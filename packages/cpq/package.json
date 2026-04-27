@@ -1,0 +1,55 @@
+{
+  "name": "@dainamite/cpq",
+  "version": "0.1.0",
+  "description": "Dainamite CPQ — Configure, Price, Quote engine for Open Mercato (configurable products, multi-charge pricing tables, guided quoting, customer inventory, orders).",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "echo 'TODO: wire build (see MIGRATION.md)'",
+    "typecheck": "tsc --noEmit"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./modules/cpq": {
+      "types": "./src/modules/cpq/index.ts",
+      "default": "./src/modules/cpq/index.ts"
+    }
+  },
+  "peerDependencies": {
+    "@open-mercato/core": "^0.5.0",
+    "@open-mercato/shared": "^0.5.0",
+    "@open-mercato/ui": "^0.5.0",
+    "@open-mercato/events": "^0.5.0",
+    "@mikro-orm/core": "^6.6.0",
+    "@mikro-orm/postgresql": "^6.6.0",
+    "awilix": "^12.0.0",
+    "next": "^16.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "zod": "^4.0.0"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com",
+    "access": "restricted"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dainamite/dainamite-core.git",
+    "directory": "packages/cpq"
+  },
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=24.0.0"
+  }
+}

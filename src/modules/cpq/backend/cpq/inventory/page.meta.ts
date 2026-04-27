@@ -9,7 +9,7 @@ export const metadata = {
   pageTitle: 'CPQ Subscriptions',
   pageTitleKey: 'cpq.inventory.title',
   pageGroup: 'CPQ',
-  pageGroupKey: 'cpq.nav.group',
+  pageGroupKey: 'customers~sales~cpq.nav.group',
   pageOrder: 92,
   icon: inventoryIcon,
   breadcrumb: [{ label: 'CPQ Subscriptions', labelKey: 'cpq.inventory.title' }],

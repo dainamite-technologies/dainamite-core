@@ -89,15 +89,44 @@ inventory service from outside CPQ.
 - Letting an asset point at a deleted subscription item without status
   reconciliation.
 
+## Required detail pages
+
+| Entity | List | Detail |
+|---|---|---|
+| `CpqInventorySubscription` | [`backend/cpq/inventory/page.tsx`](../../../../src/modules/cpq/backend/cpq/inventory/page.tsx) | [`subscriptions/[id]/page.tsx`](../../../../src/modules/cpq/backend/cpq/inventory/subscriptions/[id]/page.tsx) — must show items + assets + lifecycle timeline |
+| `CpqInventorySubscriptionItem` | inline on subscription detail | inline editor with asset drilldown |
+| `CpqInventoryAsset` | listed inline on customer / subscription | [`assets/[id]/page.tsx`](../../../../src/modules/cpq/backend/cpq/inventory/assets/[id]/page.tsx) — must show owning subscription, history, status |
+
+The customer-facing widget [`widgets/injection/customer-inventory/`](../../../../src/modules/cpq/widgets/injection/customer-inventory/)
+is part of the "detail page experience" too — when you change subscription /
+asset shape, verify the widget still renders without breaking the customer
+detail page.
+
+## Required tests
+
+Place under `src/modules/cpq/services/__tests__/`:
+
+| Test file | Asserts |
+|---|---|
+| `cpqInventoryService.materialise.test.ts` | Order activation creates one subscription per billing cycle, items mirror order lines, assets created per asset-yielding line |
+| `cpqInventoryService.statemachine.test.ts` | Every legal subscription/item/asset transition allowed; every illegal one throws; status propagation respects per-item overrides |
+| `cpqInventoryService.idempotency.test.ts` | Re-activating an already-activated order does NOT create duplicate inventory rows (regression guard for the future idempotency work flagged in `orders/SKILL.md`) |
+| `cpqInventoryService.reassignment.test.ts` | Re-pointing an asset to a different subscription item updates history + clears stale FK; old subscription item's asset reference is removed |
+| `data/validators.inventory.test.ts` | Zod schemas for status enums match `INVENTORY_*_STATUSES` exactly (catches drift) |
+
 ## Self-review checklist
 
-- [ ] Inventory writes happen only on order activation paths.
+- [ ] OpenAPI updated for any `api/inventory/*` change
+- [ ] Inventory writes happen only on order activation paths
 - [ ] Status transitions go through the state-machine in
-      `cpqInventoryService`, not direct property writes.
+      `cpqInventoryService`, not direct property writes
 - [ ] All cross-module references (`customer_id`, `quote_id`,
-      `order_id`) are FK strings.
-- [ ] New status added to `services/types.ts` enum, not hardcoded.
-- [ ] Customer detail widget continues to render after schema change
-      (it's the most common regression site).
-- [ ] User-facing strings translated.
-- [ ] `yarn generate` re-run after touching widget/injection-table.
+      `order_id`) are FK strings
+- [ ] New status added to `services/types.ts` enum, not hardcoded
+- [ ] Customer detail widget still renders after schema change
+- [ ] Detail pages: subscriptions/`[id]` and assets/`[id]` updated for new
+      fields; inline editors for subscription-items current
+- [ ] Unit tests cover materialise, state machine, idempotency, and asset
+      reassignment
+- [ ] User-facing strings translated
+- [ ] `yarn generate` re-run after touching widget/injection-table

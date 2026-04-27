@@ -6,6 +6,87 @@ This is the **first L3 customer demo** ("Demo Netia") in the Dainamite product
 line — a standalone Open Mercato application that consumes `@open-mercato/*`
 from `node_modules/` and currently hosts the in-tree CPQ module.
 
+## Open Mercato framework expertise — table stakes
+
+Anyone (or any agent) working in this repo is expected to operate as an
+**Open Mercato specialist**. That is not optional — patterns guessed from
+generic Next.js / TypeScript / MikroORM knowledge will produce code that
+violates documented framework invariants. Open Mercato has a specific
+extensibility contract; learn it before changing things.
+
+What "specialist" means concretely:
+
+- You know **what each package does** and which one to read first.
+- You know the **auto-discovery conventions** (`backend/page.tsx`,
+  `api/<method>/<path>.ts` or CPQ-style `api/<resource>/route.ts`,
+  `subscribers/*.ts`, `workers/*.ts`, `widgets/injection/`,
+  `data/entities.ts`, `data/validators.ts`, `data/extensions.ts`,
+  `data/enrichers.ts`, `events.ts`, `acl.ts`, `setup.ts`, `ce.ts`,
+  `translations.ts`, `notifications.ts`, `search.ts`).
+- You know the **non-negotiable architectural rules**: tenant-scoped
+  entities (`organization_id` + `tenant_id` indexed; standard columns),
+  no ORM relations across modules, command pattern for writes,
+  `withAtomicFlush` for mutate-then-query sequences on the same EM,
+  `openApi` export on every route, `lucide-react` icons only.
+- You know the **extension primitives** (UMES — Response Enrichers,
+  Widget Injection, API Interceptors, Mutation Guards, Component
+  Replacement, Event Subscribers, Triad Pattern) and prefer them
+  over module-to-module imports.
+- You know **where to look when in doubt**: the framework's own docs
+  ship inside `node_modules/@open-mercato/*/AGENTS.md`. Read them rather
+  than guessing.
+
+### Framework reference map (load these BEFORE writing code)
+
+Each `@open-mercato/*` package ships authoritative agent docs. When work
+touches a package, open its file first:
+
+| Package / area | File |
+|---|---|
+| Master extensibility contract — modules, DI, events, custom fields, ACL, setup, response enrichers, API interceptors, widget injection, component replacement, RBAC wildcard matcher, `withAtomicFlush`, command pattern | `node_modules/@open-mercato/core/AGENTS.md` |
+| Sales (quote → order → invoice flow, `salesCalculationService`, returns, channels) — **CPQ piggybacks on sales for headers** | `node_modules/@open-mercato/core/src/modules/sales/AGENTS.md` |
+| Customers / catalog / currencies / integrations / data_sync / workflows / customer_accounts / auth (RBAC) / directory | `node_modules/@open-mercato/core/src/modules/<module>/AGENTS.md` |
+| Event bus — `createModuleEvents`, subscribers, persistent vs ephemeral, SSE bridge | `node_modules/@open-mercato/events/AGENTS.md` |
+| Shared utilities — `withAtomicFlush`, response enrichers, query engine extensibility, feature-match helpers (wildcard-aware) | `node_modules/@open-mercato/shared/AGENTS.md` |
+| `CrudForm`, `DataTable`, primitives, sidebar icons, portal extension, FormHeader/FormFooter | `node_modules/@open-mercato/ui/AGENTS.md` |
+| CLI — generator system, auto-discovery file patterns, module-scoped migrations | `node_modules/@open-mercato/cli/AGENTS.md` |
+| Worker contract — `metadata = { queue, id?, concurrency? }`, idempotency, local/async strategies | `node_modules/@open-mercato/queue/AGENTS.md` |
+| Cache, search, content, onboarding, ai-assistant | `node_modules/@open-mercato/<package>/AGENTS.md` |
+| Scheduler (no AGENTS.md) — read `node_modules/@open-mercato/scheduler/src/index.ts` for the `CommandHandler` / `registerCommand` API |  |
+
+Where the framework's docs and our project conventions diverge, our
+conventions win for repo-local code (e.g. CPQ uses Next.js-style
+`api/<resource>/route.ts`; new modules follow framework's
+`api/<method>/<path>.ts`). The divergences are documented per-skill —
+when you spot a conflict, surface it rather than picking sides silently.
+
+## Engineering bar — applies to ALL contributors
+
+Every change in this repo is reviewed at a senior-engineer / architect bar.
+The four non-negotiables (full version with rationale lives in
+[`.ai/skills/cpq/SKILL.md`](.ai/skills/cpq/SKILL.md) → "Engineering bar"):
+
+1. **Senior mindset** — read the existing service / spec / manual before
+   writing. Identify hidden coupling. Push back on requests that break a
+   documented invariant. No half-finished work.
+2. **API-first** — every new feature starts with the REST contract
+   (`openApi` export). UI is a consumer of the API. Breaking changes are
+   versioned and changelogged.
+3. **Every entity has a detail page** — if it's listed in admin UI,
+   `backend/<module>/<entity>/page.tsx` (list) AND
+   `backend/<module>/<entity>/[id]/page.tsx` (detail) ship together.
+   Detail uses `FormHeader` in `detail` mode, handles loading / 404 / error
+   distinctly, exposes injection slots for cross-module add-ons.
+4. **Unit tests are obligatory** — services, validators, state machines,
+   and seeds get tests under `__tests__/`. Use `jest --config jest.config.cjs`
+   (already wired via `yarn test`). Integration / E2E flows go to Playwright
+   per [`.ai/skills/integration-tests/SKILL.md`](.ai/skills/integration-tests/SKILL.md).
+
+The full **Definition of Done** checklist (read it before opening a PR) is in
+[`.ai/skills/cpq/SKILL.md`](.ai/skills/cpq/SKILL.md). It covers OpenAPI,
+validators, atomic flush, ACL wiring, i18n, generators, manual updates, and
+the migration log in `packages/cpq/MIGRATION.md`.
+
 For the full distribution architecture (L1 = Open Mercato core, L2 =
 `@dainamite/*` product modules, L3 = customer apps), read
 [`.ai/specs/SPEC-001-2026-04-23-module-distribution-architecture.md`](.ai/specs/SPEC-001-2026-04-23-module-distribution-architecture.md).

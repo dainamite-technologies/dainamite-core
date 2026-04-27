@@ -71,15 +71,48 @@ This is a **breaking change**. Required steps:
 - Update `manuals/xd-187-calculate-price-api.md`.
 - Add a test that asserts the new shape end-to-end through `api/quotes/price/`.
 
+## Required detail pages
+
+Every pricing entity exposed in admin UI ships a list **and** a detail page
+(see Engineering bar §3 in [`../SKILL.md`](../SKILL.md)):
+
+| Entity | List | Detail |
+|---|---|---|
+| `CpqPricingTable` | [`backend/cpq/pricing/page.tsx`](../../../../src/modules/cpq/backend/cpq/pricing/page.tsx) | `[id]/page.tsx` (entries editor inline) |
+| `CpqPriceRule` | [`backend/cpq/price-rules/page.tsx`](../../../../src/modules/cpq/backend/cpq/price-rules/page.tsx) | [`[id]/page.tsx`](../../../../src/modules/cpq/backend/cpq/price-rules/[id]/page.tsx) (already exists) |
+| `CpqProductCharge` | rendered inline on offering detail | drilldown detail if listed standalone |
+
+Detail pages MUST render a tier-breakdown / rule-adjustment preview (read-only)
+for the live row so editors see *what this rule would do* without leaving the
+page. Use the calculate-price API in dry-run mode for the preview — never
+re-implement the math in the UI.
+
+## Required tests
+
+Place under `src/modules/cpq/services/__tests__/`:
+
+| Test file | Asserts |
+|---|---|
+| `cpqPricingService.matcher.test.ts` | Pricing-table entry matching: exact match wins; partial match falls through; no match returns null with documented error code |
+| `cpqPricingService.rules.test.ts` | Rule ordering (discount → surcharge → override). Each kind moves price by expected amount. Rule combinations produce deterministic `RuleAdjustment[]` |
+| `cpqPricingService.tiers.test.ts` | Tier breakdown numbers add up to the final price; tier boundary picks correct tier (off-by-one regression guard) |
+| `cpqValidationService.test.ts` | Invalid pricing-table dimensions rejected with `ValidationError`-shaped output, stable error keys |
+| `data/validators.test.ts` (if added) | Zod schemas accept the documented shapes from `manuals/xd-186-*` examples and reject malformed ones |
+
+Use **fixtures**, not random data. A repeatable fixture (`fixtures/gix-port-table.ts`)
+that mirrors the GIX seed lets pricing changes get caught immediately.
+
 ## Self-review checklist
 
+- [ ] OpenAPI updated for any pricing route signature change
 - [ ] Pricing functions are pure where possible — `EntityManager` reads only,
-      no writes.
-- [ ] `RuleAdjustment` and `TierBreakdown` are populated for every adjustment.
-- [ ] Money values are stored as integers (cents) or `decimal` columns —
-      never as `float`.
-- [ ] Currency is always carried alongside the amount (the sales module owns
-      currency conversion — CPQ does not convert).
-- [ ] Calculate-price API output didn't break without a migration plan.
+      no writes
+- [ ] `RuleAdjustment` and `TierBreakdown` populated for every adjustment
+- [ ] Money values stored as integers (cents) or `decimal` — never `float`
+- [ ] Currency carried alongside amount (CPQ never converts)
+- [ ] Calculate-price API output didn't break without a migration plan
+- [ ] Detail page exists for every newly listed pricing entity
+- [ ] Unit tests cover matcher, rule ordering, tier boundaries, and
+      validation error shapes
 - [ ] Manuals updated in `manuals/xd-186-*` / `xd-187-*` / `xd-188-*` /
-      `xd-217-*` if behavior changed.
+      `xd-217-*` if behavior changed

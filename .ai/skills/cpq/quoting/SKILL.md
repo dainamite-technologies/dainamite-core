@@ -83,15 +83,47 @@ this is a classic source of "the cloned quote is missing X" bugs.
   CPQ line config; the sales module reads it back via Response Enricher.
 - Hardcoded wizard step strings — always go through `workflows/registry.ts`.
 
+## Required detail pages
+
+| Entity | List | Detail |
+|---|---|---|
+| Sales Quote (sales module owns header) | sales pages | CPQ contributes via `widgets/injection/quote-configurator/` widget on the sales quote detail page — keep this widget, never replace the sales detail page |
+| `CpqQuoteConfiguration` | not standalone | rendered inline on the sales quote detail (via the configurator widget) |
+| `CpqWizardDefinition` | [`backend/cpq/wizards/page.tsx`](../../../../src/modules/cpq/backend/cpq/wizards/page.tsx) | [`[definitionCode]/page.tsx`](../../../../src/modules/cpq/backend/cpq/wizards/[definitionCode]/page.tsx) + [`[definitionCode]/detail/page.tsx`](../../../../src/modules/cpq/backend/cpq/wizards/[definitionCode]/detail/page.tsx) |
+
+If you add a new quote-related entity (e.g. quote templates, quote
+revisions) it MUST land with both list and `[id]` detail pages — see
+Engineering bar §3 in [`../SKILL.md`](../SKILL.md).
+
+## Required tests
+
+Place under `src/modules/cpq/services/__tests__/`:
+
+| Test file | Asserts |
+|---|---|
+| `cpqQuotingService.create.test.ts` | `createQuote` builds the sales quote header through the document-number generator, attaches `CpqQuoteConfiguration`, mirrors lines 1:1 with `CpqQuoteLineConfiguration` |
+| `cpqQuotingService.recalculate.test.ts` | Recalculation re-resolves prices but keeps quote-line ids stable; `pricing_summary` jsonb is overwritten not merged |
+| `cpqQuotingService.clone.test.ts` | Cloning copies header via sales command, copies *all* CPQ-side rows, generates a new document number, leaves the source quote untouched |
+| `cpqQuotingService.validate.test.ts` | `requires` / `excludes` `CpqProductRelationship` entries surface as `ValidationError[]` with the documented shape |
+| `cpqWizardService.test.ts` | `resolve` returns expected next step given step inputs; transitions evaluate in declared order; `isDefault` only fires when no condition matched |
+| `workflows/registry.test.ts` | Every step kind referenced in `lib/seeds.ts` is registered; unknown step kinds throw at registration time, not at runtime |
+
+**Fixtures:** put them in `__tests__/fixtures/` and reuse the GIX seed shape
+from `lib/seeds.ts` — don't hand-roll new fixtures unless the test needs a
+distinct shape.
+
 ## Self-review checklist
 
+- [ ] OpenAPI updated for any `api/quotes/*` or `api/wizards/*` change
 - [ ] Quote header changes go through sales-module commands, not direct
-      MikroORM writes.
+      MikroORM writes
 - [ ] `CpqQuoteLineConfiguration` is updated within a `withAtomicFlush` block
-      if the same EM is reused for queries afterwards.
-- [ ] Cloning logic copies *all* CPQ-side rows tied to the source quote.
-- [ ] New wizard step types are registered in `workflows/registry.ts`.
-- [ ] Validation errors use the `ValidationError` shape from `services/types.ts`.
-- [ ] User-facing strings translated; wizard step labels go through `useT()`.
+      if the same EM is reused for queries afterwards
+- [ ] Cloning logic copies *all* CPQ-side rows tied to the source quote
+- [ ] New wizard step types registered in `workflows/registry.ts`
+- [ ] Validation errors use the `ValidationError` shape from `services/types.ts`
+- [ ] User-facing strings translated; wizard step labels go through `useT()`
+- [ ] Detail pages: list + `[id]` for every new quote-related entity
+- [ ] Unit tests cover create / recalculate / clone / validate paths
 - [ ] `yarn generate` re-run after editing `events.ts`, `acl.ts`, or any
-      auto-discovered file.
+      auto-discovered file

@@ -9,7 +9,7 @@ export const metadata = {
   pageTitle: 'Product Specifications',
   pageTitleKey: 'cpq.specifications.list.title',
   pageGroup: 'CPQ',
-  pageGroupKey: 'cpq.nav.group',
+  pageGroupKey: 'customers~sales~cpq.nav.group',
   pageOrder: 12,
   icon: specificationsIcon,
   breadcrumb: [{ label: 'Product Specifications', labelKey: 'cpq.specifications.list.title' }],

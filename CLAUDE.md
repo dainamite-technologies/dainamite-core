@@ -134,7 +134,18 @@ generic Task → Context Map (in AGENTS.md) tells you to load.
 | Modify customer inventory / subscriptions | `.ai/skills/cpq/inventory/SKILL.md`, `manuals/xd-215-customer-inventory.md`, `specs/implementation/xd-215-customer-inventory.md` |
 | Quote → Order conversion / order activation | `.ai/skills/cpq/orders/SKILL.md`, `manuals/cpq-quote-to-order-conversion.md` |
 | Calculate-price API contract | `manuals/xd-187-calculate-price-api.md` |
-| Extract / package CPQ as `@dainamite/cpq` | `.ai/specs/SPEC-001-2026-04-23-module-distribution-architecture.md`, `packages/cpq/MIGRATION.md` |
+| Extract / package CPQ as `@dainamite/cpq` (mechanical) | `.ai/skills/cpq/packaging/SKILL.md`, `packages/cpq/MIGRATION.md` |
+
+### Cross-cutting: where does this code live?
+
+Before adding a new module, package, or large feature, decide which layer
+(L1 Open Mercato core / L2 `@dainamite/*` / L3 customer app) it belongs to.
+
+| Question | Load |
+|---|---|
+| New module / package / feature — should it be reusable, customer-specific, or upstreamed? | `.ai/skills/dainamite-layering/SKILL.md`, `.ai/specs/SPEC-001-2026-04-23-module-distribution-architecture.md` |
+| Promoting an `@app/<feature>` to a `@dainamite/*` package | `.ai/skills/dainamite-layering/SKILL.md` → "Promotion: L3 → L2" |
+| Considering ejecting a core module | `.ai/skills/dainamite-layering/SKILL.md` → "Ejection", `.ai/skills/eject-and-customize/SKILL.md` |
 
 ### Two spec conventions in this repo
 

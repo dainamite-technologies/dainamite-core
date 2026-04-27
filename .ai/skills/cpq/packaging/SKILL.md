@@ -8,8 +8,9 @@ description: Extracting CPQ from `src/modules/cpq/` to the `@dainamite/cpq` npm 
 ## Authoritative documents
 
 1. [`.ai/specs/SPEC-001-2026-04-23-module-distribution-architecture.md`](../../specs/SPEC-001-2026-04-23-module-distribution-architecture.md) — the architecture decision (L1/L2/L3, namespace `@dainamite`, registry GitHub Packages)
-2. [`packages/cpq/MIGRATION.md`](../../../packages/cpq/MIGRATION.md) — phased migration plan (Phase 0 done; Phase 1+ pending)
-3. [`packages/cpq/README.md`](../../../packages/cpq/README.md) — package surface & rules
+2. [`.ai/skills/dainamite-layering/SKILL.md`](../../dainamite-layering/SKILL.md) — the **decision framework** for "where does this code live?" — load this if the question is "should X be its own package?", "L2 vs L3?", "promote @app → @dainamite?". This skill (packaging) covers the **mechanics** of doing the extraction; the layering skill covers the **principles**
+3. [`packages/cpq/MIGRATION.md`](../../../packages/cpq/MIGRATION.md) — phased migration plan (Phase 0 done; Phase 1+ pending)
+4. [`packages/cpq/README.md`](../../../packages/cpq/README.md) — package surface & rules
 
 ## Where things live today (Phase 0)
 

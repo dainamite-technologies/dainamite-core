@@ -159,7 +159,8 @@ Unit and integration tests are **complementary, not substitutes**.
 | Specifications, offerings, attributes, bundles, components, relationships | [`products/SKILL.md`](products/SKILL.md) |
 | Customer inventory: subscriptions, subscription items, assets | [`inventory/SKILL.md`](inventory/SKILL.md) |
 | Quote → Order conversion, order activation, order status | [`orders/SKILL.md`](orders/SKILL.md) |
-| Extracting CPQ to `@dainamite/cpq` package | [`packaging/SKILL.md`](packaging/SKILL.md) |
+| Extracting CPQ to `@dainamite/cpq` package (mechanical) | [`packaging/SKILL.md`](packaging/SKILL.md) |
+| Deciding where new code lives (L1/L2/L3, `@dainamite` vs `@app`) | [`../dainamite-layering/SKILL.md`](../dainamite-layering/SKILL.md) |
 
 ## Module anatomy (recap)
 

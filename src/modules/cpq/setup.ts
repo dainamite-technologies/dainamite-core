@@ -1,6 +1,7 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
 import type { ModuleSetupConfig } from '@open-mercato/shared/modules/setup'
 import { seedCpqDefaults } from './lib/seeds'
+import { seedCpqExamples } from './lib/example-seeds'
 
 type SeedScope = { tenantId: string; organizationId: string }
 
@@ -1127,6 +1128,10 @@ export const setup: ModuleSetupConfig = {
     await seedPriceRules(em, scope)
     await seedBundleData(em, scope)
     await seedCpqDefaults(em, scope)
+  },
+
+  async seedExamples({ em, container, tenantId, organizationId }) {
+    await seedCpqExamples(em, container, { tenantId, organizationId })
   },
 }
 

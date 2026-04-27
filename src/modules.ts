@@ -50,6 +50,8 @@ export const enabledModules: ModuleEntry[] = [
   { id: 'customer_accounts', from: '@open-mercato/core' },
   { id: 'portal', from: '@open-mercato/core' },
   { id: 'example', from: '@app' },
+  // Dainamite product modules (in-tree today, future @dainamite/* npm packages — see .ai/specs/SPEC-001)
+  { id: 'cpq', from: '@app' },
 ]
 
 if (enabledModules.some((entry) => entry.id === 'example')) {

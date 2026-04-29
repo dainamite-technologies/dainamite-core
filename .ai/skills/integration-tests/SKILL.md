@@ -231,6 +231,18 @@ When reading a spec, extract test scenarios from these sections:
 | Edge Cases / Error Scenarios | One test per significant error path |
 | Risks & Impact Review | Regression tests for documented failure modes |
 
+**MUST cross-check the spec against the actual code.** Specs drift — features get added, removed, or modified after the spec is written and those changes are often not reflected back. Before finalizing the scenario list:
+
+1. Inspect the relevant module (`src/modules/<module>/api/`, `services/`, `backend/`, `data/validators.ts`, `data/entities.ts`) to enumerate **what actually exists today**.
+2. Compare against the spec. For every divergence, decide:
+   - **Code has feature, spec doesn't** → add a TC for the undocumented behavior; flag it to the user so the spec gets updated.
+   - **Spec has feature, code doesn't** → do NOT write a TC for it; flag it (spec ahead of implementation, or feature was dropped).
+   - **Behavior differs (e.g., field renamed, status removed, validation tightened)** → write the TC against the code, flag the spec as stale.
+3. Also scan recent `git log` for the module to catch behavior added without spec updates.
+4. Report the divergences in your summary so the user can reconcile spec vs. code.
+
+Treat the code as the source of truth for "what exists"; treat the spec as the source of truth for "what should exist". Tests cover the intersection plus any code-only behavior that is non-trivial.
+
 Typical spec produces 3-8 test cases. Prioritize:
 1. **High**: CRUD happy paths, authentication, authorization
 2. **Medium**: Validation errors, edge cases with business impact

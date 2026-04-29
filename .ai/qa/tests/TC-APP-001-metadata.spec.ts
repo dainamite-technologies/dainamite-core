@@ -30,10 +30,12 @@ test.describe('TC-APP-001: Template metadata', () => {
     await setGermanLocale(page)
     await login(page, 'admin')
 
+    // Next.js dev mode compiles routes on-demand — first hit can take longer
+    // than default 5s expect-timeout, so we bump it for these gotos.
     await page.goto('/backend/example', { waitUntil: 'domcontentloaded' })
-    await expect(page).toHaveTitle('Beispiel-Admin')
+    await expect(page).toHaveTitle('Beispiel-Admin', { timeout: 30_000 })
 
     await page.goto('/backend/products', { waitUntil: 'domcontentloaded' })
-    await expect(page).toHaveTitle('Products')
+    await expect(page).toHaveTitle('Products', { timeout: 30_000 })
   })
 })

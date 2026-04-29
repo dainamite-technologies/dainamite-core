@@ -46,7 +46,10 @@ jobs:
         run: yarn generate
 
       - name: Typecheck
+        # Bump heap — tsc OOMs at default 2GB on this codebase
         run: yarn typecheck
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
 
       - name: Run unit tests
         run: yarn test --coverage --ci

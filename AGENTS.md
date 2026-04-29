@@ -81,6 +81,7 @@ These guides ship automatically when the corresponding module is installed.
 | Review code changes | `.ai/skills/code-review/SKILL.md` |
 | Write a spec | `.ai/skills/spec-writing/SKILL.md`, `.ai/specs/SPEC-000-template.md` |
 | Implement a spec (or selected phases) | `.ai/skills/implement-spec/SKILL.md` |
+| Write / run unit tests (services, validators, state machines, seeds) | `.ai/skills/unit-tests/SKILL.md` |
 | Create / run integration tests | `.ai/skills/integration-tests/SKILL.md` |
 | Upgrade framework from 0.4.10 to 0.5.0 | `.ai/skills/auto-upgrade-0.4.10-to-0.5.0/SKILL.md` |
 

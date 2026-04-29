@@ -104,27 +104,32 @@ The detail page MUST:
 
 ### 4. Unit tests are obligatory
 
-Every PR that adds or changes behavior in `src/modules/cpq/` MUST land tests:
+Every PR that adds or changes behavior in `src/modules/cpq/` MUST land tests
+on the changed layer (services / validators / state-machines / seeds /
+non-trivial routes / new entities).
 
-| Layer changed | Required test |
-|---|---|
-| `services/<service>.ts` (new method or branch) | Unit test in `services/__tests__/<service>.test.ts` covering the happy path + each documented edge case |
-| `data/validators.ts` | Round-trip tests: valid input parses, invalid input fails with stable error keys |
-| `services/types.ts` enum / state-machine | Transition tests: every legal transition allowed, every illegal one rejected |
-| `lib/seeds.ts` or `setup.ts` seeding | Snapshot-style test on the seeded shape so accidental drift fails CI |
-| New API route | If non-trivial logic — controller test that calls the route handler with a mocked container; if pure CRUD — covered by service test + integration test (Playwright) |
-| New entity | Migration test (entity → diff matches generated migration) + a service-level "can be created and re-fetched" test |
+For the full WHAT-to-test matrix, mock-EM patterns, error-throw forms per
+service (`QuotingError` / `OrderError` are Error subclasses; inventory
+service throws plain `{ status, error }` objects), and the CPQ-specific
+gotchas (`getBaseCurrencyCode` consuming a hidden `findOne`,
+`buildQuoteResult` recomputing aggregates from line configs), load
+[`.ai/skills/unit-tests/SKILL.md`](../unit-tests/SKILL.md) **before writing
+any tests**.
 
-**Test conventions:**
-- Path: `src/modules/cpq/<area>/__tests__/<unit>.test.ts`
-- Runner: `jest --config jest.config.cjs` (already wired via `yarn test`)
-- One file per unit; one `describe` block per public method
-- Test naming: `it('rejects X when Y')` — describe the contract, not the
-  implementation
-- Use real validators / Zod schemas. Mock only at the EM / external-IO
-  boundary. No mocking of pure functions.
-- Money: assert on integer cents or decimals — never on `Number` floats
-- Avoid snapshot tests for anything except seed shapes — they rot fast
+CPQ-specific notes on top of the generic unit-tests skill:
+
+- All four CPQ state machines live in `services/types.ts` —
+  `ALLOWED_TRANSITIONS` (quote), `INVENTORY_SUBSCRIPTION_TRANSITIONS`,
+  `INVENTORY_ASSET_TRANSITIONS`, `CPQ_ORDER_TRANSITIONS`. Each gets its own
+  `describe` block in `services/__tests__/types.test.ts`.
+- Pricing-rule application has 5 `ruleType` variants
+  (`discount_percent`, `discount_absolute`, `surcharge_percent`,
+  `surcharge_absolute`, `price_override`); cover all five and assert the
+  delta sign in `result.adjustments[]`.
+- Bundle slot/component creation is the most validation-heavy surface —
+  every V-SLOT-1..7 and V-COMP-1..5 rule has a dedicated negative test in
+  `cpqBundleService.test.ts` and is the template for similar rule-coded
+  domains.
 
 For end-to-end flows (sidebar, full quote-to-order journey) use the
 Playwright suite — see [`.ai/skills/integration-tests/SKILL.md`](../integration-tests/SKILL.md).

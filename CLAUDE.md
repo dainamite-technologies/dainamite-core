@@ -79,8 +79,12 @@ The four non-negotiables (full version with rationale lives in
    distinctly, exposes injection slots for cross-module add-ons.
 4. **Unit tests are obligatory** — services, validators, state machines,
    and seeds get tests under `__tests__/`. Use `jest --config jest.config.cjs`
-   (already wired via `yarn test`). Integration / E2E flows go to Playwright
-   per [`.ai/skills/integration-tests/SKILL.md`](.ai/skills/integration-tests/SKILL.md).
+   (already wired via `yarn test`). For mock-EM patterns, error-throw forms
+   per service, and CPQ-specific gotchas (`getBaseCurrencyCode` consuming a
+   hidden `findOne`, `buildQuoteResult` recomputing aggregates), see
+   [`.ai/skills/unit-tests/SKILL.md`](.ai/skills/unit-tests/SKILL.md).
+   Integration / E2E flows go to Playwright per
+   [`.ai/skills/integration-tests/SKILL.md`](.ai/skills/integration-tests/SKILL.md).
 
 The full **Definition of Done** checklist (read it before opening a PR) is in
 [`.ai/skills/cpq/SKILL.md`](.ai/skills/cpq/SKILL.md). It covers OpenAPI,

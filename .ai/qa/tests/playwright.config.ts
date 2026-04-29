@@ -1,6 +1,10 @@
 import { defineConfig } from '@playwright/test'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { discoverIntegrationSpecFiles } from '@open-mercato/cli/lib/testing/integration-discovery'
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
 
 const captureScreenshots = process.env.PW_CAPTURE_SCREENSHOTS === '1'
 const isGitHubActions = process.env.GITHUB_ACTIONS === 'true'

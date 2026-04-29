@@ -102,6 +102,9 @@ jobs:
       NEXT_TELEMETRY_DISABLED: "1"
       # GH Actions standard runner has 7 GB RAM. next build needs heap > default 2 GB.
       NODE_OPTIONS: --max-old-space-size=6144
+      # Production-mode AuthService refuses to start without a token-hashing secret.
+      # Throwaway value — DB is ephemeral per-run, no real secrets ever land here.
+      AUTH_TOKEN_SECRET: ci-throwaway-secret-not-for-prod-${{ github.run_id }}
 
     steps:
       - uses: actions/checkout@v4

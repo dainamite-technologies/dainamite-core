@@ -97,9 +97,11 @@ jobs:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/open-mercato
       REDIS_URL: redis://localhost:6379
       BASE_URL: http://localhost:3000
-      NODE_ENV: development
+      NODE_ENV: production
       # Skip telemetry / interactive prompts in non-TTY runner
       NEXT_TELEMETRY_DISABLED: "1"
+      # GH Actions standard runner has 7 GB RAM. next build needs heap > default 2 GB.
+      NODE_OPTIONS: --max-old-space-size=6144
 
     steps:
       - uses: actions/checkout@v4
@@ -142,19 +144,26 @@ jobs:
       - name: Initialize app (migrate + seed accounts)
         run: yarn initialize
 
-      - name: Start dev server in background
-        run: |
-          nohup yarn dev > dev-server.log 2>&1 &
-          echo "DEV_PID=$!" >> "$GITHUB_ENV"
-          echo "Dev server PID: $!"
+      - name: Build (production)
+        # Production build is dramatically lighter at runtime than `yarn dev`
+        # — dev mode peaked at 6.1 GB RSS while precompiling routes on the
+        # 7 GB CI runner. `next start` against a built app is ~500 MB.
+        run: yarn build
 
-      - name: Wait for dev server (max 180s)
+      - name: Start production server in background
         run: |
-          timeout 180 bash -c 'until curl -sf http://localhost:3000/ > /dev/null; do
-            echo "Waiting for dev server on :3000..."
+          nohup yarn start > dev-server.log 2>&1 &
+          echo "DEV_PID=$!" >> "$GITHUB_ENV"
+          echo "Server PID: $!"
+
+      - name: Wait for server (max 180s)
+        # Accept any HTTP response (incl. 5xx) — server up == port answers.
+        run: |
+          timeout 180 bash -c 'until curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/ | grep -qE "^[0-9]"; do
+            echo "Waiting for server on :3000..."
             sleep 3
           done'
-          echo "Dev server is up."
+          echo "Server is up."
 
       - name: Run integration tests
         run: yarn test:integration

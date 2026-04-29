@@ -37,9 +37,10 @@ jobs:
           restore-keys: yarn-${{ runner.os }}-
 
       - name: Install dependencies
-        # Without --immutable: CI auto-syncs lockfile when OS-specific binaries
-        # differ between dev OS (Windows) and CI OS (Linux).
-        run: yarn install
+        # --no-immutable: Yarn 4 forces immutable installs in CI by default
+        # (when CI=true env is detected). We explicitly opt out so transient
+        # registry metadata diffs don't fail the build.
+        run: yarn install --no-immutable
 
       - name: Generate auto-discovered files
         run: yarn generate
@@ -116,9 +117,10 @@ jobs:
           restore-keys: yarn-${{ runner.os }}-
 
       - name: Install dependencies
-        # Without --immutable: CI auto-syncs lockfile when OS-specific binaries
-        # differ between dev OS (Windows) and CI OS (Linux).
-        run: yarn install
+        # --no-immutable: Yarn 4 forces immutable installs in CI by default
+        # (when CI=true env is detected). We explicitly opt out so transient
+        # registry metadata diffs don't fail the build.
+        run: yarn install --no-immutable
 
       - name: Cache Playwright browsers
         id: pw-cache

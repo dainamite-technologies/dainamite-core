@@ -9,6 +9,9 @@ on:
     # Weekly health check — Monday 06:00 UTC. Catches flakes / dep-bump regressions
     # that don't get triggered by direct activity. Runs against the default branch (main).
     - cron: '0 6 * * 1'
+  # Manual trigger — exposes a "Run workflow" button in the Actions tab so you
+  # can re-run the suite ad-hoc (e.g. to verify after env changes / before merge).
+  workflow_dispatch:
 
 # On PRs, cancel any in-flight runs for the same ref so force-pushes don't
 # burn minutes. On main pushes / scheduled runs, never cancel.

@@ -111,6 +111,10 @@ jobs:
       JWT_SECRET: ci-throwaway-jwt-secret-not-for-prod-${{ github.run_id }}
       AUTH_SECRET: ci-throwaway-auth-secret-not-for-prod-${{ github.run_id }}
       NEXTAUTH_SECRET: ci-throwaway-nextauth-secret-not-for-prod-${{ github.run_id }}
+      # Disable auth rate limiter — Playwright in CI runs many logins back-to-back
+      # and would otherwise hit "Too many requests".
+      OM_TEST_MODE: "1"
+      OM_TEST_AUTH_RATE_LIMIT_MODE: opt-in
 
     steps:
       - uses: actions/checkout@v4

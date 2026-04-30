@@ -1,5 +1,7 @@
 import { asFunction } from 'awilix'
+import type { EntityManager } from '@mikro-orm/postgresql'
 import type { AppContainer } from '@open-mercato/shared/lib/di/container'
+import type { SalesDocumentNumberGenerator } from '@open-mercato/core/modules/sales/services/salesDocumentNumberGenerator'
 import { DefaultCpqPricingService } from './services/cpqPricingService'
 import { DefaultCpqValidationService } from './services/cpqValidationService'
 import { DefaultCpqProductService } from './services/cpqProductService'

@@ -133,7 +133,11 @@ export class DefaultCpqProductService {
         } | undefined
 
         if (dyn?.type === 'pricing_table' && dyn.tableCode && dyn.dimensionKey) {
-          resolvedOptions = await this.resolveDynamicOptions(dyn, evaluationContext, scope)
+          resolvedOptions = await this.resolveDynamicOptions(
+            { tableCode: dyn.tableCode, dimensionKey: dyn.dimensionKey, filterByDimension: dyn.filterByDimension },
+            evaluationContext,
+            scope,
+          )
         }
       }
 

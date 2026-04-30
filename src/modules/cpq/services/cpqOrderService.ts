@@ -168,13 +168,17 @@ export class DefaultCpqOrderService {
       subtotalGrossAmount: String(grandTotal),
       discountTotalAmount: '0',
       taxTotalAmount: '0',
+      shippingNetAmount: '0',
+      shippingGrossAmount: '0',
+      surchargeTotalAmount: '0',
+      paidTotalAmount: '0',
       grandTotalNetAmount: String(grandTotal),
       grandTotalGrossAmount: String(grandTotal),
       lineItemCount: quoteLines.length,
       metadata: { sourceQuoteId: cpqConfig.id },
       createdAt: new Date(),
       updatedAt: new Date(),
-    })
+    } as never)
     em.persist(salesOrder)
 
     const cpqOrderConfigId = crypto.randomUUID()
@@ -237,9 +241,13 @@ export class DefaultCpqOrderService {
           parentLineId: ql.parentLineId ?? null,
         },
         normalizedQuantity: String(ql.quantity),
+        reservedQuantity: '0',
+        fulfilledQuantity: '0',
+        invoicedQuantity: '0',
+        returnedQuantity: '0',
         createdAt: new Date(),
         updatedAt: new Date(),
-      })
+      } as never)
       em.persist(orderLine)
       const orderLineConfig = em.create(CpqOrderLineConfiguration, {
         organizationId: scope.organizationId,

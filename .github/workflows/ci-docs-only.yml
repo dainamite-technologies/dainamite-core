@@ -1,0 +1,50 @@
+name: CI
+
+# Fallback companion to ci.yml. Triggers when a push/PR changes ONLY markdown.
+# ci.yml uses paths-ignore: ['**/*.md'] so it deliberately skips those commits.
+# But if branch protection on `main` requires the "CI / Unit tests" and
+# "CI / Integration tests" status checks, a docs-only PR would block forever
+# waiting for those checks to report.
+#
+# This workflow emits checks with the IDENTICAL names (`name: CI` at the
+# workflow level + matching job names) and exits success immediately. Branch
+# protection sees the required checks satisfied and the PR can merge.
+#
+# The `paths` filter here is the inverse of ci.yml's paths-ignore: this
+# workflow runs ONLY when EVERY changed file matches `**/*.md`. Mixed commits
+# (`.md` + code) hit ci.yml and not this one — they're mutually exclusive,
+# so a single run reports each required check exactly once.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**/*.md'
+  pull_request:
+    branches: [main]
+    paths:
+      - '**/*.md'
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  unit-tests:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - name: Skip — docs-only change
+        run: echo "Markdown-only change; ci-docs-only.yml stamps required checks. See ci.yml for the real test runs."
+
+  integration-tests:
+    name: Integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - name: Skip — docs-only change
+        run: echo "Markdown-only change; ci-docs-only.yml stamps required checks. See ci.yml for the real test runs."

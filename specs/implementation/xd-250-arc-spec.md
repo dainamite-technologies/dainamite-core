@@ -1,50 +1,75 @@
 # XD-250 — CPQ Amend / Renew / Cancel (ARC)
 
-**Date**: 2026-04-24
-**Status**: Approved — ready for implementation
+**Date**: 2026-04-30
+**Status**: Approved — ready for implementation (rewritten model)
 **Owner**: Kamil
 
 > **Domain parents**: [Quoting](../domains/quoting.md), [Product Inventory](../domains/product-inventory.md)
-> **Blueprint ref**: `specs/blueprint.md` — Quoting and Product Inventory domains (extends their post-sale lifecycle surface)
-> **Derives from**: XD-215 statement "future Modify/Add/Change/Delete flows require an inventory record to reference" — this spec is that MACD foundation, reframed as Amend/Renew/Cancel (ARC)
-> **Dependencies**: XD-201 (Quoting — clone + approval), XD-215 (Customer Inventory — subscription lifecycle), XD-187 (Product Specification), XD-186 (Pricing Tables)
-> **Supersedes**: the inline statement in XD-215 that "Amendments are modelled by adding new items to an existing subscription." This spec replaces that informal assumption with a formal **chain-based Amendment workflow** (see DD-ARC-1).
-> **Existing implementation**: partial — see "What already works" below
-> **New entities**: `CpqAmendmentRequest`, `CpqAmendmentChange`, `CpqRenewalTransaction`, `CpqCancellationRequest` in `src/modules/cpq/data/entities.ts`
+> **Driver**: CPQ **Quote module** owns the ARC process end-to-end. Subscription module merely executes the change at order activation.
+> **Dependencies**: XD-201 (Quoting — clone + approval flow), XD-215 (Customer Inventory — subscription lifecycle, assetizable items), XD-187 (Product Specification), XD-186 (Pricing Tables)
+> **Supersedes**: prior chain-based draft of XD-250 (separate `CpqAmendmentRequest`/`CpqRenewalTransaction`/`CpqCancellationRequest` entities, scheduled execution, chain model). The chain model is **discarded** — see "Why this rewrite" below.
+> **New entities**: `CpqSubscriptionChangeLog`, `CpqQuoteTargetSubscription` in `src/modules/cpq/data/entities.ts`
 > **New events**: `src/modules/cpq/events.ts` (NEW file — first events for CPQ module)
-> **New services**: `cpqAmendmentService`, `cpqRenewalService`, `cpqCancellationService` in `src/modules/cpq/services/`
-> **New APIs**: `src/modules/cpq/api/amendments/`, `src/modules/cpq/api/cancellations/`, `src/modules/cpq/api/renewals/`, subscription extensions under `src/modules/cpq/api/inventory/subscriptions/`
-> **Packages consumed**: `@open-mercato/events`, `@open-mercato/scheduler`, `@open-mercato/queue`, `@open-mercato/shared` (all 0.4.10, already installed)
-> **Out of scope (v1)**: refund execution (billing), dunning, bulk amendments, customer self-service UI, customer emails (separate notification module subscribes to events)
+> **Service surface**: extensions to existing `cpqQuotingService` + `cpqInventoryService` + `cpqOrderService` (no new top-level services)
+> **New APIs**: subscription-attach endpoints under `src/modules/cpq/api/quotes/[id]/...`, expiring view under `src/modules/cpq/api/inventory/subscriptions/expiring/route.ts`
+> **Out of scope (v1)**: refund execution (billing module subscribes to events), dunning, customer self-service UI, customer-facing emails, scheduler / auto-renew automation, ETF policy engine
+
+---
+
+## Why this rewrite
+
+The prior draft built ARC around three dedicated request entities (`CpqAmendmentRequest`, `CpqRenewalTransaction`, `CpqCancellationRequest`) with a scheduler and a chain model that **created a new subscription on every amend or renew**. After review the customer pushed back on three points:
+
+1. **No subscription history table.** Don't create a new subscription per change — keep one logical subscription record and edit it in place. Capture the change history in a dedicated **change-log** entity instead.
+2. **The CPQ Quote module — not the Subscription module — is responsible for the ARC process.** Operators drive every ARC change through a quote (and the resulting order), exactly like a brand-new sale. The subscription module just consumes the result at order activation.
+3. **No scheduler / auto-renew.** Renewals are explicit, manual, operator-driven through a quote.
+
+The new model:
+
+- ARC is a **mode of a CPQ quote**: every amend, renew, or cancel starts as a normal CPQ quote tagged with one or more **target subscriptions** plus an action.
+- The quote flows through the existing approval lifecycle (`new → ready → in_approval → approved → with_customer → accepted`) and produces an order, again following the existing CPQ flow.
+- At **order activation**, the order's ARC payload is applied to each target subscription **in place**: items added / removed, term updated, status flipped. A `CpqSubscriptionChangeLog` row is written per affected subscription, capturing the before / after snapshot and the originating quote+order.
+- Renewal supports **merging multiple subscriptions into one**: a **brand-new subscription** is created with the new term and the combined items; all input subs (sources) transition to a new terminal status `superseded` and link to the new sub via `mergedIntoSubscriptionId`. (Merge is the **one ARC operation that creates a new subscription row** — amend and standalone renew always mutate in place.)
+- The Subscription module gains an "expiring soon" list view to support manual renewal triage.
+
+This rewrite intentionally removes ~70% of the surface from the prior draft (no scheduler, no chain entities, no separate request lifecycles) and pushes the user-facing journey into a single coherent quote-driven flow.
 
 ---
 
 ## TLDR
 
-**Key Points:**
-- Formalize **Amend**, **Renew**, and **Cancel** lifecycle operations for post-sale CPQ entities (active orders / subscriptions).
-- Build on existing primitives: `cloneQuote` + `parentQuoteId`, line-level `action: add|modify|cancel`, subscription `currentTermEnd` + `autoRenew`, terminal `cancelled` status. Add: dedicated request entities, **chain model for both Amend and Renew**, scheduled execution, ETF support, proration event data, full audit trail.
+**ARC = CPQ Quote with a `quote_type` and one or more target subscriptions.**
 
-**Scope (confirmed decisions from Q&A):**
-- **Amend — chain model.** Amendment produces a new Quote → new Order → **new Subscription** linked to predecessor via `previous_subscription_id`. Predecessor subscription transitions to terminal status `amended`. Predecessor order transitions to `superseded` **only if it was `active`**; if `fulfilled`, it stays fulfilled (linkage recorded via `supersedes_order_id` on new order). Reuses existing quote lifecycle — cloned quote flows through `new → ready → in_approval → approved → with_customer → accepted`. Amendment executes when quote reaches `accepted` AND `effective_date ≤ now`. Amendment.executed event carries **proration data** (old MRC, new MRC, billing cycle info) for billing module to compute refund/charge deltas. (Q1, Q2, Q7)
-- **Renew — chain model.** Every renewal creates a new subscription linked via `previous_subscription_id`. Predecessor transitions to `renewed`. Attached amendments modify terms of the NEW subscription. (Q3)
-- **Cancel — two policies + ETF.** Supports `immediate` and `end-of-term` cancellation. Fixed ETF formula: `min(remaining_months × MRC × 0.5, 3 × MRC)`. No arbitrary-date scheduling, no proration/refund execution (billing downstream). (Q4, Q5.a)
-- **Change tracking — snapshots + delta.** Cloned Quote (snapshot) + explicit `CpqAmendmentChange` records per line (delta). (Q5)
-- **Scheduled effective dates.** Amendments support future `effective_date`; approving amendment with `effective_date ≤ now` executes inline (single transaction), future dates deferred to scheduler. Renewals scheduled by `currentTermEnd`. Cancellations execute immediately or at term end. (Q6)
-- **Pricing strategy — per-transaction configurable.** `rate-lock` / `current-catalog` / `mixed`. Default on subscription (`default_renewal_pricing_strategy`), overridable per operation. (Q6, Q7)
-- **Historic subscription visibility.** Chain preserved: old subscriptions queryable with items frozen at transition. Assets migrate forward by default; history via chain walk. (Q4)
-- **Asset lifecycle on amendment** (Q2): `add-line` → new Asset `pending`; `remove-line` → existing Asset → `cancelled` (stays on OLD subscription for trace); `modify-line` / unchanged-line → Asset migrates FK to new subscription.
-- **Subscription item lifecycle** (Q3): snapshot-per-subscription; new subscription gets new items from amended quote; old subscription's items transition to terminal (`amended` / `renewed` matching parent).
-- **Single currency / single tenant per subscription** — no multi-currency ARC in v1. (Q8)
+| Action | What the quote does | What changes on the subscription at order activation |
+|---|---|---|
+| **Amend** | Adds / removes items on existing subscription(s). Term **untouched**. Quote can target multiple subscriptions; lines are tagged per target. | Items added/removed in place. Subscription status unchanged (`active` or `suspended` as it was). ChangeLog row written. |
+| **Renew (standalone)** | Extends term + optionally adds/removes items on a single subscription. | Sub's `currentTermStart` / `currentTermEnd` / `termMonths` updated; items mutated in place. ChangeLog row written. Status stays `active` (or `suspended` — both allowed). |
+| **Renew (merge)** | Consolidates 2+ subscriptions into one new sub with a new term. | A **new** `CpqInventorySubscription` row is created (status `active`) with the new term, combined items (carry-over from sources + operator's edits), and FK-migrated assets. All source subs → terminal `superseded` with `mergedIntoSubscriptionId` → new sub. ChangeLog row written for the new sub AND for each source. |
+| **Cancel** | Terminates the subscription(s). | Subscription → `terminated`; items → `terminated`; assets → `cancelled`. ChangeLog row written. (Existing `transitionSubscriptionStatus` is reused.) |
+
+**Key invariants:**
+- **Identity preserved for amend, cancel, and standalone renew** — the existing row mutates. No chain, no `previous_subscription_id`.
+- **Merge renewal is the single exception**: it creates ONE new subscription and retires N source subs to terminal `superseded`. Sources link to the new sub via `mergedIntoSubscriptionId`.
+- All ARC changes flow through a CPQ Quote → CPQ Order → subscription mutation. The Subscription module exposes the mutation methods; the CPQ Quote module orchestrates when to call them.
+- **No scheduler.** Operators drive renewals and amendments manually. An "Expiring Subscriptions" list view surfaces upcoming term ends so ops can triage.
+- ChangeLog is **append-only** and is the single source of truth for "what happened to this subscription".
+- **Suspended subs are valid ARC targets** for amend / renew / cancel. Amend/renew on a suspended sub mutate items/term but **do not change subscription status** (suspended stays suspended). Merge can absorb a suspended source — it transitions to `superseded` like any other source.
+
+**Scope (confirmed):**
+- Three ARC quote types: `amend`, `renew`, `cancel` (in addition to existing `new`).
+- Multi-target quote: the same quote can target several subscriptions; each quote line is tagged with the target subscription it belongs to (nullable only for `type='new'`; required for `amend` / `renew` / `cancel`).
+- Merge-renewal: a brand-new sub M is created with the new term and the combined items from all sources. All source subs go `superseded` and link back to M via `mergedIntoSubscriptionId`.
+- Expiring subscriptions list view, with filter by days-to-expire window, customer, billing cycle.
+- ChangeLog records the diff per subscription per ARC operation.
 
 **Out of scope (v1):**
-- Refund execution (billing owns math; CPQ emits proration data)
-- Dunning / delinquency
-- Bulk amendments
-- Customer self-service UI (backoffice-only)
-- Pre-sale quote revisions (handled by existing `cloneQuote`)
-- Customer-facing notifications/emails (separate notification module listens to events)
-- Advanced multi-step amendment (e.g., "change now + change again in 3 months") — single effective_date per amendment
+- Refund / proration math (CPQ emits proration data on events; billing computes deltas).
+- Customer self-service portal flows.
+- Customer-facing notifications (separate notification module subscribes to CPQ events).
+- Scheduler / auto-renew automation.
+- Configurable ETF policy engine. (V1 records an ETF placeholder amount on the cancel quote line if ops enters one; no formula enforcement.)
+- Mid-term term changes (term changes only happen via renew).
+- Bulk ARC across many customers in one quote.
 
 ---
 
@@ -58,492 +83,489 @@
 | `CpqQuoteLineConfiguration` | `action: add\|modify\|cancel`, `startDate`, `endDate`, `termMonths` | No standalone lifecycle |
 | `CpqOrderConfiguration` | `orderId`, `sourceQuoteId`, `cpqStatus` | `draft → pending_activation → active → fulfilled \| cancelled` |
 | `CpqOrderLineConfiguration` | `action: add\|modify\|cancel` | No standalone lifecycle |
-| `CpqInventorySubscription` | `sourceQuoteId`, `sourceOrderId`, `status` (text), `billingCycle` (text, default 'monthly'), `currentTermEnd` (date), `autoRenew` (bool, default true), `termMonths` (int), `mrcAmount` (numeric(18,4) as string), `nrcAmount` (numeric(18,4) as string), `currencyCode` (text, default 'USD'), `customerId`, `activatedAt`, `suspendedAt`, `terminatedAt` | `pending → active ↔ suspended → terminated \| expired` (enforced by `INVENTORY_SUBSCRIPTION_TRANSITIONS` in types.ts) |
-| `CpqInventorySubscriptionItem` | `subscriptionId`, `parentItemId`, `status` (text), `mrcAmount`/`nrcAmount`/`currencyCode`, `sourceQuoteLineId` | No formal transition map; item.status is cascaded from parent subscription by `transitionSubscriptionStatus` |
-| `CpqInventoryAsset` | `subscriptionId`, `subscriptionItemId`, `status` (text), `sourceQuoteId`/`sourceOrderId`/`sourceQuoteLineId` | `pending → delivered → active → returned \| cancelled` (enforced by `INVENTORY_ASSET_TRANSITIONS` in types.ts) |
+| `CpqInventorySubscription` | `sourceQuoteId`, `sourceOrderId`, `status` (text), `billingCycle`, `currentTermEnd` (date), `autoRenew` (bool), `termMonths` (int), `mrcAmount`/`nrcAmount` (numeric(18,4) as string), `currencyCode`, `customerId`, `activatedAt`, `suspendedAt`, `terminatedAt` | `pending → active ↔ suspended → terminated \| expired` (per `INVENTORY_SUBSCRIPTION_TRANSITIONS` in [types.ts](../../src/modules/cpq/services/types.ts)) |
+| `CpqInventorySubscriptionItem` | `subscriptionId`, `parentItemId`, `status`, `mrcAmount`/`nrcAmount`/`currencyCode`, `sourceQuoteLineId` | Cascaded from parent subscription |
+| `CpqInventoryAsset` | `subscriptionId`, `subscriptionItemId`, `status`, `sourceQuoteId`/`sourceOrderId`/`sourceQuoteLineId` | `pending → delivered → active → returned \| cancelled` |
 
-Important conventions discovered from code verification:
-- Status columns are plain `text` with defaults — enums enforced by constants in [src/modules/cpq/services/types.ts](../../src/modules/cpq/services/types.ts), not DB-level
-- Numeric amounts stored as string via `numeric(18,4)` — arithmetic requires parsing (e.g., `parseFloat` or Decimal library)
-- Column naming: snake_case in DB (`mrc_amount`), camelCase in TS (`mrcAmount`)
-- All entities are tenant-scoped via `organizationId` + `tenantId` FKs and soft-deleted via `deletedAt`
-- Existing `version` column on Quote/Spec/Wizard is a plain integer counter (user-managed, e.g., `original.version + 1` in `cloneQuote`) — NOT MikroORM optimistic lock
+Conventions worth noting:
+- Status columns are plain `text` with defaults — enums enforced in [types.ts](../../src/modules/cpq/services/types.ts), not at DB level.
+- Numeric amounts are stored as string via `numeric(18,4)`. Use `Decimal.js` (or equivalent) for arithmetic.
+- Catalog items have an `isAssetizable` flag — when a quote line points at an assetizable product, `cpqInventoryService` materializes a `CpqInventoryAsset` per quantity at order activation. This is unchanged by this spec.
+- All entities are tenant-scoped (`organizationId` + `tenantId`) and soft-deleted (`deletedAt`).
 
-### What already works (partial ARC, verified against code)
+### What already works (relevant to ARC)
 
-- **Amend (partial):** `cpqQuotingService.cloneQuote(quoteId, scope)` at [src/modules/cpq/services/cpqQuotingService.ts:501](../../src/modules/cpq/services/cpqQuotingService.ts#L501) — creates new `SalesQuote` (cross-module) + `CpqQuoteConfiguration` with `parentQuoteId = original.id`, `version = original.version + 1`, `cpqStatus = 'new'`. Copies all `CpqQuoteLineConfiguration` (and corresponding `SalesQuoteLine`). Recomputes pricing internally.
-- **Renew (data only):** `autoRenew` (default `true`), `currentTermEnd` (nullable date), `termMonths` (nullable int) exist on `CpqInventorySubscription`; no execution logic, no scheduler.
-- **Cancel (partial):** `cpqInventoryService.transitionSubscriptionStatus(id, 'terminated', scope)` at [src/modules/cpq/services/cpqInventoryService.ts:350](../../src/modules/cpq/services/cpqInventoryService.ts#L350) — transitions subscription status, cascades to items (`item.status = targetStatus`) and assets (→ `cancelled` on termination). No reason, effective date, policy, or ETF.
-- **Quote approval flow (existing):** full quote lifecycle is `new → incomplete → ready → in_approval → pre_approved/approved → with_customer → accepted | rejected | cancelled`. Terminal states: `accepted`, `rejected`, `cancelled` (per `TERMINAL_STATUSES` in types.ts). `approved` is NOT terminal — it transitions to `with_customer → accepted`.
+- **Quote clone** — `cpqQuotingService.cloneQuote(quoteId, scope)` at [src/modules/cpq/services/cpqQuotingService.ts:501](../../src/modules/cpq/services/cpqQuotingService.ts#L501). Creates a new `SalesQuote` (cross-module) + a new `CpqQuoteConfiguration` with `parentQuoteId = original.id` and copies all `CpqQuoteLineConfiguration` rows. Used today for pre-sale revisions; ARC reuses this primitive when the operator opens an amend/renew quote pre-filled from an existing subscription.
+- **Quote approval flow** — full lifecycle `new → incomplete → ready → in_approval → pre_approved/approved → with_customer → accepted | rejected | cancelled` (terminal: `accepted`, `rejected`, `cancelled`).
+- **Order activation** — `cpqOrderService.activateOrder(orderId, scope)` transitions order from `pending_activation → active` and materializes subscription items + assets from the order's lines. ARC extends this method to apply ARC payloads to existing subscriptions.
+- **Cancel (partial)** — `cpqInventoryService.transitionSubscriptionStatus(id, 'terminated', scope)` at [src/modules/cpq/services/cpqInventoryService.ts:350](../../src/modules/cpq/services/cpqInventoryService.ts#L350). Cascades to items (→ `terminated`) and assets (→ `cancelled`). ARC's cancel path delegates to this.
 
 ### Gaps filled by this spec
 
-1. Dedicated ARC entities for auditable request/approval/execution cycle with retry + failure tracking
-2. Renewal & Amendment automation (scheduler + chain model)
-3. Cancellation metadata (reason, policy, effective date, ETF)
-4. Explicit delta tracking (per-line amendment changes)
-5. Proration data on amendment/renewal events
-6. Two new terminal subscription statuses: `amended`, `renewed`
-7. New terminal order status: `superseded`
-8. Optimistic locking via `version` column on subscription (replaces ambiguous `term_version`)
+1. **Quote ↔ subscription target wiring** — quotes must declare which subscriptions they affect, with a per-target action and per-line target FK.
+2. **Quote type discriminator** — `quote_type ∈ { new, amend, renew, cancel }` so the order activation logic can branch.
+3. **Subscription mutation handlers** in `cpqInventoryService`: `applyAmendment`, `applyRenewal`, `applyCancel` (in-place), and `applyMergeRenewal` (creates new sub M, retires sources). Throughout this spec we use *applyArcChange* as a collective shorthand referring to these four methods — there is no single method called that.
+4. **Append-only ChangeLog** — `CpqSubscriptionChangeLog` per ARC operation per affected subscription, capturing before/after.
+5. **Merge-renewal terminal status** — `superseded` on subscription (and on items) when the row was absorbed by a merge.
+6. **Term update fields on subscription** — track `currentTermStart` (NEW; complement to existing `currentTermEnd`).
+7. **Expiring subscriptions list view** — admin UI page + API.
 
 ---
 
 ## Proposed Solution
 
-Three processes, each with a dedicated request entity, service, API, state machine, and event stream. Amend and Renew both use chain model; Cancel is terminal.
-
-### Process 1: Amendment (post-sale modification, chain model)
+### Concept
 
 ```
-Active Subscription ──► AmendmentRequest (draft)
-                            │  user edits target lines, picks pricing_strategy, saves
-                            ▼
-                       AmendmentChange records created (delta)
-                            │
-                            ├─ type: 'change-config' | 'add-line' | 'remove-line' | 'change-term' | 'other'
-                            ├─ effectiveDate (immediate or future)
-                            ├─ pricing_strategy: 'rate-lock' | 'current-catalog' | 'mixed'
-                            ├─ reason (code + text)
-                            ▼
-                       Cloned Quote generated (snapshot) via extended cloneQuote
-                            │  amendment_request_id set, parentQuoteId = original CpqQuoteConfiguration.id
-                            │  creates new SalesQuote (cross-module) + SalesQuoteLines
-                            │  price computation respects pricing_strategy
-                            │  quote starts in cpqStatus='new', user drives through approval:
-                            │     new → incomplete → ready → in_approval → approved → with_customer → accepted
-                            │  (short path also valid: ready → with_customer → accepted)
-                            ▼
-                       Amendment lifecycle tracks but is separate from quote:
-                            AmendmentRequest.submit-for-approval → quote: ready → in_approval
-                            AmendmentRequest.approve              → quote: in_approval → approved
-                                                                  → quote: approved → with_customer → accepted
-                                                                  (user-driven or auto in trusted flows)
-                            When quote reaches 'accepted' AND effectiveDate ≤ now:
-                            ├─ execute() called inline
-                            └─ else deferred; scheduler picks up
-                            ▼
-                       execute() (atomic, transactional):
-                            ├─ New Order created (amendment_request_id, supersedes_order_id = original)
-                            ├─ Original Order: if 'active' → 'superseded'; if 'fulfilled' → stays fulfilled
-                            ├─ New Subscription created:
-                            │    previous_subscription_id = original, source_amendment_id = amendment
-                            │    items snapshot from amended quote
-                            │    currentTermEnd inherited from source
-                            │    status = active, version = 1
-                            │    inherits: customer_id, org/tenant_id, currency, billingCycle,
-                            │              autoRenew, default_renewal_pricing_strategy
-                            ├─ Original Subscription: status = amended
-                            ├─ Assets handled per line-change rules (see Asset & Item Handling)
-                            ├─ Items handled per line-change rules (see Asset & Item Handling)
-                            ├─ AmendmentRequest.status = executed
-                            ▼
-                       Event: cpq.amendment.executed (with proration payload)
+                ┌────────────────────────────────────────────────┐
+                │         CPQ Quote (the orchestrator)            │
+                │                                                  │
+                │  quote_type: amend | renew | cancel | new    │
+                │  targets: [TargetSubscription]+                  │
+                │  lines:   [QuoteLine.target_subscription_id]    │
+                └─────────────────────┬───────────────────────────┘
+                                      │
+                                      │  approval → accepted
+                                      ▼
+                ┌────────────────────────────────────────────────┐
+                │         CPQ Order (mirrors quote)               │
+                │  order activation reads the ARC payload          │
+                └─────────────────────┬───────────────────────────┘
+                                      │
+                                      │  cpqOrderService.activateOrder
+                                      ▼
+            ┌──────────────────────────────────────────────────────┐
+            │  cpqInventoryService.applyArcChange (per target sub)  │
+            │                                                        │
+            │   amend             → mutate items, term untouched     │
+            │   renew (standalone) → update term + items in place      │
+            │   renew (merge)      → CREATE new sub M, sources retire  │
+            │   cancel            → status='terminated' (existing)     │
+            │                                                          │
+            │   write CpqSubscriptionChangeLog row per affected sub    │
+            └──────────────────────┬───────────────────────────────────┘
+                                   │
+                                   ▼
+                       cpq.subscription.{amended, renewed, merged,
+                         cancelled, superseded} events
+                       (billing / notifications subscribe later)
 ```
 
-### Process 2: Renewal (chain model)
+### Process 1: Amend (item-only edit, term untouched)
 
 ```
-Scheduler (daily cron)
-  └─► scans subscriptions where currentTermEnd within lookahead window (default 7 days)
-      AND autoRenew = true AND status = 'active' AND no non-terminal cancellation/amendment
-         │
-         ▼
-      RenewalTransaction created (status=scheduled, scheduled_for=currentTermEnd)
-         │   pricing_strategy = attached amendment's strategy OR
-         │                      subscription.default_renewal_pricing_strategy
-         │
-         │  If amendment attached (manual renewal path):
-         │     AmendmentRequest linked, amended terms applied to NEW subscription
-         │
-         ▼  At scheduled_for:
-      Scheduler re-validates target subscription.status = 'active' (Fix #4 — execution-time check).
-      If not active → renewal.status = 'failed', failure_reason = 'target_not_active'. Alert ops.
-         │
-         ▼
-      executeRenewal() (atomic):
-         ├─ New Subscription created (inherits same fields as amendment):
-         │    previous_subscription_id = original
-         │    source_renewal_id = renewal
-         │    currentTermEnd = old.currentTermEnd + termMonths
-         │    status = active, version = 1
-         │    items snapshot from old subscription (or amended quote if attached)
-         │
-         ├─ Old Subscription:
-         │    status = renewed
-         │    items transition to 'renewed' terminal
-         │    assets migrate (FK → new subscription + new item IDs)
-         │
-         └─ RenewalTransaction.status = executed
-         ▼
-      Event: cpq.renewal.executed (with proration payload)
-
-Manual Renewal ──► POST /subscriptions/:id/renew → same RenewalTransaction path
-                   (may include amendmentId + pricing_strategy override)
+  Operator opens existing subscription detail in admin UI
+     │
+     ▼
+  Click "Amend (modify subscription)" → either:
+     (a) creates a fresh CPQ Quote pre-filled with subscription items
+         (type='amend', target=this subscription, all current items mirrored
+          as quote lines with action='modify', target_subscription_id=this sub)
+     (b) opens a multi-pick step → operator selects 1+ subscriptions on a single
+         quote (the "Modify subscription" button on the quote itself)
+     │
+     ▼
+  Operator edits per-target sub: add lines (action='add'), remove lines (action='cancel'),
+  modify configurations on existing lines (action='modify'). Each line's
+  target_subscription_id stays bound to the sub it edits.
+     │
+     ▼
+  Quote follows existing approval flow:
+     new → ready → in_approval → approved → with_customer → accepted
+     │
+     ▼
+  Operator creates Order from the accepted quote (existing CPQ flow).
+  Order is activated.
+     │
+     ▼
+  cpqInventoryService.applyAmendment(subscriptionId, lineChanges, sourceOrderId, scope):
+     ├─ items.add  → new CpqInventorySubscriptionItem (status='active')
+     ├─ items.cancel → CpqInventorySubscriptionItem.status = 'terminated'
+     ├─ items.modify → mutate config + recompute item.mrc/nrc
+     ├─ assets:
+     │     add-line on assetizable item → new CpqInventoryAsset(status='pending')
+     │     remove-line that had assets → asset.status='cancelled'
+     │     modify-line → asset config updated, FK unchanged
+     ├─ recompute subscription.mrcAmount = sum(active items.mrcAmount)
+     └─ status unchanged ('active' stays 'active'; 'suspended' stays 'suspended')
+     │
+     ▼
+  CpqSubscriptionChangeLog row written:
+     change_type='amend', source_quote_id, source_order_id,
+     before_snapshot, after_snapshot, line_changes (jsonb array)
+     │
+     ▼
+  Event: cpq.subscription.amended
 ```
 
-### Process 3: Cancellation
+### Process 2: Renew (term update + optional item edits + optional merge)
 
 ```
-CancellationRequest (requested)
-   │  requested by user, reason code + text
-   │  policy = 'immediate' | 'end-of-term'
-   │  effectiveDate computed:
-   │     immediate → now
-   │     end-of-term → subscription.currentTermEnd
-   │  ETF computed at creation (not recomputed at execution):
-   │     min(remaining_months × MRC × 0.5, 3 × MRC)
-   │
-   ▼  approval:
-CancellationRequest.status = approved
-   │  If effectiveDate ≤ now: execute() inline (same transaction)
-   │  Else: scheduler picks up at effectiveDate
-   │
-   ▼  At effectiveDate:
-execute() (atomic):
-   ├─ Subscription: status = terminated, cancellation_request_id set
-   ├─ Items: status = terminated (cascaded via transitionSubscriptionStatus)
-   ├─ Assets: status = cancelled (matches existing cascade behavior)
-   ├─ Order: status = cancelled (only if order in 'draft', 'pending_activation', or 'active' — per real CPQ_ORDER_TRANSITIONS; if 'fulfilled', order stays)
-   │
-   Event: cpq.cancellation.executed (billing listens → compute refund if needed)
+  Operator opens subscription(s) — typically from the "Expiring Subscriptions" list view
+     │
+     ▼
+  Click "Renew" on either:
+     (a) one subscription → quote pre-filled with that sub's items, type='renew', single
+         target with merge_action='standalone'
+     (b) "Modify subscription" button on quote → multi-pick. With 2+ subs picked the quote
+         enters merge mode automatically: every target gets merge_action='absorb' and the
+         drawer collects quote-level new contract metadata (term + optional code/name).
+     │
+     ▼
+  Operator enters new contract dates:
+    - standalone (1 target): on that single CpqQuoteTargetSubscription row.
+    - merge (2+ targets): quote-level fields arc_merge_new_term_start / End / Months
+       on CpqQuoteConfiguration. Optionally arc_merge_new_sub_code / name for the
+       new sub that will be created at activation.
+       Target rows keep all term fields null in merge mode.
+  Operator edits items:
+    - standalone: lines tagged with target_subscription_id = the renewing sub's id;
+       cancel/modify lines reference items via source_subscription_item_id.
+    - merge: lines have target_subscription_id=null (the merge result M doesn't exist yet);
+       cancel/modify lines reference items on any source via source_subscription_item_id.
+     │
+     ▼
+  Quote → approval → accepted → Order → activation (existing flow)
+     │
+     ▼
+  Branch on whether this is a merge:
+
+  ┌── No merge (each target renewed independently):
+  │     for each target sub:
+  │       cpqInventoryService.applyRenewal(subId, term, lineChanges, sourceOrderId):
+  │         ├─ subscription.currentTermStart = newTermStart
+  │         ├─ subscription.currentTermEnd = newTermEnd
+  │         ├─ subscription.termMonths = newTermMonths
+  │         ├─ apply item changes exactly like amend (add/cancel/modify)
+  │         ├─ recompute mrcAmount
+  │         └─ status unchanged ('active' or 'suspended' as it was)
+  │       Write ChangeLog row (change_type='renew')
+  │       Emit cpq.subscription.renewed
+  │
+  └── Merge (≥2 sources, all targets have merge_action='absorb'):
+        cpqInventoryService.applyMergeRenewal(sourceIds, term, mergeMeta, lineChanges, sourceQuoteId, sourceOrderId):
+          ├─ Validate: all source subs in {active, suspended}, same customer/currency/billingCycle.
+          ├─ Create NEW subscription `M`:
+          │    customer/currency/billingCycle inherited from sources (matched)
+          │    code     = mergeMeta.newSubCode ?? auto-generated (e.g. "MERGED-{shortid}")
+          │    name     = mergeMeta.newSubName ?? auto-generated (e.g. "Merged contract")
+          │    currentTermStart/End/termMonths from `term`
+          │    status   = 'active'
+          │    sourceQuoteId/sourceOrderId  → this ARC quote/order
+          │    version  = 1
+          ├─ Carry-over phase: for each source sub, clone its active items onto M
+          │    (new item ids, sourceQuoteLineId=null marking carry-over).
+          │    Migrate assets: subscriptionId/subscriptionItemId → M's new item ids.
+          ├─ Operator-edit phase: apply lineChanges (target_subscription_id=null,
+          │    or matching the new sub M's id once known) on M's combined item set.
+          │    'add' → new item with sourceQuoteLineId from the line.
+          │    'cancel' → matched existing item (carry-over OR added) → terminated.
+          │    'modify' → matched existing item config updated.
+          │    Matching uses the new `source_subscription_item_id` field on quote line
+          │    (operator's UI selection of the specific item being changed).
+          ├─ Recompute M.mrcAmount = sum of active items.
+          │  Write ChangeLog row on M:
+          │    change_type='merge-result', merged_from_subscription_ids=[...sourceIds],
+          │    term_change populated (oldTerm fields = null since M is new)
+          │  Emit cpq.subscription.merged
+          ├─ Each source sub:
+          │    status = 'superseded'
+          │    mergedIntoSubscriptionId = M.id
+          │    items.status = 'superseded' (cascaded)
+          │    assets already migrated above (source's asset list is empty)
+          │    terminatedAt set
+          │  Write ChangeLog row per source:
+          │    change_type='merge-source', merged_into_subscription_id=M.id, after_snapshot=null
+          │  Emit cpq.subscription.superseded
 ```
 
-### Validation Constraints
+**Why merge creates a new sub:** consolidating multiple contracts into one is conceptually a fresh contract, not a continuation of any one of the inputs. Operationally:
+- The new sub gets a clean code/name/identity that the operator can choose.
+- Sources are uniformly retired (`superseded` with `mergedIntoSubscriptionId` → new sub) — no awkward "this one is special" survivor designation.
+- Billing references on sources stop; billing on the new sub starts at the new term.
+- Trail back via `mergedIntoSubscriptionId` (sources → new) and `merged_from_subscription_ids` (new → sources, on the ChangeLog row).
 
-Cross-process rules enforced at API and service layer:
+### Process 3: Cancel (terminal)
 
-| Rule | Enforced where |
-|------|----------------|
-| Amendment target subscription must be `active` | API (creation) + service (execution re-check) |
-| Amendment `effective_date` must be ≤ source subscription's `currentTermEnd` (waived if amendment attached to RenewalTransaction) | API |
-| Amendment blocked if subscription has another amendment in `pending` or `approved` status (drafts allowed) | API (409) |
-| Amendment blocked if subscription has a non-terminal CancellationRequest | API (409) |
-| Amendment `lineChanges` must not be empty | API (400) |
-| Renewal target subscription must be `active` at execution time (not only at scheduling) | Service (scheduler at scan + at execution) |
-| Cancellation target must be in `pending`, `active`, or `suspended` | API (400) |
-| Cancellation `end-of-term` policy requires `currentTermEnd` set | API |
-| Concurrent modification detected via `version` — 409 Conflict | Service (MikroORM `@Property({ version: true })`) |
-| Execute operations are idempotent — re-call on already-executed request is a no-op returning 200 | Service |
+```
+  Operator opens subscription detail (or quote → "Modify subscription" → Cancel multi-pick).
+     │
+     ▼
+  Click "Cancel" → quote with type='cancel', one or more target subs.
+  Lines auto-derived: one action='cancel' line per existing active item per target
+  (target_subscription_id + source_subscription_item_id populated).
+  Quote captures reason code + free text + optional ETF amount on quote-level meta
+  (quote.arc_reason_code / arc_reason_text / arc_etf_amount / arc_etf_currency,
+   shared across all targets — single reason per cancel quote).
+     │
+     ▼
+  Quote → approval → accepted → Order → activation
+     │
+     ▼
+  For each target sub:
+    cpqInventoryService.applyCancel(subscriptionId, sourceOrderId, etfAmount?, ..., scope):
+       reuses existing transitionSubscriptionStatus(id, 'terminated', scope)
+       ├─ subscription.status = 'terminated'   (allowed from active OR suspended)
+       ├─ items.status = 'terminated' (cascaded today)
+       ├─ assets.status = 'cancelled' (cascaded today)
+       └─ subscription.terminatedAt = now()
+    Write ChangeLog row (change_type='cancel', etf_*, reason_*).
+    Emit cpq.subscription.cancelled (payload includes ETF + reason).
+```
+
+Note: cancellation is the lightest of the three because the existing `transitionSubscriptionStatus` already does the right cascades. ARC's contribution is (a) routing it through the quote/order flow for consistency and audit, and (b) writing a ChangeLog row.
+
+### Process 4: Expiring Subscriptions list view
+
+```
+  Backend: /backend/cpq/inventory/subscriptions/expiring
+  API:     GET /api/cpq/inventory/subscriptions/expiring?withinDays=30&customerId=...&billingCycle=monthly
+
+  Query: WHERE status='active'
+         AND currentTermEnd IS NOT NULL
+         AND currentTermEnd BETWEEN now() AND now() + ? days
+         ORDER BY currentTermEnd ASC
+
+  UI: DataTable with columns: customer, subscription code, items count,
+      MRC, currentTermEnd (with relative-time chip e.g. "in 5 days"), actions:
+      "Renew" (opens renew quote pre-filled), "Modify" (opens amend quote).
+```
 
 ---
 
-## Asset & Item Handling (chain transitions)
+## Asset & Item Handling
 
-Critical because Amend and Renew both create new subscriptions.
+For amend, standalone-renew, and cancel — items mutate on the same subscription row (no new sub created). For merge-renewal — items are cloned onto a new subscription M and assets migrate FK. Either way, item/asset handling is much simpler than the prior chain-based draft.
 
-### On Amendment execution
+### Items (`CpqInventorySubscriptionItem`)
 
-**Items** (contract-level, snapshot-per-subscription, immutable subscription_id FK):
-| Line change | New subscription | Old subscription's item |
-|-------------|-----------------|-------------------------|
-| Unchanged | Item copied with same config | → `amended` terminal |
-| Added | New item, status `pending` | (n/a) |
-| Removed | (no new item) | → `terminated` terminal (not `amended`, since removed entirely) |
-| Modified | Item copied with updated config | → `amended` terminal |
+| ARC operation | Line action | Effect on item rows |
+|---|---|---|
+| amend | add | new item row, `status='active'` (created during the same activation transaction; matches existing CPQ behaviour for new-sale order activation) |
+| amend | cancel | existing item.status → `terminated`; `terminatedAt = now()` |
+| amend | modify | existing item: config updated, `mrcAmount`/`nrcAmount` recomputed. If config didn't actually change, the mutation is a no-op and the line is omitted from `line_changes` jsonb summary on the ChangeLog. |
+| renew (standalone, no merge) | add/cancel/modify | same as amend |
+| renew (merge, on source subs) | (implicit — no per-source quote lines) | each source sub's active items: cloned onto the **new merge sub M** (new ids, `sourceQuoteLineId=null`); source's items → `superseded` |
+| renew (merge, on M — operator edits) | add/cancel/modify | applied to M's combined item set (carry-overs + ops adds). Lines have null `target_subscription_id` (M doesn't exist yet at quote time). |
+| cancel | (implicit per auto-derived `action='cancel'` lines) | all matched active items → `terminated` |
 
-**Assets** (physical; FK migrated on chain):
-| Line change | Asset behavior |
-|-------------|----------------|
-| Unchanged | `subscriptionId` + `subscriptionItemId` updated to new subscription/item |
-| Added | New Asset `pending` on new subscription |
-| Removed | Existing Asset → `cancelled`; stays linked to OLD subscription (historical trace) |
-| Modified | Migrates FK (like unchanged); configuration updated if applicable |
+**Item status enum extension** — add `superseded` to `CpqInventorySubscriptionItem` valid values. Reachable from any non-terminal item status when the parent sub goes `superseded` (cascaded automatically — items always mirror parent). Terminal.
 
-### On Renewal execution
+### Assets (`CpqInventoryAsset`)
 
-**Items:**
-- All items from old subscription copied to new subscription (fresh instances derived from old or attached amendment).
-- Old subscription's items transition to `renewed` terminal.
+| ARC operation | Line action | Effect on asset rows |
+|---|---|---|
+| amend | add (assetizable item) | new asset row, `status='pending'` |
+| amend | cancel | existing assets on that item → `status='cancelled'` |
+| amend | modify | existing asset: config updated, FK unchanged |
+| renew (standalone) | (any) | asset FK unchanged; lifecycle follows item changes |
+| renew (merge, sources → new merge sub M) | — | asset FK migrates: `subscriptionId = M.id`, `subscriptionItemId = corresponding new item id on M` |
+| cancel | — | all assets → `cancelled` (existing cascade behavior in `transitionSubscriptionStatus`) |
 
-**Assets:**
-- All assets migrate FK (`subscriptionId` → new, `subscriptionItemId` → corresponding new item).
-- Old subscription has no assets after migration; historical view via chain walk.
+### Catalog `isAssetizable` flag
 
-### On Cancellation execution
-
-**Items:** all → `terminated` (matches existing `transitionSubscriptionStatus` behavior where item.status is cascaded from parent).
-
-**Assets:** all → `cancelled` (matches existing cascade at [src/modules/cpq/services/cpqInventoryService.ts:391-395](../../src/modules/cpq/services/cpqInventoryService.ts#L391) — current code uses single terminal `cancelled` regardless of asset type).
-
-Note: the original draft of this spec proposed per-type cascade (physical → `returned`, digital → `cancelled`), but verification of `cpqInventoryService.transitionSubscriptionStatus` shows existing behavior is uniform `cancelled`. Per-type logic would require additional `assetType` handling — deferred to future enhancement. V1 preserves current cascade.
+Existing convention: catalog items declare `isAssetizable: boolean`. At order activation, `cpqInventoryService` materializes assets only for assetizable items. ARC respects this:
+- Amend `add` line → assets only created if catalog item is assetizable.
+- Amend `modify` line → asset stays if was assetizable; if catalog flag changed since original purchase, the asset is preserved (don't retroactively delete).
 
 ### Historic visibility
 
-Answering "what did old subscription X contain at time T":
-1. Items: `SELECT * FROM cpq_inventory_subscription_items WHERE subscription_id = X` — snapshot frozen when subscription transitioned to terminal.
-2. Assets that were there: walk forward chain (`WHERE previous_subscription_id = X`) and inspect assets migrated from X. Assets terminated on remove-line stay linked to X. Future: dedicated `CpqAssetHistory` log (out of v1 scope).
+Because we keep a single subscription row, "what did this subscription contain at time T" is answered via:
+1. Current state: `WHERE subscription_id = X AND status NOT IN ('terminated','superseded')` for items.
+2. History: walk `CpqSubscriptionChangeLog WHERE subscription_id = X ORDER BY created_at DESC`. Each row has `before_snapshot` and `after_snapshot` (jsonb) of the subscription + items at the moment of change.
 
-### Amendment attached to renewal (special case)
+Terminated items are still queryable in-table (we don't delete) — they're just not active.
 
-When an amendment is attached to a RenewalTransaction via `attached_amendment_id` (manual renewal path), the amendment does **not** execute standalone. Its line changes + `pricing_strategy` are applied to the new subscription created by the renewal. Lifecycle implications:
+---
 
-- **Attachment semantics**: on attachment, the amendment's `effective_date` is automatically overridden to match `renewal.scheduled_for` (so it aligns with when renewal will actually fire). The `effective_date ≤ currentTermEnd` creation-time validation is waived for attached amendments.
-- **Amendment.status lifecycle**: the amendment stays in `approved` while waiting for the renewal to fire. When the RenewalTransaction executes, the amendment transitions to `executed` in the same transaction; `result_subscription_id` on the amendment is set to the renewal's `new_subscription_id`; `result_order_id` and `result_quote_id` point to the renewal-generated order/quote.
-- **No duplicate execution**: amendment scheduler query adds a filter `AND NOT EXISTS (SELECT 1 FROM cpq_renewal_transactions WHERE attached_amendment_id = amendment.id AND status IN ('scheduled','failed'))` to skip amendments owned by a non-executed renewal.
-- **Withdrawal**: withdrawing an amendment that's attached to a scheduled renewal detaches it (sets `renewal.attached_amendment_id = null`). The renewal proceeds without amendment (default behavior). Alternative: cancel the renewal too — exposed as explicit user action, not default.
+## Validation Constraints
 
-### Subscription attribute inheritance (new subscription in chain)
+Cross-process rules enforced at quote validation + order activation:
 
-When a new subscription is created via amendment or renewal, it inherits from predecessor:
-- `customer_id`, `organization_id`, `tenant_id`
-- `currency` / `currency_code`
-- `billingCycle`
-- `autoRenew` flag
-- `default_renewal_pricing_strategy`
-
-Diverges:
-- `id` (new UUID)
-- `previous_subscription_id` (→ predecessor)
-- `source_amendment_id` / `source_renewal_id` (→ the request that created it; mutually exclusive)
-- `sourceQuoteId` / `sourceOrderId` (→ the new quote/order)
-- `currentTermEnd` (amendment: inherited; renewal: extended by `termMonths`)
-- `version` (starts at 1)
-- `status` (starts at `active`)
-- `items` (snapshot from quote)
+| Rule | Where enforced |
+|------|----------------|
+| Quote `type` ∈ `{ new, amend, renew, cancel }`; once non-`new`, immutable | Zod validator + service layer (PATCH endpoint enforces one-way `new → amend\|renew\|cancel`) |
+| `type='amend'` requires ≥1 target subscription, all in `status ∈ {active, suspended}` | API on quote create + at "submit for approval" transition |
+| `type='renew'` requires ≥1 target subscription, all in `status ∈ {active, suspended}`. Targets with `merge_action='standalone'` must have `newTermStart`, `newTermEnd` set on the target row with `newTermStart >= today` and `newTermEnd > newTermStart`. Targets with `merge_action='absorb'` keep target-level term fields null — the merge term lives on quote-level `arc_merge_new_term_*`. | API |
+| `type='renew'` with merge (≥2 targets): all targets have `merge_action='absorb'`; quote-level `arc_merge_new_term_start` / `arc_merge_new_term_end` / `arc_merge_new_term_months` are required; all targets share same `customerId`, `currencyCode`, `billingCycle` | API |
+| `type='renew'` single target: that target has `merge_action='standalone'` | API |
+| `type='cancel'` requires ≥1 target subscription in `status ∈ {active, suspended}`. Cancel lines are auto-derived by `createQuoteFromSubscription` (one line per existing active item per target, `action='cancel'`, `target_subscription_id` set). Operator can edit lines but cannot remove the auto-derivation. | API + service |
+| `type='amend'` / `'renew'` / `'cancel'` blocks if any target has another non-terminal ARC quote already in `pending`/`approved` (drafts allowed) | API on submit-for-approval |
+| Quote line `target_subscription_id` (when set) must reference one of the quote's `CpqQuoteTargetSubscription` rows | API |
+| For `type='amend'` and `type='cancel'`, every quote line must have `target_subscription_id` set | API |
+| For `type='renew'` standalone, every quote line must have `target_subscription_id` = that single target's id | API |
+| For `type='renew'` merge, every quote line must have `target_subscription_id=null` — lines target the new merge sub `M` which doesn't exist yet at quote time. Activation populates an internal mapping to M.id when applying changes. | API |
+| For amend/renew lines with `action ∈ {cancel, modify}`, `source_subscription_item_id` must reference an active item on one of the quote's targets (or, for merge mode, on any source sub being merged) — identifies which existing item the line affects. | API |
+| `arc_reason_code` is required on `type='cancel'` quotes at "submit for approval" transition (cancel-meta endpoint must have been called) | API |
+| Order activation re-validates target sub status (`active` for amend/renew, `active` or `suspended` for cancel). If re-check fails, activation throws and order stays in `pending_activation` | Service layer in `cpqOrderService.activateOrder` |
+| ARC mutations use optimistic locking on subscription `version` — concurrent modification → 409 | `cpqInventoryService.apply*` |
+| `apply*` methods are **idempotent** keyed on `(sourceOrderId, subscriptionId)` — if a ChangeLog row already exists for that order×sub pair, the call is a no-op returning the existing log. Enforced by a UNIQUE constraint on `CpqSubscriptionChangeLog (source_order_id, subscription_id) WHERE source_order_id IS NOT NULL`. | Service layer + DB |
 
 ---
 
 ## Data Models
 
-Convention note: `enum(...)` notation below describes valid values but fields are stored as `text` columns with defaults. Validation is enforced in service layer (following existing CPQ pattern — see `INVENTORY_SUBSCRIPTION_STATUSES`, `CPQ_ORDER_TRANSITIONS` etc. in [types.ts](../../src/modules/cpq/services/types.ts)). New enum-like values should be added as constants exported from the same file.
+Convention note: `enum(...)` notation describes valid values; fields are `text` columns with defaults, validated in service layer (matching existing CPQ pattern).
 
-### New entities
+### New entity: `CpqSubscriptionChangeLog`
 
-#### `CpqAmendmentRequest`
-
-```
-id: string (UUID, PK)
-organization_id: string (tenant-scoped)
-tenant_id: string
-source_subscription_id: string ──► CpqInventorySubscription
-source_order_id: string (nullable) ──► SalesOrder
-amendment_type: enum('change-config' | 'add-line' | 'remove-line' | 'change-term' | 'other')
-pricing_strategy: text ∈ {'rate-lock', 'current-catalog', 'mixed'}   ← validated in service layer, not DB enum
-reason_code: enum('upgrade' | 'downgrade' | 'config-change' | 'price-adjustment' | 'term-extension' | 'term-reduction' | 'customer-request' | 'other') (nullable)
-reason_text: string (nullable)
-requested_by_user_id: string
-effective_date: date
-status: enum('draft' | 'pending' | 'approved' | 'executed' | 'failed' | 'rejected' | 'withdrawn')
-retry_count: integer (default 0, max 3) — applies on execution failure
-failure_reason: string (nullable)
-result_quote_id: string (nullable) ──► CpqQuoteConfiguration
-result_order_id: string (nullable) ──► CpqOrderConfiguration
-result_subscription_id: string (nullable) ──► CpqInventorySubscription (new chained subscription)
-approved_by_user_id: string (nullable)
-approved_at: timestamp (nullable)
-executed_at: timestamp (nullable)
-rejection_reason: string (nullable)
-created_at, updated_at: timestamp
-version: integer @Property({ version: true })   ← MikroORM optimistic lock; auto-increments on every UPDATE. Distinct from existing user-managed `version` counter on Quote/Spec/Wizard entities.
-```
-
-Indexes: `(organization_id, status)`, `(source_subscription_id)`, `(effective_date, status)` for scheduler.
-
-Scheduler query: `WHERE status = 'approved' AND effective_date <= now()`.
-
-#### `CpqAmendmentChange` *(delta tracking)*
+Append-only audit record. One row per ARC operation per affected subscription.
 
 ```
 id: string (UUID, PK)
 organization_id: string
-amendment_request_id: string ──► CpqAmendmentRequest
-change_type: enum('line-added' | 'line-removed' | 'line-modified' | 'attribute-changed' | 'charge-changed' | 'term-changed')
-target_line_id: string (nullable) ──► CpqQuoteLineConfiguration
-before_snapshot: jsonb (nullable)
-after_snapshot: jsonb (nullable)
-field_path: string (nullable) — dotted path for attribute/charge changes
+tenant_id: string
+subscription_id: string ──► CpqInventorySubscription
+change_type: enum('amend' | 'renew' | 'cancel' | 'merge-result' | 'merge-source')
+                               ← 'merge-result' lives on the new merge sub M; 'merge-source' on each retired source.
+source_quote_id: string (nullable) ──► CpqQuoteConfiguration
+source_order_id: string (nullable) ──► CpqOrderConfiguration
+performed_by_user_id: string
+effective_at: timestamp        ← typically order activation time
+before_snapshot: jsonb (nullable) ← state before mutation. Null for change_type='merge-result' (M is brand new — no "before").
+after_snapshot:  jsonb (nullable) ← state after mutation. Null for change_type='merge-source' (source's terminal state IS the meaningful "after").
+line_changes: jsonb            ← summary array: [{ action: 'add'|'cancel'|'modify', lineId, productCode, qty, mrcDelta, ... }]
+term_change: jsonb (nullable)  ← { oldTermStart, newTermStart, oldTermEnd, newTermEnd, oldTermMonths, newTermMonths } — populated for change_type='renew' (standalone) and 'merge-result' (oldTerm fields null since M is new)
+merged_into_subscription_id:  string (nullable) ──► CpqInventorySubscription  ← set on merge-source rows; points at the new merge sub M
+merged_from_subscription_ids: jsonb (nullable)  ← array of source ids; set on the merge-result row to record which subs were merged in
+reason_code: enum('upgrade' | 'downgrade' | 'config-change' | 'price-adjustment' | 'term-extension' | 'term-reduction' | 'consolidation' | 'customer-request' | 'non-payment' | 'contract-breach' | 'other') (nullable)
+reason_text: string (nullable)
+etf_amount: numeric(18,4) string (nullable)   ← only on cancel rows; recorded at quote creation
+etf_currency: string (3-char, nullable)
 created_at: timestamp
 ```
 
-#### `CpqRenewalTransaction`
+Indexes:
+- `(organization_id, tenant_id, subscription_id, created_at DESC)` — per-sub history view
+- `(source_order_id)` — idempotency lookup
+- `(merged_into_subscription_id)` — "what got merged into which new sub"
+- **UNIQUE** `(source_order_id, subscription_id) WHERE source_order_id IS NOT NULL` — DB-level idempotency: one ChangeLog row per `(order, sub)` pair max. The partial WHERE clause permits null `source_order_id` for hypothetical future non-order-driven entries (e.g., manual reconciliation), without those colliding on the unique index.
+
+**Append-only contract:** ChangeLog rows are never updated. Soft-delete via `deletedAt` is allowed for compliance erasure but the runtime ignores deleted rows. No `version` column needed (no concurrent edits).
+
+### New entity: `CpqQuoteTargetSubscription`
+
+Junction between a quote and the subscription(s) it ARC-affects. One row per target.
 
 ```
 id: string (UUID, PK)
 organization_id: string
 tenant_id: string
-source_subscription_id: string ──► CpqInventorySubscription
-new_subscription_id: string (nullable until executed) ──► CpqInventorySubscription
-trigger_type: enum('auto' | 'manual' | 'amendment-driven')
-attached_amendment_id: string (nullable) ──► CpqAmendmentRequest
-pricing_strategy: text ∈ {'rate-lock', 'current-catalog', 'mixed'}   ← validated in service layer, not DB enum
-term_months: integer
-scheduled_for: timestamp
-executed_at: timestamp (nullable)
-executed_by_user_id: string (nullable — null for auto)
-status: enum('scheduled' | 'executed' | 'failed' | 'cancelled')
-failure_reason: string (nullable)
-retry_count: integer (default 0, max 3)
+quote_id: string ──► CpqQuoteConfiguration
+subscription_id: string ──► CpqInventorySubscription
+quote_type: enum('amend' | 'renew' | 'cancel')   ← MUST match parent quote.quoteType
+new_term_start: date (nullable)        ← only for renew with merge_action='standalone' (else null)
+new_term_end: date (nullable)          ← same
+new_term_months: integer (nullable)    ← same
+merge_action: text ∈ {'standalone', 'absorb'} (nullable)
+                                       ← only set for quote_type='renew'.
+                                         'standalone' = single-target renew (in-place mutation).
+                                         'absorb'     = merge source: this sub gets superseded;
+                                                        items migrate to the new merge sub created at activation.
+                                         null         = quote_type ∈ {'amend','cancel'}.
 created_at, updated_at: timestamp
-version: integer @Property({ version: true })   ← MikroORM optimistic lock; auto-increments on every UPDATE. Distinct from existing user-managed `version` counter on Quote/Spec/Wizard entities.
 ```
 
-Indexes: `(scheduled_for, status)` for scheduler, `(source_subscription_id)` for history.
+Indexes: `(quote_id)`, `(subscription_id, quote_type)`.
 
-#### `CpqCancellationRequest`
+Constraints (service layer):
+- A subscription cannot be on two non-terminal ARC quotes at the same time (per validation rules above).
+- For `quote_type='renew'`: `merge_action` is required; for other types it must be null.
+- Per quote: with exactly one renew target, `merge_action='standalone'`. With ≥2 renew targets, all have `merge_action='absorb'` (merge mode) and the merge term lives on quote-level fields (see `CpqQuoteConfiguration` below).
+- `merge_action='absorb'` rows have null target-level term fields.
+
+### New fields on `CpqQuoteLineConfiguration`
 
 ```
-id: string (UUID, PK)
-organization_id: string
-tenant_id: string
-target_type: enum('subscription' | 'order')
-target_id: string (polymorphic FK)
-reason_code: enum('customer-request' | 'non-payment' | 'contract-breach' | 'upgrade' | 'downgrade' | 'other')
-reason_text: string (nullable)
-requested_by_user_id: string
-cancellation_policy: enum('immediate' | 'end-of-term')
-effective_date: date
-etf_applies: boolean
-etf_amount: decimal (nullable)
-etf_currency: string (3-char, nullable)
-status: enum('requested' | 'approved' | 'executed' | 'failed' | 'rejected' | 'withdrawn')
-retry_count: integer (default 0, max 3)
-failure_reason: string (nullable)
-approved_by_user_id: string (nullable)
-approved_at: timestamp (nullable)
-executed_at: timestamp (nullable)
-rejection_reason: string (nullable)
-created_at, updated_at: timestamp
-version: integer @Property({ version: true })   ← MikroORM optimistic lock; auto-increments on every UPDATE. Distinct from existing user-managed `version` counter on Quote/Spec/Wizard entities.
+target_subscription_id:        string (nullable) ──► CpqInventorySubscription
+source_subscription_item_id:   string (nullable) ──► CpqInventorySubscriptionItem
 ```
 
-Indexes: `(organization_id, status)`, `(target_type, target_id)`, `(effective_date, status)`.
+`target_subscription_id`: identifies which target sub this line affects.
+- `type='amend'` / `type='cancel'`: required (one of the quote's targets).
+- `type='renew'` standalone: required (the single target).
+- `type='renew'` merge: must be **null** — line targets the new merge sub `M` which doesn't exist yet at quote time. The activation service maps null-target merge lines onto M.
+- `type='new'`: null (legacy behaviour preserved).
 
-### Modifications to existing entities
+`source_subscription_item_id`: required when `action ∈ {cancel, modify}` on amend/renew quotes — points at the specific existing subscription item the line is changing. For merge mode, this references an item on any of the source subs being absorbed (the activation service maps it to the corresponding new item on M).
 
-**`CpqInventorySubscription`** — add:
+For `type='cancel'` quotes, both fields are auto-populated by `createQuoteFromSubscription`: each generated cancel line gets `target_subscription_id` = the cancel target and `source_subscription_item_id` = the active item being cancelled.
+
+### New fields on `CpqQuoteConfiguration`
+
 ```
-version: integer @Property({ version: true })   ← MikroORM optimistic lock; auto-increments on every UPDATE. Distinct from existing user-managed `version` counter on Quote/Spec/Wizard entities.   ← renamed from term_version; row version for optimistic locking
-previous_subscription_id: string (nullable) ──► CpqInventorySubscription (chain predecessor)
-source_amendment_id: string (nullable) ──► CpqAmendmentRequest (amendment that created THIS subscription)
-source_renewal_id: string (nullable) ──► CpqRenewalTransaction (renewal that created THIS subscription)
-cancellation_request_id: string (nullable) ──► CpqCancellationRequest
-default_renewal_pricing_strategy: text default 'rate-lock' ∈ {'rate-lock', 'current-catalog', 'mixed'} — validated in service layer, not DB enum
-last_billing_date: date (nullable) — set by billing module integration; used by CPQ for proration cycle bounds
+quote_type: text ∈ {'new','amend','renew','cancel'} default 'new'
+
+# Cancel meta — only meaningful for type='cancel'. Stamped via POST /quotes/[id]/cancel-meta.
+arc_reason_code:  text (nullable)
+arc_reason_text:  text (nullable)
+arc_etf_amount:   numeric(18,4) string (nullable)
+arc_etf_currency: string (3-char, nullable)             ← defaults to quote currency on stamp
+
+# Merge meta — only meaningful for type='renew' with ≥2 targets all in merge_action='absorb'.
+arc_merge_new_term_start:  date (nullable)              ← required when in merge mode
+arc_merge_new_term_end:    date (nullable)              ← required when in merge mode
+arc_merge_new_term_months: integer (nullable)
+arc_merge_new_sub_code:    text (nullable)              ← optional — operator can name the new sub; auto-generated if null
+arc_merge_new_sub_name:    text (nullable)              ← optional — display name for the new sub; default e.g. "Merged contract ({customer})"
 ```
 
-Inverse lookups (no back-reference columns stored):
-- Chain successor: `WHERE previous_subscription_id = $currentId LIMIT 1`
-- Termination reason: fetch from linked `CancellationRequest`
+`arc_reason_*` / `arc_etf_*` flow forward: at activation, `applyCancel` copies them onto the cancel ChangeLog row and emits them on `cpq.subscription.cancelled`.
 
-Note: `source_amendment_id` and `source_renewal_id` are mutually exclusive — a subscription is created by exactly one of (original order, amendment, renewal).
+`arc_merge_*` flow forward: at activation, `applyMergeRenewal` reads them, creates the new sub `M` with the term + code + name, and emits them on `cpq.subscription.merged`.
 
-**Subscription status enum** — add two terminal statuses:
+Existing flow: pre-existing quotes default to `quote_type='new'`. Backfill migration sets all existing rows to `'new'`. `arc_*` fields stay null for non-applicable quote types.
+
+### Modifications to `CpqInventorySubscription`
+
 ```
-amended   ← NEW, chain predecessor via amendment
-renewed   ← NEW, chain predecessor via renewal
+current_term_start: date (nullable)             ← NEW; complements existing currentTermEnd
+merged_into_subscription_id: string (nullable) ──► CpqInventorySubscription   ← NEW; only set when this row is a merge source (terminal status='superseded')
+last_change_log_id: string (nullable) ──► CpqSubscriptionChangeLog            ← NEW; convenience pointer to most recent change for fast UI rendering
+version: integer @Property({ version: true })   ← NEW MikroORM optimistic lock; auto-increments on every UPDATE. Distinct from the existing user-managed integer counters elsewhere on quote/spec/wizard entities.
 ```
 
-**Subscription state machine** (verified against [types.ts `INVENTORY_SUBSCRIPTION_TRANSITIONS`](../../src/modules/cpq/services/types.ts#L168)):
+**No `previous_subscription_id`, `source_amendment_id`, or `source_renewal_id`.** History lives in ChangeLog only. The chain model is gone.
+
+`autoRenew` field stays in the schema for backward compatibility but is **no longer consulted** by any service in v1 (no scheduler reads it). Treat it as informational. We may remove it in a follow-up after auditing whether any existing customer extension reads it.
+
+### Subscription status enum — add ONE terminal status
+
+Existing: `pending | active | suspended | terminated | expired`.
+
+Add: **`superseded`** — terminal, reachable from `active` or `suspended` via merge-renewal (when this sub was a merge source).
 
 | From | Existing transitions | This spec adds |
 |------|---------------------|----------------|
 | `pending` | `active`, `terminated` | — |
-| `active` | `suspended`, `terminated`, `expired` | **`amended`**, **`renewed`** ← NEW |
-| `suspended` | `active`, `terminated` | — |
-| `terminated`, `expired` | (terminal) | — |
-| `amended`, `renewed` | — | terminal (NEW) |
-
-Migration: update `INVENTORY_SUBSCRIPTION_STATUSES` constant to include `'amended'`, `'renewed'`; extend `INVENTORY_SUBSCRIPTION_TRANSITIONS.active` with these; add `amended: []` and `renewed: []` entries.
-
-Notes:
-- Subscription enum has NO `cancelled` status — cancellation-driven termination uses `terminated`. `cancelled` exists on items/assets/orders but never on subscription.
-- `suspended` cannot transition directly to `amended` or `renewed` — validation blocks amendment/renewal on suspended; reactivate first.
-
-**`CpqInventorySubscriptionItem`** — status enum extended and state machine:
-
-Existing enum: `pending | active | suspended | terminated | expired`. Add: `amended`, `renewed` (mirror parent subscription terminals). Note: `cancelled` is NOT a valid item status (only `CpqInventoryAsset` has `cancelled`).
-
-| From | Allowed transitions |
-|------|---------------------|
-| `pending` | `active`, `terminated` (if parent subscription terminated/cancelled before item activated) |
-| `active` | `suspended`, `terminated`, `expired`, `amended`, `renewed` |
-| `suspended` | `active`, `terminated` |
-| `terminated`, `expired`, `amended`, `renewed` | (terminal — no outgoing) |
-
-Item transitions are driven by parent subscription transitions (never independent).
-
-**`CpqQuoteConfiguration`** — add:
-```
-amendment_request_id: string (nullable) ──► CpqAmendmentRequest
-```
-
-Successor lookup: `WHERE parent_quote_id = $currentId`.
-
-Additional rule: when an AmendmentRequest is withdrawn or rejected, the linked result Quote (if any) transitions to existing `cancelled` status — prevents orphaned quotes in limbo.
-
-**`CpqOrderConfiguration`** — add:
-```
-amendment_request_id: string (nullable) ──► CpqAmendmentRequest
-supersedes_order_id: string (nullable) ──► CpqOrderConfiguration
-```
-
-Successor lookup: `WHERE supersedes_order_id = $currentId`.
-
-**Order status enum** — add:
-```
-superseded  ← NEW TERMINAL, order replaced by amendment successor (only from 'active'; 'fulfilled' orders keep status)
-```
-
-**Order state machine** (verified against [types.ts `CPQ_ORDER_TRANSITIONS`](../../src/modules/cpq/services/types.ts#L192)):
-
-| From | Existing transitions | This spec adds |
-|------|---------------------|----------------|
-| `draft` | `pending_activation`, `active`, `cancelled` | — |
-| `pending_activation` | `active`, `cancelled` | — |
-| `active` | `fulfilled`, `cancelled` | **`superseded`** ← NEW |
-| `fulfilled`, `cancelled` | (terminal) | — |
+| `active` | `suspended`, `terminated`, `expired` | **`superseded`** ← NEW (only via merge) |
+| `suspended` | `active`, `terminated` | **`superseded`** ← NEW (only via merge — suspended subs can be absorbed) |
+| `terminated`, `expired` | — | (terminal) |
 | `superseded` | — | terminal (NEW) |
 
-Migration: update `CPQ_ORDER_STATUSES` constant to include `'superseded'`; extend `CPQ_ORDER_TRANSITIONS.active` with `'superseded'`; add `superseded: []` entry.
+Migration: extend `INVENTORY_SUBSCRIPTION_STATUSES` with `'superseded'`; extend `INVENTORY_SUBSCRIPTION_TRANSITIONS.active` and `.suspended` with `'superseded'`; add `superseded: []`.
+
+We do **not** add `amended` or `renewed` terminals — those operations don't terminate the subscription. Amend and standalone-renew on a `suspended` sub keep the sub `suspended` (status untouched, items/term mutated). Operator must explicitly reactivate via existing flow if they want it active.
+
+### Subscription item status enum
+
+Add `superseded` (only reachable when parent sub goes `superseded` via merge — items are cascaded). Terminal.
 
 ### Cross-module FK rule
 
-Per [.ai/enforcement-rules.md](../../.ai/enforcement-rules.md): **all FKs above are `string` columns, NO ORM relations cross-module.** Intra-module (e.g., `CpqAmendmentChange` → `CpqAmendmentRequest`) may use ORM relations.
+Per [.ai/enforcement-rules.md](../../.ai/enforcement-rules.md): all cross-module FKs above are `string` columns; ORM relations only inside the CPQ module. Intra-module relations (e.g., `CpqQuoteTargetSubscription` → `CpqQuoteConfiguration`) may use ORM.
 
-### ETF Formula (Q5.a — fixed default)
+---
 
-Pure function, codified in `cpqCancellationService.computeETF`:
-
-```
-input: subscription { currentTermEnd: Date|null, termMonths: number|null, mrcAmount: string, currencyCode: string }, effectiveDate: Date
-
-if cancellation_policy = 'end-of-term' OR currentTermEnd === null OR effectiveDate >= currentTermEnd OR termMonths === null:
-    return { etf_applies: false, etf_amount: null, etf_currency: null }
-
-// mrcAmount is stored as string (numeric(18,4)); parse carefully
-mrc = parseNumeric(subscription.mrcAmount)  // e.g., Decimal.js or BigDecimal
-remaining_months = ceil((currentTermEnd - effectiveDate).days / 30)
-raw_etf = remaining_months × mrc × 0.5
-capped_etf = min(raw_etf, 3 × mrc)
-
-return { etf_applies: true, etf_amount: formatNumeric(capped_etf), etf_currency: subscription.currencyCode }
-```
-
-Implementation notes:
-- `mrcAmount` on `CpqInventorySubscription` is `numeric(18,4)` stored as string (e.g., `'99.9900'`). Use `Decimal.js` (or MikroORM's `Decimal` type helper) for arithmetic; avoid `parseFloat` for financial calculations.
-- `etf_amount` on `CpqCancellationRequest` should also be `numeric(18,4)` string for consistency.
-- `ceil(days / 30)` is simple approximation; tests must cover month-boundary edge cases (e.g., effectiveDate = 15th of 30-day month vs 15th of 31-day month).
-
-Unit tests cover: zero term, exact currentTermEnd, past currentTermEnd, null termMonths, null currentTermEnd, month boundary edges, large term with cap triggering.
-
-Future: swap for configurable `CpqEtfPolicy` entity (out of scope v1).
-
-### Configuration Defaults
+## Configuration Defaults
 
 | Setting | Default | Notes |
 |---------|---------|-------|
-| Renewal scheduler lookahead window | 7 days | Configurable via env / module config |
-| Renewal scheduler look-behind window | 3 days | Catches missed cron runs |
-| Renewal retry count max | 3 | After max → terminal `failed`, alert ops |
-| Cancellation scheduler look-behind | 3 days | Same rationale |
-| Amendment scheduler poll interval | 15 min | Balances UX latency for future-dated amendments with scheduler load |
-| Amendment retry count max | 3 | Same as renewal |
-| Cancellation retry count max | 3 | Same as renewal |
-| Default subscription renewal pricing strategy | `rate-lock` | Configurable per subscription, per renewal |
-| ETF multiplier | 0.5 | Fixed v1; configurable in future |
-| ETF cap (× MRC) | 3 | Fixed v1 |
-| Numeric amount representation | `numeric(18,4)` stored as string | Matches existing CPQ convention (e.g., `mrcAmount`, `nrcAmount`); all arithmetic via Decimal library |
+| Expiring view default window | 30 days | Configurable in UI filter |
+| ChangeLog retention | indefinite | Soft-delete only for compliance; never auto-purged |
+| Idempotency key for `applyArcChange` | `(orderId, subscriptionId)` | Re-running activation produces a no-op |
+| Default reason code | none (nullable) | UI prompts but does not require it (yet) |
+| Numeric amount representation | `numeric(18,4)` stored as string | Existing CPQ convention |
 
 ---
 
@@ -551,360 +573,96 @@ Future: swap for configurable `CpqEtfPolicy` entity (out of scope v1).
 
 | Feature | Scope |
 |---------|-------|
-| `cpq.arc.amendment.view` | Read amendment requests and delta records |
-| `cpq.arc.amendment.manage` | Create, submit for approval, withdraw, retry-failed amendment |
-| `cpq.arc.amendment.approve` | Approve / reject amendment (also needs `cpq.quote.approve`) |
-| `cpq.arc.renewal.view` | Read renewal history |
-| `cpq.arc.renewal.manage` | Manual renewal, autoRenew toggle, cancel scheduled renewal, retry-failed |
-| `cpq.arc.cancellation.view` | Read cancellation requests |
-| `cpq.arc.cancellation.manage` | Create, withdraw, retry-failed cancellation |
-| `cpq.arc.cancellation.approve` | Approve / reject cancellation |
+| `cpq.arc.amend.manage` | Create / edit a quote with `type='amend'`; drive it to approval |
+| `cpq.arc.renew.manage` | Create / edit a quote with `type='renew'`, including merge designation |
+| `cpq.arc.cancel.manage` | Create / edit a quote with `type='cancel'` |
+| `cpq.arc.changelog.view` | Read `CpqSubscriptionChangeLog` per subscription |
+| `cpq.inventory.expiring.view` | View the "Expiring Subscriptions" list |
 
-Declared in [src/modules/cpq/acl.ts](../../src/modules/cpq/acl.ts).
+ARC quote approval is gated by the existing `cpq.quote.approve` feature (no new feature for that — ARC quotes follow the same approval permissions as new-sale quotes).
+
+Declared in [src/modules/cpq/acl.ts](../../src/modules/cpq/acl.ts) using the existing `{ id, title, module }` object form.
 
 ---
 
 ## API Contracts
 
-### Amendment
+All APIs live under `src/modules/cpq/api/` and follow the existing CPQ-style `api/<resource>/route.ts` pattern (verified against [src/modules/cpq/api/quotes/route.ts](../../src/modules/cpq/api/quotes/route.ts)). All routes export `metadata` with `requireAuth: true` and `requireFeatures`. All routes export `openApi`.
+
+### Quote: ARC creation helpers
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| POST | `/api/cpq/amendments` | Create AmendmentRequest (draft). Body: `{ sourceSubscriptionId, amendmentType, pricingStrategy, reasonCode?, reasonText?, effectiveDate, lineChanges: [...] }`. Validates rules. Side-effect: generates cloned Quote + AmendmentChange records. Returns `{ amendmentId, resultQuoteId }`. |
-| GET | `/api/cpq/amendments/[id]` | Fetch amendment with changes, linked quote, status |
-| POST | `/api/cpq/amendments/[id]/submit-for-approval` | `draft → pending` |
-| POST | `/api/cpq/amendments/[id]/approve` | Drives linked quote through its approval flow (requires `cpq.quote.approve`). AmendmentRequest.status → `approved` when quote reaches `accepted`. If `effective_date ≤ now`, also `approved → executed` inline in same transaction. |
-| POST | `/api/cpq/amendments/[id]/reject` | `pending → rejected` with reason |
-| POST | `/api/cpq/amendments/[id]/withdraw` | Withdraw (allowed in `draft`, `pending`, `approved`). Also cancels linked result Quote. |
-| POST | `/api/cpq/amendments/[id]/retry` | Retry execution after failure (allowed in `failed` status, resets retry_count-driven gate) |
-| GET | `/api/cpq/subscriptions/[id]/amendments` | List amendments for subscription |
-| Internal | Cron `cpq:execute-amendments` | Every 15 min: picks up `approved` amendments where `effective_date ≤ now` |
+| POST | `/api/cpq/quotes/from-subscription` | Create a fresh CPQ quote pre-filled with one subscription's items. Body: `{ subscriptionId, type: 'amend' \| 'renew' \| 'cancel', renewTerm?: { newTermStart, newTermEnd, newTermMonths } }`. Returns the new `quoteId`. |
+| PATCH | `/api/cpq/quotes/[id]` | Existing endpoint, **extended** to accept `quoteType`. Server enforces the one-way transition rule: `new → amend\|renew\|cancel` is the only allowed change; anything else returns `409`. Used by `ArcQuoteConfigurator` to convert an in-progress `new` quote into an ARC quote when the operator picks an action. |
+| POST | `/api/cpq/quotes/[id]/target-subscriptions` | Attach additional subscriptions to an in-progress quote (multi-target / merge case). Body: `{ subscriptionId, quoteType, mergeAction?: 'standalone' \| 'absorb', newTermStart?, newTermEnd?, newTermMonths? }`. Idempotent on `(quoteId, subscriptionId)`. |
+| DELETE | `/api/cpq/quotes/[id]/target-subscriptions/[targetId]` | Detach a target while quote is in editable status (`new`/`incomplete`/`ready`/`draft`). Also drops associated quote lines. |
+| PATCH | `/api/cpq/quotes/[id]/target-subscriptions/[targetId]` | Update `mergeAction`, term dates, etc. while quote is in `draft`/`incomplete`/`ready`. |
+| GET | `/api/cpq/quotes/[id]/target-subscriptions` | List targets for the quote with their per-target context (current items, current term). |
+| POST | `/api/cpq/quotes/[id]/cancel-meta` | Stamp ETF + reason on a `type='cancel'` quote. Body: `{ reasonCode, reasonText?, etfAmount?, etfCurrency? }`. Server stores them on the quote (or its first target) so they appear on the cancel order and the eventual `cpq.subscription.cancelled` event payload. Allowed only while quote is editable. |
 
-### Renewal
+### Quote line: per-line target
 
-| Method | Path | Purpose |
-|--------|------|---------|
-| POST | `/api/cpq/subscriptions/[id]/renew` | Manual renewal. Body: `{ termMonths?, amendmentId?, pricingStrategy? }` |
-| GET | `/api/cpq/subscriptions/[id]/renewals` | Renewal history for subscription chain |
-| GET | `/api/cpq/subscriptions/[id]/chain` | Full chain walk (ancestors + descendants) for historic view |
-| PATCH | `/api/cpq/subscriptions/[id]/auto-renew` | Toggle autoRenew. Body: `{ enabled: boolean }` |
-| PATCH | `/api/cpq/subscriptions/[id]/renewal-pricing-strategy` | Set `default_renewal_pricing_strategy` |
-| POST | `/api/cpq/renewals/[id]/cancel` | Cancel scheduled renewal (only when `status=scheduled`) |
-| POST | `/api/cpq/renewals/[id]/retry` | Retry after failure |
-| Internal | Cron `cpq:renew-subscriptions` | Daily scan for due renewals |
+Existing quote-line CRUD endpoints accept the new `target_subscription_id` and `source_subscription_item_id` fields in `POST` / `PATCH` bodies. Validator enforces:
+- `target_subscription_id` required for `type='amend'`, `type='cancel'`, and `type='renew'` standalone (single target).
+- `target_subscription_id` must be **null** for `type='renew'` merge (M doesn't exist at quote time; service maps lines to M at activation).
+- `target_subscription_id` (when set) must match one of the quote's `CpqQuoteTargetSubscription` rows.
+- `source_subscription_item_id` required when line `action ∈ {cancel, modify}` on amend/renew quotes.
 
-### Cancellation
+### Subscription: history + expiring
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| POST | `/api/cpq/cancellations` | Create CancellationRequest. Body: `{ targetType, targetId, reasonCode, reasonText?, cancellationPolicy }`. Computes `effective_date` + ETF at creation. |
-| GET | `/api/cpq/cancellations/[id]` | Fetch cancellation |
-| POST | `/api/cpq/cancellations/[id]/approve` | `requested → approved`; executes inline if `effective_date ≤ now` |
-| POST | `/api/cpq/cancellations/[id]/reject` | `requested → rejected` with reason |
-| POST | `/api/cpq/cancellations/[id]/withdraw` | Withdraw before execution |
-| POST | `/api/cpq/cancellations/[id]/retry` | Retry after failure |
-| Internal | Cron `cpq:execute-cancellations` | Daily scan for end-of-term cancellations due today |
+| GET | `/api/cpq/inventory/subscriptions/[id]/change-log` | Paginated ChangeLog for a subscription (most recent first) |
+| GET | `/api/cpq/inventory/subscriptions/expiring` | List subscriptions with `currentTermEnd ∈ [now, now + withinDays]`. Query: `withinDays` (default 30, max 365), `customerId?`, `billingCycle?`, `status?` (default `active`), pagination |
+
+### Order activation (extension, not a new endpoint)
+
+Existing CPQ order activation entry-point is **extended** to apply ARC payloads — no new public API surface. Phase 2 implementation pins down the exact path (the current CPQ uses status-transition endpoints rather than a dedicated `/activate`; the ARC branch hooks into whichever transition fires `cpqOrderService.activateOrder`). The contract is: when an order moves into `active` and its source quote has `quote_type ∈ {amend, renew, cancel}`, `applyArcChange` runs per attached target.
 
 ### Events
 
-All events carry: `tenantId`, `organizationId`, `timestamp`, entity IDs. Emission pattern follows Open Mercato convention: `withAtomicFlush` commits DB state, THEN `emitCpqEvent(...)` fires (outside the atomic block). Persistent subscribers queued via `@open-mercato/queue` (BullMQ when `QUEUE_STRATEGY=async`, local file queue otherwise) provide reliable delivery + retries. No custom outbox table needed — framework handles it.
+All events emit AFTER `withAtomicFlush(em, phases, { transaction: true })` commits, via `emitCpqEvent(...)`. Persistent subscribers via `@open-mercato/events` + `@open-mercato/queue` give reliable delivery to downstream listeners (billing, notifications).
 
-**Amendment events:**
-- `cpq.amendment.created`
-- `cpq.amendment.submitted`
-- `cpq.amendment.approved`
-- `cpq.amendment.rejected`
-- `cpq.amendment.withdrawn`
-- `cpq.amendment.executed` ← billing listens; **payload includes proration data**
-- `cpq.amendment.failed`
+**Subscription lifecycle events** (NEW):
+- `cpq.subscription.amended` — items mutated, term untouched, sub stays
+- `cpq.subscription.renewed` — standalone renew: term + items mutated in place, sub stays
+- `cpq.subscription.merged` — new merge sub created from N sources (only event that fires for a brand-new sub)
+- `cpq.subscription.cancelled` — terminated
+- `cpq.subscription.superseded` — sub retired by being absorbed in a merge
 
-Amendment executed payload:
+All five payloads share:
 ```
 {
-  amendmentId, sourceSubscriptionId, newSubscriptionId, newOrderId,
-  effectiveDate,
+  subscriptionId, customerId, organizationId, tenantId, timestamp,
+  sourceQuoteId, sourceOrderId, performedByUserId,
+  changeLogId,
   proration: {
     oldMrcAmount, newMrcAmount, currency,
-    billingCycleStart, billingCycleEnd,     ← derived from last_billing_date + billingCycle
+    billingCycleStart, billingCycleEnd,
     daysElapsedInCycle, daysRemainingInCycle
   }
 }
 ```
 
-**Cancellation events:**
-- `cpq.cancellation.created`
-- `cpq.cancellation.approved`
-- `cpq.cancellation.rejected`
-- `cpq.cancellation.withdrawn`
-- `cpq.cancellation.executed` ← billing listens (ETF + refund flag in payload)
-- `cpq.cancellation.failed`
+`cpq.subscription.renewed` adds: `term: { oldTermStart, newTermStart, oldTermEnd, newTermEnd }` (standalone-renew only; no merge variant).
 
-**Renewal events:**
-- `cpq.renewal.scheduled`
-- `cpq.renewal.executed` ← billing listens; **payload includes proration data**
-- `cpq.renewal.failed`
-- `cpq.renewal.cancelled`
+`cpq.subscription.merged` adds: `mergedFromSubscriptionIds: string[]`, `term: { newTermStart, newTermEnd, newTermMonths }` (no `oldTerm` — M is brand new). The `subscriptionId` in the shared envelope is M's id.
 
----
+`cpq.subscription.superseded` adds: `mergedIntoSubscriptionId` (points at M).
 
-## UI Integration
+`cpq.subscription.cancelled` adds: `etfAmount`, `etfCurrency`, `reasonCode`, `reasonText`.
 
-All ARC UI lives under `/backend/cpq/` and integrates with existing CPQ admin surface. Uses `@open-mercato/ui` primitives + existing CPQ UI patterns (see `src/modules/cpq/backend/cpq/` for reference style).
-
-### Subscription Detail Page Extensions (injection widgets)
-
-Inject into existing [src/modules/cpq/backend/cpq/inventory/](../../src/modules/cpq/backend/cpq/inventory/) subscription detail:
-- **"Amend" action button** — opens Amendment Wizard (new modal/drawer)
-- **"Cancel" action button** — opens Cancellation Dialog with reason selector + policy radio + ETF preview
-- **"Renew now" action button** — opens Manual Renew Dialog (pricing strategy selector + attach amendment option)
-- **"Auto-renew" toggle** — inline toggle for `autoRenew` flag
-- **"Renewal History" tab** — timeline of past renewals in the subscription chain
-- **"Chain" tab** — full lineage tree (ancestors + descendants) walking `previous_subscription_id` both directions
-- **"Amendments" tab** — list of AmendmentRequests targeting this subscription, with status badges
-
-Injection target: `detail:cpq.inventory.subscription:tabs` and `detail:cpq.inventory.subscription:actions` spots. If those don't exist yet, declare them in this spec's Phase 2 deliverables.
-
-### Amendment Wizard (new standalone page)
-
-`/backend/cpq/amendments/new` — multi-step wizard:
-1. **Scope selection** — pick source subscription (or arrive pre-selected from subscription detail)
-2. **Change set** — line-by-line add/modify/remove with inline product picker
-3. **Pricing strategy** — radio: `rate-lock` / `current-catalog` / `mixed` (with explainer tooltips)
-4. **Reason + effective date** — reason code (enum) + free text + date picker (default: today)
-5. **Preview** — render cloned quote totals + AmendmentChange delta table (human-readable diff)
-6. **Submit** — creates AmendmentRequest in `draft`, redirects to detail page
-
-### Amendment Detail Page
-
-`/backend/cpq/amendments/[id]`:
-- Status badge + transition actions: Submit for Approval / Approve / Reject / Withdraw / Retry (conditional on status + ACL)
-- Change delta table
-- Linked quote (click-through to standard quote detail)
-- Linked orders (predecessor + successor once executed)
-- Linked subscriptions (source + result once executed)
-- Proration payload preview (read from `result_*` after execution)
-
-### Cancellations List + Detail
-
-`/backend/cpq/cancellations` — paginated list with filters (status, target_type, reason_code, date range).
-
-`/backend/cpq/cancellations/[id]` — detail with ETF breakdown, target link, transition actions.
-
-### Renewals List
-
-`/backend/cpq/renewals` — list of scheduled/executed/failed renewals with link to parent subscription.
-
-### Navigation
-
-Menu entries under existing CPQ navigation group (sidebar): "Amendments", "Cancellations", "Renewals" — guarded by `cpq.arc.*.view` features.
-
-### Component Replacement / Overrides
-
-Client-specific customer apps can override wizard steps, ETF display widget, or reason code picker via `widgets/components.ts` `componentOverrides` mechanism (see [@open-mercato/core AGENTS.md](../../node_modules/@open-mercato/core/AGENTS.md#component-replacement)).
-
----
-
-## State Machines
-
-### AmendmentRequest
-
-Transitions listed explicitly as `from → to (trigger)`:
-
-| From | To | Trigger |
-|------|-----|---------|
-| `draft` | `pending` | submitForApproval |
-| `draft` | `withdrawn` | withdraw |
-| `pending` | `approved` | approve |
-| `pending` | `rejected` | reject |
-| `pending` | `withdrawn` | withdraw |
-| `approved` | `executed` | execute (inline if `effective_date ≤ now`, else scheduler) |
-| `approved` | `failed` | execute error (retry_count++) |
-| `approved` | `withdrawn` | withdraw (only before execution starts) |
-| `failed` | `approved` | POST /retry (allowed when retry_count < 3; beyond that 409) |
-| `failed` | `withdrawn` | manual abort |
-| `executed`, `rejected`, `withdrawn` | — | terminal |
-
-Note: `failed` is a non-terminal holding status. `retry_count` gates POST /retry eligibility but does not change the status itself. Operator can always use /withdraw to force-terminate a `failed` amendment.
-
-### CancellationRequest
-
-| From | To | Trigger |
-|------|-----|---------|
-| `requested` | `approved` | approve |
-| `requested` | `rejected` | reject |
-| `requested` | `withdrawn` | withdraw |
-| `approved` | `executed` | execute (inline if `effective_date ≤ now`, else scheduler) |
-| `approved` | `failed` | execute error (retry_count++) |
-| `approved` | `withdrawn` | withdraw (only before execution starts) |
-| `failed` | `approved` | POST /retry (when retry_count < 3) |
-| `failed` | `withdrawn` | manual abort |
-| `executed`, `rejected`, `withdrawn` | — | terminal |
-
-### RenewalTransaction
-
-| From | To | Trigger |
-|------|-----|---------|
-| `scheduled` | `executed` | executeRenewal (success) |
-| `scheduled` | `failed` | executeRenewal error (retry_count++) |
-| `scheduled` | `cancelled` | POST /renewals/[id]/cancel (only while `scheduled`) |
-| `failed` | `scheduled` | POST /retry or auto-retry (when retry_count < 3) |
-| `failed` | `cancelled` | manual abort |
-| `executed`, `cancelled` | — | terminal |
-
-Notes:
-- `failed` is non-terminal holding status (same semantics as Amendment/Cancellation); `retry_count ≥ 3` blocks further /retry but does not transition status.
-- `cancelled` only reachable from `scheduled` or `failed`. A renewal in `executed` state cannot be undone — must create a CancellationRequest on the resulting subscription.
-- No `executing` intermediate state; execution is synchronous within one DB transaction.
-
-### CpqInventorySubscription (extended)
-
-See tabular form in Data Models section above.
-
-### CpqInventorySubscriptionItem (extended)
-
-See tabular form in Data Models section above.
-
-### CpqOrderConfiguration (extended)
-
-See tabular form in Data Models section above.
-
----
-
-## Services
-
-New services in [src/modules/cpq/services/](../../src/modules/cpq/services/):
-
-- **`cpqAmendmentService.ts`**
-  - `createAmendment({ subscriptionId, type, pricingStrategy, reasonCode, reasonText, effectiveDate, lineChanges })` → validates, creates AmendmentRequest + AmendmentChange[] + cloned Quote (price per pricing_strategy)
-  - `submitForApproval(amendmentId)` → delegates to existing quote approval flow
-  - `approve(amendmentId)` → transitions to `approved`; if `effective_date ≤ now`, calls `execute()` inline
-  - `reject(amendmentId, reason)` / `withdraw(amendmentId)` → also cancels linked result Quote if present
-  - `execute(amendmentId)` → **idempotent**; no-op if already `executed`. Atomic: creates new Order, new Subscription (chain), migrates assets/items per rules, transitions old entities, writes event to outbox
-  - `retry(amendmentId)` → only on `failed` status; resets execution attempt
-  - `processDueAmendments()` → scanner (every 15 min)
-
-- **`cpqRenewalService.ts`**
-  - `scheduleRenewal({ subscriptionId, termMonths?, amendmentId?, pricingStrategy?, trigger })` → creates RenewalTransaction
-  - `executeRenewal(renewalId)` → **idempotent**; re-validates `subscription.status = active` (Fix #4); chain creation, asset migration, item snapshot, event emission
-  - `retry(renewalId)` / `cancelScheduled(renewalId)`
-  - `processDueRenewals()` → scanner (daily)
-  - `walkChain(subscriptionId)` → returns full chain (ancestors + descendants)
-
-- **`cpqCancellationService.ts`**
-  - `createCancellation({ targetType, targetId, reasonCode, policy, reasonText? })` → validates, computes `effective_date` + ETF (codified formula)
-  - `computeETF(subscription, effectiveDate)` → pure function (per ETF Formula section)
-  - `approve(cancellationId)` → if `effective_date ≤ now`, calls `execute()` inline
-  - `reject` / `withdraw` / `retry`
-  - `execute(cancellationId)` → **idempotent**; atomic transitions on target + items + assets
-  - `processDueCancellations()` → scanner (daily)
-
-All `execute()` methods wrap multi-phase mutations in `withAtomicFlush(em, phases, { transaction: true })` (from `@open-mercato/shared/lib/commands/flush`). After successful commit, events are emitted via `emitCpqEvent(...)` — outside the atomic block. Persistent subscribers via `@open-mercato/events` + `@open-mercato/queue` provide reliable delivery to downstream listeners (billing, notifications). Service/event sequencing is guaranteed because events fire only after DB commit.
-
----
-
-## Implementation Conventions
-
-This section codifies **how** to implement ARC in conformance with Open Mercato framework patterns and existing CPQ module conventions. All patterns here are verified against node_modules/@open-mercato/* documentation and current CPQ code.
-
-### Migration Workflow (MUST)
-
-> **Never hand-write migration files.** (Per [@open-mercato/core AGENTS.md](../../node_modules/@open-mercato/core/AGENTS.md))
-
-Workflow:
-1. Define/modify MikroORM entity in [src/modules/cpq/data/entities.ts](../../src/modules/cpq/data/entities.ts)
-2. Run `yarn db:generate` — framework emits SQL in `src/modules/cpq/migrations/MigrationYYYYMMDDHHMMSS_*.ts`
-3. Review generated migration
-4. Run `yarn db:migrate` to apply
-5. Run `yarn generate` (aka `npm run modules:prepare`) to refresh `.mercato/generated/*` files
-
-Migration file structure (verified against [Migration20260411000000_cpq_orders.ts](../../src/modules/cpq/migrations/Migration20260411000000_cpq_orders.ts)):
-```typescript
-import { Migration } from '@mikro-orm/migrations'
-
-export class Migration20260XXXXXXXXXX_cpq_arc_base extends Migration {
-  async up(): Promise<void> {
-    this.addSql(`create table if not exists "cpq_amendment_requests" (...)`)
-    this.addSql(`create index if not exists "..." on "..." ("organization_id", "tenant_id", ...)`)
-  }
-  async down(): Promise<void> {
-    this.addSql(`drop table if exists "cpq_amendment_requests" cascade;`)
-  }
-}
-```
-
-Conventions from existing CPQ migrations:
-- All tables have `organization_id`, `tenant_id`, `created_at`, `updated_at`, `deleted_at` columns
-- `id uuid not null default gen_random_uuid()`
-- Timestamps: `timestamptz`
-- Numeric: `numeric(18, 4)` for monetary
-- Unique index per scope: `(organization_id, tenant_id, code)` pattern
-- Indexes on `(organization_id, tenant_id, <filtered-field>)` for tenant-scoped queries
-- No DB-level FKs to cross-module tables (per enforcement rules)
-
-### DI Registration (MUST)
-
-> Container uses `InjectionMode.CLASSIC`. Turbopack breaks destructured arrow-function params in Awilix's parser. Use `container.resolve('name')` inside factory body, NOT destructuring. (Per comment in [src/modules/cpq/di.ts:12-18](../../src/modules/cpq/di.ts#L12))
-
-Add ARC services to `src/modules/cpq/di.ts`:
-```typescript
-cpqCancellationService: asFunction(() => {
-  return new DefaultCpqCancellationService({
-    em: container.resolve('em'),
-    cpqInventoryService: container.resolve('cpqInventoryService'),
-  })
-}).scoped(),
-
-cpqRenewalService: asFunction(() => {
-  return new DefaultCpqRenewalService({
-    em: container.resolve('em'),
-    cpqInventoryService: container.resolve('cpqInventoryService'),
-    cpqOrderService: container.resolve('cpqOrderService'),
-  })
-}).scoped(),
-
-cpqAmendmentService: asFunction(() => {
-  return new DefaultCpqAmendmentService({
-    em: container.resolve('em'),
-    cpqQuotingService: container.resolve('cpqQuotingService'),
-    cpqInventoryService: container.resolve('cpqInventoryService'),
-    cpqOrderService: container.resolve('cpqOrderService'),
-    cpqPricingService: container.resolve('cpqPricingService'),
-  })
-}).scoped(),
-```
-
-Use `.scoped()` — EntityManager is request-scoped. Use `.proxy()` only if factory accepts named deps (we're using closures, so no).
-
-### Events (MUST)
-
-**Current state: CPQ has NO `events.ts`.** ARC will introduce the first events for the CPQ module. Create `src/modules/cpq/events.ts`:
-
+Event declarations in `src/modules/cpq/events.ts` (NEW file — first events for the CPQ module):
 ```typescript
 import { createModuleEvents } from '@open-mercato/shared/modules/events'
 
 const events = [
-  // Amendment lifecycle
-  { id: 'cpq.amendment.created', label: 'Amendment Created', entity: 'amendment', category: 'lifecycle' },
-  { id: 'cpq.amendment.submitted', label: 'Amendment Submitted for Approval', entity: 'amendment', category: 'lifecycle' },
-  { id: 'cpq.amendment.approved', label: 'Amendment Approved', entity: 'amendment', category: 'lifecycle' },
-  { id: 'cpq.amendment.rejected', label: 'Amendment Rejected', entity: 'amendment', category: 'lifecycle' },
-  { id: 'cpq.amendment.withdrawn', label: 'Amendment Withdrawn', entity: 'amendment', category: 'lifecycle' },
-  { id: 'cpq.amendment.executed', label: 'Amendment Executed', entity: 'amendment', category: 'lifecycle', clientBroadcast: true },
-  { id: 'cpq.amendment.failed', label: 'Amendment Execution Failed', entity: 'amendment', category: 'lifecycle' },
-
-  // Cancellation lifecycle
-  { id: 'cpq.cancellation.created', label: 'Cancellation Created', entity: 'cancellation', category: 'lifecycle' },
-  { id: 'cpq.cancellation.approved', label: 'Cancellation Approved', entity: 'cancellation', category: 'lifecycle' },
-  { id: 'cpq.cancellation.rejected', label: 'Cancellation Rejected', entity: 'cancellation', category: 'lifecycle' },
-  { id: 'cpq.cancellation.withdrawn', label: 'Cancellation Withdrawn', entity: 'cancellation', category: 'lifecycle' },
-  { id: 'cpq.cancellation.executed', label: 'Cancellation Executed', entity: 'cancellation', category: 'lifecycle', clientBroadcast: true },
-  { id: 'cpq.cancellation.failed', label: 'Cancellation Failed', entity: 'cancellation', category: 'lifecycle' },
-
-  // Renewal lifecycle
-  { id: 'cpq.renewal.scheduled', label: 'Renewal Scheduled', entity: 'renewal', category: 'lifecycle' },
-  { id: 'cpq.renewal.executed', label: 'Renewal Executed', entity: 'renewal', category: 'lifecycle', clientBroadcast: true },
-  { id: 'cpq.renewal.failed', label: 'Renewal Failed', entity: 'renewal', category: 'lifecycle' },
-  { id: 'cpq.renewal.cancelled', label: 'Renewal Cancelled', entity: 'renewal', category: 'lifecycle' },
+  { id: 'cpq.subscription.amended',    label: 'Subscription Amended',    entity: 'subscription', category: 'lifecycle', clientBroadcast: true },
+  { id: 'cpq.subscription.renewed',    label: 'Subscription Renewed',    entity: 'subscription', category: 'lifecycle', clientBroadcast: true },
+  { id: 'cpq.subscription.merged',     label: 'Subscription Merged',     entity: 'subscription', category: 'lifecycle', clientBroadcast: true },
+  { id: 'cpq.subscription.cancelled',  label: 'Subscription Cancelled',  entity: 'subscription', category: 'lifecycle', clientBroadcast: true },
+  { id: 'cpq.subscription.superseded', label: 'Subscription Superseded', entity: 'subscription', category: 'lifecycle', clientBroadcast: true },
 ] as const
 
 export const eventsConfig = createModuleEvents({ moduleId: 'cpq', events })
@@ -913,398 +671,627 @@ export type CpqEventId = typeof events[number]['id']
 export default eventsConfig
 ```
 
-Run `yarn generate` after creating/modifying `events.ts`.
+---
 
-**Emission rule (MUST):** emit events AFTER `withAtomicFlush` completes — never inside. Example:
-```typescript
-await withAtomicFlush(em, [
-  () => { /* state changes */ },
-  () => { /* more state changes */ },
-], { transaction: true })
+## UI Integration
 
-// AFTER commit:
-await emitCpqEvent('cpq.amendment.executed', { amendmentId, ..., proration: { ... } })
+All ARC UI lives under existing `/backend/cpq/` and integrates with current admin surfaces. Uses `@open-mercato/ui` primitives. Sidebar icons via `lucide-react` only.
+
+### UI Terminology — internal vs user-facing
+
+Internal model uses technical names (`absorb` / `standalone` / `superseded` / `merge-source` / `merge-result`) because developers need precise vocabulary across DB, code, events, and tests. **None of those terms must reach the operator's screen.** Every UI surface translates them to friendlier labels via a centralized mapping (single source of truth in `src/modules/cpq/backend/_labels/arc.ts`).
+
+| Internal (code / DB / events) | User-facing label (UI copy, status badges, error messages) |
+|---|---|
+| `merge_action='absorb'` (on a source sub) | "Will be merged into the new contract" |
+| `merge_action='standalone'` | "Renew on its own" (or: just "Renew" when no other targets are picked) |
+| Subscription status `superseded` | "Merged" (badge); detail copy "Merged into {newSubCode} on {date}" |
+| Item status `superseded` | "Merged" |
+| ChangeLog `change_type='merge-source'` | "Merged into a new contract" (timeline entry title) |
+| ChangeLog `change_type='merge-result'` | "Created from merging {N} contracts" (timeline entry title on the new merge sub) |
+| Event `cpq.subscription.merged` | (not surfaced raw to operator UI; shown as a new sub in the inventory list with a "Merged from" annotation in detail) |
+| Event `cpq.subscription.superseded` | (not surfaced raw; rendered via the `superseded` status badge translation) |
+| Quote-level field `arc_merge_new_sub_code` | "New contract code (optional — auto-generated if blank)" |
+| Quote-level field `arc_merge_new_sub_name` | "New contract name (optional)" |
+
+**Rule for spec readers and implementers:** when this spec describes a UI element ("banner says…", "radio labelled…", "error body…"), assume the labels above are what the operator sees. The spec uses internal names everywhere else for precision, but the implementation must route all user-facing strings through the label map (and through i18n once translations land).
+
+### Quote detail page (extension)
+
+Existing CPQ quote detail page (`src/modules/cpq/backend/cpq/quotes/[id]/page.tsx`) gains:
+
+- **"Modify subscription" button** — visible when quote is in editable status (`new`, `incomplete`, `ready`, `draft`). Opens the ARC configurator drawer (described below).
+- **Per-target item editor** — once the configurator has attached targets, the existing line list groups under each target:
+  - "Add item from catalog" → new line with `target_subscription_id=<this target>`
+  - "Remove this item" on existing item lines → marks `action='cancel'`
+  - "Edit configuration" → `action='modify'` with new config
+  - Read-only summary of "current items on this subscription that are NOT being changed" — visual aid so operators know what stays.
+- **Merge-renewal banner** — when the quote has `type='renew'` and 2+ targets, a banner shows "Merging {N} contracts into a new one" with the list of source codes and the proposed new contract code/name (auto-generated unless operator overrode). At activation, all source subs are marked **Merged**. (Internal: every target has `merge_action='absorb'`; activation creates a new `CpqInventorySubscription` and sets sources' status to `superseded`.)
+
+### ARC configurator drawer (component design)
+
+Right-side drawer overlay, opened by the **"Modify subscription"** button on the quote detail page. Single self-contained client component, file: `src/modules/cpq/backend/cpq/quotes/[id]/_components/ArcQuoteConfigurator.tsx`.
+
+**Why a stepwise drawer (not a full sub-page):** keeps the operator anchored on the parent quote (line list + totals stay visible behind the overlay), constrains the flow to a known shape (action then config), and avoids polluting the quote URL with intermediate state. Closing the drawer at any step is non-destructive — nothing is persisted until the final review step submits.
+
+**Props** the component accepts:
+
+| Prop | Type | Purpose |
+|---|---|---|
+| `quoteId` | string | Quote being configured |
+| `customerId` | string | Filters eligible subscriptions in the picker |
+| `customerName` | `string \| null` | Displayed in the drawer header |
+| `currencyCode` | string | Used to filter eligible subs (currency match) and to label ETF input |
+| `initialType` | `'new' \| 'amend' \| 'renew' \| 'cancel'` | Current `quote.quoteType`. When non-`new`, the action-pick step is skipped (type is locked) |
+| `initialTargets` | `AttachedTarget[]` | Current `CpqQuoteTargetSubscription` rows so the operator can re-open and adjust |
+| `editable` | boolean | Quote is in an editable status (`new`, `incomplete`, `ready`, `draft`) — guards submit |
+| `onClose` | `() => void` | Drawer dismissed (Cancel / Esc / overlay click) |
+| `onChanged` | `() => void \| Promise<void>` | Called after a successful submit so the host page can re-fetch the quote |
+
+**Step machine**:
+
+```
+pick-action     → operator picks Amend / Renew / Cancel.
+                  Skipped entirely when initialType !== 'new' (type is immutable once set).
+pick-targets    → multi-select from eligible subscriptions for the customer
+                  (status ∈ {active, suspended}, same currency as the quote,
+                   same billingCycle required when 2+ picked for renew).
+config-renew    → renew only.
+                  • 1 target picked  → standalone: per-target newTermStart / End / Months.
+                                       (Internal: target.merge_action='standalone'.)
+                  • 2+ targets picked → merge: NO per-target term; instead a single
+                                       quote-level form for the new contract — newTermStart,
+                                       newTermEnd, newTermMonths, optional new sub code,
+                                       optional new sub name. All picked targets become
+                                       merge sources. (Internal: every target.merge_action='absorb',
+                                       quote.arc_merge_new_term_* / arc_merge_new_sub_*.)
+config-cancel   → cancel only. Reason code (required) + reason text (optional)
+                  + optional ETF amount + currency.
+review          → flat summary of action, picked targets with per-target context,
+                  and a notice that submitting will lock the quote's type.
+submitting      → in-flight indicator while the submit sequence runs.
+done            → confirmation; "Close" returns to the quote.
 ```
 
-### Subscribers (Billing Integration Point)
+`amend` skips the conditional-config step and goes from `pick-targets` straight to `review`.
 
-Future billing module will subscribe to execution events. For V1, create placeholder subscriber(s) to validate the flow. File: `src/modules/cpq/subscribers/amendment-executed-log.ts`:
+**Submit sequence** (sequential, with idempotency-friendly endpoints):
+
+1. `PATCH /api/cpq/quotes/[id]` with `{ quoteType }` — only when `initialType === 'new'`. Server enforces one-way `new → amend|renew|cancel`; any further attempt to change returns `409`.
+2. For every target the operator removed: `DELETE /api/cpq/quotes/[id]/target-subscriptions/[targetId]`.
+3. For every newly picked target: `POST /api/cpq/quotes/[id]/target-subscriptions` with `{ subscriptionId, quoteType, mergeAction, newTermStart?, newTermEnd?, newTermMonths? }`.
+4. For every retained target whose renew config changed: `PATCH /api/cpq/quotes/[id]/target-subscriptions/[targetId]`.
+5. For `cancel`: `POST /api/cpq/quotes/[id]/cancel-meta` with `{ reasonCode, reasonText?, etfAmount?, etfCurrency? }`.
+6. On full success the drawer calls `onChanged()` so the parent re-fetches the quote and renders the new attachments and per-target item editor.
+
+**Client-side validation gates** (server is authoritative; client checks for UX latency):
+
+- ≥1 target picked.
+- All targets share `currencyCode` with the quote (currency-mismatched rows are rendered disabled).
+- For renew standalone (1 target): the target has `newTermStart`, `newTermEnd`, `newTermStart < newTermEnd`.
+- For renew merge (2+ targets): all targets share the same `billingCycle`; quote-level `arc_merge_new_term_start` / `arc_merge_new_term_end` filled and ordered; quote-level new sub code/name are optional.
+- For cancel: `reasonCode` non-empty.
+
+**Behavioural details**:
+
+- ESC and overlay-click both close the drawer (non-destructive).
+- "Back" link in the footer returns to the previous step; disabled on the first step (or when `type` is locked, since action-pick is skipped).
+- Currency-mismatched eligible rows render greyed-out with an inline note ("Currency mismatch (X vs Y) — cannot include in this quote") instead of being filtered out, so operators understand why a sub is unavailable.
+- When the operator picks a 2nd target while in `renew` mode, the per-target term inputs disappear and the quote-level merge form (new contract term + optional code/name) replaces them. An amber banner appears: "Merging {N} contracts into a new one — sources will be marked Merged at activation."
+- After `done`, the host page is responsible for showing the per-target item editor — the drawer's job ends at attaching targets + locking the quote type + stamping cancel meta.
+
+**Re-using the configurator from the subscription detail page**: the **Amend / Renew / Cancel** buttons on `subscriptions/[id]/page.tsx` first call `POST /api/cpq/quotes/from-subscription` to create a fresh ARC quote pre-filled with the subscription's items, then navigate to the new quote and immediately open the configurator drawer for further targets / merge designation. The configurator does not need to be aware of this — `initialType` will already be non-`new`, so the action-pick step is skipped and the drawer opens directly on `pick-targets`.
+
+**Out of scope for v1 component**:
+
+- Focus trap and ARIA wiring beyond ESC handling — to be revisited if `@open-mercato/ui` introduces a generic `<Drawer>` primitive.
+- Server-driven dynamic field hints (e.g. "this customer's contract type forbids merge") — would require an `OPTIONS`-style endpoint; deferred.
+- Client-side ETF formula preview — V1 has no codified ETF; the operator enters a flat amount.
+
+### Subscription detail page (extension)
+
+Existing subscription detail page gains action buttons in the existing `detail:cpq.inventory.subscription:actions` injection slot:
+- **Amend** → POST `/api/cpq/quotes/from-subscription` with `type='amend'`, navigate to new quote.
+- **Renew** → same, `type='renew'`.
+- **Cancel** → same, `type='cancel'`.
+
+**Existing-quote redirect:** if the subscription is already attached to a non-terminal ARC quote (any `quote_type ∈ {amend, renew, cancel}` in `pending` / `approved` / earlier editable states), the action button does NOT create a new quote. Instead it navigates to the existing one. The button label switches to "Open pending {action} quote" with the quote number. This avoids the validation rule "subscription cannot be on two non-terminal ARC quotes" being hit by accident from this UI surface.
+
+Plus a new **"Change History" tab** (`detail:cpq.inventory.subscription:tabs` slot) reading from `GET /api/cpq/inventory/subscriptions/[id]/change-log` — a timeline showing each ARC operation: type, date, who, link to source quote/order, line-change summary, before→after diff (collapsible jsonb viewer).
+
+If those injection slots don't exist on the subscription detail page yet, **declare them as part of Phase 1**.
+
+### Expiring Subscriptions list page (NEW)
+
+Path: `/backend/cpq/inventory/subscriptions/expiring`.
+
+DataTable columns: customer, subscription code, MRC, currency, items count, currentTermEnd (with relative-time chip e.g. "in 12 days"), actions (`Renew`, `Modify`).
+
+Filters: `withinDays` (default 30, presets 7 / 14 / 30 / 60 / 90), customer, billing cycle, status (default `active`).
+
+Sidebar entry under existing CPQ navigation group, guarded by `cpq.inventory.expiring.view`. Icon: `lucide-react`'s `CalendarClock` (or similar).
+
+### Component overrides
+
+Customer-specific apps can override the "Modify subscription" drawer steps, the merge banner, and the expiring list table via `widgets/components.ts` `componentOverrides`.
+
+---
+
+## State Machines
+
+### `CpqQuoteConfiguration` — unchanged
+
+Existing flow `new → incomplete → ready → in_approval → pre_approved/approved → with_customer → accepted | rejected | cancelled` is reused as-is. Quote `type` is settable once via PATCH from `'new'` to `'amend' | 'renew' | 'cancel'`; once non-`new`, it is immutable (further PATCH attempts return 409). See DD-ARC-9.
+
+### `CpqOrderConfiguration` — unchanged
+
+Existing flow `draft → pending_activation → active → fulfilled | cancelled`. ARC orders flow through the same path.
+
+### `CpqInventorySubscription` — extended
+
+| From | Existing transitions | This spec adds |
+|------|---------------------|----------------|
+| `pending` | `active`, `terminated` | — |
+| `active` | `suspended`, `terminated`, `expired` | **`superseded`** (only via merge) |
+| `suspended` | `active`, `terminated` | **`superseded`** (only via merge — suspended sources are valid absorbtargets) |
+| `terminated`, `expired`, `superseded` | — | terminal |
+
+Notes:
+- `superseded` is reached **only** through `applyMergeRenewal` — sources transition there at activation. No manual API path sets `superseded`.
+- Amend and standalone-renew **do not change subscription status** — the sub keeps its current status (`active` or `suspended`).
+- Suspended subs can be amended / renewed (standalone) / cancelled / merged. They cannot be reactivated via ARC — that's a separate explicit operation.
+
+### `CpqInventorySubscriptionItem` — extended
+
+Add `superseded` terminal, reachable only when parent subscription transitions to `superseded`. All other transitions unchanged.
+
+---
+
+## Services
+
+### `cpqQuotingService` — extensions
+
 ```typescript
-export const metadata = {
-  event: 'cpq.amendment.executed',
-  persistent: true,
-  id: 'cpq-amendment-executed-log',
-}
+createQuoteFromSubscription({
+  subscriptionId: string,
+  type: 'amend' | 'renew' | 'cancel',
+  renewTerm?: { newTermStart: Date, newTermEnd: Date, newTermMonths?: number },
+  scope: TenantScope,
+}): Promise<{ quoteId: string }>
+// 1. Loads source subscription + items + assets.
+// 2. Creates SalesQuote (cross-module) + CpqQuoteConfiguration with quote_type=type.
+// 3. Creates one CpqQuoteTargetSubscription row.
+// 4. For amend/renew: clones each active item as a CpqQuoteLineConfiguration with action='modify' and target_subscription_id=subId.
+//    For cancel: clones each active item with action='cancel'.
+// 5. Recomputes pricing.
+// 6. Returns { quoteId }.
 
+attachTargetSubscription(quoteId, { subscriptionId, mergeAction, renewTerm? }, scope)
+// Adds a CpqQuoteTargetSubscription row. Validates same customer / currency / billingCycle.
+// For merge (≥2 renew targets): enforces all targets have merge_action='absorb'
+// and quote-level arc_merge_new_term_* are filled.
+
+detachTargetSubscription(quoteId, targetId, scope)
+// Removes the target + cleans up any quote lines pointing at it.
+
+validateArcQuote(quoteId, scope): { ok: boolean, errors: string[] }
+// Comprehensive pre-submission check:
+//  - type set, targets non-empty
+//  - type-specific term/merge invariants
+//  - per-line target_subscription_id correctness
+//  - target subs still active and not booked on another non-terminal ARC quote
+// Called automatically on the submit-for-approval transition.
+```
+
+### `cpqOrderService` — extension
+
+```typescript
+activateOrder(orderId, scope)
+// Existing method extended:
+//   reads order.sourceQuote.quoteType
+//   if type='new':    existing path (new subscription created from quote lines)
+//   if type='amend':  per-target → cpqInventoryService.applyAmendment(...)
+//   if type='renew':
+//     if all targets merge_action='standalone': per-target → applyRenewal(...)
+//     if all targets merge_action='absorb' (≥2):  one-shot → applyMergeRenewal(...)
+//   if type='cancel': per-target → applyCancel(...)
+//   Wraps everything in withAtomicFlush({ transaction: true }).
+//   Emits cpq.subscription.{amended, renewed, merged, cancelled, superseded} AFTER commit
+//   (one event per affected sub; merged fires once for M).
+```
+
+### `cpqInventoryService` — new methods
+
+```typescript
+applyAmendment({ subscriptionId, lineChanges, sourceQuoteId, sourceOrderId, performedByUserId }, scope)
+// Idempotent on (sourceOrderId, subscriptionId).
+// 1. Loads subscription with optimistic lock (version check).
+// 2. Computes before_snapshot.
+// 3. Applies line changes (add/cancel/modify) on items.
+// 4. Recomputes subscription.mrcAmount.
+// 5. Computes after_snapshot.
+// 6. Writes CpqSubscriptionChangeLog (change_type='amend').
+// 7. Updates subscription.last_change_log_id.
+
+applyRenewal({ subscriptionId, term, lineChanges, sourceQuoteId, sourceOrderId, performedByUserId }, scope)
+// Same as applyAmendment plus:
+// - Updates currentTermStart / currentTermEnd / termMonths.
+// - ChangeLog change_type='renew', term_change populated.
+
+applyMergeRenewal({ sourceIds, term, mergeMeta, lineChanges, sourceQuoteId, sourceOrderId, performedByUserId }, scope)
+// `lineChanges` are operator's edits with target_subscription_id=null
+// (lines target the new merge sub M, which doesn't exist at quote time).
+// 'cancel'/'modify' lines reference items via source_subscription_item_id pointing
+// at active items on the source subs being absorbed.
+//
+// 1. Validate: all source subs in {active, suspended}, same customer/currency/billingCycle.
+// 2. Create new subscription M:
+//    - customer/currency/billingCycle inherited from sources
+//    - code     = mergeMeta.newSubCode ?? auto-generated
+//    - name     = mergeMeta.newSubName ?? auto-generated
+//    - currentTermStart/End/termMonths from `term`
+//    - status   = 'active'
+//    - sourceQuoteId / sourceOrderId set
+//    - version  = 1
+// 3. Carry-over phase — for each source sub: clone active items onto M
+//    (new ids, sourceQuoteLineId=null). Migrate assets to M's new item ids.
+//    Build a map sourceItemId → newItemIdOnM for line resolution.
+// 4. Operator-edit phase — apply lineChanges on M's combined item set:
+//    'add'    → new item on M with sourceQuoteLineId from the line.
+//    'cancel' → look up the line's source_subscription_item_id in the map; the
+//               corresponding new item on M → terminated.
+//    'modify' → same lookup; corresponding new item config updated.
+// 5. Recompute M.mrcAmount.
+// 6. Each source sub: status='superseded', mergedIntoSubscriptionId=M.id,
+//    items.status='superseded' (cascaded), terminatedAt=now().
+// 7. ChangeLog rows:
+//    - one on M: change_type='merge-result', merged_from_subscription_ids=[...sourceIds],
+//      term_change populated (oldTerm fields=null, since M is new)
+//    - one per source: change_type='merge-source', merged_into_subscription_id=M.id,
+//      after_snapshot=null
+// 8. Update last_change_log_id on each affected sub (M and sources).
+
+applyCancel({ subscriptionId, sourceQuoteId, sourceOrderId, performedByUserId, etfAmount?, etfCurrency?, reasonCode?, reasonText? }, scope)
+// Wrapper around existing transitionSubscriptionStatus(subId, 'terminated').
+// Adds ChangeLog row (change_type='cancel') with ETF + reason.
+```
+
+All four methods:
+- Use `withAtomicFlush(em, phases, { transaction: true })` for the multi-phase mutation.
+- Emit subscription events via `emitCpqEvent(...)` AFTER commit (responsibility of the caller — `cpqOrderService.activateOrder` — so that emission is centralized once per activation).
+- Are idempotent keyed on `(sourceOrderId, subscriptionId)`.
+- Take optimistic lock on subscription `version`; raise `InventoryError(409, 'Concurrent modification', ...)` on conflict.
+
+No standalone services for amend/renew/cancel — by design. Subscription mutation is a method on `cpqInventoryService`; orchestration is in `cpqOrderService.activateOrder`; user journey is the existing CPQ Quote module's responsibility.
+
+---
+
+## Implementation Conventions
+
+### Migration workflow (MUST)
+
+> **Never hand-write migrations.** (Per [@open-mercato/core AGENTS.md](../../node_modules/@open-mercato/core/AGENTS.md))
+
+1. Define / modify entities in [src/modules/cpq/data/entities.ts](../../src/modules/cpq/data/entities.ts).
+2. Run `yarn mercato db generate` → produces `src/modules/cpq/migrations/Migration<timestamp>_*.ts`.
+3. Review generated SQL.
+4. Confirm with user before running `yarn mercato db migrate`.
+5. Run `yarn generate` to refresh `.mercato/generated/*`.
+
+Conventions from existing CPQ migrations:
+- All tables have `organization_id`, `tenant_id`, `created_at`, `updated_at`, `deleted_at`.
+- `id uuid not null default gen_random_uuid()`.
+- Timestamps `timestamptz`. Numeric `numeric(18,4)`.
+- Indexes on `(organization_id, tenant_id, <filtered-field>)` for tenant-scoped queries.
+
+### Backfill on existing data
+
+- Existing `CpqQuoteConfiguration` rows: backfill `quote_type='new'` (UPDATE in migration `up()`); all `arc_*` fields stay null (only meaningful for ARC quote types).
+- Existing `CpqQuoteLineConfiguration` rows: `target_subscription_id` and `source_subscription_item_id` stay null (acceptable for `type='new'`).
+- Existing `CpqInventorySubscription` rows: `current_term_start` left null initially (a separate one-time migration may populate it from `activatedAt` for active rows). `merged_into_subscription_id` and `last_change_log_id` stay null. `version` column added with default 1.
+
+### DI registration (MUST)
+
+No new top-level services to register. Existing `cpqQuotingService`, `cpqInventoryService`, `cpqOrderService` are already in [src/modules/cpq/di.ts](../../src/modules/cpq/di.ts). Their classes gain new methods only; DI factory signatures don't change.
+
+If new dependencies are needed inside the existing services (unlikely), use the established `asFunction(() => new ...)` + `container.resolve('name')` pattern (Turbopack constraint per [src/modules/cpq/di.ts:12-18](../../src/modules/cpq/di.ts#L12)).
+
+### Events (MUST)
+
+Create `src/modules/cpq/events.ts` (NEW — first events for the module). Run `yarn generate` after.
+
+Emission rule: events emitted AFTER `withAtomicFlush` commits, **never inside**. Caller (`cpqOrderService.activateOrder`) is the sole emitter site for ARC events — `cpqInventoryService.apply*` methods only mutate state and write ChangeLog; emission is the orchestrator's job.
+
+```typescript
+// inside cpqOrderService.activateOrder, after the atomic flush:
+for (const target of order.arcTargets) {
+  switch (target.quoteType) {
+    case 'amend':
+      await emitCpqEvent('cpq.subscription.amended', {
+        subscriptionId: target.subscriptionId,
+        sourceQuoteId, sourceOrderId, ...,
+        proration: computeProrationPayload(target),
+      })
+      break
+    case 'renew':
+      if (target.mergeAction === 'standalone') {
+        await emitCpqEvent('cpq.subscription.renewed', { subscriptionId: target.subscriptionId, term, ... })
+      } else if (target.mergeAction === 'absorb') {
+        // Source sub being retired by merge.
+        await emitCpqEvent('cpq.subscription.superseded', {
+          subscriptionId: target.subscriptionId,
+          mergedIntoSubscriptionId: newMergeSubId,
+          ...
+        })
+      }
+      // The 'cpq.subscription.merged' event for the new sub M is emitted
+      // ONCE per merge group (not per target) — handled outside this loop:
+      //
+      // if (mergeMode) {
+      //   await emitCpqEvent('cpq.subscription.merged', {
+      //     subscriptionId: newMergeSubId,
+      //     mergedFromSubscriptionIds: sourceIds,
+      //     term, ...
+      //   })
+      // }
+      break
+    case 'cancel':
+      await emitCpqEvent('cpq.subscription.cancelled', { ..., etfAmount, etfCurrency, reasonCode })
+      break
+  }
+}
+```
+
+### Subscribers (placeholder)
+
+`src/modules/cpq/subscribers/subscription-amended-log.ts` (and analogous for the other four events: `renewed`, `merged`, `cancelled`, `superseded`) — persistent, idempotent log handlers. Future billing module replaces these with real handlers.
+
+```typescript
+export const metadata = { event: 'cpq.subscription.amended', persistent: true, id: 'cpq-subscription-amended-log' }
 export default async function handler(payload, ctx) {
-  console.info('[cpq.arc] Amendment executed', payload.amendmentId, payload.proration)
-  // Future: call billing service, emit notification, etc.
+  console.info('[cpq.arc] amended', payload.subscriptionId, payload.changeLogId)
 }
 ```
 
-**Persistent subscribers MUST be idempotent** — they may be retried on failure. Use amendmentId/cancellationId/renewalId as dedup key.
+### `withAtomicFlush` (MUST)
 
-### Scheduler (Cron Jobs)
+`cpqOrderService.activateOrder` wraps the entire activation (across all targets) in a single transaction. Per-target `applyArcChange` calls run inside that transaction. If any target fails, the whole order activation rolls back. Idempotency on retry comes from the `(sourceOrderId, subscriptionId)` ChangeLog uniqueness — re-running activation skips already-applied targets.
 
-Use `@open-mercato/scheduler` — not custom cron. Pattern: define commands, schedule via DB-backed jobs with `targetType: 'command'`, `targetCommand: '<id>'`. See [scheduler test-echo](../../node_modules/@open-mercato/scheduler/src/modules/scheduler/commands/test-echo.ts) for minimal example.
-
-Create `src/modules/cpq/commands/arc-schedulers.ts`:
-```typescript
-import { registerCommand } from '@open-mercato/shared/lib/commands'
-import type { CommandHandler } from '@open-mercato/shared/lib/commands'
-
-registerCommand({
-  id: 'cpq.arc.execute-cancellations',
-  async execute(input, ctx) {
-    const service = ctx.container.resolve('cpqCancellationService')
-    return service.processDueCancellations(ctx.scope)
-  },
-})
-
-registerCommand({
-  id: 'cpq.arc.renew-subscriptions',
-  async execute(input, ctx) {
-    const service = ctx.container.resolve('cpqRenewalService')
-    return service.processDueRenewals(ctx.scope)
-  },
-})
-
-registerCommand({
-  id: 'cpq.arc.execute-amendments',
-  async execute(input, ctx) {
-    const service = ctx.container.resolve('cpqAmendmentService')
-    return service.processDueAmendments(ctx.scope)
-  },
-})
-```
-
-Schedule via scheduler UI at `/backend/config/scheduled-jobs` or programmatically in `setup.ts`:
-- `cpq.arc.execute-cancellations` — daily at 00:15
-- `cpq.arc.renew-subscriptions` — daily at 00:30
-- `cpq.arc.execute-amendments` — every 15 minutes
-
-### API Routes (MUST follow CPQ pattern)
+### API routes (MUST follow CPQ pattern)
 
 Verified against [src/modules/cpq/api/quotes/route.ts](../../src/modules/cpq/api/quotes/route.ts):
+- Named exports (`POST`, `GET`, `PATCH`, `DELETE`).
+- `export const metadata = { POST: { requireAuth: true, requireFeatures: ['cpq.arc.amend.manage'] }, ... }`.
+- `resolveCpqRouteContext(req)` → DI container + auth + scope.
+- Zod validators in [src/modules/cpq/data/validators.ts](../../src/modules/cpq/data/validators.ts).
+- `export const openApi = ...` per route.
+- Service errors as a class with `status` property (pattern: `QuotingError`); `handleError` helper.
 
+### ACL features (MUST follow CPQ format)
+
+Append to existing object array in [src/modules/cpq/acl.ts](../../src/modules/cpq/acl.ts):
 ```typescript
-// src/modules/cpq/api/amendments/route.ts
-import { NextResponse } from 'next/server'
-import { z } from 'zod'
-import { resolveCpqRouteContext } from '../context'
-import { cpqCreateAmendmentSchema } from '../../data/validators'
-import { AmendmentError } from '../../services/cpqAmendmentService'
-
-export const metadata = {
-  POST: { requireAuth: true, requireFeatures: ['cpq.arc.amendment.manage'] },
-  GET: { requireAuth: true, requireFeatures: ['cpq.arc.amendment.view'] },
-}
-
-export async function POST(req: Request) {
-  try {
-    const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-    const body = cpqCreateAmendmentSchema.parse(await req.json())
-    const scope = { organizationId: ctx.organizationId, tenantId: ctx.tenantId }
-
-    const service = ctx.container.resolve('cpqAmendmentService')
-    const result = await service.createAmendment(body, scope)
-    return NextResponse.json(result, { status: 201 })
-  } catch (err) {
-    return handleError(err, 'cpq/amendments.POST')
-  }
-}
-
-function handleError(err: unknown, context: string) {
-  if (err instanceof z.ZodError) {
-    return NextResponse.json({ error: 'Validation error', details: err.issues }, { status: 400 })
-  }
-  if (err instanceof AmendmentError) {
-    return NextResponse.json({ error: err.message, ...(err.details ?? {}) }, { status: err.status })
-  }
-  console.error(`[${context}]`, err)
-  return NextResponse.json({ error: 'Internal error' }, { status: 500 })
-}
+{ id: 'cpq.arc.amend.manage', title: 'Manage Amend Quotes', module: 'cpq' },
+{ id: 'cpq.arc.renew.manage', title: 'Manage Renew Quotes', module: 'cpq' },
+{ id: 'cpq.arc.cancel.manage', title: 'Manage Cancel Quotes', module: 'cpq' },
+{ id: 'cpq.arc.changelog.view', title: 'View Subscription Change History', module: 'cpq' },
+{ id: 'cpq.inventory.expiring.view', title: 'View Expiring Subscriptions', module: 'cpq' },
 ```
 
-Conventions:
-- Named exports `POST`, `GET`, `PUT`, `DELETE` — NOT `export default`
-- `export const metadata` declares per-method auth + `requireFeatures`
-- Always call `resolveCpqRouteContext(req)` to get DI container + auth + scope
-- Validation via Zod schemas in `src/modules/cpq/data/validators.ts`
-- Service-specific error class extends base with `status` property (pattern: `QuotingError`)
-- `handleError` helper for consistent error responses
+Update `src/modules/cpq/setup.ts` `defaultRoleFeatures` so that any role with `cpq.quote.manage` also gets the three `cpq.arc.*.manage` features by default; `cpq.inventory.expiring.view` for any role with `cpq.inventory.view`.
 
-For list endpoints, consider `makeCrudRoute` from `@open-mercato/shared/lib/crud/factory` (used in core modules but not yet in CPQ — optional modernization).
-
-### Multi-phase Mutations (MUST use `withAtomicFlush`)
-
-> MikroORM's identity-map and subscriber infrastructure can silently discard pending scalar changes when a query runs on the same `EntityManager` before an explicit `em.flush()`. (Per [@open-mercato/core AGENTS.md SPEC-018](../../node_modules/@open-mercato/core/AGENTS.md))
-
-`execute()` methods in ARC services MUST use `withAtomicFlush`:
-
-```typescript
-import { withAtomicFlush } from '@open-mercato/shared/lib/commands/flush'
-
-async execute(amendmentId: string, scope: TenantScope) {
-  const em = this.em
-  // Read phase — BEFORE withAtomicFlush
-  const amendment = await em.findOne(CpqAmendmentRequest, { id: amendmentId, ...scope })
-  if (!amendment) throw new AmendmentError('Not found', 404)
-  if (amendment.status === 'executed') return amendment // idempotent no-op
-
-  const sourceSubscription = await em.findOne(CpqInventorySubscription, { id: amendment.sourceSubscriptionId })
-  const clonedQuote = await em.findOne(CpqQuoteConfiguration, { id: amendment.resultQuoteId })
-
-  // Atomic phase
-  await withAtomicFlush(em, [
-    () => {
-      // Phase 1: create new order from cloned quote
-      // (this may internally use cpqOrderService which does its own em operations)
-    },
-    () => {
-      // Phase 2: create new subscription (chain)
-    },
-    () => {
-      // Phase 3: migrate/snapshot items per rules
-    },
-    () => {
-      // Phase 4: transition old entities
-      if (sourceOrder.cpqStatus === 'active') sourceOrder.cpqStatus = 'superseded'
-      sourceSubscription.status = 'amended'
-      amendment.status = 'executed'
-      amendment.executedAt = new Date()
-    },
-  ], { transaction: true })
-
-  // AFTER commit — emit event
-  await emitCpqEvent('cpq.amendment.executed', {
-    amendmentId,
-    sourceSubscriptionId: sourceSubscription.id,
-    newSubscriptionId: amendment.resultSubscriptionId,
-    newOrderId: amendment.resultOrderId,
-    effectiveDate: amendment.effectiveDate,
-    proration: { oldMrcAmount, newMrcAmount, ... },
-  })
-
-  return amendment
-}
-```
-
-### ACL Features (MUST follow CPQ format)
-
-Existing CPQ uses object form `{ id, title, module }` in [src/modules/cpq/acl.ts](../../src/modules/cpq/acl.ts). Match exactly:
-```typescript
-// Append to features[]
-{ id: 'cpq.arc.amendment.view', title: 'View Amendment Requests', module: 'cpq' },
-{ id: 'cpq.arc.amendment.manage', title: 'Manage Amendment Requests', module: 'cpq' },
-{ id: 'cpq.arc.amendment.approve', title: 'Approve Amendment Requests', module: 'cpq' },
-{ id: 'cpq.arc.renewal.view', title: 'View Renewal History', module: 'cpq' },
-{ id: 'cpq.arc.renewal.manage', title: 'Manage Renewals', module: 'cpq' },
-{ id: 'cpq.arc.cancellation.view', title: 'View Cancellation Requests', module: 'cpq' },
-{ id: 'cpq.arc.cancellation.manage', title: 'Manage Cancellations', module: 'cpq' },
-{ id: 'cpq.arc.cancellation.approve', title: 'Approve Cancellations', module: 'cpq' },
-```
-
-Also update `src/modules/cpq/setup.ts` `defaultRoleFeatures` to grant appropriate roles (e.g., `admin: 'cpq.*'` already wildcard-covers; employee roles need explicit `cpq.arc.*.view`).
-
-### Dependencies Verified
+### Dependencies
 
 All required packages already in [package.json](../../package.json):
-- `@open-mercato/events` (0.4.10) ✓
-- `@open-mercato/scheduler` (0.4.10) ✓
-- `@open-mercato/queue` (0.4.10) ✓
-- `@open-mercato/shared` (0.4.10) — contains `withAtomicFlush`, `createModuleEvents`, `registerCommand` ✓
+- `@open-mercato/events` ✓
+- `@open-mercato/queue` ✓
+- `@open-mercato/shared` (provides `withAtomicFlush`, `createModuleEvents`) ✓
 
-No new dependencies needed.
+`@open-mercato/scheduler` is **no longer required by this spec** (no scheduled jobs).
 
 ---
 
 ## Implementation Plan
 
-### Phase 1 — Cancellation (foundation)
+### Phase 1 — Foundation (entities + quote schema + change log)
 
-Concrete step-by-step (following Open Mercato workflow):
+1. **Entities** in [src/modules/cpq/data/entities.ts](../../src/modules/cpq/data/entities.ts):
+   - NEW `CpqSubscriptionChangeLog`
+   - NEW `CpqQuoteTargetSubscription`
+   - Add to `CpqQuoteConfiguration`: `quote_type`, `arc_reason_code`, `arc_reason_text`, `arc_etf_amount`, `arc_etf_currency`, `arc_merge_new_term_start`, `arc_merge_new_term_end`, `arc_merge_new_term_months`, `arc_merge_new_sub_code`, `arc_merge_new_sub_name`
+   - Add to `CpqQuoteLineConfiguration`: `target_subscription_id`, `source_subscription_item_id`
+   - Add to `CpqInventorySubscription`: `current_term_start`, `merged_into_subscription_id`, `last_change_log_id`, `version`
+2. **types.ts**:
+   - Extend `INVENTORY_SUBSCRIPTION_STATUSES` with `'superseded'`; transitions `active → superseded`; terminal entry.
+   - Extend item statuses with `'superseded'`.
+   - Add `CPQ_QUOTE_TYPES = ['new','amend','renew','cancel'] as const`.
+   - Add `CHANGE_LOG_TYPES = ['amend','renew','cancel','merge-result','merge-source'] as const`.
+   - Add `MERGE_ACTIONS = ['standalone','absorb'] as const`.
+3. **`yarn mercato db generate`** → review migration → confirm with user → `yarn mercato db migrate`.
+4. **Validators** in [src/modules/cpq/data/validators.ts](../../src/modules/cpq/data/validators.ts):
+   - `cpqCreateQuoteFromSubscriptionSchema`
+   - `cpqAttachTargetSubscriptionSchema`
+   - Update `cpqCreateQuoteSchema` / `cpqUpdateQuoteSchema` to accept `quote_type`.
+   - Update quote-line schemas to accept `target_subscription_id`.
+5. **Events** in NEW [src/modules/cpq/events.ts](../../src/modules/cpq/events.ts).
+6. **Run `yarn generate`**.
 
-1. **Entities** — Define in [src/modules/cpq/data/entities.ts](../../src/modules/cpq/data/entities.ts):
-   - `CpqCancellationRequest` entity (per spec schema; all fields with `@Property` decorators)
-   - Additions to `CpqInventorySubscription`: `version` (MikroORM `@Property({ version: true })`), `cancellation_request_id` (nullable), `last_billing_date` (nullable)
-2. **Generate migration** — `yarn db:generate` produces `Migration20260XXXXXXXXXX_cpq_cancellation.ts`. Review generated SQL, verify indexes on `(organization_id, tenant_id, status)`, `(target_type, target_id)`, `(effective_date, status)`.
-3. **Apply migration** — `yarn db:migrate`.
-4. **Events declaration** — Create [src/modules/cpq/events.ts](../../src/modules/cpq/events.ts) (NEW file — first events for CPQ module) with `cpq.cancellation.*` event set. Run `yarn generate` to register.
-5. **Validators** — Add Zod schemas to `src/modules/cpq/data/validators.ts`: `cpqCreateCancellationSchema`, `cpqApproveCancellationSchema`, etc.
-6. **Service** — Implement `src/modules/cpq/services/cpqCancellationService.ts`:
-   - `DefaultCpqCancellationService` class with `AmendmentError` equivalent (`CancellationError` with `status` property)
-   - `createCancellation`, `computeETF` (pure), `approve`, `reject`, `withdraw`, `retry`, `execute`, `processDueCancellations`
-   - Use `withAtomicFlush` for `execute()` multi-phase
-   - Emit `cpq.cancellation.*` events AFTER commit
-7. **DI registration** — Add `cpqCancellationService` to [src/modules/cpq/di.ts](../../src/modules/cpq/di.ts) using `asFunction + container.resolve` pattern.
-8. **ACL** — Append 3 features to [src/modules/cpq/acl.ts](../../src/modules/cpq/acl.ts): `cpq.arc.cancellation.view/manage/approve`. Update `setup.ts` `defaultRoleFeatures` if needed.
-9. **API routes**:
-   - `src/modules/cpq/api/cancellations/route.ts` — POST (create) + GET (list)
-   - `src/modules/cpq/api/cancellations/[id]/route.ts` — GET (fetch)
-   - `src/modules/cpq/api/cancellations/[id]/approve/route.ts`, `/reject`, `/withdraw`, `/retry`
-   - All follow `metadata` + `resolveCpqRouteContext` + Zod + `handleError` pattern
-10. **Scheduled command** — Register `cpq.arc.execute-cancellations` in `src/modules/cpq/commands/arc-schedulers.ts`. Add schedule to `setup.ts` `onTenantCreated` (daily at 00:15).
-11. **Subscriber placeholder** — `src/modules/cpq/subscribers/cancellation-executed-log.ts` with persistent metadata.
-12. **Backend UI** — Cancel action on subscription detail + standalone cancellations list page. Use existing CPQ UI patterns (React + @open-mercato/ui).
-13. **Tests** — Unit tests for `computeETF` pure function (all edge cases per spec); integration tests for state transitions, idempotency, validation blocks, scheduler.
-14. **Run `yarn generate`** after all files are added to refresh `.mercato/generated/*`.
+### Phase 2 — Service layer
 
-### Phase 2 — Renewal (automation + chain)
-1. Entity + migrations: `CpqRenewalTransaction`, subscription additions (`previous_subscription_id`, `source_renewal_id`, `default_renewal_pricing_strategy`, new `renewed` status, item `renewed` status)
-2. `cpqRenewalService` with chain creation + asset migration + item snapshot + execution-time status re-check
-3. Cron handler `cpq:renew-subscriptions`
-4. API + ACL features (`cpq.arc.renewal.*`)
-5. Backend UI: renewal history timeline, manual renew dialog, autoRenew toggle, pricing strategy selector, chain view
-6. Events: `cpq.renewal.*` (with proration payload)
-7. Tests: auto-renewal, manual renewal, chain walk, failure/retry, asset migration, item snapshot, pricing strategies, execution-time blocked by suspended, idempotency
+1. `cpqQuotingService.createQuoteFromSubscription`, `attachTargetSubscription`, `detachTargetSubscription`, `validateArcQuote`.
+2. `cpqInventoryService.applyAmendment`, `applyRenewal`, `applyMergeRenewal`, `applyCancel`. All idempotent on `(orderId, subId)`.
+3. `cpqOrderService.activateOrder` extended to branch on `quote_type` and invoke the right `applyArcChange` per target. Wrapped in `withAtomicFlush({ transaction: true })`. Events emitted post-commit.
+4. ACL features in [src/modules/cpq/acl.ts](../../src/modules/cpq/acl.ts).
+5. Placeholder subscribers (one per event).
 
-### Phase 3 — Amendment (chain + proration)
-1. Entity + migrations: `CpqAmendmentRequest`, `CpqAmendmentChange`, subscription addition (`source_amendment_id`), quote/order additions (`amendment_request_id`, `supersedes_order_id`), new `amended` status for subscription + item, new `superseded` status for order
-2. `cpqAmendmentService` — integrates with `cpqQuotingService.cloneQuote` via `createAmendmentQuote` (tags with amendment_request_id, applies pricing_strategy)
-3. Delta computation → AmendmentChange records
-4. Chain execution: new order, new subscription, asset migration, item snapshot, old → amended/superseded (conditional on order status)
-5. API + ACL features (`cpq.arc.amendment.*`)
-6. Amendment scheduler cron (every 15 min)
-7. Backend UI: "Amend" action → wizard (select changes → pick pricing strategy → preview delta → preview cloned quote → submit)
-8. Events: `cpq.amendment.*` (with proration payload)
-9. Tests: billable/non-billable amendments, rejection, withdrawal, scheduled execution, inline execution (immediate effective_date), concurrent modification, pricing strategies, asset/item lifecycle per line-change type, validation blocks (empty changes, past currentTermEnd, suspended, pending cancellation, another non-terminal amendment), idempotency, failure + retry, withdrawal cancels linked quote
+### Phase 3 — APIs
 
-### Phase 4 — Lineage & Polish
-1. Backfill migration: `version=1` on existing subscriptions (if not already set by MikroORM)
-2. Lineage view: subscription detail shows full chain (original order → amendments → renewals → cancellation)
-3. Reporting endpoints: amendments by date range, cancellation reasons, ETF totals, renewal churn
-4. Migration rollback docs: how to revert each phase's migration if needed (drop new columns, restore status enum constraints)
+1. `POST /api/cpq/quotes/from-subscription`
+2. `POST/GET/PATCH/DELETE /api/cpq/quotes/[id]/target-subscriptions[/[targetId]]`
+3. Update `POST/PATCH /api/cpq/quotes` and `POST/PATCH /api/cpq/quotes/[id]/lines` to accept new fields.
+4. `GET /api/cpq/inventory/subscriptions/[id]/change-log`
+5. `GET /api/cpq/inventory/subscriptions/expiring`
+6. All routes export `openApi`.
+
+### Phase 4 — UI
+
+1. Quote detail page extensions:
+   - "Modify subscription" drawer (type selector, target picker, term + merge designation for renew).
+   - Per-target item editor (group quote lines under target sub, add/remove/modify per target).
+   - Merge-renewal banner when applicable.
+2. Subscription detail page:
+   - "Amend" / "Renew" / "Cancel" action buttons (call `from-subscription` then navigate).
+   - "Change History" tab (timeline from `change-log` API).
+   - Declare new injection slots (`detail:cpq.inventory.subscription:actions`, `:tabs`) if not present.
+3. NEW page `/backend/cpq/inventory/subscriptions/expiring` — DataTable with filters, row actions.
+4. Sidebar entry for the expiring view (lucide-react icon).
+
+### Phase 5 — Tests
+
+Per [.ai/skills/unit-tests/SKILL.md](../../.ai/skills/unit-tests/SKILL.md) and [.ai/skills/integration-tests/SKILL.md](../../.ai/skills/integration-tests/SKILL.md).
+
+**Unit:**
+- `validateArcQuote`: each invariant (type required, targets non-empty, merge target unique, term ordering, currency match, etc.).
+- `applyAmendment`: add/cancel/modify line outcomes, mrc recompute, idempotency on re-run with same orderId, optimistic-lock conflict.
+- `applyRenewal`: term update, item changes, idempotency.
+- `applyMergeRenewal`: new merge sub M created with mrc = sum of all merged items + ops adds; source subs go `superseded`; asset FK migration to M; ChangeLog rows count = 1 (`merge-result` on M) + N (`merge-source` per source).
+- `applyCancel`: status cascade, ETF recorded.
+- ChangeLog snapshot shape correctness (before/after content).
+
+**Integration (Playwright):**
+- Full flow: create amend quote from subscription → approve → activate order → assert subscription items mutated + ChangeLog row.
+- Multi-target amend on a single quote.
+- Merge-renewal end-to-end with 3 source subs.
+- Cancel quote → terminated subscription + cancelled assets.
+- Expiring view filter accuracy.
+- Concurrent ARC quote rejection (409 when second amend tries to attach a sub already on a non-terminal ARC quote).
+
+### Phase 6 — Polish
+
+1. Manual updates: write `manuals/xd-250-arc-flow.md` with operator playbook.
+2. Migration log entry in `packages/cpq/MIGRATION.md` (CPQ packaging awareness).
+3. Audit of unused fields (decide on `autoRenew` removal in a follow-up spec).
+4. OpenAPI doc verification — every new route exports `openApi`.
 
 ---
 
 ## Risks
 
-### Chain depth grows faster (amendment + renewal both chain) (Severity: Medium)
-After 3 years with 4 amendments + 3 renewals, a subscription has 8+ records in chain.
-**Mitigation:** always query `WHERE status = 'active' AND customer_id = X` for current. Chain walk only for audit/history. Consider materialized "current subscription" view if performance degrades.
+### In-place mutation on a live subscription (Severity: High)
+ARC mutates the same row that billing observes. If activation partially fails after some items mutated but others not, billing gets inconsistent state.
+**Mitigation:** entire activation per order wrapped in one DB transaction (`withAtomicFlush({ transaction: true })`). On failure, full rollback. Idempotent retry via `(orderId, subId)` ChangeLog uniqueness.
+
+### Concurrent ARC operations on the same subscription (Severity: High)
+Two operators: one starts an amend quote, the other a cancel quote, both submit, both activate.
+**Mitigation:** validation rule blocks attaching a subscription to a second non-terminal ARC quote. Optimistic locking on `version` column at activation: second activation gets 409. ChangeLog idempotency keyed on `(orderId, subId)` so retries don't double-apply.
+
+### Loss of historic visibility (Severity: Medium)
+With no chain, "what did this subscription contain 6 months ago" must be reconstructed from ChangeLog snapshots.
+**Mitigation:** `before_snapshot` and `after_snapshot` are full jsonb snapshots — sufficient to reconstruct. UI "Change History" tab makes this discoverable. If reconstruction performance becomes an issue, add a materialized historical view in a follow-up spec.
+
+### Merge-renewal asset migration losing ancestry (Severity: Medium)
+Asset FK migrates from source subs to the new merge sub M. Source subs end up with zero assets — appears empty.
+**Mitigation:** ChangeLog `merge-source` row's `before_snapshot` captures the assets at moment of merge. Operator sees full pre-merge state via Change History. UI for source subs displays a banner "Merged into {M.code} on {date}" with a link to M.
+
+### Operator forgets to set `quote_type` (Severity: Medium)
+Quote stays as `type='new'` and at activation creates a *new* subscription — silent duplicate.
+**Mitigation:** UI requires explicit type selection in the "Modify subscription" drawer; the drawer is the only path that attaches target subs. `validateArcQuote` rejects quotes that have target subs but `type='new'`. Activation rejects quotes with `type ∈ {amend,renew,cancel}` but no target subs.
+
+### Order activation racing with another mutation (Severity: Medium)
+Operator manually edits a subscription via existing CRUD while ARC order activation is in flight.
+**Mitigation:** optimistic lock on `version`. The activation's UPDATE...WHERE version=? fails → 409 on the order activation, retryable.
 
 ### Proration payload accuracy (Severity: High)
-Billing module uses proration data from event. If CPQ miscomputes billing cycle boundaries, proration is wrong.
-**Mitigation:** Subscription stores `billingCycle` + `last_billing_date` (fed from billing integration). CPQ derives `billingCycleStart/End` deterministically. Contract test between CPQ and billing for payload shape + math. Amendment execution payload stored on AmendmentRequest for audit.
+Billing module consumes `proration` data from events to compute pro-rata refund/charge. Wrong `billingCycleStart/End` → wrong money.
+**Mitigation:** subscription stores `billingCycle` + `last_billing_date` (existing field, fed by billing integration). CPQ derives cycle bounds deterministically. Contract test between CPQ event and billing consumer for payload shape + math. Until billing integration exists, the placeholder subscribers log payloads for human review.
 
-### Data integrity on concurrent ARC operations (Severity: High)
-Two users amending + cancelling the same subscription → race condition.
-**Mitigation:** optimistic locking via `version` column (MikroORM `@Property({ version: true })`); 409 Conflict. Additional validation blocks concurrent non-draft amendment (only one `pending`/`approved` at a time per subscription).
+### `superseded` confused with `terminated` (Severity: Low)
+Two terminal statuses for distinct outcomes (cancellation vs merge).
+**Mitigation:** business-meaningful distinction is the whole point. Reporting queries should explicitly handle both. Docs in manuals + state machine table call this out.
 
-### Event ordering for billing (Severity: High)
-Billing computes from `cpq.amendment.executed` / `cpq.renewal.executed`. If event arrives before state persisted → wrong values.
-**Mitigation:** `withAtomicFlush(em, phases, { transaction: true })` ensures DB state is atomic. Events emitted AFTER commit via `emitCpqEvent(...)`. Persistent subscribers via `@open-mercato/events` (BullMQ-backed when async) provide reliable delivery + retries. In case of post-commit crash before emit, failed amendment record remains queryable with matching state — operator can reconcile via `/retry` endpoint (which is idempotent).
-
-### ETF formula correctness (Severity: High)
-Wrong ETF → customer disputes, legal exposure.
-**Mitigation:** codified `computeETF` pure function, exhaustive unit tests. Displayed to user before submit. Value stored at creation, not recomputed at execution.
-
-### Renewal scheduler reliability (Severity: High)
-Missed renewal → unexpected expiry.
-**Mitigation:** idempotent handler, 3-day look-behind, retry up to 3, terminal `failed` + alert after exhaustion, upcoming-renewals dashboard.
-
-### Execution partial failure (Severity: High)
-Amendment/renewal `execute()` performs many writes (new subscription, items, assets migration, old status transitions, event). A failure midway could leave partial state.
-**Mitigation:** full operation wrapped in single DB transaction. On failure: rollback; status → `failed`; retry via scheduler or manual. Idempotent `execute()` so retry is safe.
-
-### Amendment `effective_date` past `currentTermEnd` (Severity: Medium)
-Would collide with renewal window.
-**Mitigation:** validation — `effective_date ≤ currentTermEnd`. Customer must attach amendment to renewal instead.
-
-### Asset migration losing history (Severity: Medium)
-When asset FK moves forward on chain, old subscription appears to have no assets.
-**Mitigation:** chain walk preserves ancestry; UI lineage view makes it obvious. Future: dedicated `CpqAssetHistory` log.
-
-### Scheduler double-execution race (Severity: Medium)
-Two scheduler instances (replicated cron) could pick up same approved amendment.
-**Mitigation:** execute transitions status atomically via `UPDATE ... WHERE status='approved' RETURNING`; rowcount check. Second instance gets 0 rows → no-op. Plus idempotent `execute()` as belt-and-suspenders.
-
-### Terminology drift: cloneQuote vs amendment (Severity: Low)
-Developers conflate generic `cloneQuote` with post-sale `createAmendmentQuote`.
-**Mitigation:** dedicated method + tests + developer docs.
-
-### Notifications out of scope v1 (Severity: Low)
-Customer won't receive emails for renewal/cancellation/amendment unless separate notification module listens to events.
-**Mitigation:** events are ready for notification module to consume. Flag to ops/product for follow-up SPEC.
+### Quote complexity for cancel (Severity: Low)
+Routing cancel through a full quote+order flow is heavier than necessary for the simple "just kill it" case.
+**Mitigation:** UI offers "Cancel" as a one-click action that auto-creates the cancel quote with all current items pre-marked `action='cancel'`. Operator can fast-path through approval. Future SPEC may introduce a "cancel without quote" shortcut for unapproved-for-revenue cases.
 
 ---
 
 ## Acceptance Criteria
 
-### Cancellation
-- [ ] Can cancel active subscription with `immediate` policy → `terminated`, `cancellation_request_id` set
-- [ ] Can cancel with `end-of-term` policy → scheduler executes at `currentTermEnd`
-- [ ] ETF computed per formula: `min(remaining_months × MRC × 0.5, 3 × MRC)`
-- [ ] ETF = 0 for end-of-term or past-term cancellation or `termMonths = null`
-- [ ] Cancellation emits `cpq.cancellation.executed` event via outbox
-- [ ] Approved-but-not-executed cancellation can be withdrawn before `effective_date`
-- [ ] Cancellation against already-terminal target → 400
-- [ ] Cancellation works on `suspended` subscription
-- [ ] `execute()` is idempotent (no-op on already-executed)
-- [ ] Failure → status `failed`, retry via POST /retry
+### Quote-level
+- [ ] Quote `type` defaults to `new`; can transition once via PATCH from `new` to `amend`/`renew`/`cancel`; any further change attempt returns `409`
+- [ ] `POST /quotes/from-subscription` creates a quote pre-filled with subscription's active items, lines tagged with `target_subscription_id`
+- [ ] Multi-target on a single quote works for `amend` (items per target) and `cancel` (terminate multiple subs in one quote with shared reason/ETF). `renew` is single-target standalone OR multi-target merge — never multi-target standalone.
+- [ ] Merge-renewal validation (≥2 targets): all targets have `merge_action='absorb'`; quote-level `arc_merge_new_term_*` are filled and ordered; same customer/currency/billingCycle across targets
+- [ ] `validateArcQuote` blocks submission when target sub already has another non-terminal ARC quote attached
+- [ ] Quote follows existing approval flow (`new → ready → in_approval → approved → with_customer → accepted`); ARC type does not change the lifecycle
 
-### Renewal
-- [ ] Subscription with `autoRenew=true` and `currentTermEnd` within 7 days → chain created; old = `renewed`, new = `active`, version=1
-- [ ] Manual renew creates new subscription with term extended
-- [ ] Renewal with attached amendment applies amended terms to NEW subscription
-- [ ] Pricing strategy respected (rate-lock / current-catalog / mixed)
-- [ ] Items snapshotted on new subscription; old items → `renewed`
-- [ ] Assets migrate FK to new subscription and new item IDs
-- [ ] Chain walk returns ancestors + descendants correctly
-- [ ] Failed renewal retries up to 3, then terminal `failed` + alert
-- [ ] Renewal blocked on `suspended` subscription (scheduler skips at scan AND at execution)
-- [ ] New subscription inherits attributes (customer, currency, billingCycle, etc.) per rules
-- [ ] `execute()` is idempotent
+### Amend
+- [ ] At order activation: items with `action='add'` materialized as new active items; `action='cancel'` lines transition existing items to `terminated`; `action='modify'` updates configuration
+- [ ] Subscription `currentTermEnd` / `currentTermStart` / `termMonths` unchanged
+- [ ] Subscription `mrcAmount` recomputed = sum of active items' `mrcAmount`
+- [ ] Assets respect catalog `isAssetizable`: new assetizable items materialize `pending` assets; removed lines transition assets to `cancelled`
+- [ ] One `CpqSubscriptionChangeLog` row written, `change_type='amend'`, `before_snapshot` and `after_snapshot` populated
+- [ ] `cpq.subscription.amended` event emitted AFTER commit, with proration payload
 
-### Amendment
-- [ ] Can create amendment against active subscription → cloned Quote + AmendmentChange records
-- [ ] Empty `lineChanges` → 400
-- [ ] `effective_date > currentTermEnd` → 400
-- [ ] Amendment on `suspended` subscription → 400
-- [ ] Amendment blocked when pending cancellation exists → 409
-- [ ] Amendment blocked when another amendment is `pending` or `approved` (drafts allowed) → 409
-- [ ] Pricing strategy respected in cloned quote price computation
-- [ ] Amendment goes through quote approval flow: cloned quote flows `new → ready → in_approval → approved → with_customer → accepted`
-- [ ] Quote `accepted` + `effective_date ≤ now` → AmendmentRequest executes inline (same transaction)
-- [ ] Quote `accepted` + `effective_date > now` → scheduler executes within 15 min of effective date
-- [ ] Upon execution (triggered by linked quote reaching `accepted` + effectiveDate ≤ now): new Order created (`supersedes_order_id` populated); original Order: if `active` → `superseded`, if `fulfilled` → stays `fulfilled`; new Subscription created (chain); original Subscription → `amended`; version=1 on new
-- [ ] Asset lifecycle correct per line change type (add→pending on new, remove→cancelled on old, modify/keep→migrate)
-- [ ] Subscription item snapshot on new subscription; old items → `amended` (kept/modified) or `terminated` (removed)
-- [ ] Amendment.executed event carries proration payload with `billingCycleStart/End` derived from `last_billing_date` + `billingCycle`
-- [ ] Withdrawn amendment also cancels linked result Quote
-- [ ] Amendment can be withdrawn in `draft`, `pending`, `approved`
-- [ ] `execute()` is idempotent; failure → `failed`; retry works
+### Renew (standalone, single target)
+- [ ] Subscription `currentTermStart`/`currentTermEnd`/`termMonths` updated to new values from the target row
+- [ ] Item changes applied like amend
+- [ ] Subscription status unchanged (stays `active` or `suspended` as it was)
+- [ ] ChangeLog `change_type='renew'`, `term_change` populated
+- [ ] `cpq.subscription.renewed` event emitted with `term` payload
+- [ ] Suspended sub: renew works without first reactivating it
+
+### Renew (merge)
+- [ ] A new `CpqInventorySubscription` row M is created at activation with status `active`, term from `arc_merge_new_term_*`, customer/currency/billingCycle inherited from sources, code/name from `arc_merge_new_sub_code/name` or auto-generated
+- [ ] M's items = carry-over from each source (cloned, new ids, `sourceQuoteLineId=null`) + operator's add lines (with `sourceQuoteLineId` set)
+- [ ] Operator's `cancel`/`modify` lines correctly resolve via `source_subscription_item_id` to items on M (mapped from source items at carry-over)
+- [ ] Assets from source subs migrate FK to M (and to corresponding new item ids on M)
+- [ ] Source subs transition to `superseded`, `mergedIntoSubscriptionId=M.id`, `terminatedAt=now()`
+- [ ] ChangeLog rows: one `change_type='merge-result'` on M (with `merged_from_subscription_ids`, `term_change` populated), one `change_type='merge-source'` per source (with `merged_into_subscription_id=M.id`, `after_snapshot=null`)
+- [ ] Events: one `cpq.subscription.merged` for M, one `cpq.subscription.superseded` per source
+- [ ] Suspended source subs are accepted and transition `suspended → superseded`
+
+### Cancel
+- [ ] Subscription transitions to `terminated`; items → `terminated`; assets → `cancelled`
+- [ ] ChangeLog `change_type='cancel'`, ETF + reason captured
+- [ ] `cpq.subscription.cancelled` event with ETF + reason payload
+
+### Expiring view
+- [ ] `GET /api/cpq/inventory/subscriptions/expiring?withinDays=30` returns active subs with `currentTermEnd` in `[now, now+30d]`, sorted ascending
+- [ ] Backend page renders the list with relative-time chips and Renew/Modify actions
+- [ ] Filters: `withinDays`, `customerId`, `billingCycle`, `status` work correctly
+- [ ] Sidebar entry visible only with `cpq.inventory.expiring.view`
 
 ### Cross-cutting
-- [ ] All ARC operations emit events via `emitCpqEvent(...)` AFTER successful `withAtomicFlush` commit (not before); persistent subscribers registered for billing integration
-- [ ] No ORM relations cross-module (string FKs)
-- [ ] Concurrent modification → 409 via `version` column
-- [ ] Backoffice shows full chain on subscription detail
-- [ ] Tests cover happy + rejection + withdrawal + concurrency + scheduler + failure+retry + idempotency for each process
+- [ ] No new subscription rows created for amend or standalone-renew or cancel (assert via integration test counting rows before/after)
+- [ ] Exactly **one** new subscription row created per merge-renewal activation (M); same test asserts source subs are not duplicated
+- [ ] `applyArcChange` is idempotent — re-running order activation with the same `orderId` produces no additional ChangeLog rows or state changes
+- [ ] Concurrent activation of two ARC orders touching the same subscription → second one fails with 409 (optimistic lock), order stays in `pending_activation`, retryable
+- [ ] No ORM relations cross-module (string FKs only)
+- [ ] No scheduler / cron jobs introduced (no `registerCommand` calls in this spec's code)
+- [ ] All new API routes export `openApi`
 
 ---
 
 ## Requirements Traceability
 
-| Domain Requirement | Implementation |
-|-------------------|----------------|
-| R-ARC-1: Auditable post-sale changes | `CpqAmendmentRequest`, `CpqCancellationRequest`, `CpqRenewalTransaction` record who/when/why for every change. `CpqAmendmentChange` logs line-level delta. |
-| R-ARC-2: Chain history | `previous_subscription_id` on subscription + new terminal statuses `amended`/`renewed` preserve predecessors. `GET /subscriptions/[id]/chain` exposes full ancestry. |
-| R-ARC-3: Proration for mid-term changes | Amendment + Renewal `executed` events carry `proration: { oldMrcAmount, newMrcAmount, billingCycleStart/End, daysElapsedInCycle, daysRemainingInCycle }`. Billing module computes refund/charge deltas. |
-| R-ARC-4: Early Termination Fee | Codified formula `min(remaining_months × MRC × 0.5, 3 × MRC)` in `cpqCancellationService.computeETF` pure function. Value stored at creation for audit; never recomputed at execution. |
-| R-ARC-5: Scheduled execution | Amendment + Cancellation support `effective_date`. Amendment scheduler polls every 15 min; Cancellation scheduler daily. Renewal scheduled via `currentTermEnd`. |
-| R-ARC-6: Approval workflow integration | Amendment reuses existing quote approval flow (XD-201 state machine). Cancellation has own approval (`requested → approved`). |
-| R-ARC-7: Retry + failure handling | `retry_count` field (max 3) + `failed` holding status + `/retry` endpoint on all three request entities. Auto-retry in scheduler within max, manual `/retry` bypasses after exhaustion. |
-| R-ARC-8: Prevent concurrent conflict | Validation blocks concurrent non-draft amendment / pending cancellation on same subscription. Optimistic locking via MikroORM `version` column → 409 Conflict. |
-| R-ARC-9: Pricing strategy per operation | `pricing_strategy` enum field (rate-lock / current-catalog / mixed) on Amendment and Renewal entities. Subscription-level default (`default_renewal_pricing_strategy`) overridable per operation. |
-| R-GEN-1: Product agnostic | No product-specific logic. Operates on generic configuration snapshots from quote lines. |
-| R-GEN-2: Open-Close Principle | No modifications to `@open-mercato/*` packages. Extensions via DI, widget injection, event subscribers. |
-| R-GEN-3: Multi-tenancy | All queries scoped by `organizationId` + `tenantId`. All entities include both columns. |
-| R-GEN-4: Standard integration | References standard `SalesQuote` / `SalesOrder` / `CustomerEntity` IDs. No direct ORM relations cross-module. |
-| R-GEN-5: Extensibility via DI | All three new services registered in Awilix, overridable by downstream consumers (customer apps can eject). |
+| Requirement | Implementation |
+|-------------|----------------|
+| R-ARC-1: Auditable post-sale changes | `CpqSubscriptionChangeLog` per ARC operation per affected sub, append-only, with `before_snapshot` / `after_snapshot` jsonb |
+| R-ARC-2: No subscription history (no chain) | In-place mutation for amend / standalone-renew / cancel; subscription identity preserved. Merge-renewal is the single exception (creates new sub M, retires sources to `superseded`). No chain FKs anywhere; ChangeLog is the audit trail. |
+| R-ARC-3: CPQ Quote module owns the process | All ARC entry points are quote-creation endpoints; orchestration in `cpqQuotingService` + `cpqOrderService.activateOrder`; subscription module exposes mutation primitives but does not own UX |
+| R-ARC-4: ARC follows existing Quote → Order flow | Reuses unchanged quote lifecycle; reuses unchanged order activation path with a branch on `quote_type` |
+| R-ARC-5: Multi-target quote (amend) | `CpqQuoteTargetSubscription` junction; per-line `target_subscription_id`; UI groups lines by target |
+| R-ARC-6: Merge during renew | `merge_action ∈ {standalone, absorb}` on target sub + quote-level `arc_merge_new_term_*` / `arc_merge_new_sub_*`; `applyMergeRenewal` creates new sub M; sources transition to `superseded` terminal |
+| R-ARC-7: Proration data on events | All five `cpq.subscription.*` events (amended/renewed/merged/cancelled/superseded) carry proration payload; billing module subscribes |
+| R-ARC-8: Concurrent conflict prevention | Validation blocks two non-terminal ARC quotes per sub; optimistic lock on subscription `version` at activation |
+| R-ARC-9: Manual operator-driven flow (no scheduler) | No `registerCommand`, no cron, no auto-renew. Expiring list view replaces automation with operator triage |
+| R-ARC-10: Expiring subscriptions visibility | `GET /api/cpq/inventory/subscriptions/expiring`, `/backend/cpq/inventory/subscriptions/expiring` page |
+| R-GEN-1: Product agnostic | Operates on generic configuration snapshots; respects catalog `isAssetizable` |
+| R-GEN-2: Open-Close | No modifications to `@open-mercato/*` packages; extensions via DI, widget injection, event subscribers |
+| R-GEN-3: Multi-tenancy | All new entities + queries scoped by `organizationId` + `tenantId` |
+| R-GEN-4: Standard integration | Cross-module FKs as string ids; no ORM relations across modules |
+| R-GEN-5: DI extensibility | Existing CPQ services overridable via Awilix; customer apps can eject |
 
 ---
 
@@ -1314,47 +1301,52 @@ Customer won't receive emails for renewal/cancellation/amendment unless separate
 
 | File | Purpose |
 |------|---------|
-| `src/modules/cpq/events.ts` | NEW — event declarations via `createModuleEvents` (first events in CPQ module) |
-| `src/modules/cpq/subscribers/amendment-executed-log.ts` | Placeholder persistent subscriber for `cpq.amendment.executed` |
-| `src/modules/cpq/subscribers/cancellation-executed-log.ts` | Placeholder persistent subscriber for `cpq.cancellation.executed` |
-| `src/modules/cpq/subscribers/renewal-executed-log.ts` | Placeholder persistent subscriber for `cpq.renewal.executed` |
-| `src/modules/cpq/commands/arc-schedulers.ts` | `registerCommand` for `cpq.arc.execute-amendments`, `execute-cancellations`, `renew-subscriptions` |
-| `src/modules/cpq/services/cpqAmendmentService.ts` | Service with createAmendment, submitForApproval, approve/reject/withdraw, execute, retry, processDueAmendments |
-| `src/modules/cpq/services/cpqRenewalService.ts` | Service with scheduleRenewal, executeRenewal, walkChain, retry, cancelScheduled, processDueRenewals |
-| `src/modules/cpq/services/cpqCancellationService.ts` | Service with createCancellation, computeETF (pure), approve/reject/withdraw, execute, retry, processDueCancellations |
-| `src/modules/cpq/api/amendments/route.ts` | POST (create) + GET (list) |
-| `src/modules/cpq/api/amendments/[id]/route.ts` | GET (fetch) |
-| `src/modules/cpq/api/amendments/[id]/submit-for-approval/route.ts` | POST |
-| `src/modules/cpq/api/amendments/[id]/approve/route.ts` | POST |
-| `src/modules/cpq/api/amendments/[id]/reject/route.ts` | POST |
-| `src/modules/cpq/api/amendments/[id]/withdraw/route.ts` | POST |
-| `src/modules/cpq/api/amendments/[id]/retry/route.ts` | POST |
-| `src/modules/cpq/api/cancellations/route.ts` | POST + GET |
-| `src/modules/cpq/api/cancellations/[id]/route.ts` | GET |
-| `src/modules/cpq/api/cancellations/[id]/{approve,reject,withdraw,retry}/route.ts` | POST (4 files) |
-| `src/modules/cpq/api/inventory/subscriptions/[id]/renew/route.ts` | POST (manual renewal) |
-| `src/modules/cpq/api/inventory/subscriptions/[id]/renewals/route.ts` | GET (history) |
-| `src/modules/cpq/api/inventory/subscriptions/[id]/chain/route.ts` | GET (chain walk) |
-| `src/modules/cpq/api/inventory/subscriptions/[id]/auto-renew/route.ts` | PATCH |
-| `src/modules/cpq/api/inventory/subscriptions/[id]/renewal-pricing-strategy/route.ts` | PATCH |
-| `src/modules/cpq/api/renewals/[id]/{cancel,retry}/route.ts` | POST (2 files) |
-| `src/modules/cpq/backend/cpq/amendments/` | Admin UI pages (list + detail + wizard) |
-| `src/modules/cpq/backend/cpq/cancellations/` | Admin UI pages (list + detail) |
+| `src/modules/cpq/events.ts` | NEW — first events for CPQ module (`cpq.subscription.{amended,renewed,merged,cancelled,superseded}`) |
+| `src/modules/cpq/subscribers/subscription-amended-log.ts` | Placeholder persistent subscriber |
+| `src/modules/cpq/subscribers/subscription-renewed-log.ts` | Placeholder persistent subscriber |
+| `src/modules/cpq/subscribers/subscription-merged-log.ts` | Placeholder persistent subscriber |
+| `src/modules/cpq/subscribers/subscription-cancelled-log.ts` | Placeholder persistent subscriber |
+| `src/modules/cpq/subscribers/subscription-superseded-log.ts` | Placeholder persistent subscriber |
+| `src/modules/cpq/api/quotes/from-subscription/route.ts` | POST — create ARC quote pre-filled from a subscription |
+| `src/modules/cpq/api/quotes/[id]/target-subscriptions/route.ts` | GET / POST — list & attach |
+| `src/modules/cpq/api/quotes/[id]/target-subscriptions/[targetId]/route.ts` | PATCH / DELETE — update / detach |
+| `src/modules/cpq/api/inventory/subscriptions/[id]/change-log/route.ts` | GET — paginated history |
+| `src/modules/cpq/api/inventory/subscriptions/expiring/route.ts` | GET — expiring list |
+| `src/modules/cpq/backend/cpq/inventory/subscriptions/expiring/page.tsx` | Expiring list page |
+| `src/modules/cpq/backend/cpq/inventory/subscriptions/expiring/page.meta.ts` | Page metadata (sidebar entry, page group) |
+| `src/modules/cpq/backend/cpq/quotes/[id]/_components/ArcQuoteConfigurator.tsx` | UI: self-contained drawer — action selection + target picker + renew/cancel config + review. Sub-components (`StepBar`, `PickAction`, `PickTargets`, `ConfigRenew`, `ConfigCancel`, `Review`) inline in the same file |
+| `src/modules/cpq/backend/cpq/quotes/[id]/_components/PerTargetItemEditor.tsx` | UI: group existing quote lines under their target subscription (rendered on the host quote page, not in the drawer) |
+| `src/modules/cpq/backend/cpq/inventory/subscriptions/[id]/_components/ChangeHistoryTab.tsx` | UI: timeline for ChangeLog |
+| `manuals/xd-250-arc-flow.md` | Operator playbook |
 
 ### Modified files
 
 | File | Changes |
 |------|---------|
-| `src/modules/cpq/data/entities.ts` | Add 4 new entities (CpqAmendmentRequest, CpqAmendmentChange, CpqRenewalTransaction, CpqCancellationRequest). Extend CpqInventorySubscription with `version` (@Property version:true), `previous_subscription_id`, `source_amendment_id`, `source_renewal_id`, `cancellation_request_id`, `default_renewal_pricing_strategy`, `last_billing_date`. Extend CpqQuoteConfiguration with `amendment_request_id`. Extend CpqOrderConfiguration with `amendment_request_id`, `supersedes_order_id`. |
-| `src/modules/cpq/data/validators.ts` | Add Zod schemas: `cpqCreateAmendmentSchema`, `cpqApproveAmendmentSchema`, `cpqCreateCancellationSchema`, `cpqManualRenewSchema`, etc. |
-| `src/modules/cpq/services/types.ts` | Extend `INVENTORY_SUBSCRIPTION_STATUSES` with `'amended'`, `'renewed'`. Extend `INVENTORY_SUBSCRIPTION_TRANSITIONS.active` with these. Add `amended: []`, `renewed: []` terminal entries. Extend `CPQ_ORDER_STATUSES` with `'superseded'`. Extend `CPQ_ORDER_TRANSITIONS.active` with `'superseded'`. Add `superseded: []` entry. Export new constants: `ARC_AMENDMENT_STATUSES`, `ARC_CANCELLATION_STATUSES`, `ARC_RENEWAL_STATUSES`, `ARC_PRICING_STRATEGIES`. |
-| `src/modules/cpq/services/cpqInventoryService.ts` | Update `transitionSubscriptionStatus` to accept new target statuses `amended` and `renewed`. Add execution-time status re-check (for Renewal scheduler). |
-| `src/modules/cpq/services/cpqQuotingService.ts` | Add `createAmendmentQuote(sourceQuoteId, amendmentId, pricingStrategy, scope)` — variant of `cloneQuote` that tags the new quote with `amendment_request_id` and respects pricing strategy. |
-| `src/modules/cpq/di.ts` | Register `cpqAmendmentService`, `cpqRenewalService`, `cpqCancellationService` following `asFunction + container.resolve` pattern. |
-| `src/modules/cpq/acl.ts` | Append 8 features: `cpq.arc.amendment.{view,manage,approve}`, `cpq.arc.renewal.{view,manage}`, `cpq.arc.cancellation.{view,manage,approve}`. |
-| `src/modules/cpq/setup.ts` | Add ACL role grants; optionally add default cancellation reason codes to `seedDefaults`; schedule the 3 cron commands in `onTenantCreated`. |
-| `src/modules/cpq/index.ts` | No change (module metadata stable; entities auto-discovered). |
-| `src/modules/cpq/migrations/Migration20260XXXXXXXXXX_cpq_arc.ts` | AUTO-GENERATED via `yarn db:generate` — DO NOT hand-write. |
+| `src/modules/cpq/data/entities.ts` | Add `CpqSubscriptionChangeLog`, `CpqQuoteTargetSubscription`. Add `quote_type`, `arc_reason_*`, `arc_etf_*`, `arc_merge_*` on `CpqQuoteConfiguration`. Add `target_subscription_id`, `source_subscription_item_id` on `CpqQuoteLineConfiguration`. Add `current_term_start`, `merged_into_subscription_id`, `last_change_log_id`, `version` on `CpqInventorySubscription`. |
+| `src/modules/cpq/data/validators.ts` | Add `cpqCreateQuoteFromSubscriptionSchema`, `cpqAttachTargetSubscriptionSchema`. Extend quote/quote-line schemas. |
+| `src/modules/cpq/services/types.ts` | Extend `INVENTORY_SUBSCRIPTION_STATUSES` with `'superseded'`; transitions; terminal entry. Item-status `'superseded'`. New constants: `CPQ_QUOTE_TYPES`, `CHANGE_LOG_TYPES`, `MERGE_ACTIONS`. |
+| `src/modules/cpq/services/cpqQuotingService.ts` | Add `createQuoteFromSubscription`, `attachTargetSubscription`, `detachTargetSubscription`, `validateArcQuote`. |
+| `src/modules/cpq/services/cpqInventoryService.ts` | Add `applyAmendment`, `applyRenewal`, `applyMergeRenewal`, `applyCancel`. Update `transitionSubscriptionStatus` to accept `'superseded'`. |
+| `src/modules/cpq/services/cpqOrderService.ts` | Extend `activateOrder` to branch on `quote_type` and orchestrate per-target ARC application; emit subscription events post-commit. |
+| `src/modules/cpq/acl.ts` | Append 5 features. |
+| `src/modules/cpq/setup.ts` | Update `defaultRoleFeatures` to grant ARC features alongside existing `cpq.quote.manage` and `cpq.inventory.view` mappings. |
+| `src/modules/cpq/backend/cpq/quotes/[id]/page.tsx` | Render "Modify subscription" button (when editable); render per-target item editor; render merge-renewal banner. |
+| `src/modules/cpq/backend/cpq/inventory/subscriptions/[id]/page.tsx` | Add Amend / Renew / Cancel action buttons; declare/use `:actions` and `:tabs` injection slots; mount Change History tab. |
+| `src/modules/cpq/migrations/Migration<timestamp>_*.ts` | AUTO-GENERATED via `yarn mercato db generate`. |
+
+### Removed (compared to prior chain-based draft)
+
+The following are **NOT** part of this rewrite (they appeared in the prior draft but are explicitly removed):
+
+- `CpqAmendmentRequest`, `CpqAmendmentChange`, `CpqRenewalTransaction`, `CpqCancellationRequest` entities
+- Their dedicated services, APIs, state machines, retry endpoints
+- Scheduler commands (`cpq.arc.execute-amendments`, `cpq.arc.execute-cancellations`, `cpq.arc.renew-subscriptions`)
+- Chain fields on subscription (`previous_subscription_id`, `source_amendment_id`, `source_renewal_id`)
+- `amended` and `renewed` terminal statuses on subscription
+- `superseded` on order (the prior draft's order-level field — order lifecycle stays as-is here)
+- ETF formula codification (kept as an operator-entered amount on the cancel quote line; no formula enforcement)
+- Auto-renew automation
 
 ---
 
@@ -1362,154 +1354,100 @@ Customer won't receive emails for renewal/cancellation/amendment unless separate
 
 | Status | Condition | Body |
 |--------|-----------|------|
-| `400 Bad Request` | Request body fails Zod validation | `{ "error": "Validation error", "details": [...ZodIssue] }` |
-| `400 Bad Request` | Amendment `lineChanges` empty | `{ "error": "Amendment must include at least one line change" }` |
-| `400 Bad Request` | Amendment `effective_date > currentTermEnd` (and not attached to renewal) | `{ "error": "Effective date exceeds subscription term end" }` |
-| `400 Bad Request` | Amendment target subscription not `active` | `{ "error": "Amendment target subscription must be active", "status": "<current>" }` |
-| `400 Bad Request` | Cancellation target already terminal | `{ "error": "Target is already in terminal status", "status": "<current>" }` |
-| `400 Bad Request` | Renewal target not `active` (manual) | `{ "error": "Renewal target must be active" }` |
-| `400 Bad Request` | Withdraw attempted on terminal request | `{ "error": "Cannot withdraw from <status>" }` |
-| `400 Bad Request` | Retry attempted on non-`failed` status | `{ "error": "Retry only allowed from failed status" }` |
-| `401 Unauthorized` | Missing session or lacking required feature | `{ "error": "Unauthorized" }` |
-| `404 Not Found` | Amendment / Cancellation / Renewal not found | `{ "error": "Not found" }` |
-| `409 Conflict` | Concurrent amendment exists on same subscription (status `pending` or `approved`) | `{ "error": "Another amendment is in progress for this subscription", "amendmentId": "<id>" }` |
-| `409 Conflict` | Non-terminal cancellation exists on target subscription | `{ "error": "Subscription has a pending cancellation", "cancellationId": "<id>" }` |
-| `409 Conflict` | Invalid status transition | `{ "error": "Cannot transition from '<current>' to '<target>'" }` |
-| `409 Conflict` | Optimistic lock failure (stale `version`) | `{ "error": "Concurrent modification detected", "expectedVersion": <n>, "actualVersion": <m> }` |
-| `422 Unprocessable Entity` | ETF computation failure (e.g., invalid numeric in `mrc_amount`) | `{ "error": "ETF computation failed", "reason": "<detail>" }` |
-| `500 Internal Server Error` | Unexpected error | `{ "error": "Internal error" }` |
+| `400 Bad Request` | Quote validation fails (type missing, targets empty, term invariants) | `{ "error": "Validation error", "details": [...] }` |
+| `400 Bad Request` | Merge-renewal: zero or multiple continuing subscriptions designated | `{ "error": "Pick exactly one subscription to continue forward" }` |
+| `400 Bad Request` | Target sub not in compatible status | `{ "error": "Target subscription must be active", "subscriptionId": "...", "status": "<current>" }` |
+| `400 Bad Request` | Per-line `target_subscription_id` does not match any quote target | `{ "error": "Quote line target does not match an attached subscription", "lineId": "..." }` |
+| `400 Bad Request` | Merge: customer/currency/billingCycle mismatch across targets | `{ "error": "Merge targets must share customer, currency, and billing cycle" }` |
+| `401 Unauthorized` | Missing session or required feature | `{ "error": "Unauthorized" }` |
+| `404 Not Found` | Quote / subscription / change-log row not found | `{ "error": "Not found" }` |
+| `409 Conflict` | Subscription already attached to another non-terminal ARC quote | `{ "error": "Subscription has another ARC quote in progress", "quoteId": "..." }` |
+| `409 Conflict` | Optimistic lock failure at activation | `{ "error": "Concurrent modification detected", "subscriptionId": "...", "expectedVersion": <n>, "actualVersion": <m> }` |
+| `409 Conflict` | Quote `type` change attempted after creation | `{ "error": "Quote type is immutable" }` |
+| `500 Internal Server Error` | Unexpected | `{ "error": "Internal error" }` |
 
 ---
 
 ## Extensibility Points
 
-Client-specific customization patterns (telco tenants, industry verticals):
+### EP-ARC-1: Custom ETF policy
+V1 records ETF as an operator-entered amount on the cancel quote. Customer apps wanting a formula can override `cpqQuotingService.createQuoteFromSubscription` (when `type='cancel'`) via DI to pre-fill ETF lines from a `CpqEtfPolicy` entity. Pure extension; no core change.
 
-### EP-ARC-1: Custom ETF Policies
-V1 ETF is codified. For tenants needing per-offering rules (contract type, loyalty tier, regulatory), override `cpqCancellationService.computeETF` via DI — register a `DefaultCpqCancellationService` subclass in customer-specific `@app/src/modules/cpq/di.ts`. Future spec may introduce `CpqEtfPolicy` entity for declarative rules.
+### EP-ARC-2: Custom merge validation
+Customer-specific merge constraints (e.g., same site, same regulatory zone) plug in via a Mutation Guard on `cpqQuotingService.attachTargetSubscription` per [@open-mercato/core AGENTS.md](../../node_modules/@open-mercato/core/AGENTS.md) Mutation Guards.
 
-### EP-ARC-2: Per-Tenant Amendment Approval Routing
-By default Amendment reuses Quote approval flow (linear). For multi-step approval (sales → finance → legal), extend via widget injection on amendment detail page (`crud-form:cpq.arc.amendment:fields` spot) or wrap service method. Alternatively, subscribe to `cpq.amendment.submitted` event and implement custom routing.
+### EP-ARC-3: Notification hooks
+All five `cpq.subscription.*` events (`amended`, `renewed`, `merged`, `cancelled`, `superseded`) have `clientBroadcast: true` → SSE delivery to UI for free. Email/SMS via separate notifications module subscribing persistently.
 
-### EP-ARC-3: Pricing Strategy Extensions
-`pricing_strategy` enum is `'rate-lock' | 'current-catalog' | 'mixed'`. Custom strategies (e.g., `loyalty-discount`, `grandfathered-tier`) can extend by intercepting price computation in `cpqPricingService` (existing extensibility via `registerCpqPricingResolver`). Strategy value itself is text, so new values simply need service-layer support.
+### EP-ARC-4: ChangeLog enrichment
+Downstream modules (audit, compliance) subscribe to `cpq.subscription.*` events and write enriched audit records without modifying ARC schema.
 
-### EP-ARC-4: Notification Hooks
-All ARC executed events have `clientBroadcast: true` → automatically delivered to UI via SSE. For email/SMS, create a notification module that subscribes persistently to these events. Pattern: `src/modules/notifications-arc/subscribers/*.ts`. No modification to ARC module needed.
-
-### EP-ARC-5: Amendment Change Enrichment
-`CpqAmendmentChange` records `before_snapshot` / `after_snapshot` as jsonb. Downstream modules (audit, compliance) can subscribe to `cpq.amendment.executed` and enrich with custom fields (reason categorization, risk classification) via separate audit table, without modifying ARC schema.
-
-### EP-ARC-6: Custom Cancellation Policies
-V1: `immediate` and `end-of-term`. For `scheduled` (arbitrary future date), extend via ejecting `cpqCancellationService` and adding policy handling. Recommend keeping the DB enum value limited until V2 formalizes scheduled cancellation.
+### EP-ARC-5: Custom expiring filter
+Expiring list query is implemented in `cpqInventoryService.findExpiringSubscriptions(filters)`. Customer apps can override via DI to add custom filter dimensions.
 
 ---
 
 ## Design Decisions
 
-### DD-ARC-1: Chain model for Amendment (supersedes XD-215 assumption)
+### DD-ARC-1: In-place mutation, not chain
+**Decision:** amend, standalone-renew, and cancel mutate the existing subscription row. No `previous_subscription_id`, no chain. (Merge-renewal is the deliberate exception — see DD-ARC-4.)
 
-**Decision**: Amendment execution creates a NEW subscription (chain via `previous_subscription_id`), predecessor → terminal `amended` status.
+**Why:** Direct customer requirement: "no subscription history table" for the common case. Operational simplicity — the current sub is always queryable as a single row. Reporting queries don't need chain walks. ChangeLog provides the audit trail without doubling row counts.
 
-**Alternative considered**: In-place subscription update (what XD-215 informally assumed — "add items to existing subscription"). Simpler, fewer records.
+**Cost:** "What did this sub contain in March?" requires reading ChangeLog snapshots instead of querying a frozen ancestor row. Acceptable — UI Change History tab makes it ergonomic.
 
-**Why chain wins**:
-- Proration support requires clean before/after state — chain gives immutable snapshot of pre-amendment state for audit + billing
-- Consistent model with Renewal (also chain) — single mental model for developers
-- Historic visibility preserved — old subscription queryable with items frozen at transition
-- Simple "current subscription" query via `WHERE status = 'active' AND customer_id = X`
-- User decision Q1 explicitly chose chain conditional on proration support
+### DD-ARC-2: CPQ Quote orchestrates, Inventory mutates
+**Decision:** the user journey, validation, multi-target wiring, merge designation all live in `cpqQuotingService` + UI under `/backend/cpq/quotes/`. Subscription module exposes raw mutation primitives (`applyAmendment`, etc.) but doesn't own UX or validation.
 
-**Cost**: More records per subscription lineage (4 amendments + 3 renewals in 3 years = 8+ records). Mitigated by: chain walk is only needed for audit/history, never for hot-path queries.
+**Why:** Customer requirement: "CPQ quote module is responsible for the process, not subscription module". This matches the principle of having one orchestrator (the quote) drive a transactional outcome (the order activation) that touches data in another module (subscription).
 
-### DD-ARC-2: Pricing strategy per-operation (not per-subscription)
+### DD-ARC-3: Multi-target on a single quote (amend)
+**Decision:** a single quote can target multiple subscriptions; each line is tagged with `target_subscription_id`.
 
-**Decision**: `pricing_strategy` field lives on each `CpqAmendmentRequest` / `CpqRenewalTransaction`. Subscription has `default_renewal_pricing_strategy` used when renewal schedules automatically.
+**Why:** Customer explicitly requested "modify subscription button → pick several → add products separately to each". Multi-target on one quote keeps approval one-shot. Alternative (one quote per sub) would force operators to drive N approvals for N subs — bad UX.
 
-**Why**: Business reality — same customer may have different pricing intent per change (rate-lock during amendment to reward retention, current-catalog on renewal to capture catalog updates). Subscription-level only default is inflexible.
+### DD-ARC-4: Merge-renewal creates a new subscription
+**Decision:** merge during renewal creates a brand-new `CpqInventorySubscription` row M with the new term and the combined items. All input subs (sources) → `superseded`, with `mergedIntoSubscriptionId` → M.
 
-**Alternative rejected**: Single subscription-level strategy — too coarse.
+**Why:** Consolidating multiple contracts into one is conceptually a fresh contract — none of the inputs is special enough to be "the survivor". A clean new sub with a new code/name is what operators expect; arbitrary "this one wins" rules would be confusing in UI and reporting. Sources retire uniformly.
 
-### DD-ARC-3: Codified ETF formula (not configurable in V1)
+**Tension with the "no new sub per ARC operation" rule:** that rule still holds for amend, standalone-renew, and cancel — those mutate in place. Merge is the deliberate exception, and it's the ONLY exception. The customer explicitly wanted this shape during the second design pass.
 
-**Decision**: ETF = `min(remaining_months × MRC × 0.5, 3 × MRC)` — hardcoded pure function.
+**Alternative considered:** designate one source as the "survivor" that stays alive while others are absorbed (the original design). Rejected because (a) the survivor's identity becomes arbitrary, (b) UI gets a confusing "pick the winner" radio, (c) the survivor's old code/name and metadata leak into a contract that's logically a new arrangement.
 
-**Why**: 
-- V1 simplicity — no config entity, no per-tenant rules yet
-- Business can validate single formula against real cancellations before we complicate
-- Displayed to user before submit + stored at creation = audit-safe
+### DD-ARC-5: ChangeLog is append-only with full snapshots
+**Decision:** `before_snapshot` and `after_snapshot` are full jsonb of the affected subscription + items + assets at moment of change. Append-only (no updates).
 
-**Future**: `CpqEtfPolicy` entity with rules per offering/tier/jurisdiction — see EP-ARC-1.
+**Why:** History reconstruction without chain. Pure audit trail. JSONB is cheap; subscriptions are not high-volume enough for snapshot bloat to matter.
 
-### DD-ARC-4: Events AFTER commit (not transactional outbox)
+**Cost:** ~2× row size per change. Compared to creating chained subscription rows, still less data overall.
 
-**Decision**: Emit events via `emitCpqEvent(...)` AFTER `withAtomicFlush(..., { transaction: true })` completes. Use `@open-mercato/events` persistent subscribers for delivery reliability.
+### DD-ARC-6: Cancel goes through quote/order (not a shortcut)
+**Decision:** even cancel — the simplest case — flows through a quote → order → activation.
 
-**Alternative considered**: Transactional outbox pattern (write event to outbox table in same DB tx; publisher reads outbox and emits).
+**Why:** Customer requirement: "ARC process goes through Quote and Order like Add". Consistency means one mental model for operators. Approval workflow + audit trail fall out naturally. UI offers a fast-path "auto-fill cancel quote" so the heavy flow doesn't slow operators down.
 
-**Why commit-first**: 
-- Open Mercato's events package + queue package provide retry + reliability via BullMQ
-- No need for custom outbox infrastructure — framework solves it
-- Matches existing core module pattern (see `@open-mercato/core/modules/catalog/events.ts`)
-- Commit-first trades a tiny window of "DB committed but event not emitted" (mitigated by operator-driven `/retry` on the request record) for massively simpler code
+### DD-ARC-7: No scheduler, manual flow, expiring view
+**Decision:** drop all auto-renewal automation. Operators triage upcoming term ends via the expiring list view.
 
-### DD-ARC-5: Subscription items snapshot per subscription (not migrate)
+**Why:** Customer requirement: "no scheduler". Manual is fine — Dainamite's customers are B2B with low subscription churn; operator review per renewal is acceptable and often desired (compliance, pricing review).
 
-**Decision**: On chain transition, items are COPIED to new subscription. Old subscription retains its items (frozen in terminal status).
+### DD-ARC-8: Events emitted at order activation (one site)
+**Decision:** `cpqOrderService.activateOrder` is the sole emission site for ARC subscription events. `cpqInventoryService.apply*` methods only mutate state and write ChangeLog.
 
-**Alternative considered**: Migrate items (update FK) — fewer records, but old subscription appears empty.
+**Why:** Centralizes event ordering and makes the activation transaction obvious. `apply*` methods stay reusable in non-activation contexts (testing, future flows) without firing events spuriously.
 
-**Why snapshot**: Historical visibility is a primary use case (Q4 answer). Old subscription must be queryable with items intact. Snapshot gives audit-grade frozen record.
+### DD-ARC-9: Quote `type` is one-way settable from `new`
+**Decision:** `quote_type` defaults to `'new'`. The only allowed transition is `'new' → 'amend' | 'renew' | 'cancel'` (set once via `PATCH /api/cpq/quotes/[id]`). Once non-`new`, the type is immutable — any further change attempt returns `409`.
 
-**Cost**: 2× item records per amendment. Acceptable — items are small (JSONB config, no blobs).
+**Why:** Validation of target subs, line tags, term dates, and cancel-meta fields all depend on type. Once those resources are attached, switching type would require resetting them, which is more confusing than asking the operator to clone the quote into the desired type.
 
-**Assets handled differently** (migrate FK) — physical/digital items don't duplicate; they're unique instances. See DD-ARC-7.
+**Consequence for the configurator:** the drawer's `pick-action` step calls the PATCH endpoint exactly once when the operator first picks an action. From that moment on the quote is locked into that ARC type. Re-opening the drawer skips the action-pick step and goes straight to target management.
 
-### DD-ARC-6: Two terminal statuses (`amended` + `renewed`), not single `superseded`
+### DD-ARC-10: `version` for optimistic locking, only on subscription
+**Decision:** add MikroORM `@Property({ version: true })` to `CpqInventorySubscription` only. Other ARC entities (`CpqSubscriptionChangeLog`, `CpqQuoteTargetSubscription`) don't need it.
 
-**Decision**: Subscription gets TWO new terminal statuses — `amended` (chain via AmendmentRequest) and `renewed` (chain via RenewalTransaction).
-
-**Alternative considered**: Single `superseded` terminal with discriminator field.
-
-**Why two**: 
-- Business-meaningful distinction — "amended = terms changed mid-contract" vs "renewed = term extended/restarted"
-- Query simplicity for reporting (e.g., "renewal churn", "amendments per customer/month")
-- Zero additional discriminator lookup
-- Subscription table already has `source_amendment_id` / `source_renewal_id` for forensic backlink
-
-**Cost**: Two new enum values in types.ts — trivial.
-
-### DD-ARC-7: Assets migrate FK, items snapshot
-
-**Decision** (already covered partly in DD-ARC-5):
-- Items → snapshot (copy) per subscription, old items → terminal mirroring parent
-- Assets → migrate FK (`subscriptionId`, `subscriptionItemId` pointed at new subscription); removed lines → `cancelled` status stays on OLD subscription for trace
-
-**Why asymmetry**: Items are abstract contract-layer records (cheap to duplicate). Assets are physical/digital unique instances (cannot duplicate — a SIM card exists once). Per Q2 answer on remove-line → `cancelled`.
-
-### DD-ARC-8: Withdrawal detaches amendment (does not cancel) renewal
-
-**Decision**: Withdrawing an amendment attached to a scheduled renewal detaches it (sets `renewal.attached_amendment_id = null`). Renewal proceeds without amendment.
-
-**Alternative considered**: Cancel the renewal too.
-
-**Why detach-default**: Renewal is a business-critical cron-driven process (ensures service continuity). Accidentally cancelling a renewal because operator withdrew an amendment would be bad UX. Explicit "cancel renewal" action remains available via `/renewals/[id]/cancel`.
-
-### DD-ARC-9: CPQ pioneers events.ts
-
-**Decision**: Create `src/modules/cpq/events.ts` — first events for CPQ module.
-
-**Why now**: ARC integration with billing REQUIRES events (async cross-module communication). CPQ's historical synchronous style (no events emitted) would force tight coupling if we extended that pattern. This spec introduces the event surface and sets precedent for future CPQ → other-module integration.
-
-**Migration path for existing CPQ**: Gradually add CRUD events (`cpq.quote.created`, `cpq.order.fulfilled`, etc.) as needs arise. Not required by this spec.
-
-### DD-ARC-10: Scheduler via `@open-mercato/scheduler`, not custom cron
-
-**Decision**: 3 scheduled jobs (`cpq.arc.execute-amendments`, `execute-cancellations`, `renew-subscriptions`) declared as `CommandHandler`s and registered via `registerCommand`. Scheduled via Scheduler module's DB-backed jobs.
-
-**Why**: Framework-native. Ops visibility via `/backend/config/scheduled-jobs`. Retry semantics + queue integration for free.
-
-**Alternative rejected**: External cron or Bull directly — bypasses framework ops UI.
+**Why:** Subscription is the only row mutated in-place across multiple ARC operations. ChangeLog is append-only (no updates → no concurrent modify). TargetSubscription is owned by the quote (concurrent edits guarded by quote lifecycle).
 
 ---
 
@@ -1517,13 +1455,11 @@ V1: `immediate` and `end-of-term`. For `scheduled` (arbitrary future date), exte
 
 | Date | Change |
 |------|--------|
-| 2026-04-24 | Initial draft — skeleton with Open Questions, current state audit. |
-| 2026-04-24 | Open Questions answered (Q1–Q8 first round). Status → Approved. Initial data model. |
-| 2026-04-24 | Review cleanup: bidirectional refs removed, `cancelled` → `withdrawn` on requests, `scheduled` status removed (derived), `target_type=quote` removed, Validation Constraints table, ACL Features section, event naming aligned, Configuration Defaults. |
-| 2026-04-24 | **Amendment model flipped to chain** (refined Q1 requiring proration support). Added `amended` status for subscription, `superseded` for order. Codified ETF formula (Q5.a). `pricing_strategy` field (Q6, Q7). Asset & Item Handling section. Proration payload on events. Chain walk endpoint (Q4). Subscription gained `source_amendment_id`, `source_renewal_id`, `default_renewal_pricing_strategy`. |
-| 2026-04-24 | Second review pass (bug + gap fixes): (1) `term_version` renamed to `version` for optimistic locking semantics; (2) subscription/order/item state machines in tabular form (no ambiguity re: transitions from `suspended`); (3) `last_billing_date` added to Subscription for proration; (4) renewal execution-time status re-check; (5) original Order transition conditional (`active → superseded`, `fulfilled` stays); (6) RenewalTransaction state machine clarified (`cancelled` only from `scheduled`); (7) amendment approval inline-executes when `effective_date ≤ now`; (8) amendment `reason_code` enum added; (9) item state machine added; (10) concurrent amendment block relaxed to `pending`/`approved` (drafts OK); (11) Process 1 "assets reassigned" → "handled per rules"; added explicit subscription attribute inheritance rules; added `failed` status + retry_count + retry endpoint to AmendmentRequest and CancellationRequest; idempotency requirement on all `execute()` methods; added scheduler double-execution race risk with atomic transition mitigation; added withdrawal-cancels-linked-quote rule; added migration rollback as Phase 4 item. |
-| 2026-04-24 | Third pass self-review fixes: (A) subscription state machine `pending → cancelled` corrected to `pending → terminated` (subscription enum has no `cancelled`); (B) added "Amendment attached to renewal" subsection covering effective_date override, amendment lifecycle under renewal, no-duplicate-execution SQL filter, withdrawal-detaches-not-cancels default; (C) Order state machine restricted to preserve existing transitions — only `active → superseded` is truly new, removed over-reaching `draft/pending_activation → cancelled` rows; (D) removed stale "executing" mention from RenewalTransaction state machine note (no such state exists; execution is synchronous). |
-| 2026-04-24 | Fourth pass (final polish): (A) removed `cancelled` status from `CpqInventorySubscriptionItem` state machine — item enum does not include `cancelled` (only Asset does); items now transition `pending → active \| terminated` instead; (B) reformatted AmendmentRequest, CancellationRequest, RenewalTransaction state machines to explicit `from → to (trigger)` tables — eliminates ambiguity of previous ASCII-tree with dangling arrows; (C) clarified that `failed` is a non-terminal holding status for all three request entities — `retry_count` gates /retry eligibility but does not change the status itself. |
-| 2026-04-24 | **Seventh pass — alignment with project spec conventions.** Cross-referenced XD-201, XD-215 structure. Added: (1) metadata blockquote at top (domain parents, dependencies, supersedes notice for XD-215's informal amendment model, new files/entities/packages, out-of-scope); (2) **UI Integration** section — subscription detail injection points, Amendment Wizard flow, Amendment Detail page, list pages for Cancellations/Renewals, navigation entries, component override extensibility; (3) **Requirements Traceability** table mapping R-ARC-1..9 and R-GEN-1..5 to implementation; (4) **File Changes Summary** — explicit list of 30+ new files and 9 modified files, per phase; (5) **Error Responses** matrix — 16 error conditions with HTTP codes and response body shapes; (6) **Extensibility Points** (EP-ARC-1..6) — custom ETF policies, custom approval routing, pricing strategy extensions, notification hooks, amendment change enrichment, custom cancellation policies; (7) **Design Decisions** (DD-ARC-1..10) — chain amendment rationale (supersedes XD-215), per-operation pricing strategy, codified ETF, commit-first event emission, snapshot-vs-migrate for items-vs-assets, two-terminal-statuses vs single, withdrawal-detaches-not-cancels, CPQ-pioneers-events.ts, scheduler-via-framework. |
-| 2026-04-24 | **Sixth pass — senior architect review against Open Mercato framework docs.** Verified `@open-mercato/events`, `@open-mercato/scheduler`, `@open-mercato/queue` exist as dependencies (0.4.10). Key realignments: (1) Removed all "transactional outbox" mentions — replaced with Open Mercato's pattern: `withAtomicFlush` for DB atomicity + emit events AFTER commit via `emitCpqEvent`; persistent subscribers (`@open-mercato/events` + `@open-mercato/queue`) provide delivery reliability. (2) Scheduled jobs use `@open-mercato/scheduler` CommandHandler pattern via `registerCommand` — not custom cron. (3) CPQ currently has NO `events.ts` — ARC introduces first events (pioneer role). (4) Added comprehensive **Implementation Conventions** section covering: migration workflow (entities-first, `yarn db:generate`, never hand-write), DI pattern (`asFunction` + `container.resolve` due to Turbopack + CLASSIC mode), events declaration pattern, subscribers contract, scheduler commands, API route pattern (verified against `quotes/route.ts`), `withAtomicFlush` for multi-phase mutations, ACL format (CPQ uses `{id,title,module}` not flat string array). (5) Phase 1 plan rewritten as concrete step-by-step workflow matching Open Mercato dev loop. (6) Confirmed all required packages already in `package.json` — no new deps needed. |
-| 2026-04-24 | **Fifth pass — code verification against actual CPQ source.** Verified [entities.ts](../../src/modules/cpq/data/entities.ts), [types.ts](../../src/modules/cpq/services/types.ts), and service files. Corrections: (1) Existing state machines restored to match real `INVENTORY_SUBSCRIPTION_TRANSITIONS` and `CPQ_ORDER_TRANSITIONS` — `draft → pending_activation, active, cancelled` + `pending_activation → active, cancelled` were real transitions I'd previously restricted; (2) Noted numeric amounts (`mrcAmount`, `nrcAmount`) are stored as string via `numeric(18,4)` — ETF formula updated to use Decimal parsing; (3) Status columns are `text`, not DB enum — added convention note; validation enforced by constants in types.ts; (4) Existing `version` columns on Quote/Spec/Wizard are user-managed counters (e.g., `original.version + 1` in cloneQuote) — NEW `version` fields I'm adding use MikroORM `@Property({ version: true })` for true optimistic locking; clarified distinction; (5) Asset cascade on cancellation — existing code sets all to `cancelled`, not per-type `returned/cancelled` — V1 preserves current behavior; (6) Quote approval flow correction — amendment execution triggers on quote `accepted`, NOT `approved` (approved is intermediate; flows `approved → with_customer → accepted`); (7) `cloneQuote` creates both `SalesQuote` and `CpqQuoteConfiguration` cross-module — noted in Process 1; (8) `last_billing_date` confirmed as NEW field (does not exist on current entity); (9) Added citations to actual file paths and line numbers for verifiable references. |
+| 2026-04-24 | Initial draft — chain model with separate request entities + scheduler. |
+| 2026-04-24 | Iterations 2–7: chain model refined, ETF formula, scheduler details, full UI/UX surface, design decisions DD-ARC-1..10 (chain-era). |
+| 2026-04-30 | **Second coherence pass — finishing the merge-flip cleanup.** Found and fixed: (1) Phase 1 entity-additions list missed `arc_reason_*` / `arc_etf_*` / `arc_merge_*` on `CpqQuoteConfiguration` and `source_subscription_item_id` on `CpqQuoteLineConfiguration` — added. (2) TLDR Amend row + Process 1 + Process 2 standalone said "stays active" — corrected to "status unchanged (active or suspended)" since suspended subs are valid ARC targets. (3) TLDR Scope still mentioned "designation of which target sub continues forward" (old survivor model) — replaced with new-sub-M description. (4) Asset & Item Handling section heading "(in-place mutation)" was misleading after merge-flip — reworded to cover both in-place and merge-creates-new cases. (5) Item state-machine note "reachable only from active" — corrected to "from any non-terminal status" since suspended → superseded is now allowed. (6) Quote-line validator description on the API page was incomplete — now lists all four cases: amend/cancel/renew-standalone require `target_subscription_id`; renew-merge requires it null; `source_subscription_item_id` required on cancel/modify. (7) DELETE target-subscriptions endpoint description fixed ("before quote is accepted" → "while quote is editable"). (8) Quote state machine section had "set at creation, immutable thereafter" — contradicted DD-ARC-9; aligned with one-way-from-`new`. (9) `activateOrder` extension snippet missed `merged` in the emitted-events list — added; also expanded the snippet to show all four type branches and the merge dispatch. (10) Subscriber placeholder text said "the other three events" — corrected to four (renewed/merged/cancelled/superseded). (11) EP-ARC-3 + R-ARC-7 said "all four events" — corrected to five with explicit names. (12) DD-ARC-1 said "amend and renew mutate" — clarified that merge-renew is the exception. (13) R-ARC-2 wording made consistent with merge-as-exception. (14) Acceptance criterion "Multi-target amend" — broadened to cover multi-target cancel and to clarify renew is single-target standalone or multi-target merge. (15) Asset table "renew (no merge)" → "renew (standalone)" for naming consistency. (16) Process 3 cancel diagram was singular-target only — rewritten to show multi-target shape with quote-level shared reason/ETF. (17) "Gaps filled" item 3 wording: clarified `applyArcChange` is a collective shorthand, not a real method. (18) Summary doc updated in lockstep: model-in-one-sentence acknowledges merge exception, amend status, internal-vocab list, schema-delta now includes the merge meta fields and `source_subscription_item_id`. |
+| 2026-04-30 | **Merge model flipped — merge now creates a new subscription.** Previous design picked one source as "survivor" who kept its identity; new design always creates a brand-new `CpqInventorySubscription` (M) and retires ALL source subs uniformly to `superseded` with `mergedIntoSubscriptionId → M`. Rationale: consolidating contracts is conceptually a fresh contract, not a continuation. Changes: dropped `merge_action='survive'` enum value (only `'standalone' \| 'absorb'` remain); added quote-level `arc_merge_new_term_*` and `arc_merge_new_sub_code/name` fields on `CpqQuoteConfiguration`; added `source_subscription_item_id` on `CpqQuoteLineConfiguration` for cancel/modify line resolution; new event `cpq.subscription.merged` (fires for M); new ChangeLog `change_type='merge-result'`; merge-mode quote lines have `target_subscription_id=null` (M doesn't exist at quote time); DD-ARC-4 rewritten. **Suspended subs admitted as ARC targets** — amend/renew/cancel/merge accept status ∈ {active, suspended}; amend and standalone-renew don't change status; merge sources can transition `suspended → superseded`. Updated subscription state machine, validation rules, drawer step machine, acceptance criteria, file changes summary. |
+| 2026-04-30 | **Coherence pass — fixed inconsistencies and gaps surfaced during a full re-read.** (1) `is_merge_survivor` boolean dropped — `merge_action='survive'` is the single source of truth. (2) Renew validation: only `survive` and `standalone` targets need term dates; `absorb` targets keep them null. (3) Added missing `arc_reason_code` / `arc_reason_text` / `arc_etf_amount` / `arc_etf_currency` fields on `CpqQuoteConfiguration` so cancel-meta has somewhere to live before order activation. (4) Removed the dangling "target-level cancel-all flag" mention. (5) Added validation rule: in merge mode, all quote lines must target the survivor (operator works on the survivor's combined view; absorbed subs get migrated wholesale, no per-source quote lines needed). (6) Added DB-level UNIQUE `(source_order_id, subscription_id)` partial index on ChangeLog to enforce activation-idempotency at the DB layer (not just service-layer). (7) Clarified `applyMergeRenewal` parameter semantics — carry-over items vs operator-edit items, `sourceQuoteLineId=null` marker for carry-overs, matching rules for cancel/modify lines. (8) DD-ARC-9 + matching acceptance criterion reworded — `quote_type` is one-way settable from `'new'` (not "set at creation only"). (9) Subscription detail action buttons now redirect to an existing non-terminal ARC quote instead of trying to create a duplicate. (10) Removed the "or however CPQ exposes activation today" hedge — activation hooks into the existing `cpqOrderService.activateOrder` path. (11) Item-handling table no longer says items are "active or pending" — they're created `active` in the same activation transaction. (12) TLDR Scope text aligned with rename (`purposes` → `types`) and made consistent with validation: every ARC line requires `target_subscription_id`, only `type='new'` lines may leave it null. |
+| 2026-04-30 | Renamed `quote_purpose` → `quote_type` (and `quotePurpose` → `quoteType`, `initialPurpose` → `initialType`) across the spec for clearer English. Added **"UI Terminology — internal vs user-facing"** subsection mapping internal enum values (`survive` / `absorb` / `superseded` / `merge-source`) to friendly UI labels ("Continuing subscription", "Merge into…", "Merged"); updated drawer copy, merge banner copy, and the merge-validation error message body so technical names never reach the operator's screen. Internal model (DB columns, code, events, tests) keeps the precise technical names. |
+| 2026-04-30 | Added **ARC configurator drawer** component design to the spec — props table, step machine (`pick-action → pick-targets → config-renew \| config-cancel → review → submitting → done`), submit sequence (5 ordered API calls), client-side validation gates, behavioural details, and how the subscription detail page's Amend/Renew/Cancel buttons re-use the same drawer. API contracts extended with `PATCH /api/cpq/quotes/[id]` accepting `quoteType` (one-way from `new`) and `POST /api/cpq/quotes/[id]/cancel-meta` (reason + ETF stamping for cancel quotes). |
+| 2026-04-30 | **Full rewrite — chain model discarded.** Driven by customer feedback: (1) no subscription history table — in-place mutation only, with `CpqSubscriptionChangeLog` for audit; (2) CPQ Quote module owns the ARC process end-to-end (subscription module just exposes mutation primitives); (3) no scheduler / no auto-renew; (4) merge-renewal via designated survivor (one sub stays, others go `superseded`); (5) explicit operator triage via new "Expiring Subscriptions" list view. Removed: `CpqAmendmentRequest`, `CpqAmendmentChange`, `CpqRenewalTransaction`, `CpqCancellationRequest`, scheduler commands, chain FKs (`previous_subscription_id`, `source_amendment_id`, `source_renewal_id`), terminal statuses `amended` and `renewed`. Added: `CpqSubscriptionChangeLog`, `CpqQuoteTargetSubscription`, `quote_type` discriminator, per-line `target_subscription_id`, `superseded` terminal (only via merge), `current_term_start`, `merged_into_subscription_id`, expiring view UI/API, four `cpq.subscription.*` events. |

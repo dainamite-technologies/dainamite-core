@@ -5,12 +5,22 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  schedule:
+    # Weekly health check — Monday 06:00 UTC. Catches flakes / dep-bump regressions
+    # that don't get triggered by direct activity. Runs against the default branch (main).
+    - cron: '0 6 * * 1'
 
 # On PRs, cancel any in-flight runs for the same ref so force-pushes don't
-# burn minutes. On main pushes, never cancel — every commit gets verified.
+# burn minutes. On main pushes / scheduled runs, never cancel.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# pull-requests:write needed to post the aggregate test summary as a PR comment.
+permissions:
+  contents: read
+  pull-requests: write
+  checks: read
 
 jobs:
   unit-tests:
@@ -52,7 +62,48 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=4096
 
       - name: Run unit tests
-        run: yarn test --coverage --ci
+        # Emit JSON report next to coverage so the summary step can parse counts.
+        run: yarn test --coverage --ci --json --outputFile=jest-results.json
+
+      - name: Render unit-tests job summary
+        if: always()
+        run: |
+          if [ ! -f jest-results.json ]; then
+            echo "::warning::jest-results.json not found — skipping summary"
+            exit 0
+          fi
+          node -e '
+            const r = require("./jest-results.json");
+            const total = r.numTotalTests;
+            const pass = r.numPassedTests;
+            const fail = r.numFailedTests;
+            const skip = r.numPendingTests;
+            const failedNames = r.testResults
+              .flatMap(s => s.testResults
+                .filter(t => t.status === "failed")
+                .map(t => `${s.name.split(/[\\\\/]/).slice(-2).join("/")} › ${t.fullName}`));
+            let md = "## Unit tests (Jest)\n\n";
+            md += "| | |\n|---|---:|\n";
+            md += `| ✅ Passed | ${pass} |\n`;
+            md += `| ❌ Failed | ${fail} |\n`;
+            md += `| ⏭️ Skipped | ${skip} |\n`;
+            md += `| **Total** | **${total}** |\n`;
+            if (failedNames.length) {
+              md += `\n### Failed (${failedNames.length})\n\n`;
+              md += failedNames.slice(0, 30).map(n => `- \`${n}\``).join("\n") + "\n";
+              if (failedNames.length > 30) md += `\n_…and ${failedNames.length - 30} more_\n`;
+            }
+            require("fs").appendFileSync(process.env.GITHUB_STEP_SUMMARY, md);
+          '
+
+      - name: Upload jest results JSON
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jest-results
+          path: jest-results.json
+          retention-days: 14
+          if-no-files-found: ignore
 
       - name: Upload coverage report
         if: always()
@@ -181,6 +232,56 @@ jobs:
       - name: Run integration tests
         run: yarn test:integration
 
+      - name: Render integration-tests job summary
+        if: always()
+        run: |
+          REPORT=.ai/qa/test-results/results.json
+          if [ ! -f "$REPORT" ]; then
+            echo "::warning::$REPORT not found — skipping summary"
+            exit 0
+          fi
+          node -e '
+            const r = require("./.ai/qa/test-results/results.json");
+            let pass = 0, fail = 0, skip = 0;
+            const failedTitles = [];
+            const walk = (suite) => {
+              for (const sub of suite.suites || []) walk(sub);
+              for (const spec of suite.specs || []) {
+                for (const t of spec.tests || []) {
+                  // Take the LAST result (final state after retries)
+                  const final = (t.results || []).slice(-1)[0];
+                  if (!final) continue;
+                  if (final.status === "passed") pass++;
+                  else if (final.status === "skipped" || final.status === "interrupted") skip++;
+                  else { fail++; failedTitles.push(`${spec.file} › ${spec.title}`); }
+                }
+              }
+            };
+            for (const top of r.suites || []) walk(top);
+            const total = pass + fail + skip;
+            let md = "## Integration tests (Playwright)\n\n";
+            md += "| | |\n|---|---:|\n";
+            md += `| ✅ Passed | ${pass} |\n`;
+            md += `| ❌ Failed | ${fail} |\n`;
+            md += `| ⏭️ Skipped | ${skip} |\n`;
+            md += `| **Total** | **${total}** |\n`;
+            if (failedTitles.length) {
+              md += `\n### Failed (${failedTitles.length})\n\n`;
+              md += [...new Set(failedTitles)].slice(0, 30).map(n => `- \`${n}\``).join("\n") + "\n";
+              if (failedTitles.length > 30) md += `\n_…and more_\n`;
+            }
+            require("fs").appendFileSync(process.env.GITHUB_STEP_SUMMARY, md);
+          '
+
+      - name: Upload playwright results JSON
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-results-json
+          path: .ai/qa/test-results/results.json
+          retention-days: 14
+          if-no-files-found: ignore
+
       - name: Stop dev server
         if: always()
         run: |
@@ -196,3 +297,108 @@ jobs:
             dev-server.log
           retention-days: 7
           if-no-files-found: ignore
+
+  pr-summary:
+    name: PR test summary
+    if: github.event_name == 'pull_request' && always()
+    needs: [unit-tests, integration-tests]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Download jest results
+        uses: actions/download-artifact@v4
+        with:
+          name: jest-results
+          path: jest-results
+        continue-on-error: true
+
+      - name: Download playwright results
+        uses: actions/download-artifact@v4
+        with:
+          name: playwright-results-json
+          path: playwright-results
+        continue-on-error: true
+
+      - name: Build and post summary comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+
+            function readJson(p) {
+              try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; }
+            }
+
+            // ── Unit (Jest) ──────────────────────────────────────────
+            const jest = readJson('jest-results/jest-results.json');
+            let unitLine = '⚠️ Unit tests: report missing';
+            if (jest) {
+              const total = jest.numTotalTests, pass = jest.numPassedTests, fail = jest.numFailedTests, skip = jest.numPendingTests;
+              const icon = fail === 0 ? '✅' : '❌';
+              unitLine = `${icon} **Unit tests:** ${pass}/${total} passed` +
+                (fail ? `, ${fail} failed` : '') + (skip ? `, ${skip} skipped` : '');
+            }
+
+            // ── Integration (Playwright) ─────────────────────────────
+            const pw = readJson('playwright-results/results.json');
+            let integLine = '⚠️ Integration tests: report missing';
+            if (pw) {
+              let pass = 0, fail = 0, skip = 0;
+              const walk = (s) => {
+                for (const sub of s.suites || []) walk(sub);
+                for (const spec of s.specs || []) {
+                  for (const t of spec.tests || []) {
+                    const final = (t.results || []).slice(-1)[0];
+                    if (!final) continue;
+                    if (final.status === 'passed') pass++;
+                    else if (final.status === 'skipped' || final.status === 'interrupted') skip++;
+                    else fail++;
+                  }
+                }
+              };
+              for (const top of pw.suites || []) walk(top);
+              const total = pass + fail + skip;
+              const icon = fail === 0 ? '✅' : '❌';
+              integLine = `${icon} **Integration tests:** ${pass}/${total} passed` +
+                (fail ? `, ${fail} failed` : '') + (skip ? `, ${skip} skipped` : '');
+            }
+
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = `<!-- ci-summary -->
+            ## CI test summary
+
+            ${unitLine}
+            ${integLine}
+
+            [Full run details →](${runUrl})
+
+            _Auto-updated on each push. Drill into a job for individual test names + trace artifacts._`;
+
+            // Find existing comment by marker, update if present, else create.
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              per_page: 100,
+            });
+            const existing = comments.find(c => c.body && c.body.includes('<!-- ci-summary -->'));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+              core.info(`Updated existing CI summary comment #${existing.id}`);
+            } else {
+              const { data: created } = await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+              core.info(`Created CI summary comment #${created.id}`);
+            }

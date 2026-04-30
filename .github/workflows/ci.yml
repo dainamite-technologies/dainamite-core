@@ -67,34 +67,8 @@ jobs:
 
       - name: Render unit-tests job summary
         if: always()
-        run: |
-          if [ ! -f jest-results.json ]; then
-            echo "::warning::jest-results.json not found — skipping summary"
-            exit 0
-          fi
-          node -e '
-            const r = require("./jest-results.json");
-            const total = r.numTotalTests;
-            const pass = r.numPassedTests;
-            const fail = r.numFailedTests;
-            const skip = r.numPendingTests;
-            const failedNames = r.testResults
-              .flatMap(s => s.testResults
-                .filter(t => t.status === "failed")
-                .map(t => `${s.name.split(/[\\\\/]/).slice(-2).join("/")} › ${t.fullName}`));
-            let md = "## Unit tests (Jest)\n\n";
-            md += "| | |\n|---|---:|\n";
-            md += `| ✅ Passed | ${pass} |\n`;
-            md += `| ❌ Failed | ${fail} |\n`;
-            md += `| ⏭️ Skipped | ${skip} |\n`;
-            md += `| **Total** | **${total}** |\n`;
-            if (failedNames.length) {
-              md += `\n### Failed (${failedNames.length})\n\n`;
-              md += failedNames.slice(0, 30).map(n => `- \`${n}\``).join("\n") + "\n";
-              if (failedNames.length > 30) md += `\n_…and ${failedNames.length - 30} more_\n`;
-            }
-            require("fs").appendFileSync(process.env.GITHUB_STEP_SUMMARY, md);
-          '
+        continue-on-error: true
+        run: node .github/scripts/render-jest-summary.mjs
 
       - name: Upload jest results JSON
         if: always()
@@ -234,44 +208,8 @@ jobs:
 
       - name: Render integration-tests job summary
         if: always()
-        run: |
-          REPORT=.ai/qa/test-results/results.json
-          if [ ! -f "$REPORT" ]; then
-            echo "::warning::$REPORT not found — skipping summary"
-            exit 0
-          fi
-          node -e '
-            const r = require("./.ai/qa/test-results/results.json");
-            let pass = 0, fail = 0, skip = 0;
-            const failedTitles = [];
-            const walk = (suite) => {
-              for (const sub of suite.suites || []) walk(sub);
-              for (const spec of suite.specs || []) {
-                for (const t of spec.tests || []) {
-                  // Take the LAST result (final state after retries)
-                  const final = (t.results || []).slice(-1)[0];
-                  if (!final) continue;
-                  if (final.status === "passed") pass++;
-                  else if (final.status === "skipped" || final.status === "interrupted") skip++;
-                  else { fail++; failedTitles.push(`${spec.file} › ${spec.title}`); }
-                }
-              }
-            };
-            for (const top of r.suites || []) walk(top);
-            const total = pass + fail + skip;
-            let md = "## Integration tests (Playwright)\n\n";
-            md += "| | |\n|---|---:|\n";
-            md += `| ✅ Passed | ${pass} |\n`;
-            md += `| ❌ Failed | ${fail} |\n`;
-            md += `| ⏭️ Skipped | ${skip} |\n`;
-            md += `| **Total** | **${total}** |\n`;
-            if (failedTitles.length) {
-              md += `\n### Failed (${failedTitles.length})\n\n`;
-              md += [...new Set(failedTitles)].slice(0, 30).map(n => `- \`${n}\``).join("\n") + "\n";
-              if (failedTitles.length > 30) md += `\n_…and more_\n`;
-            }
-            require("fs").appendFileSync(process.env.GITHUB_STEP_SUMMARY, md);
-          '
+        continue-on-error: true
+        run: node .github/scripts/render-playwright-summary.mjs
 
       - name: Upload playwright results JSON
         if: always()

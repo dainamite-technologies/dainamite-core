@@ -26,8 +26,46 @@ permissions:
   checks: read
 
 jobs:
+  # Lightweight gate: detect whether the push/PR contains anything other than
+  # markdown. Downstream test jobs use this to skip themselves on docs-only
+  # changes (skipped jobs satisfy required status checks under modern GH branch
+  # protection — distinct from cancelled / failed).
+  #
+  # workflow_dispatch and schedule always force a full run (no diff to filter
+  # against, and we want manual / health-check runs to exercise everything).
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      code: ${{ steps.decide.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Filter changed paths
+        id: filter
+        if: github.event_name == 'push' || github.event_name == 'pull_request'
+        uses: dorny/paths-filter@v3
+        with:
+          # `code` is true when AT LEAST ONE changed file is non-markdown.
+          # Pure docs-only commits (every file matches **/*.md) → code=false.
+          filters: |
+            code:
+              - '!**/*.md'
+
+      - name: Decide whether to run code-touching jobs
+        id: decide
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" || "${{ github.event_name }}" == "schedule" ]]; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "code=${{ steps.filter.outputs.code }}" >> "$GITHUB_OUTPUT"
+          fi
+
   unit-tests:
     name: Unit tests
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -93,6 +131,8 @@ jobs:
 
   integration-tests:
     name: Integration tests
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -241,8 +281,12 @@ jobs:
 
   pr-summary:
     name: PR test summary
-    if: github.event_name == 'pull_request' && always()
-    needs: [unit-tests, integration-tests]
+    needs: [changes, unit-tests, integration-tests]
+    # always() ensures we still run when unit/integration failed (we want to post
+    # the failure summary). Skip entirely on docs-only PRs — no tests ran, no
+    # summary to post (otherwise the bot leaves "report missing" noise on every
+    # spec PR).
+    if: always() && github.event_name == 'pull_request' && needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
 

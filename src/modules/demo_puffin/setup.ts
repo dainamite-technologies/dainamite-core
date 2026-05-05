@@ -14,6 +14,10 @@ const ADMIN_EMAIL =
   (process.env.CPQ_DEMO_PUFFIN_ADMIN_EMAIL && process.env.CPQ_DEMO_PUFFIN_ADMIN_EMAIL.trim()) || 'admin@puffin.com'
 const ADMIN_PASSWORD =
   (process.env.CPQ_DEMO_PUFFIN_ADMIN_PASSWORD && process.env.CPQ_DEMO_PUFFIN_ADMIN_PASSWORD.trim()) || 'secret'
+const EMPLOYEE_EMAIL =
+  (process.env.CPQ_DEMO_PUFFIN_EMPLOYEE_EMAIL && process.env.CPQ_DEMO_PUFFIN_EMPLOYEE_EMAIL.trim()) || 'employee@puffin.com'
+const EMPLOYEE_PASSWORD =
+  (process.env.CPQ_DEMO_PUFFIN_EMPLOYEE_PASSWORD && process.env.CPQ_DEMO_PUFFIN_EMPLOYEE_PASSWORD.trim()) || 'secret'
 
 registerCpqUseCase({
   id: 'puffin',
@@ -27,6 +31,14 @@ registerCpqUseCase({
     roleNames: ['admin', 'employee'],
     primaryUserRoles: ['admin'],
     includeDerivedUsers: false,
+    additionalUsers: [
+      {
+        email: EMPLOYEE_EMAIL,
+        password: EMPLOYEE_PASSWORD,
+        displayName: 'Puffin Cloud Employee',
+        roles: ['employee'],
+      },
+    ],
   },
   seedDefaults: seedPuffinDefaults,
   seedExamples: seedPuffinExamples,

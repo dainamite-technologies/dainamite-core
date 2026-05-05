@@ -17,6 +17,17 @@ import type { AwilixContainer } from 'awilix'
  * (`@app/demo_tenants`) walks this registry at init time.
  */
 
+export type CpqUseCaseAdditionalUserSpec = {
+  /** Email address for the additional user, e.g. `employee@gix.com`. */
+  email: string
+  /** Initial password (dev-only — overridable via env). */
+  password: string
+  /** Optional display name. */
+  displayName?: string
+  /** Roles assigned to this user. Default `['employee']`. */
+  roles?: string[]
+}
+
 export type CpqUseCaseTenantSpec = {
   /** Stable slug used as a key in env overrides, e.g. `gix`, `puffin`. */
   slug: string
@@ -36,6 +47,12 @@ export type CpqUseCaseTenantSpec = {
   primaryUserRoles?: string[]
   /** Whether to also create the derived `employee@<domain>` user. Default `false`. */
   includeDerivedUsers?: boolean
+  /**
+   * Additional users to provision in this tenant alongside the admin.
+   * Each entry is created idempotently with the specified roles. Use this
+   * to seed e.g. `employee@gix.com` so a non-admin login is available.
+   */
+  additionalUsers?: CpqUseCaseAdditionalUserSpec[]
 }
 
 export type CpqUseCaseSeedContext = {

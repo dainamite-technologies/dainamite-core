@@ -6,6 +6,10 @@ const ADMIN_EMAIL =
   (process.env.CPQ_DEMO_GIX_ADMIN_EMAIL && process.env.CPQ_DEMO_GIX_ADMIN_EMAIL.trim()) || 'admin@gix.com'
 const ADMIN_PASSWORD =
   (process.env.CPQ_DEMO_GIX_ADMIN_PASSWORD && process.env.CPQ_DEMO_GIX_ADMIN_PASSWORD.trim()) || 'secret'
+const EMPLOYEE_EMAIL =
+  (process.env.CPQ_DEMO_GIX_EMPLOYEE_EMAIL && process.env.CPQ_DEMO_GIX_EMPLOYEE_EMAIL.trim()) || 'employee@gix.com'
+const EMPLOYEE_PASSWORD =
+  (process.env.CPQ_DEMO_GIX_EMPLOYEE_PASSWORD && process.env.CPQ_DEMO_GIX_EMPLOYEE_PASSWORD.trim()) || 'secret'
 
 // Register the GIX use case with the CPQ seed registry. The orchestrator
 // (`demo_tenants`) walks `listCpqUseCases()` at init time and routes this
@@ -22,6 +26,14 @@ registerCpqUseCase({
     roleNames: ['admin', 'employee'],
     primaryUserRoles: ['admin'],
     includeDerivedUsers: false,
+    additionalUsers: [
+      {
+        email: EMPLOYEE_EMAIL,
+        password: EMPLOYEE_PASSWORD,
+        displayName: 'GIX Employee',
+        roles: ['employee'],
+      },
+    ],
   },
   seedDefaults: seedGixDefaults,
   seedExamples: seedGixExamples,

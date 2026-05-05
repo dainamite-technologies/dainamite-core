@@ -75,9 +75,8 @@ const seed: ModuleCli = {
       target = [match]
     }
 
-    const { resolve } = await createRequestContainer()
-    const em = resolve<EntityManager>('em')
-    const container = resolve('__container' as any) as any
+    const container = await createRequestContainer()
+    const em = container.resolve<EntityManager>('em')
 
     if (reset) {
       for (const uc of target) {

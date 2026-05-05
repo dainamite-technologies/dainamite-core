@@ -55,7 +55,9 @@ export async function seedUseCase(
   options: RunnerOptions,
 ): Promise<SeedUseCaseOutcome> {
   const startedAt = Date.now()
-  const ensured = await ensureDemoTenant(options.em, options.container, useCase.tenant)
+  const ensured = await ensureDemoTenant(options.em, options.container, useCase.tenant, {
+    modules: options.modules,
+  })
   const scope = { tenantId: ensured.tenantId, organizationId: ensured.organizationId }
 
   console.log(

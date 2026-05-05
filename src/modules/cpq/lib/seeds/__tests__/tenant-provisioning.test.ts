@@ -10,6 +10,28 @@ jest.mock('@open-mercato/shared/lib/encryption/find', () => ({
 
 jest.mock('@open-mercato/core/modules/auth/data/entities', () => ({
   User: class FakeUser {},
+  Role: class FakeRole {},
+  UserRole: class FakeUserRole {},
+}))
+
+jest.mock('@open-mercato/core/modules/auth/lib/emailHash', () => ({
+  computeEmailHash: (email: string) => `hash:${email}`,
+}))
+
+jest.mock('@open-mercato/shared/lib/encryption/toggles', () => ({
+  isTenantDataEncryptionEnabled: () => false,
+}))
+
+jest.mock('@open-mercato/shared/lib/encryption/tenantDataEncryptionService', () => ({
+  TenantDataEncryptionService: class {},
+}))
+
+jest.mock('@open-mercato/shared/lib/encryption/kms', () => ({
+  createKmsService: () => ({}),
+}))
+
+jest.mock('bcryptjs', () => ({
+  hash: async (value: string) => `bcrypt:${value}`,
 }))
 
 import { setupInitialTenant } from '@open-mercato/core/modules/auth/lib/setup-app'
@@ -152,6 +174,115 @@ describe('ensureDemoTenant', () => {
         includeDerivedUsers: true,
       }),
     )
+  })
+
+  it('forwards the modules list to setupInitialTenant so role ACLs are merged', async () => {
+    setupMock.mockResolvedValueOnce({
+      tenantId: 't-mods',
+      organizationId: 'o-mods',
+      reusedExistingUser: false,
+      users: [
+        { user: { id: 'u-mods', email: 'admin@gix.com' } as any, roles: ['admin'], created: true },
+      ],
+    })
+    const fakeModules = [{ id: 'dashboards' }, { id: 'cpq' }] as any
+
+    await ensureDemoTenant(fakeEm, fakeContainer, baseSpec, { modules: fakeModules })
+
+    expect(setupMock).toHaveBeenCalledWith(
+      fakeEm,
+      expect.objectContaining({ modules: fakeModules }),
+    )
+  })
+
+  it('provisions additionalUsers with their roles after the admin tenant exists', async () => {
+    setupMock.mockResolvedValueOnce({
+      tenantId: 't-add',
+      organizationId: 'o-add',
+      reusedExistingUser: false,
+      users: [
+        { user: { id: 'u-admin', email: 'admin@gix.com' } as any, roles: ['admin'], created: true },
+      ],
+    })
+    // 1) lookup existing additional user (none) → create path
+    findMock.mockResolvedValueOnce(null)
+    // 2) lookup employee role → exists
+    findMock.mockResolvedValueOnce({ id: 'r-emp', name: 'employee', tenantId: 't-add' } as any)
+    // 3) lookup existing UserRole link → none → create
+    findMock.mockResolvedValueOnce(null)
+
+    const persisted: any[] = []
+    const created: any[] = []
+    const trackingEm: any = {
+      persist: (entity: any) => persisted.push(entity),
+      flush: jest.fn().mockResolvedValue(undefined),
+      create: (Class: any, data: any) => {
+        const instance = Object.assign(new Class(), data)
+        created.push(instance)
+        return instance
+      },
+    }
+
+    await ensureDemoTenant(trackingEm, fakeContainer, {
+      ...baseSpec,
+      additionalUsers: [
+        { email: 'employee@gix.com', password: 'secret', displayName: 'GIX Employee' },
+      ],
+    })
+
+    const userRecord = created.find((c) => c.email === 'employee@gix.com')
+    expect(userRecord).toBeDefined()
+    expect(userRecord.tenantId).toBe('t-add')
+    expect(userRecord.organizationId).toBe('o-add')
+    expect(userRecord.passwordHash).toBe('bcrypt:secret')
+    expect(userRecord.emailHash).toBe('hash:employee@gix.com')
+    expect(userRecord.isConfirmed).toBe(true)
+    expect(persisted).toContain(userRecord)
+    // UserRole link was also persisted
+    expect(persisted.length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('skips re-creating an additionalUser that already exists but still ensures role link', async () => {
+    setupMock.mockResolvedValueOnce({
+      tenantId: 't-exist',
+      organizationId: 'o-exist',
+      reusedExistingUser: true,
+      users: [
+        { user: { id: 'u-admin', email: 'admin@gix.com' } as any, roles: ['admin'], created: false },
+      ],
+    })
+    const existingEmployee = {
+      id: 'u-emp',
+      email: 'employee@gix.com',
+      tenantId: 't-exist',
+      organizationId: 'o-exist',
+      isConfirmed: true,
+    }
+    findMock.mockResolvedValueOnce(existingEmployee as any) // user lookup
+    findMock.mockResolvedValueOnce({ id: 'r-emp', name: 'employee', tenantId: 't-exist' } as any) // role lookup
+    findMock.mockResolvedValueOnce({ id: 'ur-1' } as any) // existing UserRole link
+
+    const persisted: any[] = []
+    const created: any[] = []
+    const trackingEm: any = {
+      persist: (entity: any) => persisted.push(entity),
+      flush: jest.fn().mockResolvedValue(undefined),
+      create: (Class: any, data: any) => {
+        const instance = Object.assign(new Class(), data)
+        created.push(instance)
+        return instance
+      },
+    }
+
+    await ensureDemoTenant(trackingEm, fakeContainer, {
+      ...baseSpec,
+      additionalUsers: [{ email: 'employee@gix.com', password: 'secret' }],
+    })
+
+    // No new User row was created
+    expect(created.find((c) => c.email === 'employee@gix.com')).toBeUndefined()
+    // No new UserRole row was persisted (link already existed)
+    expect(created.length).toBe(0)
   })
 
   it('defaults orgName to tenantName when organizationName is omitted', async () => {

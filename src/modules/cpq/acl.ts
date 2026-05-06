@@ -13,6 +13,12 @@ export const features = [
   { id: 'cpq.wizards.manage', title: 'Manage Wizards', module: 'cpq' },
   { id: 'cpq.orders.view', title: 'View CPQ Orders', module: 'cpq' },
   { id: 'cpq.orders.manage', title: 'Manage CPQ Orders', module: 'cpq' },
+  // XD-250 ARC (Amend / Renew / Cancel)
+  { id: 'cpq.arc.amend.manage', title: 'Manage Amend Quotes', module: 'cpq' },
+  { id: 'cpq.arc.renew.manage', title: 'Manage Renew Quotes', module: 'cpq' },
+  { id: 'cpq.arc.cancel.manage', title: 'Manage Cancel Quotes', module: 'cpq' },
+  { id: 'cpq.arc.changelog.view', title: 'View Subscription Change History', module: 'cpq' },
+  { id: 'cpq.inventory.expiring.view', title: 'View Expiring Subscriptions', module: 'cpq' },
 ]
 
 export default features

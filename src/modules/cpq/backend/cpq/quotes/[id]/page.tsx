@@ -1,6 +1,9 @@
 "use client"
 import * as React from 'react'
 import { useRouter, useParams, useSearchParams } from 'next/navigation'
+import ArcQuoteConfigurator, {
+  type AttachedTarget,
+} from './_components/ArcQuoteConfigurator'
 
 // ─── Types ───────────────────────────────────────────────────────
 
@@ -32,12 +35,23 @@ type ResolvedCharge = {
   adjustments?: RuleAdjustment[] | null
 }
 
+type QuoteLineAction = 'add' | 'modify' | 'cancel'
+
+type ArcLineSource = {
+  subscriptionItemId: string
+  name: string
+  mrcAmount: number
+  nrcAmount: number
+  quantity: number
+}
+
 type QuoteLine = {
   lineId: string
   offeringId: string | null
   offeringName: string
   offeringType: string | null
   parentLineId: string | null
+  action: QuoteLineAction
   quantity: number
   configuration: Record<string, unknown>
   nrcTotal: number
@@ -45,6 +59,8 @@ type QuoteLine = {
   charges: ResolvedCharge[]
   isConfigured: boolean
   validationErrors: Array<{ message: string }> | null
+  arcSource: ArcLineSource | null
+  targetSubscriptionId: string | null
 }
 
 type QuoteResult = {
@@ -186,6 +202,11 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
   const [quantity, setQuantity] = React.useState(1)
   const [editingLineId, setEditingLineId] = React.useState<string | null>(null)
   const [addingToParentLineId, setAddingToParentLineId] = React.useState<string | null>(null)
+  // XD-250 multi-target ARC: when adding a top-level offering operator can
+  // pick 1..N target subs (default = all) and we fire one POST per target.
+  // For "Add Component" to a bundle, this is forced to a single id (the
+  // parent line's target) since a bundle component must follow its bundle.
+  const [addingTargetSubIds, setAddingTargetSubIds] = React.useState<string[]>([])
   const [expandedLines, setExpandedLines] = React.useState<Set<string>>(new Set())
   const [converting, setConverting] = React.useState(false)
   const [transitioning, setTransitioning] = React.useState(false)
@@ -194,6 +215,33 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
   const [showDeleteConfirm, setShowDeleteConfirm] = React.useState(false)
   const [pricingDetail, setPricingDetail] = React.useState<{ lineIdx: number; chargeIdx: number } | null>(null)
   const statusMenuRef = React.useRef<HTMLDivElement>(null)
+
+  // ─── XD-250 ARC state ──────────────────────────────────────────
+  const [arcTargets, setArcTargets] = React.useState<AttachedTarget[]>([])
+  const [arcQuoteType, setArcQuoteType] = React.useState<'new' | 'amend' | 'renew' | 'cancel'>('new')
+  const [arcDrawerOpen, setArcDrawerOpen] = React.useState(false)
+
+  const loadArcTargets = React.useCallback(async () => {
+    try {
+      const res = await fetch(`/api/cpq/quotes/${cpqConfigId}/target-subscriptions`)
+      if (!res.ok) return
+      const data = await res.json()
+      const items: AttachedTarget[] = data.items ?? []
+      setArcTargets(items)
+      if (items.length > 0) {
+        setArcQuoteType(items[0].quoteType as 'amend' | 'renew' | 'cancel')
+      } else {
+        setArcQuoteType('new')
+      }
+    } catch {
+      // best-effort — non-ARC quotes have no targets, that's fine.
+    }
+  }, [cpqConfigId])
+
+  React.useEffect(() => {
+    if (!cpqConfigId || isNew) return
+    void loadArcTargets()
+  }, [cpqConfigId, isNew, loadArcTargets])
 
   React.useEffect(() => {
     if (!showStatusMenu) return
@@ -276,14 +324,23 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
     if (!cpqQuote || !selectedOffering) return
     try {
       setSubmitting(true); setError(null)
-      const body: Record<string, unknown> = { offeringId: selectedOffering.id, configuration: config, quantity }
-      if (addingToParentLineId) body.parentLineId = addingToParentLineId
-      const result = await apiJson<QuoteResult>(`/api/cpq/quotes/${cpqQuote.id}/items`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      })
-      setCpqQuote(result)
+      // XD-250 multi-target ARC: when ≥2 targets selected, fire one POST per
+      // target — backend creates one line per request, each tagged with its
+      // own targetSubscriptionId. Single target / non-ARC quote: list is
+      // empty or 1-elem, we just do one POST and let the server auto-inherit.
+      const targetsToPost = addingTargetSubIds.length > 0 ? addingTargetSubIds : [null]
+      let lastResult: QuoteResult | null = null
+      for (const tid of targetsToPost) {
+        const body: Record<string, unknown> = { offeringId: selectedOffering.id, configuration: config, quantity }
+        if (addingToParentLineId) body.parentLineId = addingToParentLineId
+        if (tid) body.targetSubscriptionId = tid
+        lastResult = await apiJson<QuoteResult>(`/api/cpq/quotes/${cpqQuote.id}/items`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        })
+      }
+      if (lastResult) setCpqQuote(lastResult)
       resetConfigState()
       setView('summary')
     } catch (err) { setError((err as Error).message) }
@@ -376,7 +433,13 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
     setAddingToParentLineId(null)
   }
 
-  const startAddOffering = () => { resetConfigState(); loadOfferings(); setView('add-offering') }
+  const startAddOffering = () => {
+    resetConfigState()
+    // Default: apply to all attached targets (operator can uncheck in the picker).
+    setAddingTargetSubIds(arcTargets.map((t) => t.subscriptionId))
+    loadOfferings()
+    setView('add-offering')
+  }
 
   const startAddComponent = async (parentLineId: string, offeringId?: string) => {
     setSelectedOffering(null)
@@ -385,6 +448,12 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
     setQuantity(1)
     setEditingLineId(null)
     setAddingToParentLineId(parentLineId)
+    // Inherit the parent line's target so a bundle component lands on the
+    // same subscription as its parent (XD-250 multi-target ARC). For
+    // components there's no choice — bundle ↔ component must agree.
+    const parent = cpqQuote?.lines.find((l) => l.lineId === parentLineId)
+    const inherited = parent?.targetSubscriptionId ?? arcTargets[0]?.subscriptionId
+    setAddingTargetSubIds(inherited ? [inherited] : [])
     if (offeringId) {
       try {
         const result = await apiJson<{ items: Offering[] }>('/api/cpq/product-offerings?pageSize=100&lifecycleStatus=active')
@@ -441,13 +510,59 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
 
   const { pricingSummary: summary, currencyCode: currency } = cpqQuote
 
+  const arcEditable = ['new', 'incomplete', 'ready'].includes(cpqQuote.cpqStatus)
+  const isMergeRenew =
+    arcQuoteType === 'renew' &&
+    arcTargets.length >= 2 &&
+    arcTargets.every((t) => t.mergeAction === 'absorb')
+
+  // XD-250 multi-target ARC: map subscriptionId → friendly code (e.g. SUB-...).
+  // Used for the per-line target badge so the operator can see which sub each
+  // line acts on; only meaningful when there are 2+ targets. Plain map (not
+  // useMemo) because this whole block is after the loading / not-found early
+  // returns — adding a hook here would violate Rules of Hooks. Tiny N (count
+  // of attached ARC targets) so re-building per render is fine.
+  const arcTargetCodeMap = new Map<string, string>()
+  for (const t of arcTargets) {
+    if (t.subscription?.code) arcTargetCodeMap.set(t.subscriptionId, t.subscription.code)
+  }
+
   return (
     <div className="space-y-6">
+      {arcDrawerOpen && (
+        <ArcQuoteConfigurator
+          quoteId={cpqQuote.id}
+          customerId={cpqQuote.customerId}
+          customerName={null}
+          currencyCode={cpqQuote.currencyCode}
+          initialType={arcQuoteType}
+          initialTargets={arcTargets}
+          editable={arcEditable}
+          onClose={() => setArcDrawerOpen(false)}
+          onChanged={async () => {
+            await loadArcTargets()
+            // Drawer attached / detached targets — backend may have mirrored
+            // items from new targets (XD-250 multi-target ARC), so refetch
+            // the full quote to pick up the new lines without a hard refresh.
+            try {
+              const fresh = await apiJson<QuoteResult>(`/api/cpq/quotes/${cpqQuote.id}`)
+              setCpqQuote(fresh)
+            } catch {
+              /* ignore — loadArcTargets already surfaced any error */
+            }
+          }}
+        />
+      )}
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <button onClick={() => router.push('/backend/cpq/quotes')} className="text-sm text-muted-foreground hover:text-foreground">← Back</button>
           <h1 className="text-2xl font-bold">Quote {cpqQuote.quoteNumber || cpqQuote.quoteId.slice(0, 8)}</h1>
+          {arcQuoteType !== 'new' && (
+            <span className="rounded-full bg-purple-100 text-purple-800 px-2.5 py-0.5 text-xs font-medium uppercase">
+              {arcQuoteType}
+            </span>
+          )}
           <div className="relative" ref={statusMenuRef}>
             <button
               onClick={() => {
@@ -533,10 +648,49 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
               Cancel
             </button>
           )}
+          {arcEditable && (
+            <button
+              onClick={() => setArcDrawerOpen(true)}
+              className="inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-muted transition-colors"
+            >
+              Modify subscription
+            </button>
+          )}
         </div>
       </div>
 
       {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
+
+      {arcQuoteType !== 'new' && arcTargets.length > 0 && (
+        <div className="rounded-md border bg-purple-50 border-purple-200 px-4 py-3 text-sm">
+          <div className="flex items-center justify-between">
+            <div>
+              <span className="font-medium uppercase">{arcQuoteType}</span>
+              {' • '}
+              {arcTargets.length} target{arcTargets.length === 1 ? '' : 's'}:
+              {' '}
+              {arcTargets.map((t, i) => (
+                <span key={t.id}>
+                  {i > 0 && ', '}
+                  <button
+                    onClick={() =>
+                      router.push(`/backend/cpq/inventory/subscriptions/${t.subscriptionId}`)
+                    }
+                    className="text-purple-700 hover:underline"
+                  >
+                    {t.subscription?.code ?? t.subscriptionId.slice(0, 8)}
+                  </button>
+                </span>
+              ))}
+              {isMergeRenew && (
+                <span className="ml-2 text-amber-700 font-medium">
+                  • Merging into a new contract
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {showDeleteConfirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setShowDeleteConfirm(false)}>
@@ -605,6 +759,7 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
             currency={currency}
             expandedLines={expandedLines}
             pricingDetail={pricingDetail}
+            targetCodes={arcTargetCodeMap}
             onToggleLine={toggleLine}
             onEditLine={startEditLine}
             onRemoveLine={removeItem}
@@ -645,6 +800,21 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
           attributes={attributes}
           config={config}
           quantity={quantity}
+          arcTargetOptions={
+            arcTargets.length >= 2 && !addingToParentLineId
+              ? arcTargets.map((t) => ({
+                  subscriptionId: t.subscriptionId,
+                  code: t.subscription?.code ?? t.subscriptionId.slice(0, 8),
+                  name: t.subscription?.name ?? null,
+                }))
+              : null
+          }
+          arcSelectedTargetIds={addingTargetSubIds}
+          onArcTargetToggle={(subId) => {
+            setAddingTargetSubIds((prev) =>
+              prev.includes(subId) ? prev.filter((id) => id !== subId) : [...prev, subId],
+            )
+          }}
           onConfigChange={(key, value) => {
             const next = { ...config, [key]: value }
             setConfig(next)
@@ -664,6 +834,9 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
           attributes={attributes}
           config={config}
           quantity={quantity}
+          arcTargetOptions={null}
+          arcSelectedTargetIds={[]}
+          onArcTargetToggle={() => {}}
           onConfigChange={(key, value) => {
             const next = { ...config, [key]: value }
             setConfig(next)
@@ -682,9 +855,10 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
 
 // ─── Sub-components ──────────────────────────────────────────────
 
-function QuoteLineTree({ lines, currency, expandedLines, pricingDetail, onToggleLine, onEditLine, onRemoveLine, onAddComponent, onTogglePricingDetail }: {
+function QuoteLineTree({ lines, currency, expandedLines, pricingDetail, targetCodes, onToggleLine, onEditLine, onRemoveLine, onAddComponent, onTogglePricingDetail }: {
   lines: QuoteLine[]; currency: string; expandedLines: Set<string>
   pricingDetail: { lineIdx: number; chargeIdx: number } | null
+  targetCodes: Map<string, string>
   onToggleLine: (id: string) => void; onEditLine: (line: QuoteLine) => void
   onRemoveLine: (lineId: string) => void; onAddComponent: (parentLineId: string, offeringId?: string) => void
   onTogglePricingDetail: (lineIdx: number, chargeIdx: number) => void
@@ -740,6 +914,7 @@ function QuoteLineTree({ lines, currency, expandedLines, pricingDetail, onToggle
                   isExpanded={isExpanded}
                   pricingDetail={pricingDetail} isBundle={isBundle}
                   childCount={children.length} indent={0}
+                  targetCodes={targetCodes}
                   onToggle={() => onToggleLine(line.lineId)}
                   onEdit={() => onEditLine(line)}
                   onRemove={() => onRemoveLine(line.lineId)}
@@ -757,6 +932,7 @@ function QuoteLineTree({ lines, currency, expandedLines, pricingDetail, onToggle
                     expandedLines={expandedLines}
                     pricingDetail={pricingDetail}
                     parentLineId={line.lineId}
+                    targetCodes={targetCodes}
                     onToggleLine={onToggleLine}
                     onEditLine={onEditLine}
                     onRemoveLine={onRemoveLine}
@@ -773,11 +949,12 @@ function QuoteLineTree({ lines, currency, expandedLines, pricingDetail, onToggle
   )
 }
 
-function BundleSlotPanel({ bundleTree, treeLoading, children, allLines, currency, expandedLines, pricingDetail, parentLineId, onToggleLine, onEditLine, onRemoveLine, onAddComponent, onTogglePricingDetail }: {
+function BundleSlotPanel({ bundleTree, treeLoading, children, allLines, currency, expandedLines, pricingDetail, parentLineId, targetCodes, onToggleLine, onEditLine, onRemoveLine, onAddComponent, onTogglePricingDetail }: {
   bundleTree: BundleTree | undefined; treeLoading: boolean
   children: QuoteLine[]; allLines: QuoteLine[]; currency: string
   expandedLines: Set<string>; pricingDetail: { lineIdx: number; chargeIdx: number } | null
   parentLineId: string
+  targetCodes: Map<string, string>
   onToggleLine: (id: string) => void; onEditLine: (line: QuoteLine) => void
   onRemoveLine: (lineId: string) => void; onAddComponent: (parentLineId: string, offeringId?: string) => void
   onTogglePricingDetail: (lineIdx: number, chargeIdx: number) => void
@@ -803,6 +980,7 @@ function BundleSlotPanel({ bundleTree, treeLoading, children, allLines, currency
               isExpanded={expandedLines.has(child.lineId)}
               pricingDetail={pricingDetail} isBundle={false}
               childCount={0} indent={1}
+              targetCodes={targetCodes}
               onToggle={() => onToggleLine(child.lineId)}
               onEdit={() => onEditLine(child)}
               onRemove={() => onRemoveLine(child.lineId)}
@@ -885,6 +1063,7 @@ function BundleSlotPanel({ bundleTree, treeLoading, children, allLines, currency
                   isExpanded={expandedLines.has(child.lineId)}
                   pricingDetail={pricingDetail} isBundle={false}
                   childCount={0} indent={1}
+                  targetCodes={targetCodes}
                   onToggle={() => onToggleLine(child.lineId)}
                   onEdit={() => onEditLine(child)}
                   onRemove={() => onRemoveLine(child.lineId)}
@@ -905,6 +1084,7 @@ function BundleSlotPanel({ bundleTree, treeLoading, children, allLines, currency
             isExpanded={expandedLines.has(child.lineId)}
             pricingDetail={pricingDetail} isBundle={false}
             childCount={0} indent={1}
+            targetCodes={targetCodes}
             onToggle={() => onToggleLine(child.lineId)}
             onEdit={() => onEditLine(child)}
             onRemove={() => onRemoveLine(child.lineId)}
@@ -916,10 +1096,11 @@ function BundleSlotPanel({ bundleTree, treeLoading, children, allLines, currency
   )
 }
 
-function QuoteLineRow({ line, lineIdx, currency, isExpanded, pricingDetail, isBundle, childCount, indent, onToggle, onEdit, onRemove, onAddComponent, onTogglePricingDetail }: {
+function QuoteLineRow({ line, lineIdx, currency, isExpanded, pricingDetail, isBundle, childCount, indent, targetCodes, onToggle, onEdit, onRemove, onAddComponent, onTogglePricingDetail }: {
   line: QuoteLine; lineIdx: number; currency: string; isExpanded: boolean
   pricingDetail: { lineIdx: number; chargeIdx: number } | null
   isBundle: boolean; childCount: number; indent: number
+  targetCodes: Map<string, string>
   onToggle: () => void; onEdit: () => void; onRemove: () => void
   onAddComponent?: () => void
   onTogglePricingDetail: (lineIdx: number, chargeIdx: number) => void
@@ -947,6 +1128,15 @@ function QuoteLineRow({ line, lineIdx, currency, isExpanded, pricingDetail, isBu
             )}
             <span className="font-medium text-sm">{line.offeringName}</span>
             {line.quantity > 1 && <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-medium">×{line.quantity}</span>}
+            <ActionBadge action={line.action} />
+            {targetCodes.size >= 2 && line.targetSubscriptionId && targetCodes.get(line.targetSubscriptionId) && (
+              <span
+                className="inline-flex items-center rounded-full bg-purple-50 px-1.5 py-0.5 text-xs font-medium text-purple-700 border border-purple-200"
+                title={`Acts on subscription ${targetCodes.get(line.targetSubscriptionId)}`}
+              >
+                → {targetCodes.get(line.targetSubscriptionId)}
+              </span>
+            )}
             {line.isConfigured ? (
               <span className="inline-flex items-center rounded-full bg-green-100 px-1.5 py-0.5 text-xs font-medium text-green-700">configured</span>
             ) : (
@@ -989,6 +1179,10 @@ function QuoteLineRow({ line, lineIdx, currency, isExpanded, pricingDetail, isBu
         </div>
       </div>
 
+      {/* XD-250 ARC: before/after preview when line mirrors a sub item */}
+      {isExpanded && line.arcSource && (
+        <ArcLineDiff line={line} currency={currency} />
+      )}
       {/* Charge breakdown (non-bundle or any expanded line) */}
       {isExpanded && !isBundle && line.charges.length > 0 && (
         <ChargeBreakdown line={line} lineIdx={lineIdx} currency={currency} pricingDetail={pricingDetail} onTogglePricingDetail={onTogglePricingDetail} />
@@ -996,6 +1190,104 @@ function QuoteLineRow({ line, lineIdx, currency, isExpanded, pricingDetail, isBu
       {/* For bundles: show own charges first, then children are rendered by parent */}
       {isExpanded && isBundle && line.charges.length > 0 && (
         <ChargeBreakdown line={line} lineIdx={lineIdx} currency={currency} pricingDetail={pricingDetail} onTogglePricingDetail={onTogglePricingDetail} />
+      )}
+      {/* Fallback: line has no per-charge breakdown and no ARC diff (truly empty) */}
+      {isExpanded && line.charges.length === 0 && !line.arcSource && (
+        <LineSummaryFallback line={line} currency={currency} />
+      )}
+    </div>
+  )
+}
+
+function ArcLineDiff({ line, currency }: { line: QuoteLine; currency: string }) {
+  const src = line.arcSource
+  if (!src) return null
+  const isCancel = line.action === 'cancel'
+  const beforeMrc = src.mrcAmount
+  const beforeNrc = src.nrcAmount
+  const beforeQty = src.quantity
+  const afterMrc = isCancel ? 0 : line.mrcTotal
+  const afterNrc = isCancel ? 0 : line.nrcTotal
+  const afterQty = isCancel ? 0 : line.quantity
+  const fmtVal = (v: number, asCurrency: boolean) =>
+    asCurrency ? fmt(v, currency) : String(v)
+  const rows: Array<{ label: string; before: number; after: number; asCurrency: boolean }> = [
+    { label: 'Quantity', before: beforeQty, after: afterQty, asCurrency: false },
+    { label: 'MRC', before: beforeMrc, after: afterMrc, asCurrency: true },
+    { label: 'NRC', before: beforeNrc, after: afterNrc, asCurrency: true },
+  ]
+
+  return (
+    <div className="border-t bg-muted/10 px-12 py-2 space-y-1.5">
+      <p className="text-xs font-medium text-muted-foreground">Change Preview</p>
+      <div className="rounded border bg-background overflow-hidden">
+        <table className="w-full text-xs">
+          <thead className="bg-muted/40">
+            <tr className="text-muted-foreground">
+              <th className="text-left px-3 py-1.5 font-medium" />
+              <th className="text-right px-3 py-1.5 font-medium">Before</th>
+              <th className="text-right px-3 py-1.5 font-medium">After</th>
+              <th className="text-right px-3 py-1.5 font-medium">Δ</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => {
+              const delta = r.after - r.before
+              const showDelta = delta !== 0
+              return (
+                <tr key={r.label} className="border-t border-dashed border-border/40">
+                  <td className="px-3 py-1 text-muted-foreground">{r.label}</td>
+                  <td className="px-3 py-1 text-right font-mono">{fmtVal(r.before, r.asCurrency)}</td>
+                  <td className={`px-3 py-1 text-right font-mono ${isCancel ? 'text-muted-foreground line-through' : ''}`}>
+                    {fmtVal(r.after, r.asCurrency)}
+                  </td>
+                  <td className={`px-3 py-1 text-right font-mono font-medium ${showDelta ? (delta > 0 ? 'text-green-700' : 'text-red-700') : 'text-muted-foreground'}`}>
+                    {showDelta ? `${delta > 0 ? '+' : ''}${fmtVal(delta, r.asCurrency)}` : '—'}
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+      {isCancel && (
+        <p className="text-xs text-red-700 italic">Cancellation — item will be terminated on activation.</p>
+      )}
+    </div>
+  )
+}
+
+function ActionBadge({ action }: { action: QuoteLineAction }) {
+  const styles: Record<QuoteLineAction, string> = {
+    add: 'bg-blue-100 text-blue-700',
+    modify: 'bg-amber-100 text-amber-700',
+    cancel: 'bg-red-100 text-red-700',
+  }
+  return (
+    <span className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-xs font-medium ${styles[action]}`}>
+      {action}
+    </span>
+  )
+}
+
+function LineSummaryFallback({ line, currency }: { line: QuoteLine; currency: string }) {
+  const hasTotals = line.nrcTotal > 0 || line.mrcTotal > 0
+  const mirroredFromItemId = (line.configuration?._arcMirroredFromItemId as string | undefined) ?? null
+  return (
+    <div className="border-t bg-muted/10 px-12 py-2 text-xs text-muted-foreground space-y-1">
+      <div>
+        No detailed charge breakdown available for this line.
+        {mirroredFromItemId && ' Mirrored from existing subscription item.'}
+      </div>
+      {hasTotals && (
+        <div className="flex gap-4">
+          {line.nrcTotal > 0 && (
+            <span>NRC <span className="font-mono font-medium text-foreground">{fmt(line.nrcTotal, currency)}</span></span>
+          )}
+          {line.mrcTotal > 0 && (
+            <span>MRC <span className="font-mono font-medium text-foreground">{fmt(line.mrcTotal, currency)}</span></span>
+          )}
+        </div>
       )}
     </div>
   )
@@ -1194,15 +1486,54 @@ function OfferingBrowser({ offerings, loading, search, onSearchChange, onSelect 
   )
 }
 
-function ConfigurePanel({ title, attributes, config, quantity, onConfigChange, onQuantityChange, onSubmit, submitLabel, submitting }: {
+function ConfigurePanel({ title, attributes, config, quantity, arcTargetOptions, arcSelectedTargetIds, onArcTargetToggle, onConfigChange, onQuantityChange, onSubmit, submitLabel, submitting }: {
   title: string; attributes: ConstrainedAttribute[]; config: Record<string, unknown>; quantity: number
+  arcTargetOptions: Array<{ subscriptionId: string; code: string; name: string | null }> | null
+  arcSelectedTargetIds: string[]
+  onArcTargetToggle: (subId: string) => void
   onConfigChange: (key: string, value: unknown) => void; onQuantityChange: (q: number) => void
   onSubmit: () => void; submitLabel: string; submitting: boolean
 }) {
+  const noTargetsPicked =
+    arcTargetOptions !== null && arcTargetOptions.length > 0 && arcSelectedTargetIds.length === 0
   return (
     <div className="rounded-lg border bg-card">
       <div className="border-b px-4 py-3"><h3 className="text-sm font-medium">{title}</h3></div>
       <div className="p-4 space-y-4">
+        {arcTargetOptions && arcTargetOptions.length > 0 && (
+          <div>
+            <label className="block text-sm font-medium mb-1">
+              Apply to subscription(s)
+              <span className="text-red-600 ml-1">*</span>
+            </label>
+            <div className="space-y-1.5 rounded-md border bg-background px-3 py-2">
+              {arcTargetOptions.map((opt) => {
+                const checked = arcSelectedTargetIds.includes(opt.subscriptionId)
+                return (
+                  <label
+                    key={opt.subscriptionId}
+                    className="flex items-center gap-2 text-sm cursor-pointer hover:bg-muted/40 rounded px-1 py-0.5"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => onArcTargetToggle(opt.subscriptionId)}
+                      className="h-4 w-4 rounded border-border"
+                    />
+                    <span className="font-mono font-medium">{opt.code}</span>
+                    {opt.name && <span className="text-muted-foreground">— {opt.name}</span>}
+                  </label>
+                )
+              })}
+            </div>
+            <p className="text-xs text-muted-foreground mt-1">
+              Pick one or more — a separate line will be created on each selected subscription.
+            </p>
+            {noTargetsPicked && (
+              <p className="text-xs text-red-600 mt-1">Select at least one target.</p>
+            )}
+          </div>
+        )}
         <div>
           <label className="block text-sm font-medium mb-1">Quantity</label>
           <input type="number" min={1} value={quantity} onChange={(e) => onQuantityChange(Math.max(1, parseInt(e.target.value) || 1))}
@@ -1215,7 +1546,7 @@ function ConfigurePanel({ title, attributes, config, quantity, onConfigChange, o
         )}
       </div>
       <div className="border-t px-4 py-3 flex justify-end">
-        <button onClick={onSubmit} disabled={submitting}
+        <button onClick={onSubmit} disabled={submitting || noTargetsPicked}
           className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-sm hover:bg-primary/90 transition-colors disabled:opacity-50">
           {submitting ? <Spinner /> : null} {submitLabel}
         </button>

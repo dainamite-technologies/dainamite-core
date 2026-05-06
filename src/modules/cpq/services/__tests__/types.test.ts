@@ -4,10 +4,16 @@ import {
   ALLOWED_TRANSITIONS,
   INVENTORY_SUBSCRIPTION_STATUSES,
   INVENTORY_SUBSCRIPTION_TRANSITIONS,
+  INVENTORY_SUBSCRIPTION_ITEM_STATUSES,
   INVENTORY_ASSET_STATUSES,
   INVENTORY_ASSET_TRANSITIONS,
   CPQ_ORDER_STATUSES,
   CPQ_ORDER_TRANSITIONS,
+  CPQ_QUOTE_TYPES,
+  ARC_QUOTE_TYPES,
+  CHANGE_LOG_TYPES,
+  MERGE_ACTIONS,
+  ARC_REASON_CODES,
 } from '../types'
 
 describe('CPQ quote lifecycle (CPQ_STATUSES / ALLOWED_TRANSITIONS)', () => {
@@ -136,6 +142,7 @@ describe('Inventory subscription lifecycle', () => {
       'suspended',
       'terminated',
       'expired',
+      'superseded',
     ])
   })
 
@@ -273,3 +280,67 @@ describe('CPQ order lifecycle', () => {
     })
   })
 })
+
+// ─── ARC (XD-250) constants & transitions ──────────────────────
+
+describe("ARC (XD-250) — quote types & enums", () => {
+  it("CPQ_QUOTE_TYPES enumerates new + amend + renew + cancel", () => {
+    expect(CPQ_QUOTE_TYPES).toEqual(["new", "amend", "renew", "cancel"])
+  })
+
+  it("ARC_QUOTE_TYPES is the non-new subset", () => {
+    expect(ARC_QUOTE_TYPES).toEqual(["amend", "renew", "cancel"])
+  })
+
+  it("CHANGE_LOG_TYPES covers amend / renew / cancel + merge variants", () => {
+    expect(CHANGE_LOG_TYPES).toEqual([
+      "amend",
+      "renew",
+      "cancel",
+      "merge-result",
+      "merge-source",
+    ])
+  })
+
+  it("MERGE_ACTIONS only allows standalone or absorb", () => {
+    expect(MERGE_ACTIONS).toEqual(["standalone", "absorb"])
+  })
+
+  it("ARC_REASON_CODES includes the contract-life vocabulary", () => {
+    expect(ARC_REASON_CODES).toEqual(
+      expect.arrayContaining([
+        "upgrade",
+        "downgrade",
+        "term-extension",
+        "consolidation",
+        "non-payment",
+        "other",
+      ]),
+    )
+  })
+})
+
+describe("ARC (XD-250) — subscription state machine extensions", () => {
+  it("introduces \"superseded\" as a terminal status", () => {
+    expect(INVENTORY_SUBSCRIPTION_STATUSES).toContain("superseded")
+    expect(INVENTORY_SUBSCRIPTION_TRANSITIONS.superseded).toEqual([])
+  })
+
+  it("active → superseded is allowed (merge source path)", () => {
+    expect(INVENTORY_SUBSCRIPTION_TRANSITIONS.active).toContain("superseded")
+  })
+
+  it("suspended → superseded is allowed (suspended subs can be absorbed)", () => {
+    expect(INVENTORY_SUBSCRIPTION_TRANSITIONS.suspended).toContain("superseded")
+  })
+
+  it("terminal statuses do not allow re-emerging into superseded", () => {
+    expect(INVENTORY_SUBSCRIPTION_TRANSITIONS.terminated).toEqual([])
+    expect(INVENTORY_SUBSCRIPTION_TRANSITIONS.expired).toEqual([])
+  })
+
+  it("subscription-item statuses include superseded", () => {
+    expect(INVENTORY_SUBSCRIPTION_ITEM_STATUSES).toContain("superseded")
+  })
+})
+

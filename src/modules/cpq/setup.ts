@@ -2,6 +2,7 @@ import type { EntityManager } from '@mikro-orm/postgresql'
 import type { ModuleSetupConfig } from '@open-mercato/shared/modules/setup'
 import { seedCpqDefaults } from './lib/seeds'
 import { seedCpqExamples } from './lib/example-seeds'
+import { seedCpqArcExamples } from './lib/arc-example-seeds'
 
 type SeedScope = { tenantId: string; organizationId: string }
 
@@ -1101,8 +1102,14 @@ export const setup: ModuleSetupConfig = {
       'cpq.wizards.manage',
       'cpq.inventory.view',
       'cpq.inventory.manage',
+      'cpq.inventory.expiring.view',
       'cpq.orders.view',
       'cpq.orders.manage',
+      // XD-250 ARC features — admins can drive every ARC flow.
+      'cpq.arc.amend.manage',
+      'cpq.arc.renew.manage',
+      'cpq.arc.cancel.manage',
+      'cpq.arc.changelog.view',
     ],
     employee: [
       'cpq.quotes.view',
@@ -1113,7 +1120,14 @@ export const setup: ModuleSetupConfig = {
       'cpq.offerings.view',
       'cpq.wizards.view',
       'cpq.inventory.view',
+      'cpq.inventory.expiring.view',
       'cpq.orders.view',
+      // XD-250 ARC: anyone with cpq.quotes.manage drives ARC quotes;
+      // changelog view follows cpq.inventory.view.
+      'cpq.arc.amend.manage',
+      'cpq.arc.renew.manage',
+      'cpq.arc.cancel.manage',
+      'cpq.arc.changelog.view',
     ],
   },
 
@@ -1131,7 +1145,12 @@ export const setup: ModuleSetupConfig = {
   },
 
   async seedExamples({ em, container, tenantId, organizationId }) {
-    await seedCpqExamples(em, container, { tenantId, organizationId })
+    const scope = { tenantId, organizationId }
+    await seedCpqExamples(em, container, scope)
+    // XD-250 ARC: ships an extra demo customer with a portfolio of subs
+    // covering every ARC operator scenario (amend / renew / cancel /
+    // multi-target / merge / suspended). Idempotent + self-contained.
+    await seedCpqArcExamples(em, container, scope)
   },
 }
 

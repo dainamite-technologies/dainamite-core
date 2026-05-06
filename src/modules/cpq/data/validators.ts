@@ -203,11 +203,35 @@ export const cpqPricingTableEntryUpdateSchema = cpqPricingTableEntryCreateSchema
 
 // ─── Quoting v2 ─────────────────────────────────────────────────
 
+export const cpqQuoteTypeEnum = z.enum(['new', 'amend', 'renew', 'cancel'])
+export const cpqArcQuoteTypeEnum = z.enum(['amend', 'renew', 'cancel'])
+export const cpqMergeActionEnum = z.enum(['standalone', 'absorb'])
+export const cpqArcReasonCodeEnum = z.enum([
+  'upgrade',
+  'downgrade',
+  'config-change',
+  'price-adjustment',
+  'term-extension',
+  'term-reduction',
+  'consolidation',
+  'customer-request',
+  'non-payment',
+  'contract-breach',
+  'other',
+])
+
 export const cpqCreateQuoteSchema = z.object({
   customerId: z.string().uuid(),
   quoteId: z.string().uuid().optional(),      // Link to existing SalesQuote
   dealId: z.string().uuid().optional(),
   currencyCode: z.string().min(1).optional(),
+  quoteType: cpqQuoteTypeEnum.optional().default('new'),
+})
+
+// Server enforces the one-way rule (new → amend|renew|cancel only) in the
+// service layer; the schema just shapes the body.
+export const cpqUpdateQuoteSchema = z.object({
+  quoteType: cpqQuoteTypeEnum.optional(),
 })
 
 const cpqPricePreviewItemSchema = z.object({
@@ -243,6 +267,10 @@ export const cpqAddQuoteItemSchema = z.object({
   startDate: z.string().optional(),
   termMonths: z.number().int().min(1).optional(),
   endDate: z.string().optional(),
+  // ARC (XD-250): per-line target sub for amend / renew (standalone) / cancel.
+  targetSubscriptionId: z.string().uuid().nullish(),
+  // ARC (XD-250): existing item being changed by cancel/modify lines.
+  sourceSubscriptionItemId: z.string().uuid().nullish(),
 })
 
 export const cpqUpdateQuoteItemSchema = z.object({
@@ -259,6 +287,69 @@ export const cpqUpdateQuoteItemSchema = z.object({
   startDate: z.string().optional(),
   termMonths: z.number().int().min(1).optional(),
   endDate: z.string().optional(),
+  targetSubscriptionId: z.string().uuid().nullish(),
+  sourceSubscriptionItemId: z.string().uuid().nullish(),
+})
+
+// ─── ARC (Amend / Renew / Cancel) — XD-250 ──────────────────────
+
+export const cpqCreateQuoteFromSubscriptionSchema = z.object({
+  subscriptionId: z.string().uuid(),
+  type: cpqArcQuoteTypeEnum,
+  renewTerm: z
+    .object({
+      newTermStart: z.string().min(1),
+      newTermEnd: z.string().min(1),
+      newTermMonths: z.number().int().min(1).optional(),
+    })
+    .optional(),
+})
+
+export const cpqAttachTargetSubscriptionSchema = z.object({
+  subscriptionId: z.string().uuid(),
+  quoteType: cpqArcQuoteTypeEnum,
+  mergeAction: cpqMergeActionEnum.optional(),
+  newTermStart: z.string().min(1).optional(),
+  newTermEnd: z.string().min(1).optional(),
+  newTermMonths: z.number().int().min(1).optional(),
+})
+
+export const cpqUpdateTargetSubscriptionSchema = z.object({
+  mergeAction: cpqMergeActionEnum.optional(),
+  newTermStart: z.string().min(1).nullish(),
+  newTermEnd: z.string().min(1).nullish(),
+  newTermMonths: z.number().int().min(1).nullish(),
+})
+
+export const cpqCancelMetaSchema = z.object({
+  reasonCode: cpqArcReasonCodeEnum,
+  reasonText: z.string().nullish(),
+  etfAmount: z
+    .union([z.string(), z.number().transform(String)])
+    .nullish(),
+  etfCurrency: z.string().min(1).max(3).nullish(),
+})
+
+export const cpqMergeMetaSchema = z.object({
+  newTermStart: z.string().min(1),
+  newTermEnd: z.string().min(1),
+  newTermMonths: z.number().int().min(1).optional(),
+  newSubCode: z.string().min(1).nullish(),
+  newSubName: z.string().min(1).nullish(),
+})
+
+export const cpqExpiringSubscriptionsQuerySchema = z.object({
+  withinDays: z.coerce.number().int().min(1).max(365).optional().default(30),
+  customerId: z.string().uuid().optional(),
+  billingCycle: z.enum(['monthly', 'quarterly', 'annually']).optional(),
+  status: z.string().optional().default('active'),
+  page: z.coerce.number().int().min(1).optional().default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).optional().default(50),
+})
+
+export const cpqChangeLogQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).optional().default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).optional().default(50),
 })
 
 export const cpqRecalculateSchema = z.object({

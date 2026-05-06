@@ -77,6 +77,73 @@ the `@dainamite/cpq` package, per
 | Breaking schema migration on customer DB | Migrations ship in package, document upgrade in CHANGELOG |
 | Custom @app code drifts from package | Audit every 6 months, promote duplicated features into the package |
 
+## Schema / API changelog (track breaking changes here)
+
+### 2026-05-04 — XD-250 ARC (Amend / Renew / Cancel)
+
+Additive only. Every existing CPQ contract is preserved.
+
+**New entities** (require migration):
+- `cpq_quote_target_subscriptions` — junction quote ↔ subscription target
+- `cpq_subscription_change_logs` — append-only audit per ARC operation
+
+**New columns on existing entities** (additive, default-safe):
+- `cpq_quote_configurations`: `quote_type` (default `'new'`), `arc_reason_*`,
+  `arc_etf_*`, `arc_merge_new_term_*`, `arc_merge_new_sub_*`
+- `cpq_quote_line_configurations`: `target_subscription_id`,
+  `source_subscription_item_id`
+- `cpq_inventory_subscriptions`: `current_term_start`,
+  `merged_into_subscription_id`, `last_change_log_id`,
+  `version` (MikroORM optimistic lock)
+
+**Status enum extensions**:
+- `INVENTORY_SUBSCRIPTION_STATUSES` adds `'superseded'` (terminal,
+  reachable only via merge-renewal — sources transition there).
+- Subscription items mirror parent via the same `'superseded'` status.
+
+**New events** in `cpq.events.ts` (NEW file — first events for the module):
+- `cpq.subscription.amended`
+- `cpq.subscription.renewed`
+- `cpq.subscription.merged`
+- `cpq.subscription.cancelled`
+- `cpq.subscription.superseded`
+
+All five include a `proration` payload + ChangeLog id, persistent +
+`clientBroadcast: true`.
+
+**New API endpoints** (all under `src/modules/cpq/api/`):
+- `POST /api/cpq/quotes/from-subscription`
+- `GET / POST /api/cpq/quotes/[quoteId]/target-subscriptions`
+- `PATCH / DELETE /api/cpq/quotes/[quoteId]/target-subscriptions/[targetId]`
+- `POST /api/cpq/quotes/[quoteId]/cancel-meta`
+- `POST /api/cpq/quotes/[quoteId]/merge-meta`
+- `PATCH /api/cpq/quotes/[quoteId]` — extended to accept `quoteType`
+  (one-way `new → amend|renew|cancel`)
+- `GET /api/cpq/inventory/subscriptions/[subscriptionId]/change-log`
+- `GET /api/cpq/inventory/subscriptions/expiring`
+
+**New ACL features** (in `acl.ts`, granted to admin + employee in `setup.ts`):
+- `cpq.arc.amend.manage`
+- `cpq.arc.renew.manage`
+- `cpq.arc.cancel.manage`
+- `cpq.arc.changelog.view`
+- `cpq.inventory.expiring.view`
+
+**Service surface additions** (no new top-level services — methods on existing):
+- `cpqInventoryService.applyAmendment / applyRenewal / applyMergeRenewal /
+  applyCancel` — idempotent on `(sourceOrderId, subscriptionId)`.
+- `cpqInventoryService.findExpiringSubscriptions / listChangeLog`.
+- `cpqQuotingService.createQuoteFromSubscription / setQuoteType /
+  attachTargetSubscription / detachTargetSubscription /
+  updateTargetSubscription / setCancelMeta / setMergeMeta /
+  validateArcQuote`.
+- `cpqOrderService.activateOrder` — extended to branch on `quoteType` and
+  invoke the right `apply*` per attached target. Events emit AFTER commit.
+
+**Backwards compatibility**: existing `quote_type='new'` quotes flow through
+the unchanged path. `autoRenew` column on subscriptions is preserved but no
+longer consulted (no scheduler).
+
 ## Open decisions (per SPEC-001 §Open Questions)
 
 - Q3 — Monorepo tooling: yarn workspaces alone vs Nx/Turborepo. Default to

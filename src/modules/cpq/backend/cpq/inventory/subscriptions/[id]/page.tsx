@@ -2,6 +2,72 @@
 import * as React from 'react'
 import { useRouter, useParams } from 'next/navigation'
 
+// XD-250 — ARC integration on subscription detail.
+//   • header buttons (Amend / Renew / Cancel) call /from-subscription
+//     and redirect to the new ARC quote
+//   • "Change History" section reads /change-log
+
+type SnapshotItem = {
+  id: string
+  name?: string
+  mrcAmount?: number | string
+  nrcAmount?: number | string
+  quantity?: number
+  status?: string
+}
+
+type SubscriptionSnapshot = {
+  id?: string
+  currencyCode?: string
+  items?: SnapshotItem[]
+} | null
+
+type LineChangeEntry = {
+  action: 'add' | 'modify' | 'cancel'
+  itemId?: string
+  quoteLineId?: string | null
+  mrcDelta?: number
+  mrcAmount?: number
+  nrcAmount?: number
+  quantity?: number
+}
+
+type ChangeLogRow = {
+  id: string
+  changeType: string
+  sourceQuoteId: string | null
+  sourceOrderId: string | null
+  performedByUserId: string | null
+  effectiveAt: string
+  createdAt: string
+  reasonCode: string | null
+  reasonText: string | null
+  etfAmount: string | null
+  etfCurrency: string | null
+  termChange: Record<string, unknown> | null
+  lineChanges: LineChangeEntry[] | null
+  beforeSnapshot: SubscriptionSnapshot
+  afterSnapshot: SubscriptionSnapshot
+  mergedIntoSubscriptionId: string | null
+  mergedFromSubscriptionIds: string[] | null
+}
+
+const CHANGE_TYPE_LABELS: Record<string, string> = {
+  amend: 'Amended',
+  renew: 'Renewed',
+  cancel: 'Cancelled',
+  'merge-result': 'Created from merging contracts',
+  'merge-source': 'Merged into a new contract',
+}
+
+const CHANGE_TYPE_COLORS: Record<string, string> = {
+  amend: 'bg-blue-100 text-blue-800',
+  renew: 'bg-green-100 text-green-800',
+  cancel: 'bg-red-100 text-red-800',
+  'merge-result': 'bg-purple-100 text-purple-800',
+  'merge-source': 'bg-orange-100 text-orange-800',
+}
+
 type SubscriptionItem = {
   id: string
   subscriptionId: string
@@ -120,6 +186,47 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
   const [showStatusMenu, setShowStatusMenu] = React.useState(false)
   const [transitioning, setTransitioning] = React.useState(false)
   const statusMenuRef = React.useRef<HTMLDivElement>(null)
+  // XD-250 ARC state
+  const [arcInFlight, setArcInFlight] = React.useState<'amend' | 'renew' | 'cancel' | null>(null)
+  const [changeLog, setChangeLog] = React.useState<ChangeLogRow[]>([])
+  const [changeLogLoading, setChangeLogLoading] = React.useState(false)
+
+  const startArcQuote = React.useCallback(
+    async (type: 'amend' | 'renew' | 'cancel') => {
+      if (!sub) return
+      setArcInFlight(type)
+      try {
+        const res = await fetch('/api/cpq/quotes/from-subscription', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ subscriptionId: sub.id, type }),
+        })
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({})) as { error?: string; existingQuoteId?: string }
+          // XD-250 spec § UI: when the subscription already has a non-terminal
+          // ARC quote attached, the server returns 409 with `existingQuoteId`.
+          // Offer to navigate to that quote instead of showing a dead alert.
+          if (body.existingQuoteId) {
+            const ok = window.confirm(
+              `${body.error ?? 'Subscription has another ARC quote in progress.'}\n\n` +
+                `Open the existing quote now?`,
+            )
+            if (ok) {
+              router.push(`/backend/cpq/quotes/${body.existingQuoteId}`)
+            }
+            return
+          }
+          alert(`Failed to start ${type} quote: ${body.error ?? res.statusText}`)
+          return
+        }
+        const data = await res.json()
+        router.push(`/backend/cpq/quotes/${data.quoteId}`)
+      } finally {
+        setArcInFlight(null)
+      }
+    },
+    [router, sub],
+  )
 
   React.useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -149,6 +256,24 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
       setTransitioning(false)
     }
   }
+
+  React.useEffect(() => {
+    let cancelled = false
+    async function loadLog() {
+      setChangeLogLoading(true)
+      try {
+        const r = await fetch(`/api/cpq/inventory/subscriptions/${subId}/change-log?pageSize=50`)
+        if (r.ok && !cancelled) {
+          const data = await r.json()
+          setChangeLog(data.items ?? [])
+        }
+      } finally {
+        if (!cancelled) setChangeLogLoading(false)
+      }
+    }
+    if (subId) void loadLog()
+    return () => { cancelled = true }
+  }, [subId])
 
   React.useEffect(() => {
     let cancelled = false
@@ -252,6 +377,32 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
           </div>
           <span className="text-xs text-muted-foreground font-mono">{sub.code}</span>
         </div>
+        {/* XD-250 ARC actions */}
+        {(sub.status === 'active' || sub.status === 'suspended') && (
+          <div className="flex gap-2">
+            <button
+              disabled={arcInFlight !== null}
+              onClick={() => startArcQuote('amend')}
+              className="rounded-md border border-green-300 bg-green-50 text-green-700 px-3 py-1.5 text-sm hover:bg-green-100 disabled:opacity-50"
+            >
+              Amend
+            </button>
+            <button
+              disabled={arcInFlight !== null}
+              onClick={() => startArcQuote('renew')}
+              className="rounded-md border border-blue-300 bg-blue-50 text-blue-700 px-3 py-1.5 text-sm hover:bg-blue-100 disabled:opacity-50"
+            >
+              Renew
+            </button>
+            <button
+              disabled={arcInFlight !== null}
+              onClick={() => startArcQuote('cancel')}
+              className="rounded-md border border-red-300 bg-red-50 text-red-700 px-3 py-1.5 text-sm hover:bg-red-100 disabled:opacity-50"
+            >
+              Cancel
+            </button>
+          </div>
+        )}
       </div>
 
       {error && <ErrorBanner message={error} />}
@@ -441,6 +592,85 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
         )}
       </div>
 
+      {/* XD-250 Change History */}
+      <div>
+        <h3 className="text-sm font-medium mb-2 px-1">Change History ({changeLog.length})</h3>
+        {changeLogLoading ? (
+          <div className="rounded-lg border bg-card py-6 text-center text-sm text-muted-foreground">Loading…</div>
+        ) : changeLog.length === 0 ? (
+          <div className="rounded-lg border bg-card py-6 text-center text-sm text-muted-foreground">No ARC changes yet.</div>
+        ) : (
+          <div className="rounded-lg border bg-card divide-y">
+            {changeLog.map((row) => (
+              <div key={row.id} className="px-4 py-3 space-y-1">
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
+                      CHANGE_TYPE_COLORS[row.changeType] ?? 'bg-gray-100 text-gray-800'
+                    }`}
+                  >
+                    {CHANGE_TYPE_LABELS[row.changeType] ?? row.changeType}
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    {new Date(row.effectiveAt).toLocaleString()}
+                  </span>
+                  {row.sourceQuoteId && (
+                    <button
+                      onClick={() => router.push(`/backend/cpq/quotes/${row.sourceQuoteId}`)}
+                      className="text-xs text-primary hover:underline"
+                    >
+                      Quote {row.sourceQuoteId.slice(0, 8)}…
+                    </button>
+                  )}
+                  {row.sourceOrderId && (
+                    <button
+                      onClick={() => router.push(`/backend/cpq/orders/${row.sourceOrderId}`)}
+                      className="text-xs text-primary hover:underline"
+                    >
+                      Order {row.sourceOrderId.slice(0, 8)}…
+                    </button>
+                  )}
+                </div>
+                <ChangeLogLineDetails row={row} currency={currency} />
+                {row.termChange && (
+                  <div className="text-xs text-muted-foreground">
+                    Term: {String(row.termChange.oldTermEnd ?? '—')} → {String(row.termChange.newTermEnd ?? '—')}
+                  </div>
+                )}
+                {row.reasonCode && (
+                  <div className="text-xs text-muted-foreground">
+                    Reason: {row.reasonCode}{row.reasonText ? ` — ${row.reasonText}` : ''}
+                  </div>
+                )}
+                {row.etfAmount && (
+                  <div className="text-xs text-muted-foreground">
+                    ETF: {row.etfAmount} {row.etfCurrency ?? ''}
+                  </div>
+                )}
+                {row.mergedIntoSubscriptionId && (
+                  <div className="text-xs text-muted-foreground">
+                    Merged into{' '}
+                    <button
+                      onClick={() =>
+                        router.push(`/backend/cpq/inventory/subscriptions/${row.mergedIntoSubscriptionId}`)
+                      }
+                      className="text-primary hover:underline"
+                    >
+                      subscription {row.mergedIntoSubscriptionId.slice(0, 8)}…
+                    </button>
+                  </div>
+                )}
+                {row.mergedFromSubscriptionIds && row.mergedFromSubscriptionIds.length > 0 && (
+                  <div className="text-xs text-muted-foreground">
+                    Merged from {row.mergedFromSubscriptionIds.length} subscriptions
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       {/* Linked Assets */}
       <div>
         <h3 className="text-sm font-medium mb-2 px-1">Linked Assets ({assets.length})</h3>
@@ -514,6 +744,184 @@ function ErrorBanner({ message }: { message: string }) {
   return (
     <div className="rounded-md bg-red-50 border border-red-200 p-3 flex items-start gap-2">
       <span className="text-sm text-red-700 flex-1">{message}</span>
+    </div>
+  )
+}
+
+// XD-250 — render the per-line summary of an ARC change, with inline product
+// names and before/after MRC values. Falls back gracefully when snapshots are
+// missing (older log rows) or when lineChanges is null (cancel / merge).
+function ChangeLogLineDetails({ row, currency }: { row: ChangeLogRow; currency: string }) {
+  const beforeItems = new Map<string, SnapshotItem>(
+    (row.beforeSnapshot?.items ?? []).map((it) => [it.id, it]),
+  )
+  const afterItems = new Map<string, SnapshotItem>(
+    (row.afterSnapshot?.items ?? []).map((it) => [it.id, it]),
+  )
+
+  type DerivedChange = {
+    key: string
+    action: 'add' | 'modify' | 'cancel'
+    name: string
+    beforeMrc: number | null
+    afterMrc: number | null
+    delta: number | null
+  }
+
+  const derived: DerivedChange[] = []
+
+  if (row.lineChanges && row.lineChanges.length > 0) {
+    for (let i = 0; i < row.lineChanges.length; i++) {
+      const lc = row.lineChanges[i]
+      const itemId = lc.itemId ?? ''
+      const before = beforeItems.get(itemId)
+      const after = afterItems.get(itemId)
+      const item = after ?? before
+      const beforeMrc = before ? Number(before.mrcAmount ?? 0) : null
+      const afterMrc = after ? Number(after.mrcAmount ?? 0) : null
+      const explicitDelta = lc.mrcDelta != null ? Number(lc.mrcDelta) : null
+      const computedDelta =
+        beforeMrc != null && afterMrc != null ? afterMrc - beforeMrc : null
+      derived.push({
+        key: `${itemId}-${i}`,
+        action: lc.action,
+        name: item?.name ?? (lc.action === 'add' ? 'New item' : 'Item'),
+        beforeMrc,
+        afterMrc:
+          lc.action === 'add' && afterMrc == null && lc.mrcAmount != null
+            ? Number(lc.mrcAmount)
+            : afterMrc,
+        delta: explicitDelta ?? computedDelta,
+      })
+    }
+  } else if (row.changeType === 'cancel' && row.beforeSnapshot?.items) {
+    // applyCancel writes lineChanges=null; surface the items that got terminated.
+    for (const it of row.beforeSnapshot.items) {
+      const mrc = Number(it.mrcAmount ?? 0)
+      derived.push({
+        key: it.id,
+        action: 'cancel',
+        name: it.name ?? 'Item',
+        beforeMrc: mrc,
+        afterMrc: 0,
+        delta: -mrc,
+      })
+    }
+  } else if (row.changeType === 'merge-result' && row.afterSnapshot?.items) {
+    for (const it of row.afterSnapshot.items) {
+      const mrc = Number(it.mrcAmount ?? 0)
+      derived.push({
+        key: it.id,
+        action: 'add',
+        name: it.name ?? 'Item',
+        beforeMrc: null,
+        afterMrc: mrc,
+        delta: null,
+      })
+    }
+  } else if (row.changeType === 'merge-source' && row.beforeSnapshot?.items) {
+    for (const it of row.beforeSnapshot.items) {
+      const mrc = Number(it.mrcAmount ?? 0)
+      derived.push({
+        key: it.id,
+        action: 'cancel',
+        name: it.name ?? 'Item',
+        beforeMrc: mrc,
+        afterMrc: 0,
+        delta: -mrc,
+      })
+    }
+  }
+
+  if (derived.length === 0) {
+    // Amend / renew without any actual line edits — service writes lineChanges=[]
+    // because line 1641 of cpqInventoryService.applyLineChanges only records modify
+    // entries with a real delta. Show an explicit note so the operator knows
+    // the activation happened but nothing on items moved.
+    if (row.changeType === 'amend' || row.changeType === 'renew') {
+      return (
+        <div className="mt-1.5 text-xs text-muted-foreground italic">
+          No item-level changes recorded.
+        </div>
+      )
+    }
+    return null
+  }
+
+  return (
+    <div className="mt-1.5 rounded border bg-muted/20 px-3 py-2 space-y-1">
+      {derived.map((d) => (
+        <ChangeLogLineRow key={d.key} change={d} currency={currency} />
+      ))}
+    </div>
+  )
+}
+
+const ACTION_GLYPH: Record<'add' | 'modify' | 'cancel', { sign: string; color: string; label: string }> = {
+  add: { sign: '+', color: 'text-green-700', label: 'added' },
+  modify: { sign: '~', color: 'text-blue-700', label: 'modified' },
+  cancel: { sign: '−', color: 'text-red-700', label: 'removed' },
+}
+
+function ChangeLogLineRow({
+  change,
+  currency,
+}: {
+  change: {
+    action: 'add' | 'modify' | 'cancel'
+    name: string
+    beforeMrc: number | null
+    afterMrc: number | null
+    delta: number | null
+  }
+  currency: string
+}) {
+  const glyph = ACTION_GLYPH[change.action]
+  const showPriceChange =
+    change.action === 'modify' &&
+    change.beforeMrc != null &&
+    change.afterMrc != null &&
+    change.beforeMrc !== change.afterMrc
+  const showSinglePrice =
+    !showPriceChange &&
+    ((change.action === 'add' && change.afterMrc != null && change.afterMrc > 0) ||
+      (change.action === 'cancel' && change.beforeMrc != null && change.beforeMrc > 0))
+  const showDelta = change.delta != null && change.delta !== 0
+  const isNoopModify =
+    change.action === 'modify' && !showPriceChange && !showDelta
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
+      <span className={`font-bold w-3 text-center ${glyph.color}`} title={glyph.label}>
+        {glyph.sign}
+      </span>
+      <span className="font-medium text-foreground">{change.name}</span>
+      {showPriceChange && (
+        <span className="font-mono text-muted-foreground">
+          {fmt(change.beforeMrc!, currency)} → {fmt(change.afterMrc!, currency)}/mo
+        </span>
+      )}
+      {showSinglePrice && change.action === 'add' && (
+        <span className="font-mono text-muted-foreground">
+          {fmt(change.afterMrc!, currency)}/mo
+        </span>
+      )}
+      {showSinglePrice && change.action === 'cancel' && (
+        <span className="font-mono text-muted-foreground">
+          was {fmt(change.beforeMrc!, currency)}/mo
+        </span>
+      )}
+      {showDelta && (
+        <span
+          className={`font-mono font-medium ${change.delta! > 0 ? 'text-green-700' : 'text-red-700'}`}
+        >
+          ({change.delta! > 0 ? '+' : ''}
+          {fmt(change.delta!, currency)}/mo)
+        </span>
+      )}
+      {isNoopModify && (
+        <span className="text-muted-foreground italic">no price change</span>
+      )}
     </div>
   )
 }

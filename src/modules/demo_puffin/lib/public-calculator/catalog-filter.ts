@@ -250,7 +250,7 @@ export function filterPublicOfferings(offerings: RawOffering[]): PublicOffering[
 }
 
 export type PublicCatalog = {
-  tenantSlug: string
+  tenantSlug: 'puffin'
   currencyCode: string
   regions: Array<{ code: string; label: string }>
   specifications: PublicSpecification[]

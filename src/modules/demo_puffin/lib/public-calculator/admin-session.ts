@@ -49,7 +49,11 @@ function logFailure(message: string): void {
 
 function nextBackoffMs(): number {
   const exp = Math.min(MAX_BACKOFF_MS, MIN_BACKOFF_MS * 2 ** Math.max(0, consecutiveFailures - 1))
-  return exp
+  // Full jitter: pick a random value in [exp/2, exp]. Prevents multiple workers
+  // from recovering in lockstep and immediately re-saturating Postgres after a
+  // pool-exhaustion incident.
+  const min = exp / 2
+  return Math.floor(min + Math.random() * (exp - min))
 }
 
 export class PuffinAdminLoginError extends Error {

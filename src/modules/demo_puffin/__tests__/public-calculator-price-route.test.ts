@@ -14,6 +14,39 @@ jest.mock('@open-mercato/core/bootstrap', () => ({
 
 import { _resetOfferingAllowlistForTests } from '../lib/public-calculator/offering-allowlist'
 import { _resetPuffinAdminSessionForTests } from '../lib/public-calculator/admin-session'
+import {
+  _setCatalogDataLoaderForTests,
+  type CatalogRawData,
+} from '../lib/public-calculator/catalog-cache'
+import type { RawOffering } from '../lib/public-calculator/catalog-filter'
+
+function makeOffering(id: string, listed: boolean): RawOffering {
+  return {
+    id,
+    specId: 'spec-1',
+    code: `code-${id.slice(0, 4)}`,
+    name: `Offering ${id.slice(0, 4)}`,
+    description: null,
+    offeringType: 'simple',
+    designTimeValues: null,
+    lifecycleStatus: 'active',
+    metadata: listed ? { listedInCalculator: true } : {},
+    charges: [],
+    components: null,
+    isActive: true,
+  }
+}
+
+function installCatalogLoader(): void {
+  _setCatalogDataLoaderForTests(async () => ({
+    offerings: [
+      makeOffering(VPS_ATLANTIC_ID, true),
+      makeOffering(CDN_ID, true),
+      makeOffering(UNLISTED_ID, false),
+    ],
+    specifications: [],
+  } satisfies CatalogRawData))
+}
 
 const FAKE_JWT_PAYLOAD = Buffer.from(
   JSON.stringify({ sub: 'admin', exp: Math.floor(Date.now() / 1000) + 7 * 60 * 60 }),
@@ -60,41 +93,9 @@ function installFetchMock(opts: FetchMockOptions) {
         headers: { 'content-type': 'application/json' },
       })
     }
-    if (url.includes('/api/cpq/product-offerings')) {
-      const offerings = [
-        { id: VPS_ATLANTIC_ID, metadata: { listedInCalculator: true }, lifecycleStatus: 'active', isActive: true },
-        { id: CDN_ID, metadata: { listedInCalculator: true }, lifecycleStatus: 'active', isActive: true },
-        { id: UNLISTED_ID, metadata: {}, lifecycleStatus: 'active', isActive: true },
-      ]
-      // Detail-by-id (used by the shared catalog cache hydrate pass).
-      const idMatch = url.match(/[?&]id=([^&]+)/)
-      if (idMatch) {
-        const offering = offerings.find((o) => o.id === idMatch[1])
-        if (offering) {
-          return new Response(JSON.stringify(offering), {
-            status: 200,
-            headers: { 'content-type': 'application/json' },
-          })
-        }
-        return new Response(JSON.stringify({ error: 'not found' }), { status: 404 })
-      }
-      return new Response(
-        JSON.stringify({
-          items: offerings,
-          total: offerings.length,
-          page: 1,
-          pageSize: 100,
-          totalPages: 1,
-        }),
-        { status: 200, headers: { 'content-type': 'application/json' } },
-      )
-    }
-    if (url.includes('/api/cpq/product-specifications')) {
-      return new Response(
-        JSON.stringify({ items: [], total: 0, page: 1, pageSize: 100, totalPages: 0 }),
-        { status: 200, headers: { 'content-type': 'application/json' } },
-      )
-    }
+    // /api/cpq/product-offerings and /api/cpq/product-specifications used to
+    // be loopback-proxied here. The catalog cache now reads them directly
+    // from the DB; tests inject their fixture via `installCatalogLoader()`.
     if (url.includes('/api/cpq/quotes/price')) {
       const body = init?.body ? JSON.parse(String(init.body)) : null
       opts.capturePriceRequest({ url, body })
@@ -131,11 +132,13 @@ describe('POST /api/demo_puffin/cloud-pricing-calculator/price', () => {
   beforeEach(() => {
     _resetOfferingAllowlistForTests()
     _resetPuffinAdminSessionForTests()
+    installCatalogLoader()
     process.env.PUFFIN_PUBLIC_LEAD_JWT_SECRET = 'a'.repeat(40)
   })
 
   afterEach(() => {
     global.fetch = originalFetch
+    _setCatalogDataLoaderForTests(null)
     process.env = { ...originalEnv }
   })
 

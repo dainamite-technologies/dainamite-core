@@ -12,6 +12,35 @@ import { _resetOfferingAllowlistForTests } from '../lib/public-calculator/offeri
 import { _resetPuffinAdminSessionForTests } from '../lib/public-calculator/admin-session'
 import { _resetNonceStoreForTests } from '../lib/public-calculator/nonce-store'
 import { signLeadToken } from '../lib/public-calculator/lead-token'
+import {
+  _setCatalogDataLoaderForTests,
+  type CatalogRawData,
+} from '../lib/public-calculator/catalog-cache'
+import type { RawOffering } from '../lib/public-calculator/catalog-filter'
+
+function makeOffering(id: string): RawOffering {
+  return {
+    id,
+    specId: 'spec-1',
+    code: `code-${id.slice(0, 4)}`,
+    name: `Offering ${id.slice(0, 4)}`,
+    description: null,
+    offeringType: 'simple',
+    designTimeValues: null,
+    lifecycleStatus: 'active',
+    metadata: { listedInCalculator: true },
+    charges: [],
+    components: null,
+    isActive: true,
+  }
+}
+
+function installCatalogLoader(): void {
+  _setCatalogDataLoaderForTests(async () => ({
+    offerings: [makeOffering(VPS_ATLANTIC_ID), makeOffering(CDN_ID)],
+    specifications: [],
+  } satisfies CatalogRawData))
+}
 
 const SECRET = 'a'.repeat(40)
 const VPS_ATLANTIC_ID = '11111111-1111-4111-8111-111111111111'
@@ -54,39 +83,9 @@ function installFetchMock(opts: {
         headers: { 'content-type': 'application/json' },
       })
     }
-    if (url.includes('/api/cpq/product-offerings')) {
-      const offerings = [
-        { id: VPS_ATLANTIC_ID, metadata: { listedInCalculator: true }, lifecycleStatus: 'active', isActive: true },
-        { id: CDN_ID, metadata: { listedInCalculator: true }, lifecycleStatus: 'active', isActive: true },
-      ]
-      const idMatch = url.match(/[?&]id=([^&]+)/)
-      if (idMatch) {
-        const offering = offerings.find((o) => o.id === idMatch[1])
-        if (offering) {
-          return new Response(JSON.stringify(offering), {
-            status: 200,
-            headers: { 'content-type': 'application/json' },
-          })
-        }
-        return new Response(JSON.stringify({ error: 'not found' }), { status: 404 })
-      }
-      return new Response(
-        JSON.stringify({
-          items: offerings,
-          total: offerings.length,
-          page: 1,
-          pageSize: 100,
-          totalPages: 1,
-        }),
-        { status: 200, headers: { 'content-type': 'application/json' } },
-      )
-    }
-    if (url.includes('/api/cpq/product-specifications')) {
-      return new Response(
-        JSON.stringify({ items: [], total: 0, page: 1, pageSize: 100, totalPages: 0 }),
-        { status: 200, headers: { 'content-type': 'application/json' } },
-      )
-    }
+    // /api/cpq/product-offerings and /api/cpq/product-specifications are now
+    // served from the catalog cache via direct DB; tests inject their fixture
+    // through `installCatalogLoader()`.
     if (url.includes('/api/cpq/quotes/') && url.endsWith('/status')) {
       const targetStatus = (body as { targetStatus?: string } | null)?.targetStatus
       if (opts.transitionFailsAt && opts.transitionFailsAt === targetStatus) {
@@ -141,11 +140,13 @@ describe('POST /api/demo_puffin/cloud-pricing-calculator/quotes', () => {
     _resetOfferingAllowlistForTests()
     _resetPuffinAdminSessionForTests()
     _resetNonceStoreForTests()
+    installCatalogLoader()
     process.env.PUFFIN_PUBLIC_LEAD_JWT_SECRET = SECRET
   })
 
   afterEach(() => {
     global.fetch = originalFetch
+    _setCatalogDataLoaderForTests(null)
     process.env = { ...originalEnv }
   })
 

@@ -304,7 +304,11 @@ export function CalculatorShell({ catalog, config }: Props) {
       )}
 
       <footer className="pf-foot">
-        © Puffin Cloud — Live pricing calculator. <a href="#">Talk to sales</a>
+        This is a sample demo use case. <br></br> 
+        Puffin Cloud is a fictional brand built to
+        showcase a configurable pricing calculator. <br></br>
+        Want something like this
+        for your company? <a href="https://dainamite.com/contact/" target="_blank" rel="noopener noreferrer">Contact Dainamite</a>.
       </footer>
 
       {submission.kind === 'lead-form' && (

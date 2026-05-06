@@ -3,14 +3,13 @@ import {
   getListedOfferingIds,
   isOfferingListed,
 } from '../lib/public-calculator/offering-allowlist'
+import {
+  _setCatalogDataLoaderForTests,
+  type CatalogDataLoader,
+  type CatalogRawData,
+} from '../lib/public-calculator/catalog-cache'
 import { _resetPuffinAdminSessionForTests } from '../lib/public-calculator/admin-session'
-
-const ADMIN_TOKEN_PAYLOAD = Buffer.from(
-  JSON.stringify({ sub: 'admin', exp: Math.floor(Date.now() / 1000) + 7 * 60 * 60 }),
-)
-  .toString('base64')
-  .replace(/=/g, '')
-const FAKE_JWT = `eyJ.${ADMIN_TOKEN_PAYLOAD}.sig`
+import type { RawOffering, RawSpecification } from '../lib/public-calculator/catalog-filter'
 
 function makeConfig() {
   return {
@@ -25,108 +24,59 @@ function makeConfig() {
   }
 }
 
-function buildOfferingsPage(items: Array<{ id: string; metadata?: Record<string, unknown>; lifecycleStatus?: string; isActive?: boolean }>): {
-  items: typeof items
-  total: number
-  page: number
-  pageSize: number
-  totalPages: number
-} {
-  return { items, total: items.length, page: 1, pageSize: 100, totalPages: 1 }
+function makeOffering(overrides: Partial<RawOffering> & { id: string }): RawOffering {
+  return {
+    id: overrides.id,
+    specId: overrides.specId ?? 'spec-1',
+    code: overrides.code ?? `code-${overrides.id}`,
+    name: overrides.name ?? `Offering ${overrides.id}`,
+    description: overrides.description ?? null,
+    offeringType: overrides.offeringType ?? 'simple',
+    designTimeValues: overrides.designTimeValues ?? null,
+    lifecycleStatus: overrides.lifecycleStatus ?? 'active',
+    metadata: overrides.metadata ?? { listedInCalculator: true },
+    charges: overrides.charges ?? [],
+    components: overrides.components ?? null,
+    isActive: overrides.isActive ?? true,
+  }
+}
+
+function makeLoader(offerings: RawOffering[], specifications: RawSpecification[] = []): CatalogDataLoader & { calls: number } {
+  const fn = (jest.fn(async () => ({ offerings, specifications } as CatalogRawData)) as unknown) as CatalogDataLoader & { calls: number }
+  Object.defineProperty(fn, 'calls', {
+    get(): number {
+      return (fn as unknown as jest.Mock).mock.calls.length
+    },
+  })
+  return fn
 }
 
 describe('getListedOfferingIds', () => {
-  const originalFetch = global.fetch
   afterEach(() => {
     _resetOfferingAllowlistForTests()
     _resetPuffinAdminSessionForTests()
-    global.fetch = originalFetch
+    _setCatalogDataLoaderForTests(null)
   })
 
   it('returns only offerings flagged listedInCalculator and active', async () => {
-    global.fetch = jest.fn(async (input: unknown) => {
-      const url = String(input)
-      if (url.includes('/api/auth/login')) {
-        return new Response(JSON.stringify({ ok: true, token: FAKE_JWT }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        })
-      }
-      if (url.includes('/api/cpq/product-offerings')) {
-        const offerings = [
-          { id: 'a', metadata: { listedInCalculator: true }, lifecycleStatus: 'active', isActive: true },
-          { id: 'b', metadata: {}, lifecycleStatus: 'active', isActive: true },
-          { id: 'c', metadata: { listedInCalculator: true }, lifecycleStatus: 'draft', isActive: true },
-          { id: 'd', metadata: { listedInCalculator: true }, lifecycleStatus: 'active', isActive: false },
-        ]
-        const idMatch = url.match(/[?&]id=([^&]+)/)
-        if (idMatch) {
-          const offering = offerings.find((o) => o.id === idMatch[1])
-          if (offering) {
-            return new Response(JSON.stringify(offering), {
-              status: 200,
-              headers: { 'content-type': 'application/json' },
-            })
-          }
-          return new Response(JSON.stringify({ error: 'not found' }), { status: 404 })
-        }
-        return new Response(JSON.stringify(buildOfferingsPage(offerings)), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        })
-      }
-      if (url.includes('/api/cpq/product-specifications')) {
-        return new Response(
-          JSON.stringify({ items: [], total: 0, page: 1, pageSize: 100, totalPages: 0 }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        )
-      }
-      return new Response('{}', { status: 404 })
-    }) as unknown as typeof fetch
+    const offerings = [
+      makeOffering({ id: 'a', metadata: { listedInCalculator: true }, lifecycleStatus: 'active', isActive: true }),
+      makeOffering({ id: 'b', metadata: {}, lifecycleStatus: 'active', isActive: true }),
+      makeOffering({ id: 'c', metadata: { listedInCalculator: true }, lifecycleStatus: 'draft', isActive: true }),
+      makeOffering({ id: 'd', metadata: { listedInCalculator: true }, lifecycleStatus: 'active', isActive: false }),
+    ]
+    _setCatalogDataLoaderForTests(makeLoader(offerings))
 
     const ids = await getListedOfferingIds(makeConfig())
     expect(Array.from(ids)).toEqual(['a'])
   })
 
-  it('caches results across concurrent calls (issues one offerings list call)', async () => {
-    let listingCalls = 0
-    global.fetch = jest.fn(async (input: unknown) => {
-      const url = String(input)
-      if (url.includes('/api/auth/login')) {
-        return new Response(JSON.stringify({ ok: true, token: FAKE_JWT }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        })
-      }
-      if (url.includes('/api/cpq/product-offerings')) {
-        // Only count the list call (no `id=` query param) — the new shared
-        // catalog cache also makes per-offering detail calls during hydrate,
-        // and the test only asserts that the list isn't refetched on each
-        // concurrent caller.
-        if (!url.includes('id=')) listingCalls += 1
-        if (url.includes('id=')) {
-          return new Response(
-            JSON.stringify({ id: 'a', metadata: { listedInCalculator: true }, lifecycleStatus: 'active', isActive: true }),
-            { status: 200, headers: { 'content-type': 'application/json' } },
-          )
-        }
-        return new Response(
-          JSON.stringify(
-            buildOfferingsPage([
-              { id: 'a', metadata: { listedInCalculator: true }, lifecycleStatus: 'active', isActive: true },
-            ]),
-          ),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        )
-      }
-      if (url.includes('/api/cpq/product-specifications')) {
-        return new Response(
-          JSON.stringify({ items: [], total: 0, page: 1, pageSize: 100, totalPages: 0 }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        )
-      }
-      return new Response('{}', { status: 404 })
-    }) as unknown as typeof fetch
+  it('caches results across concurrent calls (loader runs once)', async () => {
+    const offerings = [
+      makeOffering({ id: 'a', metadata: { listedInCalculator: true }, lifecycleStatus: 'active', isActive: true }),
+    ]
+    const loader = makeLoader(offerings)
+    _setCatalogDataLoaderForTests(loader)
 
     const cfg = makeConfig()
     const [a, b, c] = await Promise.all([
@@ -137,6 +87,6 @@ describe('getListedOfferingIds', () => {
     expect(a.has('a')).toBe(true)
     expect(b.has('a')).toBe(true)
     expect(c).toBe(true)
-    expect(listingCalls).toBe(1)
+    expect(loader.calls).toBe(1)
   })
 })

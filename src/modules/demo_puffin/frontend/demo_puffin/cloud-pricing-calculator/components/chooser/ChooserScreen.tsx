@@ -13,7 +13,7 @@ export function ChooserScreen({ onChoose }: Props) {
       <div className="pf-landing-inner">
         <div className="pf-eyebrow">Pricing</div>
         <h1 className="pf-h1">
-          Build a price for your<br />
+          Estimate your<br />
           <em>Puffin Cloud</em> setup.
         </h1>
         <p className="pf-lede">

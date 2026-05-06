@@ -113,11 +113,21 @@ export async function seedPuffinBundles(em: EntityManager, scope: SeedScope): Pr
         console.warn(`[demo_puffin] target spec "${slotDef.targetSpecCode}" not found for slot "${slotDef.key}" — skipping`)
         continue
       }
+      // Include `name` in the lookup. (specId, targetSpecId, componentGroup)
+      // alone collides whenever a bundle has two slots that share both target
+      // spec and component group — ecommerce has `database` + `cache` (both
+      // managed-db, group 'database'); business has `public_website` +
+      // `apps_host` (both vps, group 'compute') and `workspace_seats` +
+      // `workspace_archive` (both workspace, group 'workspace'). Without
+      // disambiguating by name, the second slot upsert resolves to the first
+      // slot and the second slot is never created — the calculator sees one
+      // bundle slot where the data model intends two.
       let slot = await em.findOne(CpqBundleSlot, {
         ...scope,
         specId: bundleSpec.id,
         targetSpecId: targetSpec.id,
         componentGroup: slotDef.componentGroup,
+        name: slotDef.name,
       })
       if (!slot) {
         slot = em.create(CpqBundleSlot, {

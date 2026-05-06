@@ -815,12 +815,12 @@ The XD-275 deliverable is done when:
 
 | Phase | Status | Date | Notes |
 |---|---|---|---|
-| Phase 1 — `context_select` wizard companion fix | Pending | — | — |
-| Phase 2 — Server foundations (admin proxy + catalog/config) | Pending | — | — |
-| Phase 3 — Pricing + attribute proxies | Pending | — | — |
-| Phase 4 — `/pricing` skeleton + chooser | Pending | — | — |
-| Phase 5 — Custom Solution flow | Pending | — | — |
-| Phase 6 — Managed DB / Workspace / Premium Support | Pending | — | — |
-| Phase 7 — Predefined Solutions + bundle expansion | Pending | — | — |
-| Phase 8 — Lead → Quote conversion | Pending | — | — |
-| Phase 9 — Polish, tests, docs | Pending | — | — |
+| Phase 1 — `context_select` wizard companion fix | Done | 2026-05-05 | `ContextSelectStep` registered server-side via `setup.ts` and client-side via `widgets/components.ts` (auto-loaded by `ComponentOverridesBootstrap`). 4/4 tests passing. |
+| Phase 2 — Server foundations (admin proxy + catalog/config) | Done | 2026-05-05 | env/admin-session/proxy-client/catalog-filter/lead-token/nonce-store/captcha + `/catalog` and `/config` routes. 23/23 unit tests pass. Login endpoint is `/api/auth/login` (spec mentions `/api/auth/session` — only the refresh route lives at that path). |
+| Phase 3 — Pricing + attribute proxies | Done | 2026-05-05 | `/price` translates flat `items[]` to CPQ `primaryItem`+`childItems[]`, merges `quoteContext` (incl. `public_calculator: true`) into each item's configuration, gated by tenant-cached `listedInCalculator` allowlist; `/attributes` proxies CPQ run-time attribute resolution. 29/29 unit tests pass. |
+| Phase 4 — `/pricing` skeleton + chooser | Done | 2026-05-05 | `/demo_puffin/cloud-pricing-calculator` page (force-dynamic SSR shell), `CalculatorShell`, `HeroBar` (region/term/cadence), `ChooserScreen`, URL-state cart hook (`flow`, `region`, `term`, `cadence`, base64 `cart`), session storage fallback, `OpsBanner` for misconfigured deploys. |
+| Phase 5 — Custom Solution flow | Done | 2026-05-05 | `ProductCatalogue` lays out specs by `uiPattern` (plan grid for VPS/three-tier-compare; flex column otherwise), `OfferingCard` add/configure/remove with `GenericConfigurator` driving runtime attribute resolution via `/attributes`. `usePublicPrice` debounces (250 ms) the cart and re-prices on every change. `CartDrawer` renders live MRC + NRC + usage breakdown. |
+| Phase 6 — Managed DB / Workspace / Premium Support | Done | 2026-05-05 | Covered by `GenericConfigurator` which adapts inputs to attribute type (enum/number/boolean) with dependency-driven re-fetch. The configurator handles Managed DB engine→version, Workspace seat sliders, and Premium Support attribute-driven pricing through the same code path. |
+| Phase 7 — Predefined Solutions + bundle expansion | Done | 2026-05-05 | `BundleGrid` renders bundle specs as 3 sized cards (Starter/Standard/Pro) with live `fromPriceMonthly`. "Use this bundle" calls `/price` with `quoteContext.fromBundle` and seeds the cart from the expanded line items, tagging each with a `bundleSlotKey` pill. |
+| Phase 8 — Lead → Quote conversion | Done | 2026-05-05 | `/leads` (captcha-gated, creates `lead` company + signs JWT), `/quotes` (verifies JWT, reserves nonce, chains create→items→ready→with_customer); LeadFormSlideOver + ConfirmationScreen; replay returns 409, item failure releases the nonce. 6/6 quote-route tests passing. |
+| Phase 9 — Polish, tests, docs | Done | 2026-05-05 | Playwright integration spec at `.ai/qa/tests/TC-PUFFIN-275-public-calculator.spec.ts`, manual at `manuals/puffin-public-pricing-calculator.md`, CLAUDE.md Task→Context Map row added. 64/64 unit tests pass; `npx tsc --noEmit` clean. |

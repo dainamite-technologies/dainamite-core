@@ -1,10 +1,26 @@
 import * as React from 'react'
 import type { Metadata } from 'next'
 import { headers } from 'next/headers'
+import { Inter_Tight, JetBrains_Mono } from 'next/font/google'
 import { readPuffinPublicConfig } from '../../../lib/public-calculator/env'
 import { CalculatorShell } from './components/CalculatorShell'
 import { OpsBanner } from './components/layout/OpsBanner'
 import type { PublicCatalog, PublicConfig } from './types'
+import './styles.css'
+
+const interTight = Inter_Tight({
+  subsets: ['latin'],
+  weight: ['400', '500', '600', '700'],
+  variable: '--font-pf-ui',
+  display: 'swap',
+})
+
+const jetBrainsMono = JetBrains_Mono({
+  subsets: ['latin'],
+  weight: ['400', '500', '600'],
+  variable: '--font-pf-mono',
+  display: 'swap',
+})
 
 export const dynamic = 'force-dynamic'
 
@@ -62,5 +78,9 @@ export default async function PuffinCloudPricingCalculatorPage() {
     )
   }
 
-  return <CalculatorShell catalog={catalogResp.data} config={configResp.data} />
+  return (
+    <div className={`${interTight.variable} ${jetBrainsMono.variable}`}>
+      <CalculatorShell catalog={catalogResp.data} config={configResp.data} />
+    </div>
+  )
 }

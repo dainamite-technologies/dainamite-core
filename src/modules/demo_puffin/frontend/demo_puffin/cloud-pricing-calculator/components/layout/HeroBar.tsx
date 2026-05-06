@@ -1,102 +1,152 @@
 'use client'
 
 import * as React from 'react'
+import Image from 'next/image'
+import { Check, ChevronDown } from 'lucide-react'
 import type { Cart, PublicCatalog } from '../../types'
+import puffinLogo from '../../assets/puffin-cloud-logo.png'
 
 type Props = {
   cart: Cart
   catalog: PublicCatalog
   onRegion: (region: string) => void
-  onTerm: (term: Cart['term']) => void
-  onCadence: (cadence: Cart['cadence']) => void
   onReset: () => void
 }
 
-const TERMS: Array<{ value: Cart['term']; label: string }> = [
-  { value: 'on_demand', label: 'On-Demand' },
-  { value: 'reserved_1y', label: '1-Year Reserved (−22%)' },
-  { value: 'reserved_3y', label: '3-Year Reserved (−38%)' },
+// Flag emoji by region-code prefix. The catalog API only returns
+// `{ code, label }` so we infer the country from the conventional code prefix
+// (`fra*` = Frankfurt = DE). Falls back to a globe.
+const FLAG_BY_PREFIX: Array<[RegExp, string]> = [
+  [/^fra/i, '🇩🇪'],
+  [/^ams/i, '🇳🇱'],
+  [/^lon|^lhr/i, '🇬🇧'],
+  [/^par|^cdg/i, '🇫🇷'],
+  [/^nyc|^iad|^sfo|^sjc|^lax|^ord/i, '🇺🇸'],
+  [/^tor|^yyz/i, '🇨🇦'],
+  [/^syd/i, '🇦🇺'],
+  [/^sin|^sgp/i, '🇸🇬'],
+  [/^tok|^nrt|^hnd/i, '🇯🇵'],
 ]
 
-const CADENCES: Array<{ value: Cart['cadence']; label: string }> = [
-  { value: 'monthly', label: 'Monthly' },
-  { value: 'annual_prepay', label: 'Annual Prepay' },
-]
+function flagFor(code: string): string {
+  for (const [re, flag] of FLAG_BY_PREFIX) if (re.test(code)) return flag
+  return '🌐'
+}
 
-export function HeroBar({ cart, catalog, onRegion, onTerm, onCadence, onReset }: Props) {
+export function HeroBar({ cart, catalog, onRegion, onReset }: Props) {
   const hasState = cart.flow !== null || cart.items.length > 0
   return (
-    <div className="border-b bg-background sticky top-0 z-30 backdrop-blur supports-[backdrop-filter]:bg-background/85">
-      <div className="mx-auto max-w-6xl px-4 sm:px-6 py-3 flex flex-wrap items-center gap-3">
-        <div className="flex items-center gap-2 font-semibold text-base text-primary">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/examples/puffin-cloud-logo.svg" alt="Puffin Cloud" className="h-7 w-auto" />
-          Puffin Cloud
+    <header className="pf-header">
+      <div className="pf-header-inner">
+        <div className="pf-brand">
+          <Image src={puffinLogo} alt="" width={48} height={48} priority className="pf-brand-mark" />
+          <span className="pf-brand-name">Puffin Cloud</span>
         </div>
-        <span className="text-xs text-muted-foreground">Pricing Calculator</span>
 
-        <div className="ml-auto flex flex-wrap items-center gap-2 text-xs">
-          <label className="flex items-center gap-2">
-            <span className="text-muted-foreground">Region</span>
-            <select
-              className="rounded-md border bg-background px-2 py-1 text-sm"
+        <div className="pf-controls">
+          <div className="pf-ctl-group">
+            <span className="pf-ctl-label">Region</span>
+            <RegionSelect
+              regions={catalog.regions}
               value={cart.region}
-              onChange={(e) => onRegion(e.target.value)}
-              aria-label="Region"
-            >
-              {catalog.regions.map((r) => (
-                <option key={r.code} value={r.code}>
-                  {r.label}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <div className="flex items-center gap-1 rounded-md border p-0.5" role="group" aria-label="Term">
-            {TERMS.map((t) => (
-              <button
-                key={t.value}
-                type="button"
-                onClick={() => onTerm(t.value)}
-                className={`px-2 py-1 rounded text-xs transition-colors ${
-                  cart.term === t.value ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'
-                }`}
-              >
-                {t.label}
-              </button>
-            ))}
+              onChange={onRegion}
+            />
           </div>
 
-          <div className="flex items-center gap-1 rounded-md border p-0.5" role="group" aria-label="Billing cadence">
-            {CADENCES.map((c) => (
-              <button
-                key={c.value}
-                type="button"
-                onClick={() => onCadence(c.value)}
-                className={`px-2 py-1 rounded text-xs transition-colors ${
-                  cart.cadence === c.value ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'
-                }`}
-              >
-                {c.label}
-              </button>
-            ))}
-          </div>
+          <CurrencySelect value={catalog.currencyCode} />
 
-          <span className="text-muted-foreground">{catalog.currencyCode}</span>
-
-          {hasState && (
-            <button
-              type="button"
-              onClick={onReset}
-              data-testid="reset-calculator"
-              title="Clear cart and start fresh"
-              className="ml-1 inline-flex items-center gap-1 rounded-md border border-destructive/30 px-2 py-1 text-xs text-destructive hover:bg-destructive/10 transition-colors"
-            >
-              Reset
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={onReset}
+            disabled={!hasState}
+            data-testid="reset-calculator"
+            title="Clear cart and start fresh"
+            className={`pf-reset${hasState ? ' is-active' : ''}`}
+          >
+            Reset
+          </button>
         </div>
       </div>
+    </header>
+  )
+}
+
+function RegionSelect({
+  regions,
+  value,
+  onChange,
+}: {
+  regions: Array<{ code: string; label: string }>
+  value: string
+  onChange: (code: string) => void
+}) {
+  const [open, setOpen] = React.useState(false)
+  const ref = React.useRef<HTMLDivElement>(null)
+
+  React.useEffect(() => {
+    if (!open) return
+    const onClick = (e: MouseEvent) => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onClick)
+    return () => document.removeEventListener('mousedown', onClick)
+  }, [open])
+
+  const current = regions.find((r) => r.code === value) ?? regions[0]
+
+  return (
+    <div className="pf-select" ref={ref}>
+      <button
+        type="button"
+        className="pf-select-trigger"
+        onClick={() => setOpen((v) => !v)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+      >
+        <span className="pf-flag" aria-hidden>
+          {current ? flagFor(current.code) : '🌐'}
+        </span>
+        <span>{current?.label ?? 'Region'}</span>
+        {current && <span className="pf-mono-dim"> · {current.code}</span>}
+        <ChevronDown size={14} aria-hidden />
+      </button>
+      {open && (
+        <div className="pf-select-menu" role="listbox">
+          {regions.map((r) => (
+            <button
+              key={r.code}
+              type="button"
+              role="option"
+              aria-selected={r.code === value}
+              className={`pf-select-opt${r.code === value ? ' is-active' : ''}`}
+              onClick={() => {
+                onChange(r.code)
+                setOpen(false)
+              }}
+            >
+              <span>
+                <span className="pf-flag" aria-hidden>{flagFor(r.code)}</span> {r.label}{' '}
+                <span className="pf-mono-dim">· {r.code}</span>
+              </span>
+              {r.code === value && <Check size={14} aria-hidden />}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function CurrencySelect({ value }: { value: string }) {
+  // Display-only — the catalog is currency-locked. Rendered as a disabled
+  // dropdown trigger so the visual rhythm of the controls bar still reads as
+  // a row of selects.
+  return (
+    <div className="pf-select">
+      <button type="button" className="pf-select-trigger" disabled>
+        <span>{value}</span>
+        <ChevronDown size={14} aria-hidden />
+      </button>
     </div>
   )
 }

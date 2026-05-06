@@ -5,6 +5,7 @@ import {
   Activity,
   BadgeCheck,
   Box,
+  Check,
   ChevronDown,
   Cpu,
   Database,
@@ -12,6 +13,7 @@ import {
   HardDrive,
   LifeBuoy,
   Network,
+  Plus,
   Server,
   Shield,
   Users,
@@ -29,10 +31,6 @@ type Props = {
   onRemoveItem: (lineKey: string) => void
 }
 
-// Display order from specs/sample-use-cases/cloud-services-provider-requirements.md
-// section "# Products". Specs not listed here are pushed to the bottom in
-// catalog order, which keeps the page deterministic if a new product gets
-// seeded before the constant is updated.
 const SPEC_DISPLAY_ORDER: Record<string, number> = {
   'SPEC-PUFFIN-VPS': 1,
   'SPEC-PUFFIN-COMPUTE': 2,
@@ -90,8 +88,6 @@ function lowestFromPrice(spec: PublicSpecification): number | null {
 }
 
 export function ProductCatalogue({ catalog, cart, onAddItem, onUpdateItem, onRemoveItem }: Props) {
-  // Surface only product specs in the custom flow — bundles live in the
-  // Predefined Solutions screen and would otherwise clutter the catalogue.
   const productSpecs = React.useMemo(() => {
     const list = catalog.specifications.filter((s) => s.specType !== 'bundle')
     return [...list].sort((a, b) => specOrder(a.code, list.indexOf(a)) - specOrder(b.code, list.indexOf(b)))
@@ -108,7 +104,7 @@ export function ProductCatalogue({ catalog, cart, onAddItem, onUpdateItem, onRem
   }, [cart])
 
   return (
-    <div className="space-y-3">
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       {productSpecs.map((spec) => {
         const inCartCount = spec.offerings.reduce(
           (acc, o) => acc + (cartLinesByOffering.get(o.id)?.length ?? 0),
@@ -153,74 +149,51 @@ function SpecRow({
 }) {
   const [open, setOpen] = React.useState(defaultOpen)
 
-  // Re-open if the spec gains an in-cart offering from elsewhere (e.g.
-  // bundle expansion) so visitors can see what's been added.
   React.useEffect(() => {
     if (inCartCount > 0) setOpen(true)
   }, [inCartCount])
 
   const Icon = SPEC_ICON[spec.code] ?? Server
   const lowest = lowestFromPrice(spec)
-  const isHighlighted = inCartCount > 0
+  const hasLine = inCartCount > 0
   const summaryPrice = lowest != null ? formatPrice(lowest, currencyCode) : null
-
-  const isPlanGrid = spec.uiPattern === 'plan_grid' || spec.uiPattern === 'three_tier_compare'
 
   return (
     <section
       data-testid={`spec-row-${spec.code}`}
-      className={`rounded-xl border bg-card overflow-hidden transition-colors ${
-        isHighlighted ? 'border-primary' : 'hover:border-foreground/20'
-      }`}
+      className={`pf-product${open ? ' is-expanded' : ''}${hasLine ? ' has-line' : ''}`}
     >
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
-        className="w-full text-left flex items-center gap-4 px-4 py-4"
+        className="pf-product-head"
       >
-        <div
-          className={`shrink-0 h-10 w-10 rounded-lg flex items-center justify-center ${
-            isHighlighted ? 'bg-primary/15 text-primary' : 'bg-muted text-foreground/70'
-          }`}
-        >
-          <Icon className="h-5 w-5" />
+        <span className="pf-product-icon">
+          <Icon size={18} aria-hidden />
+        </span>
+        <div>
+          <h3 className="pf-product-name">
+            {displaySpecName(spec.name)}
+            {inCartCount > 0 && <span className="pf-chip">{inCartCount} in cart</span>}
+          </h3>
+          {spec.tagline && <p className="pf-product-spec">{spec.tagline}</p>}
         </div>
-
-        <div className="min-w-0 flex-1">
-          <div className="flex items-baseline gap-2 flex-wrap">
-            <span className="font-semibold">{displaySpecName(spec.name)}</span>
-            {inCartCount > 0 && (
-              <span className="text-[10px] font-medium uppercase tracking-wider text-primary">
-                {inCartCount} in cart
-              </span>
-            )}
-          </div>
-          {spec.tagline && (
-            <p className="text-xs text-muted-foreground truncate">{spec.tagline}</p>
-          )}
-        </div>
-
-        <div className="shrink-0 text-right">
+        <div className="pf-product-meta">
           {summaryPrice ? (
-            <div className="text-sm" style={{ fontVariantNumeric: 'tabular-nums' }}>
-              <span className="text-muted-foreground">from </span>
-              <span className="font-semibold">{summaryPrice}</span>
-              <span className="text-xs text-muted-foreground"> / mo</span>
-            </div>
+            <span className="pf-product-from">
+              from <span className="pf-mono">{summaryPrice}</span>
+            </span>
           ) : (
-            <span className="text-xs italic text-muted-foreground">Configure to price</span>
+            <span className="pf-price-conf">Configure to price</span>
           )}
+          <ChevronDown className="pf-chevron" size={16} aria-hidden />
         </div>
-
-        <ChevronDown
-          className={`shrink-0 h-4 w-4 text-muted-foreground transition-transform ${open ? 'rotate-180' : ''}`}
-        />
       </button>
 
       {open && (
-        <div className="border-t bg-muted/20">
-          <div className={isPlanGrid ? 'grid sm:grid-cols-2 gap-3 p-4' : 'flex flex-col gap-3 p-4'}>
+        <div className="pf-product-body">
+          <div className="pf-options">
             {spec.offerings.map((offering) => (
               <OfferingCard
                 key={offering.id}
@@ -265,70 +238,64 @@ function OfferingCard({
   const editingLine = inCart ? cartLines[0] : null
 
   return (
-    <div
-      className={`rounded-lg border bg-card p-4 transition-all ${
-        inCart ? 'border-primary ring-1 ring-primary/20' : 'hover:border-foreground/20'
-      }`}
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <span className="font-semibold text-sm">{offering.marketingName}</span>
-            {inCart && (
-              <span className="inline-flex items-center gap-0.5 text-[10px] font-medium uppercase tracking-wider text-primary">
-                ✓ in cart
-              </span>
-            )}
-          </div>
+    <div className={`pf-option${inCart ? ' is-active' : ''}`}>
+      <div className="pf-option-head">
+        <div>
+          <div className="pf-option-name">{offering.marketingName}</div>
           {offering.description && (
-            <div className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{offering.description}</div>
+            <div className="pf-option-detail">{offering.description}</div>
           )}
         </div>
-        <div className="text-right shrink-0">
+        <div className="pf-option-price">
           {offering.fromPriceMonthly != null ? (
             <>
-              <div className="text-base font-semibold" style={{ fontVariantNumeric: 'tabular-nums' }}>
-                {formatPrice(offering.fromPriceMonthly, currencyCode)}
-              </div>
-              <div className="text-[11px] text-muted-foreground">from / mo</div>
+              <span className="pf-price-num">{formatPrice(offering.fromPriceMonthly, currencyCode)}</span>
+              <span className="pf-price-suffix">/ mo</span>
             </>
           ) : (
-            <div className="text-xs text-muted-foreground italic">Configure to price</div>
+            <span className="pf-price-conf">Configure to price</span>
           )}
         </div>
       </div>
 
-      {expanded && (
-        <div className="mt-3 pt-3 border-t space-y-2">
+      {expanded && editingLine && (
+        <div
+          style={{
+            paddingTop: 10,
+            borderTop: '1px dashed var(--line)',
+          }}
+        >
           <GenericConfigurator
             offering={offering}
             specification={spec}
-            configuration={editingLine?.configuration ?? {}}
+            configuration={editingLine.configuration}
             onChange={(patch) => {
-              if (editingLine) {
-                onUpdateItem(editingLine.lineKey, {
-                  configuration: { ...editingLine.configuration, ...patch },
-                })
-              }
+              onUpdateItem(editingLine.lineKey, {
+                configuration: { ...editingLine.configuration, ...patch },
+              })
             }}
           />
         </div>
       )}
 
-      <div className="mt-3 flex items-center gap-2">
+      <div className="pf-option-actions">
         {inCart ? (
           <>
             <button
               type="button"
               onClick={() => setExpanded((v) => !v)}
-              className="text-xs px-2.5 py-1.5 rounded-md border bg-background hover:bg-muted"
+              className="pf-btn pf-btn--ghost pf-btn--sm"
             >
               {expanded ? 'Hide options' : 'Configure'}
             </button>
+            <span className="pf-pill">
+              <Check size={12} aria-hidden /> in cart
+            </span>
             <button
               type="button"
               onClick={() => editingLine && onRemoveItem(editingLine.lineKey)}
-              className="text-xs px-2.5 py-1.5 rounded-md border bg-background hover:bg-destructive/10 hover:text-destructive ml-auto"
+              className="pf-btn pf-btn--ghost pf-btn--sm"
+              style={{ marginLeft: 'auto' }}
             >
               Remove
             </button>
@@ -341,9 +308,10 @@ function OfferingCard({
               onAddItem(offering.id, {})
               setExpanded(true)
             }}
-            className="text-xs px-3 py-1.5 rounded-md bg-foreground text-background hover:bg-foreground/90 transition-colors"
+            className="pf-btn pf-btn--primary pf-btn--sm"
+            style={{ width: 'auto' }}
           >
-            + Add to cart
+            <Plus size={12} aria-hidden /> Add to cart
           </button>
         )}
       </div>

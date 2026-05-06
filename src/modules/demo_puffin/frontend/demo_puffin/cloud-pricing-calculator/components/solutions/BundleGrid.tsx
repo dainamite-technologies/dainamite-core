@@ -1,6 +1,8 @@
 'use client'
 
 import * as React from 'react'
+import { ArrowRight, Box, Check, Cpu, Users, X } from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
 import type { PublicCatalog, PublicOffering, PublicSpecification } from '../../types'
 import { displaySpecName } from '../../types'
 
@@ -22,13 +24,20 @@ const BUNDLE_GROUP_BY_SIZE: Record<string, 'solo' | 'standard' | 'pro'> = {
   biz_established: 'pro',
 }
 
-const SIZE_LABEL: Record<string, string> = {
-  solo: 'Starter',
-  standard: 'Standard',
-  pro: 'Pro',
+const SIZE_LABEL: Record<'solo' | 'standard' | 'pro', string> = {
+  solo: 'STARTER',
+  standard: 'STANDARD',
+  pro: 'PRO',
 }
 
 const SIZE_ORDER: Array<'solo' | 'standard' | 'pro'> = ['solo', 'standard', 'pro']
+
+const SPEC_ICON: Record<string, LucideIcon> = {
+  // Best-effort mapping by spec code; fallback Cpu.
+  'SPEC-PUFFIN-DEV-APP-BUNDLE': Cpu,
+  'SPEC-PUFFIN-ECOMMERCE-BUNDLE': Box,
+  'SPEC-PUFFIN-BUSINESS-OFFICE-BUNDLE': Users,
+}
 
 export function BundleGrid({ catalog, activeBundleId, onUseBundle }: Props) {
   const bundleSpecs = React.useMemo(
@@ -36,8 +45,6 @@ export function BundleGrid({ catalog, activeBundleId, onUseBundle }: Props) {
     [catalog],
   )
 
-  // If a bundle is already in cart, auto-select the spec it belongs to so the
-  // visitor lands directly on the size picker for that use-case.
   const initialSelected = React.useMemo(() => {
     if (!activeBundleId) return null
     for (const spec of bundleSpecs) {
@@ -48,35 +55,67 @@ export function BundleGrid({ catalog, activeBundleId, onUseBundle }: Props) {
 
   const [selectedSpecId, setSelectedSpecId] = React.useState<string | null>(initialSelected)
 
-  // Re-sync selection when the active bundle changes (e.g. after Reset).
   React.useEffect(() => {
     setSelectedSpecId(initialSelected)
   }, [initialSelected])
 
   if (bundleSpecs.length === 0) {
-    return <p className="text-sm text-muted-foreground">No bundles available right now.</p>
+    return <p className="pf-section-desc">No bundles available right now.</p>
   }
 
   const selected = selectedSpecId ? bundleSpecs.find((s) => s.id === selectedSpecId) : null
 
-  if (!selected) {
-    return (
-      <UseCasePicker
-        specs={bundleSpecs}
-        currencyCode={catalog.currencyCode}
-        onPick={setSelectedSpecId}
-      />
-    )
-  }
-
   return (
-    <SizePicker
-      spec={selected}
-      currencyCode={catalog.currencyCode}
-      activeBundleId={activeBundleId ?? null}
-      onBack={() => setSelectedSpecId(null)}
-      onUseBundle={onUseBundle}
-    />
+    <>
+      <Stepper2
+        step={selected ? 2 : 1}
+        pickedSpec={selected ?? null}
+        onBack={() => setSelectedSpecId(null)}
+      />
+      {!selected ? (
+        <UseCasePicker
+          specs={bundleSpecs}
+          currencyCode={catalog.currencyCode}
+          onPick={setSelectedSpecId}
+        />
+      ) : (
+        <SizePicker
+          spec={selected}
+          currencyCode={catalog.currencyCode}
+          activeBundleId={activeBundleId ?? null}
+          onUseBundle={onUseBundle}
+        />
+      )}
+    </>
+  )
+}
+
+function Stepper2({
+  step,
+  pickedSpec,
+  onBack,
+}: {
+  step: 1 | 2
+  pickedSpec: PublicSpecification | null
+  onBack: () => void
+}) {
+  return (
+    <div className="pf-steps">
+      <div className={`pf-step is-done${step === 1 ? ' is-current' : ''}`}>
+        <span className="pf-step-num">01</span>
+        <span className="pf-step-label">Use case</span>
+        {step === 2 && pickedSpec && (
+          <button type="button" className="pf-step-value" onClick={onBack}>
+            {displaySpecName(pickedSpec.name)} <X size={11} aria-hidden />
+          </button>
+        )}
+      </div>
+      <div className="pf-step-line" />
+      <div className={`pf-step${step >= 2 ? ' is-current' : ''}`}>
+        <span className="pf-step-num">02</span>
+        <span className="pf-step-label">Size</span>
+      </div>
+    </div>
   )
 }
 
@@ -112,53 +151,43 @@ function UseCasePicker({
   onPick: (specId: string) => void
 }) {
   return (
-    <section className="space-y-4">
-      <header className="space-y-1">
-        <h2 className="text-lg font-semibold tracking-tight">Step 1 — What's the use-case?</h2>
-        <p className="text-sm text-muted-foreground">
-          Pick the scenario closest to yours. Next step lets you choose a size.
+    <section className="pf-section">
+      <header className="pf-section-head">
+        <h2 className="pf-section-title">Step 1 — what are you building?</h2>
+        <p className="pf-section-desc">
+          Pick a use case. We&apos;ll show you three sized bundles tuned for it.
         </p>
       </header>
-
-      <div className="flex flex-col gap-3">
+      <div className="pf-usecase-grid">
         {specs.map((spec) => {
           const lowest = lowestPrice(spec)
+          const Icon = SPEC_ICON[spec.code] ?? Cpu
           return (
             <button
               key={spec.id}
               type="button"
               data-testid={`use-case-${spec.code}`}
+              className="pf-usecase-card"
               onClick={() => onPick(spec.id)}
-              className="group w-full text-left rounded-xl border bg-card p-5 hover:border-primary hover:shadow-sm transition-all flex items-center gap-5"
             >
-              <div className="min-w-0 flex-1 space-y-1">
-                <h3 className="font-semibold text-lg leading-tight">{displaySpecName(spec.name)}</h3>
-                {spec.tagline && (
-                  <p className="text-xs italic text-muted-foreground">{spec.tagline}</p>
-                )}
-                <div className="text-xs text-muted-foreground flex items-center gap-2 pt-1">
-                  <span>{spec.offerings.length} packages</span>
-                  {lowest != null && (
-                    <>
-                      <span aria-hidden>·</span>
-                      <span>
-                        from{' '}
-                        <span
-                          className="font-medium text-foreground"
-                          style={{ fontVariantNumeric: 'tabular-nums' }}
-                        >
-                          {fmtCurrency(lowest, currencyCode)}
-                        </span>{' '}
-                        / mo
-                      </span>
-                    </>
-                  )}
+              <div className="pf-usecase-head">
+                <div className="pf-usecase-icon">
+                  <Icon size={20} aria-hidden />
                 </div>
+                <span className="pf-usecase-aud">{spec.offerings.length} packages</span>
               </div>
-
-              <div className="shrink-0 inline-flex items-center gap-1 text-xs font-medium text-primary group-hover:underline">
-                Choose this use-case
-                <span aria-hidden>→</span>
+              <h3 className="pf-usecase-name">{displaySpecName(spec.name)}</h3>
+              <p className="pf-usecase-desc">
+                {spec.tagline || 'A curated stack tuned for this scenario.'}
+              </p>
+              <div className="pf-usecase-foot">
+                <span className="pf-usecase-from">
+                  from{' '}
+                  <span className="pf-mono">{fmtCurrency(lowest, currencyCode)}</span> / mo
+                </span>
+                <span className="pf-usecase-cta">
+                  Choose <ArrowRight size={13} aria-hidden />
+                </span>
               </div>
             </button>
           )
@@ -172,13 +201,11 @@ function SizePicker({
   spec,
   currencyCode,
   activeBundleId,
-  onBack,
   onUseBundle,
 }: {
   spec: PublicSpecification
   currencyCode: string
   activeBundleId: string | null
-  onBack: () => void
   onUseBundle: (id: string) => void
 }) {
   const bySize = React.useMemo(() => {
@@ -191,35 +218,22 @@ function SizePicker({
   }, [spec])
 
   return (
-    <section className="space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <button
-          type="button"
-          onClick={onBack}
-          className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-        >
-          <span aria-hidden>←</span> Back to use-cases
-        </button>
-        <span className="text-xs text-muted-foreground">Step 2 — Pick a size</span>
-      </div>
-
-      <header className="rounded-xl border bg-muted/30 px-5 py-4">
-        <div className="flex items-baseline gap-2 flex-wrap">
-          <h2 className="font-semibold text-lg">{displaySpecName(spec.name)}</h2>
-          {spec.tagline && (
-            <span className="text-xs italic text-muted-foreground">{spec.tagline}</span>
-          )}
-        </div>
+    <section className="pf-section">
+      <header className="pf-section-head">
+        <h2 className="pf-section-title">
+          Step 2 — pick a size for{' '}
+          <em style={{ fontStyle: 'normal', color: 'var(--accent)' }}>{displaySpecName(spec.name)}</em>
+        </h2>
+        {spec.tagline && <p className="pf-section-desc">{spec.tagline}</p>}
       </header>
-
-      <div className="grid gap-4 md:grid-cols-3">
+      <div className="pf-bundle-grid">
         {SIZE_ORDER.map((size) => (
           <SizeCard
             key={size}
-            sizeLabel={SIZE_LABEL[size]}
+            tier={SIZE_LABEL[size]}
             offering={bySize.get(size) ?? null}
             currencyCode={currencyCode}
-            isActive={!!activeBundleId && bySize.get(size)?.id === activeBundleId}
+            isInCart={!!activeBundleId && bySize.get(size)?.id === activeBundleId}
             onUseBundle={onUseBundle}
           />
         ))}
@@ -229,61 +243,58 @@ function SizePicker({
 }
 
 function SizeCard({
-  sizeLabel,
+  tier,
   offering,
   currencyCode,
-  isActive,
+  isInCart,
   onUseBundle,
 }: {
-  sizeLabel: string
+  tier: string
   offering: PublicOffering | null
   currencyCode: string
-  isActive: boolean
+  isInCart: boolean
   onUseBundle: (id: string) => void
 }) {
   if (!offering) {
     return (
-      <div className="rounded-xl border-2 border-dashed p-5 text-center text-xs text-muted-foreground min-h-[200px] flex items-center justify-center">
-        {sizeLabel} — Coming soon
+      <div
+        className="pf-bundle-card"
+        style={{
+          borderStyle: 'dashed',
+          alignItems: 'center',
+          justifyContent: 'center',
+          minHeight: 220,
+          color: 'var(--ink-4)',
+          fontSize: 12,
+        }}
+      >
+        {tier} — Coming soon
       </div>
     )
   }
 
   return (
-    <div
-      className={`rounded-xl border bg-card p-5 flex flex-col gap-4 transition-shadow ${
-        isActive ? 'border-primary shadow-sm ring-1 ring-primary/20' : 'hover:shadow-sm'
-      }`}
-    >
-      <div className="space-y-2">
-        <div className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium">
-          {sizeLabel}
-        </div>
-        <div className="font-semibold text-lg leading-tight">{offering.marketingName}</div>
-        {offering.description && (
-          <p className="text-xs text-muted-foreground line-clamp-3">{offering.description}</p>
-        )}
+    <div className={`pf-bundle-card${isInCart ? ' is-in-cart' : ''}`}>
+      <div className="pf-bundle-tier">{tier}</div>
+      <div className="pf-bundle-name">{offering.marketingName}</div>
+      <p className="pf-bundle-blurb">{offering.description ?? ''}</p>
+      <div className="pf-bundle-price">
+        <span className="pf-price-num">{fmtCurrency(offering.fromPriceMonthly, currencyCode)}</span>
+        <span className="pf-price-suffix">/ mo</span>
       </div>
-
-      <div className="tracking-tight" style={{ fontVariantNumeric: 'tabular-nums' }}>
-        {offering.fromPriceMonthly != null && (
-          <span className="text-xs font-normal text-muted-foreground mr-1">from</span>
-        )}
-        <span className="text-3xl font-bold">{fmtCurrency(offering.fromPriceMonthly, currencyCode)}</span>
-        <span className="text-xs font-normal text-muted-foreground"> / mo</span>
-      </div>
-
       <button
         type="button"
         data-testid={`use-bundle-${offering.code}`}
         onClick={() => onUseBundle(offering.id)}
-        className={`mt-auto w-full inline-flex items-center justify-center rounded-md px-3 py-2.5 text-sm font-medium transition-colors ${
-          isActive
-            ? 'bg-muted text-muted-foreground'
-            : 'bg-primary text-primary-foreground hover:bg-primary/90'
-        }`}
+        className={`pf-btn pf-btn--primary${isInCart ? ' is-in-cart' : ''}`}
       >
-        {isActive ? 'Currently selected' : 'Use this bundle'}
+        {isInCart ? (
+          <>
+            <Check size={14} aria-hidden /> Added to cart
+          </>
+        ) : (
+          'Use this bundle'
+        )}
       </button>
     </div>
   )

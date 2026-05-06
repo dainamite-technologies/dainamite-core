@@ -1,6 +1,7 @@
 'use client'
 
 import * as React from 'react'
+import { ArrowLeft, ArrowRight, Sparkles, Wrench, X } from 'lucide-react'
 import type { Cart, CartItem, PublicCatalog, PublicConfig, PublicOffering } from '../types'
 import { displaySpecName } from '../types'
 import { useCalculatorCart } from '../hooks/useCalculatorCart'
@@ -76,11 +77,11 @@ export function CalculatorShell({ catalog, config }: Props) {
         if (comp.isActive === false) continue
         if (!comp.isDefault) continue
         // Use slot.name as the slot identity. componentGroup is shared across
-// slots within a bundle (e.g. ecommerce has two `database` slots — one
-// for the primary DB, one for redis cache; business has two `compute`
-// slots — public website and apps host). Keying by componentGroup
-// silently dropped the second of each pair.
-const slotKey = comp.slot?.name ?? 'slot'
+        // slots within a bundle (e.g. ecommerce has two `database` slots — one
+        // for the primary DB, one for redis cache; business has two `compute`
+        // slots — public website and apps host). Keying by componentGroup
+        // silently dropped the second of each pair.
+        const slotKey = comp.slot?.name ?? 'slot'
         if (!comp.childOfferingId) continue
         if (!pickedBySlot.has(slotKey)) pickedBySlot.set(slotKey, comp.childOfferingId)
       }
@@ -88,12 +89,7 @@ const slotKey = comp.slot?.name ?? 'slot'
       // get the first available active component.
       for (const comp of components) {
         if (comp.isActive === false) continue
-        // Use slot.name as the slot identity. componentGroup is shared across
-// slots within a bundle (e.g. ecommerce has two `database` slots — one
-// for the primary DB, one for redis cache; business has two `compute`
-// slots — public website and apps host). Keying by componentGroup
-// silently dropped the second of each pair.
-const slotKey = comp.slot?.name ?? 'slot'
+        const slotKey = comp.slot?.name ?? 'slot'
         if (pickedBySlot.has(slotKey)) continue
         if ((comp.slot?.cardinalityMin ?? 0) === 0) continue
         if (!comp.childOfferingId) continue
@@ -125,12 +121,7 @@ const slotKey = comp.slot?.name ?? 'slot'
       // workspace_archive when `workspace_archive: true`).
       for (const comp of components) {
         if (comp.isActive === false) continue
-        // Use slot.name as the slot identity. componentGroup is shared across
-// slots within a bundle (e.g. ecommerce has two `database` slots — one
-// for the primary DB, one for redis cache; business has two `compute`
-// slots — public website and apps host). Keying by componentGroup
-// silently dropped the second of each pair.
-const slotKey = comp.slot?.name ?? 'slot'
+        const slotKey = comp.slot?.name ?? 'slot'
         if (pickedBySlot.has(slotKey)) continue
         const resolution = resolveBundleSlot(slotKey, bundleDtv, catalog)
         if (resolution.skip) continue
@@ -174,9 +165,6 @@ const slotKey = comp.slot?.name ?? 'slot'
         })
       }
 
-      // Stay on the Predefined Solutions flow so the visitor still sees their
-      // chosen bundle as the active selection. The custom-flow switch is one
-      // click away via the FlowSwitcher if they want full catalog control.
       cartCtx.replaceItems(seeded, bundleOfferingId)
     },
     [catalog, cart.region, cartCtx],
@@ -194,7 +182,6 @@ const slotKey = comp.slot?.name ?? 'slot'
     async (input: { name: string; email: string; company: string; captchaToken: string | null }) => {
       setSubmission({ kind: 'lead-form', loading: true, error: null })
       try {
-        // Step 1: create / find the lead and obtain the short-lived session token.
         const leadRes = await fetch(LEADS_ENDPOINT, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
@@ -208,7 +195,6 @@ const slotKey = comp.slot?.name ?? 'slot'
         const leadJson = (await leadRes.json()) as { quoteSessionToken: string }
         setSessionToken(leadJson.quoteSessionToken)
 
-        // Step 2: submit the cart against the token.
         const quoteRes = await fetch(QUOTES_ENDPOINT, {
           method: 'POST',
           headers: {
@@ -253,61 +239,59 @@ const slotKey = comp.slot?.name ?? 'slot'
   }, [cartCtx])
 
   return (
-    <div className="min-h-screen bg-background text-foreground" data-tenant="puffin">
+    <div className="pf-app" data-tenant="puffin">
       <HeroBar
         cart={cart}
         catalog={catalog}
         onRegion={cartCtx.setRegion}
-        onTerm={cartCtx.setTerm}
-        onCadence={cartCtx.setCadence}
         onReset={cartCtx.resetCart}
       />
 
-      <main className="mx-auto max-w-6xl px-4 sm:px-6 py-8">
-        {!cart.flow && <ChooserScreen onChoose={handleChoose} />}
+      {!cart.flow && <ChooserScreen onChoose={handleChoose} />}
 
-        {cart.flow === 'solutions' && (
-          <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
-            <div className="space-y-4">
-              <FlowSwitcher cart={cart} onSwitch={cartCtx.setFlow} />
-              {cart.fromBundle && (
-                <ActiveBundlePanel
-                  cart={cart}
+      {cart.flow && (
+        <>
+          <div className="pf-page-toolbar">
+            <button type="button" className="pf-back-link" onClick={() => cartCtx.setFlow(null)}>
+              <ArrowLeft size={14} aria-hidden /> back to chooser
+            </button>
+            <FlowSwitcher cart={cart} onSwitch={cartCtx.setFlow} />
+            <span style={{ width: 100 }} aria-hidden />
+          </div>
+
+          <div className="pf-screen-grid">
+            <div className="pf-screen-main">
+              {cart.flow === 'solutions' && (
+                <>
+                  {cart.fromBundle && (
+                    <ActiveBundlePanel
+                      cart={cart}
+                      catalog={catalog}
+                      pricing={pricing}
+                      onRemove={cartCtx.removeItem}
+                      onUpdateItem={(lineKey, patch) => cartCtx.updateItem(lineKey, patch)}
+                      onSwitchToCustom={() => cartCtx.setFlow('custom')}
+                    />
+                  )}
+                  <BundleGrid
+                    catalog={catalog}
+                    activeBundleId={cart.fromBundle}
+                    onUseBundle={handleUseBundle}
+                  />
+                </>
+              )}
+
+              {cart.flow === 'custom' && (
+                <ProductCatalogue
                   catalog={catalog}
-                  pricing={pricing}
-                  onRemove={cartCtx.removeItem}
+                  cart={cart}
+                  onAddItem={handleAddItem}
                   onUpdateItem={(lineKey, patch) => cartCtx.updateItem(lineKey, patch)}
-                  onSwitchToCustom={() => cartCtx.setFlow('custom')}
+                  onRemoveItem={cartCtx.removeItem}
                 />
               )}
-              <BundleGrid
-                catalog={catalog}
-                activeBundleId={cart.fromBundle}
-                onUseBundle={handleUseBundle}
-              />
             </div>
-            <CartDrawer
-              cart={cart}
-              catalog={catalog}
-              pricing={pricing}
-              onRemove={cartCtx.removeItem}
-              onCheckout={openLeadForm}
-            />
-          </div>
-        )}
 
-        {cart.flow === 'custom' && (
-          <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
-            <div className="space-y-4">
-              <FlowSwitcher cart={cart} onSwitch={cartCtx.setFlow} />
-              <ProductCatalogue
-                catalog={catalog}
-                cart={cart}
-                onAddItem={handleAddItem}
-                onUpdateItem={(lineKey, patch) => cartCtx.updateItem(lineKey, patch)}
-                onRemoveItem={cartCtx.removeItem}
-              />
-            </div>
             <CartDrawer
               cart={cart}
               catalog={catalog}
@@ -316,8 +300,12 @@ const slotKey = comp.slot?.name ?? 'slot'
               onCheckout={openLeadForm}
             />
           </div>
-        )}
-      </main>
+        </>
+      )}
+
+      <footer className="pf-foot">
+        © Puffin Cloud — Live pricing calculator. <a href="#">Talk to sales</a>
+      </footer>
 
       {submission.kind === 'lead-form' && (
         <LeadFormSlideOver
@@ -326,6 +314,9 @@ const slotKey = comp.slot?.name ?? 'slot'
           error={submission.error}
           captchaProvider={config.captcha.provider}
           captchaSiteKey={config.captcha.provider === 'recaptcha_v3' ? config.captcha.siteKey : null}
+          totalMonthly={pricing.data?.totals.mrcTotal ?? 0}
+          currencyCode={catalog.currencyCode}
+          itemCount={cart.items.length}
           onSubmit={submitLead}
           onClose={closeLeadForm}
         />
@@ -343,20 +334,26 @@ const slotKey = comp.slot?.name ?? 'slot'
 
 function FlowSwitcher({ cart, onSwitch }: { cart: Cart; onSwitch: (f: Cart['flow']) => void }) {
   return (
-    <div className="flex items-center gap-2 text-xs">
+    <div className="pf-mode" role="tablist" aria-label="Flow">
       <button
         type="button"
+        role="tab"
+        aria-selected={cart.flow === 'solutions'}
         onClick={() => onSwitch('solutions')}
-        className={`px-3 py-1.5 rounded-md border ${cart.flow === 'solutions' ? 'bg-primary text-primary-foreground border-primary' : 'hover:bg-muted'}`}
+        className={`pf-mode-btn${cart.flow === 'solutions' ? ' is-active' : ''}`}
       >
-        Predefined Solutions
+        <Sparkles size={15} aria-hidden />
+        <span>Predefined Solutions</span>
       </button>
       <button
         type="button"
+        role="tab"
+        aria-selected={cart.flow === 'custom'}
         onClick={() => onSwitch('custom')}
-        className={`px-3 py-1.5 rounded-md border ${cart.flow === 'custom' ? 'bg-primary text-primary-foreground border-primary' : 'hover:bg-muted'}`}
+        className={`pf-mode-btn${cart.flow === 'custom' ? ' is-active' : ''}`}
       >
-        Custom Solution
+        <Wrench size={15} aria-hidden />
+        <span>Custom Solution</span>
       </button>
     </div>
   )
@@ -377,8 +374,6 @@ function ActiveBundlePanel({
   onUpdateItem: (lineKey: string, patch: { configuration?: Record<string, unknown>; quantity?: number }) => void
   onSwitchToCustom: () => void
 }) {
-  // Map offeringId → { offering, spec } for both label rendering and the
-  // per-line configurator that needs both halves.
   const offeringIndex = React.useMemo(() => {
     const map = new Map<
       string,
@@ -408,24 +403,20 @@ function ActiveBundlePanel({
   }
 
   return (
-    <section className="rounded-xl border border-primary bg-primary/5 overflow-hidden">
-      <header className="flex items-start justify-between gap-3 px-5 py-3 border-b border-primary/20">
-        <div className="min-w-0">
-          <div className="text-xs uppercase tracking-wider text-primary font-medium">Active bundle</div>
-          <div className="font-semibold truncate">{bundleMeta?.offering.marketingName ?? 'Bundle'}</div>
-          <p className="text-xs text-muted-foreground">
+    <section className="pf-active-strip">
+      <header className="pf-active-head">
+        <div>
+          <div className="pf-eyebrow pf-eyebrow--accent">ACTIVE BUNDLE</div>
+          <h3 className="pf-active-title">{bundleMeta?.offering.marketingName ?? 'Bundle'}</h3>
+          <p className="pf-section-desc">
             Tweak individual lines below, or pick a different bundle. Switching to Custom keeps your cart.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={onSwitchToCustom}
-          className="shrink-0 text-xs px-3 py-1.5 rounded-md border hover:bg-background"
-        >
-          Customise in catalog →
+        <button type="button" className="pf-link" onClick={onSwitchToCustom}>
+          Customise in catalog <ArrowRight size={13} aria-hidden />
         </button>
       </header>
-      <ul className="divide-y divide-primary/10">
+      <ul className="pf-active-lines">
         {cart.items.map((item) => {
           const entry = offeringIndex.get(item.offeringId)
           const line = linesByKey.get(item.lineKey)
@@ -469,51 +460,42 @@ function BundleLineRow({
   const [expanded, setExpanded] = React.useState(false)
 
   return (
-    <li className="px-5 py-2.5">
-      <div className="flex items-center justify-between gap-3">
-        <div className="min-w-0 flex-1">
-          <div className="text-sm font-medium truncate">{offering?.marketingName ?? 'Unknown'}</div>
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <span className="truncate">{displaySpecName(specification?.name)}</span>
-            {item.bundleSlotKey && (
-              <span className="px-1.5 py-0.5 rounded bg-primary/10 text-primary text-[10px] uppercase tracking-wider">
-                {item.bundleSlotKey}
-              </span>
-            )}
-          </div>
+    <li className={`pf-active-line${expanded ? ' is-expanded' : ''}`}>
+      <div className="pf-active-line-row">
+        <div className="pf-line-info">
+          <div className="pf-line-name">{offering?.marketingName ?? 'Unknown'}</div>
+          <div className="pf-line-spec">{displaySpecName(specification?.name)}</div>
+          {item.bundleSlotKey && <span className="pf-chip">{item.bundleSlotKey}</span>}
         </div>
-        <div className="text-right shrink-0">
-          <div
-            className="text-sm font-semibold flex items-center justify-end gap-1.5"
-            style={{ fontVariantNumeric: 'tabular-nums' }}
-          >
-            {priceLoading ? <Spinner /> : <span>{priceLabel ?? '—'}</span>}
-          </div>
-          <div className="text-[10px] text-muted-foreground">/ mo</div>
+        <div className="pf-line-price">
+          {priceLoading ? (
+            <span className="pf-spinner" role="status" aria-label="Calculating" />
+          ) : (
+            <>
+              <span className="pf-price-num">{priceLabel ?? '—'}</span>
+              <span className="pf-price-suffix">/ mo</span>
+            </>
+          )}
         </div>
-        {offering && specification && (
+        {offering && specification ? (
           <button
             type="button"
             onClick={() => setExpanded((v) => !v)}
             data-testid={`bundle-line-toggle-${item.lineKey}`}
-            className="text-xs px-2 py-1 rounded border bg-background hover:bg-muted shrink-0"
+            className="pf-link"
             aria-expanded={expanded}
           >
             {expanded ? 'Hide' : 'Configure'}
           </button>
+        ) : (
+          <span aria-hidden />
         )}
-        <button
-          type="button"
-          onClick={onRemove}
-          className="text-xs text-muted-foreground hover:text-destructive shrink-0"
-          aria-label="Remove"
-        >
-          ✕
+        <button type="button" onClick={onRemove} className="pf-icon-btn" aria-label="Remove">
+          <X size={14} aria-hidden />
         </button>
       </div>
-
       {expanded && offering && specification && (
-        <div className="mt-3 rounded-lg border bg-background p-3">
+        <div className="pf-active-line-config">
           <GenericConfigurator
             offering={offering}
             specification={specification}
@@ -523,15 +505,5 @@ function BundleLineRow({
         </div>
       )}
     </li>
-  )
-}
-
-function Spinner({ className = '' }: { className?: string }) {
-  return (
-    <span
-      role="status"
-      aria-label="Loading"
-      className={`inline-block h-3.5 w-3.5 rounded-full border-2 border-muted-foreground/30 border-t-primary animate-spin ${className}`}
-    />
   )
 }

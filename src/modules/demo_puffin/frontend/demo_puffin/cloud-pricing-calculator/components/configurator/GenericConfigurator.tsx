@@ -39,7 +39,6 @@ export function GenericConfigurator({ offering, specification, configuration, on
   const [version, setVersion] = React.useState(0)
   const lastConfigRef = React.useRef<string>('')
 
-  // Refresh attributes when configuration changes affect any dependency.
   const dependencyKey = React.useMemo(() => {
     const keysWithDependents = attrs.filter((a) => {
       const cons = a.constraints as Record<string, unknown> | undefined
@@ -58,11 +57,6 @@ export function GenericConfigurator({ offering, specification, configuration, on
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ offeringId: offering.id, configuration }),
       })
-      // Many simple offerings (free tiers, support plans) have no run-time
-      // attributes — the upstream resolver may 404 / 422 / 500. Treat any
-      // non-200 as "no attributes needed" so the visitor isn't blocked by a
-      // red error on an offering that's already fully configured at design
-      // time.
       if (!res.ok) {
         setAttrs([])
         return
@@ -81,7 +75,6 @@ export function GenericConfigurator({ offering, specification, configuration, on
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [offering.id, version])
 
-  // When a dependency value changes, re-fetch options.
   React.useEffect(() => {
     if (dependencyKey === lastConfigRef.current) return
     lastConfigRef.current = dependencyKey
@@ -89,31 +82,29 @@ export function GenericConfigurator({ offering, specification, configuration, on
   }, [dependencyKey, attrs.length])
 
   if (loading && attrs.length === 0) {
-    return <p className="text-sm text-muted-foreground">Loading options…</p>
+    return <p className="pf-config-help">Loading options…</p>
   }
   if (error) {
-    return <p className="text-sm text-destructive">Could not load options. Refresh the page.</p>
+    return <p className="pf-cart-error">Could not load options. Refresh the page.</p>
   }
   if (attrs.length === 0) {
-    return (
-      <p className="text-sm text-muted-foreground">
-        No additional configuration needed.
-      </p>
-    )
+    return <p className="pf-config-help">No additional configuration needed.</p>
   }
 
   return (
-    <div className="space-y-3">
-      {attrs.map((attr) => (
-        <AttributeField
-          key={attr.code}
-          attr={attr}
-          value={configuration[attr.code]}
-          onChange={(value) => onChange({ [attr.code]: value })}
-        />
-      ))}
-      <p className="text-[11px] text-muted-foreground">
-        From spec: <span className="font-mono">{specification.code}</span>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div className="pf-config-grid">
+        {attrs.map((attr) => (
+          <AttributeField
+            key={attr.code}
+            attr={attr}
+            value={configuration[attr.code]}
+            onChange={(value) => onChange({ [attr.code]: value })}
+          />
+        ))}
+      </div>
+      <p className="pf-config-foot">
+        From spec: <span className="pf-mono">{specification.code}</span>
       </p>
     </div>
   )
@@ -133,17 +124,16 @@ function AttributeField({
 
   if (attr.attributeType === 'boolean') {
     return (
-      <label htmlFor={id} className="flex items-center gap-2 text-sm">
+      <label htmlFor={id} className="pf-config-checkbox">
         <input
           id={id}
           type="checkbox"
           checked={Boolean(value)}
           onChange={(e) => onChange(e.target.checked)}
-          className="rounded border-input"
         />
         <span>{attr.name}</span>
-        {attr.isRequired && <span className="text-destructive">*</span>}
-        {helpText && <span className="text-xs text-muted-foreground">{helpText}</span>}
+        {attr.isRequired && <span className="pf-config-required">*</span>}
+        {helpText && <span className="pf-config-help">{helpText}</span>}
       </label>
     )
   }
@@ -151,62 +141,60 @@ function AttributeField({
   if (attr.attributeType === 'number') {
     const cons = (attr.constraints ?? {}) as { min?: number; max?: number; step?: number }
     const numericValue = typeof value === 'number' ? value : Number(value ?? attr.defaultValue ?? cons.min ?? 0)
+    const isRange = cons.min != null && cons.max != null
     return (
-      <div className="space-y-1">
-        <label htmlFor={id} className="text-sm font-medium flex items-center gap-1">
+      <div className="pf-config-field">
+        <label htmlFor={id} className="pf-config-label">
           {attr.name}
-          {attr.isRequired && <span className="text-destructive">*</span>}
-          <span className="ml-auto text-xs text-muted-foreground" style={{ fontVariantNumeric: 'tabular-nums' }}>
-            {numericValue}
-          </span>
+          {attr.isRequired && <span className="pf-config-required">*</span>}
+          <span className="pf-config-numeric">{numericValue}</span>
         </label>
         <input
           id={id}
-          type={cons.min != null && cons.max != null ? 'range' : 'number'}
+          type={isRange ? 'range' : 'number'}
           min={cons.min}
           max={cons.max}
           step={cons.step ?? 1}
           value={Number.isFinite(numericValue) ? numericValue : 0}
           onChange={(e) => onChange(Number(e.target.value))}
-          className="w-full"
+          className={isRange ? 'pf-config-range' : 'pf-config-input'}
         />
-        {helpText && <p className="text-xs text-muted-foreground">{helpText}</p>}
+        {helpText && <p className="pf-config-help">{helpText}</p>}
       </div>
     )
   }
 
-  // enum, select, multi-select, reference
   const options = attr.options ?? []
   if (options.length === 0) {
     return (
-      <div className="space-y-1">
-        <label htmlFor={id} className="text-sm font-medium flex items-center gap-1">
+      <div className="pf-config-field">
+        <label htmlFor={id} className="pf-config-label">
           {attr.name}
-          {attr.isRequired && <span className="text-destructive">*</span>}
+          {attr.isRequired && <span className="pf-config-required">*</span>}
         </label>
         <input
           id={id}
           type="text"
           value={typeof value === 'string' ? value : ''}
           onChange={(e) => onChange(e.target.value)}
-          className="w-full rounded-md border bg-background px-2 py-1 text-sm"
+          className="pf-config-input"
         />
-        {helpText && <p className="text-xs text-muted-foreground">{helpText}</p>}
+        {helpText && <p className="pf-config-help">{helpText}</p>}
       </div>
     )
   }
 
   return (
-    <div className="space-y-1">
-      <label htmlFor={id} className="text-sm font-medium flex items-center gap-1">
+    <div className="pf-config-field">
+      <label htmlFor={id} className="pf-config-label">
         {attr.name}
-        {attr.isRequired && <span className="text-destructive">*</span>}
+        {attr.isRequired && <span className="pf-config-required">*</span>}
       </label>
       <select
         id={id}
         value={typeof value === 'string' ? value : ''}
         onChange={(e) => onChange(e.target.value)}
-        className="w-full rounded-md border bg-background px-2 py-1 text-sm"
+        className="pf-config-select"
       >
         <option value="">— Select —</option>
         {options.map((opt) => (
@@ -215,7 +203,7 @@ function AttributeField({
           </option>
         ))}
       </select>
-      {helpText && <p className="text-xs text-muted-foreground">{helpText}</p>}
+      {helpText && <p className="pf-config-help">{helpText}</p>}
     </div>
   )
 }

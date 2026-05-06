@@ -1,6 +1,7 @@
 'use client'
 
 import * as React from 'react'
+import { Check, X } from 'lucide-react'
 
 type Props = {
   open: boolean
@@ -8,17 +9,38 @@ type Props = {
   error: string | null
   captchaProvider: 'disabled' | 'recaptcha_v3'
   captchaSiteKey?: string | null
+  totalMonthly?: number
+  currencyCode?: string
+  itemCount?: number
   onSubmit: (input: { name: string; email: string; company: string; captchaToken: string | null }) => Promise<void>
   onClose: () => void
 }
 
-export function LeadFormSlideOver({ open, loading, error, captchaProvider, captchaSiteKey, onSubmit, onClose }: Props) {
+function formatCurrency(value: number, currencyCode: string): string {
+  try {
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency: currencyCode }).format(value)
+  } catch {
+    return `${currencyCode} ${value.toFixed(2)}`
+  }
+}
+
+export function LeadFormSlideOver({
+  open,
+  loading,
+  error,
+  captchaProvider,
+  captchaSiteKey,
+  totalMonthly = 0,
+  currencyCode = 'USD',
+  itemCount = 0,
+  onSubmit,
+  onClose,
+}: Props) {
   const [name, setName] = React.useState('')
   const [email, setEmail] = React.useState('')
   const [company, setCompany] = React.useState('')
   const captchaInputRef = React.useRef<HTMLInputElement | null>(null)
 
-  // Close on Escape (Cmd/Ctrl+Enter to submit handled at form level).
   React.useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent) => {
@@ -36,9 +58,7 @@ export function LeadFormSlideOver({ open, loading, error, captchaProvider, captc
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     const captchaToken =
-      captchaProvider === 'recaptcha_v3'
-        ? captchaInputRef.current?.value ?? null
-        : null
+      captchaProvider === 'recaptcha_v3' ? captchaInputRef.current?.value ?? null : null
     await onSubmit({ name, email, company, captchaToken })
   }
 
@@ -50,82 +70,97 @@ export function LeadFormSlideOver({ open, loading, error, captchaProvider, captc
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center sm:justify-center bg-black/40 backdrop-blur-sm p-0 sm:p-4">
-      <form
-        onSubmit={handleSubmit}
-        onKeyDown={handleKey}
-        className="w-full sm:max-w-md rounded-t-xl sm:rounded-xl bg-background border shadow-xl p-5 space-y-4"
-        data-testid="lead-form"
-      >
-        <div className="flex items-start justify-between">
+    <div className="pf-modal-overlay" onClick={onClose}>
+      <div className="pf-modal" onClick={(e) => e.stopPropagation()}>
+        <header className="pf-modal-head">
           <div>
-            <h2 className="text-lg font-semibold">Get a quote</h2>
-            <p className="text-xs text-muted-foreground">
+            <h3 className="pf-modal-title">Get a quote</h3>
+            <p className="pf-modal-sub">
               We&apos;ll send your configured cart to a sales engineer who&apos;ll follow up shortly.
             </p>
           </div>
-          <button type="button" onClick={onClose} className="text-muted-foreground hover:text-foreground" aria-label="Close">
-            ×
+          <button type="button" className="pf-icon-btn" onClick={onClose} aria-label="Close">
+            <X size={16} aria-hidden />
           </button>
-        </div>
+        </header>
 
-        <label className="block space-y-1">
-          <span className="text-sm font-medium">Name</span>
-          <input
-            type="text"
-            required
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            className="w-full rounded-md border bg-background px-2 py-1.5 text-sm"
-            autoFocus
-          />
-        </label>
-
-        <label className="block space-y-1">
-          <span className="text-sm font-medium">Work email</span>
-          <input
-            type="email"
-            required
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            className="w-full rounded-md border bg-background px-2 py-1.5 text-sm"
-          />
-        </label>
-
-        <label className="block space-y-1">
-          <span className="text-sm font-medium">Company</span>
-          <input
-            type="text"
-            required
-            value={company}
-            onChange={(e) => setCompany(e.target.value)}
-            className="w-full rounded-md border bg-background px-2 py-1.5 text-sm"
-          />
-        </label>
-
-        {captchaProvider === 'recaptcha_v3' && captchaSiteKey && (
-          <div className="text-[11px] text-muted-foreground">
-            Protected by reCAPTCHA v3.
-            {/* The integrator wires window.grecaptcha to populate this hidden field. */}
-            <input ref={captchaInputRef} type="hidden" name="captcha_token" />
+        {(totalMonthly > 0 || itemCount > 0) && (
+          <div className="pf-modal-summary">
+            <div className="pf-eyebrow">YOUR ESTIMATE</div>
+            <div className="pf-modal-total">
+              <span className="pf-mono pf-mono--xl">{formatCurrency(totalMonthly, currencyCode)}</span>
+              <span className="pf-price-suffix">/ mo</span>
+            </div>
+            <div className="pf-modal-summary-meta">
+              {itemCount} {itemCount === 1 ? 'line' : 'lines'} · {currencyCode}
+            </div>
           </div>
         )}
 
-        {error && <p className="text-sm text-destructive">{error}</p>}
+        <form
+          onSubmit={handleSubmit}
+          onKeyDown={handleKey}
+          className="pf-form"
+          data-testid="lead-form"
+        >
+          <label className="pf-field">
+            <span>Name</span>
+            <input
+              type="text"
+              required
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Jane Doe"
+              autoFocus
+            />
+          </label>
 
-        <div className="flex items-center justify-end gap-2 pt-1">
-          <button type="button" onClick={onClose} className="text-xs px-3 py-1.5 rounded border hover:bg-muted">
-            Cancel
-          </button>
-          <button
-            type="submit"
-            disabled={loading}
-            className="text-xs px-4 py-1.5 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-          >
-            {loading ? 'Submitting…' : 'Send quote request'}
-          </button>
-        </div>
-      </form>
+          <label className="pf-field">
+            <span>Work email</span>
+            <input
+              type="email"
+              required
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="jane@company.com"
+            />
+          </label>
+
+          <label className="pf-field">
+            <span>Company</span>
+            <input
+              type="text"
+              required
+              value={company}
+              onChange={(e) => setCompany(e.target.value)}
+              placeholder="Acme, Inc."
+            />
+          </label>
+
+          {captchaProvider === 'recaptcha_v3' && captchaSiteKey && (
+            <div className="pf-config-help">
+              Protected by reCAPTCHA v3.
+              <input ref={captchaInputRef} type="hidden" name="captcha_token" />
+            </div>
+          )}
+
+          {error && <p className="pf-modal-error">{error}</p>}
+
+          <div className="pf-modal-actions">
+            <button type="button" onClick={onClose} className="pf-btn pf-btn--ghost">
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={loading}
+              className="pf-btn pf-btn--primary"
+              style={{ width: 'auto' }}
+            >
+              {loading ? 'Submitting…' : 'Send quote request'}
+            </button>
+          </div>
+        </form>
+      </div>
     </div>
   )
 }
@@ -138,21 +173,23 @@ export function ConfirmationScreen({
   onClose: () => void
 }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
-      <div className="w-full max-w-md rounded-xl bg-background border shadow-xl p-6 space-y-3">
-        <div className="text-3xl">✓</div>
-        <h2 className="text-lg font-semibold">Thanks — we&apos;ve got it.</h2>
-        <p className="text-sm text-muted-foreground">
-          Your quote <span className="font-mono">{quoteNumber}</span> is in our system. A sales engineer
-          will review your configuration and follow up within one business day.
-        </p>
-        <button
-          type="button"
-          onClick={onClose}
-          className="w-full inline-flex items-center justify-center rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
-        >
-          Continue browsing
-        </button>
+    <div className="pf-modal-overlay" onClick={onClose}>
+      <div className="pf-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="pf-modal-success">
+          <div className="pf-success-mark">
+            <Check size={28} aria-hidden />
+          </div>
+          <h3 className="pf-modal-title">Quote on its way.</h3>
+          <p className="pf-modal-sub">
+            Your quote <span className="pf-mono">{quoteNumber}</span> is in our system. A sales
+            engineer will review your configuration and follow up within one business day.
+          </p>
+          <div className="pf-modal-actions" style={{ justifyContent: 'center', marginTop: 16 }}>
+            <button type="button" onClick={onClose} className="pf-btn pf-btn--primary" style={{ width: 'auto' }}>
+              Continue browsing
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   )

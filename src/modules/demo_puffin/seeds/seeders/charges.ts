@@ -138,17 +138,21 @@ export async function seedPuffinCharges(em: EntityManager, scope: SeedScope): Pr
   // --- Block Storage — per offering, per-GB-month -------------------------
   const blockId = await findProductId(em, scope, BLOCK_STORAGE.sku)
   if (blockId) {
+    // Per-GB pricing lives in `puffin_block_storage_pricing` (offering_code-
+    // dimensioned). The public price route injects `offering_code` into each
+    // item's configuration so calculatePerUnit can match the right row and
+    // multiply by `volume_size_gb`.
+    const blockTableId = await findTableId(em, scope, 'puffin_block_storage_pricing')
     for (const offer of BLOCK_STORAGE.offerings) {
       const oid = await findOfferingId(em, scope, offer.code)
-      if (!oid) continue
-      const dtv = offer.designTimeValues as Record<string, number> | undefined
-      if (!dtv) continue
+      if (!oid || !blockTableId) continue
       await ensureCharge(em, scope, blockId, oid, {
         code: `${offer.code}_storage`,
         name: `${offer.name} — Storage (per GB-month)`,
         chargeType: 'mrc',
         pricingMethod: 'per_unit',
-        fixedPrice: String(dtv.price_per_gb),
+        pricingTableId: blockTableId,
+        priceColumnKey: 'per_gb',
         quantityAttributeCode: 'volume_size_gb',
         sortOrder: 0,
       })
@@ -361,6 +365,11 @@ export async function seedPuffinCharges(em: EntityManager, scope: SeedScope): Pr
   // --- Workspace — per-seat usage charge per offering ---------------------
   const workspaceId = await findProductId(em, scope, WORKSPACE.sku)
   if (workspaceId) {
+    // Per-seat pricing lives in `puffin_workspace_seat_pricing` (offering_code-
+    // dimensioned, one row per plan / add-on). The public price route injects
+    // `offering_code` into each item's configuration so calculatePerUnit
+    // matches the right row and multiplies by `seat_count`.
+    const workspaceSeatTableId = await findTableId(em, scope, 'puffin_workspace_seat_pricing')
     for (const offer of WORKSPACE.offerings) {
       const oid = await findOfferingId(em, scope, offer.code)
       if (!oid) continue
@@ -378,7 +387,8 @@ export async function seedPuffinCharges(em: EntityManager, scope: SeedScope): Pr
         })
         continue
       }
-      // Extra storage is per-GB-month.
+      // Extra storage is per-GB-month — usage charge, totalPrice is null in
+      // the response so the fixed-price early-return is harmless here.
       if (offer.code === 'ws_extra_storage') {
         await ensureCharge(em, scope, workspaceId, oid, {
           code: `${offer.code}_per_gb`,
@@ -393,13 +403,14 @@ export async function seedPuffinCharges(em: EntityManager, scope: SeedScope): Pr
       }
       // All other Workspace plans + add-ons are per-seat per month.
       const seatPrice = dtv.seat_price
-      if (seatPrice == null) continue
+      if (seatPrice == null || !workspaceSeatTableId) continue
       await ensureCharge(em, scope, workspaceId, oid, {
         code: `${offer.code}_per_seat`,
         name: `${offer.name} — Per Seat`,
         chargeType: 'mrc',
         pricingMethod: 'per_unit',
-        fixedPrice: String(seatPrice),
+        pricingTableId: workspaceSeatTableId,
+        priceColumnKey: 'per_seat',
         quantityAttributeCode: 'seat_count',
         sortOrder: 0,
       })

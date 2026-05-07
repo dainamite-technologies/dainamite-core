@@ -5,6 +5,7 @@ import {
   COMPUTE_PRICING,
   DB_PRICING,
 } from '../data/pricing'
+import { BLOCK_STORAGE, WORKSPACE } from '../data/products'
 import type { SeedScope } from './_types'
 
 /**
@@ -100,6 +101,52 @@ export async function seedPuffinPricingTables(em: EntityManager, scope: SeedScop
       rangeFrom: String(t.from),
       rangeTo: t.to != null ? String(t.to) : null,
       prices: { per_gb: t.per_gb },
+    })
+  }
+  await em.flush()
+
+  // Workspace per-seat pricing — one row per offering, dimensioned by
+  // offering_code so the public price route can inject the offering's code
+  // and `calculatePerUnit` will multiply unit price × seat_count. This
+  // replaces the previous broken `per_unit + fixedPrice` shape on the
+  // workspace charges, which CPQ's engine treats as a flat $unit total
+  // (ignoring quantityAttributeCode) — see cpqPricingService.calculateCharge.
+  const workspaceSeatTableId = await ensureTable(em, scope, {
+    code: 'puffin_workspace_seat_pricing',
+    name: 'Puffin Workspace — Per-Seat Pricing',
+    dimensions: [{ key: 'offering_code', label: 'Offering Code' }],
+    priceColumns: [{ key: 'per_seat', label: 'Price per Seat (Monthly)' }],
+    currencyCodeList: ['USD'],
+  })
+  for (const offer of WORKSPACE.offerings) {
+    const dtv = offer.designTimeValues as Record<string, number> | undefined
+    const seatPrice = dtv?.seat_price
+    if (seatPrice == null) continue
+    const dim = { offering_code: offer.code }
+    await ensureEntry(em, scope, workspaceSeatTableId, { dimensionValues: dim }, {
+      dimensionValues: dim,
+      prices: { per_seat: seatPrice },
+    })
+  }
+  await em.flush()
+
+  // Block Storage per-GB pricing — one row per offering, dimensioned by
+  // offering_code. Same rationale as Workspace above.
+  const blockStorageTableId = await ensureTable(em, scope, {
+    code: 'puffin_block_storage_pricing',
+    name: 'Puffin Block Storage — Per-GB Pricing',
+    dimensions: [{ key: 'offering_code', label: 'Offering Code' }],
+    priceColumns: [{ key: 'per_gb', label: 'Price per GB-Month' }],
+    currencyCodeList: ['USD'],
+  })
+  for (const offer of BLOCK_STORAGE.offerings) {
+    const dtv = offer.designTimeValues as Record<string, number> | undefined
+    const pricePerGb = dtv?.price_per_gb
+    if (pricePerGb == null) continue
+    const dim = { offering_code: offer.code }
+    await ensureEntry(em, scope, blockStorageTableId, { dimensionValues: dim }, {
+      dimensionValues: dim,
+      prices: { per_gb: pricePerGb },
     })
   }
   await em.flush()

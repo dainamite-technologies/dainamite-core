@@ -46,9 +46,11 @@ test.describe('TC-CPQ-ARC-007 — Renew from Expiring view (UI)', () => {
       // router.push()es to the new quote. Wait for URL transition.
       await page.waitForURL(/\/backend\/cpq\/quotes\/[0-9a-f-]+$/, { timeout: 15_000 })
       await expect(page.locator('body')).toContainText(sub.code, { timeout: 10_000 })
-      // ARC banner shows "RENEW • 1 target: <code>"
+      // ARC banner shows "RENEW • 1 target: <code>" — DOM stores lowercase
+      // 'renew' under a CSS uppercase rule, so `getByText` regex must use the
+      // case-insensitive flag.
       await expect(page.getByText(/1 target/i).first()).toBeVisible({ timeout: 5_000 })
-      await expect(page.getByText(/RENEW/).first()).toBeVisible({ timeout: 5_000 })
+      await expect(page.getByText(/renew/i).first()).toBeVisible({ timeout: 5_000 })
     } finally {
       await deleteSubscription(request, token, sub.id).catch(() => undefined)
       await deleteCustomer(request, token, customerId).catch(() => undefined)

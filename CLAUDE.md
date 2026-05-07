@@ -137,6 +137,7 @@ generic Task → Context Map (in AGENTS.md) tells you to load.
 | Modify offerings / bundles / specifications | `.ai/skills/cpq/products/SKILL.md`, `manuals/xd-223-bundled-offerings.md`, `specs/implementation/xd-187-product-specification.md` |
 | Modify customer inventory / subscriptions | `.ai/skills/cpq/inventory/SKILL.md`, `manuals/xd-215-customer-inventory.md`, `specs/implementation/xd-215-customer-inventory.md` |
 | Quote → Order conversion / order activation | `.ai/skills/cpq/orders/SKILL.md`, `manuals/cpq-quote-to-order-conversion.md` |
+| ARC — Amend / Renew / Cancel a live subscription via quote (XD-273) | `.ai/skills/cpq/arc/SKILL.md`, `manuals/xd-250-arc-flow.md`, `specs/implementation/xd-250-arc-spec.md` |
 | Calculate-price API contract | `manuals/xd-187-calculate-price-api.md` |
 | Extract / package CPQ as `@dainamite/cpq` (mechanical) | `.ai/skills/cpq/packaging/SKILL.md`, `packages/cpq/MIGRATION.md` |
 | Modify CPQ seed data, add a new demo tenant, or change tenant provisioning | `specs/implementation/xd-276-cpq-data-seed.md`, `src/modules/cpq/lib/seeds/api.ts`, `src/modules/demo_tenants/`, the `demo_<x>` modules |

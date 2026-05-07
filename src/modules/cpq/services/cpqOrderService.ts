@@ -4,18 +4,27 @@ import type { SalesDocumentNumberGenerator } from '@open-mercato/core/modules/sa
 import {
   CpqQuoteConfiguration,
   CpqQuoteLineConfiguration,
+  CpqQuoteTargetSubscription,
+  CpqInventorySubscription,
   CpqOrderConfiguration,
   CpqOrderLineConfiguration,
   CpqProductOffering,
   CpqProductSpecification,
   CpqInventorySubscriptionItem,
 } from '../data/entities'
-import type { DefaultCpqInventoryService } from './cpqInventoryService'
+import type {
+  ApplyArcResult,
+  ApplyMergeRenewalResult,
+  ArcLineChange,
+  CreateSubscriptionItemInput,
+  DefaultCpqInventoryService,
+} from './cpqInventoryService'
 import {
   CPQ_ORDER_TRANSITIONS,
   type CpqOrderStatus,
   type TenantScope,
 } from './types'
+import { emitCpqEvent } from '../events'
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -54,6 +63,15 @@ interface OrderLineResult {
   mrcTotal: number
   charges: Array<Record<string, unknown>>
   sourceQuoteLineId: string | null
+  /** XD-250 ARC: snapshot of the source subscription item's current state.
+   * Null for non-ARC lines and for fresh `add` lines on amend quotes. */
+  arcSource: {
+    subscriptionItemId: string
+    name: string
+    mrcAmount: number
+    nrcAmount: number
+    quantity: number
+  } | null
 }
 
 interface OrderResult {
@@ -63,6 +81,9 @@ interface OrderResult {
   customerId: string
   cpqStatus: string
   sourceQuoteId: string | null
+  /** XD-250 ARC quote type carried over from the source quote — used by the
+   * order detail page to render the AMEND / RENEW / CANCEL badge. */
+  quoteType: string
   currencyCode: string
   pricingSummary: {
     nrcTotal: number
@@ -212,7 +233,12 @@ export class DefaultCpqOrderService {
       const orderLineId = crypto.randomUUID()
       quoteLineIdToOrderLineId.set(ql.quoteLineId, orderLineId)
 
-      const offeringName = await this.resolveOfferingName(em, ql.offeringId, scope)
+      const offeringName = await this.resolveOfferingName(
+        em,
+        ql.offeringId,
+        scope,
+        ql.configuration as Record<string, unknown> | null,
+      )
 
       const orderLine = em.create(SalesOrderLine, {
         id: orderLineId,
@@ -315,7 +341,27 @@ export class DefaultCpqOrderService {
       deletedAt: null,
     })
 
-    await this.createInventoryFromOrder(orderConfig, orderLines, scope)
+    // Branch on the source quote's quoteType. ARC quotes mutate existing
+    // subscriptions; new-sale quotes materialize a fresh subscription.
+    const sourceQuote = orderConfig.sourceQuoteId
+      ? await em.findOne(CpqQuoteConfiguration, {
+          id: orderConfig.sourceQuoteId,
+          organizationId: scope.organizationId,
+          tenantId: scope.tenantId,
+          deletedAt: null,
+        })
+      : null
+
+    const quoteType = sourceQuote?.quoteType ?? 'new'
+    const arcEvents: Array<() => Promise<void>> = []
+
+    if (quoteType === 'new') {
+      await this.createInventoryFromOrder(orderConfig, orderLines, scope)
+    } else {
+      arcEvents.push(
+        ...(await this.applyArcOrder(orderConfig, sourceQuote!, orderLines, scope)),
+      )
+    }
 
     orderConfig.cpqStatus = 'active'
     orderConfig.activatedAt = new Date()
@@ -324,7 +370,222 @@ export class DefaultCpqOrderService {
 
     await em.flush()
 
+    // Emit ARC events AFTER the activation transaction commits.
+    for (const fire of arcEvents) {
+      try {
+        await fire()
+      } catch (err) {
+        // Don't roll back the activation just because a subscriber blew up —
+        // events are best-effort once the DB state is committed.
+        console.error('[cpq.arc] event emission failed', err)
+      }
+    }
+
     return this.buildOrderResult(em, orderConfig, salesOrder, orderLines, scope)
+  }
+
+  // ─── ARC activation branch (XD-250) ─────────────────────────
+  //
+  // Reads the source quote's targets + lines, then dispatches per target to
+  // cpqInventoryService.apply* primitives. Returns the list of post-commit
+  // event emissions so the caller can fire them outside the activation TX.
+  private async applyArcOrder(
+    orderConfig: CpqOrderConfiguration,
+    sourceQuote: CpqQuoteConfiguration,
+    orderLines: CpqOrderLineConfiguration[],
+    scope: TenantScope,
+  ): Promise<Array<() => Promise<void>>> {
+    const em = this.em
+    const quoteType = sourceQuote.quoteType as 'amend' | 'renew' | 'cancel'
+
+    // Load attached targets.
+    const targets = await em.find(CpqQuoteTargetSubscription, {
+      quoteId: sourceQuote.id,
+      organizationId: scope.organizationId,
+      tenantId: scope.tenantId,
+      deletedAt: null,
+    })
+    if (targets.length === 0) {
+      throw new OrderError(
+        409,
+        `ARC quote ${sourceQuote.id} has no target subscriptions to activate`,
+      )
+    }
+
+    const inventory = this.inventoryService
+
+    // Group order lines by target_subscription_id — ARC order lines mirror the
+    // quote lines' ARC fields (target_subscription_id is preserved through
+    // convertQuoteToOrder via line.configuration when needed).
+    // Source quote lines are the source of truth for ARC line data because
+    // CpqOrderLineConfiguration doesn't carry target/source-item fields.
+    const sourceQuoteLines = await em.find(CpqQuoteLineConfiguration, {
+      quoteConfigurationId: sourceQuote.id,
+      organizationId: scope.organizationId,
+      tenantId: scope.tenantId,
+      deletedAt: null,
+    })
+    const linesByTarget = new Map<string | null, CpqQuoteLineConfiguration[]>()
+    for (const line of sourceQuoteLines) {
+      const key = line.targetSubscriptionId ?? null
+      const list = linesByTarget.get(key) ?? []
+      list.push(line)
+      linesByTarget.set(key, list)
+    }
+
+    // Look up specs for `add` lines so we can build itemInput correctly.
+    const specIds = [
+      ...new Set(sourceQuoteLines.map((l) => l.specId).filter((x): x is string => Boolean(x))),
+    ]
+    const specs =
+      specIds.length > 0
+        ? await em.find(CpqProductSpecification, {
+            id: { $in: specIds },
+            organizationId: scope.organizationId,
+            tenantId: scope.tenantId,
+            deletedAt: null,
+          })
+        : []
+    const specMap = new Map(specs.map((s) => [s.id, s]))
+
+    const events: Array<() => Promise<void>> = []
+    const eventBaseEnvelope = {
+      organizationId: scope.organizationId,
+      tenantId: scope.tenantId,
+      sourceQuoteId: sourceQuote.id,
+      sourceOrderId: orderConfig.id,
+    } as const
+
+    if (quoteType === 'amend') {
+      for (const target of targets) {
+        const lines = linesByTarget.get(target.subscriptionId) ?? []
+        const result = await inventory.applyAmendment(
+          {
+            subscriptionId: target.subscriptionId,
+            sourceQuoteId: sourceQuote.id,
+            sourceOrderId: orderConfig.id,
+            performedByUserId: null,
+            lineChanges: lines.map((l) => buildArcLineChange(l, specMap)),
+          },
+          scope,
+        )
+        events.push(() =>
+          emitArcEvent('cpq.subscription.amended', result, eventBaseEnvelope),
+        )
+      }
+    } else if (quoteType === 'cancel') {
+      for (const target of targets) {
+        const result = await inventory.applyCancel(
+          {
+            subscriptionId: target.subscriptionId,
+            sourceQuoteId: sourceQuote.id,
+            sourceOrderId: orderConfig.id,
+            performedByUserId: null,
+            etfAmount: sourceQuote.arcEtfAmount ?? null,
+            etfCurrency: sourceQuote.arcEtfCurrency ?? null,
+            reasonCode: sourceQuote.arcReasonCode ?? null,
+            reasonText: sourceQuote.arcReasonText ?? null,
+          },
+          scope,
+        )
+        events.push(() =>
+          emitArcEvent('cpq.subscription.cancelled', result, {
+            ...eventBaseEnvelope,
+            etfAmount: sourceQuote.arcEtfAmount ?? null,
+            etfCurrency: sourceQuote.arcEtfCurrency ?? null,
+            reasonCode: sourceQuote.arcReasonCode ?? null,
+            reasonText: sourceQuote.arcReasonText ?? null,
+          }),
+        )
+      }
+    } else if (quoteType === 'renew') {
+      const standalone = targets.filter((t) => t.mergeAction === 'standalone')
+      const absorb = targets.filter((t) => t.mergeAction === 'absorb')
+
+      if (standalone.length > 0 && absorb.length === 0) {
+        for (const target of standalone) {
+          if (!target.newTermStart || !target.newTermEnd) {
+            throw new OrderError(
+              409,
+              `Standalone renew target ${target.id} missing newTermStart/newTermEnd`,
+            )
+          }
+          const lines = linesByTarget.get(target.subscriptionId) ?? []
+          const result = await inventory.applyRenewal(
+            {
+              subscriptionId: target.subscriptionId,
+              sourceQuoteId: sourceQuote.id,
+              sourceOrderId: orderConfig.id,
+              performedByUserId: null,
+              term: {
+                newTermStart: target.newTermStart,
+                newTermEnd: target.newTermEnd,
+                newTermMonths: target.newTermMonths ?? null,
+              },
+              lineChanges: lines.map((l) => buildArcLineChange(l, specMap)),
+            },
+            scope,
+          )
+          events.push(() =>
+            emitArcEvent('cpq.subscription.renewed', result, {
+              ...eventBaseEnvelope,
+              term: {
+                newTermStart: target.newTermStart!.toISOString(),
+                newTermEnd: target.newTermEnd!.toISOString(),
+              },
+            }),
+          )
+        }
+      } else if (absorb.length >= 2 && standalone.length === 0) {
+        if (!sourceQuote.arcMergeNewTermStart || !sourceQuote.arcMergeNewTermEnd) {
+          throw new OrderError(
+            409,
+            `Merge renew quote ${sourceQuote.id} missing arc_merge_new_term_*`,
+          )
+        }
+        // Lines targeting null are operator-edits on the new merge sub M.
+        const mergeLines = linesByTarget.get(null) ?? []
+        const merge = await inventory.applyMergeRenewal(
+          {
+            sourceIds: absorb.map((t) => t.subscriptionId),
+            sourceQuoteId: sourceQuote.id,
+            sourceOrderId: orderConfig.id,
+            performedByUserId: null,
+            term: {
+              newTermStart: sourceQuote.arcMergeNewTermStart,
+              newTermEnd: sourceQuote.arcMergeNewTermEnd,
+              newTermMonths: sourceQuote.arcMergeNewTermMonths ?? null,
+            },
+            mergeMeta: {
+              newSubCode: sourceQuote.arcMergeNewSubCode ?? null,
+              newSubName: sourceQuote.arcMergeNewSubName ?? null,
+            },
+            lineChanges: mergeLines.map((l) => buildArcLineChange(l, specMap)),
+          },
+          scope,
+        )
+
+        // One event per source (`superseded`) + one for M (`merged`).
+        const mergedFromSubscriptionIds = absorb.map((t) => t.subscriptionId)
+        events.push(() =>
+          emitMergedEvent(merge, eventBaseEnvelope, mergedFromSubscriptionIds),
+        )
+        for (const sourceLog of merge.sourceChangeLogs) {
+          events.push(() =>
+            emitSupersededEvent(sourceLog, merge.mergedSubscription.id, eventBaseEnvelope),
+          )
+        }
+      } else {
+        throw new OrderError(
+          409,
+          `Inconsistent renew targets — must be either single standalone or ≥2 absorb`,
+        )
+      }
+    } else {
+      throw new OrderError(500, `Unknown quote_type '${quoteType}' for ARC activation`)
+    }
+
+    return events
   }
 
   // ─── Inventory Creation ─────────────────────────────────────
@@ -568,25 +829,47 @@ export class DefaultCpqOrderService {
     return order
   }
 
-  private async resolveOfferingInfo(em: EntityManager, offeringId: string | null | undefined, scope: TenantScope): Promise<{ name: string; type: string | null }> {
-    if (!offeringId) return { name: 'Configured Item', type: null }
-    const offering = await em.findOne(CpqProductOffering, {
-      id: offeringId,
-      organizationId: scope.organizationId,
-      tenantId: scope.tenantId,
-      deletedAt: null,
-    })
-    return { name: offering?.name ?? 'Configured Item', type: offering?.offeringType ?? 'simple' }
+  private async resolveOfferingInfo(
+    em: EntityManager,
+    offeringId: string | null | undefined,
+    scope: TenantScope,
+    fallbackConfig?: Record<string, unknown> | null,
+  ): Promise<{ name: string; type: string | null }> {
+    if (offeringId) {
+      const offering = await em.findOne(CpqProductOffering, {
+        id: offeringId,
+        organizationId: scope.organizationId,
+        tenantId: scope.tenantId,
+        deletedAt: null,
+      })
+      if (offering) return { name: offering.name, type: offering.offeringType ?? 'simple' }
+    }
+    const cfg = fallbackConfig ?? null
+    const fallbackName =
+      (cfg?._arcMirroredName as string | undefined) ??
+      (cfg?.offeringName as string | undefined) ??
+      'Configured Item'
+    return { name: fallbackName, type: null }
   }
 
-  private async resolveOfferingName(em: EntityManager, offeringId: string | null | undefined, scope: TenantScope): Promise<string> {
-    const info = await this.resolveOfferingInfo(em, offeringId, scope)
+  private async resolveOfferingName(
+    em: EntityManager,
+    offeringId: string | null | undefined,
+    scope: TenantScope,
+    fallbackConfig?: Record<string, unknown> | null,
+  ): Promise<string> {
+    const info = await this.resolveOfferingInfo(em, offeringId, scope, fallbackConfig)
     return info.name
   }
 
   private getLineName(line: CpqOrderLineConfiguration): string {
-    const config = line.configuration as Record<string, unknown>
-    return (config?.offeringName as string) ?? (config?.name as string) ?? 'Configured Item'
+    const config = line.configuration as Record<string, unknown> | null
+    return (
+      (config?._arcMirroredName as string | undefined) ??
+      (config?.offeringName as string | undefined) ??
+      (config?.name as string | undefined) ??
+      'Configured Item'
+    )
   }
 
   private async buildSubscriptionName(
@@ -619,8 +902,32 @@ export class DefaultCpqOrderService {
   ): Promise<OrderResult> {
     const lines: OrderLineResult[] = []
 
+    // XD-250 ARC: batch-load source subscription items so we can render the
+    // before/after diff per line on the order detail page.
+    const arcItemIds = new Set<string>()
     for (const lc of lineConfigs) {
-      const offeringInfo = await this.resolveOfferingInfo(em, lc.offeringId, scope)
+      const m = (lc.configuration as Record<string, unknown> | null)?._arcMirroredFromItemId
+      if (typeof m === 'string') arcItemIds.add(m)
+    }
+    const arcItemMap = new Map<string, CpqInventorySubscriptionItem>()
+    if (arcItemIds.size > 0) {
+      const items = await em.find(CpqInventorySubscriptionItem, {
+        id: { $in: Array.from(arcItemIds) },
+        organizationId: scope.organizationId,
+        tenantId: scope.tenantId,
+        deletedAt: null,
+      })
+      for (const it of items) arcItemMap.set(it.id, it)
+    }
+
+    for (const lc of lineConfigs) {
+      const offeringInfo = await this.resolveOfferingInfo(
+        em,
+        lc.offeringId,
+        scope,
+        lc.configuration as Record<string, unknown> | null,
+      )
+      const arcSource = pickArcSourceFromConfig(lc.configuration as Record<string, unknown> | null, arcItemMap)
       lines.push({
         lineId: lc.orderLineId,
         offeringId: lc.offeringId ?? null,
@@ -639,7 +946,23 @@ export class DefaultCpqOrderService {
         mrcTotal: Number(lc.mrcTotal),
         charges: (lc.charges ?? []) as Array<Record<string, unknown>>,
         sourceQuoteLineId: lc.sourceQuoteLineId ?? null,
+        arcSource,
       })
+    }
+
+    // Source quote's quoteType — surfaced to the order header so the UI can
+    // render an AMEND / RENEW / CANCEL badge alongside the order number.
+    // CpqOrderConfiguration.sourceQuoteId stores CpqQuoteConfiguration.id
+    // (see convertFromConfig — sourceQuoteId: cpqConfig.id), NOT the
+    // SalesQuote.id, so we look it up by `id` rather than by `quoteId`.
+    let quoteType = 'new'
+    if (orderConfig.sourceQuoteId) {
+      const sourceCfg = await em.findOne(CpqQuoteConfiguration, {
+        id: orderConfig.sourceQuoteId,
+        organizationId: scope.organizationId,
+        tenantId: scope.tenantId,
+      })
+      if (sourceCfg?.quoteType) quoteType = sourceCfg.quoteType
     }
 
     const pricing = orderConfig.pricingSummary ?? {}
@@ -651,6 +974,7 @@ export class DefaultCpqOrderService {
       customerId: orderConfig.customerId,
       cpqStatus: orderConfig.cpqStatus,
       sourceQuoteId: orderConfig.sourceQuoteId ?? null,
+      quoteType,
       currencyCode: orderConfig.currencyCode,
       pricingSummary: {
         nrcTotal: Number((pricing as Record<string, unknown>).nrcTotal ?? 0),
@@ -664,6 +988,23 @@ export class DefaultCpqOrderService {
   }
 }
 
+function pickArcSourceFromConfig(
+  cfg: Record<string, unknown> | null,
+  map: Map<string, CpqInventorySubscriptionItem>,
+): OrderLineResult['arcSource'] {
+  const m = cfg?._arcMirroredFromItemId
+  if (typeof m !== 'string') return null
+  const item = map.get(m)
+  if (!item) return null
+  return {
+    subscriptionItemId: item.id,
+    name: item.name,
+    mrcAmount: Number(item.mrcAmount),
+    nrcAmount: Number(item.nrcAmount),
+    quantity: item.quantity,
+  }
+}
+
 // ─── Error class ──────────────────────────────────────────────────
 
 export class OrderError extends Error {
@@ -673,5 +1014,184 @@ export class OrderError extends Error {
   ) {
     super(message)
     this.name = 'OrderError'
+  }
+}
+
+// ─── ARC helpers (XD-250) ─────────────────────────────────────────
+
+/**
+ * Build a service-layer ArcLineChange from a CpqQuoteLineConfiguration.
+ * For 'add' actions, materializes the itemInput from line + spec data.
+ */
+function buildArcLineChange(
+  line: CpqQuoteLineConfiguration,
+  specMap: Map<string, CpqProductSpecification>,
+): ArcLineChange {
+  const action = line.action as 'add' | 'modify' | 'cancel'
+  if (action === 'add') {
+    const itemInput: Omit<CreateSubscriptionItemInput, 'name'> & { name: string } = {
+      productId: line.productId ?? undefined,
+      offeringId: line.offeringId ?? undefined,
+      specId: line.specId ?? undefined,
+      name: resolveLineName(line, specMap),
+      configuration: line.configuration ?? {},
+      charges: (line.charges ?? null) as Array<Record<string, unknown>> | undefined,
+      mrcAmount: Number(line.mrcTotal),
+      nrcAmount: Number(line.nrcTotal),
+      quantity: line.quantity,
+      sourceQuoteLineId: line.quoteLineId,
+    }
+    return {
+      quoteLineId: line.quoteLineId,
+      action,
+      itemInput,
+      parentQuoteLineId: line.parentLineId ?? null,
+    }
+  }
+  if (action === 'cancel') {
+    return {
+      quoteLineId: line.quoteLineId,
+      action,
+      sourceSubscriptionItemId: line.sourceSubscriptionItemId ?? null,
+    }
+  }
+  // modify
+  return {
+    quoteLineId: line.quoteLineId,
+    action,
+    sourceSubscriptionItemId: line.sourceSubscriptionItemId ?? null,
+    modifyPatch: {
+      configuration: line.configuration ?? undefined,
+      charges: (line.charges ?? undefined) as Array<Record<string, unknown>> | undefined,
+      mrcAmount: Number(line.mrcTotal),
+      nrcAmount: Number(line.nrcTotal),
+      quantity: line.quantity,
+    },
+  }
+}
+
+function resolveLineName(
+  line: CpqQuoteLineConfiguration,
+  specMap: Map<string, CpqProductSpecification>,
+): string {
+  const cfg = line.configuration as Record<string, unknown> | null
+  const cfgName = (cfg?._arcMirroredName as string | undefined) ?? null
+  if (cfgName) return cfgName
+  if (line.specId) {
+    const spec = specMap.get(line.specId)
+    if (spec?.name) return spec.name
+  }
+  return 'Configured Item'
+}
+
+interface ArcEventEnvelope {
+  organizationId: string
+  tenantId: string
+  sourceQuoteId: string
+  sourceOrderId: string
+}
+
+async function emitArcEvent(
+  eventId:
+    | 'cpq.subscription.amended'
+    | 'cpq.subscription.renewed'
+    | 'cpq.subscription.cancelled',
+  result: ApplyArcResult,
+  envelope: ArcEventEnvelope & {
+    term?: { newTermStart: string; newTermEnd: string }
+    etfAmount?: string | null
+    etfCurrency?: string | null
+    reasonCode?: string | null
+    reasonText?: string | null
+  },
+): Promise<void> {
+  const sub = result.subscription
+  await emitCpqEvent(eventId as never, {
+    subscriptionId: sub.id,
+    customerId: sub.customerId,
+    organizationId: envelope.organizationId,
+    tenantId: envelope.tenantId,
+    timestamp: new Date().toISOString(),
+    sourceQuoteId: envelope.sourceQuoteId,
+    sourceOrderId: envelope.sourceOrderId,
+    performedByUserId: null,
+    changeLogId: result.changeLog.id,
+    proration: buildProrationPayload(sub, result.changeLog.beforeSnapshot ?? null),
+    ...(envelope.term ? { term: envelope.term } : {}),
+    ...(envelope.etfAmount !== undefined ? { etfAmount: envelope.etfAmount } : {}),
+    ...(envelope.etfCurrency !== undefined ? { etfCurrency: envelope.etfCurrency } : {}),
+    ...(envelope.reasonCode !== undefined ? { reasonCode: envelope.reasonCode } : {}),
+    ...(envelope.reasonText !== undefined ? { reasonText: envelope.reasonText } : {}),
+  } as never)
+}
+
+async function emitMergedEvent(
+  merge: ApplyMergeRenewalResult,
+  envelope: ArcEventEnvelope,
+  mergedFromSubscriptionIds: string[],
+): Promise<void> {
+  const m = merge.mergedSubscription
+  await emitCpqEvent('cpq.subscription.merged' as never, {
+    subscriptionId: m.id,
+    customerId: m.customerId,
+    organizationId: envelope.organizationId,
+    tenantId: envelope.tenantId,
+    timestamp: new Date().toISOString(),
+    sourceQuoteId: envelope.sourceQuoteId,
+    sourceOrderId: envelope.sourceOrderId,
+    performedByUserId: null,
+    changeLogId: merge.mergeResultChangeLog.id,
+    mergedFromSubscriptionIds,
+    term: {
+      newTermStart: m.currentTermStart?.toISOString() ?? null,
+      newTermEnd: m.currentTermEnd?.toISOString() ?? null,
+      newTermMonths: m.termMonths ?? null,
+    },
+    proration: buildProrationPayload(m, null),
+  } as never)
+}
+
+async function emitSupersededEvent(
+  sourceLog: { id: string; subscriptionId: string },
+  newMergeSubId: string,
+  envelope: ArcEventEnvelope,
+): Promise<void> {
+  await emitCpqEvent('cpq.subscription.superseded' as never, {
+    subscriptionId: sourceLog.subscriptionId,
+    organizationId: envelope.organizationId,
+    tenantId: envelope.tenantId,
+    timestamp: new Date().toISOString(),
+    sourceQuoteId: envelope.sourceQuoteId,
+    sourceOrderId: envelope.sourceOrderId,
+    performedByUserId: null,
+    changeLogId: sourceLog.id,
+    mergedIntoSubscriptionId: newMergeSubId,
+  } as never)
+}
+
+/**
+ * Compute proration payload sent on every ARC subscription event.
+ *
+ * Currently a placeholder. Proration math against the live billing cycle
+ * lives in the billing module — CPQ's contract is to surface the *inputs*
+ * (old/new MRC, cycle bounds) on the event payload so billing can compute
+ * the delta. Until billing integration exists, we expose the essentials and
+ * leave precise cycle math to follow-up work.
+ */
+function buildProrationPayload(
+  sub: CpqInventorySubscription,
+  beforeSnapshot: Record<string, unknown> | null,
+): Record<string, unknown> {
+  const oldMrc = beforeSnapshot
+    ? Number((beforeSnapshot.mrcAmount as string | undefined) ?? 0)
+    : 0
+  return {
+    oldMrcAmount: oldMrc,
+    newMrcAmount: Number(sub.mrcAmount),
+    currency: sub.currencyCode,
+    billingCycleStart: null,
+    billingCycleEnd: null,
+    daysElapsedInCycle: null,
+    daysRemainingInCycle: null,
   }
 }

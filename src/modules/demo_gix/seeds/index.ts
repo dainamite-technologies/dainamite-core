@@ -1,5 +1,6 @@
 import type { CpqUseCaseSeedContext } from '../../cpq/lib/seeds/api'
 import { seedGixExamples as seedGixExamplesImpl } from './examples'
+import { seedCpqArcExamples } from './arc-examples'
 import {
   seedGixBundleData,
   seedGixPriceRules,
@@ -37,8 +38,12 @@ export async function seedGixDefaults(ctx: CpqUseCaseSeedContext): Promise<void>
  */
 export async function seedGixExamples(ctx: CpqUseCaseSeedContext): Promise<void> {
   if (!ctx.withExamples) return
-  await seedGixExamplesImpl(ctx.em, ctx.container, {
-    tenantId: ctx.tenantId,
-    organizationId: ctx.organizationId,
-  })
+  const scope = { tenantId: ctx.tenantId, organizationId: ctx.organizationId }
+  await seedGixExamplesImpl(ctx.em, ctx.container, scope)
+  // XD-250 ARC: extra demo customer ("Meridian Connectivity Sp. z o.o.") with
+  // a portfolio of subscriptions covering every ARC operator scenario
+  // (amend / renew / cancel / multi-target / merge / suspended).
+  // Idempotent + self-contained — items use generic name-only inputs so
+  // they don't depend on the GIX product catalog.
+  await seedCpqArcExamples(ctx.em, ctx.container, scope)
 }

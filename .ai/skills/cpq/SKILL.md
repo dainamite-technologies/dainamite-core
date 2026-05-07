@@ -164,6 +164,7 @@ Unit and integration tests are **complementary, not substitutes**.
 | Specifications, offerings, attributes, bundles, components, relationships | [`products/SKILL.md`](products/SKILL.md) |
 | Customer inventory: subscriptions, subscription items, assets | [`inventory/SKILL.md`](inventory/SKILL.md) |
 | Quote → Order conversion, order activation, order status | [`orders/SKILL.md`](orders/SKILL.md) |
+| Amend / Renew / Cancel a live subscription via quote (ARC, XD-250) | [`arc/SKILL.md`](arc/SKILL.md) |
 | Extracting CPQ to `@dainamite/cpq` package (mechanical) | [`packaging/SKILL.md`](packaging/SKILL.md) |
 | Deciding where new code lives (L1/L2/L3, `@dainamite` vs `@app`) | [`../dainamite-layering/SKILL.md`](../dainamite-layering/SKILL.md) |
 
@@ -233,6 +234,9 @@ cpq.specifications.{view,manage}
 cpq.offerings.{view,manage}
 cpq.wizards.{view,manage}
 cpq.orders.{view,manage}
+cpq.arc.{amend,renew,cancel}.manage
+cpq.arc.changelog.view
+cpq.inventory.expiring.view
 ```
 
 When evaluating raw granted features in runtime code, use `hasFeature` /
@@ -246,7 +250,8 @@ When evaluating raw granted features in runtime code, use `hasFeature` /
 3. [`manuals/xd-188-quote-wizard-with-price-rules.md`](../../../manuals/xd-188-quote-wizard-with-price-rules.md) — guided flow UX
 4. [`manuals/xd-215-customer-inventory.md`](../../../manuals/xd-215-customer-inventory.md) — what survives after order activation
 5. [`manuals/xd-223-bundled-offerings.md`](../../../manuals/xd-223-bundled-offerings.md) — composite offerings
-6. [`specs/implementation/`](../../../specs/implementation/) — the long-form specs behind each manual
+6. [`manuals/xd-250-arc-flow.md`](../../../manuals/xd-250-arc-flow.md) + [`specs/implementation/xd-250-arc-spec.md`](../../../specs/implementation/xd-250-arc-spec.md) — Amend / Renew / Cancel operator flow on live subscriptions
+7. [`specs/implementation/`](../../../specs/implementation/) — the long-form specs behind each manual
 
 ## Self-review checklist (CPQ-specific)
 

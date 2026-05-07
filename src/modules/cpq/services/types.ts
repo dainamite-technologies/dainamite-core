@@ -86,6 +86,10 @@ export interface QuoteItemInput {
   startDate?: string
   termMonths?: number
   endDate?: string
+  /** XD-250 ARC: target subscription this line acts on. Auto-inherited from
+   * the quote's single attached target when omitted. Required when the ARC
+   * quote has multiple non-merge targets (operator must pick). */
+  targetSubscriptionId?: string | null
 }
 
 export interface ValidationError {
@@ -95,6 +99,18 @@ export interface ValidationError {
   sourceSpec?: string
   targetSpec?: string
   message: string
+}
+
+/** XD-250 ARC: snapshot of the source subscription item's *current* state.
+ * Surfaced on quote / order lines so the operator can compare "before" (this
+ * snapshot) vs "after" (the line's current configuration). Null for lines
+ * that aren't ARC-mirrored (e.g. a fresh `add` line on an amend quote). */
+export interface ArcLineSource {
+  subscriptionItemId: string
+  name: string
+  mrcAmount: number
+  nrcAmount: number
+  quantity: number
 }
 
 export interface QuoteLineResult {
@@ -117,6 +133,9 @@ export interface QuoteLineResult {
   charges: ResolvedCharge[]
   isConfigured: boolean
   validationErrors: ValidationError[] | null
+  arcSource: ArcLineSource | null
+  /** XD-250 multi-target ARC: which target subscription this line acts on. */
+  targetSubscriptionId: string | null
 }
 
 export interface PricingSummary {
@@ -190,16 +209,34 @@ export interface ResolvedCharge {
 
 // ─── Inventory status constants ──────────────────────────────────
 
-export const INVENTORY_SUBSCRIPTION_STATUSES = ['pending', 'active', 'suspended', 'terminated', 'expired'] as const
+export const INVENTORY_SUBSCRIPTION_STATUSES = [
+  'pending',
+  'active',
+  'suspended',
+  'terminated',
+  'expired',
+  'superseded',
+] as const
 export type InventorySubscriptionStatus = (typeof INVENTORY_SUBSCRIPTION_STATUSES)[number]
 
 export const INVENTORY_SUBSCRIPTION_TRANSITIONS: Record<InventorySubscriptionStatus, InventorySubscriptionStatus[]> = {
   pending: ['active', 'terminated'],
-  active: ['suspended', 'terminated', 'expired'],
-  suspended: ['active', 'terminated'],
+  active: ['suspended', 'terminated', 'expired', 'superseded'],
+  suspended: ['active', 'terminated', 'superseded'],
   terminated: [],
   expired: [],
+  superseded: [],
 }
+
+export const INVENTORY_SUBSCRIPTION_ITEM_STATUSES = [
+  'pending',
+  'active',
+  'suspended',
+  'terminated',
+  'expired',
+  'superseded',
+] as const
+export type InventorySubscriptionItemStatus = (typeof INVENTORY_SUBSCRIPTION_ITEM_STATUSES)[number]
 
 export const INVENTORY_ASSET_STATUSES = ['pending', 'delivered', 'active', 'returned', 'cancelled'] as const
 export type InventoryAssetStatus = (typeof INVENTORY_ASSET_STATUSES)[number]
@@ -224,3 +261,37 @@ export const CPQ_ORDER_TRANSITIONS: Record<CpqOrderStatus, CpqOrderStatus[]> = {
   cancelled: [],
   fulfilled: [],
 }
+
+// ─── ARC (Amend / Renew / Cancel) constants ─────────────────────
+
+export const CPQ_QUOTE_TYPES = ['new', 'amend', 'renew', 'cancel'] as const
+export type CpqQuoteType = (typeof CPQ_QUOTE_TYPES)[number]
+
+export const ARC_QUOTE_TYPES: ReadonlyArray<Exclude<CpqQuoteType, 'new'>> = ['amend', 'renew', 'cancel']
+
+export const CHANGE_LOG_TYPES = [
+  'amend',
+  'renew',
+  'cancel',
+  'merge-result',
+  'merge-source',
+] as const
+export type ChangeLogType = (typeof CHANGE_LOG_TYPES)[number]
+
+export const MERGE_ACTIONS = ['standalone', 'absorb'] as const
+export type MergeAction = (typeof MERGE_ACTIONS)[number]
+
+export const ARC_REASON_CODES = [
+  'upgrade',
+  'downgrade',
+  'config-change',
+  'price-adjustment',
+  'term-extension',
+  'term-reduction',
+  'consolidation',
+  'customer-request',
+  'non-payment',
+  'contract-breach',
+  'other',
+] as const
+export type ArcReasonCode = (typeof ARC_REASON_CODES)[number]

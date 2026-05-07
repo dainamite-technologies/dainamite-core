@@ -1,36 +1,5 @@
 import { DefaultCpqInventoryService } from '../cpqInventoryService'
-import type { TenantScope } from '../types'
-
-interface MockEm {
-  findOne: jest.MockedFunction<(entity: unknown, where: Record<string, unknown>) => Promise<unknown>>
-  find: jest.MockedFunction<
-    (entity: unknown, where: Record<string, unknown>, options?: Record<string, unknown>) => Promise<unknown[]>
-  >
-  findAndCount: jest.MockedFunction<
-    (entity: unknown, where: Record<string, unknown>, options?: Record<string, unknown>) => Promise<[unknown[], number]>
-  >
-  count: jest.MockedFunction<(entity: unknown, where: Record<string, unknown>) => Promise<number>>
-  create: jest.MockedFunction<(entity: unknown, data: Record<string, unknown>) => unknown>
-  persist: jest.MockedFunction<(entity: unknown) => unknown>
-  flush: jest.MockedFunction<() => Promise<void>>
-}
-
-function createMockEm(): MockEm {
-  return {
-    findOne: jest.fn(),
-    find: jest.fn(),
-    findAndCount: jest.fn(),
-    count: jest.fn().mockResolvedValue(0),
-    create: jest.fn().mockImplementation((_e, data: Record<string, unknown>) => ({ ...data })),
-    persist: jest.fn(),
-    flush: jest.fn().mockResolvedValue(undefined),
-  }
-}
-
-const SCOPE: TenantScope = {
-  tenantId: '00000000-0000-0000-0000-000000000001',
-  organizationId: '00000000-0000-0000-0000-000000000002',
-}
+import { createMockEm, TEST_SCOPE as SCOPE } from './_helpers/mockEm'
 
 function makeService() {
   const em = createMockEm()
@@ -161,7 +130,8 @@ describe('DefaultCpqInventoryService.transitionSubscriptionStatus', () => {
     const [, itemWhere] = em.find.mock.calls[0]
     expect(itemWhere).toMatchObject({
       subscriptionId: 's1',
-      status: { $nin: ['terminated', 'expired'] },
+      // XD-250 added 'superseded' to the terminal item statuses excluded from cascade.
+      status: { $nin: ['terminated', 'expired', 'superseded'] },
     })
   })
 })

@@ -608,8 +608,16 @@ export class CpqPriceRule {
 
 @Entity({ tableName: 'cpq_quote_configurations' })
 @Unique({ name: 'cpq_quote_configurations_quote_unique', properties: ['organizationId', 'tenantId', 'quoteId'] })
+@Index({ name: 'cpq_quote_configurations_quote_type_idx', properties: ['organizationId', 'tenantId', 'quoteType'] })
 export class CpqQuoteConfiguration {
-  [OptionalProps]?: 'cpqStatus' | 'version' | 'currencyCode' | 'createdAt' | 'updatedAt' | 'deletedAt'
+  [OptionalProps]?:
+    | 'cpqStatus'
+    | 'version'
+    | 'currencyCode'
+    | 'quoteType'
+    | 'createdAt'
+    | 'updatedAt'
+    | 'deletedAt'
 
   @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
   id!: string
@@ -646,6 +654,39 @@ export class CpqQuoteConfiguration {
 
   @Property({ name: 'pricing_summary', type: 'jsonb', nullable: true })
   pricingSummary?: Record<string, unknown> | null
+
+  // ── ARC (Amend / Renew / Cancel) — XD-250 ───────────────────────
+  @Property({ name: 'quote_type', type: 'text', default: 'new' })
+  quoteType: string = 'new'
+
+  // Cancel meta — only meaningful for quoteType='cancel'.
+  @Property({ name: 'arc_reason_code', type: 'text', nullable: true })
+  arcReasonCode?: string | null
+
+  @Property({ name: 'arc_reason_text', type: 'text', nullable: true })
+  arcReasonText?: string | null
+
+  @Property({ name: 'arc_etf_amount', type: 'numeric', columnType: 'numeric(18, 4)', nullable: true })
+  arcEtfAmount?: string | null
+
+  @Property({ name: 'arc_etf_currency', type: 'text', nullable: true })
+  arcEtfCurrency?: string | null
+
+  // Merge meta — only meaningful for quoteType='renew' with ≥2 absorb targets.
+  @Property({ name: 'arc_merge_new_term_start', type: 'date', nullable: true })
+  arcMergeNewTermStart?: Date | null
+
+  @Property({ name: 'arc_merge_new_term_end', type: 'date', nullable: true })
+  arcMergeNewTermEnd?: Date | null
+
+  @Property({ name: 'arc_merge_new_term_months', type: 'integer', nullable: true })
+  arcMergeNewTermMonths?: number | null
+
+  @Property({ name: 'arc_merge_new_sub_code', type: 'text', nullable: true })
+  arcMergeNewSubCode?: string | null
+
+  @Property({ name: 'arc_merge_new_sub_name', type: 'text', nullable: true })
+  arcMergeNewSubName?: string | null
 
   @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
   createdAt: Date = new Date()
@@ -721,6 +762,7 @@ export class CpqWizardDefinition {
 @Unique({ name: 'cpq_qlc_quote_line_unique', properties: ['organizationId', 'tenantId', 'quoteLineId'] })
 @Index({ name: 'cpq_qlc_quote_config_idx', properties: ['organizationId', 'tenantId', 'quoteConfigurationId'] })
 @Index({ name: 'cpq_qlc_parent_line_idx', properties: ['organizationId', 'tenantId', 'parentLineId'] })
+@Index({ name: 'cpq_qlc_target_sub_idx', properties: ['organizationId', 'tenantId', 'targetSubscriptionId'] })
 export class CpqQuoteLineConfiguration {
   [OptionalProps]?: 'action' | 'configuration' | 'quantity' | 'nrcTotal' | 'mrcTotal' | 'isConfigured' | 'createdAt' | 'updatedAt' | 'deletedAt'
 
@@ -790,6 +832,18 @@ export class CpqQuoteLineConfiguration {
   @Property({ name: 'is_configured', type: 'boolean', default: false })
   isConfigured: boolean = false
 
+  // ── ARC (Amend / Renew / Cancel) — XD-250 ───────────────────────
+  // For quote_type='amend'/'cancel'/'renew' standalone: identifies which
+  // target subscription the line affects. Null for type='new' and merge
+  // mode (M doesn't exist at quote time).
+  @Property({ name: 'target_subscription_id', type: 'uuid', nullable: true })
+  targetSubscriptionId?: string | null
+
+  // Required when action ∈ {cancel, modify} on amend/renew quotes.
+  // Identifies the existing subscription item the line is changing.
+  @Property({ name: 'source_subscription_item_id', type: 'uuid', nullable: true })
+  sourceSubscriptionItemId?: string | null
+
   @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
   createdAt: Date = new Date()
 
@@ -808,8 +862,20 @@ export class CpqQuoteLineConfiguration {
 @Index({ name: 'cpq_inventory_subscriptions_customer_idx', properties: ['organizationId', 'tenantId', 'customerId'] })
 @Index({ name: 'cpq_inventory_subscriptions_status_idx', properties: ['organizationId', 'tenantId', 'status'] })
 @Index({ name: 'cpq_inventory_subscriptions_source_quote_idx', properties: ['organizationId', 'tenantId', 'sourceQuoteId'] })
+@Index({ name: 'cpq_inventory_subscriptions_term_end_idx', properties: ['organizationId', 'tenantId', 'currentTermEnd'] })
+@Index({ name: 'cpq_inventory_subscriptions_merged_into_idx', properties: ['organizationId', 'tenantId', 'mergedIntoSubscriptionId'] })
 export class CpqInventorySubscription {
-  [OptionalProps]?: 'status' | 'billingCycle' | 'currencyCode' | 'mrcAmount' | 'nrcAmount' | 'autoRenew' | 'createdAt' | 'updatedAt' | 'deletedAt'
+  [OptionalProps]?:
+    | 'status'
+    | 'billingCycle'
+    | 'currencyCode'
+    | 'mrcAmount'
+    | 'nrcAmount'
+    | 'autoRenew'
+    | 'version'
+    | 'createdAt'
+    | 'updatedAt'
+    | 'deletedAt'
 
   @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
   id!: string
@@ -850,6 +916,9 @@ export class CpqInventorySubscription {
   @Property({ name: 'start_date', type: 'date', nullable: true })
   startDate?: Date | null
 
+  @Property({ name: 'current_term_start', type: 'date', nullable: true })
+  currentTermStart?: Date | null
+
   @Property({ name: 'current_term_end', type: 'date', nullable: true })
   currentTermEnd?: Date | null
 
@@ -876,6 +945,20 @@ export class CpqInventorySubscription {
 
   @Property({ name: 'source_order_id', type: 'uuid', nullable: true })
   sourceOrderId?: string | null
+
+  // ── ARC (Amend / Renew / Cancel) — XD-250 ───────────────────────
+  // Set when this row is a merge source (terminal status='superseded').
+  // Points at the new merge sub M that absorbed this one.
+  @Property({ name: 'merged_into_subscription_id', type: 'uuid', nullable: true })
+  mergedIntoSubscriptionId?: string | null
+
+  // Convenience pointer to most recent CpqSubscriptionChangeLog for fast UI.
+  @Property({ name: 'last_change_log_id', type: 'uuid', nullable: true })
+  lastChangeLogId?: string | null
+
+  // MikroORM optimistic lock — auto-increments on every UPDATE.
+  @Property({ type: 'integer', version: true })
+  version: number = 1
 
   @Property({ type: 'jsonb', nullable: true })
   metadata?: Record<string, unknown> | null
@@ -1202,6 +1285,174 @@ export class CpqOrderLineConfiguration {
   @Property({ name: 'updated_at', type: Date, onUpdate: () => new Date() })
   updatedAt: Date = new Date()
 
+  @Property({ name: 'deleted_at', type: Date, nullable: true })
+  deletedAt?: Date | null
+}
+
+// ─── CpqQuoteTargetSubscription (XD-250 ARC) ────────────────────
+//
+// Junction between an ARC quote and the subscription(s) it targets.
+// One row per (quote, subscription) pair.
+
+@Entity({ tableName: 'cpq_quote_target_subscriptions' })
+@Unique({
+  name: 'cpq_qts_quote_sub_unique',
+  properties: ['organizationId', 'tenantId', 'quoteId', 'subscriptionId'],
+})
+@Index({ name: 'cpq_qts_quote_idx', properties: ['organizationId', 'tenantId', 'quoteId'] })
+@Index({
+  name: 'cpq_qts_sub_type_idx',
+  properties: ['organizationId', 'tenantId', 'subscriptionId', 'quoteType'],
+})
+export class CpqQuoteTargetSubscription {
+  [OptionalProps]?: 'createdAt' | 'updatedAt' | 'deletedAt'
+
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @Property({ name: 'organization_id', type: 'uuid' })
+  organizationId!: string
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  // FK to CpqQuoteConfiguration.id (intra-module — could be ORM relation,
+  // kept as string id for consistency with the rest of the CPQ schema).
+  @Property({ name: 'quote_id', type: 'uuid' })
+  quoteId!: string
+
+  // FK to CpqInventorySubscription.id (intra-module).
+  @Property({ name: 'subscription_id', type: 'uuid' })
+  subscriptionId!: string
+
+  // MUST mirror parent CpqQuoteConfiguration.quoteType ∈ {amend, renew, cancel}.
+  @Property({ name: 'quote_type', type: 'text' })
+  quoteType!: string
+
+  // Renew-only: standalone (single target, in-place mutation) or absorb
+  // (merge source — items migrate to a new sub at activation). Null for
+  // amend / cancel.
+  @Property({ name: 'merge_action', type: 'text', nullable: true })
+  mergeAction?: string | null
+
+  // Renew-only, populated only when merge_action='standalone'.
+  @Property({ name: 'new_term_start', type: 'date', nullable: true })
+  newTermStart?: Date | null
+
+  @Property({ name: 'new_term_end', type: 'date', nullable: true })
+  newTermEnd?: Date | null
+
+  @Property({ name: 'new_term_months', type: 'integer', nullable: true })
+  newTermMonths?: number | null
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+
+  @Property({ name: 'updated_at', type: Date, onUpdate: () => new Date() })
+  updatedAt: Date = new Date()
+
+  @Property({ name: 'deleted_at', type: Date, nullable: true })
+  deletedAt?: Date | null
+}
+
+// ─── CpqSubscriptionChangeLog (XD-250 ARC) ──────────────────────
+//
+// Append-only audit record. One row per ARC operation per affected
+// subscription. Drives the "Change History" UI tab and downstream
+// billing / notification consumers.
+
+@Entity({ tableName: 'cpq_subscription_change_logs' })
+@Index({
+  name: 'cpq_scl_sub_history_idx',
+  properties: ['organizationId', 'tenantId', 'subscriptionId', 'createdAt'],
+})
+@Index({ name: 'cpq_scl_source_order_idx', properties: ['sourceOrderId'] })
+@Index({ name: 'cpq_scl_merged_into_idx', properties: ['mergedIntoSubscriptionId'] })
+// Idempotency: re-running activation for the same (order, sub) pair is a no-op.
+// PostgreSQL treats NULLs as distinct in UNIQUE indexes by default, so multiple
+// rows with NULL source_order_id can coexist for the same subscription
+// (hypothetical future non-order-driven entries — manual reconciliation, etc.).
+@Unique({
+  name: 'cpq_scl_order_sub_unique',
+  properties: ['sourceOrderId', 'subscriptionId'],
+})
+export class CpqSubscriptionChangeLog {
+  [OptionalProps]?: 'createdAt' | 'deletedAt'
+
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @Property({ name: 'organization_id', type: 'uuid' })
+  organizationId!: string
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  // FK to CpqInventorySubscription.id (intra-module).
+  @Property({ name: 'subscription_id', type: 'uuid' })
+  subscriptionId!: string
+
+  // 'amend' | 'renew' | 'cancel' | 'merge-result' | 'merge-source'.
+  // Validated in service layer (see CHANGE_LOG_TYPES in services/types.ts).
+  @Property({ name: 'change_type', type: 'text' })
+  changeType!: string
+
+  @Property({ name: 'source_quote_id', type: 'uuid', nullable: true })
+  sourceQuoteId?: string | null
+
+  @Property({ name: 'source_order_id', type: 'uuid', nullable: true })
+  sourceOrderId?: string | null
+
+  @Property({ name: 'performed_by_user_id', type: 'uuid', nullable: true })
+  performedByUserId?: string | null
+
+  @Property({ name: 'effective_at', type: Date })
+  effectiveAt: Date = new Date()
+
+  // Full state snapshot (subscription + items + assets) before mutation.
+  // Null on change_type='merge-result' (M is brand new — no "before").
+  @Property({ name: 'before_snapshot', type: 'jsonb', nullable: true })
+  beforeSnapshot?: Record<string, unknown> | null
+
+  // Full state snapshot after mutation. Null on change_type='merge-source'
+  // (source's terminal state is the meaningful "after").
+  @Property({ name: 'after_snapshot', type: 'jsonb', nullable: true })
+  afterSnapshot?: Record<string, unknown> | null
+
+  // Summary array: [{ action, lineId, productCode, qty, mrcDelta, ... }]
+  @Property({ name: 'line_changes', type: 'jsonb', nullable: true })
+  lineChanges?: Array<Record<string, unknown>> | null
+
+  // { oldTermStart, newTermStart, oldTermEnd, newTermEnd, oldTermMonths, newTermMonths }
+  // Populated for change_type='renew' (standalone) and 'merge-result'.
+  @Property({ name: 'term_change', type: 'jsonb', nullable: true })
+  termChange?: Record<string, unknown> | null
+
+  // Set on change_type='merge-source' rows; points at the new merge sub M.
+  @Property({ name: 'merged_into_subscription_id', type: 'uuid', nullable: true })
+  mergedIntoSubscriptionId?: string | null
+
+  // Set on change_type='merge-result' rows; array of source ids absorbed into M.
+  @Property({ name: 'merged_from_subscription_ids', type: 'jsonb', nullable: true })
+  mergedFromSubscriptionIds?: string[] | null
+
+  // Cancel-only.
+  @Property({ name: 'reason_code', type: 'text', nullable: true })
+  reasonCode?: string | null
+
+  @Property({ name: 'reason_text', type: 'text', nullable: true })
+  reasonText?: string | null
+
+  @Property({ name: 'etf_amount', type: 'numeric', columnType: 'numeric(18, 4)', nullable: true })
+  etfAmount?: string | null
+
+  @Property({ name: 'etf_currency', type: 'text', nullable: true })
+  etfCurrency?: string | null
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+
+  // Soft-delete reserved for compliance erasure; runtime ignores deleted rows.
   @Property({ name: 'deleted_at', type: Date, nullable: true })
   deletedAt?: Date | null
 }

@@ -4,6 +4,14 @@ import { useRouter, useParams } from 'next/navigation'
 
 // ─── Types ───────────────────────────────────────────────────────
 
+type ArcLineSource = {
+  subscriptionItemId: string
+  name: string
+  mrcAmount: number
+  nrcAmount: number
+  quantity: number
+}
+
 type OrderLineResult = {
   lineId: string
   offeringId: string | null
@@ -22,6 +30,7 @@ type OrderLineResult = {
   mrcTotal: number
   charges: Array<{ chargeName?: string; chargeType?: string; unitPrice?: number; quantity?: number; totalPrice?: number }>
   sourceQuoteLineId: string | null
+  arcSource: ArcLineSource | null
 }
 
 type OrderResult = {
@@ -31,6 +40,7 @@ type OrderResult = {
   customerId: string
   cpqStatus: string
   sourceQuoteId: string | null
+  quoteType: string
   currencyCode: string
   pricingSummary: {
     nrcTotal: number
@@ -40,6 +50,12 @@ type OrderResult = {
   activatedAt: string | null
   createdAt: string
   lines: OrderLineResult[]
+}
+
+const ARC_BADGE_STYLES: Record<string, string> = {
+  amend: 'bg-purple-100 text-purple-800 border-purple-200',
+  renew: 'bg-green-100 text-green-800 border-green-200',
+  cancel: 'bg-red-100 text-red-800 border-red-200',
 }
 
 // ─── Constants ───────────────────────────────────────────────────
@@ -191,6 +207,16 @@ export default function CpqOrderDetailPage(props: { params?: { id?: string } }) 
         <div className="flex items-center gap-3">
           <button onClick={() => router.push('/backend/cpq/orders')} className="text-sm text-muted-foreground hover:text-foreground">← Back</button>
           <h1 className="text-2xl font-bold">Order {order.orderNumber || order.orderId.slice(0, 8)}</h1>
+          {order.quoteType && order.quoteType !== 'new' && (
+            <span
+              className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-bold uppercase tracking-wide ${
+                ARC_BADGE_STYLES[order.quoteType] ?? 'bg-gray-100 text-gray-800 border-gray-200'
+              }`}
+              title={`ARC ${order.quoteType} order — derived from a Customer Inventory subscription change`}
+            >
+              {order.quoteType}
+            </span>
+          )}
           <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${STATUS_COLORS[order.cpqStatus] ?? 'bg-gray-100 text-gray-800'}`}>
             {order.cpqStatus.replace(/_/g, ' ')}
           </span>
@@ -412,57 +438,99 @@ function OrderLineRow({ line, currency, isExpanded, isBundle, childCount, indent
         </div>
       </div>
 
-      {isExpanded && (
-        <div className="border-t bg-muted/10 px-12 py-3 space-y-3" style={paddingLeft ? { paddingLeft: `calc(${paddingLeft} + 2rem)` } : undefined}>
-          {Object.keys(line.configuration).length > 0 && (
-            <div>
-              <p className="text-xs font-medium text-muted-foreground mb-1">Configuration</p>
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-1">
-                {Object.entries(line.configuration).map(([key, value]) => (
-                  <div key={key} className="text-xs">
-                    <span className="text-muted-foreground">{key}: </span>
-                    <span className="font-medium">{String(value)}</span>
+      {isExpanded && (() => {
+        const internalKeys = new Set(['_arcMirroredName', '_arcMirroredFromItemId', 'offeringName'])
+        const visibleConfigEntries = Object.entries(line.configuration).filter(
+          ([key]) => !internalKeys.has(key),
+        )
+        const hasConfig = visibleConfigEntries.length > 0
+        const hasCharges = line.charges.length > 0
+        const hasTerm = !!(line.startDate || line.termMonths || line.endDate)
+        const hasArcDiff = !!line.arcSource
+        const mirroredFromItemId = (line.configuration?._arcMirroredFromItemId as string | undefined) ?? null
+        const isEmpty = !hasConfig && !hasCharges && !hasTerm && !hasArcDiff
+
+        return (
+          <div
+            className="border-t bg-muted/10 px-12 py-3 space-y-3"
+            style={paddingLeft ? { paddingLeft: `calc(${paddingLeft} + 2rem)` } : undefined}
+          >
+            {hasArcDiff && (
+              <ArcLineDiff line={line} currency={currency} />
+            )}
+            {isEmpty ? (
+              <div className="text-xs text-muted-foreground space-y-1">
+                <div>
+                  No detailed breakdown for this line.
+                  {mirroredFromItemId && ' Mirrored from existing subscription item.'}
+                </div>
+                {(line.nrcTotal > 0 || line.mrcTotal > 0) && (
+                  <div className="flex gap-4">
+                    {line.nrcTotal > 0 && (
+                      <span>NRC <span className="font-mono font-medium text-foreground">{fmt(line.nrcTotal, currency)}</span></span>
+                    )}
+                    {line.mrcTotal > 0 && (
+                      <span>MRC <span className="font-mono font-medium text-foreground">{fmt(line.mrcTotal, currency)}</span></span>
+                    )}
                   </div>
-                ))}
+                )}
               </div>
-            </div>
-          )}
+            ) : (
+              <>
+                {hasConfig && (
+                  <div>
+                    <p className="text-xs font-medium text-muted-foreground mb-1">Configuration</p>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-1">
+                      {visibleConfigEntries.map(([key, value]) => (
+                        <div key={key} className="text-xs">
+                          <span className="text-muted-foreground">{key}: </span>
+                          <span className="font-medium">{String(value)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
-          {line.charges.length > 0 && (
-            <div>
-              <p className="text-xs font-medium text-muted-foreground mb-1">Charges</p>
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="text-muted-foreground">
-                    <th className="text-left py-1 font-medium">Charge</th>
-                    <th className="text-left py-1 font-medium">Type</th>
-                    <th className="text-right py-1 font-medium">Unit Price</th>
-                    <th className="text-right py-1 font-medium">Qty</th>
-                    <th className="text-right py-1 font-medium">Total</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {line.charges.map((c, i) => (
-                    <tr key={i} className="border-t border-dashed border-border/50">
-                      <td className="py-1">{c.chargeName ?? '—'}</td>
-                      <td className="py-1 uppercase">{c.chargeType ?? '—'}</td>
-                      <td className="py-1 text-right font-mono">{c.unitPrice != null ? fmt(c.unitPrice, currency) : '—'}</td>
-                      <td className="py-1 text-right font-mono">{c.quantity ?? '—'}</td>
-                      <td className="py-1 text-right font-mono">{c.totalPrice != null ? fmt(c.totalPrice, currency) : '—'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+                {hasCharges && (
+                  <div>
+                    <p className="text-xs font-medium text-muted-foreground mb-1">Charges</p>
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="text-muted-foreground">
+                          <th className="text-left py-1 font-medium">Charge</th>
+                          <th className="text-left py-1 font-medium">Type</th>
+                          <th className="text-right py-1 font-medium">Unit Price</th>
+                          <th className="text-right py-1 font-medium">Qty</th>
+                          <th className="text-right py-1 font-medium">Total</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {line.charges.map((c, i) => (
+                          <tr key={i} className="border-t border-dashed border-border/50">
+                            <td className="py-1">{c.chargeName ?? '—'}</td>
+                            <td className="py-1 uppercase">{c.chargeType ?? '—'}</td>
+                            <td className="py-1 text-right font-mono">{c.unitPrice != null ? fmt(c.unitPrice, currency) : '—'}</td>
+                            <td className="py-1 text-right font-mono">{c.quantity ?? '—'}</td>
+                            <td className="py-1 text-right font-mono">{c.totalPrice != null ? fmt(c.totalPrice, currency) : '—'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
 
-          <div className="flex gap-4 text-xs text-muted-foreground">
-            {line.startDate && <span>Start: {new Date(line.startDate).toLocaleDateString()}</span>}
-            {line.termMonths && <span>Term: {line.termMonths}mo</span>}
-            {line.endDate && <span>End: {new Date(line.endDate).toLocaleDateString()}</span>}
+                {hasTerm && (
+                  <div className="flex gap-4 text-xs text-muted-foreground">
+                    {line.startDate && <span>Start: {new Date(line.startDate).toLocaleDateString()}</span>}
+                    {line.termMonths && <span>Term: {line.termMonths}mo</span>}
+                    {line.endDate && <span>End: {new Date(line.endDate).toLocaleDateString()}</span>}
+                  </div>
+                )}
+              </>
+            )}
           </div>
-        </div>
-      )}
+        )
+      })()}
     </div>
   )
 }
@@ -482,5 +550,84 @@ function ErrorBanner({ message, onDismiss }: { message: string; onDismiss?: () =
       <span className="text-sm text-red-700 flex-1">{message}</span>
       {onDismiss && <button onClick={onDismiss} className="text-red-400 hover:text-red-600 text-sm font-bold">×</button>}
     </div>
+  )
+}
+
+// XD-250 ARC: side-by-side "Before / After" snapshot for a quote / order line
+// that mirrors an existing subscription item. "Before" comes from the live
+// CpqInventorySubscriptionItem at render time; "After" is what the line will
+// apply on activation. For 'cancel' lines the after column is greyed out.
+function ArcLineDiff({ line, currency }: { line: OrderLineResult; currency: string }) {
+  const src = line.arcSource
+  if (!src) return null
+  const isCancel = line.action === 'cancel'
+
+  const beforeMrc = src.mrcAmount
+  const beforeNrc = src.nrcAmount
+  const beforeQty = src.quantity
+  const afterMrc = isCancel ? 0 : line.mrcTotal
+  const afterNrc = isCancel ? 0 : line.nrcTotal
+  const afterQty = isCancel ? 0 : line.quantity
+  const mrcDelta = afterMrc - beforeMrc
+  const nrcDelta = afterNrc - beforeNrc
+  const qtyDelta = afterQty - beforeQty
+
+  return (
+    <div>
+      <p className="text-xs font-medium text-muted-foreground mb-1.5">Change Preview</p>
+      <div className="rounded border bg-background overflow-hidden">
+        <table className="w-full text-xs">
+          <thead className="bg-muted/40">
+            <tr className="text-muted-foreground">
+              <th className="text-left px-3 py-1.5 font-medium" />
+              <th className="text-right px-3 py-1.5 font-medium">Before</th>
+              <th className="text-right px-3 py-1.5 font-medium">After</th>
+              <th className="text-right px-3 py-1.5 font-medium">Δ</th>
+            </tr>
+          </thead>
+          <tbody>
+            <ArcDiffRow label="Quantity" before={beforeQty} after={afterQty} delta={qtyDelta} currency={null} dimAfter={isCancel} />
+            <ArcDiffRow label="MRC" before={beforeMrc} after={afterMrc} delta={mrcDelta} currency={currency} dimAfter={isCancel} />
+            <ArcDiffRow label="NRC" before={beforeNrc} after={afterNrc} delta={nrcDelta} currency={currency} dimAfter={isCancel} />
+          </tbody>
+        </table>
+      </div>
+      {isCancel && (
+        <p className="text-xs text-red-700 mt-1 italic">
+          Cancellation — item will be terminated on activation.
+        </p>
+      )}
+    </div>
+  )
+}
+
+function ArcDiffRow({
+  label,
+  before,
+  after,
+  delta,
+  currency,
+  dimAfter,
+}: {
+  label: string
+  before: number
+  after: number
+  delta: number
+  currency: string | null
+  dimAfter: boolean
+}) {
+  const fmtVal = (v: number) => (currency ? fmt(v, currency) : String(v))
+  const showDelta = delta !== 0
+  return (
+    <tr className="border-t border-dashed border-border/40">
+      <td className="px-3 py-1 text-muted-foreground">{label}</td>
+      <td className="px-3 py-1 text-right font-mono">{fmtVal(before)}</td>
+      <td className={`px-3 py-1 text-right font-mono ${dimAfter ? 'text-muted-foreground line-through' : ''}`}>
+        {fmtVal(after)}
+      </td>
+      <td className={`px-3 py-1 text-right font-mono font-medium ${showDelta ? (delta > 0 ? 'text-green-700' : 'text-red-700') : 'text-muted-foreground'}`}>
+        {showDelta ? `${delta > 0 ? '+' : ''}${fmtVal(delta)}` : '—'}
+      </td>
+    </tr>
   )
 }

@@ -99,6 +99,14 @@ Place under `src/modules/cpq/services/__tests__/`:
 | `cpqOrderService.activate.test.ts` | Activation triggers `cpqInventoryService` materialisation; activation failure does not partially write (transactional boundary held); status reflects activation outcome |
 | `cpqOrderService.idempotency.test.ts` | (When activation idempotency lands per the domain rules above) Re-activating produces no duplicate inventory rows; regression guard if/when this work happens |
 
+> **ARC note** (XD-250): when the source quote's `quoteType !== 'new'`,
+> `cpqOrderService` activation routes per ARC type — calls `applyAmendment`
+> / `applyRenewal` / `applyMergeRenewal` / `applyCancel` on
+> `cpqInventoryService` instead of creating a fresh subscription.
+> `buildArcLineChange` translates quote line configs into the apply input
+> shape. Load [`../arc/SKILL.md`](../arc/SKILL.md) before touching the
+> activation routing block or any `apply*` translator.
+
 ## Self-review checklist
 
 - [ ] OpenAPI updated for any `api/orders/*` change

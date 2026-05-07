@@ -58,7 +58,6 @@ const BUNDLE_ECOMMERCE: BundleDef = {
   defaultComponents: [
     { slotKey: 'storefront_host', childOfferingCode: 'vps_small', isDefault: true },
     { slotKey: 'database', childOfferingCode: 'OFFER-PUFFIN-MANAGED-DB', isDefault: true },
-    { slotKey: 'cache', childOfferingCode: 'OFFER-PUFFIN-MANAGED-DB', isDefault: false },
     { slotKey: 'media', childOfferingCode: 'OFFER-PUFFIN-OBJECT-STORAGE', isDefault: true },
     { slotKey: 'cdn', childOfferingCode: 'OFFER-PUFFIN-CDN', isDefault: true },
     { slotKey: 'ddos', childOfferingCode: 'OFFER-PUFFIN-DDOS-STD', isDefault: true },

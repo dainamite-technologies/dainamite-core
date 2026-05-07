@@ -4,28 +4,28 @@ import {
   CustomerCompanyProfile,
   CustomerEntity,
 } from '@open-mercato/core/modules/customers/data/entities'
-import { CpqProductOffering } from '../data/entities'
-import type { TenantScope } from '../services/types'
-import type { DefaultCpqQuotingService } from '../services/cpqQuotingService'
-import type { DefaultCpqOrderService } from '../services/cpqOrderService'
-import type { DefaultCpqInventoryService } from '../services/cpqInventoryService'
+import { CpqProductOffering } from '../../cpq/data/entities'
+import type { TenantScope } from '../../cpq/services/types'
+import type { DefaultCpqQuotingService } from '../../cpq/services/cpqQuotingService'
+import type { DefaultCpqOrderService } from '../../cpq/services/cpqOrderService'
+import type { DefaultCpqInventoryService } from '../../cpq/services/cpqInventoryService'
 
 /**
- * Seed sample CPQ demo data: companies, quotes (across statuses), an order
+ * Seed sample GIX demo data: companies, quotes (across statuses), an order
  * activation, and the resulting subscription + assets.
  *
  * Idempotent: skips on re-run by checking for the marker company.
  * Defensive: warns and skips if required offerings are not seeded yet.
  *
- * Wired via the `seedExamples` lifecycle hook in setup.ts — runs only when
- * the operator opted in to example seeding.
+ * Migrated from src/modules/cpq/lib/example-seeds.ts (XD-210). Now scoped to
+ * the GIX use case so its data only seeds into the GIX tenant.
  */
-export async function seedCpqExamples(
+export async function seedGixExamples(
   em: EntityManager,
   container: AwilixContainer,
   scope: TenantScope,
 ): Promise<void> {
-  const log = (msg: string) => console.log(`    [cpq:examples] ${msg}`)
+  const log = (msg: string) => console.log(`    [demo_gix:examples] ${msg}`)
 
   // 1. Idempotency guard — skip if marker company already exists
   const existing = await em.findOne(CustomerEntity, {
@@ -49,7 +49,8 @@ export async function seedCpqExamples(
   // 3. Resolve services
   const quoting = container.resolve('cpqQuotingService') as DefaultCpqQuotingService
   const orders = container.resolve('cpqOrderService') as DefaultCpqOrderService
-  const inventory = container.resolve('cpqInventoryService') as DefaultCpqInventoryService
+  // Resolve to validate registration even if not used directly here.
+  container.resolve('cpqInventoryService') as DefaultCpqInventoryService
 
   // 4. Create demo companies
   const acme = await ensureCompany(em, scope, ACME)
@@ -58,8 +59,6 @@ export async function seedCpqExamples(
   log(`Companies created: ${acme.displayName}, ${globex.displayName}`)
 
   // 5. Quote A1 — Acme, GIX Access Port 10G Amsterdam — full happy path
-  //    create → addItem → recalculate → transitionStatus(accepted)
-  //    → convertToOrder → activateOrder (auto-creates subscription + assets)
   let quoteA1 = await quoting.createQuote(
     {
       customerId: acme.id,
@@ -167,8 +166,6 @@ export async function seedCpqExamples(
     },
     scope,
   )
-  // Skip recalculate to keep B2 as a genuine in-progress draft —
-  // recalculate({ save: true }) auto-promotes valid quotes to 'ready'.
   log(`Quote B2 (${quoteB2.cpqStatus}): ${quoteB2.quoteNumber} — Internet Peering 500Mbps draft`)
 
   log('Example seed complete: 2 companies, 4 quotes, 1 order activated, subscription+assets generated.')
@@ -178,12 +175,6 @@ export async function seedCpqExamples(
 
 const DEMO_MARKER = 'cpq-seed-v1'
 
-/**
- * Transition a quote to `target` only if it's not already there.
- *
- * `recalculate({ save: true })` auto-promotes a valid `new` quote to `ready`,
- * so we'd otherwise fail with "Cannot transition from 'ready' to 'ready'".
- */
 async function safeTransition(
   quoting: DefaultCpqQuotingService,
   current: { id: string; cpqStatus: string },

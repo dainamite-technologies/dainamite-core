@@ -139,6 +139,7 @@ generic Task → Context Map (in AGENTS.md) tells you to load.
 | Quote → Order conversion / order activation | `.ai/skills/cpq/orders/SKILL.md`, `manuals/cpq-quote-to-order-conversion.md` |
 | Calculate-price API contract | `manuals/xd-187-calculate-price-api.md` |
 | Extract / package CPQ as `@dainamite/cpq` (mechanical) | `.ai/skills/cpq/packaging/SKILL.md`, `packages/cpq/MIGRATION.md` |
+| Modify CPQ seed data, add a new demo tenant, or change tenant provisioning | `specs/implementation/xd-276-cpq-data-seed.md`, `src/modules/cpq/lib/seeds/api.ts`, `src/modules/demo_tenants/`, the `demo_<x>` modules |
 
 ### Cross-cutting: where does this code live?
 

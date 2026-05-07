@@ -52,6 +52,14 @@ export const enabledModules: ModuleEntry[] = [
   { id: 'example', from: '@app' },
   // Dainamite product modules (in-tree today, future @dainamite/* npm packages — see .ai/specs/SPEC-001)
   { id: 'cpq', from: '@app' },
+  // Demo / use-case bundles (XD-276) — register CPQ use cases that the demo_tenants
+  // orchestrator iterates at init time. Each demo module ships zero customer-facing
+  // pages or APIs, just seed code scoped to its own tenant.
+  { id: 'demo_gix', from: '@app' },
+  { id: 'demo_puffin', from: '@app' },
+  // Orchestrator MUST be registered after every demo_<x> module so the registry
+  // is fully populated by the time its seedExamples hook fires.
+  { id: 'demo_tenants', from: '@app' },
 ]
 
 if (enabledModules.some((entry) => entry.id === 'example')) {

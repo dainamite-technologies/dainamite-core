@@ -183,10 +183,6 @@ jobs:
       # and would otherwise hit "Too many requests".
       OM_TEST_MODE: "1"
       OM_TEST_AUTH_RATE_LIMIT_MODE: opt-in
-      # Puffin public calculator (XD-275) — signs lead-form JWTs. ≥32 chars
-      # required; without it, the page renders the OpsBanner and the
-      # TC-PUFFIN-275 specs fail.
-      PUFFIN_PUBLIC_LEAD_JWT_SECRET: ci-throwaway-puffin-lead-jwt-secret-not-for-prod-${{ github.run_id }}
 
     steps:
       - uses: actions/checkout@v4

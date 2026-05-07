@@ -127,6 +127,32 @@ export async function seedActiveSubscription(
 }
 
 /**
+ * Creates a subscription, takes it to `active`, then transitions to the
+ * given non-active status (`suspended` / `terminated` / `expired`). Used by
+ * the ARC suspended-target test (scenario 6) and the terminal-status
+ * negative test (scenario 7) where ARC buttons must not render.
+ */
+export async function seedSubscriptionInStatus(
+  request: APIRequestContext,
+  token: string,
+  input: SeedSubscriptionInput,
+  status: 'suspended' | 'terminated' | 'expired',
+): Promise<SeededSubscription> {
+  const sub = await seedActiveSubscription(request, token, input)
+  const res = await apiRequest(
+    request,
+    'POST',
+    '/api/cpq/inventory/subscriptions/status',
+    { token, data: { id: sub.id, targetStatus: status } },
+  )
+  expect(
+    res.ok(),
+    `transition to ${status} returned ${res.status()}: ${await res.text()}`,
+  ).toBeTruthy()
+  return sub
+}
+
+/**
  * Cleanup: soft-delete created subscriptions, swallow errors so teardown
  * never aborts subsequent cleanup.
  */

@@ -112,6 +112,14 @@ Place under `src/modules/cpq/services/__tests__/`:
 from `lib/seeds.ts` — don't hand-roll new fixtures unless the test needs a
 distinct shape.
 
+> **ARC note** (XD-250): quotes with `quoteType ∈ {amend, renew, cancel}`
+> reuse the same status ladder + recalculate / approval flow but mutate an
+> existing subscription on activation. They carry per-target rows
+> (`CpqQuoteTargetSubscription`) and per-line `targetSubscriptionId` /
+> `sourceSubscriptionItemId`. Load [`../arc/SKILL.md`](../arc/SKILL.md)
+> before touching `createQuoteFromSubscription`, `attachTargetSubscription`,
+> `validateArcQuote`, or anything in `ArcQuoteConfigurator.tsx`.
+
 ## Self-review checklist
 
 - [ ] OpenAPI updated for any `api/quotes/*` or `api/wizards/*` change

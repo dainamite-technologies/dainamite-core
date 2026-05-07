@@ -117,6 +117,12 @@ Place under `src/modules/cpq/services/__tests__/`:
 ## Self-review checklist
 
 - [ ] OpenAPI updated for any `api/inventory/*` change
+> **ARC note** (XD-250): subscription mutations through Amend / Renew /
+> Cancel quotes go through `applyAmendment` / `applyRenewal` /
+> `applyMergeRenewal` / `applyCancel` in this same service, plus a
+> `CpqSubscriptionChangeLog` audit trail. Load
+> [`../arc/SKILL.md`](../arc/SKILL.md) before touching those.
+
 - [ ] Inventory writes happen only on order activation paths
 - [ ] Status transitions go through the state-machine in
       `cpqInventoryService`, not direct property writes

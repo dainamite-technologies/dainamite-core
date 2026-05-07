@@ -1642,16 +1642,8 @@ DefaultCpqQuotingService.prototype.createQuoteFromSubscription = async function 
   em.persist(target)
 
   // 4. Pre-fill quote lines from the subscription's active items via the
-  //    shared mirror helper (also used when attaching extra targets to a
-  //    multi-target quote). For renew the helper still uses 'modify' action
-  //    — the term-extending semantic comes from the target row, not the
-  //    line action.
-  if (input.type !== 'renew') {
-    await mirrorTargetSubscriptionItems(em, cpqConfig, sub, salesQuote, input.type, scope)
-  } else {
-    // renew uses 'modify' for line semantics, same as amend
-    await mirrorTargetSubscriptionItems(em, cpqConfig, sub, salesQuote, 'amend', scope)
-  }
+  //    shared mirror helper (also used when attaching extra targets).
+  await mirrorTargetSubscriptionItems(em, cpqConfig, sub, salesQuote, input.type, scope)
 
   await em.flush()
   return { quoteId: salesQuoteId, cpqConfigId: cpqConfig.id }
@@ -1831,53 +1823,42 @@ DefaultCpqQuotingService.prototype.attachTargetSubscription = async function (
   }
 
   // XD-250 multi-target ARC: mirror the newly attached subscription's items
-  // as quote lines so the operator can actually see / edit / cancel them in
-  // the quote UI. Without this, attaching a 2nd amend / cancel target was a
-  // dangling no-op — the target row existed but the quote had no lines for
-  // it, so activation produced an empty change-log entry on that sub.
-  // For renew merge, mirrored lines carry `targetSubscriptionId: null`
-  // (the merged sub doesn't exist yet at quote time), so we also retag any
-  // lines that were created earlier for the original standalone target.
-  if (
-    input.quoteType === 'amend' ||
-    input.quoteType === 'cancel' ||
-    input.quoteType === 'renew'
-  ) {
-    const salesQuote = await em.findOne(SalesQuote, {
-      id: cpqConfig.quoteId,
-      organizationId: scope.organizationId,
-      tenantId: scope.tenantId,
-    })
-    if (salesQuote) {
-      const isRenewMerge =
-        input.quoteType === 'renew' &&
-        otherTargets.length > 0 // we now have ≥2 attached
-      await mirrorTargetSubscriptionItems(
-        em,
-        cpqConfig,
-        sub,
-        salesQuote,
-        input.quoteType,
-        scope,
-        { mergeMode: isRenewMerge },
-      )
+  // so the operator can see / edit / cancel them in the quote UI. Without
+  // this the target row existed but the quote had no lines for it, so
+  // activation produced an empty change-log entry on that sub. For renew
+  // merge, mirrored lines carry `targetSubscriptionId: null` (the merged
+  // sub doesn't exist yet at quote time) and any lines created earlier for
+  // the original standalone target get re-tagged to null too.
+  const salesQuote = await em.findOne(SalesQuote, {
+    id: cpqConfig.quoteId,
+    organizationId: scope.organizationId,
+    tenantId: scope.tenantId,
+  })
+  if (salesQuote) {
+    const isRenewMerge = input.quoteType === 'renew' && otherTargets.length > 0
+    await mirrorTargetSubscriptionItems(
+      em,
+      cpqConfig,
+      sub,
+      salesQuote,
+      input.quoteType,
+      scope,
+      { mergeMode: isRenewMerge },
+    )
 
-      // Re-tag pre-existing lines (mirrored at create time for the original
-      // standalone target) to null target now that we're in merge mode.
-      if (renewMergeJustEntered) {
-        const existingLines = await em.find(CpqQuoteLineConfiguration, {
-          quoteConfigurationId: cpqConfig.id,
-          organizationId: scope.organizationId,
-          tenantId: scope.tenantId,
-          deletedAt: null,
-        })
-        for (const lc of existingLines) {
-          if (lc.targetSubscriptionId !== null) lc.targetSubscriptionId = null
-        }
+    if (renewMergeJustEntered) {
+      const existingLines = await em.find(CpqQuoteLineConfiguration, {
+        quoteConfigurationId: cpqConfig.id,
+        organizationId: scope.organizationId,
+        tenantId: scope.tenantId,
+        deletedAt: null,
+      })
+      for (const lc of existingLines) {
+        if (lc.targetSubscriptionId !== null) lc.targetSubscriptionId = null
       }
-
-      await em.flush()
     }
+
+    await em.flush()
   }
 
   return mapTargetView(em, target, scope)
@@ -2405,7 +2386,7 @@ function pickArcSource(
 function buildRenewDefaults(
   sub: CpqInventorySubscription,
   override?: ArcRenewTermInput,
-): { start: Date; end: Date; months: number } | null {
+): { start: Date; end: Date; months: number } {
   if (override) {
     const start = toDateOrNull(override.newTermStart)
     const end = toDateOrNull(override.newTermEnd)

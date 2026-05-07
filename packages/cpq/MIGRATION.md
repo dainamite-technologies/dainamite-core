@@ -4,13 +4,19 @@ This document tracks the concrete steps to extract the in-tree CPQ module into
 the `@dainamite/cpq` package, per
 [SPEC-001 — Module Distribution Architecture](../../.ai/specs/SPEC-001-2026-04-23-module-distribution-architecture.md).
 
-## Current state (2026-04-27)
+## Current state (2026-05-04)
 
 - CPQ source lives at [`src/modules/cpq/`](../../src/modules/cpq/).
 - Registered as `{ id: 'cpq', from: '@app' }` in
   [`src/modules.ts`](../../src/modules.ts).
 - `packages/cpq/` is a structural placeholder only (this directory).
 - `dainamite-core` repo is the L3 customer demo (Demo Netia) per SPEC-001 Q4.
+- **Customer demo data does NOT live in `cpq/`** (since XD-276). GIX and
+  Puffin Cloud catalog seeds live in `src/modules/demo_gix/` and
+  `src/modules/demo_puffin/`, registered as use cases via
+  `cpq/lib/seeds/api.ts` and orchestrated by `src/modules/demo_tenants/`.
+  When extracting `@dainamite/cpq`, only the registry API ships; the demo
+  modules stay in the customer repo.
 
 ## Target state
 

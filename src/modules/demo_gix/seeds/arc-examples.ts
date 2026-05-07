@@ -4,9 +4,9 @@ import {
   CustomerCompanyProfile,
   CustomerEntity,
 } from '@open-mercato/core/modules/customers/data/entities'
-import { CpqInventorySubscription } from '../data/entities'
-import type { TenantScope } from '../services/types'
-import type { DefaultCpqInventoryService } from '../services/cpqInventoryService'
+import { CpqInventorySubscription } from '../../cpq/data/entities'
+import type { TenantScope } from '../../cpq/services/types'
+import type { DefaultCpqInventoryService } from '../../cpq/services/cpqInventoryService'
 
 /**
  * XD-250 ARC demo seed.

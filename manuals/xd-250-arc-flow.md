@@ -55,7 +55,7 @@ Customer: **Meridian Connectivity Sp. z o.o.** Subscriptions:
 1. **In the browser, go to** `http://localhost:3000/login`.
    - **Checkpoint**: a login form with two inputs (`Email`, `Password`) and a `Sign in` button.
 
-2. **Click the `Email` field, type:** `admin@acme.com`
+2. **Click the `Email` field, type:** `admin@gix.com` (the GIX-tenant admin — XD-276 demo seed orchestration ships ARC fixtures as part of the GIX use case)
 3. **Click the `Password` field, type:** `secret`
 4. **Press Enter** (or click `Sign in`).
    - **Checkpoint**: redirect to `http://localhost:3000/backend`. Page header reads `Dashboard`. Left sidebar contains groups: `Customers`, `Catalog`, `Sales`, `CPQ`, ...

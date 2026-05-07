@@ -60,7 +60,7 @@ sub.click("Amend / Renew /  ─┬─→  ├─ renew (standalone) → extend t
 | UI — order detail (ARC additions) | `backend/cpq/orders/[id]/page.tsx` — header AMEND/RENEW/CANCEL badge, `ArcLineDiff` per line |
 | UI — sub detail (ARC additions) | `backend/cpq/inventory/subscriptions/[id]/page.tsx` — Amend/Renew/Cancel buttons, `ChangeLogLineDetails` (per-line +/~/− glyphs, before→after MRC) |
 | UI — Expiring view | `backend/cpq/inventory/subscriptions/expiring/page.tsx` (window-preset filter + cycle filter, Renew/Modify per row) |
-| Seed | `lib/arc-example-seeds.ts` — 11 demo subs across all ARC scenarios under "Meridian Connectivity Sp. z o.o." (run via `seedExamples` opt-in, NOT in plain `seedDefaults`) |
+| Seed | `src/modules/demo_gix/seeds/arc-examples.ts` (`seedCpqArcExamples`) — 11 demo subs across all ARC scenarios under "Meridian Connectivity Sp. z o.o."; invoked from `demo_gix/seeds/index.ts → seedGixExamples` per XD-276 use-case bundle architecture (skipped when `ctx.withExamples` is false) |
 | Manual | [`manuals/xd-250-arc-flow.md`](../../../../manuals/xd-250-arc-flow.md) — 11 click-by-click operator scenarios |
 | Spec | [`specs/implementation/xd-250-arc-spec.md`](../../../../specs/implementation/xd-250-arc-spec.md) |
 | Migration | `migrations/Migration20260504064621_cpq_arc.ts` |

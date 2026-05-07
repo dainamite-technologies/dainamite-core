@@ -35,17 +35,54 @@ async function offeringId(em: EntityManager, scope: SeedScope, code: string): Pr
   return o?.id ?? null
 }
 
+// Reserved-eligible offerings per XD-275 Rule 1: VPS family + the single
+// Compute offering + the single Managed-DB offering + DDoS (all tiers).
+const RESERVED_ELIGIBLE_OFFERING_CODES = [
+  'vps_nano',
+  'vps_micro',
+  'vps_small',
+  'vps_medium',
+  'vps_large',
+  'vps_xlarge',
+  'vps_mega',
+  'OFFER-PUFFIN-COMPUTE',
+  'OFFER-PUFFIN-MANAGED-DB',
+  'OFFER-PUFFIN-DDOS-STD',
+  'OFFER-PUFFIN-DDOS-ADV',
+  'OFFER-PUFFIN-DDOS-ENT',
+]
+
+// Workspace plans + add-ons that participate in volume-tier and annual-prepay
+// discounts. Mirrors the seat_price-bearing offerings plus storage/compliance.
+const WORKSPACE_DISCOUNTABLE_OFFERING_CODES = [
+  'workspace_essentials',
+  'workspace_business',
+  'workspace_business_premium',
+  'workspace_enterprise',
+  'ws_email_archive',
+  'ws_atp',
+  'ws_extra_storage',
+  'ws_compliance',
+]
+
 /**
  * Seed CpqPriceRule rows that implement the XD-275 pricing semantics —
- * reserved discounts, Workspace volume tiers + annual prepay, API Gateway
- * free tier, Premium Support spend-uplift `price_override`, VPS backups
+ * reserved discounts, Workspace volume tiers + annual prepay, VPS backups
  * surcharge, and DB attribute-driven surcharges.
  *
- * Where possible we reference offering ids so re-runs after offering
- * deletion don't dangle.
+ * Important: CPQ's `evaluateApplicability` only understands the
+ * `{ attribute, operator: 'eq'|'neq', value }` shape. Anything else (richer
+ * condition keys, `gte`/`lte`/`in` operators) silently returns `true` and
+ * the rule fires on every line. For that reason scoping is done two ways:
+ *   1. Row-level via `productOfferingId` (loaded only for that offering).
+ *   2. Inside the `applicabilityCondition` via a single attribute test that
+ *      reads from configuration — including the synthetic attributes the
+ *      public price route injects (`offering_code`, `seat_volume_tier`,
+ *      plus quoteContext fields like `contract_model`, `billing_cadence`).
  */
 export async function seedPuffinPriceRules(em: EntityManager, scope: SeedScope): Promise<void> {
-  // VPS backups surcharge — +20% on MRC, scoped to the VPS spec.
+  // VPS backups surcharge — +20% on MRC. Scoped by attribute (`backups` is a
+  // VPS-only attribute, so non-VPS lines never satisfy the condition).
   await ensureRule(em, scope, {
     code: 'puffin-vps-backups-surcharge',
     name: 'VPS Backups Add-on (+20% MRC)',
@@ -53,187 +90,155 @@ export async function seedPuffinPriceRules(em: EntityManager, scope: SeedScope):
     ruleType: 'surcharge_percent',
     value: '20',
     chargeTypeFilter: 'mrc',
-    applicabilityCondition: {
-      offeringSpecCode: 'SPEC-PUFFIN-VPS',
-      attribute: 'backups',
-      operator: 'eq',
-      value: true,
-    },
+    applicabilityCondition: { attribute: 'backups', operator: 'eq', value: true },
     sortOrder: 10,
     isActive: true,
   })
 
-  // Reserved discounts — 1y −22%, 3y −38%. Scoped to specs that are reserved-eligible
-  // per XD-275 Rule 1: VPS, Compute, Managed DB, DDoS adv/ent.
-  await ensureRule(em, scope, {
-    code: 'puffin-reserved-1y',
-    name: 'Reserved 1-year discount (−22% MRC)',
-    description: 'Applies to reserved-eligible specs when contract_model = reserved_1y.',
-    ruleType: 'discount_percent',
-    value: '22',
-    chargeTypeFilter: 'mrc',
-    applicabilityCondition: {
-      contractModel: 'reserved_1y',
-      offeringSpecCodeIn: [
-        'SPEC-PUFFIN-VPS',
-        'SPEC-PUFFIN-COMPUTE',
-        'SPEC-PUFFIN-MANAGED-DB',
-        'SPEC-PUFFIN-DDOS',
-      ],
-    },
-    sortOrder: 20,
-    isActive: true,
-  })
-  await ensureRule(em, scope, {
-    code: 'puffin-reserved-3y',
-    name: 'Reserved 3-year discount (−38% MRC)',
-    description: 'Applies to reserved-eligible specs when contract_model = reserved_3y.',
-    ruleType: 'discount_percent',
-    value: '38',
-    chargeTypeFilter: 'mrc',
-    applicabilityCondition: {
-      contractModel: 'reserved_3y',
-      offeringSpecCodeIn: [
-        'SPEC-PUFFIN-VPS',
-        'SPEC-PUFFIN-COMPUTE',
-        'SPEC-PUFFIN-MANAGED-DB',
-        'SPEC-PUFFIN-DDOS',
-      ],
-    },
-    sortOrder: 21,
-    isActive: true,
-  })
+  // Reserved 1y / 3y discounts — per offering, gated by contract_model. The
+  // public price route merges quoteContext into each item's configuration so
+  // `contract_model` is available as a normal attribute.
+  let reservedSort = 20
+  for (const code of RESERVED_ELIGIBLE_OFFERING_CODES) {
+    const oid = await offeringId(em, scope, code)
+    if (!oid) continue
+    await ensureRule(em, scope, {
+      code: `puffin-reserved-1y-${code}`,
+      name: `Reserved 1y (−22% MRC) — ${code}`,
+      description: 'Applies when contract_model = reserved_1y on this offering.',
+      productOfferingId: oid,
+      ruleType: 'discount_percent',
+      value: '22',
+      chargeTypeFilter: 'mrc',
+      applicabilityCondition: { attribute: 'contract_model', operator: 'eq', value: 'reserved_1y' },
+      sortOrder: reservedSort++,
+      isActive: true,
+    })
+    await ensureRule(em, scope, {
+      code: `puffin-reserved-3y-${code}`,
+      name: `Reserved 3y (−38% MRC) — ${code}`,
+      description: 'Applies when contract_model = reserved_3y on this offering.',
+      productOfferingId: oid,
+      ruleType: 'discount_percent',
+      value: '38',
+      chargeTypeFilter: 'mrc',
+      applicabilityCondition: { attribute: 'contract_model', operator: 'eq', value: 'reserved_3y' },
+      sortOrder: reservedSort++,
+      isActive: true,
+    })
+  }
 
-  // Workspace volume tiers — mutually exclusive via priority order. Each
-  // applies to all Workspace charges. Volume tier rules apply only when seat
-  // count exceeds the threshold; the rule engine selects the highest match.
-  const workspacePlanCodes = [
-    'workspace_essentials',
-    'workspace_business',
-    'workspace_business_premium',
-    'workspace_enterprise',
-    'ws_email_archive',
-    'ws_atp',
-    'ws_extra_storage',
-    'ws_compliance',
-  ]
-  await ensureRule(em, scope, {
-    code: 'puffin-ws-volume-25',
-    name: 'Workspace Volume −5% (≥26 seats)',
-    description: 'Applies when seat_count ≥ 26.',
-    ruleType: 'discount_percent',
-    value: '5',
-    applicabilityCondition: {
-      offeringCodeIn: workspacePlanCodes,
-      attribute: 'seat_count',
-      operator: 'gte',
-      value: 26,
-    },
-    sortOrder: 30,
-    isActive: true,
-    metadata: { volume_tier: 1 },
-  })
-  await ensureRule(em, scope, {
-    code: 'puffin-ws-volume-100',
-    name: 'Workspace Volume −10% (≥101 seats)',
-    description: 'Applies when seat_count ≥ 101.',
-    ruleType: 'discount_percent',
-    value: '10',
-    applicabilityCondition: {
-      offeringCodeIn: workspacePlanCodes,
-      attribute: 'seat_count',
-      operator: 'gte',
-      value: 101,
-    },
-    sortOrder: 31,
-    isActive: true,
-    metadata: { volume_tier: 2 },
-  })
-  await ensureRule(em, scope, {
-    code: 'puffin-ws-volume-500',
-    name: 'Workspace Volume −15% (≥501 seats)',
-    description: 'Applies when seat_count ≥ 501.',
-    ruleType: 'discount_percent',
-    value: '15',
-    applicabilityCondition: {
-      offeringCodeIn: workspacePlanCodes,
-      attribute: 'seat_count',
-      operator: 'gte',
-      value: 501,
-    },
-    sortOrder: 32,
-    isActive: true,
-    metadata: { volume_tier: 3 },
-  })
+  // Workspace volume tiers — mutually exclusive via the synthetic attribute
+  // `seat_volume_tier` injected by the public price route based on
+  // `seat_count`:
+  //   < 26 → 'tier0' (no discount)   26–100 → 'tier1' (−5%)
+  //   101–500 → 'tier2' (−10%)       ≥ 501 → 'tier3' (−15%)
+  // Per-offering scope avoids spilling onto non-Workspace mrc lines.
+  let workspaceSort = 100
+  for (const code of WORKSPACE_DISCOUNTABLE_OFFERING_CODES) {
+    const oid = await offeringId(em, scope, code)
+    if (!oid) continue
+    await ensureRule(em, scope, {
+      code: `puffin-ws-volume-tier1-${code}`,
+      name: `Workspace Volume −5% (26+ seats) — ${code}`,
+      productOfferingId: oid,
+      ruleType: 'discount_percent',
+      value: '5',
+      applicabilityCondition: { attribute: 'seat_volume_tier', operator: 'eq', value: 'tier1' },
+      sortOrder: workspaceSort++,
+      isActive: true,
+      metadata: { volume_tier: 1 },
+    })
+    await ensureRule(em, scope, {
+      code: `puffin-ws-volume-tier2-${code}`,
+      name: `Workspace Volume −10% (101+ seats) — ${code}`,
+      productOfferingId: oid,
+      ruleType: 'discount_percent',
+      value: '10',
+      applicabilityCondition: { attribute: 'seat_volume_tier', operator: 'eq', value: 'tier2' },
+      sortOrder: workspaceSort++,
+      isActive: true,
+      metadata: { volume_tier: 2 },
+    })
+    await ensureRule(em, scope, {
+      code: `puffin-ws-volume-tier3-${code}`,
+      name: `Workspace Volume −15% (501+ seats) — ${code}`,
+      productOfferingId: oid,
+      ruleType: 'discount_percent',
+      value: '15',
+      applicabilityCondition: { attribute: 'seat_volume_tier', operator: 'eq', value: 'tier3' },
+      sortOrder: workspaceSort++,
+      isActive: true,
+      metadata: { volume_tier: 3 },
+    })
+    // Annual prepay — multiplies on top of the volume tier (sort > tiers).
+    await ensureRule(em, scope, {
+      code: `puffin-ws-annual-prepay-${code}`,
+      name: `Workspace Annual Prepay (−15%) — ${code}`,
+      productOfferingId: oid,
+      ruleType: 'discount_percent',
+      value: '15',
+      applicabilityCondition: { attribute: 'billing_cadence', operator: 'eq', value: 'annual_prepay' },
+      sortOrder: workspaceSort++,
+      isActive: true,
+    })
+  }
 
-  // Annual prepay — multiplies on top of volume tier.
-  await ensureRule(em, scope, {
-    code: 'puffin-ws-annual-prepay',
-    name: 'Workspace Annual Prepay (−15%)',
-    description: 'Applies when quoteContext.billing_cadence = annual_prepay.',
-    ruleType: 'discount_percent',
-    value: '15',
-    applicabilityCondition: {
-      offeringCodeIn: workspacePlanCodes,
-      contextField: 'billing_cadence',
-      operator: 'eq',
-      value: 'annual_prepay',
-    },
-    sortOrder: 40,
-    isActive: true,
-  })
-
-  // API Gateway free tier — subtract 1M requests + 400k GB-s/month.
+  // API Gateway free tier — encodes quote-level allowances the engine does
+  // not support. Left in the seed (inactive) for documentation; flipping to
+  // active before the engine grows allowance-aware math would silently
+  // discount every unit by a flat amount.
   await ensureRule(em, scope, {
     code: 'puffin-api-free-tier-requests',
     name: 'API Gateway — first 1M requests free',
-    description: 'Subtracts up to 1M requests/month from the request usage subtotal.',
+    description: 'INACTIVE: requires quote-level allowance math not yet supported by CPQ.',
     ruleType: 'discount_absolute',
     value: '0.20',
     chargeCodeFilter: 'api_gateway_requests',
-    applicabilityCondition: { allowance_million_requests: 1 },
-    sortOrder: 50,
-    isActive: true,
+    applicabilityCondition: null,
+    sortOrder: 500,
+    isActive: false,
   })
   await ensureRule(em, scope, {
     code: 'puffin-api-free-tier-compute',
     name: 'API Gateway — first 400k GB-s free',
-    description: 'Subtracts up to 400,000 GB-s/month from the compute subtotal.',
+    description: 'INACTIVE: requires quote-level allowance math not yet supported by CPQ.',
     ruleType: 'discount_absolute',
     value: '6.6667',
     chargeCodeFilter: 'api_gateway_compute',
-    applicabilityCondition: { allowance_gb_seconds: 400000 },
-    sortOrder: 51,
-    isActive: true,
+    applicabilityCondition: null,
+    sortOrder: 501,
+    isActive: false,
   })
 
-  // Managed DB — read replica rate (60% of HA-0 base, per replica)
+  // Managed DB read replicas / PITR rates — encode "X% of HA-0 base", which
+  // requires referencing another charge's resolved price (multiplier rules).
+  // The engine doesn't expose that. Leave the rows inactive so they don't
+  // masquerade as working price_overrides to $0.
   await ensureRule(em, scope, {
     code: 'puffin-db-read-replica-rate',
     name: 'Managed DB — Read Replica rate (60% of HA-0 base)',
-    description: 'Multiplies the read_replicas charge by HA-0 base × 0.6 per replica.',
+    description: 'INACTIVE: requires multiplier-of-base support not yet in CPQ.',
     ruleType: 'price_override',
     value: '0',
     chargeCodeFilter: 'db_read_replicas',
-    applicabilityCondition: { multiplierKey: 'db_ha0_base', multiplier: 0.6 },
-    sortOrder: 60,
-    isActive: true,
+    applicabilityCondition: null,
+    sortOrder: 600,
+    isActive: false,
   })
-
-  // Managed DB — PITR add-on (15% of HA-0 base)
   await ensureRule(em, scope, {
     code: 'puffin-db-pitr-rate',
     name: 'Managed DB — PITR Add-on (15% of HA-0 base)',
-    description: 'Sets PITR add-on charge to 15% of HA-0 base when pitr_enabled is true.',
+    description: 'INACTIVE: requires multiplier-of-base support not yet in CPQ.',
     ruleType: 'price_override',
     value: '0',
     chargeCodeFilter: 'db_pitr_addon',
-    applicabilityCondition: { multiplierKey: 'db_ha0_base', multiplier: 0.15 },
-    sortOrder: 61,
-    isActive: true,
+    applicabilityCondition: null,
+    sortOrder: 601,
+    isActive: false,
   })
 
-  // Managed DB — backup retention surcharge (+5% for 14, +12% for 30)
+  // Managed DB — backup retention surcharges. Already in the supported shape.
   await ensureRule(em, scope, {
     code: 'puffin-db-backup-retention-14',
     name: 'Managed DB — 14-day backup retention (+5% base)',
@@ -242,7 +247,7 @@ export async function seedPuffinPriceRules(em: EntityManager, scope: SeedScope):
     value: '5',
     chargeCodeFilter: 'db_base_mrc',
     applicabilityCondition: { attribute: 'backup_retention_days', operator: 'eq', value: '14' },
-    sortOrder: 62,
+    sortOrder: 620,
     isActive: true,
   })
   await ensureRule(em, scope, {
@@ -253,55 +258,48 @@ export async function seedPuffinPriceRules(em: EntityManager, scope: SeedScope):
     value: '12',
     chargeCodeFilter: 'db_base_mrc',
     applicabilityCondition: { attribute: 'backup_retention_days', operator: 'eq', value: '30' },
-    sortOrder: 63,
+    sortOrder: 621,
     isActive: true,
   })
 
-  // Premium Support — composite spend-uplift (price_override).
-  // Implementation note: the rule references quote-level totals via
-  // `applicabilityCondition.use_total_mrc_excluding_codes_prefix`. The pricing
-  // engine already evaluates rules in priority order with quote totals
-  // available — we set the priority high so this runs LAST.
+  // Premium Support — composite spend-uplift. Engine sees only the simple
+  // `price_override` to 500 (which equals the documented floor). The
+  // max(500, 6% × MRC) part is quote-level math not yet supported; leaving
+  // this active means visitors always pay the floor — better than $0.
   const premiumOfferingId = await offeringId(em, scope, 'premium_support')
-  await ensureRule(em, scope, {
-    code: 'puffin-premium-support-uplift',
-    name: 'Premium Support — Spend Uplift max(500, 6% × MRC)',
-    description: 'Sets premium_support_base to max(500, 0.06 × sum_of_mrc_excluding_support).',
-    productOfferingId: premiumOfferingId,
-    ruleType: 'price_override',
-    value: '500',
-    chargeCodeFilter: 'premium_support_base',
-    applicabilityCondition: {
-      formula: 'max(base, percent_of_quote_mrc)',
-      base: 500,
-      percent: 6,
-      excludeChargeCodePrefixes: ['support_', 'premium_support_'],
-    },
-    sortOrder: 999, // evaluate last
-    isActive: true,
-  })
-
-  // Premium Support — reserved discounts.
-  await ensureRule(em, scope, {
-    code: 'puffin-premium-support-1y',
-    name: 'Premium Support — Reserved 1y (−10%)',
-    productOfferingId: premiumOfferingId,
-    ruleType: 'discount_percent',
-    value: '10',
-    chargeTypeFilter: 'mrc',
-    applicabilityCondition: { attribute: 'reserved_term', operator: 'eq', value: '1y' },
-    sortOrder: 70,
-    isActive: true,
-  })
-  await ensureRule(em, scope, {
-    code: 'puffin-premium-support-3y',
-    name: 'Premium Support — Reserved 3y (−18%)',
-    productOfferingId: premiumOfferingId,
-    ruleType: 'discount_percent',
-    value: '18',
-    chargeTypeFilter: 'mrc',
-    applicabilityCondition: { attribute: 'reserved_term', operator: 'eq', value: '3y' },
-    sortOrder: 71,
-    isActive: true,
-  })
+  if (premiumOfferingId) {
+    await ensureRule(em, scope, {
+      code: 'puffin-premium-support-uplift',
+      name: 'Premium Support — Spend Uplift (floor only; full formula needs quote-level math)',
+      productOfferingId: premiumOfferingId,
+      ruleType: 'price_override',
+      value: '500',
+      chargeCodeFilter: 'premium_support_base',
+      applicabilityCondition: null,
+      sortOrder: 999,
+      isActive: true,
+    })
+    await ensureRule(em, scope, {
+      code: 'puffin-premium-support-1y',
+      name: 'Premium Support — Reserved 1y (−10%)',
+      productOfferingId: premiumOfferingId,
+      ruleType: 'discount_percent',
+      value: '10',
+      chargeTypeFilter: 'mrc',
+      applicabilityCondition: { attribute: 'reserved_term', operator: 'eq', value: '1y' },
+      sortOrder: 700,
+      isActive: true,
+    })
+    await ensureRule(em, scope, {
+      code: 'puffin-premium-support-3y',
+      name: 'Premium Support — Reserved 3y (−18%)',
+      productOfferingId: premiumOfferingId,
+      ruleType: 'discount_percent',
+      value: '18',
+      chargeTypeFilter: 'mrc',
+      applicabilityCondition: { attribute: 'reserved_term', operator: 'eq', value: '3y' },
+      sortOrder: 701,
+      isActive: true,
+    })
+  }
 }

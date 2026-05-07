@@ -1,6 +1,13 @@
 import type { ModuleSetupConfig } from '@open-mercato/shared/modules/setup'
 import { registerCpqUseCase } from '../cpq/lib/seeds/api'
 import { seedPuffinDefaults, seedPuffinExamples } from './seeds'
+import { registerPuffinStepTypes } from './workflows/steps'
+
+// Register the CPQ wizard step types contributed by demo_puffin (e.g. the
+// `context_select` step used by the puffin-sales-led-quote wizard). The
+// registry is process-local; the matching client-side registration lives in
+// `widgets/components.ts`, loaded by the generated component overrides bundle.
+registerPuffinStepTypes()
 
 /**
  * Public calculator feature flag — XD-275 phase 5 will read this when it

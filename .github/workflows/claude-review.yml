@@ -78,9 +78,12 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          # Sonnet 4.6 is the default; pinning here for reproducibility +
-          # cap turns so a runaway prompt can't burn quota.
-          claude_args: --max-turns 4 --model claude-sonnet-4-6
+          # Sonnet 4.6 is the default; pinning here for reproducibility.
+          # max-turns sized for read-CLAUDE.md → AGENTS.md → SKILL.md →
+          # sub-skill → diff → modified files → post-comment. Smoketest
+          # showed 4 was too tight (action exited "Reached maximum number
+          # of turns"). 25 leaves headroom without burning quota.
+          claude_args: --max-turns 25 --model claude-sonnet-4-6
           prompt: |
             You are reviewing a pull request on the dainamite-core repository
             (a standalone Open Mercato L3 application that hosts the in-tree

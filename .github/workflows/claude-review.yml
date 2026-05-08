@@ -80,18 +80,16 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # Sonnet 4.6 pinned for reproducibility. max-turns sized for
           # read-CLAUDE.md → AGENTS.md → SKILL.md → sub-skill → diff →
-          # modified files → post-comment.
-          # The flag is `--allowedTools` (camelCase) — kebab-case
-          # `--allowed-tools` is silently ignored by the underlying CLI,
-          # which is why earlier smoketest runs hit permission_denials.
-          # Tools listed: Bash gh-pr triplet (diff/view + final comment),
-          # plus the MCP inline-comment tool for line-level findings, plus
-          # the standard read tools (Read/Glob/Grep) for navigating the
-          # repo + skills.
+          # modified files → write-review-to-file. The flag is
+          # `--allowedTools` (camelCase) — kebab-case is silently ignored.
+          # Strategy: Claude does the analysis and Writes the review markdown
+          # to /tmp/claude-review.md. A subsequent step (Post review
+          # comment) does the actual `gh pr comment --body-file` so we
+          # don't fight the action's permission model around comment tools.
           claude_args: |
             --max-turns 25
             --model claude-sonnet-4-6
-            --allowedTools "Read,Glob,Grep,Bash(gh pr comment:*),Bash(gh pr view:*),Bash(gh pr diff:*),mcp__github_inline_comment__create_inline_comment"
+            --allowedTools "Read,Glob,Grep,Write,Bash(gh pr diff:*),Bash(gh pr view:*),Bash(cat:*)"
           prompt: |
             You are reviewing a pull request on the dainamite-core repository
             (a standalone Open Mercato L3 application that hosts the in-tree
@@ -276,3 +274,26 @@ jobs:
             correct — focus on what's worth a human's attention.
 
             If the PR is docs-only or trivial, say so in 1 line and stop.
+
+            ## Output format — IMPORTANT
+
+            Use the `Write` tool to save your full review markdown to
+            **`/tmp/claude-review.md`**. Do NOT try to post the comment
+            yourself — a subsequent workflow step will do that for you.
+            Just write the markdown and finish your turn.
+
+            If the PR is trivial / docs-only and you want to skip a full
+            review, still write a 1-line file (e.g. "_Trivial change — no
+            review needed._") so the post step has something to publish.
+
+      - name: Post review comment
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+        run: |
+          if [ ! -s /tmp/claude-review.md ]; then
+            echo "::warning::No review file produced — Claude run may have failed silently."
+            exit 0
+          fi
+          gh pr comment "$PR_NUMBER" --body-file /tmp/claude-review.md

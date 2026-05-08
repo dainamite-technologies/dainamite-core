@@ -15,6 +15,26 @@ import { createCompanyFixture } from '@open-mercato/core/helpers/integration/crm
 export const uniq = (): string =>
   Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
 
+/**
+ * Wait for a condition to become true. Used in slow-flaky UI assertions
+ * where Playwright's auto-retry doesn't fit (e.g. polling a custom DOM
+ * marker that isn't tied to a Playwright locator). Default 5s timeout,
+ * 100ms poll interval.
+ */
+export async function waitFor(
+  predicate: () => boolean | Promise<boolean>,
+  options: { timeout?: number; interval?: number; message?: string } = {},
+): Promise<void> {
+  const timeout = options.timeout ?? 5000
+  const interval = options.interval ?? 100
+  const start = Date.now()
+  while (Date.now() - start < timeout) {
+    if (await predicate()) return
+    await new Promise((resolve) => setTimeout(resolve, interval))
+  }
+  throw new Error(options.message ?? `waitFor timed out after ${timeout}ms`)
+}
+
 export interface SeededSubscription {
   id: string
   customerId: string

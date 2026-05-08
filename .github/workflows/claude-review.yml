@@ -47,6 +47,12 @@ permissions:
   contents: read
   pull-requests: write
   issues: write
+  # Required by anthropics/claude-code-action when the Anthropic Claude
+  # GitHub App is installed on the repo — the action mints an OIDC token to
+  # exchange for an App installation token (so comments come from claude[bot]
+  # instead of github-actions[bot]). Without this the action fails with
+  # "Could not fetch an OIDC token" even when CLAUDE_CODE_OAUTH_TOKEN is set.
+  id-token: write
 
 jobs:
   review:

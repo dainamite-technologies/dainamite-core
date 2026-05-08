@@ -191,7 +191,10 @@ export function daysFromNow(days: number): string {
 
 /**
  * Hide globally floating widgets (Feedback FAB, Next.js dev toolbar) so they
- * don't intercept clicks on drawer / page buttons. Safe to call multiple times.
+ * don't intercept clicks on drawer / page buttons. Safe to call multiple
+ * times — `addStyleTag` appends an extra `<style>` each call, but the rules
+ * are idempotent (display: none doesn't compound). Wrapped in a defensive
+ * catch so a flaky CDP `addStyleTag` failure doesn't fail the whole spec.
  */
 export async function hideFloatingOverlays(page: Page): Promise<void> {
   await page

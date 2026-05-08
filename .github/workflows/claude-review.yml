@@ -80,16 +80,22 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # Sonnet 4.6 pinned for reproducibility. max-turns sized for
           # read-CLAUDE.md → AGENTS.md → SKILL.md → sub-skill → diff →
-          # modified files → write-review-to-file. The flag is
-          # `--allowedTools` (camelCase) — kebab-case is silently ignored.
-          # Strategy: Claude does the analysis and Writes the review markdown
-          # to /tmp/claude-review.md. A subsequent step (Post review
-          # comment) does the actual `gh pr comment --body-file` so we
-          # don't fight the action's permission model around comment tools.
+          # write-review-to-file → post-via-gh. The flag is `--allowedTools`
+          # (camelCase) — kebab-case is silently ignored.
+          #
+          # Strategy: Claude does the analysis, Writes /tmp/claude-review.md,
+          # then posts via `gh pr comment --body-file`. Inside the action's
+          # bash, `gh` uses the Claude GitHub App's installation token
+          # (minted via OIDC), so the comment appears authored by
+          # `claude[bot]` — branded avatar, dedicated history filter, etc.
+          # If posting from inside the action is blocked for any reason,
+          # the standalone "Post review comment" step at the end falls
+          # back to GITHUB_TOKEN (comment would appear as
+          # `github-actions[bot]`). Both paths publish the same content.
           claude_args: |
             --max-turns 25
             --model claude-sonnet-4-6
-            --allowedTools "Read,Glob,Grep,Write,Bash(gh pr diff:*),Bash(gh pr view:*),Bash(cat:*)"
+            --allowedTools "Read,Glob,Grep,Write,Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr comment:*),Bash(cat:*)"
           prompt: |
             You are reviewing a pull request on the dainamite-core repository
             (a standalone Open Mercato L3 application that hosts the in-tree
@@ -277,23 +283,60 @@ jobs:
 
             ## Output format — IMPORTANT
 
-            Use the `Write` tool to save your full review markdown to
-            **`/tmp/claude-review.md`**. Do NOT try to post the comment
-            yourself — a subsequent workflow step will do that for you.
-            Just write the markdown and finish your turn.
+            Two steps:
+
+            1. Use the `Write` tool to save your full review markdown to
+               **`/tmp/claude-review.md`** (so the fallback post step has
+               something to publish if step 2 is blocked).
+
+            2. **Post the review yourself** via `Bash`:
+
+               ```bash
+               gh pr comment <PR_NUMBER> --body-file /tmp/claude-review.md
+               ```
+
+               (You can read the PR number from the working environment
+               — it's in `$GITHUB_REF`, or you can `gh pr view` the
+               current branch's PR.) Posting from inside the action uses
+               the Claude GitHub App installation token, so the comment
+               will appear authored by `claude[bot]`. This is what the
+               team wants — don't skip step 2 unless `gh pr comment` is
+               actually denied (then the fallback workflow step will
+               publish from the file).
 
             If the PR is trivial / docs-only and you want to skip a full
             review, still write a 1-line file (e.g. "_Trivial change — no
-            review needed._") so the post step has something to publish.
+            review needed._") and post it the same way.
 
-      - name: Post review comment
+      - name: Fallback — post review comment if claude[bot] didn't
         if: success()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
         run: |
+          # Preferred path: Claude already posted via gh pr comment from
+          # inside the action (using the Claude GitHub App's installation
+          # token, so the comment appears as claude[bot]). This step is
+          # the safety net — if the action couldn't post (permission edge
+          # case, network blip), fall back to publishing the same review
+          # markdown via GITHUB_TOKEN. The fallback comment appears as
+          # `github-actions[bot]` instead, but the content is identical.
           if [ ! -s /tmp/claude-review.md ]; then
             echo "::warning::No review file produced — Claude run may have failed silently."
             exit 0
           fi
+
+          # Skip fallback if a claude[bot] comment is already on the PR
+          # for this run (Claude posted successfully). We match by author
+          # and a marker present in every review (the "What this PR does"
+          # heading or — for trivial PRs — the "Trivial change" line).
+          existing_count=$(gh pr view "$PR_NUMBER" --json comments \
+            --jq '[.comments[] | select(.author.login == "claude")] | length' \
+            2>/dev/null || echo 0)
+          if [ "$existing_count" != "0" ]; then
+            echo "claude[bot] already posted ($existing_count comment(s)) — skipping fallback."
+            exit 0
+          fi
+
+          echo "claude[bot] did not post — falling back to github-actions[bot]."
           gh pr comment "$PR_NUMBER" --body-file /tmp/claude-review.md

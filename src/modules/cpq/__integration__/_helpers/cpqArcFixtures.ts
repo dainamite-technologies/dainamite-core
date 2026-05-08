@@ -12,6 +12,12 @@ import { createCompanyFixture } from '@open-mercato/core/helpers/integration/crm
  * transitions, change history) — only the *prerequisite state* is API.
  */
 
+/**
+ * Returns a short unique-ish string usable as a test fixture suffix.
+ * Combines `Date.now()` (millisecond resolution) with 4 random base36
+ * characters — collision-free across same-process tests, good enough
+ * across parallel CI workers given Playwright's per-worker isolation.
+ */
 export const uniq = (): string =>
   Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
 

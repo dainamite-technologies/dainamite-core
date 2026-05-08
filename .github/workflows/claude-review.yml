@@ -78,12 +78,18 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          # Sonnet 4.6 is the default; pinning here for reproducibility.
-          # max-turns sized for read-CLAUDE.md → AGENTS.md → SKILL.md →
-          # sub-skill → diff → modified files → post-comment. Smoketest
-          # showed 4 was too tight (action exited "Reached maximum number
-          # of turns"). 25 leaves headroom without burning quota.
-          claude_args: --max-turns 25 --model claude-sonnet-4-6
+          # Sonnet 4.6 pinned for reproducibility. max-turns sized for
+          # read-CLAUDE.md → AGENTS.md → SKILL.md → sub-skill → diff →
+          # modified files → post-comment.
+          # --allowed-tools is liberal because the default whitelist blocks
+          # the comment-posting MCP tool (smoketest run 25542643301 showed
+          # permission_denials_count: 3 — Claude finished the review but
+          # couldn't post it). The Bash(gh pr comment:*) entry is the
+          # belt-and-braces fallback in case the MCP path is blocked.
+          claude_args: |
+            --max-turns 25
+            --model claude-sonnet-4-6
+            --allowed-tools "Read,Glob,Grep,Bash(gh pr comment:*),Bash(gh pr view:*),mcp__github_inline_comment__create_inline_comment,mcp__github__add_issue_comment"
           prompt: |
             You are reviewing a pull request on the dainamite-core repository
             (a standalone Open Mercato L3 application that hosts the in-tree

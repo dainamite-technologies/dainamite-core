@@ -80,22 +80,24 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # Sonnet 4.6 pinned for reproducibility. max-turns sized for
           # read-CLAUDE.md → AGENTS.md → SKILL.md → sub-skill → diff →
-          # write-review-to-file → post-via-gh. The flag is `--allowedTools`
-          # (camelCase) — kebab-case is silently ignored.
+          # inline-comments → write-summary → post-via-gh. The flag is
+          # `--allowedTools` (camelCase) — kebab-case is silently ignored.
           #
-          # Strategy: Claude does the analysis, Writes /tmp/claude-review.md,
-          # then posts via `gh pr comment --body-file`. Inside the action's
-          # bash, `gh` uses the Claude GitHub App's installation token
-          # (minted via OIDC), so the comment appears authored by
-          # `claude[bot]` — branded avatar, dedicated history filter, etc.
-          # If posting from inside the action is blocked for any reason,
-          # the standalone "Post review comment" step at the end falls
-          # back to GITHUB_TOKEN (comment would appear as
-          # `github-actions[bot]`). Both paths publish the same content.
+          # Two-channel review:
+          #   - Inline comments via mcp__github_inline_comment__create…
+          #     for specific file:line issues. The action buffers them
+          #     and flushes via post-buffered-inline-comments.ts at end.
+          #   - Top-level summary via gh pr comment from the same bash
+          #     context, so it's authored by claude[bot] (App installation
+          #     token, minted by the action via OIDC).
+          # If gh pr comment from inside the action is blocked, the
+          # standalone "Post review comment" step at the end falls back
+          # to GITHUB_TOKEN (comment would appear as github-actions[bot]).
+          # Both paths publish the same content.
           claude_args: |
-            --max-turns 25
+            --max-turns 30
             --model claude-sonnet-4-6
-            --allowedTools "Read,Glob,Grep,Write,Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr comment:*),Bash(cat:*)"
+            --allowedTools "Read,Glob,Grep,Write,Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr comment:*),Bash(cat:*),mcp__github_inline_comment__create_inline_comment"
           prompt: |
             You are reviewing a pull request on the dainamite-core repository
             (a standalone Open Mercato L3 application that hosts the in-tree
@@ -283,30 +285,49 @@ jobs:
 
             ## Output format — IMPORTANT
 
-            Two steps:
+            Use TWO complementary channels for findings:
 
-            1. Use the `Write` tool to save your full review markdown to
-               **`/tmp/claude-review.md`** (so the fallback post step has
-               something to publish if step 2 is blocked).
+            **A. Inline comments — for specific file:line issues.**
+            For each concrete problem anchored to a precise location
+            (a violated invariant, a buggy line, a missing piece in a
+            specific function), call:
 
-            2. **Post the review yourself** via `Bash`:
+            ```
+            mcp__github_inline_comment__create_inline_comment
+              path: "<repo-relative path>"
+              line: <number, end-of-range for multi-line>
+              body: "<short, actionable message — 1-3 sentences max>"
+            ```
 
-               ```bash
-               gh pr comment <PR_NUMBER> --body-file /tmp/claude-review.md
-               ```
+            Use these when the finding pins to ONE place. Don't use
+            inline for general observations or things spanning many
+            files. Don't repeat the diff — say what's wrong and how to
+            fix it. Aim for 0–8 inline comments on a typical PR; if you
+            find more, you're probably nitpicking.
 
-               (You can read the PR number from the working environment
-               — it's in `$GITHUB_REF`, or you can `gh pr view` the
-               current branch's PR.) Posting from inside the action uses
-               the Claude GitHub App installation token, so the comment
-               will appear authored by `claude[bot]`. This is what the
-               team wants — don't skip step 2 unless `gh pr comment` is
-               actually denied (then the fallback workflow step will
-               publish from the file).
+            **B. Top-level summary comment — for the synthesis.**
+            Use the `Write` tool to save the markdown review to
+            **`/tmp/claude-review.md`**, then post via `Bash`:
 
-            If the PR is trivial / docs-only and you want to skip a full
-            review, still write a 1-line file (e.g. "_Trivial change — no
-            review needed._") and post it the same way.
+            ```bash
+            gh pr comment <PR_NUMBER> --body-file /tmp/claude-review.md
+            ```
+
+            (PR number from `$GITHUB_REF` or `gh pr view`.) The
+            top-level summary covers the 5 sections (What this PR does
+            / Conventions check / Inconsistencies & suggestions / Test
+            coverage gaps / Risk callouts). Inside "Inconsistencies",
+            cross-reference inline comments by saying "(see inline)"
+            instead of repeating the file:line detail.
+
+            Posting via `gh pr comment` from inside the action uses the
+            Claude GitHub App installation token, so the comment is
+            authored by `claude[bot]` with branded avatar.
+
+            If the PR is trivial / docs-only, skip inline entirely and
+            write a 1-line file ("_Trivial change — no review needed._")
+            posted as a top-level comment. Do NOT spam inline comments
+            on a trivial PR.
 
       - name: Fallback — post review comment if claude[bot] didn't
         if: success()

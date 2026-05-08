@@ -84,12 +84,55 @@ jobs:
             non-negotiable contract:
 
               1. CLAUDE.md — project routing, CPQ → Task → Context Map
-              2. AGENTS.md — generic Open Mercato conventions
+              2. AGENTS.md — generic project conventions
               3. .ai/skills/cpq/SKILL.md — engineering bar, hard rules,
                  Definition of Done
               4. Any sub-skill under .ai/skills/cpq/<area>/SKILL.md that
                  matches the touched code (pricing / quoting / products /
                  inventory / orders / arc / packaging)
+
+            And — equally important — the **Open Mercato framework
+            conventions**. CPQ runs on top of Open Mercato; ~80% of what
+            looks like a CPQ design choice is actually a framework
+            convention. Patterns guessed from generic Next.js / TypeScript /
+            MikroORM knowledge will violate documented framework
+            invariants. The framework's authoritative docs ship inside
+            node_modules — load them when the PR touches the relevant
+            surface:
+
+              - node_modules/@open-mercato/core/AGENTS.md — master
+                extensibility contract: modules, DI (Awilix), events,
+                custom fields, ACL, setup, response enrichers, API
+                interceptors, widget injection, component replacement,
+                RBAC wildcard matcher, withAtomicFlush, command pattern
+              - node_modules/@open-mercato/core/src/modules/sales/AGENTS.md
+                — sales (quote → order → invoice flow); CPQ piggybacks on
+                sales for headers
+              - node_modules/@open-mercato/core/src/modules/<module>/AGENTS.md
+                — customers / catalog / currencies / integrations /
+                data_sync / workflows / customer_accounts / auth (RBAC) /
+                directory
+              - node_modules/@open-mercato/events/AGENTS.md — event bus,
+                createModuleEvents, subscribers (persistent vs ephemeral),
+                SSE bridge
+              - node_modules/@open-mercato/shared/AGENTS.md — withAtomicFlush,
+                response enrichers, query engine extensibility, feature-
+                match helpers (wildcard-aware)
+              - node_modules/@open-mercato/ui/AGENTS.md — CrudForm,
+                DataTable, primitives, sidebar icons, FormHeader/FormFooter
+              - node_modules/@open-mercato/cli/AGENTS.md — generator
+                system, auto-discovery file patterns, module-scoped
+                migrations
+              - node_modules/@open-mercato/queue/AGENTS.md — worker
+                contract, idempotency, local/async strategies
+              - node_modules/@open-mercato/<package>/AGENTS.md — for any
+                other framework package the PR touches
+
+            Where the framework's docs and our project conventions
+            diverge, our conventions win for repo-local code (e.g. CPQ
+            uses `api/<resource>/route.ts`; new sibling modules under
+            `src/modules/` follow framework's `api/<method>/<path>.ts`).
+            Surface the divergence rather than picking sides silently.
 
             Your output is a single PR review comment with these sections:
 
@@ -99,35 +142,102 @@ jobs:
 
             ### Conventions check
             Tick off, per item, whether the PR honours each non-negotiable.
-            Be direct — say "MISSING" / "VIOLATED" with file:line evidence:
+            Be direct — say "MISSING" / "VIOLATED" with file:line evidence.
 
+            **Open Mercato framework invariants** (apply everywhere):
+              - **Auto-discovery layout**: filenames + locations *are* the
+                contract — `events.ts`, `acl.ts`, `setup.ts`, `ce.ts`,
+                `data/entities.ts`, `data/validators.ts`, `data/enrichers.ts`,
+                `data/extensions.ts`, `subscribers/*.ts`, `workers/*.ts`,
+                `widgets/injection-table.ts`, `widgets/components.ts`,
+                `translations.ts`, `notifications.ts`, `search.ts`. Anything
+                relocated to a non-canonical path will be silently skipped by
+                the bootstrap.
+              - **Run `yarn generate` after structural changes**: editing
+                `src/modules.ts`, `events.ts`, `acl.ts`, `data/enrichers.ts`,
+                widget files, `api/`, `subscribers/`, `workers/` — without
+                regen, `.mercato/generated/*` goes stale. Never edit
+                `.mercato/generated/*` by hand.
+              - **Run `yarn mercato db generate` after entity changes**:
+                migration must be a generated file, never hand-written.
+              - **No imports from `node_modules/@open-mercato/*` outside
+                of allowed entry points** — never edit `node_modules`; eject
+                the module via `yarn mercato eject <module>` if it must be
+                customised beyond extension primitives.
+              - **DI via Awilix**: services resolved from the container,
+                not `new`-ed directly; closure-resolution pattern preferred
+                for new services.
+              - **Commands for writes** (sales / catalog mutations): writes
+                go through commands (`execute` + `undo`); side-effect
+                emitters live OUTSIDE `withAtomicFlush`.
+              - **Cross-module = framework primitive, not direct import**:
+                Need to react to a write? Subscriber + event. Need to
+                extend another module's API response? Response enricher.
+                Need a UI add-on? Widget injection / component replacement.
+                Direct import of another module's services / entities is a
+                code smell; ORM relations across module boundaries are a
+                hard fail.
+              - **Events follow `createModuleEvents`** with id pattern
+                `module.entity.action` (singular entity, past tense, e.g.
+                `sales.order.created`). Persistent vs ephemeral chosen
+                deliberately per the events guide.
+              - **Worker contract**: `metadata = { queue, id?, concurrency? }`
+                exported from each `workers/*.ts`; idempotent under retry.
+              - **No `any` types**: Zod schemas everywhere user input
+                lands; `z.infer` for derived TS types; runtime narrows for
+                anything still unknown.
+              - **Encrypted queries via `findWithDecryption`** when the
+                entity has encrypted columns — never raw `em.find` for
+                those.
+
+            **CPQ-specific (on top of the framework rules)**:
               - **API-first**: every new route exports `openApi`. New write
                 routes call `validateCrudMutationGuard` /
-                `runCrudMutationGuardAfterSuccess`.
+                `runCrudMutationGuardAfterSuccess` (or use
+                `createCrudOpenApiFactory`).
+              - **CPQ routing convention**: `api/<resource>/route.ts`
+                (Next.js style). New sibling modules outside CPQ use
+                framework's `api/<method>/<path>.ts`.
               - **No cross-module ORM**: no `@ManyToOne` / `@OneToMany` from
-                cpq to non-cpq entities. Cross-module refs are FK-string only.
+                cpq to non-cpq entities. `customer_id` / `product_id` /
+                `quote_id` are FK strings.
               - **Tenant scoping**: every new entity has `organizationId` +
-                `tenantId` indexed, standard columns, UUID PK.
+                `tenantId` indexed, standard `created_at` / `updated_at` /
+                `deleted_at` / `is_active` columns, UUID PK.
               - **Atomic flush**: `withAtomicFlush` wraps any "mutate scalars
                 then query on same EM" sequence.
               - **Status enums**: changes to status sets land in
-                `services/types.ts`, not inline.
+                `services/types.ts` (`CPQ_STATUSES`,
+                `INVENTORY_SUBSCRIPTION_STATUSES`, …) — never inline.
               - **ACL**: features added to `acl.ts` AND wired in
-                `setup.ts` defaultRoleFeatures.
+                `setup.ts` `defaultRoleFeatures`. Use `hasFeature` /
+                `hasAllFeatures` for runtime checks (not `.includes()` —
+                wildcard grants like `cpq.*` will silently fail).
               - **i18n**: user-facing strings via `useT()` /
                 `resolveTranslations()` — no hardcoded labels.
-              - **Detail page accompanies list page**: any new entity exposed
-                in admin UI has both list and `[id]` pages, with loading /
-                404 / error states distinct.
-              - **Manual updated**: any operator-facing behaviour change is
-                reflected in `manuals/*.md`.
-              - **MIGRATION.md updated**: any breaking change to a CPQ public
-                contract has an entry in `packages/cpq/MIGRATION.md`.
-              - **Tests obligatory**: services / validators / state machines /
-                seeds touched have unit tests; UI flows touched have a
-                Playwright integration spec.
-              - **Migration discipline**: entity changes are accompanied by a
-                generated (NOT hand-written) migration file. No raw SQL.
+              - **Sidebar icons**: `lucide-react` only — never inline SVG
+                via `React.createElement`.
+              - **Detail page accompanies list page**: any new entity
+                exposed in admin UI has both list and `[id]` pages, with
+                loading / 404 / error states distinct, `FormHeader` in
+                `detail` mode, injection slots for cross-module add-ons.
+              - **DataTable**: pagination wired (`page`, `pageSize`,
+                `totalCount`, `onPageChange`); `pageSize` ≤ 100.
+              - **Manual updated**: any operator-facing behaviour change
+                is reflected in `manuals/*.md`.
+              - **MIGRATION.md updated**: any breaking change to a CPQ
+                public contract (route signatures, validator shapes,
+                emitted event payloads, public service methods) has an
+                entry in `packages/cpq/MIGRATION.md`.
+              - **CPQ never imports from `src/modules/<other>/`** —
+                customer-specific code goes to `src/modules/@app/<feature>/`,
+                NOT inside `src/modules/cpq/`.
+              - **Tests obligatory**: services / validators / state
+                machines / seeds touched have unit tests; UI flows
+                touched have a Playwright integration spec under
+                `__integration__/TC-CPQ-*.spec.ts`. Use
+                `jest --config jest.config.cjs` (already wired via
+                `yarn test`) — see `.ai/skills/unit-tests/SKILL.md`.
 
             ### Inconsistencies & suggestions
             Specific, actionable items with file:line refs. Order by impact.

@@ -179,8 +179,11 @@ export async function deleteCustomer(
 }
 
 /**
- * Compute an ISO date `daysFromNow` days into the future. Used by the
- * Expiring view test to build subscriptions with predictable term-end dates.
+ * Compute an ISO date (YYYY-MM-DD) `daysFromNow` days into the future. Used
+ * by the Expiring view test to build subscriptions with predictable
+ * term-end dates. Always returns the UTC calendar date — runner timezone
+ * doesn't affect the ±1 day boundary that the 30/90-day window asserts on.
+ * Negative values are accepted (returns a past date).
  */
 export function daysFromNow(days: number): string {
   return new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString().split('T')[0]

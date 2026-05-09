@@ -1,4 +1,4 @@
-import { registerStepType } from '../../../cpq/workflows/registry'
+import { registerStepType } from '@dainamite/cpq/modules/cpq/workflows/registry'
 import { ContextSelectStep } from './ContextSelectStep'
 
 let registered = false

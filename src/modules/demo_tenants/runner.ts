@@ -2,8 +2,8 @@ import type { EntityManager } from '@mikro-orm/postgresql'
 import type { AwilixContainer } from 'awilix'
 import type { Module } from '@open-mercato/shared/modules/registry'
 import { ensureCustomRoleAcls } from '@open-mercato/core/modules/auth/lib/setup-app'
-import { ensureDemoTenant } from '../cpq/lib/seeds/tenant-provisioning'
-import type { CpqUseCase } from '../cpq/lib/seeds/api'
+import { ensureDemoTenant } from '@dainamite/cpq/modules/cpq/lib/seeds/tenant-provisioning'
+import type { CpqUseCase } from '@dainamite/cpq/modules/cpq/lib/seeds/api'
 
 export type RunnerOptions = {
   em: EntityManager

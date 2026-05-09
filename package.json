@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "packageManager": "yarn@4.12.0+sha512.f45ab632439a67f8bc759bf32ead036a1f413287b9042726b7cc4818b7b49e14e9423ba49b18f9e06ea4941c1ad062385b1d8760a8d5091a1a31e5f6219afca8",
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "setup": "node ./scripts/setup.mjs",
     "setup:classic": "node ./scripts/setup.mjs --classic",
@@ -44,7 +47,7 @@
     "@open-mercato/ai-assistant": "0.5.0",
     "@open-mercato/cache": "0.5.0",
     "@open-mercato/checkout": "0.5.0",
-    "@open-mercato/cli": "0.5.0",
+    "@open-mercato/cli": "patch:@open-mercato/cli@npm%3A0.5.0#~/.yarn/patches/@open-mercato-cli-npm-0.5.0-f8b7b7ffd4.patch",
     "@open-mercato/content": "0.5.0",
     "@open-mercato/core": "0.5.0",
     "@open-mercato/events": "0.5.0",
@@ -104,6 +107,8 @@
     "zod": "^4.1.13"
   },
   "devDependencies": {
+    "@changesets/cli": "^2.31.0",
+    "@esbuild/win32-x64": "^0.28.0",
     "@playwright/test": "^1.58.2",
     "@tailwindcss/postcss": "^4.1.17",
     "@testing-library/dom": "^10.4.0",

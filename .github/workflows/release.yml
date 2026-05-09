@@ -1,0 +1,62 @@
+name: Release @dainamite/* packages
+
+on:
+  push:
+    branches: [main]
+
+# Cancel any in-flight release run for the same ref.
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+# `contents: write` for the changesets action to push the "Version Packages" PR.
+# `packages: write` for publishing to GitHub Packages.
+# `pull-requests: write` for opening / updating the version PR.
+permissions:
+  contents: write
+  packages: write
+  pull-requests: write
+
+jobs:
+  release:
+    name: Version + publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Full history needed for changesets to compute version bumps from
+          # the changelog of pending changesets.
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          # Auth handled at install/publish time via .npmrc + NPM_AUTH_TOKEN.
+          # We deliberately don't use setup-node's registry-url because the
+          # repo's checked-in .npmrc already points @dainamite at GitHub Packages.
+
+      - name: Enable corepack
+        run: corepack enable
+
+      - name: Install dependencies
+        run: yarn install --immutable
+        env:
+          NPM_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build all workspace packages
+        # Each @dainamite/* package gets built before publish so dist/ exists.
+        # If we add more packages later, switch to `yarn workspaces foreach -A run build`.
+        run: yarn workspace @dainamite/cpq build
+
+      - name: Create release PR or publish
+        uses: changesets/action@v1
+        with:
+          # When PR with version bumps is merged → this command publishes.
+          # When changesets exist but PR isn't merged → updates the PR.
+          publish: yarn changeset publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

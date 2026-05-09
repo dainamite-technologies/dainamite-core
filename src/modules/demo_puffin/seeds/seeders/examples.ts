@@ -4,9 +4,9 @@ import {
   CustomerCompanyProfile,
   CustomerEntity,
 } from '@open-mercato/core/modules/customers/data/entities'
-import { CpqProductOffering } from '../../../cpq/data/entities'
-import type { TenantScope } from '../../../cpq/services/types'
-import type { DefaultCpqQuotingService } from '../../../cpq/services/cpqQuotingService'
+import { CpqProductOffering } from '@dainamite/cpq/modules/cpq/data/entities'
+import type { TenantScope } from '@dainamite/cpq/modules/cpq/services/types'
+import type { DefaultCpqQuotingService } from '@dainamite/cpq/modules/cpq/services/cpqQuotingService'
 
 const DEMO_MARKER = 'puffin-seed-v1'
 

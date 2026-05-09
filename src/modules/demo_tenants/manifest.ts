@@ -1,4 +1,4 @@
-import { listCpqUseCases, type CpqUseCase } from '../cpq/lib/seeds/api'
+import { listCpqUseCases, type CpqUseCase } from '@dainamite/cpq/modules/cpq/lib/seeds/api'
 import { parseBooleanWithDefault } from '@open-mercato/shared/lib/boolean'
 
 const DEFAULT_USE_CASES = ['gix', 'puffin'] as const

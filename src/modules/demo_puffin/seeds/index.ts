@@ -1,4 +1,4 @@
-import type { CpqUseCaseSeedContext } from '../../cpq/lib/seeds/api'
+import type { CpqUseCaseSeedContext } from '@dainamite/cpq/modules/cpq/lib/seeds/api'
 import { seedPuffinAttributes } from './seeders/attributes'
 import { seedPuffinBundles } from './seeders/bundles'
 import { seedPuffinCharges } from './seeders/charges'

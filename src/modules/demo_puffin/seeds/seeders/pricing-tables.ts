@@ -22,7 +22,7 @@ async function ensureTable(
     currencyCodeList: string[]
   },
 ): Promise<string> {
-  const { CpqPricingTable } = await import('../../../cpq/data/entities')
+  const { CpqPricingTable } = await import('@dainamite/cpq/modules/cpq/data/entities')
   let table = await em.findOne(CpqPricingTable, { ...scope, code: data.code })
   if (!table) {
     table = em.create(CpqPricingTable, { ...scope, ...data })
@@ -39,7 +39,7 @@ async function ensureEntry(
   lookup: Record<string, unknown>,
   data: Record<string, unknown>,
 ): Promise<void> {
-  const { CpqPricingTableEntry } = await import('../../../cpq/data/entities')
+  const { CpqPricingTableEntry } = await import('@dainamite/cpq/modules/cpq/data/entities')
   const exists = await em.findOne(CpqPricingTableEntry, { ...scope, pricingTableId: tableId, ...lookup })
   if (!exists) {
     em.persist(em.create(CpqPricingTableEntry, { ...scope, pricingTableId: tableId, currencyCode: 'USD', ...data }))

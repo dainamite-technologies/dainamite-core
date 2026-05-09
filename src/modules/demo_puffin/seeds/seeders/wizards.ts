@@ -67,7 +67,7 @@ const WIZARDS = [
 ]
 
 export async function seedPuffinWizards(em: EntityManager, scope: SeedScope): Promise<void> {
-  const { CpqWizardDefinition } = await import('../../../cpq/data/entities')
+  const { CpqWizardDefinition } = await import('@dainamite/cpq/modules/cpq/data/entities')
   try {
     for (const wz of WIZARDS) {
       const existing = await em.findOne(CpqWizardDefinition, { ...scope, code: wz.code })

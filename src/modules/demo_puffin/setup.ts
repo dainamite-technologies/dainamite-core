@@ -1,5 +1,5 @@
 import type { ModuleSetupConfig } from '@open-mercato/shared/modules/setup'
-import { registerCpqUseCase } from '../cpq/lib/seeds/api'
+import { registerCpqUseCase } from '@dainamite/cpq/modules/cpq/lib/seeds/api'
 import { seedPuffinDefaults, seedPuffinExamples } from './seeds'
 import { registerPuffinStepTypes } from './workflows/steps'
 

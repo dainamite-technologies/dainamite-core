@@ -2,7 +2,7 @@ import {
   registerCpqUseCase,
   clearCpqUseCases,
   type CpqUseCase,
-} from '../../cpq/lib/seeds/api'
+} from '@dainamite/cpq/modules/cpq/lib/seeds/api'
 import { getEnabledUseCases, shouldSkipExamples } from '../manifest'
 
 const buildUseCase = (id: string): CpqUseCase => ({

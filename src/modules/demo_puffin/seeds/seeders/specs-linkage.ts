@@ -12,7 +12,7 @@ import type { SeedScope } from './_types'
  */
 export async function seedPuffinSpecsLinkage(em: EntityManager, scope: SeedScope): Promise<void> {
   const { CpqProductSpecification, CpqProductOffering, CpqProductAttribute, CpqProductCharge } = await import(
-    '../../../cpq/data/entities'
+    '@dainamite/cpq/modules/cpq/data/entities'
   )
   const { CatalogProduct } = await import('@open-mercato/core/modules/catalog/data/entities')
 

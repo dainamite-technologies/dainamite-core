@@ -82,7 +82,7 @@ const GIX_WIZARDS = [
 ]
 
 export async function seedGixWizards(em: EntityManager, scope: SeedScope): Promise<void> {
-  const { CpqWizardDefinition } = await import('../../cpq/data/entities')
+  const { CpqWizardDefinition } = await import('@dainamite/cpq/modules/cpq/data/entities')
   console.log('    Seeding GIX wizard definitions...')
   try {
     for (const wz of GIX_WIZARDS) {

@@ -36,43 +36,96 @@ the `@dainamite/cpq` package, per
       identity, peer deps, exports.
 - [x] Document plan (this file).
 
-### Phase 1 — Standalone build
+### Phase 1 — Standalone build (XD-270, 2026-05-08)
 
-- [ ] Promote root to a Yarn workspace (`workspaces: ["packages/*"]` in root
+- [x] Promote root to a Yarn workspace (`workspaces: ["packages/*"]` in root
       `package.json`).
-- [ ] Add `packages/cpq/tsconfig.json` extending root config.
-- [ ] Add `packages/cpq/build.mjs` mirroring `@open-mercato/core` (esbuild +
-      MikroORM entity manifest).
-- [ ] Move `src/modules/cpq/` → `packages/cpq/src/modules/cpq/` (single git mv
-      to preserve history).
-- [ ] Update `src/modules.ts` entry to `{ id: 'cpq', from: '@dainamite/cpq' }`.
-- [ ] Run `yarn install && yarn generate && yarn typecheck && yarn build`.
-- [ ] Smoke-test backend: list/create offering, run a quote wizard.
+- [x] Add `packages/cpq/tsconfig.json` (extends root) and
+      `packages/cpq/tsconfig.build.json`.
+- [x] Add `packages/cpq/build.mjs` (esbuild → `dist/`, mirrors
+      `@open-mercato/core/build.mjs` — only `.js` emit, no `.d.ts`).
+      Per Open Mercato convention, the package ships `src/` for types
+      and `dist/` for runtime — exports map `types → ./src/*.ts`,
+      `default → ./dist/*.js`.
+- [x] Move `src/modules/cpq/` → `packages/cpq/src/modules/cpq/` (single
+      `git mv` — history preserved, all 136 source files renamed).
+- [x] Update `src/modules.ts` entry to `{ id: 'cpq', from: '@dainamite/cpq' }`.
+- [x] Patch `@open-mercato/cli@0.5.0` to allow the `@dainamite/` prefix in
+      `GENERATED_MODULE_SPECIFIER_PREFIXES` (the CLI rejects unknown package
+      scopes when emitting `.mercato/generated/`). Patch lives at
+      `.yarn/patches/@open-mercato-cli-npm-0.5.0-*.patch`. **Will be
+      fixed upstream in the next framework release** — patch can be
+      removed at that point.
+- [x] Rewrite cross-module imports in `demo_gix`, `demo_puffin`,
+      `demo_tenants`: `'../../cpq/...'` → `'@dainamite/cpq/modules/cpq/...'`
+      (26 files). Demo modules now consume CPQ via the public package
+      surface — no in-repo coupling left.
+- [x] Extend root `jest.config.cjs` `testMatch` to discover tests under
+      `packages/*/src/**/__tests__/`. Without this, the 27 CPQ test files
+      moved with `git mv` were silently skipped.
+- [x] `yarn install && yarn workspace @dainamite/cpq build && yarn generate && yarn typecheck && yarn test` — all green (26 suites, 531 tests).
+- [ ] Smoke-test backend: `yarn dev`, list/create offering, run a quote
+      wizard, check ARC subscription detail page. **(manual, blocks merge)**
 
-### Phase 2 — Audit & lint cross-package coupling
+### Phase 2 — Audit & lint cross-package coupling (XD-270, 2026-05-09)
 
-- [ ] Grep for `@ManyToOne`, `@OneToMany`, `@ManyToMany` to entities outside
-      `cpq` — replace with FK string columns.
-- [ ] Grep for direct imports from other `src/modules/*` (custom in-app
-      modules) — break them.
-- [ ] Add a guard test: try to bootstrap CPQ in isolation (no other app modules
-      registered).
+- [x] Grep for `@ManyToOne`, `@OneToMany`, `@ManyToMany`, `@OneToOne` —
+      zero violations (CPQ already uses FK string columns).
+- [x] Grep for cross-module imports (`@/modules/<x>`, `src/modules/<x>`,
+      relative escapes) — zero violations.
+- [x] Audit deep imports into `@open-mercato/core/modules/<x>` — found
+      `auth` and `directory` usages not declared in `metadata.requires`.
+      Fix: extended [`packages/cpq/src/modules/cpq/index.ts`](src/modules/cpq/index.ts)
+      `requires` to `['auth', 'directory', 'catalog', 'sales', 'customers', 'dictionaries']`.
+- [x] Audit external deps used by package — found `bcryptjs` imported in
+      `lib/seeds/tenant-provisioning.ts` but missing from `peerDependencies`.
+      Fix: added `bcryptjs ^3.0.0` to `peerDependencies`. Also added
+      `lucide-react ^0.400.0` (used by sidebar icons in `backend/**/page.meta.ts`).
+- [x] Add guard test:
+      [`packages/cpq/src/modules/cpq/__tests__/package-isolation.test.ts`](src/modules/cpq/__tests__/package-isolation.test.ts) —
+      static analysis of every `.ts`/`.tsx` in the package, asserting:
+      no forbidden cross-module imports; only allowed import prefixes
+      (mirroring `peerDependencies`); deep core imports declared in
+      `requires`; zero ORM relations; module index loads cleanly. Future
+      regressions caught by CI.
+- [x] Removed `@open-mercato/core` patch (nav sidebar order tweak) — was
+      cosmetic; not worth the upstream-PR cost.
 
-### Phase 3 — Publish
+### Phase 3 — Publish (XD-270, 2026-05-09)
 
-- [ ] Configure `.npmrc` for GitHub Packages auth (read-only token committed
-      to repo template, write token in CI secrets only).
-- [ ] Add changesets (`@changesets/cli`) — patch bumps wired up.
-- [ ] First publish: `@dainamite/cpq@0.1.0`.
+- [x] Flip `private: true` → `false` in `packages/cpq/package.json`.
+- [x] Add `.npmrc` at repo root — points `@dainamite` scope at
+      `https://npm.pkg.github.com`, reads token from `${NPM_AUTH_TOKEN}`.
+- [x] Install + init `@changesets/cli` — config in `.changeset/config.json`
+      with `access: restricted`, `baseBranch: main`, `dainamite-core` ignored.
+- [x] First changeset: `.changeset/initial-release.md` for
+      `@dainamite/cpq@0.1.0` (minor bump from 0.0.0 — initial publish).
+- [x] CI release workflow at `.github/workflows/release.yml` —
+      on push to `main`, runs `changesets/action@v1` which either opens a
+      "Version Packages" PR (when changesets exist) or runs
+      `yarn changeset publish` (when version PR is merged). Uses
+      `GITHUB_TOKEN` for both repo writes and `npm.pkg.github.com` auth.
+- [ ] **Manual / first-time setup before merge to main:**
+      - Verify `permissions: packages: write` is enabled on the GitHub
+        repo settings (Settings → Actions → General → Workflow permissions).
+      - Optional: add `NPM_TOKEN` secret if you want to use a PAT instead
+        of the auto-issued `GITHUB_TOKEN` (longer-lived, but less safe).
+- [ ] **First publish flow** (after this branch lands on main):
+      1. Push to main triggers release workflow.
+      2. Workflow sees `.changeset/initial-release.md` and opens a
+         "Version Packages" PR that bumps `@dainamite/cpq` 0.1.0 → 0.1.0
+         (changeset is `minor` from 0.0.0 baseline) and writes
+         `packages/cpq/CHANGELOG.md`.
+      3. Merge that PR → release workflow re-runs, this time runs
+         `yarn changeset publish` → `@dainamite/cpq@0.1.0` lands on
+         `https://github.com/dainamite-technologies/dainamite-core/packages`.
 - [ ] Update SPEC-001 changelog.
 
-### Phase 4 — Extract to product monorepo
-
-- [ ] Create new `dainamite-product/` repo with `packages/cpq/` plus tooling
-      (`tools/`, `.changeset/`, GH Actions release pipeline).
-- [ ] Move `packages/cpq/` from `dainamite-core` to `dainamite-product`.
-- [ ] `dainamite-core` keeps `from: '@dainamite/cpq'` in `src/modules.ts`,
-      installs from GitHub Packages just like any future customer repo.
+> **Note:** SPEC-001 references a future `dainamite-product/` repo as a
+> Phase 4 destination. **That plan is dropped** — `dainamite-core` IS the
+> Dainamite product monorepo, and `packages/cpq/` (plus any future
+> `@dainamite/*` packages) stay here permanently. Other customer apps
+> install from GitHub Packages.
 
 ## Risks (carried from SPEC-001)
 

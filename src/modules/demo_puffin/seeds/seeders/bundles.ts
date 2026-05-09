@@ -94,7 +94,7 @@ const BUNDLES: BundleDef[] = [BUNDLE_DEV_APP, BUNDLE_ECOMMERCE, BUNDLE_BUSINESS]
 
 export async function seedPuffinBundles(em: EntityManager, scope: SeedScope): Promise<void> {
   const { CpqProductSpecification, CpqProductOffering, CpqBundleSlot, CpqOfferingComponent } = await import(
-    '../../../cpq/data/entities'
+    '@dainamite/cpq/modules/cpq/data/entities'
   )
 
   for (const bundle of BUNDLES) {

@@ -4,11 +4,11 @@ import {
   CustomerCompanyProfile,
   CustomerEntity,
 } from '@open-mercato/core/modules/customers/data/entities'
-import { CpqProductOffering } from '../../cpq/data/entities'
-import type { TenantScope } from '../../cpq/services/types'
-import type { DefaultCpqQuotingService } from '../../cpq/services/cpqQuotingService'
-import type { DefaultCpqOrderService } from '../../cpq/services/cpqOrderService'
-import type { DefaultCpqInventoryService } from '../../cpq/services/cpqInventoryService'
+import { CpqProductOffering } from '@dainamite/cpq/modules/cpq/data/entities'
+import type { TenantScope } from '@dainamite/cpq/modules/cpq/services/types'
+import type { DefaultCpqQuotingService } from '@dainamite/cpq/modules/cpq/services/cpqQuotingService'
+import type { DefaultCpqOrderService } from '@dainamite/cpq/modules/cpq/services/cpqOrderService'
+import type { DefaultCpqInventoryService } from '@dainamite/cpq/modules/cpq/services/cpqInventoryService'
 
 /**
  * Seed sample GIX demo data: companies, quotes (across statuses), an order

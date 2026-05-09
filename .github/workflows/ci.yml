@@ -93,6 +93,13 @@ jobs:
         # registry metadata diffs don't fail the build.
         run: yarn install --no-immutable
 
+      - name: Build workspace packages
+        # @dainamite/cpq must be built before typecheck so the package's
+        # `default` export (./dist/**/*.js) resolves. Without this, TS
+        # falls back to the `types` condition only, which works for .ts
+        # source but mismatches our esbuild output for .tsx files.
+        run: yarn workspace @dainamite/cpq build
+
       - name: Generate auto-discovered files
         run: yarn generate
 
@@ -218,6 +225,11 @@ jobs:
 
       - name: Install Playwright Chromium + system deps
         run: npx playwright install --with-deps chromium
+
+      - name: Build workspace packages
+        # See unit-tests job for rationale — @dainamite/cpq dist/ must
+        # exist before generate / next build runs.
+        run: yarn workspace @dainamite/cpq build
 
       - name: Generate auto-discovered files
         run: yarn generate

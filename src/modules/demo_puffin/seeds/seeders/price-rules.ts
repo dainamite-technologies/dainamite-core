@@ -22,7 +22,7 @@ type RuleInput = {
 }
 
 async function ensureRule(em: EntityManager, scope: SeedScope, data: RuleInput): Promise<void> {
-  const { CpqPriceRule } = await import('../../../cpq/data/entities')
+  const { CpqPriceRule } = await import('@dainamite/cpq/modules/cpq/data/entities')
   const exists = await em.findOne(CpqPriceRule, { ...scope, code: data.code })
   if (!exists) {
     em.persist(em.create(CpqPriceRule, { ...scope, ...data }))
@@ -30,7 +30,7 @@ async function ensureRule(em: EntityManager, scope: SeedScope, data: RuleInput):
 }
 
 async function offeringId(em: EntityManager, scope: SeedScope, code: string): Promise<string | null> {
-  const { CpqProductOffering } = await import('../../../cpq/data/entities')
+  const { CpqProductOffering } = await import('@dainamite/cpq/modules/cpq/data/entities')
   const o = await em.findOne(CpqProductOffering, { ...scope, code, deletedAt: null })
   return o?.id ?? null
 }

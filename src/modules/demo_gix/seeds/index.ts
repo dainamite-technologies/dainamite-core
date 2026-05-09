@@ -1,4 +1,4 @@
-import type { CpqUseCaseSeedContext } from '../../cpq/lib/seeds/api'
+import type { CpqUseCaseSeedContext } from '@dainamite/cpq/modules/cpq/lib/seeds/api'
 import { seedGixExamples as seedGixExamplesImpl } from './examples'
 import { seedCpqArcExamples } from './arc-examples'
 import {

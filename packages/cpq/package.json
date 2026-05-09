@@ -4,36 +4,42 @@
   "description": "Dainamite CPQ — Configure, Price, Quote engine for Open Mercato (configurable products, multi-charge pricing tables, guided quoting, customer inventory, orders).",
   "private": true,
   "type": "module",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "main": "./dist/modules/cpq/index.js",
   "files": [
     "dist",
     "src",
     "README.md",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "MIGRATION.md"
   ],
   "scripts": {
-    "build": "echo 'TODO: wire build (see MIGRATION.md)'",
+    "build": "node build.mjs",
     "typecheck": "tsc --noEmit"
   },
   "exports": {
     ".": {
-      "types": "./src/index.ts",
-      "default": "./src/index.ts"
+      "types": "./src/modules/cpq/index.ts",
+      "default": "./dist/modules/cpq/index.js"
     },
     "./modules/cpq": {
       "types": "./src/modules/cpq/index.ts",
-      "default": "./src/modules/cpq/index.ts"
+      "default": "./dist/modules/cpq/index.js"
+    },
+    "./modules/cpq/*": {
+      "types": "./src/modules/cpq/*.ts",
+      "default": "./dist/modules/cpq/*.js"
     }
   },
   "peerDependencies": {
-    "@open-mercato/core": "^0.5.0",
-    "@open-mercato/shared": "^0.5.0",
-    "@open-mercato/ui": "^0.5.0",
-    "@open-mercato/events": "^0.5.0",
     "@mikro-orm/core": "^6.6.0",
     "@mikro-orm/postgresql": "^6.6.0",
+    "@open-mercato/core": "^0.5.0",
+    "@open-mercato/events": "^0.5.0",
+    "@open-mercato/shared": "^0.5.0",
+    "@open-mercato/ui": "^0.5.0",
     "awilix": "^12.0.0",
+    "bcryptjs": "^3.0.0",
+    "lucide-react": "^0.400.0",
     "next": "^16.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

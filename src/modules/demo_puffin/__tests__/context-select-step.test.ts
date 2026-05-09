@@ -10,7 +10,7 @@ describe('context_select wizard step registration', () => {
     const { registerPuffinStepTypes } = await import('../workflows/steps')
     registerPuffinStepTypes()
 
-    const { getStepType } = await import('../../cpq/workflows/registry')
+    const { getStepType } = await import('@dainamite/cpq/modules/cpq/workflows/registry')
     const stepType = getStepType('context_select')
 
     expect(stepType).toBeDefined()
@@ -25,14 +25,14 @@ describe('context_select wizard step registration', () => {
     registerPuffinStepTypes()
     registerPuffinStepTypes()
 
-    const { getStepType } = await import('../../cpq/workflows/registry')
+    const { getStepType } = await import('@dainamite/cpq/modules/cpq/workflows/registry')
     expect(getStepType('context_select')).toBeDefined()
   })
 
   it('demo_puffin/setup side-effect imports the step type registration', async () => {
     await import('../setup')
 
-    const { getStepType } = await import('../../cpq/workflows/registry')
+    const { getStepType } = await import('@dainamite/cpq/modules/cpq/workflows/registry')
     expect(getStepType('context_select')).toBeDefined()
   })
 
@@ -48,7 +48,7 @@ describe('context_select wizard step registration', () => {
 
     const { registerPuffinStepTypes } = await import('../workflows/steps')
     registerPuffinStepTypes()
-    const { getStepType } = await import('../../cpq/workflows/registry')
+    const { getStepType } = await import('@dainamite/cpq/modules/cpq/workflows/registry')
     expect(getStepType('context_select')).toBeDefined()
   })
 })

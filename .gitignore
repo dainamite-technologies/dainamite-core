@@ -71,7 +71,7 @@ src/generated/
 
 # uploads and app data
 public/uploads/*
-storage/
+/storage/
 /data/
 
 # local package managers

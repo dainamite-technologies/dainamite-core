@@ -1,4 +1,4 @@
-jest.mock('../../cpq/lib/seeds/tenant-provisioning', () => ({
+jest.mock('@dainamite/cpq/modules/cpq/lib/seeds/tenant-provisioning', () => ({
   ensureDemoTenant: jest.fn(),
 }))
 
@@ -6,10 +6,10 @@ jest.mock('@open-mercato/core/modules/auth/lib/setup-app', () => ({
   ensureCustomRoleAcls: jest.fn(),
 }))
 
-import { ensureDemoTenant } from '../../cpq/lib/seeds/tenant-provisioning'
+import { ensureDemoTenant } from '@dainamite/cpq/modules/cpq/lib/seeds/tenant-provisioning'
 import { ensureCustomRoleAcls } from '@open-mercato/core/modules/auth/lib/setup-app'
 import { seedUseCase, seedUseCases } from '../runner'
-import type { CpqUseCase } from '../../cpq/lib/seeds/api'
+import type { CpqUseCase } from '@dainamite/cpq/modules/cpq/lib/seeds/api'
 
 const ensureMock = ensureDemoTenant as jest.MockedFunction<typeof ensureDemoTenant>
 const ensureAclsMock = ensureCustomRoleAcls as jest.MockedFunction<typeof ensureCustomRoleAcls>

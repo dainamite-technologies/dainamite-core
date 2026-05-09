@@ -28,7 +28,7 @@ import {
   CpqProductCharge,
   CpqOfferingComponent,
   CpqBundleSlot,
-} from '../../../cpq/data/entities'
+} from '@dainamite/cpq/modules/cpq/data/entities'
 import type { PuffinPublicConfig } from './env'
 import {
   buildPublicCatalog,

@@ -24,13 +24,13 @@ async function findProductId(em: EntityManager, scope: SeedScope, sku: string): 
 }
 
 async function findOfferingId(em: EntityManager, scope: SeedScope, code: string): Promise<string | null> {
-  const { CpqProductOffering } = await import('../../../cpq/data/entities')
+  const { CpqProductOffering } = await import('@dainamite/cpq/modules/cpq/data/entities')
   const o = await em.findOne(CpqProductOffering, { ...scope, code, deletedAt: null })
   return o?.id ?? null
 }
 
 async function findTableId(em: EntityManager, scope: SeedScope, code: string): Promise<string | null> {
-  const { CpqPricingTable } = await import('../../../cpq/data/entities')
+  const { CpqPricingTable } = await import('@dainamite/cpq/modules/cpq/data/entities')
   const t = await em.findOne(CpqPricingTable, { ...scope, code })
   return t?.id ?? null
 }
@@ -42,7 +42,7 @@ async function ensureCharge(
   oid: string | null,
   data: ChargeInput,
 ): Promise<void> {
-  const { CpqProductCharge } = await import('../../../cpq/data/entities')
+  const { CpqProductCharge } = await import('@dainamite/cpq/modules/cpq/data/entities')
   const exists = await em.findOne(CpqProductCharge, {
     ...scope,
     productId: pid,

@@ -1,7 +1,7 @@
 'use client'
 
 import React from 'react'
-import type { WizardStepProps } from '../../../cpq/workflows/types'
+import type { WizardStepProps } from '@dainamite/cpq/modules/cpq/workflows/types'
 
 type ContextSelectOption = {
   value: string

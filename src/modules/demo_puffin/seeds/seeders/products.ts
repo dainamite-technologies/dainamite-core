@@ -17,7 +17,7 @@ import type { SeedScope } from './_types'
  */
 export async function seedPuffinProducts(em: EntityManager, scope: SeedScope): Promise<void> {
   const { CatalogProduct } = await import('@open-mercato/core/modules/catalog/data/entities')
-  const { CpqProductSpecification, CpqProductOffering } = await import('../../../cpq/data/entities')
+  const { CpqProductSpecification, CpqProductOffering } = await import('@dainamite/cpq/modules/cpq/data/entities')
 
   for (const def of ALL_PRODUCTS) {
     let product = await em.findOne(CatalogProduct, { ...scope, sku: def.sku, deletedAt: null })

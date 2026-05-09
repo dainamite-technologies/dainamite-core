@@ -19,7 +19,7 @@ async function ensureAttribute(
   productId: string,
   attr: AttrInput,
 ): Promise<void> {
-  const { CpqProductAttribute } = await import('../../../cpq/data/entities')
+  const { CpqProductAttribute } = await import('@dainamite/cpq/modules/cpq/data/entities')
   const exists = await em.findOne(CpqProductAttribute, { ...scope, productId, code: attr.code })
   if (!exists) {
     em.persist(

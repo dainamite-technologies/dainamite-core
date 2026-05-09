@@ -36,7 +36,7 @@ export async function seedGixProducts(em: EntityManager, scope: SeedScope): Prom
 }
 
 export async function seedGixProductAttributes(em: EntityManager, scope: SeedScope): Promise<void> {
-  const { CpqProductAttribute } = await import('../../cpq/data/entities')
+  const { CpqProductAttribute } = await import('@dainamite/cpq/modules/cpq/data/entities')
   const { CatalogProduct } = await import('@open-mercato/core/modules/catalog/data/entities')
 
   const productBySku = async (sku: string) => {
@@ -187,7 +187,7 @@ export async function seedGixProductAttributes(em: EntityManager, scope: SeedSco
 }
 
 export async function seedGixPricingTables(em: EntityManager, scope: SeedScope): Promise<void> {
-  const { CpqPricingTable, CpqPricingTableEntry } = await import('../../cpq/data/entities')
+  const { CpqPricingTable, CpqPricingTableEntry } = await import('@dainamite/cpq/modules/cpq/data/entities')
 
   const ensureTable = async (data: {
     code: string
@@ -310,7 +310,7 @@ export async function seedGixPricingTables(em: EntityManager, scope: SeedScope):
 }
 
 export async function seedGixProductCharges(em: EntityManager, scope: SeedScope): Promise<void> {
-  const { CpqProductCharge, CpqPricingTable } = await import('../../cpq/data/entities')
+  const { CpqProductCharge, CpqPricingTable } = await import('@dainamite/cpq/modules/cpq/data/entities')
   const { CatalogProduct } = await import('@open-mercato/core/modules/catalog/data/entities')
 
   const tableId = async (code: string) => {
@@ -452,7 +452,7 @@ export async function seedGixProductCharges(em: EntityManager, scope: SeedScope)
 
 export async function seedGixSpecsAndOfferings(em: EntityManager, scope: SeedScope): Promise<void> {
   const { CpqProductSpecification, CpqProductOffering, CpqProductAttribute, CpqProductCharge } = await import(
-    '../../cpq/data/entities'
+    '@dainamite/cpq/modules/cpq/data/entities'
   )
   const { CatalogProduct } = await import('@open-mercato/core/modules/catalog/data/entities')
 
@@ -510,7 +510,7 @@ export async function seedGixSpecsAndOfferings(em: EntityManager, scope: SeedSco
 }
 
 export async function seedGixPriceRules(em: EntityManager, scope: SeedScope): Promise<void> {
-  const { CpqPriceRule, CpqProductOffering } = await import('../../cpq/data/entities')
+  const { CpqPriceRule, CpqProductOffering } = await import('@dainamite/cpq/modules/cpq/data/entities')
 
   const offeringId = async (code: string): Promise<string | undefined> => {
     const o = await em.findOne(CpqProductOffering, { ...scope, code, deletedAt: null })
@@ -645,7 +645,7 @@ export async function seedGixPriceRules(em: EntityManager, scope: SeedScope): Pr
 
 export async function seedGixBundleData(em: EntityManager, scope: SeedScope): Promise<void> {
   const { CpqProductSpecification, CpqProductOffering, CpqProductCharge, CpqBundleSlot, CpqOfferingComponent } = await import(
-    '../../cpq/data/entities'
+    '@dainamite/cpq/modules/cpq/data/entities'
   )
   const { CatalogProduct } = await import('@open-mercato/core/modules/catalog/data/entities')
 

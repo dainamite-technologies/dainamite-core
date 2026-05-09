@@ -24,9 +24,63 @@
       "types": "./src/modules/cpq/index.ts",
       "default": "./dist/modules/cpq/index.js"
     },
-    "./modules/cpq/*": {
-      "types": "./src/modules/cpq/*.ts",
-      "default": "./dist/modules/cpq/*.js"
+    "./*.ts": {
+      "types": "./src/*.ts",
+      "default": "./dist/*.js"
+    },
+    "./*.tsx": {
+      "types": "./src/*.tsx",
+      "default": "./dist/*.js"
+    },
+    "./*.json": "./src/*.json",
+    "./*": {
+      "types": ["./src/*.ts", "./src/*.tsx"],
+      "default": "./dist/*.js"
+    },
+    "./*/*.json": "./src/*/*.json",
+    "./*/*": {
+      "types": ["./src/*/*.ts", "./src/*/*.tsx"],
+      "default": "./dist/*/*.js"
+    },
+    "./*/*/*.json": "./src/*/*/*.json",
+    "./*/*/*": {
+      "types": ["./src/*/*/*.ts", "./src/*/*/*.tsx"],
+      "default": "./dist/*/*/*.js"
+    },
+    "./*/*/*/*.json": "./src/*/*/*/*.json",
+    "./*/*/*/*": {
+      "types": ["./src/*/*/*/*.ts", "./src/*/*/*/*.tsx"],
+      "default": "./dist/*/*/*/*.js"
+    },
+    "./*/*/*/*/*.json": "./src/*/*/*/*/*.json",
+    "./*/*/*/*/*": {
+      "types": ["./src/*/*/*/*/*.ts", "./src/*/*/*/*/*.tsx"],
+      "default": "./dist/*/*/*/*/*.js"
+    },
+    "./*/*/*/*/*/*.json": "./src/*/*/*/*/*/*.json",
+    "./*/*/*/*/*/*": {
+      "types": ["./src/*/*/*/*/*/*.ts", "./src/*/*/*/*/*/*.tsx"],
+      "default": "./dist/*/*/*/*/*/*.js"
+    },
+    "./*/*/*/*/*/*/*.json": "./src/*/*/*/*/*/*/*.json",
+    "./*/*/*/*/*/*/*": {
+      "types": ["./src/*/*/*/*/*/*/*.ts", "./src/*/*/*/*/*/*/*.tsx"],
+      "default": "./dist/*/*/*/*/*/*/*.js"
+    },
+    "./*/*/*/*/*/*/*/*.json": "./src/*/*/*/*/*/*/*/*.json",
+    "./*/*/*/*/*/*/*/*": {
+      "types": ["./src/*/*/*/*/*/*/*/*.ts", "./src/*/*/*/*/*/*/*/*.tsx"],
+      "default": "./dist/*/*/*/*/*/*/*/*.js"
+    },
+    "./*/*/*/*/*/*/*/*/*.json": "./src/*/*/*/*/*/*/*/*/*.json",
+    "./*/*/*/*/*/*/*/*/*": {
+      "types": ["./src/*/*/*/*/*/*/*/*/*.ts", "./src/*/*/*/*/*/*/*/*/*.tsx"],
+      "default": "./dist/*/*/*/*/*/*/*/*/*.js"
+    },
+    "./*/*/*/*/*/*/*/*/*/*.json": "./src/*/*/*/*/*/*/*/*/*/*.json",
+    "./*/*/*/*/*/*/*/*/*/*": {
+      "types": ["./src/*/*/*/*/*/*/*/*/*/*.ts", "./src/*/*/*/*/*/*/*/*/*/*.tsx"],
+      "default": "./dist/*/*/*/*/*/*/*/*/*/*.js"
     }
   },
   "peerDependencies": {

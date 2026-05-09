@@ -94,20 +94,32 @@ the `@dainamite/cpq` package, per
 ### Phase 3 — Publish (XD-270, 2026-05-09)
 
 - [x] Flip `private: true` → `false` in `packages/cpq/package.json`.
-- [x] Add `.npmrc` at repo root — points `@dainamite` scope at
-      `https://npm.pkg.github.com`, reads token from `${NPM_AUTH_TOKEN}`.
 - [x] Install + init `@changesets/cli` — config in `.changeset/config.json`
-      with `access: restricted`, `baseBranch: main`, `dainamite-core` ignored.
+      with `access: restricted` → later switched to `public`,
+      `baseBranch: main`, `dainamite-core` automatically skipped (private workspace).
 - [x] First changeset: `.changeset/initial-release.md` for
-      `@dainamite/cpq@0.1.0` (minor bump from 0.0.0 — initial publish).
+      `@dainamite/cpq` initial release.
 - [x] CI release workflow at `.github/workflows/release.yml` —
       on push to `main`, runs `changesets/action@v1` which either opens a
       "Version Packages" PR (when changesets exist) or runs
-      `yarn changeset publish` (when version PR is merged). Uses
-      `GITHUB_TOKEN` for both repo writes and `npm.pkg.github.com` auth.
+      `yarn changeset publish` (when version PR is merged).
+- [x] **Switched publish target from GitHub Packages → public npm.js.**
+      First publish attempts as `@dainamite/cpq` on GitHub Packages failed
+      with `403 Forbidden — installation does not exist`: scope `@dainamite`
+      on GitHub belongs to a different (unrelated) "DAInamite" organization
+      based in Berlin (dainamite.de). Switching to public npm.js, where the
+      `@dainamite` scope is free, lets us keep the brand without renaming
+      everything to `@dainamite-technologies/cpq`. Open Mercato itself
+      publishes to npm.js (`@open-mercato/core` etc.) so this is also more
+      consistent with the upstream ecosystem.
 - [ ] **Manual / first-time setup before merge to main:**
-      - Verify `permissions: packages: write` is enabled on the GitHub
-        repo settings (Settings → Actions → General → Workflow permissions).
+      - **npm.js account + org** — sign up at https://www.npmjs.com/signup
+        if needed, then create the `dainamite` org at
+        https://www.npmjs.com/org/create (Free plan — public packages only,
+        which is fine since CPQ is public).
+      - **`NPM_TOKEN` secret** — at https://www.npmjs.com/settings/<your-username>/tokens
+        click "Generate New Token" → type `Automation` → Add as repo secret
+        named `NPM_TOKEN`.
       - **`RELEASE_TOKEN` PAT** — required for "Version Packages" PRs to
         trigger CI automatically. Without it, you must push an empty
         commit to `changeset-release/main` each release to trigger CI
@@ -119,22 +131,26 @@ the `@dainamite/cpq` package, per
         3. Expiration: 90+ days, set a calendar reminder to rotate
         4. Repo settings → Secrets and variables → Actions → New
            repository secret → name `RELEASE_TOKEN`, value the PAT
+      - **License decision** — `packages/cpq/package.json` still has
+        `"license": "UNLICENSED"` from when the package was private.
+        For a public npm package pick a real OSI license (MIT recommended
+        for ecosystem consistency with `@open-mercato/*`) and update
+        before merging.
 - [ ] **First publish flow** (after this branch lands on main):
       1. Push to main triggers release workflow.
-      2. Workflow sees `.changeset/initial-release.md` and opens a
-         "Version Packages" PR that bumps `@dainamite/cpq` 0.1.0 → 0.1.0
-         (changeset is `minor` from 0.0.0 baseline) and writes
+      2. Workflow sees pending changesets and opens a
+         "Version Packages" PR that bumps `@dainamite/cpq` and writes
          `packages/cpq/CHANGELOG.md`.
       3. Merge that PR → release workflow re-runs, this time runs
-         `yarn changeset publish` → `@dainamite/cpq@0.1.0` lands on
-         `https://github.com/dainamite-technologies/dainamite-core/packages`.
+         `yarn changeset publish` → `@dainamite/cpq` lands on
+         https://www.npmjs.com/package/@dainamite/cpq.
 - [ ] Update SPEC-001 changelog.
 
 > **Note:** SPEC-001 references a future `dainamite-product/` repo as a
 > Phase 4 destination. **That plan is dropped** — `dainamite-core` IS the
 > Dainamite product monorepo, and `packages/cpq/` (plus any future
 > `@dainamite/*` packages) stay here permanently. Other customer apps
-> install from GitHub Packages.
+> install from npm.js with no auth setup needed (public package).
 
 ## Risks (carried from SPEC-001)
 

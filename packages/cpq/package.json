@@ -2,7 +2,6 @@
   "name": "@dainamite/cpq",
   "version": "0.1.0",
   "description": "Dainamite CPQ — Configure, Price, Quote engine for Open Mercato (configurable products, multi-charge pricing tables, guided quoting, customer inventory, orders).",
-  "private": true,
   "type": "module",
   "main": "./dist/modules/cpq/index.js",
   "files": [

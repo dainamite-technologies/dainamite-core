@@ -76,7 +76,10 @@ public/uploads/*
 
 # local package managers
 package-lock.json
-.npmrc
+# .npmrc IS committed (template with env-var refs only — tokens never live in
+# the file). Local overrides go to .npmrc.local. .npmrc.bak is the backup
+# created by tooling.
+.npmrc.bak
 !.npmrc.local
 
 # IDE related

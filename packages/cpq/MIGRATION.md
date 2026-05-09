@@ -91,13 +91,34 @@ the `@dainamite/cpq` package, per
 - [x] Removed `@open-mercato/core` patch (nav sidebar order tweak) — was
       cosmetic; not worth the upstream-PR cost.
 
-### Phase 3 — Publish
+### Phase 3 — Publish (XD-270, 2026-05-09)
 
-- [ ] Flip `private: true` → `false` in `packages/cpq/package.json`.
-- [ ] Configure `.npmrc` for GitHub Packages auth (read-only token committed
-      to repo template, write token in CI secrets only).
-- [ ] Add changesets (`@changesets/cli`) — patch bumps wired up.
-- [ ] First publish: `@dainamite/cpq@0.1.0`.
+- [x] Flip `private: true` → `false` in `packages/cpq/package.json`.
+- [x] Add `.npmrc` at repo root — points `@dainamite` scope at
+      `https://npm.pkg.github.com`, reads token from `${NPM_AUTH_TOKEN}`.
+- [x] Install + init `@changesets/cli` — config in `.changeset/config.json`
+      with `access: restricted`, `baseBranch: main`, `dainamite-core` ignored.
+- [x] First changeset: `.changeset/initial-release.md` for
+      `@dainamite/cpq@0.1.0` (minor bump from 0.0.0 — initial publish).
+- [x] CI release workflow at `.github/workflows/release.yml` —
+      on push to `main`, runs `changesets/action@v1` which either opens a
+      "Version Packages" PR (when changesets exist) or runs
+      `yarn changeset publish` (when version PR is merged). Uses
+      `GITHUB_TOKEN` for both repo writes and `npm.pkg.github.com` auth.
+- [ ] **Manual / first-time setup before merge to main:**
+      - Verify `permissions: packages: write` is enabled on the GitHub
+        repo settings (Settings → Actions → General → Workflow permissions).
+      - Optional: add `NPM_TOKEN` secret if you want to use a PAT instead
+        of the auto-issued `GITHUB_TOKEN` (longer-lived, but less safe).
+- [ ] **First publish flow** (after this branch lands on main):
+      1. Push to main triggers release workflow.
+      2. Workflow sees `.changeset/initial-release.md` and opens a
+         "Version Packages" PR that bumps `@dainamite/cpq` 0.1.0 → 0.1.0
+         (changeset is `minor` from 0.0.0 baseline) and writes
+         `packages/cpq/CHANGELOG.md`.
+      3. Merge that PR → release workflow re-runs, this time runs
+         `yarn changeset publish` → `@dainamite/cpq@0.1.0` lands on
+         `https://github.com/dainamite-technologies/dainamite-core/packages`.
 - [ ] Update SPEC-001 changelog.
 
 > **Note:** SPEC-001 references a future `dainamite-product/` repo as a

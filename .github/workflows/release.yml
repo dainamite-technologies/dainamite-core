@@ -58,5 +58,16 @@ jobs:
           # When changesets exist but PR isn't merged → updates the PR.
           publish: yarn changeset publish
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Use RELEASE_TOKEN (PAT) if available, fall back to GITHUB_TOKEN.
+          # Why PAT: PRs created with the default GITHUB_TOKEN do NOT trigger
+          # other workflows (anti-recursion safety). That means the auto-opened
+          # "Version Packages" PR sits with no CI checks, blocked by branch
+          # protection. A PAT-authored PR is treated as user-authored and
+          # triggers CI normally.
+          # PAT setup: Settings → Developer settings → Personal access tokens →
+          # Tokens (classic) → Generate new with `repo` scope. Add as repo secret
+          # named RELEASE_TOKEN. Until you do, the workflow falls back to
+          # GITHUB_TOKEN and you'll need to push an empty commit to the
+          # changeset-release/main branch each time to trigger CI.
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
           NPM_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

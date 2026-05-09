@@ -108,8 +108,17 @@ the `@dainamite/cpq` package, per
 - [ ] **Manual / first-time setup before merge to main:**
       - Verify `permissions: packages: write` is enabled on the GitHub
         repo settings (Settings → Actions → General → Workflow permissions).
-      - Optional: add `NPM_TOKEN` secret if you want to use a PAT instead
-        of the auto-issued `GITHUB_TOKEN` (longer-lived, but less safe).
+      - **`RELEASE_TOKEN` PAT** — required for "Version Packages" PRs to
+        trigger CI automatically. Without it, you must push an empty
+        commit to `changeset-release/main` each release to trigger CI
+        (the default `GITHUB_TOKEN` cannot trigger workflows on PRs it
+        opens, anti-recursion safety). Setup:
+        1. Settings → Developer settings → Personal access tokens →
+           Tokens (classic) → Generate new (classic)
+        2. Scope: `repo` (full)
+        3. Expiration: 90+ days, set a calendar reminder to rotate
+        4. Repo settings → Secrets and variables → Actions → New
+           repository secret → name `RELEASE_TOKEN`, value the PAT
 - [ ] **First publish flow** (after this branch lands on main):
       1. Push to main triggers release workflow.
       2. Workflow sees `.changeset/initial-release.md` and opens a

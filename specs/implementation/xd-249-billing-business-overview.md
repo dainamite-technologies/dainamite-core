@@ -415,14 +415,12 @@ records jako rated. Operator weryfikuje.
 - **GDPR-ready** — moduł nie loguje PII w eventach. Right to
   portability — endpoint `/billing/export/account/{id}` zwraca pełen
   dump JSON dla danego konta.
-- **Retention policy** (config per tenant):
-  - Bill Run history — domyślnie 7 lat (zgodnie z PL przepisami o
-    przechowywaniu dokumentów księgowych)
-  - Usage records — domyślnie 2 lata po `rated_in_bill_run_id` set
-    (bo już są na fakturze; faktura zostaje 7 lat)
-  - Soft-delete dla wszystkich encji (`deleted_at`)
 - **Idempotency-first API** — `source_ref` na Billing Items i Usage
   records zapobiega podwójnemu naliczeniu przy retry.
+
+> **Retention policy** nie jest definiowana w v1 — moduł nie usuwa
+> sam żadnych danych. Soft-delete (`deleted_at`) dostępne dla
+> wszystkich encji, ale automated purge / TTL jest poza scope.
 
 KSeF (2027), SAF-T / JPK_VAT — przez `core/sales` lub osobne pakiety,
 billing nic nie psuje.
@@ -463,7 +461,7 @@ bez własnego IT, klienci usage-heavy z milionami eventów dziennie
 | 1 | REST API: Billing Account CRUD, Billing Item CRUD, Usage ingest endpoint. UoM dictionary integration. Idempotency przez `source_ref`. | 2 tygodnie |
 | 2 | Bill Run engine: schedulable, processes recurring + one_time + credit items, tworzy draft invoices w `core/sales`, idempotency (skip existing draft). Manual trigger + retry-failed. **Dry-run mode.** | 2-3 tygodnie |
 | 3 | Usage handling: rate'owanie w Bill Run (simple + tiered), exact UoM matching, `rated_in_bill_run_id` marking. | 1-2 tygodnie |
-| 4 | UI admina: draft invoice review + post + edit (audit), Bill Run history + retry, manual triggers, Billing Account/Item CRUD UI. **v1 release**. | 2-3 tygodnie |
+| 4 | UI admina: draft invoice review + post + edit (audit), Bill Run history + retry, manual triggers, Billing Account/Item CRUD UI. Plus `manuals/cpq-billing-integration.md` z gotowym przykładem subscribera dla integratorów. **v1 release**. | 2-3 tygodnie |
 
 **Łącznie:** ~8-11 tygodni solo. Pierwsze demo z draftowymi fakturami:
 ~koniec Phase 2 (5-6 tygodni od startu).
@@ -529,32 +527,18 @@ strategii growth vs bootstrap.
   `core/sales`. Dedicated flow planowany jako add-on.
 - **Currency mismatch** — warning + zapisany z flagą `currency_mismatch`,
   nie reject. Operator widzi w UI, decyduje.
+- **Retention policy** — nie definiujemy w v1. Soft-delete dostępny,
+  automated purge / TTL poza scope.
+- **CPQ bridge — glue code w v1, ekstrakcja do pakietu później.**
+  W v1 piszemy `manuals/cpq-billing-integration.md` z gotowym
+  przykładem subscribera (~30-50 linijek). Klient (lub my przy
+  pierwszym wdrożeniu CPQ+Billing) wkleja to do swojego
+  `src/modules/@app/cpq-billing-bridge/`. Gdy pierwszy klient to
+  napisze i działa — promujemy kod do osobnego pakietu
+  `@dainamite/cpq-billing-bridge`. **Rule:** raz to glue code, drugi
+  raz to pakiet (DRY refactor po realnej walidacji, nie premature
+  abstraction).
 - **Monetyzacja** — wciąż open, do dogrania osobno.
-
-## Co jeszcze potwierdzić przed Phase 0
-
-1. **CPQ bridge — pakiet czy doc-only.** Trzy ścieżki:
-   - **A (rekomendowane):** osobny pakiet
-     `@dainamite/cpq-billing-bridge` zainstalowany razem z CPQ +
-     Billing, automatycznie podsłuchuje eventy CPQ
-     (`cpq.subscription.created/amended/cancelled`) i kalkuluje
-     prorate value, tworzy Billing Items przez billing API.
-     Klient nic nie pisze, "yarn add i działa". Koszt: +1-2 tygodnie
-     developmentu poza v1 billingu.
-   - **B:** tylko `manuals/cpq-billing-integration.md` z przykładem
-     kodu — każdy integrator pisze własny bridge module w swoim
-     `src/modules/@app/`. Szybciej do v1, ryzyko bugów w pricingu
-     po stronie integratora.
-   - **C:** v1 = doc-only (B), potem ekstrakcja do pakietu (A) gdy
-     pierwszy klient z CPQ to potwierdzi.
-2. **Retention policy — domyślne wartości.** Default w specu: Bill Run
-   history 7 lat, rated Usage records 2 lata. Trzy podejścia:
-   - **Hardcoded defaults** (7y/2y), klient regulowany robi feature
-     request.
-   - **Per-tenant configurable** (zalecane) — config w UI, default
-     7y/2y, klient regulowany podnosi do 10+ lat sam.
-   - **Branch-specific defaults** (telco=10y, SaaS=5y) — nadwymagane
-     dla v1, nie polecam.
 
 ---
 

@@ -11,7 +11,7 @@ invoice number is assigned.
 
 The package is **standalone-first**: any source (CSV import, CRM,
 custom integration) can push Billing Items via REST API. When used
-with CPQ, a separate **pre-built `@dainamite/cpq-billing-bridge`**
+with CPQ, a separate **pre-built `@dainamite/cpq-billing-connector`**
 package wires CPQ subscription events to billing API calls.
 
 > **Date**: 2026-05-11
@@ -26,8 +26,8 @@ package wires CPQ subscription events to billing API calls.
 > `@open-mercato/core/sales`; UoM dictionary from
 > `@open-mercato/core/dictionaries`; tax service from `core/sales`;
 > queue worker contract from `@open-mercato/queue`.
-> **Companion package**: `@dainamite/cpq-billing-bridge` in
-> `packages/cpq-billing-bridge/` — pre-built CPQ integration,
+> **Companion package**: `@dainamite/cpq-billing-connector` in
+> `packages/cpq-billing-connector/` — pre-built CPQ integration,
 > shipped alongside billing v1.
 > **Out of scope (v1)**: credit notes / storno, dunning, customer
 > portal, payment collection, tax calculation, currency conversion,
@@ -41,9 +41,9 @@ package wires CPQ subscription events to billing API calls.
    a textual description and optional string FK to a product in
    another module. Billing does not know what a "product" is — only
    what appears on an invoice.
-2. **Standalone-first; pre-built CPQ bridge.** `@dainamite/billing`
+2. **Standalone-first; pre-built CPQ connector.** `@dainamite/billing`
    does not depend on CPQ. The companion package
-   `@dainamite/cpq-billing-bridge` ships in v1 and provides the
+   `@dainamite/cpq-billing-connector` ships in v1 and provides the
    ready-to-install CPQ integration.
 3. **Charges calculate during Bill Run** for time-proportional
    (`recurring`) and metered (`usage`) items. **Pre-calculated**
@@ -53,7 +53,7 @@ package wires CPQ subscription events to billing API calls.
    Invoices land as `draft`; a finance operator manually approves
    ("Post") — sequence number and accounting events fire only then.
 5. **Proration is supported but lightweight.** The integrator (CPQ
-   bridge or custom) computes the prorated value; billing stores it
+   connector or custom) computes the prorated value; billing stores it
    as a `one_time` Billing Item with a descriptive line. No
    dedicated proration audit tables.
 6. **Lightweight usage handling.** External systems upload
@@ -91,7 +91,10 @@ A container per customer (typically one customer = one account).
 | `currency_code` | text | no | ISO 4217; single-currency per account |
 | `bill_cycle` | text | no | `monthly` / `quarterly` / `annually` / `weekly` |
 | `bill_cycle_anchor` | text | no | Day 1–28 (monthly/quarterly/annually) or `mon`–`sun` (weekly) |
-| `invoice_data` | jsonb | no | `{ address, tax_id, email, language }` |
+| `invoice_email` | text | no | Email address invoices are sent to |
+| `invoice_language` | text | no | ISO 639-1 code (`en`, `pl`, etc.) — used by mailer/template renderer |
+| `tax_id` | text | yes | Tax / VAT identifier (NIP for PL, VATIN for EU). Nullable for individuals without a registered tax ID |
+| `invoice_address` | jsonb | no | Multi-line address as structured JSON: `{ line1, line2?, city, postal_code, country }`. JSONB rather than separate columns because address structure differs across countries and we don't query by address fields |
 | `next_bill_date` | date | no | Anchor date of the **next** period to bill. See [Bill Period semantics](#bill-period--cycle-semantics) |
 | `last_bill_date` | date | yes | Anchor of the most recently billed period (nullable for new accounts). Advanced by Bill Run after each successful run |
 | `created_at`, `updated_at`, `deleted_at` | timestamptz | std | OM defaults |
@@ -115,19 +118,20 @@ A single line that will appear on an invoice.
 | `subscription_item_id` | text | yes | String FK to upstream subscription item. NULL conditions same as above |
 | `source_ref` | text | yes | Idempotency key, unique per `(tenant_id, bill_account_id, source_ref)`. Duplicate POST returns the existing row (HTTP 200) — never creates a duplicate |
 | `currency_mismatch` | bool | no | Default `false`. Set when the integrator POSTed a value in a different currency than the account's `currency_code`. Operator sees warning in the UI on the draft and decides whether to edit or reject the line |
+| `billed_to_date` | date | yes | The most recent bill period end date through which this Item has been included on a **posted or draft** invoice (real runs only — test runs do not update this). Nullable = never billed. Used as the anti-double-bill guard: <ul><li>For `one_time`: once set, the Item is never picked up again — guarantees one-shot semantics even after retries or catch-up</li><li>For `recurring`: Bill Run only emits a line when the next cycle's `bill_period_end > billed_to_date`</li><li>For `usage`: not used directly (Usage records have their own `rated_in_bill_run_id` guard); kept null</li></ul> |
 | `created_at`, `updated_at`, `deleted_at` | timestamptz | std | OM defaults |
 
 **`type` semantics:**
 
 | Type | Used for | Bill Run behaviour |
 |---|---|---|
-| `one_time` | Activation fees, manual corrections, proration values (pre-calculated by bridge) | Copies `rate_json.amount` onto the draft once if the bill period overlaps `[bill_start_date, bill_end_date]` |
-| `recurring` | MRC, subscription fees | Pays `rate_json.unit_price` for each **full cycle** the Item covers within the bill period. See [Mid-cycle items](#mid-cycle-recurring-items) |
-| `usage` | Metered consumption | Sums matching Usage records' `quantity` × `rate_json` (simple or tiered) |
+| `one_time` | Activation fees, manual corrections, proration values (pre-calculated by connector) | Copies `rate_json.amount` onto the draft once **if `billed_to_date IS NULL`** and bill period overlaps `[bill_start_date, bill_end_date]`. On real-run post, sets `billed_to_date = bill_period_end`, guaranteeing single-shot semantics |
+| `recurring` | MRC, subscription fees | Pays `rate_json.unit_price` for each **full cycle** the Item covers within the bill period, **only when `bill_period_end > billed_to_date`** (or `billed_to_date IS NULL`). On real-run, sets `billed_to_date = bill_period_end`. See [Mid-cycle items](#mid-cycle-recurring-items) |
+| `usage` | Metered consumption | Sums matching Usage records' `quantity` × `rate_json` (simple or tiered). Anti-duplicate via `rated_in_bill_run_id` on Usage records, not `billed_to_date` |
 
 > **CPQ integration note.** If a CPQ subscription item has both a
 > one-time charge (e.g. activation) and a recurring charge (e.g. MRC),
-> the bridge creates **two separate Billing Items** (`type=one_time`
+> the connector creates **two separate Billing Items** (`type=one_time`
 > + `type=recurring`) both pointing at the same
 > `subscription_item_id`.
 
@@ -194,7 +198,7 @@ Validation rules (Zod, enforced at API):
 **Rounding policy.** When the engine computes line `amount`s
 (recurring × cycles, usage × tier rates), the result is rounded to
 **2 decimal places, half-up** (standard commercial rounding;
-matches PL VAT practice). Bridges computing proration values
+matches PL VAT practice). Connectors computing proration values
 should follow the same convention for consistency on the draft.
 
 ### Entity 3: BillingAccountUsage
@@ -208,6 +212,7 @@ Bucket for pre-aggregated usage uploaded by external systems.
 | `uom_code` | text | no | Must exactly match `uom_code` on a matching `type=usage` Billing Item |
 | `quantity` | numeric(18,4) | no | Amount consumed |
 | `period_start`, `period_end` | timestamptz | no | The window over which this usage was aggregated |
+| `line_description` | text | yes | Optional per-record description. When set, Bill Run emits **one invoice line per Usage record** with this description (e.g. "API key X — 753k input tokens, 2026-02-23..25"). When null, Bill Run aggregates all matching Usage records into a **single line** with the Billing Item's `description`. Enables breakdown reporting on the invoice |
 | `source_ref` | text | yes | Idempotency key, unique per `(tenant_id, bill_account_id, source_ref)`. Duplicate POST returns existing row |
 | `rated_in_bill_run_id` | uuid | yes | Set when this record is consumed; prevents double-rating on retry |
 | `created_at`, `updated_at`, `deleted_at` | timestamptz | std | OM defaults |
@@ -235,7 +240,8 @@ A single execution of the engine.
 | `tenant_id`, `organization_id` | uuid | no | Standard scoping |
 | `triggered_by` | text | no | `schedule` / `manual` |
 | `parent_run_id` | uuid | yes | Set when this run is a "retry failed" of a previous run |
-| `dry_run` | bool | no | Default `false`. When `true`, engine computes everything but does NOT persist drafts, mark Usage as rated, or advance `next_bill_date`. Preview only |
+| `dry_run` | bool | no | Default `false`. When `true`, engine computes everything but does NOT persist drafts, mark Usage as rated, or advance `next_bill_date`. Preview only — no side effects |
+| `test_mode` | bool | no | Default `false`. When `true`, engine **persists drafts** (so operator can review the actual output) but flags them as test and does NOT advance `next_bill_date`, does NOT set `billed_to_date` on Items, does NOT mark Usage as rated. See [Test-bill-run mode](#test-bill-run-mode) |
 | `catch_up` | bool | no | Default `false`. When `true` (manual triggers only), engine loops missed cycles per account in one run. See [Catch-up](#catch-up--missed-cycles) |
 | `scoped_account_ids` | uuid[] | yes | Optional — when set, run processes only these accounts (manual single-account trigger, retry-failed) |
 | `as_of_date` | date | no | The "today" the run uses. For schedule trigger = current date; for manual trigger = operator's choice (defaults to today). Used to find accounts where `next_bill_date <= as_of_date` |
@@ -243,7 +249,24 @@ A single execution of the engine.
 | `status` | text | no | `running` / `completed` / `partial_failure` / `failed` |
 | `summary` | jsonb | yes | `{ accounts_processed, drafts_created, drafts_skipped_existing, accounts_failed, accounts_with_warnings, usage_records_rated }` |
 
-**Per-account outcomes** in `BillRunOutcome`:
+**Per-account outcomes** are stored in a separate `BillRunOutcome`
+table rather than as a JSONB array inside `BillRun.summary`. The
+trade-off:
+
+- **Standalone table (chosen)** — outcomes are queryable in SQL.
+  Operator can answer "which accounts failed in the last 30 days
+  across all runs?", "what's the failure rate per customer over
+  time?", "show me the retry chain for account X" without writing
+  JSON path queries. Plus foreign keys to `BillRun` + `BillingAccount`
+  give referential integrity.
+- **JSONB array in `BillRun.summary`** — fewer tables, but per-account
+  queries require `jsonb_array_elements` + filters. Painful for
+  retry-failed logic which needs `WHERE status='failed'`, and even
+  more painful for operational dashboards.
+
+For a lightweight module we still pay the cost of one extra table
+because Bill Run outcomes are exactly the data operators reach for
+when something goes wrong.
 
 | Column | Type | Description |
 |---|---|---|
@@ -308,6 +331,23 @@ the invoice does NOT delete the audit records (kept for compliance).
 Billing does not invent its own invoice entity. It creates an
 `Invoice` (status `draft`) in `core/sales` and links Billing Items
 to invoice lines.
+
+> **Phase 0 validation step.** Before Phase 1 starts, we verify
+> that `core/sales` Invoice + InvoiceLine entities expose every
+> field billing relies on:
+> - `status` enum supporting `draft` / `posted` / `paid` / `void`
+> - per-line `description`, `unit_price`, `quantity`, `amount`,
+>   `vat_rate`
+> - `metadata` JSONB on both invoice and line for billing's
+>   back-references (`bill_period_*`, `bill_run_id`,
+>   `billing_item_id`, `billing_type`, `test_run`,
+>   `usage_tier_breakdown`)
+> - Sequence number generator service that billing can call at post
+>
+> If any field is missing, billing extends via `metadata` JSONB
+> (preferred) or proposes an upstream PR to `core/sales`. The
+> trade-off is documented in the Phase 0 deliverable so the
+> implementer doesn't get stuck silently.
 
 **Status flow:**
 - `draft` — created by Bill Run; mutable by operator (audited via
@@ -410,10 +450,62 @@ per missed cycle in a single run. Useful for a "let me catch up
 that paused customer in one go" operator action. Always one draft
 per period (never combined into one mega-invoice).
 
+**Why two anti-duplicate guards (account-level + item-level).** The
+account-level guard (`next_bill_date` advance + open-draft check)
+prevents re-billing the **same period as a whole**. The item-level
+guard (`billed_to_date` on `BillingItem`) prevents re-billing a
+**specific item** even if it would otherwise qualify for the period.
+These cover different failure modes:
+
+- Account-level alone is not enough — if an item was added with
+  `bill_start_date` mid-cycle and the connector retroactively
+  changes its `bill_start_date` to an earlier date, the item could
+  end up double-billed without item-level tracking.
+- Item-level alone is not enough — an account being paused mid-cycle
+  and resumed needs the period boundary tracking to know whether to
+  catch-up or skip ahead.
+
+Both run together: real runs advance both `next_bill_date` (account)
+and `billed_to_date` (per item that contributed a line).
+
 | Mode | Trigger | Cycles per run per account |
 |---|---|---|
 | Default | `triggered_by='schedule'` | exactly 1 |
 | Catch-up | `triggered_by='manual'` AND `catch_up=true` | as many as missed |
+
+### Run modes — dry-run vs test-bill-run vs real run
+
+Three modes serve three different needs. Both `dry_run` and
+`test_mode` are write-safe in different ways:
+
+| Mode | Persists drafts? | Marks items as billed? | Advances `next_bill_date`? | Repeatable? | Use case |
+|---|---|---|---|---|---|
+| **Real run** (default) | ✅ | ✅ (via `billed_to_date` / Usage `rated_in_bill_run_id`) | ✅ | ❌ (subsequent runs skip already-billed) | Production |
+| **Dry-run** (`dry_run=true`) | ❌ (computes in memory only) | ❌ | ❌ | ✅ | Quick preview, sanity check |
+| **Test-bill-run** (`test_mode=true`) | ✅ flagged as test (invoice `metadata.test_run=true`) | ❌ | ❌ | ✅ | Acceptance testing, staging validation, side-by-side comparison |
+
+**Test-bill-run** is for when an operator wants to **actually see the
+draft invoice that would be produced** (with all line items, totals,
+formatting) without the production side effects:
+
+- Drafts get `metadata.test_run=true` on the `core/sales` invoice +
+  reference to the originating `BillRun.id`
+- Items that participate in a test run keep their `billed_to_date`
+  unchanged → a follow-up test run produces the **same draft** (idempotent
+  on test side, not on production state)
+- Usage records are NOT marked `rated_in_bill_run_id` → same usage
+  data flows into the next run, whether test or real
+- `BillingAccount.next_bill_date` is NOT advanced
+
+**Wipe-out for test drafts.** Operator can clean test invoices via a
+dedicated endpoint `DELETE /api/billing/test-invoices?bill_run_id=X`
+which removes the invoice + its lines from `core/sales` filtered by
+the `metadata.test_run=true` flag. (Hard delete, not soft — test
+data should not pollute production history.)
+
+This is **not the same as dry-run**: dry-run gives you a JSON
+summary; test-bill-run gives you the actual draft invoice the
+operator would post in production, with the option to wipe it after.
 
 ### Mid-cycle recurring items
 
@@ -423,7 +515,7 @@ period only when:
 - AND (`bill_end_date IS NULL` OR `bill_end_date >= bill_period_end`)
 
 If neither condition holds (the Item starts or ends mid-cycle), the
-engine **skips it for that cycle**. The integrator (bridge or
+engine **skips it for that cycle**. The integrator (connector or
 custom) is responsible for posting a `one_time` Billing Item with a
 pre-calculated proration value covering the partial period.
 
@@ -444,7 +536,7 @@ The integrator's responsibility:
   descriptive line ("Proration: <product> from <date> to <date>").
 - On mid-cycle **remove** (e.g. CPQ cancel): set `bill_end_date` on
   the `recurring` Item, **plus** post a `one_time` credit Item with
-  negative `amount` if a refund is owed (CPQ amend / bridge owns
+  negative `amount` if a refund is owed (CPQ amend / connector owns
   this math).
 
 ### Open-draft check (anti-duplicate)
@@ -486,17 +578,29 @@ conversion.
 
 ### Invoice Sequence Number
 
-Per-tenant configurable invoice numbering, atomic at post.
+**Per-organization** configurable invoice numbering, atomic at post.
+Each `organization_id` within a tenant has its own sequence — so a
+tenant with multiple branches (each registered as a separate
+organization in OM) gets independent gap-free numbering per branch,
+which is required when branches file VAT separately or operate
+under different tax IDs.
 
-- `pattern` — e.g. `FV/{YEAR}/{MONTH}/{NNNN}` or `INV-{YYYY}-{0000000}`
+A tenant with one organization gets one sequence (the common case);
+a tenant with N organizations gets N sequences.
+
+Each sequence has:
+- `pattern` — e.g. `FV/{YEAR}/{MONTH}/{NNNN}` or `INV-{YYYY}-{0000000}`.
+  Optional `{ORG}` placeholder lets the org code appear in the
+  number (e.g. `FV/PL01/2026/0001`)
 - `reset_cycle` — `yearly` / `monthly` / `never`
 - `current_value` — integer, atomically incremented via SQL upsert
 
-SQL upsert guarantees uniqueness and gaplessness under concurrent
-post (mandated by the Polish VAT Act and EU Directive 2006/112/EC).
+SQL upsert on `(tenant_id, organization_id)` guarantees uniqueness
+and gaplessness under concurrent post (mandated by the Polish VAT
+Act and EU Directive 2006/112/EC).
 
-Default pattern seeded by `setup.ts`: `INV-{YYYY}-{0000001}`,
-`reset_cycle: yearly`.
+Default pattern seeded by `setup.ts` per organization at creation
+time: `INV-{YYYY}-{0000001}`, `reset_cycle: yearly`.
 
 ### Bill Run Schedule (cron)
 
@@ -519,7 +623,7 @@ defaults at module installation:
 - Seeds default `billing.cron_schedule`
 - Registers ACL features (see [ACL](#acl-features))
 - Grants `admin` role all `billing.*` features
-- Registers default `billing.operator`, `billing.auditor`,
+- Registers default `billing.admin`, `billing.finance_user`,
   `billing.usage_writer` roles
 
 Tenants installed before this module skip nothing — the setup is
@@ -529,7 +633,7 @@ idempotent.
 
 ## Bill Run Flow
 
-1. **Setup.** Operator (or bridge) creates a Billing Account with
+1. **Setup.** Operator (or connector) creates a Billing Account with
    cycle, anchor, currency, and invoice data.
 2. **Items flow in.** Integrator POSTs Billing Items with optional
    `source_ref` for idempotency.
@@ -590,28 +694,74 @@ idempotent.
 
 ---
 
+## Performance Considerations
+
+Two workload shapes drive the engine's design:
+
+**Shape A — many accounts, few items each** (typical B2B SaaS):
+500,000 Billing Accounts × ~5 items each. Bill Run picks all
+accounts where `next_bill_date <= today` (potentially hundreds of
+thousands per day on busy month boundaries).
+
+- **Required indexes:** `(tenant_id, next_bill_date)` partial index
+  WHERE `deleted_at IS NULL` on `BillingAccount`;
+  `(bill_account_id, type, status_eq_active)` on `BillingItem`
+- **Strategy:** parallel per-account worker pool. Each account's
+  per-account transaction is short (~5 items → ~5 invoice line
+  inserts → 1 invoice draft) and independent — workers chew through
+  the queue without lock contention.
+- **Throughput target:** ~500 accounts/sec on a single beefy
+  Postgres + 8-worker pool ≈ 17 min for 500k accounts.
+
+**Shape B — few accounts, huge item count** (telco, infra):
+20 Billing Accounts × 500,000 items each. One account's bill run
+is now the heavy step (500k recurring items to evaluate per cycle,
+millions of Usage records to aggregate).
+
+- **Required indexes:** `(bill_account_id, type)` on `BillingItem`
+  for the per-account filter;
+  `(bill_account_id, uom_code, rated_in_bill_run_id, period_end)`
+  on `BillingAccountUsage`
+- **Strategy:** within a single account's transaction, batch SQL
+  operations — single `INSERT ... SELECT FROM billing_items WHERE
+  ... AND billed_to_date IS DISTINCT FROM bill_period_end` for
+  recurring (no per-item loop in app code), single aggregate query
+  for usage. Tiered rating computed in CTE or application-side from
+  a single fetch.
+- **Throughput target:** ~30 sec per account for 500k items;
+  20 accounts × 30s ≈ 10 min total.
+
+Both shapes must work; Phase 2 includes integration tests with
+seeded data matching each shape, asserting end-to-end Bill Run
+duration within target. If we hit limits, the per-account
+transaction is split into batches (one invoice draft per batch of
+N items) — but that's a documented escape hatch, not Phase 2
+scope.
+
+---
+
 ## CPQ Integration
 
 Shipped as a **separate pre-built package**
-`@dainamite/cpq-billing-bridge`, released alongside billing v1.
-Source lives in `packages/cpq-billing-bridge/` in this monorepo,
+`@dainamite/cpq-billing-connector`, released alongside billing v1.
+Source lives in `packages/cpq-billing-connector/` in this monorepo,
 alongside `packages/billing/` and `packages/cpq/`.
 
-The bridge installs as a sibling module in the consumer app:
+The connector installs as a sibling module in the consumer app:
 
 ```typescript
 // src/modules.ts
 import billingModule from '@dainamite/billing'
 import cpqModule from '@dainamite/cpq'
-import cpqBillingBridge from '@dainamite/cpq-billing-bridge'
+import cpqBillingConnector from '@dainamite/cpq-billing-connector'
 
-export const modules = [billingModule, cpqModule, cpqBillingBridge]
+export const modules = [billingModule, cpqModule, cpqBillingConnector]
 ```
 
-The bridge subscribes to CPQ lifecycle events and translates them
+The connector subscribes to CPQ lifecycle events and translates them
 to billing API calls:
 
-| CPQ event | Bridge action |
+| CPQ event | Connector action |
 |---|---|
 | `cpq.subscription.activated` | Create Billing Account if missing; create Billing Items per charge (one-time + recurring split) |
 | `cpq.subscription.amended` | Create new Billing Items for added subscription items; compute proration value for the partial cycle and post as `one_time` Billing Item; set `bill_end_date` on removed items |
@@ -622,7 +772,7 @@ to billing API calls:
 
 ### CPQ-side payload contracts
 
-The bridge expects each CPQ event to carry these fields:
+The connector expects each CPQ event to carry these fields:
 
 **`cpq.subscription.activated`** *(NEW event — upstream PR in Phase 5)*
 ```typescript
@@ -665,8 +815,8 @@ Equivalent payloads exist for `renewed`, `cancelled`, `merged`,
 
 ### Reference subscriber implementation
 
-Ships in the bridge package under
-`packages/cpq-billing-bridge/src/modules/cpq_billing_bridge/subscribers/`:
+Ships in the connector package under
+`packages/cpq-billing-connector/src/modules/cpq_billing_connector/subscribers/`:
 
 ```typescript
 // cpq-subscription-activated.ts
@@ -706,7 +856,7 @@ export default async function handler(opts) {
 }
 ```
 
-For `amended` events the bridge computes proration
+For `amended` events the connector computes proration
 (`unitPrice × quantity × daysRemaining / daysInPeriod`) and posts
 it as a `one_time` Billing Item with
 `rate_json: {"amount": <prorataValue>}`.
@@ -717,9 +867,9 @@ it as a `one_time` Billing Item with
 
 | Persona | Activity |
 |---|---|
-| **Finance operator** | Verifies and posts drafts, retries failed runs, edits Billing Items / draft lines |
-| **Auditor / accounting** | Read-only access to invoices, Bill Run history, Billing Accounts. Can run **dry-run previews** (no side effects). Does not post, edit, or trigger real runs |
-| **Integrator** | Writes / consumes bridge code; receives scoped API key for `billing.item.manage` |
+| **Billing admin** | Verifies and posts drafts, retries failed runs, edits Billing Items / draft lines, triggers manual / test / catch-up runs |
+| **Finance user** | Read-only access to invoices, Bill Run history, Billing Accounts. Can run **dry-run previews** (no side effects). Does not post, edit, or trigger real runs |
+| **Integrator** | Writes / consumes connector code; receives scoped API key for `billing.item.manage` |
 | **External usage system** | Autonomous POST to Usage endpoint via narrowly-scoped API key (`billing.usage.ingest` only) |
 
 ### ACL features
@@ -746,8 +896,8 @@ Defined in `acl.ts`:
 | Role | Features |
 |---|---|
 | `admin` | All `billing.*` |
-| `billing.operator` | `account.manage`, `account.view`, `item.manage`, `item.view`, `usage.view`, `run.trigger`, `run.dry_run`, `run.view`, `invoice.post`, `invoice.edit_draft`, `invoice.view` |
-| `billing.auditor` | All `.view` features + `run.dry_run` (preview without write) — no posting, no editing, no real trigger |
+| `billing.admin` | `account.manage`, `account.view`, `item.manage`, `item.view`, `usage.view`, `run.trigger`, `run.dry_run`, `run.view`, `invoice.post`, `invoice.edit_draft`, `invoice.view` — the day-to-day persona ("Billing admin") |
+| `billing.finance_user` | All `.view` features + `run.dry_run` (preview without write) — no posting, no editing, no real trigger. The read-only persona ("Finance user") |
 | `billing.usage_writer` | `usage.ingest` only — for external system API keys |
 
 ---
@@ -778,12 +928,12 @@ Operator opens draft, reviews, clicks "Post" — invoice gets number
 ### Story 2 — customer adds a product mid-cycle
 
 On 15 May the customer buys an additional package (29 EUR/mo). The
-bridge POSTs:
+connector POSTs:
 1. New `recurring` Billing Item with `rate_json: {"unit_price": 29}`
    and `bill_start_date: 2026-05-15`
 2. `one_time` Billing Item with `rate_json: {"amount": 15.90}`,
    `bill_start_date: 2026-05-15`, description "Proration: Package X
-   from 2026-05-15 to 2026-05-31" — bridge computed the prorated
+   from 2026-05-15 to 2026-05-31" — connector computed the prorated
    value (29 × 17/31)
 
 On 1 June Bill Run for May:
@@ -854,7 +1004,7 @@ either.
 | 2 | Bill Run engine: cron schedulable, processes `recurring` + `one_time`, creates `core/sales` draft invoices with proper line mapping, open-draft anti-duplicate, mid-cycle skip rules, catch-up loop, dry-run mode | 2-3 weeks | **First automatic drafts. "Shippable preview".** |
 | 3 | Usage rating: tiered (volume/graduated/flat) and simple, exact UoM matching, `rated_in_bill_run_id` marking, `success_with_warnings` for unmatched UoMs | 1-2 weeks | Customer pushes usage → engine rates it |
 | 4 | Admin UI: draft review + post + edit (audited via `DraftInvoiceEdit`), Bill Run history + outcomes + retry, manual triggers, dry-run preview, Account/Item CRUD UI, GDPR portability endpoint; `payments.payment.completed` subscriber from `core/payment_gateways` wires posted invoice → `paid` status | 2-3 weeks | **`@dainamite/billing` v1 release.** |
-| 5 | `packages/cpq-billing-bridge/` workspace: subscribers for the 6 CPQ events, upstream PR to CPQ adding `cpq.subscription.activated` event and formalizing payloads | 1-2 weeks | **`@dainamite/cpq-billing-bridge` v1 release.** |
+| 5 | `packages/cpq-billing-connector/` workspace: subscribers for the 6 CPQ events, upstream PR to CPQ adding `cpq.subscription.activated` event and formalizing payloads | 1-2 weeks | **`@dainamite/cpq-billing-connector` v1 release.** |
 
 **Total:** 9-13 weeks solo. First "it works" moment after ~5-6
 weeks (end of Phase 2).

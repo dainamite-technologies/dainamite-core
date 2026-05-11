@@ -1,10 +1,6 @@
-# Billing Module (xd-249) — Brief dla wspólnika
+# Billing Module (xd-249) — Spec
 
 **Czas czytania:** ~7 min
-**Powiązane:** pełny spec w
-[xd-249-billing-business-overview.md](./xd-249-billing-business-overview.md)
-(~650 linii, dla developerów); ten plik jest streszczeniem do
-omówienia bez wchodzenia w technikę.
 
 ---
 
@@ -206,9 +202,7 @@ metering), klienci bez własnego IT.
 
 ## Linki / referencje
 
-- **Pełny spec:** [xd-249-billing-business-overview.md](./xd-249-billing-business-overview.md) (650 linii)
-- **PR z tym dokumentem + specem:** [#34](https://github.com/dainamite-technologies/dainamite-core/pull/34)
-- **Architektura modułów @dainamite/***: [SPEC-001](../../.ai/specs/SPEC-001-2026-04-23-module-distribution-architecture.md)
+- **Architektura modułów `@dainamite/*`:** [SPEC-001](../../.ai/specs/SPEC-001-2026-04-23-module-distribution-architecture.md)
 - **Pierwszy pakiet w produkcji (`@dainamite/cpq`):** [packages/cpq/MIGRATION.md](../../packages/cpq/MIGRATION.md)
 
 ---

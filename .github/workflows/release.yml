@@ -9,13 +9,13 @@ concurrency:
   group: release-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 
-# `contents: write` for the changesets action to push the "Version Packages" PR.
-# `packages: write` for publishing to GitHub Packages.
+# `contents: write` for the changesets action to push the "Version Packages" branch.
 # `pull-requests: write` for opening / updating the version PR.
+# `id-token: write` for npm provenance (recommended for public packages).
 permissions:
   contents: write
-  packages: write
   pull-requests: write
+  id-token: write
 
 jobs:
   release:
@@ -34,17 +34,15 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 24
-          # Auth handled at install/publish time via .npmrc + NPM_AUTH_TOKEN.
-          # We deliberately don't use setup-node's registry-url because the
-          # repo's checked-in .npmrc already points @dainamite at GitHub Packages.
+          # Auth handled at publish time via .npmrc + NPM_TOKEN. The checked-in
+          # .npmrc points npm.js auth at the NPM_TOKEN env var; we deliberately
+          # don't use setup-node's registry-url so we keep a single source of truth.
 
       - name: Enable corepack
         run: corepack enable
 
       - name: Install dependencies
         run: yarn install --immutable
-        env:
-          NPM_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build all workspace packages
         # Each @dainamite/* package gets built before publish so dist/ exists.
@@ -58,16 +56,17 @@ jobs:
           # When changesets exist but PR isn't merged → updates the PR.
           publish: yarn changeset publish
         env:
-          # Use RELEASE_TOKEN (PAT) if available, fall back to GITHUB_TOKEN.
-          # Why PAT: PRs created with the default GITHUB_TOKEN do NOT trigger
-          # other workflows (anti-recursion safety). That means the auto-opened
-          # "Version Packages" PR sits with no CI checks, blocked by branch
-          # protection. A PAT-authored PR is treated as user-authored and
-          # triggers CI normally.
+          # GitHub auth — use RELEASE_TOKEN (PAT) if available, fall back to
+          # GITHUB_TOKEN. Why PAT: PRs created with the default GITHUB_TOKEN do
+          # NOT trigger other workflows (anti-recursion safety). A PAT-authored
+          # PR is treated as user-authored and triggers CI normally.
           # PAT setup: Settings → Developer settings → Personal access tokens →
           # Tokens (classic) → Generate new with `repo` scope. Add as repo secret
-          # named RELEASE_TOKEN. Until you do, the workflow falls back to
-          # GITHUB_TOKEN and you'll need to push an empty commit to the
-          # changeset-release/main branch each time to trigger CI.
+          # named RELEASE_TOKEN.
           GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
-          NPM_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # npm.js auth for `yarn changeset publish`. Get the token at
+          # https://www.npmjs.com/settings/<username>/tokens (type: Automation,
+          # scope: read+write, NOT a granular access token — those don't work
+          # well with org-scoped publishes yet). Add as repo secret named
+          # NPM_TOKEN.
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}

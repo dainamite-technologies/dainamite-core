@@ -353,6 +353,185 @@ Default role mappings:
 
 ---
 
+## Przykład glue code: CPQ → Billing bridge
+
+Poniższy reference design pokazuje **jak wygląda integrator-side glue
+code** który łączy CPQ z billingiem. W v1 ten kod żyje w aplikacji
+klienta pod `src/modules/@app/cpq-billing-bridge/`. Po pierwszej
+udanej walidacji u klienta — promujemy do pakietu
+`@dainamite/cpq-billing-bridge`.
+
+**Pre-requisite:** `@dainamite/cpq` musi emitować event
+`cpq.subscription.activated` (dziś emituje tylko ARC eventy —
+amend/renew/merged/cancelled/superseded). Add-on PR do CPQ z
+emisją `activated` jest częścią pierwszego wdrożenia bridge'a.
+
+### Subscriber: aktywacja nowej subskrypcji
+
+```typescript
+// src/modules/@app/cpq-billing-bridge/subscribers/cpq-subscription-activated.ts
+import type { EventSubscriberMetadata } from '@open-mercato/events'
+import type { AppContainer } from '@open-mercato/shared/lib/di/container'
+
+export const metadata: EventSubscriberMetadata = {
+  event: 'cpq.subscription.activated',
+  queue: 'persistent', // retry-safe, survives restart
+}
+
+type CpqSubscriptionActivatedPayload = {
+  subscriptionId: string
+  customerId: string
+  currencyCode: string
+  items: Array<{
+    subscriptionItemId: string
+    productCode: string
+    productName: string
+    quantity: number
+    charges: Array<{
+      type: 'one_time' | 'recurring'
+      amount?: number              // for one_time, pre-calculated by CPQ
+      unitPrice?: number           // for recurring, billed in Bill Run
+      description: string
+    }>
+  }>
+}
+
+export default async function handler(opts: {
+  payload: CpqSubscriptionActivatedPayload
+  container: AppContainer
+}) {
+  const { payload, container } = opts
+  const billingApi = container.resolve('billingApiClient')
+
+  // 1. Get-or-create Billing Account for this customer
+  const account = await billingApi.accounts.getOrCreate({
+    customerId: payload.customerId,
+    currencyCode: payload.currencyCode,
+    billCycle: 'monthly',
+    billCycleAnchor: 1, // 1st of each month
+    sourceRef: `cpq-customer-${payload.customerId}`,
+  })
+
+  // 2. For each subscription item, create matching Billing Items
+  //    A single CPQ item with both one-time + recurring charges
+  //    yields TWO Billing Items (per spec contract)
+  for (const item of payload.items) {
+    for (const charge of item.charges) {
+      await billingApi.items.create({
+        billAccountId: account.id,
+        type: charge.type,
+        description: `${item.productName} — ${charge.description}`,
+        quantity: item.quantity,
+        amount: charge.amount, // null for recurring, value for one_time
+        rateJson: charge.unitPrice
+          ? { unit_price: charge.unitPrice }
+          : null,
+        subscriptionId: payload.subscriptionId,
+        subscriptionItemId: item.subscriptionItemId,
+        sourceRef: `cpq-${payload.subscriptionId}-${item.subscriptionItemId}-${charge.type}`,
+        billStartDate: new Date().toISOString().slice(0, 10), // today
+      })
+    }
+  }
+}
+```
+
+### Subscriber: amend w trakcie cyklu (prorata)
+
+```typescript
+// src/modules/@app/cpq-billing-bridge/subscribers/cpq-subscription-amended.ts
+import type { EventSubscriberMetadata } from '@open-mercato/events'
+
+export const metadata: EventSubscriberMetadata = {
+  event: 'cpq.subscription.amended',
+  queue: 'persistent',
+}
+
+type CpqAmendedPayload = {
+  subscriptionId: string
+  effectiveDate: string  // when the amend takes effect
+  addedItems: Array<{
+    subscriptionItemId: string
+    productName: string
+    quantity: number
+    monthlyUnitPrice: number
+  }>
+  removedSubscriptionItemIds: string[]
+  proration: {
+    daysInPeriod: number       // 31
+    daysRemaining: number      // e.g. 17
+    cycleStart: string         // '2026-05-01'
+    cycleEnd: string           // '2026-05-31'
+  }
+}
+
+export default async function handler(opts: {
+  payload: CpqAmendedPayload
+  container: AppContainer
+}) {
+  const { payload, container } = opts
+  const billingApi = container.resolve('billingApiClient')
+  const account = await billingApi.accounts.findBySubscription(payload.subscriptionId)
+
+  // Add new recurring items + their prorated one-time charge
+  for (const added of payload.addedItems) {
+    // Recurring item (will be billed full cycles in Bill Run)
+    await billingApi.items.create({
+      billAccountId: account.id,
+      type: 'recurring',
+      description: added.productName,
+      quantity: added.quantity,
+      rateJson: { unit_price: added.monthlyUnitPrice },
+      subscriptionId: payload.subscriptionId,
+      subscriptionItemId: added.subscriptionItemId,
+      sourceRef: `cpq-${payload.subscriptionId}-${added.subscriptionItemId}-recurring`,
+      billStartDate: payload.effectiveDate,
+    })
+
+    // Pre-calculated proration (bridge does the math; billing just stores)
+    const prorataAmount = +(
+      added.monthlyUnitPrice
+      * added.quantity
+      * (payload.proration.daysRemaining / payload.proration.daysInPeriod)
+    ).toFixed(2)
+
+    await billingApi.items.create({
+      billAccountId: account.id,
+      type: 'one_time',
+      description: `Proration: ${added.productName} from ${payload.effectiveDate} to ${payload.proration.cycleEnd}`,
+      amount: prorataAmount,
+      subscriptionId: payload.subscriptionId,
+      subscriptionItemId: added.subscriptionItemId,
+      sourceRef: `cpq-${payload.subscriptionId}-${added.subscriptionItemId}-proration-${payload.effectiveDate}`,
+    })
+  }
+
+  // Close removed items (status='cancelled' or set bill_end_date)
+  for (const removedId of payload.removedSubscriptionItemIds) {
+    await billingApi.items.cancelBySubscriptionItem({
+      subscriptionItemId: removedId,
+      cancelAsOf: payload.effectiveDate,
+    })
+  }
+}
+```
+
+### Co warto zauważyć
+
+- **`sourceRef` jest idempotency key** — bridge może być retry'owany
+  (event bus daje at-least-once delivery), duplicate POST'y są
+  bezpiecznie skipowane przez billing.
+- **Proration math jest po stronie bridge'a**, nie billingu.
+  Billing zapisuje tylko `amount` jako pre-calculated value.
+- **Mapping CPQ → Billing semantyki jest 1:N** — jedna pozycja
+  CPQ z mixed charges = wiele Billing Items.
+- Pełny zestaw subskryberów (`activated`, `amended`, `renewed`,
+  `merged`, `cancelled`, `superseded`) to ~150-250 linijek glue code
+  total. Możliwy do napisania w ramach 1-2 dni przy pierwszym wdrożeniu
+  CPQ+Billing.
+
+---
+
 ## Trzy historie end-to-end
 
 ### Historia 1 — nowa subskrypcja z opłatą wstępną

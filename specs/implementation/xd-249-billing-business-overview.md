@@ -299,8 +299,13 @@ Per-tenant konfigurowalna sekwencja numeracji faktur.
   oznaczyć `paid` — nie zarządza płatnościami.
 - **Brak liczenia podatków.** VAT/exempty załatwia tax service z
   `core/sales`. Billing przekazuje stawkę i kwotę.
-- **Brak konwersji walut.** Każde Billing Account jest single-currency.
-  Items i Usage w innej walucie odrzucane przy create (400).
+- **Brak konwersji walut.** Każde Billing Account jest single-currency
+  (`currency_code` na Account). Bridge może wysłać pre-calculated
+  `amount` lub usage record z explicit `currency_code` mismatch — w
+  takim wypadku API zwraca **200 z warning** i zapisuje pozycję z
+  flagą `currency_mismatch: true`. Operator widzi tę flagę w UI na
+  drafcie i decyduje czy edytować/odrzucić linię przed post. Brak
+  konwersji = brak FX risk po naszej stronie, decyzja świadoma.
 - **Brak konwersji UoM.** Usage record z `uom_code` nie matchującym
   exactly Item-side → un-rated, warning w outcome.
 - **Brak trial periods jako odrębna feature.** Discounted okres →
@@ -348,38 +353,39 @@ Default role mappings:
 
 ---
 
-## Trzy historie end-to-end (Netia / CPQ bridge)
+## Trzy historie end-to-end
 
-### Historia 1 — nowy klient kupuje internet 100/100
-W CPQ klient akceptuje quote, CPQ aktywuje subskrypcję. Bridge wykrywa
-aktywację, woła billing API: tworzy Billing Account dla klienta
-(`currency_code: EUR`, `bill_cycle: monthly`, `bill_cycle_anchor: 1`)
-+ dwa Billing Items dla subskrypcji: `recurring` MRC 49.99 EUR/mc
-oraz `one_time` opłatę aktywacyjną z `amount: 99.00` (pre-calculated,
-brak `rate_json`).
+### Historia 1 — nowa subskrypcja z opłatą wstępną
+Integrator (CPQ-bridge lub własny) woła billing API: tworzy Billing
+Account dla klienta (`currency_code: EUR`, `bill_cycle: monthly`,
+`bill_cycle_anchor: 1`) + dwa Billing Items dla subskrypcji:
+`recurring` MRC 49.99 EUR/mc oraz `one_time` opłatę
+aktywacyjną/setup fee z `amount: 99.00` (pre-calculated, brak
+`rate_json`).
 
 1 czerwca o 02:00 Bill Run znajduje to konto, kalkuluje recurring
 (49.99 × 1 cykl), bierze one-time as-is (99.00), tworzy **draft
 invoice** zawierający 49.99 + 99 = 148.99 EUR. Rano operator otwiera
 draft, weryfikuje, klika "Post" — faktura dostaje numer
-`FV/2026/06/0123`, status `posted`, event leci do system mailingowego.
+`FV/2026/06/0123`, status `posted`, event `billing.invoice.posted`
+leci do system mailingowego.
 
-### Historia 2 — klient dorzuca usługę w trakcie miesiąca
-15 maja klient kupuje pakiet TV (29 EUR/mc) w CPQ. Bridge robi POST:
+### Historia 2 — klient dorzuca usługę w trakcie cyklu
+15 maja klient kupuje dodatkowy pakiet (29 EUR/mc). Bridge robi POST:
 1. Nowy Billing Item `recurring` z `rate_json: {"unit_price": 29}`,
    `bill_start_date: 2026-05-15`
-2. Billing Item `one_time` z `amount: 15.90`, opis "Proration: TV
+2. Billing Item `one_time` z `amount: 15.90`, opis "Proration: Pakiet X
    from 2026-05-15 to 2026-05-31" — **bridge kalkuluje wartość
    proraty** (29 × 17/31), billing tylko zapisuje pozycję
 
 1 czerwca Bill Run tworzy draft z: stary MRC 49.99 (recurring, full
-cycle) + nowe TV za pełny czerwiec 29 (recurring, full cycle —
-`bill_start_date` ≤ start okresu więc liczy się full) + proration 15.90
-(one_time, pre-calculated). Razem 94.89 EUR. Operator posta.
+cycle) + nowy pakiet za pełny czerwiec 29 (recurring, full cycle —
+`bill_start_date` ≤ start okresu więc liczy się full) + proration
+15.90 (one_time, pre-calculated). Razem 94.89 EUR. Operator posta.
 
 ### Historia 3 — usage-based billing
-Klient ma SaaS-owy plan: 49 EUR flat + 0.001 EUR za każdy API request
-ponad 10k. Tworzymy dwa Billing Items:
+Klient ma plan: 49 EUR flat + 0.001 EUR za każdy API request ponad
+10k. Tworzymy dwa Billing Items:
 - `recurring` 49 EUR (`rate_json: {"unit_price": 49}`)
 - `usage` z `uom_code: api_request`, `rate_json: {"tiers": [{"up_to":
   10000, "unit_price": 0}, {"up_to": null, "unit_price": 0.001}],
@@ -493,8 +499,8 @@ strategii growth vs bootstrap.
 - Integration tests > 95% coverage na komendy + API endpoints.
 
 **Tier 2 — produkt u klienta:**
-- Netia używa go produkcyjnie do ≥ 100 aktywnych Billing Accounts
-  przez ≥ 30 dni.
+- Pierwszy klient produkcyjnie używa go do ≥ 100 aktywnych Billing
+  Accounts przez ≥ 30 dni.
 - 0 ręcznych korekt z powodu błędu billingu (proration value
   dostarczany przez bridge — bug może być po jego stronie, nie
   billingu).
@@ -502,9 +508,8 @@ strategii growth vs bootstrap.
   poprzedniego procesu.
 
 **Tier 3 — skala:**
-- 2-3 klienci poza Netią używają standalone (bez CPQ).
-- Bridge `@dainamite/cpq-billing-bridge` wdrożony u ≥ 1 klienta poza
-  Netią.
+- 2-3 klienci produkcyjnie, w tym co najmniej 1 standalone (bez CPQ).
+- Bridge `@dainamite/cpq-billing-bridge` wdrożony u ≥ 1 klienta.
 
 **Anti-metrics:**
 - > 1% draftów wymaga ręcznej korekty linii (przed post).
@@ -515,25 +520,41 @@ strategii growth vs bootstrap.
 
 ---
 
-## Co potwierdzić przed Phase 0
+## Decyzje przyjęte (2026-05-11 review)
 
-1. **Key objects scope** — czy te 5 obiektów (Account, Item, Usage,
-   Run, Invoice ref) wystarcza?
-2. **Draft → post flow** — czy human-in-the-loop na każdej fakturze
-   jest must-have w v1, czy `auto_post: true` per Billing Account
-   wpadłoby w v1?
-3. **Korekty (credit notes)** — czy v1 absolutnie bez nich (manual w
-   `core/sales`)? Czy poniżej critical jeśli stażnik prawny powie że
-   musi być?
-4. **Walidacje currency** — czy faktycznie blokujemy mismatched
-   currency na create, czy tylko warning?
-5. **CPQ integration** — czy osobny `cpq-billing-bridge` package w
-   v1, czy tylko documented patterns dla integratora?
-6. **Pierwszy klient walidacyjny** — Netia/CPQ jak w XD-270, czy
-   szukamy drugiego klienta dla standalone validation już teraz?
-7. **Monetyzacja** — do dogrania.
-8. **Retention policy** — 7 lat dla Bill Run / 2 lata dla Usage są OK,
-   czy klient regulowany może wymagać dłużej?
+- **Key objects** — 5 wystarczy (Account, Item, Usage, Run, Invoice ref);
+  pomocnicze tabele (`bill_run_outcomes`) nie są "key objects".
+- **Human-in-the-loop dla post** — must-have w v1, brak `auto_post`.
+- **Korekty (credit notes / storno)** — out of scope v1, manual przez
+  `core/sales`. Dedicated flow planowany jako add-on.
+- **Currency mismatch** — warning + zapisany z flagą `currency_mismatch`,
+  nie reject. Operator widzi w UI, decyduje.
+- **Monetyzacja** — wciąż open, do dogrania osobno.
+
+## Co jeszcze potwierdzić przed Phase 0
+
+1. **CPQ bridge — pakiet czy doc-only.** Trzy ścieżki:
+   - **A (rekomendowane):** osobny pakiet
+     `@dainamite/cpq-billing-bridge` zainstalowany razem z CPQ +
+     Billing, automatycznie podsłuchuje eventy CPQ
+     (`cpq.subscription.created/amended/cancelled`) i kalkuluje
+     prorate value, tworzy Billing Items przez billing API.
+     Klient nic nie pisze, "yarn add i działa". Koszt: +1-2 tygodnie
+     developmentu poza v1 billingu.
+   - **B:** tylko `manuals/cpq-billing-integration.md` z przykładem
+     kodu — każdy integrator pisze własny bridge module w swoim
+     `src/modules/@app/`. Szybciej do v1, ryzyko bugów w pricingu
+     po stronie integratora.
+   - **C:** v1 = doc-only (B), potem ekstrakcja do pakietu (A) gdy
+     pierwszy klient z CPQ to potwierdzi.
+2. **Retention policy — domyślne wartości.** Default w specu: Bill Run
+   history 7 lat, rated Usage records 2 lata. Trzy podejścia:
+   - **Hardcoded defaults** (7y/2y), klient regulowany robi feature
+     request.
+   - **Per-tenant configurable** (zalecane) — config w UI, default
+     7y/2y, klient regulowany podnosi do 10+ lat sam.
+   - **Branch-specific defaults** (telco=10y, SaaS=5y) — nadwymagane
+     dla v1, nie polecam.
 
 ---
 

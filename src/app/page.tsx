@@ -60,9 +60,9 @@ export default async function Home() {
   try {
     const container = await createRequestContainer()
     const em = container.resolve<EntityManager>('em')
-    usersCount = await em.count('User', {})
-    tenantsCount = await em.count('Tenant', {})
-    orgsCount = await em.count('Organization', {})
+    usersCount = await em.count('User' as any, {})
+    tenantsCount = await em.count('Tenant' as any, {})
+    orgsCount = await em.count('Organization' as any, {})
     dbStatus = t('app.page.dbStatus.connected', 'Connected')
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : t('app.page.dbStatus.noConnection', 'no connection')

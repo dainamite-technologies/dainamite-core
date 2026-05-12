@@ -50,7 +50,7 @@ async function ensureCharge(
     ...(oid ? { offeringId: oid } : {}),
   })
   if (!exists) {
-    em.persist(em.create(CpqProductCharge, { ...scope, productId: pid, offeringId: oid, currencyCode: 'USD', ...data }))
+    em.persist(em.create(CpqProductCharge, { ...scope, productId: pid, offeringId: oid, currencyCode: 'USD', ...data } as any))
   }
 }
 

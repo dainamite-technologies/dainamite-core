@@ -10,7 +10,7 @@ module.exports = {
   },
   transform: {
     '^.+\\.(t|j)sx?$': [
-      'ts-jest',
+      '<rootDir>/scripts/jest-mikroorm-transformer.cjs',
       {
         tsconfig: {
           jsx: 'react-jsx',
@@ -18,7 +18,7 @@ module.exports = {
           emitDecoratorMetadata: true,
           esModuleInterop: true,
           module: 'commonjs',
-          target: 'ES2020',
+          target: 'ES2022',
           isolatedModules: true,
         },
         diagnostics: {
@@ -33,5 +33,5 @@ module.exports = {
     '<rootDir>/packages/*/src/**/__tests__/**/*.test.(ts|tsx)',
   ],
   passWithNoTests: true,
-  transformIgnorePatterns: ['/node_modules/(?!(@open-mercato)/)'],
+  transformIgnorePatterns: ['/node_modules/(?!(@open-mercato|@mikro-orm)/)'],
 }

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import type { EntityManager } from '@mikro-orm/postgresql'
+import { sql } from 'kysely'
 import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
 import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import { findWithDecryption } from '@open-mercato/shared/lib/encryption/find'
@@ -82,9 +83,10 @@ export async function GET(request: Request) {
         : []
 
     const em = (container.resolve('em') as EntityManager).fork()
-    const knex = em.getKnex()
-    const rowsQuery = knex('example_customer_interaction_mappings')
-      .select<MappingRow[]>([
+    const db = em.getKysely<any>()
+    let rowsQuery = db
+      .selectFrom('example_customer_interaction_mappings')
+      .select([
         'id',
         'interaction_id',
         'todo_id',
@@ -97,37 +99,39 @@ export async function GET(request: Request) {
         'organization_id',
         'tenant_id',
       ])
-      .where('tenant_id', auth.tenantId)
+      .where('tenant_id', '=', auth.tenantId)
       .orderBy('updated_at', 'desc')
       .orderBy('id', 'desc')
       .limit(query.limit + 1)
 
     if (organizationIds.length > 0) {
-      rowsQuery.whereIn('organization_id', organizationIds)
+      rowsQuery = rowsQuery.where('organization_id', 'in', organizationIds)
     }
     if (query.interactionId) {
-      rowsQuery.andWhere('interaction_id', query.interactionId)
+      rowsQuery = rowsQuery.where('interaction_id', '=', query.interactionId)
     }
     if (query.todoId) {
-      rowsQuery.andWhere('todo_id', query.todoId)
+      rowsQuery = rowsQuery.where('todo_id', '=', query.todoId)
     }
     if (cursor) {
-      rowsQuery.andWhere(function applyCursor() {
-        this.where('updated_at', '<', new Date(cursor.updatedAt)).orWhere(function applyTieBreaker() {
-          this.where('updated_at', new Date(cursor.updatedAt)).andWhere('id', '<', cursor.id)
-        })
-      })
+      const cursorDate = new Date(cursor.updatedAt)
+      rowsQuery = rowsQuery.where((eb: any) =>
+        eb.or([
+          eb('updated_at', '<', cursorDate),
+          eb.and([eb('updated_at', '=', cursorDate), eb('id', '<', cursor.id)]),
+        ]),
+      )
     }
 
-    const rows = await rowsQuery
+    const rows = (await rowsQuery.execute()) as MappingRow[]
     const pageRows = rows.slice(0, query.limit)
-    const interactionIds = Array.from(new Set(pageRows.map((row) => row.interaction_id)))
+    const interactionIds = Array.from(new Set(pageRows.map((row: MappingRow) => row.interaction_id)))
     const interactions = interactionIds.length > 0
       ? await findWithDecryption(
           em,
           CustomerInteraction,
           {
-            id: { $in: interactionIds },
+            id: { $in: interactionIds } as any,
             tenantId: auth.tenantId,
             ...(organizationIds.length > 0 ? { organizationId: { $in: organizationIds } } : {}),
             deletedAt: null,
@@ -148,7 +152,7 @@ export async function GET(request: Request) {
       null,
     )
 
-    const items = pageRows.map((row) => {
+    const items = pageRows.map((row: MappingRow) => {
       const interaction = interactionById.get(row.interaction_id)
       const entityId = interaction
         ? (typeof interaction.entity === 'string' ? interaction.entity : interaction.entity.id)

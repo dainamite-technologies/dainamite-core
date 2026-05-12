@@ -25,7 +25,7 @@ async function ensureRule(em: EntityManager, scope: SeedScope, data: RuleInput):
   const { CpqPriceRule } = await import('@dainamite/cpq/modules/cpq/data/entities')
   const exists = await em.findOne(CpqPriceRule, { ...scope, code: data.code })
   if (!exists) {
-    em.persist(em.create(CpqPriceRule, { ...scope, ...data }))
+    em.persist(em.create(CpqPriceRule, { ...scope, ...data } as any))
   }
 }
 

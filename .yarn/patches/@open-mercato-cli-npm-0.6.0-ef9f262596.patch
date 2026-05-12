@@ -1,8 +1,8 @@
 diff --git a/dist/lib/generators/module-registry.js b/dist/lib/generators/module-registry.js
-index c354df33a9e2dc4414be2e1b4e129bb35a827b23..733e9f972580355734450b5fcd91ccc6c69fe9a7 100644
+index af74e5ba16b9f0a6585861eddd8ec11c5a57c171..035fb48f4a6b56c760c38067e960d5bfe80892d8 100644
 --- a/dist/lib/generators/module-registry.js
 +++ b/dist/lib/generators/module-registry.js
-@@ -504,7 +504,7 @@ function requiresRuntimePageMetadataFromSourceFile(sourceFile) {
+@@ -629,7 +629,7 @@ function requiresRuntimePageMetadataFromSourceFile(sourceFile) {
  function toLiteral(value) {
    return JSON.stringify(value).replace(/</g, "\\u003c").replace(/>/g, "\\u003e").replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
  }

@@ -24,6 +24,9 @@ export type CpqListData<T> = {
   totalPages: number
   page: number
   isLoading: boolean
+  /** Last successful fetch duration in milliseconds. Surfaces in the
+   *  pagination footer as `... in 1.5s`, matching OM's standard list views. */
+  durationMs: number | null
   search: string
   sorting: SortingState
   filterValues: FilterValues
@@ -74,6 +77,7 @@ export function useCpqListData<T extends { id: string }>(
   const [totalPages, setTotalPages] = React.useState(1)
   const [page, setPageState] = React.useState(1)
   const [isLoading, setIsLoading] = React.useState(true)
+  const [durationMs, setDurationMs] = React.useState<number | null>(null)
   const [reloadToken, setReloadToken] = React.useState(0)
   const [search, setSearchState] = React.useState('')
   const [sorting, setSorting] = React.useState<SortingState>(initialSorting)
@@ -97,6 +101,9 @@ export function useCpqListData<T extends { id: string }>(
     let cancelled = false
     async function load() {
       setIsLoading(true)
+      // Use `performance.now()` so the wall-clock change during the request
+      // (NTP, DST, manual clock skew) can never produce a negative duration.
+      const startedAt = typeof performance !== 'undefined' ? performance.now() : Date.now()
       try {
         const fallback: PaginatedResponse<T> = { items: [], total: 0, totalPages: 1 }
         const call = await apiCall<PaginatedResponse<T>>(
@@ -114,6 +121,8 @@ export function useCpqListData<T extends { id: string }>(
         setRows(items)
         setTotal(typeof payload.total === 'number' ? payload.total : items.length)
         setTotalPages(typeof payload.totalPages === 'number' ? payload.totalPages : 1)
+        const finishedAt = typeof performance !== 'undefined' ? performance.now() : Date.now()
+        setDurationMs(Math.max(0, finishedAt - startedAt))
       } finally {
         if (!cancelled) setIsLoading(false)
       }
@@ -149,6 +158,7 @@ export function useCpqListData<T extends { id: string }>(
     totalPages,
     page,
     isLoading,
+    durationMs,
     search,
     sorting,
     filterValues,
@@ -336,6 +346,7 @@ export function CpqListView<T extends { id: string }>({
             total: data.total,
             totalPages: data.totalPages,
             onPageChange: data.setPage,
+            durationMs: data.durationMs,
           }}
           isLoading={data.isLoading}
           emptyState={emptyState}

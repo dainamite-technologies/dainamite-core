@@ -152,6 +152,7 @@ export function AssetsTable() {
         total: data.total,
         totalPages: data.totalPages,
         onPageChange: data.setPage,
+        durationMs: data.durationMs,
       }}
       isLoading={data.isLoading}
       emptyState={

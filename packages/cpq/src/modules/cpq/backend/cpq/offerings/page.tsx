@@ -16,9 +16,7 @@ import {
 } from '@open-mercato/ui/primitives/select'
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
 import { flash } from '@open-mercato/ui/backend/FlashMessages'
-import { RowActions } from '@open-mercato/ui/backend/RowActions'
 import { CpqListView, useCpqListData } from '../../../components/CpqListView'
-import { useCpqRowActions } from '../../../components/useCpqRowActions'
 
 type Charge = {
   id: string
@@ -124,13 +122,6 @@ export default function OfferingsListPage() {
     pageSize: PAGE_SIZE,
     buildFilterParams,
     loadErrorMessage: t('cpq.offerings.list.error.load', 'Failed to load offerings'),
-  })
-
-  const rowActionsApi = useCpqRowActions<Offering>({
-    endpoint: '/api/cpq/product-offerings',
-    entityName: t('cpq.offerings.entityName', 'offering'),
-    editHref: (row) => `/backend/cpq/offerings/${row.id}`,
-    onReload: data.reload,
   })
 
   // Bulk charge creation state
@@ -347,6 +338,8 @@ export default function OfferingsListPage() {
     [t],
   )
 
+  // Module-specific bulk actions; "Delete selected" is appended automatically
+  // by CpqListView when `crud` is provided.
   const bulkActions = React.useMemo<BulkAction<Offering>[]>(
     () => [
       {
@@ -358,14 +351,8 @@ export default function OfferingsListPage() {
           return { ok: true }
         },
       },
-      {
-        id: 'delete',
-        label: t('cpq.offerings.bulk.deleteSelected', 'Delete selected'),
-        destructive: true,
-        onExecute: rowActionsApi.bulkDelete,
-      },
     ],
-    [openBulkChargeForm, rowActionsApi.bulkDelete, t],
+    [openBulkChargeForm, t],
   )
 
   const bulkChargeForm = bulkChargeOpen && bulkChargeTargets.length > 0 && (
@@ -570,10 +557,13 @@ export default function OfferingsListPage() {
         </Button>
       }
       bulkActions={bulkActions}
+      crud={{
+        endpoint: '/api/cpq/product-offerings',
+        entityName: t('cpq.offerings.entityName', 'offering'),
+        editHref: (row) => `/backend/cpq/offerings/${row.id}`,
+      }}
       onRowClick={(row) => router.push(`/backend/cpq/offerings/${row.id}`)}
-      rowActions={(row) => <RowActions items={rowActionsApi.buildItems(row)} />}
       toolbarContent={toolbarContent}
-      footerContent={rowActionsApi.ConfirmDialogElement}
       emptyState={
         <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
           {t(

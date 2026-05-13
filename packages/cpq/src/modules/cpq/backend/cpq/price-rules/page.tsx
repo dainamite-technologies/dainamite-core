@@ -3,12 +3,9 @@ import * as React from 'react'
 import { useRouter } from 'next/navigation'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import type { ColumnDef } from '@tanstack/react-table'
-import { type BulkAction } from '@open-mercato/ui/backend/DataTable'
 import { Button } from '@open-mercato/ui/primitives/button'
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
-import { RowActions } from '@open-mercato/ui/backend/RowActions'
 import { CpqListView, useCpqListData } from '../../../components/CpqListView'
-import { useCpqRowActions } from '../../../components/useCpqRowActions'
 import {
   PriceRuleForm,
   RULE_TYPE_LABELS,
@@ -49,15 +46,6 @@ export default function PriceRulesPage() {
     initialSorting: [{ id: 'sortOrder', desc: false }],
     buildFilterParams,
     loadErrorMessage: t('cpq.priceRules.list.error.load', 'Failed to load price rules'),
-  })
-
-  // Price Rules: the row's primary affordance is "Edit inline" (opens the
-  // page-level form), so `editHref` is replaced below by an `onSelect` extra.
-  const rowActionsApi = useCpqRowActions<PriceRule>({
-    endpoint: '/api/cpq/price-rules',
-    entityName: t('cpq.priceRules.entityName', 'price rule'),
-    editHref: (row) => `/backend/cpq/price-rules/${row.id}`,
-    onReload: data.reload,
   })
 
   const [showForm, setShowForm] = React.useState(false)
@@ -143,18 +131,6 @@ export default function PriceRulesPage() {
       setSaving(false)
     }
   }, [data, form])
-
-  const bulkActions = React.useMemo<BulkAction<PriceRule>[]>(
-    () => [
-      {
-        id: 'delete',
-        label: t('cpq.priceRules.bulk.deleteSelected', 'Delete selected'),
-        destructive: true,
-        onExecute: rowActionsApi.bulkDelete,
-      },
-    ],
-    [rowActionsApi.bulkDelete, t],
-  )
 
   const columns = React.useMemo<ColumnDef<PriceRule>[]>(
     () => [
@@ -250,9 +226,12 @@ export default function PriceRulesPage() {
           {t('cpq.priceRules.create', 'Create Rule')}
         </Button>
       }
-      bulkActions={bulkActions}
+      crud={{
+        endpoint: '/api/cpq/price-rules',
+        entityName: t('cpq.priceRules.entityName', 'price rule'),
+        editHref: (row) => `/backend/cpq/price-rules/${row.id}`,
+      }}
       onRowClick={(row) => router.push(`/backend/cpq/price-rules/${row.id}`)}
-      rowActions={(row) => <RowActions items={rowActionsApi.buildItems(row)} />}
       toolbarContent={
         showForm ? (
           <PriceRuleForm
@@ -267,7 +246,6 @@ export default function PriceRulesPage() {
           />
         ) : null
       }
-      footerContent={rowActionsApi.ConfirmDialogElement}
       emptyState={
         <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
           No price rules found. Click &quot;Create Rule&quot; to add one.

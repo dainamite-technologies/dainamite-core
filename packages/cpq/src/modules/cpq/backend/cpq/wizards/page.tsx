@@ -4,9 +4,7 @@ import { useRouter } from 'next/navigation'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import type { ColumnDef } from '@tanstack/react-table'
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
-import { RowActions } from '@open-mercato/ui/backend/RowActions'
 import { CpqListView, useCpqListData } from '../../../components/CpqListView'
-import { useCpqRowActions } from '../../../components/useCpqRowActions'
 
 type WizardDefinition = {
   id: string
@@ -39,13 +37,6 @@ export default function CpqWizardsPage() {
     pageSize: PAGE_SIZE,
     buildFilterParams,
     loadErrorMessage: t('cpq.wizards.list.error.load', 'Failed to load wizards'),
-  })
-
-  const rowActionsApi = useCpqRowActions<WizardDefinition>({
-    endpoint: '/api/cpq/wizards',
-    entityName: t('cpq.wizards.entityName', 'wizard'),
-    editHref: (row) => `/backend/cpq/wizards/${row.code}/detail`,
-    onReload: data.reload,
   })
 
   const filters = React.useMemo<FilterDef[]>(
@@ -123,22 +114,23 @@ export default function CpqWizardsPage() {
       filters={filters}
       pageSize={PAGE_SIZE}
       searchPlaceholder={t('cpq.wizards.search.placeholder', 'Search wizards...')}
-      rowActions={(row) => (
-        <RowActions
-          items={rowActionsApi.buildItems(row, {
-            append: row.isActive
-              ? [
+      crud={{
+        endpoint: '/api/cpq/wizards',
+        entityName: t('cpq.wizards.entityName', 'wizard'),
+        editHref: (row) => `/backend/cpq/wizards/${row.code}/detail`,
+        extraRowItems: (row) =>
+          row.isActive
+            ? {
+                append: [
                   {
                     id: 'start',
                     label: t('cpq.wizards.actions.start', 'Start'),
                     onSelect: () => handleStartWizard(row.code),
                   },
-                ]
-              : undefined,
-          })}
-        />
-      )}
-      footerContent={rowActionsApi.ConfirmDialogElement}
+                ],
+              }
+            : {},
+      }}
       emptyState={
         <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
           {t('cpq.wizards.empty', 'No wizard definitions yet. Create one via the API.')}

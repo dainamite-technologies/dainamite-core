@@ -3,12 +3,9 @@ import * as React from 'react'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { useRouter } from 'next/navigation'
 import type { ColumnDef } from '@tanstack/react-table'
-import { type BulkAction } from '@open-mercato/ui/backend/DataTable'
 import { Button } from '@open-mercato/ui/primitives/button'
-import { RowActions } from '@open-mercato/ui/backend/RowActions'
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
 import { CpqListView, useCpqListData } from '../../../components/CpqListView'
-import { useCpqRowActions } from '../../../components/useCpqRowActions'
 
 type PricingTable = {
   id: string
@@ -35,13 +32,6 @@ export default function PricingTablesPage() {
     pageSize: PAGE_SIZE,
     buildFilterParams,
     loadErrorMessage: t('cpq.pricing.list.error.load', 'Failed to load pricing tables'),
-  })
-
-  const rowActionsApi = useCpqRowActions<PricingTable>({
-    endpoint: '/api/cpq/pricing-tables',
-    entityName: t('cpq.pricing.entityName', 'pricing table'),
-    editHref: (row) => `/backend/cpq/pricing/${row.id}`,
-    onReload: data.reload,
   })
 
   const filters = React.useMemo<FilterDef[]>(
@@ -94,18 +84,6 @@ export default function PricingTablesPage() {
     [t],
   )
 
-  const bulkActions = React.useMemo<BulkAction<PricingTable>[]>(
-    () => [
-      {
-        id: 'delete',
-        label: t('cpq.pricing.bulk.deleteSelected', 'Delete selected'),
-        destructive: true,
-        onExecute: rowActionsApi.bulkDelete,
-      },
-    ],
-    [rowActionsApi.bulkDelete, t],
-  )
-
   return (
     <CpqListView<PricingTable>
       title={t('cpq.pricing.list.title', 'Pricing Tables')}
@@ -120,15 +98,17 @@ export default function PricingTablesPage() {
           <a href="/backend/cpq/pricing/new">{t('cpq.pricing.add', 'New Pricing Table')}</a>
         </Button>
       }
-      bulkActions={bulkActions}
+      crud={{
+        endpoint: '/api/cpq/pricing-tables',
+        entityName: t('cpq.pricing.entityName', 'pricing table'),
+        editHref: (row) => `/backend/cpq/pricing/${row.id}`,
+      }}
       onRowClick={(row) => router.push(`/backend/cpq/pricing/${row.id}`)}
-      rowActions={(row) => <RowActions items={rowActionsApi.buildItems(row)} />}
       emptyState={
         <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
           {t('cpq.pricing.empty', 'No pricing tables found.')}
         </div>
       }
-      footerContent={rowActionsApi.ConfirmDialogElement}
     />
   )
 }

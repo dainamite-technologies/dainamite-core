@@ -3,13 +3,10 @@ import * as React from 'react'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { useRouter } from 'next/navigation'
 import type { ColumnDef } from '@tanstack/react-table'
-import { type BulkAction } from '@open-mercato/ui/backend/DataTable'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { Checkbox } from '@open-mercato/ui/primitives/checkbox'
-import { RowActions } from '@open-mercato/ui/backend/RowActions'
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
 import { CpqListView, useCpqListData } from '../../../components/CpqListView'
-import { useCpqRowActions } from '../../../components/useCpqRowActions'
 
 type Specification = {
   id: string
@@ -56,13 +53,6 @@ export default function SpecificationsListPage() {
     pageSize: PAGE_SIZE,
     buildFilterParams,
     loadErrorMessage: t('cpq.specifications.list.error.load', 'Failed to load specifications'),
-  })
-
-  const rowActionsApi = useCpqRowActions<Specification>({
-    endpoint: '/api/cpq/product-specifications',
-    entityName: t('cpq.specifications.entityName', 'specification'),
-    editHref: (row) => `/backend/cpq/specifications/${row.id}`,
-    onReload: data.reload,
   })
 
   const lifecycleOptions = React.useMemo(
@@ -172,18 +162,6 @@ export default function SpecificationsListPage() {
     [t],
   )
 
-  const bulkActions = React.useMemo<BulkAction<Specification>[]>(
-    () => [
-      {
-        id: 'delete',
-        label: t('cpq.specifications.bulk.deleteSelected', 'Delete selected'),
-        destructive: true,
-        onExecute: rowActionsApi.bulkDelete,
-      },
-    ],
-    [rowActionsApi.bulkDelete, t],
-  )
-
   return (
     <CpqListView<Specification>
       title={t('cpq.specifications.list.title', 'Product Specifications')}
@@ -200,9 +178,12 @@ export default function SpecificationsListPage() {
           </a>
         </Button>
       }
-      bulkActions={bulkActions}
+      crud={{
+        endpoint: '/api/cpq/product-specifications',
+        entityName: t('cpq.specifications.entityName', 'specification'),
+        editHref: (row) => `/backend/cpq/specifications/${row.id}`,
+      }}
       onRowClick={(row) => router.push(`/backend/cpq/specifications/${row.id}`)}
-      rowActions={(row) => <RowActions items={rowActionsApi.buildItems(row)} />}
       emptyState={
         <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
           {t(
@@ -211,7 +192,6 @@ export default function SpecificationsListPage() {
           )}
         </div>
       }
-      footerContent={rowActionsApi.ConfirmDialogElement}
     />
   )
 }

@@ -2,12 +2,9 @@
 import * as React from 'react'
 import { useRouter } from 'next/navigation'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
-import type { ColumnDef, SortingState } from '@tanstack/react-table'
-import { DataTable } from '@open-mercato/ui/backend/DataTable'
-import { Page, PageBody } from '@open-mercato/ui/backend/Page'
+import type { ColumnDef } from '@tanstack/react-table'
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
-import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
-import { flash } from '@open-mercato/ui/backend/FlashMessages'
+import { CpqListView, useCpqListData } from '../../../components/CpqListView'
 
 type OrderConfig = {
   id: string
@@ -22,12 +19,6 @@ type OrderConfig = {
   } | null
   createdAt: string
   activatedAt: string | null
-}
-
-type OrdersResponse = {
-  items?: OrderConfig[]
-  total?: number
-  totalPages?: number
 }
 
 const PAGE_SIZE = 50
@@ -45,20 +36,25 @@ function fmt(amount: number | undefined, currency: string): string {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(amount)
 }
 
+function buildFilterParams(values: FilterValues, params: URLSearchParams) {
+  if (typeof values.cpqStatus === 'string' && values.cpqStatus) {
+    params.set('cpqStatus', values.cpqStatus)
+  }
+  if (typeof values.currencyCode === 'string' && values.currencyCode.trim()) {
+    params.set('currencyCode', values.currencyCode.trim().toUpperCase())
+  }
+}
+
 export default function CpqOrdersListPage() {
   const router = useRouter()
   const t = useT()
 
-  const [rows, setRows] = React.useState<OrderConfig[]>([])
-  const [total, setTotal] = React.useState(0)
-  const [totalPages, setTotalPages] = React.useState(1)
-  const [page, setPage] = React.useState(1)
-  const [isLoading, setIsLoading] = React.useState(true)
-  const [reloadToken, setReloadToken] = React.useState(0)
-
-  const [search, setSearch] = React.useState('')
-  const [sorting, setSorting] = React.useState<SortingState>([{ id: 'createdAt', desc: true }])
-  const [filterValues, setFilterValues] = React.useState<FilterValues>({})
+  const data = useCpqListData<OrderConfig>({
+    endpoint: '/api/cpq/orders',
+    pageSize: PAGE_SIZE,
+    buildFilterParams,
+    loadErrorMessage: t('cpq.orders.list.error.load', 'Failed to load orders'),
+  })
 
   const statusOptions = React.useMemo(
     () => [
@@ -87,56 +83,6 @@ export default function CpqOrdersListPage() {
     ],
     [statusOptions, t],
   )
-
-  const queryString = React.useMemo(() => {
-    const params = new URLSearchParams()
-    params.set('page', String(page))
-    params.set('pageSize', String(PAGE_SIZE))
-    if (search.trim()) params.set('search', search.trim())
-    const sort = sorting[0]
-    if (sort?.id) {
-      params.set('sortField', sort.id)
-      params.set('sortDir', sort.desc ? 'desc' : 'asc')
-    }
-    if (typeof filterValues.cpqStatus === 'string' && filterValues.cpqStatus) {
-      params.set('cpqStatus', filterValues.cpqStatus)
-    }
-    if (typeof filterValues.currencyCode === 'string' && filterValues.currencyCode.trim()) {
-      params.set('currencyCode', filterValues.currencyCode.trim().toUpperCase())
-    }
-    return params.toString()
-  }, [filterValues, page, search, sorting])
-
-  React.useEffect(() => {
-    let cancelled = false
-    async function load() {
-      setIsLoading(true)
-      try {
-        const fallback: OrdersResponse = { items: [], total: 0, totalPages: 1 }
-        const call = await apiCall<OrdersResponse>(
-          `/api/cpq/orders?${queryString}`,
-          undefined,
-          { fallback },
-        )
-        if (cancelled) return
-        if (!call.ok) {
-          flash(t('cpq.orders.list.error.load', 'Failed to load orders'), 'error')
-          return
-        }
-        const payload = call.result ?? fallback
-        const items = Array.isArray(payload.items) ? payload.items : []
-        setRows(items)
-        setTotal(typeof payload.total === 'number' ? payload.total : items.length)
-        setTotalPages(typeof payload.totalPages === 'number' ? payload.totalPages : 1)
-      } finally {
-        if (!cancelled) setIsLoading(false)
-      }
-    }
-    load()
-    return () => {
-      cancelled = true
-    }
-  }, [queryString, reloadToken, t])
 
   const columns = React.useMemo<ColumnDef<OrderConfig>[]>(
     () => [
@@ -207,67 +153,24 @@ export default function CpqOrdersListPage() {
     [t],
   )
 
-  const handleSearchChange = React.useCallback((value: string) => {
-    setSearch(value)
-    setPage(1)
-  }, [])
-
-  const handleFiltersApply = React.useCallback((values: FilterValues) => {
-    setFilterValues(values)
-    setPage(1)
-  }, [])
-
-  const handleFiltersClear = React.useCallback(() => {
-    setFilterValues({})
-    setPage(1)
-  }, [])
-
-  const handleRefresh = React.useCallback(() => {
-    setReloadToken((token) => token + 1)
-  }, [])
-
   return (
-    <Page>
-      <PageBody className="space-y-6">
-        <DataTable<OrderConfig>
-          title={t('cpq.orders.list.title', 'CPQ Orders')}
-          refreshButton={{
-            label: t('cpq.orders.actions.refresh', 'Refresh'),
-            onRefresh: handleRefresh,
-            isRefreshing: isLoading,
-          }}
-          columns={columns}
-          data={rows}
-          searchValue={search}
-          onSearchChange={handleSearchChange}
-          searchPlaceholder={t('cpq.orders.search.placeholder', 'Search by order / customer id...')}
-          filters={filters}
-          filterValues={filterValues}
-          onFiltersApply={handleFiltersApply}
-          onFiltersClear={handleFiltersClear}
-          sorting={sorting}
-          onSortingChange={setSorting}
-          onRowClick={(row) => router.push(`/backend/cpq/orders/${row.id}`)}
-          perspective={{ tableId: 'cpq.orders.list' }}
-          columnChooser={{ auto: true }}
-          pagination={{
-            page,
-            pageSize: PAGE_SIZE,
-            total,
-            totalPages,
-            onPageChange: setPage,
-          }}
-          isLoading={isLoading}
-          emptyState={
-            <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
-              {t(
-                'cpq.orders.empty',
-                'No CPQ orders found. Convert an accepted quote to create an order.',
-              )}
-            </div>
-          }
-        />
-      </PageBody>
-    </Page>
+    <CpqListView<OrderConfig>
+      title={t('cpq.orders.list.title', 'CPQ Orders')}
+      tableId="cpq.orders.list"
+      data={data}
+      columns={columns}
+      filters={filters}
+      pageSize={PAGE_SIZE}
+      searchPlaceholder={t('cpq.orders.search.placeholder', 'Search by order / customer id...')}
+      onRowClick={(row) => router.push(`/backend/cpq/orders/${row.id}`)}
+      emptyState={
+        <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
+          {t(
+            'cpq.orders.empty',
+            'No CPQ orders found. Convert an accepted quote to create an order.',
+          )}
+        </div>
+      }
+    />
   )
 }

@@ -2,15 +2,12 @@
 import * as React from 'react'
 import { useRouter } from 'next/navigation'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
-import type { ColumnDef, SortingState } from '@tanstack/react-table'
-import { DataTable } from '@open-mercato/ui/backend/DataTable'
-import { Page, PageBody } from '@open-mercato/ui/backend/Page'
+import type { ColumnDef } from '@tanstack/react-table'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { Input } from '@open-mercato/ui/primitives/input'
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
-import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
-import { flash } from '@open-mercato/ui/backend/FlashMessages'
 import { Plus, Search as SearchIcon } from 'lucide-react'
+import { CpqListView, useCpqListData } from '../../../components/CpqListView'
 
 type QuoteConfig = {
   id: string
@@ -37,12 +34,6 @@ type Customer = {
   primaryEmail?: string
 }
 
-type QuotesResponse = {
-  items?: QuoteConfig[]
-  total?: number
-  totalPages?: number
-}
-
 const PAGE_SIZE = 50
 
 const STATUS_COLORS: Record<string, string> = {
@@ -62,25 +53,154 @@ function fmt(amount: number | undefined, currency: string): string {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(amount)
 }
 
+function buildFilterParams(values: FilterValues, params: URLSearchParams) {
+  if (typeof values.cpqStatus === 'string' && values.cpqStatus) {
+    params.set('cpqStatus', values.cpqStatus)
+  }
+  if (typeof values.currencyCode === 'string' && values.currencyCode.trim()) {
+    params.set('currencyCode', values.currencyCode.trim().toUpperCase())
+  }
+}
+
+// ─── Customer picker (extracted to keep main page focused) ────────
+
+type CustomerPickerProps = {
+  open: boolean
+  onClose: () => void
+  onSelect: (customer: Customer) => void | Promise<void>
+  creating: boolean
+  error: string | null
+}
+
+function getCustomerLabel(c: Customer) {
+  return c.display_name || c.displayName || c.name || c.companyName || 'Unnamed'
+}
+
+function getCustomerEmail(c: Customer) {
+  return c.primary_email || c.primaryEmail || ''
+}
+
+function CustomerPickerModal({ open, onClose, onSelect, creating, error }: CustomerPickerProps) {
+  const [customers, setCustomers] = React.useState<Customer[]>([])
+  const [customersLoading, setCustomersLoading] = React.useState(false)
+  const [search, setSearch] = React.useState('')
+
+  React.useEffect(() => {
+    if (!open) return
+    let cancelled = false
+    setSearch('')
+    setCustomersLoading(true)
+    fetch('/api/customers/companies?pageSize=100')
+      .then((r) => (r.ok ? r.json() : { items: [] }))
+      .then((data) => {
+        if (!cancelled) setCustomers(data.items ?? data ?? [])
+      })
+      .catch(() => {
+        if (!cancelled) setCustomers([])
+      })
+      .finally(() => {
+        if (!cancelled) setCustomersLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [open])
+
+  if (!open) return null
+
+  const filtered = customers.filter((c) => {
+    if (!search.trim()) return true
+    const q = search.toLowerCase()
+    return (
+      getCustomerLabel(c).toLowerCase().includes(q) ||
+      getCustomerEmail(c).toLowerCase().includes(q) ||
+      c.id.toLowerCase().includes(q)
+    )
+  })
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+      onClick={() => !creating && onClose()}
+    >
+      <div
+        className="w-full max-w-lg rounded-lg border bg-card shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b px-4 py-3">
+          <h3 className="text-sm font-medium">Select Customer for New Quote</h3>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={creating}
+            className="text-muted-foreground hover:text-foreground text-lg font-bold leading-none cursor-pointer disabled:cursor-not-allowed"
+          >
+            &times;
+          </button>
+        </div>
+        <div className="p-4 space-y-3">
+          {error && (
+            <div className="rounded-md bg-red-50 border border-red-200 p-3 text-sm text-red-700">
+              {error}
+            </div>
+          )}
+          <div className="relative">
+            <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Search customers…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              autoFocus
+              className="pl-10"
+            />
+          </div>
+          <div className="max-h-72 overflow-y-auto space-y-1">
+            {customersLoading ? (
+              <div className="py-8 text-center text-sm text-muted-foreground">
+                Loading customers…
+              </div>
+            ) : filtered.length === 0 ? (
+              <div className="py-8 text-center text-sm text-muted-foreground">
+                {search ? 'No customers match your search.' : 'No customers found.'}
+              </div>
+            ) : (
+              filtered.map((c) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  onClick={() => onSelect(c)}
+                  disabled={creating}
+                  className="w-full rounded-md border px-3 py-2.5 text-left hover:border-primary hover:bg-primary/5 transition-colors disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
+                >
+                  <p className="text-sm font-medium">{getCustomerLabel(c)}</p>
+                  {getCustomerEmail(c) && (
+                    <p className="text-xs text-muted-foreground mt-0.5">{getCustomerEmail(c)}</p>
+                  )}
+                  <p className="text-xs text-muted-foreground font-mono mt-0.5">{c.id}</p>
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Page ─────────────────────────────────────────────────────────
+
 export default function CpqQuotesListPage() {
   const router = useRouter()
   const t = useT()
 
-  const [rows, setRows] = React.useState<QuoteConfig[]>([])
-  const [total, setTotal] = React.useState(0)
-  const [totalPages, setTotalPages] = React.useState(1)
-  const [page, setPage] = React.useState(1)
-  const [isLoading, setIsLoading] = React.useState(true)
-  const [reloadToken, setReloadToken] = React.useState(0)
-
-  const [search, setSearch] = React.useState('')
-  const [sorting, setSorting] = React.useState<SortingState>([{ id: 'createdAt', desc: true }])
-  const [filterValues, setFilterValues] = React.useState<FilterValues>({})
+  const data = useCpqListData<QuoteConfig>({
+    endpoint: '/api/cpq/quotes',
+    pageSize: PAGE_SIZE,
+    buildFilterParams,
+    loadErrorMessage: t('cpq.quotes.list.error.load', 'Failed to load quotes'),
+  })
 
   const [showCustomerPicker, setShowCustomerPicker] = React.useState(false)
-  const [customers, setCustomers] = React.useState<Customer[]>([])
-  const [customersLoading, setCustomersLoading] = React.useState(false)
-  const [customerSearch, setCustomerSearch] = React.useState('')
   const [creating, setCreating] = React.useState(false)
   const [createError, setCreateError] = React.useState<string | null>(null)
 
@@ -116,109 +236,31 @@ export default function CpqQuotesListPage() {
     [statusOptions, t],
   )
 
-  const queryString = React.useMemo(() => {
-    const params = new URLSearchParams()
-    params.set('page', String(page))
-    params.set('pageSize', String(PAGE_SIZE))
-    if (search.trim()) params.set('search', search.trim())
-    const sort = sorting[0]
-    if (sort?.id) {
-      params.set('sortField', sort.id)
-      params.set('sortDir', sort.desc ? 'desc' : 'asc')
-    }
-    if (typeof filterValues.cpqStatus === 'string' && filterValues.cpqStatus) {
-      params.set('cpqStatus', filterValues.cpqStatus)
-    }
-    if (typeof filterValues.currencyCode === 'string' && filterValues.currencyCode.trim()) {
-      params.set('currencyCode', filterValues.currencyCode.trim().toUpperCase())
-    }
-    return params.toString()
-  }, [filterValues, page, search, sorting])
-
-  React.useEffect(() => {
-    let cancelled = false
-    async function load() {
-      setIsLoading(true)
+  const selectCustomer = React.useCallback(
+    async (customer: Customer) => {
+      setCreating(true)
+      setCreateError(null)
       try {
-        const fallback: QuotesResponse = { items: [], total: 0, totalPages: 1 }
-        const call = await apiCall<QuotesResponse>(
-          `/api/cpq/quotes?${queryString}`,
-          undefined,
-          { fallback },
-        )
-        if (cancelled) return
-        if (!call.ok) {
-          flash(t('cpq.quotes.list.error.load', 'Failed to load quotes'), 'error')
-          return
+        const res = await fetch('/api/cpq/quotes', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ customerId: customer.id }),
+        })
+        const body = await res.json()
+        if (res.ok) {
+          setShowCustomerPicker(false)
+          router.push(`/backend/cpq/quotes/${body.id}`)
+        } else {
+          setCreateError(body.error ?? `Failed to create quote (${res.status})`)
         }
-        const payload = call.result ?? fallback
-        const items = Array.isArray(payload.items) ? payload.items : []
-        setRows(items)
-        setTotal(typeof payload.total === 'number' ? payload.total : items.length)
-        setTotalPages(typeof payload.totalPages === 'number' ? payload.totalPages : 1)
+      } catch (err) {
+        setCreateError((err as Error).message)
       } finally {
-        if (!cancelled) setIsLoading(false)
+        setCreating(false)
       }
-    }
-    load()
-    return () => {
-      cancelled = true
-    }
-  }, [queryString, reloadToken, t])
-
-  const openCustomerPicker = async () => {
-    setShowCustomerPicker(true)
-    setCustomerSearch('')
-    setCustomersLoading(true)
-    try {
-      const res = await fetch('/api/customers/companies?pageSize=100')
-      if (res.ok) {
-        const data = await res.json()
-        setCustomers(data.items ?? data ?? [])
-      }
-    } catch {
-      setCustomers([])
-    } finally {
-      setCustomersLoading(false)
-    }
-  }
-
-  const selectCustomer = async (customer: Customer) => {
-    setCreating(true)
-    setCreateError(null)
-    try {
-      const res = await fetch('/api/cpq/quotes', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ customerId: customer.id }),
-      })
-      const data = await res.json()
-      if (res.ok) {
-        setShowCustomerPicker(false)
-        router.push(`/backend/cpq/quotes/${data.id}`)
-      } else {
-        setCreateError(data.error ?? `Failed to create quote (${res.status})`)
-      }
-    } catch (err) {
-      setCreateError((err as Error).message)
-    } finally {
-      setCreating(false)
-    }
-  }
-
-  const getCustomerLabel = (c: Customer) =>
-    c.display_name || c.displayName || c.name || c.companyName || 'Unnamed'
-  const getCustomerEmail = (c: Customer) => c.primary_email || c.primaryEmail || ''
-
-  const filteredCustomers = customers.filter((c) => {
-    if (!customerSearch.trim()) return true
-    const q = customerSearch.toLowerCase()
-    return (
-      getCustomerLabel(c).toLowerCase().includes(q) ||
-      getCustomerEmail(c).toLowerCase().includes(q) ||
-      c.id.toLowerCase().includes(q)
-    )
-  })
+    },
+    [router],
+  )
 
   const columns = React.useMemo<ColumnDef<QuoteConfig>[]>(
     () => [
@@ -285,141 +327,39 @@ export default function CpqQuotesListPage() {
     [t],
   )
 
-  const handleSearchChange = React.useCallback((value: string) => {
-    setSearch(value)
-    setPage(1)
-  }, [])
-
-  const handleFiltersApply = React.useCallback((values: FilterValues) => {
-    setFilterValues(values)
-    setPage(1)
-  }, [])
-
-  const handleFiltersClear = React.useCallback(() => {
-    setFilterValues({})
-    setPage(1)
-  }, [])
-
-  const handleRefresh = React.useCallback(() => {
-    setReloadToken((token) => token + 1)
-  }, [])
-
   return (
-    <Page>
-      <PageBody className="space-y-6">
-        {showCustomerPicker && (
-          <div
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-            onClick={() => !creating && setShowCustomerPicker(false)}
-          >
-            <div
-              className="w-full max-w-lg rounded-lg border bg-card shadow-xl"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="flex items-center justify-between border-b px-4 py-3">
-                <h3 className="text-sm font-medium">Select Customer for New Quote</h3>
-                <button
-                  onClick={() => setShowCustomerPicker(false)}
-                  disabled={creating}
-                  className="text-muted-foreground hover:text-foreground text-lg font-bold leading-none"
-                >
-                  &times;
-                </button>
-              </div>
-              <div className="p-4 space-y-3">
-                {createError && (
-                  <div className="rounded-md bg-red-50 border border-red-200 p-3 text-sm text-red-700">
-                    {createError}
-                  </div>
-                )}
-                <div className="relative">
-                  <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                  <Input
-                    placeholder="Search customers…"
-                    value={customerSearch}
-                    onChange={(e) => setCustomerSearch(e.target.value)}
-                    autoFocus
-                    className="pl-10"
-                  />
-                </div>
-                <div className="max-h-72 overflow-y-auto space-y-1">
-                  {customersLoading ? (
-                    <div className="py-8 text-center text-sm text-muted-foreground">
-                      Loading customers…
-                    </div>
-                  ) : filteredCustomers.length === 0 ? (
-                    <div className="py-8 text-center text-sm text-muted-foreground">
-                      {customerSearch
-                        ? 'No customers match your search.'
-                        : 'No customers found.'}
-                    </div>
-                  ) : (
-                    filteredCustomers.map((c) => (
-                      <button
-                        key={c.id}
-                        onClick={() => selectCustomer(c)}
-                        disabled={creating}
-                        className="w-full rounded-md border px-3 py-2.5 text-left hover:border-primary hover:bg-primary/5 transition-colors disabled:opacity-50"
-                      >
-                        <p className="text-sm font-medium">{getCustomerLabel(c)}</p>
-                        {getCustomerEmail(c) && (
-                          <p className="text-xs text-muted-foreground mt-0.5">{getCustomerEmail(c)}</p>
-                        )}
-                        <p className="text-xs text-muted-foreground font-mono mt-0.5">{c.id}</p>
-                      </button>
-                    ))
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        <DataTable<QuoteConfig>
-          title={t('cpq.quotes.list.title', 'CPQ Quotes')}
-          actions={
-            <Button type="button" onClick={openCustomerPicker} className="gap-1.5">
-              <Plus className="h-4 w-4" />
-              {t('cpq.quotes.add', 'New Quote')}
-            </Button>
-          }
-          refreshButton={{
-            label: t('cpq.quotes.actions.refresh', 'Refresh'),
-            onRefresh: handleRefresh,
-            isRefreshing: isLoading,
-          }}
-          columns={columns}
-          data={rows}
-          searchValue={search}
-          onSearchChange={handleSearchChange}
-          searchPlaceholder={t('cpq.quotes.search.placeholder', 'Search by quote / customer id...')}
-          filters={filters}
-          filterValues={filterValues}
-          onFiltersApply={handleFiltersApply}
-          onFiltersClear={handleFiltersClear}
-          sorting={sorting}
-          onSortingChange={setSorting}
-          onRowClick={(row) => router.push(`/backend/cpq/quotes/${row.id}`)}
-          perspective={{ tableId: 'cpq.quotes.list' }}
-          columnChooser={{ auto: true }}
-          pagination={{
-            page,
-            pageSize: PAGE_SIZE,
-            total,
-            totalPages,
-            onPageChange: setPage,
-          }}
-          isLoading={isLoading}
-          emptyState={
-            <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
-              {t(
-                'cpq.quotes.empty',
-                'No CPQ quotes found. Create one to start configuring offerings for a customer.',
-              )}
-            </div>
-          }
+    <CpqListView<QuoteConfig>
+      title={t('cpq.quotes.list.title', 'CPQ Quotes')}
+      tableId="cpq.quotes.list"
+      data={data}
+      columns={columns}
+      filters={filters}
+      pageSize={PAGE_SIZE}
+      searchPlaceholder={t('cpq.quotes.search.placeholder', 'Search by quote / customer id...')}
+      actions={
+        <Button type="button" onClick={() => setShowCustomerPicker(true)} className="gap-1.5">
+          <Plus className="h-4 w-4" />
+          {t('cpq.quotes.add', 'New Quote')}
+        </Button>
+      }
+      onRowClick={(row) => router.push(`/backend/cpq/quotes/${row.id}`)}
+      toolbarContent={
+        <CustomerPickerModal
+          open={showCustomerPicker}
+          onClose={() => setShowCustomerPicker(false)}
+          onSelect={selectCustomer}
+          creating={creating}
+          error={createError}
         />
-      </PageBody>
-    </Page>
+      }
+      emptyState={
+        <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
+          {t(
+            'cpq.quotes.empty',
+            'No CPQ quotes found. Create one to start configuring offerings for a customer.',
+          )}
+        </div>
+      }
+    />
   )
 }

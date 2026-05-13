@@ -2,15 +2,14 @@
 import * as React from 'react'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { useRouter } from 'next/navigation'
-import type { ColumnDef, SortingState } from '@tanstack/react-table'
-import { DataTable, type BulkAction } from '@open-mercato/ui/backend/DataTable'
-import { Page, PageBody } from '@open-mercato/ui/backend/Page'
+import type { ColumnDef } from '@tanstack/react-table'
+import { type BulkAction } from '@open-mercato/ui/backend/DataTable'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { Checkbox } from '@open-mercato/ui/primitives/checkbox'
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
-import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import { flash } from '@open-mercato/ui/backend/FlashMessages'
 import { useConfirmDialog } from '@open-mercato/ui/backend/confirm-dialog'
+import { CpqListView, useCpqListData } from '../../../components/CpqListView'
 
 type Specification = {
   id: string
@@ -26,12 +25,6 @@ type Specification = {
   createdAt: string
 }
 
-type SpecificationsResponse = {
-  items?: Specification[]
-  total?: number
-  totalPages?: number
-}
-
 const PAGE_SIZE = 50
 
 const STATUS_COLORS: Record<string, string> = {
@@ -41,21 +34,30 @@ const STATUS_COLORS: Record<string, string> = {
   retired: 'bg-red-100 text-red-700',
 }
 
+function buildFilterParams(values: FilterValues, params: URLSearchParams) {
+  if (typeof values.lifecycleStatus === 'string' && values.lifecycleStatus) {
+    params.set('lifecycleStatus', values.lifecycleStatus)
+  }
+  if (typeof values.specType === 'string' && values.specType) {
+    params.set('specType', values.specType)
+  }
+  if (values.isActive === true) params.set('isActive', 'true')
+  if (values.isActive === false) params.set('isActive', 'false')
+  if (values.isAssetizable === true) params.set('isAssetizable', 'true')
+  if (values.isAssetizable === false) params.set('isAssetizable', 'false')
+}
+
 export default function SpecificationsListPage() {
   const t = useT()
   const router = useRouter()
   const { confirm, ConfirmDialogElement } = useConfirmDialog()
 
-  const [rows, setRows] = React.useState<Specification[]>([])
-  const [total, setTotal] = React.useState(0)
-  const [totalPages, setTotalPages] = React.useState(1)
-  const [page, setPage] = React.useState(1)
-  const [isLoading, setIsLoading] = React.useState(true)
-  const [reloadToken, setReloadToken] = React.useState(0)
-
-  const [search, setSearch] = React.useState('')
-  const [sorting, setSorting] = React.useState<SortingState>([{ id: 'createdAt', desc: true }])
-  const [filterValues, setFilterValues] = React.useState<FilterValues>({})
+  const data = useCpqListData<Specification>({
+    endpoint: '/api/cpq/product-specifications',
+    pageSize: PAGE_SIZE,
+    buildFilterParams,
+    loadErrorMessage: t('cpq.specifications.list.error.load', 'Failed to load specifications'),
+  })
 
   const lifecycleOptions = React.useMemo(
     () => [
@@ -102,60 +104,6 @@ export default function SpecificationsListPage() {
     ],
     [lifecycleOptions, specTypeOptions, t],
   )
-
-  const queryString = React.useMemo(() => {
-    const params = new URLSearchParams()
-    params.set('page', String(page))
-    params.set('pageSize', String(PAGE_SIZE))
-    if (search.trim()) params.set('search', search.trim())
-    const sort = sorting[0]
-    if (sort?.id) {
-      params.set('sortField', sort.id)
-      params.set('sortDir', sort.desc ? 'desc' : 'asc')
-    }
-    if (typeof filterValues.lifecycleStatus === 'string' && filterValues.lifecycleStatus) {
-      params.set('lifecycleStatus', filterValues.lifecycleStatus)
-    }
-    if (typeof filterValues.specType === 'string' && filterValues.specType) {
-      params.set('specType', filterValues.specType)
-    }
-    if (filterValues.isActive === true) params.set('isActive', 'true')
-    if (filterValues.isActive === false) params.set('isActive', 'false')
-    if (filterValues.isAssetizable === true) params.set('isAssetizable', 'true')
-    if (filterValues.isAssetizable === false) params.set('isAssetizable', 'false')
-    return params.toString()
-  }, [filterValues, page, search, sorting])
-
-  React.useEffect(() => {
-    let cancelled = false
-    async function load() {
-      setIsLoading(true)
-      try {
-        const fallback: SpecificationsResponse = { items: [], total: 0, totalPages: 1 }
-        const call = await apiCall<SpecificationsResponse>(
-          `/api/cpq/product-specifications?${queryString}`,
-          undefined,
-          { fallback },
-        )
-        if (cancelled) return
-        if (!call.ok) {
-          flash(t('cpq.specifications.list.error.load', 'Failed to load specifications'), 'error')
-          return
-        }
-        const payload = call.result ?? fallback
-        const items = Array.isArray(payload.items) ? payload.items : []
-        setRows(items)
-        setTotal(typeof payload.total === 'number' ? payload.total : items.length)
-        setTotalPages(typeof payload.totalPages === 'number' ? payload.totalPages : 1)
-      } finally {
-        if (!cancelled) setIsLoading(false)
-      }
-    }
-    load()
-    return () => {
-      cancelled = true
-    }
-  }, [queryString, reloadToken, t])
 
   const columns = React.useMemo<ColumnDef<Specification>[]>(
     () => [
@@ -218,25 +166,6 @@ export default function SpecificationsListPage() {
     [t],
   )
 
-  const handleSearchChange = React.useCallback((value: string) => {
-    setSearch(value)
-    setPage(1)
-  }, [])
-
-  const handleFiltersApply = React.useCallback((values: FilterValues) => {
-    setFilterValues(values)
-    setPage(1)
-  }, [])
-
-  const handleFiltersClear = React.useCallback(() => {
-    setFilterValues({})
-    setPage(1)
-  }, [])
-
-  const handleRefresh = React.useCallback(() => {
-    setReloadToken((token) => token + 1)
-  }, [])
-
   const deleteSelected = React.useCallback(
     async (selectedRows: Specification[]) => {
       if (!selectedRows.length) return { ok: false as const }
@@ -265,10 +194,10 @@ export default function SpecificationsListPage() {
       } else {
         flash(t('cpq.specifications.flash.deleted', 'Specifications deleted'), 'success')
       }
-      setReloadToken((token) => token + 1)
+      data.reload()
       return { ok: failed === 0, affectedCount: selectedRows.length - failed }
     },
-    [confirm, t],
+    [confirm, data, t],
   )
 
   const bulkActions = React.useMemo<BulkAction<Specification>[]>(
@@ -284,57 +213,32 @@ export default function SpecificationsListPage() {
   )
 
   return (
-    <Page>
-      <PageBody className="space-y-6">
-        <DataTable<Specification>
-          title={t('cpq.specifications.list.title', 'Product Specifications')}
-          actions={
-            <Button asChild>
-              <a href="/backend/cpq/specifications/new">
-                {t('cpq.specifications.add', 'New Specification')}
-              </a>
-            </Button>
-          }
-          refreshButton={{
-            label: t('cpq.specifications.actions.refresh', 'Refresh'),
-            onRefresh: handleRefresh,
-            isRefreshing: isLoading,
-          }}
-          columns={columns}
-          data={rows}
-          searchValue={search}
-          onSearchChange={handleSearchChange}
-          searchPlaceholder={t('cpq.specifications.search.placeholder', 'Search specifications...')}
-          filters={filters}
-          filterValues={filterValues}
-          onFiltersApply={handleFiltersApply}
-          onFiltersClear={handleFiltersClear}
-          sorting={sorting}
-          onSortingChange={setSorting}
-          bulkActions={bulkActions}
-          selectionScopeKey="cpq.specifications"
-          onRowClick={(row) => router.push(`/backend/cpq/specifications/${row.id}`)}
-          perspective={{ tableId: 'cpq.specifications.list' }}
-          columnChooser={{ auto: true }}
-          pagination={{
-            page,
-            pageSize: PAGE_SIZE,
-            total,
-            totalPages,
-            onPageChange: setPage,
-          }}
-          isLoading={isLoading}
-          emptyState={
-            <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
-              {t(
-                'cpq.specifications.empty',
-                'No product specifications found. Create one to define your product catalogue.',
-              )}
-            </div>
-          }
-        />
-        {ConfirmDialogElement}
-      </PageBody>
-    </Page>
+    <CpqListView<Specification>
+      title={t('cpq.specifications.list.title', 'Product Specifications')}
+      tableId="cpq.specifications.list"
+      data={data}
+      columns={columns}
+      filters={filters}
+      pageSize={PAGE_SIZE}
+      searchPlaceholder={t('cpq.specifications.search.placeholder', 'Search specifications...')}
+      actions={
+        <Button asChild>
+          <a href="/backend/cpq/specifications/new">
+            {t('cpq.specifications.add', 'New Specification')}
+          </a>
+        </Button>
+      }
+      bulkActions={bulkActions}
+      onRowClick={(row) => router.push(`/backend/cpq/specifications/${row.id}`)}
+      emptyState={
+        <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
+          {t(
+            'cpq.specifications.empty',
+            'No product specifications found. Create one to define your product catalogue.',
+          )}
+        </div>
+      }
+      footerContent={ConfirmDialogElement}
+    />
   )
 }

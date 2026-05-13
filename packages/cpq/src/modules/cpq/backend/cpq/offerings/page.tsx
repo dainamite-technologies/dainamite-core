@@ -2,9 +2,8 @@
 import * as React from 'react'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { useRouter } from 'next/navigation'
-import type { ColumnDef, SortingState } from '@tanstack/react-table'
-import { DataTable, type BulkAction } from '@open-mercato/ui/backend/DataTable'
-import { Page, PageBody } from '@open-mercato/ui/backend/Page'
+import type { ColumnDef } from '@tanstack/react-table'
+import { type BulkAction } from '@open-mercato/ui/backend/DataTable'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { Checkbox } from '@open-mercato/ui/primitives/checkbox'
 import { Input } from '@open-mercato/ui/primitives/input'
@@ -16,9 +15,9 @@ import {
   SelectValue,
 } from '@open-mercato/ui/primitives/select'
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
-import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import { flash } from '@open-mercato/ui/backend/FlashMessages'
 import { useConfirmDialog } from '@open-mercato/ui/backend/confirm-dialog'
+import { CpqListView, useCpqListData } from '../../../components/CpqListView'
 
 type Charge = {
   id: string
@@ -46,12 +45,11 @@ type Offering = {
   charges?: Charge[]
 }
 
-type PricingTableRef = { id: string; code: string; name: string; priceColumns: Array<{ key: string; label: string }> }
-
-type OfferingsResponse = {
-  items?: Offering[]
-  total?: number
-  totalPages?: number
+type PricingTableRef = {
+  id: string
+  code: string
+  name: string
+  priceColumns: Array<{ key: string; label: string }>
 }
 
 const PAGE_SIZE = 50
@@ -77,7 +75,11 @@ function ChargePopover({ charge }: { charge: Charge }) {
       onMouseEnter={() => setOpen(true)}
       onMouseLeave={() => setOpen(false)}
     >
-      <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium cursor-default ${CHARGE_TYPE_COLORS[charge.chargeType] ?? 'bg-gray-100 text-gray-700'}`}>
+      <span
+        className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium cursor-default ${
+          CHARGE_TYPE_COLORS[charge.chargeType] ?? 'bg-gray-100 text-gray-700'
+        }`}
+      >
         {charge.chargeType.toUpperCase()}
       </span>
       {open && (
@@ -88,7 +90,9 @@ function ChargePopover({ charge }: { charge: Charge }) {
           <div className="flex items-center justify-between pt-1 border-t">
             <span>Pricing: {charge.pricingMethod}</span>
             {charge.fixedPrice != null && (
-              <span className="font-medium">{charge.currencyCode ?? 'USD'} {charge.fixedPrice}</span>
+              <span className="font-medium">
+                {charge.currencyCode ?? 'USD'} {charge.fixedPrice}
+              </span>
             )}
           </div>
           {!charge.isActive && <div className="text-yellow-600 font-medium">Inactive</div>}
@@ -99,24 +103,30 @@ function ChargePopover({ charge }: { charge: Charge }) {
   )
 }
 
+function buildFilterParams(values: FilterValues, params: URLSearchParams) {
+  if (typeof values.lifecycleStatus === 'string' && values.lifecycleStatus) {
+    params.set('lifecycleStatus', values.lifecycleStatus)
+  }
+  if (typeof values.offeringType === 'string' && values.offeringType) {
+    params.set('offeringType', values.offeringType)
+  }
+  if (values.isActive === true) params.set('isActive', 'true')
+  if (values.isActive === false) params.set('isActive', 'false')
+}
+
 export default function OfferingsListPage() {
   const t = useT()
   const router = useRouter()
   const { confirm, ConfirmDialogElement } = useConfirmDialog()
 
-  const [rows, setRows] = React.useState<Offering[]>([])
-  const [total, setTotal] = React.useState(0)
-  const [totalPages, setTotalPages] = React.useState(1)
-  const [page, setPage] = React.useState(1)
-  const [isLoading, setIsLoading] = React.useState(true)
-  const [reloadToken, setReloadToken] = React.useState(0)
+  const data = useCpqListData<Offering>({
+    endpoint: '/api/cpq/product-offerings',
+    pageSize: PAGE_SIZE,
+    buildFilterParams,
+    loadErrorMessage: t('cpq.offerings.list.error.load', 'Failed to load offerings'),
+  })
 
-  // Search + sort + filters (OM standard)
-  const [search, setSearch] = React.useState('')
-  const [sorting, setSorting] = React.useState<SortingState>([{ id: 'createdAt', desc: true }])
-  const [filterValues, setFilterValues] = React.useState<FilterValues>({})
-
-  // Bulk charge creation
+  // Bulk charge creation state
   const [bulkChargeOpen, setBulkChargeOpen] = React.useState(false)
   const [bulkChargeTargets, setBulkChargeTargets] = React.useState<Offering[]>([])
   const [chargeForm, setChargeForm] = React.useState({
@@ -175,65 +185,13 @@ export default function OfferingsListPage() {
     [lifecycleOptions, offeringTypeOptions, t],
   )
 
-  const queryString = React.useMemo(() => {
-    const params = new URLSearchParams()
-    params.set('page', String(page))
-    params.set('pageSize', String(PAGE_SIZE))
-    if (search.trim()) params.set('search', search.trim())
-    const sort = sorting[0]
-    if (sort?.id) {
-      params.set('sortField', sort.id)
-      params.set('sortDir', sort.desc ? 'desc' : 'asc')
-    }
-    if (typeof filterValues.lifecycleStatus === 'string' && filterValues.lifecycleStatus) {
-      params.set('lifecycleStatus', filterValues.lifecycleStatus)
-    }
-    if (typeof filterValues.offeringType === 'string' && filterValues.offeringType) {
-      params.set('offeringType', filterValues.offeringType)
-    }
-    if (filterValues.isActive === true) params.set('isActive', 'true')
-    if (filterValues.isActive === false) params.set('isActive', 'false')
-    return params.toString()
-  }, [filterValues, page, search, sorting])
-
-  React.useEffect(() => {
-    let cancelled = false
-    async function load() {
-      setIsLoading(true)
-      try {
-        const fallback: OfferingsResponse = { items: [], total: 0, totalPages: 1 }
-        const call = await apiCall<OfferingsResponse>(
-          `/api/cpq/product-offerings?${queryString}`,
-          undefined,
-          { fallback },
-        )
-        if (cancelled) return
-        if (!call.ok) {
-          flash(t('cpq.offerings.list.error.load', 'Failed to load offerings'), 'error')
-          return
-        }
-        const payload = call.result ?? fallback
-        const items = Array.isArray(payload.items) ? payload.items : []
-        setRows(items)
-        setTotal(typeof payload.total === 'number' ? payload.total : items.length)
-        setTotalPages(typeof payload.totalPages === 'number' ? payload.totalPages : 1)
-      } finally {
-        if (!cancelled) setIsLoading(false)
-      }
-    }
-    load()
-    return () => {
-      cancelled = true
-    }
-  }, [queryString, reloadToken, t])
-
   const loadPricingTables = React.useCallback(async () => {
     if (pricingTables.length > 0) return
     try {
       const res = await fetch('/api/cpq/pricing-tables?pageSize=200')
       if (res.ok) {
-        const data = await res.json()
-        setPricingTables(data.items ?? [])
+        const json = await res.json()
+        setPricingTables(json.items ?? [])
       }
     } catch {
       // ignore — pricing tables are optional
@@ -286,8 +244,8 @@ export default function OfferingsListPage() {
           body: JSON.stringify(payload),
         })
         if (!res.ok) {
-          const d = await res.json().catch(() => ({} as { error?: string }))
-          setError(d.error ?? `Failed to save charge for ${offering.name}`)
+          const body = await res.json().catch(() => ({} as { error?: string }))
+          setError(body.error ?? `Failed to save charge for ${offering.name}`)
           setSaving(false)
           return
         }
@@ -295,7 +253,7 @@ export default function OfferingsListPage() {
       flash(t('cpq.offerings.flash.chargesCreated', 'Charges created'), 'success')
       setBulkChargeOpen(false)
       setBulkChargeTargets([])
-      setReloadToken((token) => token + 1)
+      data.reload()
     } catch {
       setError('Failed to save charges')
     } finally {
@@ -308,6 +266,7 @@ export default function OfferingsListPage() {
     chargePriceColumnKey,
     chargePrices,
     chargePricingTableId,
+    data,
     t,
   ])
 
@@ -361,10 +320,7 @@ export default function OfferingsListPage() {
           const charges = row.original.charges ?? []
           if (charges.length === 0) return <span className="text-xs text-muted-foreground">—</span>
           return (
-            <div
-              className="flex flex-wrap gap-1"
-              onClick={(e) => e.stopPropagation()}
-            >
+            <div className="flex flex-wrap gap-1" onClick={(e) => e.stopPropagation()}>
               {charges.map((ch) => (
                 <ChargePopover key={ch.id} charge={ch} />
               ))}
@@ -383,25 +339,6 @@ export default function OfferingsListPage() {
     ],
     [t],
   )
-
-  const handleSearchChange = React.useCallback((value: string) => {
-    setSearch(value)
-    setPage(1)
-  }, [])
-
-  const handleFiltersApply = React.useCallback((values: FilterValues) => {
-    setFilterValues(values)
-    setPage(1)
-  }, [])
-
-  const handleFiltersClear = React.useCallback(() => {
-    setFilterValues({})
-    setPage(1)
-  }, [])
-
-  const handleRefresh = React.useCallback(() => {
-    setReloadToken((token) => token + 1)
-  }, [])
 
   const deleteSelected = React.useCallback(
     async (selectedRows: Offering[]) => {
@@ -431,10 +368,10 @@ export default function OfferingsListPage() {
       } else {
         flash(t('cpq.offerings.flash.deleted', 'Offerings deleted'), 'success')
       }
-      setReloadToken((token) => token + 1)
+      data.reload()
       return { ok: failed === 0, affectedCount: selectedRows.length - failed }
     },
-    [confirm, t],
+    [confirm, data, t],
   )
 
   const bulkActions = React.useMemo<BulkAction<Offering>[]>(
@@ -458,238 +395,219 @@ export default function OfferingsListPage() {
     [deleteSelected, openBulkChargeForm, t],
   )
 
-  return (
-    <Page>
-      <PageBody className="space-y-6">
-      {error && (
-        <div className="rounded-md bg-red-50 border border-red-200 p-3 text-sm text-red-700">{error}</div>
-      )}
+  const bulkChargeForm = bulkChargeOpen && bulkChargeTargets.length > 0 && (
+    <div className="rounded-lg border bg-card p-5 space-y-4">
+      <h4 className="font-medium text-sm">
+        {t('cpq.offerings.bulk.formTitle', 'New Charge for')} {bulkChargeTargets.length}{' '}
+        {bulkChargeTargets.length > 1
+          ? t('cpq.offerings.bulk.offeringsPlural', 'offerings')
+          : t('cpq.offerings.bulk.offeringsSingular', 'offering')}
+      </h4>
 
-      {bulkChargeOpen && bulkChargeTargets.length > 0 && (
-        <div className="rounded-lg border bg-card p-5 space-y-4">
-          <h4 className="font-medium text-sm">
-            {t('cpq.offerings.bulk.formTitle', 'New Charge for')} {bulkChargeTargets.length}{' '}
-            {bulkChargeTargets.length > 1
-              ? t('cpq.offerings.bulk.offeringsPlural', 'offerings')
-              : t('cpq.offerings.bulk.offeringsSingular', 'offering')}
-          </h4>
+      <div className="grid grid-cols-4 gap-3">
+        <div>
+          <label className="block text-xs font-medium mb-1">Code</label>
+          <Input
+            value={chargeForm.code}
+            onChange={(e) => setChargeForm({ ...chargeForm, code: e.target.value })}
+            placeholder="e.g. mrc-monthly"
+          />
+        </div>
+        <div>
+          <label className="block text-xs font-medium mb-1">Name</label>
+          <Input
+            value={chargeForm.name}
+            onChange={(e) => setChargeForm({ ...chargeForm, name: e.target.value })}
+            placeholder="e.g. Monthly Recurring"
+          />
+        </div>
+        <div>
+          <label className="block text-xs font-medium mb-1">Type</label>
+          <Select
+            value={chargeForm.chargeType}
+            onValueChange={(value) => setChargeForm({ ...chargeForm, chargeType: value })}
+          >
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="nrc">NRC (Non-Recurring)</SelectItem>
+              <SelectItem value="mrc">MRC (Monthly Recurring)</SelectItem>
+              <SelectItem value="usage">Usage</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div>
+          <label className="block text-xs font-medium mb-1">Pricing</label>
+          <Select
+            value={chargeForm.pricingMethod}
+            onValueChange={(value) => setChargeForm({ ...chargeForm, pricingMethod: value })}
+          >
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="flat">Fixed Price (per offering)</SelectItem>
+              <SelectItem value="per_unit">Per Unit (table lookup)</SelectItem>
+              <SelectItem value="tiered">Tiered (table lookup)</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
 
-          <div className="grid grid-cols-4 gap-3">
-            <div>
-              <label className="block text-xs font-medium mb-1">Code</label>
-              <Input
-                value={chargeForm.code}
-                onChange={(e) => setChargeForm({ ...chargeForm, code: e.target.value })}
-                placeholder="e.g. mrc-monthly"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-medium mb-1">Name</label>
-              <Input
-                value={chargeForm.name}
-                onChange={(e) => setChargeForm({ ...chargeForm, name: e.target.value })}
-                placeholder="e.g. Monthly Recurring"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-medium mb-1">Type</label>
-              <Select
-                value={chargeForm.chargeType}
-                onValueChange={(value) => setChargeForm({ ...chargeForm, chargeType: value })}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="nrc">NRC (Non-Recurring)</SelectItem>
-                  <SelectItem value="mrc">MRC (Monthly Recurring)</SelectItem>
-                  <SelectItem value="usage">Usage</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <label className="block text-xs font-medium mb-1">Pricing</label>
-              <Select
-                value={chargeForm.pricingMethod}
-                onValueChange={(value) => setChargeForm({ ...chargeForm, pricingMethod: value })}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="flat">Fixed Price (per offering)</SelectItem>
-                  <SelectItem value="per_unit">Per Unit (table lookup)</SelectItem>
-                  <SelectItem value="tiered">Tiered (table lookup)</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
+      <div>
+        <label className="block text-xs font-medium mb-1">Description</label>
+        <Input
+          value={chargeForm.description}
+          onChange={(e) => setChargeForm({ ...chargeForm, description: e.target.value })}
+          placeholder="User-facing charge description"
+        />
+      </div>
 
-          <div>
-            <label className="block text-xs font-medium mb-1">Description</label>
+      {chargeForm.pricingMethod === 'flat' && (
+        <div className="space-y-2">
+          <div className="flex items-center gap-3">
+            <label className="text-xs font-medium">Currency</label>
             <Input
-              value={chargeForm.description}
-              onChange={(e) => setChargeForm({ ...chargeForm, description: e.target.value })}
-              placeholder="User-facing charge description"
+              value={chargeCurrency}
+              onChange={(e) => setChargeCurrency(e.target.value.toUpperCase())}
+              maxLength={3}
+              className="w-20"
             />
           </div>
-
-          {chargeForm.pricingMethod === 'flat' && (
-            <div className="space-y-2">
-              <div className="flex items-center gap-3">
-                <label className="text-xs font-medium">Currency</label>
-                <Input
-                  value={chargeCurrency}
-                  onChange={(e) => setChargeCurrency(e.target.value.toUpperCase())}
-                  maxLength={3}
-                  className="w-20"
-                />
-              </div>
-              <div className="rounded border">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b bg-muted/30">
-                      <th className="px-3 py-2 text-left font-medium text-xs">Offering</th>
-                      <th className="px-3 py-2 text-left font-medium text-xs">Price ({chargeCurrency})</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {bulkChargeTargets.map((o) => (
-                      <tr key={o.id} className="border-b last:border-0">
-                        <td className="px-3 py-2 font-medium text-xs">
-                          {o.name} <span className="text-muted-foreground font-mono">({o.code})</span>
-                        </td>
-                        <td className="px-3 py-2">
-                          <Input
-                            type="number"
-                            step="0.01"
-                            value={chargePrices[o.id] ?? ''}
-                            onChange={(e) =>
-                              setChargePrices({ ...chargePrices, [o.id]: e.target.value })
-                            }
-                            placeholder="0.00"
-                            className="w-32"
-                          />
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
-          {chargeForm.pricingMethod !== 'flat' && (
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs font-medium mb-1">Pricing Table</label>
-                <Select
-                  value={chargePricingTableId ?? ''}
-                  onValueChange={(value) => {
-                    setChargePricingTableId(value || null)
-                    setChargePriceColumnKey(null)
-                  }}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select table..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {pricingTables.map((pt) => (
-                      <SelectItem key={pt.id} value={pt.id}>
-                        {pt.name} ({pt.code})
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <label className="block text-xs font-medium mb-1">Price Column</label>
-                <Select
-                  value={chargePriceColumnKey ?? ''}
-                  onValueChange={(value) => setChargePriceColumnKey(value || null)}
-                  disabled={!selectedPricingTable}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select column..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {selectedPricingTable?.priceColumns.map((col) => (
-                      <SelectItem key={col.key} value={col.key}>
-                        {col.label} ({col.key})
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-          )}
-
-          <div className="flex gap-2 pt-1">
-            <Button
-              type="button"
-              onClick={saveChargesForSelected}
-              disabled={saving || !chargeForm.code || !chargeForm.name}
-            >
-              {saving
-                ? 'Saving...'
-                : `Create Charge for ${bulkChargeTargets.length} Offering${bulkChargeTargets.length > 1 ? 's' : ''}`}
-            </Button>
-            <Button type="button" variant="outline" onClick={() => setBulkChargeOpen(false)}>
-              Cancel
-            </Button>
+          <div className="rounded border">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b bg-muted/30">
+                  <th className="px-3 py-2 text-left font-medium text-xs">Offering</th>
+                  <th className="px-3 py-2 text-left font-medium text-xs">Price ({chargeCurrency})</th>
+                </tr>
+              </thead>
+              <tbody>
+                {bulkChargeTargets.map((o) => (
+                  <tr key={o.id} className="border-b last:border-0">
+                    <td className="px-3 py-2 font-medium text-xs">
+                      {o.name} <span className="text-muted-foreground font-mono">({o.code})</span>
+                    </td>
+                    <td className="px-3 py-2">
+                      <Input
+                        type="number"
+                        step="0.01"
+                        value={chargePrices[o.id] ?? ''}
+                        onChange={(e) =>
+                          setChargePrices({ ...chargePrices, [o.id]: e.target.value })
+                        }
+                        placeholder="0.00"
+                        className="w-32"
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       )}
 
-      <DataTable<Offering>
-        title={t('cpq.offerings.list.title', 'Product Offerings')}
-        actions={
-          <Button asChild>
-            <a href="/backend/cpq/offerings/new">
-              {t('cpq.offerings.add', 'New Offering')}
-            </a>
-          </Button>
-        }
-        refreshButton={{
-          label: t('cpq.offerings.actions.refresh', 'Refresh'),
-          onRefresh: handleRefresh,
-          isRefreshing: isLoading,
-        }}
-        columns={columns}
-        data={rows}
-        searchValue={search}
-        onSearchChange={handleSearchChange}
-        searchPlaceholder={t('cpq.offerings.search.placeholder', 'Search offerings...')}
-        filters={filters}
-        filterValues={filterValues}
-        onFiltersApply={handleFiltersApply}
-        onFiltersClear={handleFiltersClear}
-        sorting={sorting}
-        onSortingChange={setSorting}
-        bulkActions={bulkActions}
-        selectionScopeKey="cpq.offerings"
-        onRowClick={(row) => router.push(`/backend/cpq/offerings/${row.id}`)}
-        perspective={{ tableId: 'cpq.offerings.list' }}
-        columnChooser={{ auto: true }}
-        pagination={{
-          page,
-          pageSize: PAGE_SIZE,
-          total,
-          totalPages,
-          onPageChange: setPage,
-        }}
-        isLoading={isLoading}
-        emptyState={
-          <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
-            {t(
-              'cpq.offerings.empty',
-              'No product offerings found. Create one to define a sellable variant of a product specification.',
-            )}
+      {chargeForm.pricingMethod !== 'flat' && (
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs font-medium mb-1">Pricing Table</label>
+            <Select
+              value={chargePricingTableId ?? ''}
+              onValueChange={(value) => {
+                setChargePricingTableId(value || null)
+                setChargePriceColumnKey(null)
+              }}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Select table..." />
+              </SelectTrigger>
+              <SelectContent>
+                {pricingTables.map((pt) => (
+                  <SelectItem key={pt.id} value={pt.id}>
+                    {pt.name} ({pt.code})
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
-        }
-      />
-      {ConfirmDialogElement}
-      </PageBody>
-    </Page>
+          <div>
+            <label className="block text-xs font-medium mb-1">Price Column</label>
+            <Select
+              value={chargePriceColumnKey ?? ''}
+              onValueChange={(value) => setChargePriceColumnKey(value || null)}
+              disabled={!selectedPricingTable}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Select column..." />
+              </SelectTrigger>
+              <SelectContent>
+                {selectedPricingTable?.priceColumns.map((col) => (
+                  <SelectItem key={col.key} value={col.key}>
+                    {col.label} ({col.key})
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+      )}
+
+      <div className="flex gap-2 pt-1">
+        <Button
+          type="button"
+          onClick={saveChargesForSelected}
+          disabled={saving || !chargeForm.code || !chargeForm.name}
+        >
+          {saving
+            ? 'Saving...'
+            : `Create Charge for ${bulkChargeTargets.length} Offering${bulkChargeTargets.length > 1 ? 's' : ''}`}
+        </Button>
+        <Button type="button" variant="outline" onClick={() => setBulkChargeOpen(false)}>
+          Cancel
+        </Button>
+      </div>
+    </div>
+  )
+
+  const toolbarContent = (
+    <>
+      {error && (
+        <div className="rounded-md bg-red-50 border border-red-200 p-3 text-sm text-red-700">
+          {error}
+        </div>
+      )}
+      {bulkChargeForm}
+    </>
+  )
+
+  return (
+    <CpqListView<Offering>
+      title={t('cpq.offerings.list.title', 'Product Offerings')}
+      tableId="cpq.offerings.list"
+      data={data}
+      columns={columns}
+      filters={filters}
+      pageSize={PAGE_SIZE}
+      searchPlaceholder={t('cpq.offerings.search.placeholder', 'Search offerings...')}
+      actions={
+        <Button asChild>
+          <a href="/backend/cpq/offerings/new">{t('cpq.offerings.add', 'New Offering')}</a>
+        </Button>
+      }
+      bulkActions={bulkActions}
+      onRowClick={(row) => router.push(`/backend/cpq/offerings/${row.id}`)}
+      toolbarContent={toolbarContent}
+      footerContent={ConfirmDialogElement}
+      emptyState={
+        <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
+          {t(
+            'cpq.offerings.empty',
+            'No product offerings found. Create one to define a sellable variant of a product specification.',
+          )}
+        </div>
+      }
+    />
   )
 }

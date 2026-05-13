@@ -17,6 +17,7 @@ import {
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
 import { flash } from '@open-mercato/ui/backend/FlashMessages'
 import { CpqListView, useCpqListData } from '../../../components/CpqListView'
+import { NumberInput } from '../../../components/NumberInput'
 
 type Charge = {
   id: string
@@ -450,12 +451,10 @@ export default function OfferingsListPage() {
                       {o.name} <span className="text-muted-foreground font-mono">({o.code})</span>
                     </td>
                     <td className="px-3 py-2">
-                      <Input
-                        type="number"
-                        step="0.01"
-                        value={chargePrices[o.id] ?? ''}
-                        onChange={(e) =>
-                          setChargePrices({ ...chargePrices, [o.id]: e.target.value })
+                      <NumberInput
+                        value={chargePrices[o.id] === undefined || chargePrices[o.id] === '' ? null : Number(chargePrices[o.id])}
+                        onChange={(n) =>
+                          setChargePrices({ ...chargePrices, [o.id]: n == null ? '' : String(n) })
                         }
                         placeholder="0.00"
                         className="w-32"

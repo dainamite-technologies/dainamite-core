@@ -2,6 +2,7 @@
 import * as React from 'react'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { useParams, useRouter } from 'next/navigation'
+import { NumberInput } from '../../../../components/NumberInput'
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -554,11 +555,9 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                         ))}
                       </select>
                     ) : attr.attributeType === 'number' ? (
-                      <input
-                        type="number"
-                        value={designTimeValues[attr.code] != null ? String(designTimeValues[attr.code]) : ''}
-                        onChange={(e) => setDesignTimeValues({ ...designTimeValues, [attr.code]: e.target.value ? Number(e.target.value) : null })}
-                        className="w-full rounded-md border px-2 py-1.5 text-sm"
+                      <NumberInput
+                        value={typeof designTimeValues[attr.code] === 'number' ? (designTimeValues[attr.code] as number) : null}
+                        onChange={(n) => setDesignTimeValues({ ...designTimeValues, [attr.code]: n })}
                       />
                     ) : attr.attributeType === 'boolean' ? (
                       <div className="pt-1">
@@ -701,7 +700,11 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                 )}
                 <div>
                   <label className="block text-xs font-medium mb-1">Sort Order</label>
-                  <input type="number" value={editingCharge.sortOrder} onChange={(e) => setEditingCharge({ ...editingCharge, sortOrder: Number(e.target.value) })} className="w-full rounded-md border px-2 py-1.5 text-sm" />
+                  <NumberInput
+                    integer
+                    value={editingCharge.sortOrder}
+                    onChange={(n) => setEditingCharge({ ...editingCharge, sortOrder: n ?? 0 })}
+                  />
                 </div>
               </div>
               <div>

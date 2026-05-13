@@ -1,6 +1,7 @@
 "use client"
 import * as React from 'react'
 import { useRouter, useParams } from 'next/navigation'
+import { NumberInput } from '../../../../components/NumberInput'
 
 const RULE_TYPE_LABELS: Record<string, string> = {
   discount_percent: 'Discount %',
@@ -310,11 +311,18 @@ export default function PriceRuleDetailPage(props: { params?: { id?: string } })
             </label>
             <label className="space-y-1">
               <span className="text-sm font-medium">Value</span>
-              <input type="number" step="any" className="w-full rounded-md border px-3 py-2 text-sm" value={form.value} onChange={(e) => setForm({ ...form, value: e.target.value })} />
+              <NumberInput
+                value={form.value === '' ? null : Number(form.value)}
+                onChange={(n) => setForm({ ...form, value: n == null ? '' : String(n) })}
+              />
             </label>
             <label className="space-y-1">
               <span className="text-sm font-medium">Sort Order</span>
-              <input type="number" className="w-full rounded-md border px-3 py-2 text-sm" value={form.sortOrder} onChange={(e) => setForm({ ...form, sortOrder: e.target.value })} />
+              <NumberInput
+                integer
+                value={form.sortOrder === '' ? null : Number(form.sortOrder)}
+                onChange={(n) => setForm({ ...form, sortOrder: n == null ? '' : String(n) })}
+              />
             </label>
             <label className="space-y-1">
               <span className="text-sm font-medium">Description</span>

@@ -2,6 +2,7 @@
 import * as React from 'react'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { useParams, useRouter } from 'next/navigation'
+import { NumberInput } from '../../../../components/NumberInput'
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -893,7 +894,11 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                 </div>
                 <div>
                   <label className="block text-xs font-medium mb-1">Sort Order</label>
-                  <input type="number" value={editingAttr.sortOrder} onChange={(e) => setEditingAttr({ ...editingAttr, sortOrder: Number(e.target.value) })} className="w-full rounded-md border px-2 py-1.5 text-sm" />
+                  <NumberInput
+                    integer
+                    value={editingAttr.sortOrder}
+                    onChange={(n) => setEditingAttr({ ...editingAttr, sortOrder: n ?? 0 })}
+                  />
                 </div>
                 <div>
                   <label className="block text-xs font-medium mb-1">Help Text</label>
@@ -1133,11 +1138,9 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                             ))}
                           </select>
                         ) : attr.attributeType === 'number' ? (
-                          <input
-                            type="number"
-                            value={editingDtValues[attr.code] != null ? String(editingDtValues[attr.code]) : ''}
-                            onChange={(e) => setEditingDtValues({ ...editingDtValues, [attr.code]: e.target.value ? Number(e.target.value) : null })}
-                            className="w-full rounded-md border px-2 py-1.5 text-sm"
+                          <NumberInput
+                            value={typeof editingDtValues[attr.code] === 'number' ? (editingDtValues[attr.code] as number) : null}
+                            onChange={(n) => setEditingDtValues({ ...editingDtValues, [attr.code]: n })}
                           />
                         ) : attr.attributeType === 'boolean' ? (
                           <div className="pt-1">
@@ -1265,11 +1268,22 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                 <div className="grid grid-cols-2 gap-2">
                   <div>
                     <label className="block text-xs font-medium mb-1">Min</label>
-                    <input type="number" value={editingRel.cardinalityMin} onChange={(e) => setEditingRel({ ...editingRel, cardinalityMin: Number(e.target.value) })} className="w-full rounded-md border px-2 py-1.5 text-sm" />
+                    <NumberInput
+                      integer
+                      min={0}
+                      value={editingRel.cardinalityMin}
+                      onChange={(n) => setEditingRel({ ...editingRel, cardinalityMin: n ?? 0 })}
+                    />
                   </div>
                   <div>
                     <label className="block text-xs font-medium mb-1">Max</label>
-                    <input type="number" value={editingRel.cardinalityMax ?? ''} onChange={(e) => setEditingRel({ ...editingRel, cardinalityMax: e.target.value ? Number(e.target.value) : null })} placeholder="∞" className="w-full rounded-md border px-2 py-1.5 text-sm" />
+                    <NumberInput
+                      integer
+                      min={0}
+                      value={editingRel.cardinalityMax}
+                      onChange={(n) => setEditingRel({ ...editingRel, cardinalityMax: n })}
+                      placeholder="∞"
+                    />
                   </div>
                 </div>
               </div>
@@ -1383,32 +1397,29 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                 </div>
                 <div>
                   <label className="block text-sm font-medium mb-1">Sort Order</label>
-                  <input
-                    type="number"
+                  <NumberInput
+                    integer
                     value={editingSlot.sortOrder}
-                    onChange={(e) => setEditingSlot({ ...editingSlot, sortOrder: parseInt(e.target.value) || 0 })}
-                    className="w-full rounded-md border px-3 py-2 text-sm"
+                    onChange={(n) => setEditingSlot({ ...editingSlot, sortOrder: n ?? 0 })}
                   />
                 </div>
                 <div>
                   <label className="block text-sm font-medium mb-1">Cardinality Min</label>
-                  <input
-                    type="number"
-                    value={editingSlot.cardinalityMin}
+                  <NumberInput
+                    integer
                     min={0}
-                    onChange={(e) => setEditingSlot({ ...editingSlot, cardinalityMin: parseInt(e.target.value) || 0 })}
-                    className="w-full rounded-md border px-3 py-2 text-sm"
+                    value={editingSlot.cardinalityMin}
+                    onChange={(n) => setEditingSlot({ ...editingSlot, cardinalityMin: n ?? 0 })}
                   />
                 </div>
                 <div>
                   <label className="block text-sm font-medium mb-1">Cardinality Max</label>
-                  <input
-                    type="number"
-                    value={editingSlot.cardinalityMax ?? ''}
+                  <NumberInput
+                    integer
                     min={0}
                     placeholder="∞ (unlimited)"
-                    onChange={(e) => setEditingSlot({ ...editingSlot, cardinalityMax: e.target.value ? parseInt(e.target.value) : null })}
-                    className="w-full rounded-md border px-3 py-2 text-sm"
+                    value={editingSlot.cardinalityMax}
+                    onChange={(n) => setEditingSlot({ ...editingSlot, cardinalityMax: n })}
                   />
                 </div>
               </div>

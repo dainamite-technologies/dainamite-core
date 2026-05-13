@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react'
 import type { WizardStepProps } from '../types'
+import { NumberInput } from '../../components/NumberInput'
 
 type ConstrainedAttribute = {
   code: string
@@ -205,12 +206,10 @@ export function ProductConfigureStep({ config, onComplete, onBack, stepData, cur
 
     if (attr.attributeType === 'number') {
       return (
-        <input
-          type="number"
-          value={value === '' ? '' : Number(value)}
-          onChange={(e) => handleChange(attr.code, e.target.value ? Number(e.target.value) : '')}
+        <NumberInput
+          value={value === '' || value == null ? null : Number(value)}
+          onChange={(n) => handleChange(attr.code, n ?? '')}
           disabled={isReadonly}
-          className="w-full rounded-md border px-3 py-2 text-sm disabled:opacity-50"
         />
       )
     }

@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react'
 import type { WizardStepProps } from '../types'
+import { NumberInput } from '../../components/NumberInput'
 
 type Offering = {
   id: string
@@ -103,7 +104,10 @@ function ConfigPanel({
     }
     if (attr.attributeType === 'number') {
       return (
-        <input type="number" value={value === '' ? '' : Number(value)} onChange={(e) => handleChange(attr.code, e.target.value ? Number(e.target.value) : '')} className="w-full rounded-md border px-3 py-2 text-sm" />
+        <NumberInput
+          value={value === '' || value == null ? null : Number(value)}
+          onChange={(n) => handleChange(attr.code, n ?? '')}
+        />
       )
     }
     return <input type="text" value={String(value)} onChange={(e) => handleChange(attr.code, e.target.value)} className="w-full rounded-md border px-3 py-2 text-sm" />

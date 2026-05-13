@@ -325,6 +325,7 @@ And re-load it when reviewing your own diff before opening a PR.
 | Repeated inline normalization | One named helper |
 | `cf_*` or duplicate normalization across modules | Use `@open-mercato/shared/lib/custom-fields` |
 | Repeated mutate-then-query on the same EM | `withAtomicFlush(em, phases)` from `@open-mercato/shared/lib/commands/flush` |
+| Raw `<input type="number">` controlled by a `number` state | Use `NumberInput` from `packages/cpq/src/modules/cpq/components/NumberInput.tsx` (select-on-focus + internal string state so users don't have to clear the "0" before typing). Same rule applies to any future numeric form field — fix it at the component, not at the call site. |
 
 If something on this page conflicts with the framework's own AGENTS.md
 guides, the framework wins. This skill complements them with the

@@ -1,5 +1,6 @@
 "use client"
 import * as React from 'react'
+import { NumberInput as BaseNumberInput } from '../../../../../components/NumberInput'
 
 // XD-250 — ARC configurator drawer.
 //
@@ -686,16 +687,20 @@ function DateInput(props: { label: string; value: string; onChange: (v: string) 
   )
 }
 
+// Local "labelled number" wrapper kept as a string-in/string-out facade so
+// the surrounding code (which threads `value` through `mergeTerm.months` as
+// a string) doesn't have to change. The actual input behaviour comes from
+// the shared `NumberInput` component (select-on-focus + internal string
+// state — see components/NumberInput.tsx for the rationale).
 function NumberInput(props: { label: string; value: string; onChange: (v: string) => void }) {
   return (
     <div>
       <label className="block text-xs text-muted-foreground mb-1">{props.label}</label>
-      <input
-        type="number"
+      <BaseNumberInput
+        integer
         min={1}
-        value={props.value}
-        onChange={(e) => props.onChange(e.target.value)}
-        className="w-full rounded-md border border-input bg-background px-2 py-1.5 text-sm"
+        value={props.value === '' ? null : Number(props.value)}
+        onChange={(n) => props.onChange(n == null ? '' : String(n))}
       />
     </div>
   )

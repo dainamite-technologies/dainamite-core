@@ -4,6 +4,7 @@ import { useRouter, useParams, useSearchParams } from 'next/navigation'
 import ArcQuoteConfigurator, {
   type AttachedTarget,
 } from './_components/ArcQuoteConfigurator'
+import { NumberInput } from '../../../../components/NumberInput'
 
 // ─── Types ───────────────────────────────────────────────────────
 
@@ -1536,8 +1537,13 @@ function ConfigurePanel({ title, attributes, config, quantity, arcTargetOptions,
         )}
         <div>
           <label className="block text-sm font-medium mb-1">Quantity</label>
-          <input type="number" min={1} value={quantity} onChange={(e) => onQuantityChange(Math.max(1, parseInt(e.target.value) || 1))}
-            className="w-24 rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
+          <NumberInput
+            integer
+            min={1}
+            value={quantity}
+            onChange={(n) => onQuantityChange(Math.max(1, n ?? 1))}
+            className="w-24"
+          />
         </div>
         {attributes.length === 0 ? (
           <p className="text-sm text-muted-foreground">No configurable attributes for this offering.</p>
@@ -1576,12 +1582,18 @@ function AttributeField({ attribute, value, onChange }: { attribute: Constrained
           <span className="text-sm text-muted-foreground">{helpText ?? 'Enable'}</span>
         </label>
       ) : attributeType === 'number' ? (
-        <input type="number" value={String(currentValue)}
+        <NumberInput
+          value={
+            typeof currentValue === 'number'
+              ? currentValue
+              : currentValue === '' || currentValue == null
+                ? null
+                : Number(currentValue)
+          }
           min={(constraints as Record<string, unknown>)?.min as number | undefined}
           max={(constraints as Record<string, unknown>)?.max as number | undefined}
-          step={(constraints as Record<string, unknown>)?.step as number | undefined}
-          onChange={(e) => onChange(e.target.value === '' ? '' : Number(e.target.value))}
-          className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
+          onChange={(n) => onChange(n ?? '')}
+        />
       ) : (
         <input type="text" value={String(currentValue)} onChange={(e) => onChange(e.target.value)}
           className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />

@@ -304,6 +304,33 @@ export function CpqInteractionStyles() {
 .cpq-page [data-clickable="true"] {
   cursor: pointer;
 }
+/* Row actions \`⋯\` trigger: OM's hover:bg-accent is barely visible in
+   the light theme. Make hover (and the open state) clearly distinct so
+   users see what they're aiming at. */
+.cpq-list-view [aria-haspopup="menu"]:hover,
+.cpq-page [aria-haspopup="menu"]:hover,
+.cpq-list-view [aria-haspopup="menu"][aria-expanded="true"],
+.cpq-page [aria-haspopup="menu"][aria-expanded="true"] {
+  background-color: rgba(0, 0, 0, 0.08);
+}
+.dark .cpq-list-view [aria-haspopup="menu"]:hover,
+.dark .cpq-page [aria-haspopup="menu"]:hover,
+.dark .cpq-list-view [aria-haspopup="menu"][aria-expanded="true"],
+.dark .cpq-page [aria-haspopup="menu"][aria-expanded="true"] {
+  background-color: rgba(255, 255, 255, 0.1);
+}
+/* Items inside the row-actions dropdown menu — strengthen hover so the
+   item under the pointer is unmistakable. The menu portal renders at the
+   document body, so we can't scope it to .cpq-list-view; targeting the
+   role attribute is enough. */
+[role="menu"] [role="menuitem"]:hover,
+[role="menu"] [role="menuitem"]:focus-visible {
+  background-color: rgba(0, 0, 0, 0.06);
+}
+.dark [role="menu"] [role="menuitem"]:hover,
+.dark [role="menu"] [role="menuitem"]:focus-visible {
+  background-color: rgba(255, 255, 255, 0.08);
+}
 `}</style>
   )
 }

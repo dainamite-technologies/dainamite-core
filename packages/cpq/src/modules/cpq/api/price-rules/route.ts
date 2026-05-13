@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { resolveCpqRouteContext } from '../context'
-import { CpqPriceRule } from '../../data/entities'
+import { CpqPriceRule, CpqProductOffering } from '../../data/entities'
 import { cpqPriceRuleCreateSchema, cpqPriceRuleUpdateSchema } from '../../data/validators'
 
 export const metadata = {
@@ -60,14 +60,60 @@ export async function GET(req: Request) {
       filters.productOfferingId = null
     }
 
+    const ruleType = url.searchParams.get('ruleType')
+    if (ruleType) filters.ruleType = ruleType
+
+    const chargeTypeFilter = url.searchParams.get('chargeTypeFilter')
+    if (chargeTypeFilter) filters.chargeTypeFilter = chargeTypeFilter
+
+    const isActiveParam = url.searchParams.get('isActive')
+    if (isActiveParam === 'true') filters.isActive = true
+    else if (isActiveParam === 'false') filters.isActive = false
+
+    // Free-text search across code, name, description (case-insensitive)
+    const search = url.searchParams.get('search')?.trim()
+    if (search) {
+      filters.$or = [
+        { code: { $ilike: `%${search}%` } },
+        { name: { $ilike: `%${search}%` } },
+        { description: { $ilike: `%${search}%` } },
+      ]
+    }
+
+    // Configurable sort
+    const ALLOWED_SORT_FIELDS = ['sortOrder', 'createdAt', 'updatedAt', 'code', 'name', 'ruleType'] as const
+    const sortFieldParam = url.searchParams.get('sortField') ?? ''
+    const sortField = (ALLOWED_SORT_FIELDS as readonly string[]).includes(sortFieldParam)
+      ? (sortFieldParam as (typeof ALLOWED_SORT_FIELDS)[number])
+      : 'sortOrder'
+    const sortDir = url.searchParams.get('sortDir') === 'desc' ? 'desc' : 'asc'
+
     const [items, total] = await ctx.em.findAndCount(CpqPriceRule, filters, {
       limit: pageSize,
       offset: (page - 1) * pageSize,
-      orderBy: { sortOrder: 'asc' },
+      orderBy: { [sortField]: sortDir },
     })
 
+    // Batch-load offering names for the visible rules (single query — avoids N+1)
+    const offeringIds = Array.from(
+      new Set(items.map((r) => r.productOfferingId).filter((id): id is string => !!id)),
+    )
+    const offeringNameById = new Map<string, string>()
+    if (offeringIds.length > 0) {
+      const offerings = await ctx.em.find(
+        CpqProductOffering,
+        { id: { $in: offeringIds }, ...scope },
+      )
+      for (const o of offerings) offeringNameById.set(o.id, o.name)
+    }
+
     return NextResponse.json({
-      items: items.map(serializeRule),
+      items: items.map((rule) => ({
+        ...serializeRule(rule),
+        productOfferingName: rule.productOfferingId
+          ? offeringNameById.get(rule.productOfferingId) ?? null
+          : null,
+      })),
       total,
       page,
       pageSize,

@@ -60,11 +60,31 @@ export async function GET(req: Request) {
 
     const code = url.searchParams.get('code')
     if (code) filters.code = code
+    const isActiveParam = url.searchParams.get('isActive')
+    if (isActiveParam === 'true') filters.isActive = true
+    else if (isActiveParam === 'false') filters.isActive = false
+
+    // Free-text search across code, name (case-insensitive)
+    const search = url.searchParams.get('search')?.trim()
+    if (search) {
+      filters.$or = [
+        { code: { $ilike: `%${search}%` } },
+        { name: { $ilike: `%${search}%` } },
+      ]
+    }
+
+    // Configurable sort
+    const ALLOWED_SORT_FIELDS = ['createdAt', 'updatedAt', 'code', 'name'] as const
+    const sortFieldParam = url.searchParams.get('sortField') ?? ''
+    const sortField = (ALLOWED_SORT_FIELDS as readonly string[]).includes(sortFieldParam)
+      ? (sortFieldParam as (typeof ALLOWED_SORT_FIELDS)[number])
+      : 'createdAt'
+    const sortDir = url.searchParams.get('sortDir') === 'asc' ? 'asc' : 'desc'
 
     const [items, total] = await ctx.em.findAndCount(CpqPricingTable, filters, {
       limit: pageSize,
       offset: (page - 1) * pageSize,
-      orderBy: { createdAt: 'desc' },
+      orderBy: { [sortField]: sortDir },
     })
 
     return NextResponse.json({

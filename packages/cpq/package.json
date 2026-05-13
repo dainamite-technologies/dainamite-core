@@ -13,6 +13,7 @@
   ],
   "scripts": {
     "build": "node build.mjs",
+    "watch": "node watch.mjs",
     "typecheck": "tsc --noEmit"
   },
   "exports": {

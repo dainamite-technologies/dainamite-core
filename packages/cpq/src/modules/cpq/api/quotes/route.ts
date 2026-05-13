@@ -32,15 +32,50 @@ export async function GET(req: Request) {
     const ctx = await resolveCpqRouteContext(req)
     if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-    const scope = { organizationId: ctx.organizationId, tenantId: ctx.tenantId }
+    const url = new URL(req.url)
+    const scope = { organizationId: ctx.organizationId, tenantId: ctx.tenantId, deletedAt: null }
 
-    const configs = await ctx.em.find(
-      CpqQuoteConfiguration,
-      { ...scope, deletedAt: null },
-      { orderBy: { createdAt: 'desc' }, limit: 100 },
-    )
+    const page = Math.max(1, Number(url.searchParams.get('page') ?? '1'))
+    const pageSize = Math.min(100, Math.max(1, Number(url.searchParams.get('pageSize') ?? '50')))
 
-    return NextResponse.json({ items: configs })
+    const filters: Record<string, unknown> = { ...scope }
+
+    const cpqStatus = url.searchParams.get('cpqStatus')
+    if (cpqStatus) filters.cpqStatus = cpqStatus
+    const currencyCode = url.searchParams.get('currencyCode')
+    if (currencyCode) filters.currencyCode = currencyCode
+    const customerId = url.searchParams.get('customerId')
+    if (customerId) filters.customerId = customerId
+
+    // Free-text search across quoteId, customerId (case-insensitive)
+    const search = url.searchParams.get('search')?.trim()
+    if (search) {
+      filters.$or = [
+        { quoteId: { $ilike: `%${search}%` } },
+        { customerId: { $ilike: `%${search}%` } },
+      ]
+    }
+
+    const ALLOWED_SORT_FIELDS = ['createdAt', 'updatedAt', 'cpqStatus', 'version', 'currencyCode'] as const
+    const sortFieldParam = url.searchParams.get('sortField') ?? ''
+    const sortField = (ALLOWED_SORT_FIELDS as readonly string[]).includes(sortFieldParam)
+      ? (sortFieldParam as (typeof ALLOWED_SORT_FIELDS)[number])
+      : 'createdAt'
+    const sortDir = url.searchParams.get('sortDir') === 'asc' ? 'asc' : 'desc'
+
+    const [items, total] = await ctx.em.findAndCount(CpqQuoteConfiguration, filters, {
+      limit: pageSize,
+      offset: (page - 1) * pageSize,
+      orderBy: { [sortField]: sortDir },
+    })
+
+    return NextResponse.json({
+      items,
+      total,
+      page,
+      pageSize,
+      totalPages: Math.ceil(total / pageSize),
+    })
   } catch (err) {
     return handleError(err, 'cpq/quotes.GET')
   }

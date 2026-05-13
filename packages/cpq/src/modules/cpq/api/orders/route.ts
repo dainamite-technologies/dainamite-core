@@ -33,14 +33,25 @@ export async function GET(req: Request) {
 
     const scope = { organizationId: ctx.organizationId, tenantId: ctx.tenantId }
     const url = new URL(req.url)
+    const ALLOWED_SORT_FIELDS = ['createdAt', 'updatedAt', 'cpqStatus', 'activatedAt', 'currencyCode'] as const
+    const sortFieldParam = url.searchParams.get('sortField') ?? ''
+    const sortField = (ALLOWED_SORT_FIELDS as readonly string[]).includes(sortFieldParam)
+      ? (sortFieldParam as (typeof ALLOWED_SORT_FIELDS)[number])
+      : undefined
+    const sortDir = url.searchParams.get('sortDir') === 'asc' ? 'asc' : 'desc'
+
     const filters = {
       customerId: url.searchParams.get('customerId') ?? undefined,
       sourceQuoteId: url.searchParams.get('sourceQuoteId') ?? undefined,
       salesOrderId: url.searchParams.get('salesOrderId') ?? undefined,
       cpqStatus: url.searchParams.get('cpqStatus') ?? undefined,
+      currencyCode: url.searchParams.get('currencyCode') ?? undefined,
+      search: url.searchParams.get('search') ?? undefined,
+      sortField,
+      sortDir,
       page: url.searchParams.has('page') ? Number(url.searchParams.get('page')) : undefined,
       pageSize: url.searchParams.has('pageSize') ? Number(url.searchParams.get('pageSize')) : undefined,
-    }
+    } as const
 
     const service = ctx.container.resolve('cpqOrderService') as DefaultCpqOrderService
     const result = await service.listOrders(filters, scope)

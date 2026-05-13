@@ -23,6 +23,10 @@ interface SubscriptionListFilters {
   sourceOrderId?: string
   status?: string | string[]
   productId?: string
+  billingCycle?: string
+  search?: string
+  sortField?: 'createdAt' | 'updatedAt' | 'code' | 'name' | 'status' | 'startDate' | 'currentTermEnd'
+  sortDir?: 'asc' | 'desc'
   page?: number
   pageSize?: number
 }
@@ -40,6 +44,9 @@ interface AssetListFilters {
   productId?: string
   subscriptionId?: string
   subscriptionItemId?: string
+  search?: string
+  sortField?: 'createdAt' | 'updatedAt' | 'code' | 'name' | 'status' | 'assetType' | 'purchasePrice'
+  sortDir?: 'asc' | 'desc'
   page?: number
   pageSize?: number
 }
@@ -281,10 +288,19 @@ export class DefaultCpqInventoryService {
 
     if (filters.customerId) where.customerId = filters.customerId
     if (filters.sourceOrderId) where.sourceOrderId = filters.sourceOrderId
+    if (filters.billingCycle) where.billingCycle = filters.billingCycle
     if (filters.status) {
       where.status = Array.isArray(filters.status)
         ? { $in: filters.status }
         : filters.status
+    }
+
+    const search = filters.search?.trim()
+    if (search) {
+      where.$or = [
+        { code: { $ilike: `%${search}%` } },
+        { name: { $ilike: `%${search}%` } },
+      ]
     }
 
     if (filters.productId) {
@@ -305,10 +321,13 @@ export class DefaultCpqInventoryService {
       where.id = { $in: subIds }
     }
 
+    const sortField = filters.sortField ?? 'createdAt'
+    const sortDir = filters.sortDir === 'asc' ? 'asc' : 'desc'
+
     const [items, total] = await this.em.findAndCount(
       CpqInventorySubscription,
       where,
-      { limit: pageSize, offset, orderBy: { createdAt: 'desc' } },
+      { limit: pageSize, offset, orderBy: { [sortField]: sortDir } },
     )
 
     return {
@@ -640,10 +659,21 @@ export class DefaultCpqInventoryService {
     if (filters.subscriptionId) where.subscriptionId = filters.subscriptionId
     if (filters.subscriptionItemId) where.subscriptionItemId = filters.subscriptionItemId
 
+    const search = filters.search?.trim()
+    if (search) {
+      where.$or = [
+        { code: { $ilike: `%${search}%` } },
+        { name: { $ilike: `%${search}%` } },
+      ]
+    }
+
+    const sortField = filters.sortField ?? 'createdAt'
+    const sortDir = filters.sortDir === 'asc' ? 'asc' : 'desc'
+
     const [items, total] = await this.em.findAndCount(
       CpqInventoryAsset,
       where,
-      { limit: pageSize, offset, orderBy: { createdAt: 'desc' } },
+      { limit: pageSize, offset, orderBy: { [sortField]: sortDir } },
     )
 
     return {

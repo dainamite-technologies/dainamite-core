@@ -39,9 +39,22 @@ export async function GET(req: Request) {
     const surface = url.searchParams.get('surface') ?? undefined
     const isActiveParam = url.searchParams.get('isActive')
     const isActive = isActiveParam !== null ? isActiveParam === 'true' : undefined
+    const search = url.searchParams.get('search') ?? undefined
+
+    const ALLOWED_SORT_FIELDS = ['createdAt', 'updatedAt', 'name', 'code', 'surface'] as const
+    const sortFieldParam = url.searchParams.get('sortField') ?? ''
+    const sortField = (ALLOWED_SORT_FIELDS as readonly string[]).includes(sortFieldParam)
+      ? (sortFieldParam as (typeof ALLOWED_SORT_FIELDS)[number])
+      : undefined
+    const sortDir = url.searchParams.get('sortDir') === 'asc' ? 'asc' : 'desc'
 
     return NextResponse.json(
-      await service.listDefinitions({ surface, isActive }, scope, page, pageSize),
+      await service.listDefinitions(
+        { surface, isActive, search, sortField, sortDir },
+        scope,
+        page,
+        pageSize,
+      ),
     )
   } catch (err) {
     console.error('[cpq/wizards.GET]', err)

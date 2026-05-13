@@ -127,11 +127,37 @@ export async function GET(req: Request) {
     if (lifecycleStatus) filters.lifecycleStatus = lifecycleStatus
     const code = url.searchParams.get('code')
     if (code) filters.code = code
+    const specType = url.searchParams.get('specType')
+    if (specType) filters.specType = specType
+    const isActiveParam = url.searchParams.get('isActive')
+    if (isActiveParam === 'true') filters.isActive = true
+    else if (isActiveParam === 'false') filters.isActive = false
+    const isAssetizableParam = url.searchParams.get('isAssetizable')
+    if (isAssetizableParam === 'true') filters.isAssetizable = true
+    else if (isAssetizableParam === 'false') filters.isAssetizable = false
+
+    // Free-text search across code, name, description (case-insensitive)
+    const search = url.searchParams.get('search')?.trim()
+    if (search) {
+      filters.$or = [
+        { code: { $ilike: `%${search}%` } },
+        { name: { $ilike: `%${search}%` } },
+        { description: { $ilike: `%${search}%` } },
+      ]
+    }
+
+    // Configurable sort
+    const ALLOWED_SORT_FIELDS = ['createdAt', 'updatedAt', 'code', 'name', 'lifecycleStatus', 'specType', 'version'] as const
+    const sortFieldParam = url.searchParams.get('sortField') ?? ''
+    const sortField = (ALLOWED_SORT_FIELDS as readonly string[]).includes(sortFieldParam)
+      ? (sortFieldParam as (typeof ALLOWED_SORT_FIELDS)[number])
+      : 'createdAt'
+    const sortDir = url.searchParams.get('sortDir') === 'asc' ? 'asc' : 'desc'
 
     const [items, total] = await ctx.em.findAndCount(CpqProductSpecification, filters, {
       limit: pageSize,
       offset: (page - 1) * pageSize,
-      orderBy: { createdAt: 'desc' },
+      orderBy: { [sortField]: sortDir },
     })
 
     return NextResponse.json({

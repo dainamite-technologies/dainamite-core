@@ -33,6 +33,10 @@ interface OrderListFilters {
   sourceQuoteId?: string
   salesOrderId?: string
   cpqStatus?: string | string[]
+  currencyCode?: string
+  search?: string
+  sortField?: 'createdAt' | 'updatedAt' | 'cpqStatus' | 'activatedAt' | 'currencyCode'
+  sortDir?: 'asc' | 'desc'
   page?: number
   pageSize?: number
 }
@@ -740,16 +744,28 @@ export class DefaultCpqOrderService {
     if (filters.customerId) where.customerId = filters.customerId
     if (filters.sourceQuoteId) where.sourceQuoteId = filters.sourceQuoteId
     if (filters.salesOrderId) where.orderId = filters.salesOrderId
+    if (filters.currencyCode) where.currencyCode = filters.currencyCode
     if (filters.cpqStatus) {
       where.cpqStatus = Array.isArray(filters.cpqStatus)
         ? { $in: filters.cpqStatus }
         : filters.cpqStatus
     }
 
+    const search = filters.search?.trim()
+    if (search) {
+      where.$or = [
+        { orderId: { $ilike: `%${search}%` } },
+        { customerId: { $ilike: `%${search}%` } },
+      ]
+    }
+
+    const sortField = filters.sortField ?? 'createdAt'
+    const sortDir = filters.sortDir === 'asc' ? 'asc' : 'desc'
+
     const [configs, total] = await this.em.findAndCount(
       CpqOrderConfiguration,
       where,
-      { limit: pageSize, offset, orderBy: { createdAt: 'desc' } },
+      { limit: pageSize, offset, orderBy: { [sortField]: sortDir } },
     )
 
     const orderIds = configs.map((c) => c.orderId)

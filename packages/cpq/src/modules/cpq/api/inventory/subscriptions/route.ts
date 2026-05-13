@@ -37,6 +37,18 @@ export async function GET(req: Request) {
     if (productId) filters.productId = productId
     const sourceOrderId = url.searchParams.get('sourceOrderId')
     if (sourceOrderId) filters.sourceOrderId = sourceOrderId
+    const billingCycle = url.searchParams.get('billingCycle')
+    if (billingCycle) filters.billingCycle = billingCycle
+    const search = url.searchParams.get('search')
+    if (search) filters.search = search
+
+    const ALLOWED_SORT_FIELDS = ['createdAt', 'updatedAt', 'code', 'name', 'status', 'startDate', 'currentTermEnd'] as const
+    const sortFieldParam = url.searchParams.get('sortField') ?? ''
+    if ((ALLOWED_SORT_FIELDS as readonly string[]).includes(sortFieldParam)) {
+      filters.sortField = sortFieldParam
+    }
+    filters.sortDir = url.searchParams.get('sortDir') === 'asc' ? 'asc' : 'desc'
+
     filters.page = Math.max(1, Number(url.searchParams.get('page') ?? '1'))
     filters.pageSize = Math.min(100, Math.max(1, Number(url.searchParams.get('pageSize') ?? '50')))
 

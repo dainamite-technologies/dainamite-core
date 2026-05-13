@@ -116,12 +116,68 @@ export async function GET(req: Request) {
     if (lifecycleStatus) filters.lifecycleStatus = lifecycleStatus
     const code = url.searchParams.get('code')
     if (code) filters.code = code
+    const offeringType = url.searchParams.get('offeringType')
+    if (offeringType) filters.offeringType = offeringType
+    const isActiveParam = url.searchParams.get('isActive')
+    if (isActiveParam === 'true') filters.isActive = true
+    else if (isActiveParam === 'false') filters.isActive = false
+
+    // Free-text search across code, name, description (case-insensitive)
+    const search = url.searchParams.get('search')?.trim()
+    if (search) {
+      filters.$or = [
+        { code: { $ilike: `%${search}%` } },
+        { name: { $ilike: `%${search}%` } },
+        { description: { $ilike: `%${search}%` } },
+      ]
+    }
+
+    // Configurable sort
+    const ALLOWED_SORT_FIELDS = ['createdAt', 'updatedAt', 'code', 'name', 'lifecycleStatus', 'offeringType'] as const
+    const sortFieldParam = url.searchParams.get('sortField') ?? ''
+    const sortField = (ALLOWED_SORT_FIELDS as readonly string[]).includes(sortFieldParam)
+      ? (sortFieldParam as (typeof ALLOWED_SORT_FIELDS)[number])
+      : 'createdAt'
+    const sortDir = url.searchParams.get('sortDir') === 'asc' ? 'asc' : 'desc'
 
     const [items, total] = await ctx.em.findAndCount(CpqProductOffering, filters, {
       limit: pageSize,
       offset: (page - 1) * pageSize,
-      orderBy: { createdAt: 'desc' },
+      orderBy: { [sortField]: sortDir },
     })
+
+    // Batch-load charges for all visible offerings in a single query
+    // (replaces an N+1 pattern where the UI fetched each offering's detail separately).
+    const offeringIds = items.map((item) => item.id)
+    const chargesByOffering = new Map<string, Array<Record<string, unknown>>>()
+    if (offeringIds.length > 0) {
+      const allCharges = await ctx.em.find(
+        CpqProductCharge,
+        { offeringId: { $in: offeringIds }, ...scope },
+        { orderBy: { sortOrder: 'asc' } },
+      )
+      for (const c of allCharges) {
+        if (!c.offeringId) continue
+        const list = chargesByOffering.get(c.offeringId) ?? []
+        list.push({
+          id: c.id,
+          code: c.code,
+          name: c.name,
+          description: c.description,
+          chargeType: c.chargeType,
+          pricingMethod: c.pricingMethod,
+          pricingTableId: c.pricingTableId,
+          priceColumnKey: c.priceColumnKey,
+          fixedPrice: c.fixedPrice,
+          currencyCode: c.currencyCode,
+          quantityAttributeCode: c.quantityAttributeCode,
+          applicabilityCondition: c.applicabilityCondition,
+          sortOrder: c.sortOrder,
+          isActive: c.isActive,
+        })
+        chargesByOffering.set(c.offeringId, list)
+      }
+    }
 
     return NextResponse.json({
       items: items.map((item) => ({
@@ -139,6 +195,7 @@ export async function GET(req: Request) {
         isActive: item.isActive,
         createdAt: item.createdAt,
         updatedAt: item.updatedAt,
+        charges: chargesByOffering.get(item.id) ?? [],
       })),
       total,
       page,

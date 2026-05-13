@@ -2,6 +2,23 @@
 import * as React from 'react'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { useRouter } from 'next/navigation'
+import type { ColumnDef, SortingState } from '@tanstack/react-table'
+import { DataTable, type BulkAction } from '@open-mercato/ui/backend/DataTable'
+import { Page, PageBody } from '@open-mercato/ui/backend/Page'
+import { Button } from '@open-mercato/ui/primitives/button'
+import { Checkbox } from '@open-mercato/ui/primitives/checkbox'
+import { Input } from '@open-mercato/ui/primitives/input'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@open-mercato/ui/primitives/select'
+import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
+import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
+import { flash } from '@open-mercato/ui/backend/FlashMessages'
+import { useConfirmDialog } from '@open-mercato/ui/backend/confirm-dialog'
 
 type Charge = {
   id: string
@@ -26,9 +43,18 @@ type Offering = {
   lifecycleStatus: string
   isActive: boolean
   createdAt: string
+  charges?: Charge[]
 }
 
 type PricingTableRef = { id: string; code: string; name: string; priceColumns: Array<{ key: string; label: string }> }
+
+type OfferingsResponse = {
+  items?: Offering[]
+  total?: number
+  totalPages?: number
+}
+
+const PAGE_SIZE = 50
 
 const CHARGE_TYPE_COLORS: Record<string, string> = {
   mrc: 'bg-blue-100 text-blue-800',
@@ -36,13 +62,17 @@ const CHARGE_TYPE_COLORS: Record<string, string> = {
   usage: 'bg-purple-100 text-purple-800',
 }
 
+const STATUS_COLORS: Record<string, string> = {
+  draft: 'bg-gray-100 text-gray-700',
+  active: 'bg-green-100 text-green-800',
+  deprecated: 'bg-yellow-100 text-yellow-800',
+  retired: 'bg-red-100 text-red-700',
+}
+
 function ChargePopover({ charge }: { charge: Charge }) {
   const [open, setOpen] = React.useState(false)
-  const ref = React.useRef<HTMLSpanElement>(null)
-
   return (
     <span
-      ref={ref}
       className="relative inline-flex"
       onMouseEnter={() => setOpen(true)}
       onMouseLeave={() => setOpen(false)}
@@ -69,23 +99,33 @@ function ChargePopover({ charge }: { charge: Charge }) {
   )
 }
 
-const STATUS_COLORS: Record<string, string> = {
-  draft: 'bg-gray-100 text-gray-700',
-  active: 'bg-green-100 text-green-800',
-  deprecated: 'bg-yellow-100 text-yellow-800',
-  retired: 'bg-red-100 text-red-700',
-}
-
 export default function OfferingsListPage() {
   const t = useT()
   const router = useRouter()
-  const [items, setItems] = React.useState<Offering[]>([])
-  const [loading, setLoading] = React.useState(true)
+  const { confirm, ConfirmDialogElement } = useConfirmDialog()
 
-  // Selection & charge creation
-  const [selectedIds, setSelectedIds] = React.useState<Set<string>>(new Set())
-  const [chargeFormOpen, setChargeFormOpen] = React.useState(false)
-  const [chargeForm, setChargeForm] = React.useState({ code: '', name: '', description: '', chargeType: 'mrc', pricingMethod: 'flat' })
+  const [rows, setRows] = React.useState<Offering[]>([])
+  const [total, setTotal] = React.useState(0)
+  const [totalPages, setTotalPages] = React.useState(1)
+  const [page, setPage] = React.useState(1)
+  const [isLoading, setIsLoading] = React.useState(true)
+  const [reloadToken, setReloadToken] = React.useState(0)
+
+  // Search + sort + filters (OM standard)
+  const [search, setSearch] = React.useState('')
+  const [sorting, setSorting] = React.useState<SortingState>([{ id: 'createdAt', desc: true }])
+  const [filterValues, setFilterValues] = React.useState<FilterValues>({})
+
+  // Bulk charge creation
+  const [bulkChargeOpen, setBulkChargeOpen] = React.useState(false)
+  const [bulkChargeTargets, setBulkChargeTargets] = React.useState<Offering[]>([])
+  const [chargeForm, setChargeForm] = React.useState({
+    code: '',
+    name: '',
+    description: '',
+    chargeType: 'mrc',
+    pricingMethod: 'flat',
+  })
   const [chargePrices, setChargePrices] = React.useState<Record<string, string>>({})
   const [chargePricingTableId, setChargePricingTableId] = React.useState<string | null>(null)
   const [chargePriceColumnKey, setChargePriceColumnKey] = React.useState<string | null>(null)
@@ -93,83 +133,130 @@ export default function OfferingsListPage() {
   const [pricingTables, setPricingTables] = React.useState<PricingTableRef[]>([])
   const [saving, setSaving] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
-  const [offeringCharges, setOfferingCharges] = React.useState<Record<string, Charge[]>>({})
+
+  const lifecycleOptions = React.useMemo(
+    () => [
+      { value: 'draft', label: t('cpq.offerings.lifecycle.draft', 'Draft') },
+      { value: 'active', label: t('cpq.offerings.lifecycle.active', 'Active') },
+      { value: 'deprecated', label: t('cpq.offerings.lifecycle.deprecated', 'Deprecated') },
+      { value: 'retired', label: t('cpq.offerings.lifecycle.retired', 'Retired') },
+    ],
+    [t],
+  )
+
+  const offeringTypeOptions = React.useMemo(
+    () => [
+      { value: 'simple', label: t('cpq.offerings.type.simple', 'Simple') },
+      { value: 'bundle', label: t('cpq.offerings.type.bundle', 'Bundle') },
+    ],
+    [t],
+  )
+
+  const filters = React.useMemo<FilterDef[]>(
+    () => [
+      {
+        id: 'lifecycleStatus',
+        label: t('cpq.offerings.filters.lifecycleStatus', 'Lifecycle Status'),
+        type: 'select',
+        options: lifecycleOptions,
+      },
+      {
+        id: 'offeringType',
+        label: t('cpq.offerings.filters.offeringType', 'Type'),
+        type: 'select',
+        options: offeringTypeOptions,
+      },
+      {
+        id: 'isActive',
+        label: t('cpq.offerings.filters.isActive', 'Active'),
+        type: 'checkbox',
+      },
+    ],
+    [lifecycleOptions, offeringTypeOptions, t],
+  )
+
+  const queryString = React.useMemo(() => {
+    const params = new URLSearchParams()
+    params.set('page', String(page))
+    params.set('pageSize', String(PAGE_SIZE))
+    if (search.trim()) params.set('search', search.trim())
+    const sort = sorting[0]
+    if (sort?.id) {
+      params.set('sortField', sort.id)
+      params.set('sortDir', sort.desc ? 'desc' : 'asc')
+    }
+    if (typeof filterValues.lifecycleStatus === 'string' && filterValues.lifecycleStatus) {
+      params.set('lifecycleStatus', filterValues.lifecycleStatus)
+    }
+    if (typeof filterValues.offeringType === 'string' && filterValues.offeringType) {
+      params.set('offeringType', filterValues.offeringType)
+    }
+    if (filterValues.isActive === true) params.set('isActive', 'true')
+    if (filterValues.isActive === false) params.set('isActive', 'false')
+    return params.toString()
+  }, [filterValues, page, search, sorting])
 
   React.useEffect(() => {
     let cancelled = false
-
     async function load() {
+      setIsLoading(true)
       try {
-        const res = await fetch('/api/cpq/product-offerings?pageSize=100')
-        if (res.ok) {
-          const data = await res.json()
-          const loadedItems: Offering[] = data.items ?? []
-          if (!cancelled) setItems(loadedItems)
-
-          // Load charges for each offering
-          const results = await Promise.all(
-            loadedItems.map((o) =>
-              fetch(`/api/cpq/product-offerings?id=${encodeURIComponent(o.id)}`)
-                .then((r) => r.ok ? r.json() : null)
-            )
-          )
-          if (!cancelled) {
-            const chargeMap: Record<string, Charge[]> = {}
-            results.forEach((data, idx) => {
-              if (data) chargeMap[loadedItems[idx].id] = data.charges ?? []
-            })
-            setOfferingCharges(chargeMap)
-          }
+        const fallback: OfferingsResponse = { items: [], total: 0, totalPages: 1 }
+        const call = await apiCall<OfferingsResponse>(
+          `/api/cpq/product-offerings?${queryString}`,
+          undefined,
+          { fallback },
+        )
+        if (cancelled) return
+        if (!call.ok) {
+          flash(t('cpq.offerings.list.error.load', 'Failed to load offerings'), 'error')
+          return
         }
-      } catch (err) {
-        console.error('Failed to load offerings', err)
+        const payload = call.result ?? fallback
+        const items = Array.isArray(payload.items) ? payload.items : []
+        setRows(items)
+        setTotal(typeof payload.total === 'number' ? payload.total : items.length)
+        setTotalPages(typeof payload.totalPages === 'number' ? payload.totalPages : 1)
       } finally {
-        if (!cancelled) setLoading(false)
+        if (!cancelled) setIsLoading(false)
       }
     }
-
     load()
-    return () => { cancelled = true }
-  }, [])
-
-  const toggleSelection = (id: string) => {
-    setSelectedIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id); else next.add(id)
-      return next
-    })
-  }
-
-  const toggleAll = () => {
-    if (selectedIds.size === items.length) {
-      setSelectedIds(new Set())
-    } else {
-      setSelectedIds(new Set(items.map((o) => o.id)))
+    return () => {
+      cancelled = true
     }
-  }
+  }, [queryString, reloadToken, t])
 
-  const loadPricingTables = async () => {
+  const loadPricingTables = React.useCallback(async () => {
     if (pricingTables.length > 0) return
-    const res = await fetch('/api/cpq/pricing-tables?pageSize=200')
-    if (res.ok) {
-      const data = await res.json()
-      setPricingTables(data.items ?? [])
+    try {
+      const res = await fetch('/api/cpq/pricing-tables?pageSize=200')
+      if (res.ok) {
+        const data = await res.json()
+        setPricingTables(data.items ?? [])
+      }
+    } catch {
+      // ignore — pricing tables are optional
     }
-  }
+  }, [pricingTables.length])
 
-  const openChargeForm = () => {
-    setChargeForm({ code: '', name: '', description: '', chargeType: 'mrc', pricingMethod: 'flat' })
-    setChargePrices({})
-    setChargePricingTableId(null)
-    setChargePriceColumnKey(null)
-    setChargeCurrency('USD')
-    setError(null)
-    setChargeFormOpen(true)
-    loadPricingTables()
-  }
+  const openBulkChargeForm = React.useCallback(
+    (targets: Offering[]) => {
+      setBulkChargeTargets(targets)
+      setChargeForm({ code: '', name: '', description: '', chargeType: 'mrc', pricingMethod: 'flat' })
+      setChargePrices({})
+      setChargePricingTableId(null)
+      setChargePriceColumnKey(null)
+      setChargeCurrency('USD')
+      setError(null)
+      setBulkChargeOpen(true)
+      void loadPricingTables()
+    },
+    [loadPricingTables],
+  )
 
-  const saveChargesForSelected = async () => {
-    const targets = items.filter((o) => selectedIds.has(o.id))
+  const saveChargesForSelected = React.useCallback(async () => {
+    const targets = bulkChargeTargets
     if (!targets.length || !chargeForm.code || !chargeForm.name) return
     setSaving(true)
     setError(null)
@@ -182,7 +269,7 @@ export default function OfferingsListPage() {
           name: chargeForm.name,
           description: chargeForm.description || null,
           chargeType: chargeForm.chargeType,
-          pricingMethod: chargeForm.pricingMethod === 'flat' ? 'flat' : chargeForm.pricingMethod,
+          pricingMethod: chargeForm.pricingMethod,
           isActive: true,
           sortOrder: 0,
         }
@@ -199,107 +286,264 @@ export default function OfferingsListPage() {
           body: JSON.stringify(payload),
         })
         if (!res.ok) {
-          const d = await res.json()
+          const d = await res.json().catch(() => ({} as { error?: string }))
           setError(d.error ?? `Failed to save charge for ${offering.name}`)
-          break
+          setSaving(false)
+          return
         }
       }
-      setChargeFormOpen(false)
-      setSelectedIds(new Set())
-      // Reload charges for affected offerings
-      const reloadResults = await Promise.all(
-        targets.map((o) =>
-          fetch(`/api/cpq/product-offerings?id=${encodeURIComponent(o.id)}`)
-            .then((r) => r.ok ? r.json() : null)
-        )
-      )
-      setOfferingCharges((prev) => {
-        const next = { ...prev }
-        reloadResults.forEach((d, idx) => {
-          if (d) next[targets[idx].id] = d.charges ?? []
-        })
-        return next
-      })
+      flash(t('cpq.offerings.flash.chargesCreated', 'Charges created'), 'success')
+      setBulkChargeOpen(false)
+      setBulkChargeTargets([])
+      setReloadToken((token) => token + 1)
     } catch {
       setError('Failed to save charges')
     } finally {
       setSaving(false)
     }
-  }
+  }, [
+    bulkChargeTargets,
+    chargeCurrency,
+    chargeForm,
+    chargePriceColumnKey,
+    chargePrices,
+    chargePricingTableId,
+    t,
+  ])
 
   const selectedPricingTable = chargePricingTableId
     ? pricingTables.find((pt) => pt.id === chargePricingTableId)
     : null
 
-  return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">{t('cpq.offerings.list.title', 'Product Offerings')}</h1>
-        <div className="flex items-center gap-2">
-          {selectedIds.size > 0 && !chargeFormOpen && (
-            <button
-              onClick={openChargeForm}
-              className="inline-flex items-center justify-center rounded-md border border-primary bg-primary/10 px-4 py-2 text-sm font-medium text-primary hover:bg-primary/20"
-            >
-              Add Charge to {selectedIds.size} Selected
-            </button>
-          )}
-          <button
-            onClick={() => router.push('/backend/cpq/offerings/new')}
-            className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+  const columns = React.useMemo<ColumnDef<Offering>[]>(
+    () => [
+      {
+        accessorKey: 'code',
+        header: t('cpq.offerings.code', 'Code'),
+        cell: ({ row }) => <span className="font-mono text-xs">{row.original.code}</span>,
+      },
+      {
+        accessorKey: 'name',
+        header: t('cpq.offerings.name', 'Name'),
+        cell: ({ row }) => (
+          <span className="font-medium">
+            {row.original.name}
+            {row.original.offeringType === 'bundle' && (
+              <span className="ml-2 inline-flex items-center rounded-full bg-purple-100 text-purple-800 px-2 py-0.5 text-[10px] font-medium">
+                bundle
+              </span>
+            )}
+          </span>
+        ),
+      },
+      {
+        accessorKey: 'isActive',
+        header: t('cpq.offerings.isActive', 'Is Active?'),
+        cell: ({ row }) => <Checkbox checked={row.original.isActive} disabled />,
+      },
+      {
+        accessorKey: 'lifecycleStatus',
+        header: t('cpq.offerings.lifecycleStatus', 'Lifecycle Status'),
+        cell: ({ row }) => (
+          <span
+            className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
+              STATUS_COLORS[row.original.lifecycleStatus] ?? 'bg-gray-100 text-gray-700'
+            }`}
           >
-            {t('cpq.offerings.add', 'New Offering')}
-          </button>
-        </div>
-      </div>
+            {row.original.lifecycleStatus}
+          </span>
+        ),
+      },
+      {
+        id: 'charges',
+        header: t('cpq.offerings.charges', 'Charges'),
+        cell: ({ row }) => {
+          const charges = row.original.charges ?? []
+          if (charges.length === 0) return <span className="text-xs text-muted-foreground">—</span>
+          return (
+            <div
+              className="flex flex-wrap gap-1"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {charges.map((ch) => (
+                <ChargePopover key={ch.id} charge={ch} />
+              ))}
+            </div>
+          )
+        },
+      },
+      {
+        accessorKey: 'description',
+        header: t('cpq.offerings.description', 'Description'),
+        cell: ({ row }) => (
+          <span className="text-muted-foreground">{row.original.description ?? '—'}</span>
+        ),
+        meta: { truncate: true, maxWidth: 320 },
+      },
+    ],
+    [t],
+  )
 
+  const handleSearchChange = React.useCallback((value: string) => {
+    setSearch(value)
+    setPage(1)
+  }, [])
+
+  const handleFiltersApply = React.useCallback((values: FilterValues) => {
+    setFilterValues(values)
+    setPage(1)
+  }, [])
+
+  const handleFiltersClear = React.useCallback(() => {
+    setFilterValues({})
+    setPage(1)
+  }, [])
+
+  const handleRefresh = React.useCallback(() => {
+    setReloadToken((token) => token + 1)
+  }, [])
+
+  const deleteSelected = React.useCallback(
+    async (selectedRows: Offering[]) => {
+      if (!selectedRows.length) return { ok: false as const }
+      const confirmed = await confirm({
+        title: t(
+          'cpq.offerings.bulk.deleteConfirm',
+          `Delete ${selectedRows.length} offering${selectedRows.length > 1 ? 's' : ''}?`,
+        ),
+        variant: 'destructive',
+      })
+      if (!confirmed) return { ok: false as const }
+      let failed = 0
+      for (const row of selectedRows) {
+        const res = await fetch('/api/cpq/product-offerings', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: row.id }),
+        })
+        if (!res.ok) failed += 1
+      }
+      if (failed > 0) {
+        flash(
+          t('cpq.offerings.flash.deleteFailed', `Failed to delete ${failed} offering(s)`),
+          'error',
+        )
+      } else {
+        flash(t('cpq.offerings.flash.deleted', 'Offerings deleted'), 'success')
+      }
+      setReloadToken((token) => token + 1)
+      return { ok: failed === 0, affectedCount: selectedRows.length - failed }
+    },
+    [confirm, t],
+  )
+
+  const bulkActions = React.useMemo<BulkAction<Offering>[]>(
+    () => [
+      {
+        id: 'add-charge',
+        label: t('cpq.offerings.bulk.addCharge', 'Add Charge'),
+        onExecute: (selectedRows) => {
+          if (!selectedRows.length) return { ok: false }
+          openBulkChargeForm(selectedRows)
+          return { ok: true }
+        },
+      },
+      {
+        id: 'delete',
+        label: t('cpq.offerings.bulk.deleteSelected', 'Delete selected'),
+        destructive: true,
+        onExecute: deleteSelected,
+      },
+    ],
+    [deleteSelected, openBulkChargeForm, t],
+  )
+
+  return (
+    <Page>
+      <PageBody className="space-y-6">
       {error && (
         <div className="rounded-md bg-red-50 border border-red-200 p-3 text-sm text-red-700">{error}</div>
       )}
 
-      {/* Charge creation form */}
-      {chargeFormOpen && selectedIds.size > 0 && (
+      {bulkChargeOpen && bulkChargeTargets.length > 0 && (
         <div className="rounded-lg border bg-card p-5 space-y-4">
-          <h4 className="font-medium text-sm">New Charge for {selectedIds.size} offering{selectedIds.size > 1 ? 's' : ''}</h4>
+          <h4 className="font-medium text-sm">
+            {t('cpq.offerings.bulk.formTitle', 'New Charge for')} {bulkChargeTargets.length}{' '}
+            {bulkChargeTargets.length > 1
+              ? t('cpq.offerings.bulk.offeringsPlural', 'offerings')
+              : t('cpq.offerings.bulk.offeringsSingular', 'offering')}
+          </h4>
 
           <div className="grid grid-cols-4 gap-3">
             <div>
               <label className="block text-xs font-medium mb-1">Code</label>
-              <input type="text" value={chargeForm.code} onChange={(e) => setChargeForm({ ...chargeForm, code: e.target.value })} placeholder="e.g. mrc-monthly" className="w-full rounded-md border px-2 py-1.5 text-sm" />
+              <Input
+                value={chargeForm.code}
+                onChange={(e) => setChargeForm({ ...chargeForm, code: e.target.value })}
+                placeholder="e.g. mrc-monthly"
+              />
             </div>
             <div>
               <label className="block text-xs font-medium mb-1">Name</label>
-              <input type="text" value={chargeForm.name} onChange={(e) => setChargeForm({ ...chargeForm, name: e.target.value })} placeholder="e.g. Monthly Recurring" className="w-full rounded-md border px-2 py-1.5 text-sm" />
+              <Input
+                value={chargeForm.name}
+                onChange={(e) => setChargeForm({ ...chargeForm, name: e.target.value })}
+                placeholder="e.g. Monthly Recurring"
+              />
             </div>
             <div>
               <label className="block text-xs font-medium mb-1">Type</label>
-              <select value={chargeForm.chargeType} onChange={(e) => setChargeForm({ ...chargeForm, chargeType: e.target.value })} className="w-full rounded-md border px-2 py-1.5 text-sm">
-                <option value="nrc">NRC (Non-Recurring)</option>
-                <option value="mrc">MRC (Monthly Recurring)</option>
-                <option value="usage">Usage</option>
-              </select>
+              <Select
+                value={chargeForm.chargeType}
+                onValueChange={(value) => setChargeForm({ ...chargeForm, chargeType: value })}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="nrc">NRC (Non-Recurring)</SelectItem>
+                  <SelectItem value="mrc">MRC (Monthly Recurring)</SelectItem>
+                  <SelectItem value="usage">Usage</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
             <div>
               <label className="block text-xs font-medium mb-1">Pricing</label>
-              <select value={chargeForm.pricingMethod} onChange={(e) => setChargeForm({ ...chargeForm, pricingMethod: e.target.value })} className="w-full rounded-md border px-2 py-1.5 text-sm">
-                <option value="flat">Fixed Price (per offering)</option>
-                <option value="per_unit">Per Unit (table lookup)</option>
-                <option value="tiered">Tiered (table lookup)</option>
-              </select>
+              <Select
+                value={chargeForm.pricingMethod}
+                onValueChange={(value) => setChargeForm({ ...chargeForm, pricingMethod: value })}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="flat">Fixed Price (per offering)</SelectItem>
+                  <SelectItem value="per_unit">Per Unit (table lookup)</SelectItem>
+                  <SelectItem value="tiered">Tiered (table lookup)</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
           </div>
 
           <div>
             <label className="block text-xs font-medium mb-1">Description</label>
-            <input type="text" value={chargeForm.description} onChange={(e) => setChargeForm({ ...chargeForm, description: e.target.value })} placeholder="User-facing charge description" className="w-full rounded-md border px-2 py-1.5 text-sm" />
+            <Input
+              value={chargeForm.description}
+              onChange={(e) => setChargeForm({ ...chargeForm, description: e.target.value })}
+              placeholder="User-facing charge description"
+            />
           </div>
 
-          {/* Flat pricing: price per offering */}
           {chargeForm.pricingMethod === 'flat' && (
             <div className="space-y-2">
               <div className="flex items-center gap-3">
                 <label className="text-xs font-medium">Currency</label>
-                <input type="text" value={chargeCurrency} onChange={(e) => setChargeCurrency(e.target.value.toUpperCase())} maxLength={3} className="w-20 rounded-md border px-2 py-1.5 text-sm" />
+                <Input
+                  value={chargeCurrency}
+                  onChange={(e) => setChargeCurrency(e.target.value.toUpperCase())}
+                  maxLength={3}
+                  className="w-20"
+                />
               </div>
               <div className="rounded border">
                 <table className="w-full text-sm">
@@ -310,17 +554,21 @@ export default function OfferingsListPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {items.filter((o) => selectedIds.has(o.id)).map((o) => (
+                    {bulkChargeTargets.map((o) => (
                       <tr key={o.id} className="border-b last:border-0">
-                        <td className="px-3 py-2 font-medium text-xs">{o.name} <span className="text-muted-foreground font-mono">({o.code})</span></td>
+                        <td className="px-3 py-2 font-medium text-xs">
+                          {o.name} <span className="text-muted-foreground font-mono">({o.code})</span>
+                        </td>
                         <td className="px-3 py-2">
-                          <input
+                          <Input
                             type="number"
                             step="0.01"
                             value={chargePrices[o.id] ?? ''}
-                            onChange={(e) => setChargePrices({ ...chargePrices, [o.id]: e.target.value })}
+                            onChange={(e) =>
+                              setChargePrices({ ...chargePrices, [o.id]: e.target.value })
+                            }
                             placeholder="0.00"
-                            className="w-32 rounded-md border px-2 py-1 text-sm"
+                            className="w-32"
                           />
                         </td>
                       </tr>
@@ -331,111 +579,117 @@ export default function OfferingsListPage() {
             </div>
           )}
 
-          {/* Table lookup pricing */}
           {chargeForm.pricingMethod !== 'flat' && (
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs font-medium mb-1">Pricing Table</label>
-                <select value={chargePricingTableId ?? ''} onChange={(e) => { setChargePricingTableId(e.target.value || null); setChargePriceColumnKey(null) }} className="w-full rounded-md border px-2 py-1.5 text-sm">
-                  <option value="">Select table...</option>
-                  {pricingTables.map((pt) => (
-                    <option key={pt.id} value={pt.id}>{pt.name} ({pt.code})</option>
-                  ))}
-                </select>
+                <Select
+                  value={chargePricingTableId ?? ''}
+                  onValueChange={(value) => {
+                    setChargePricingTableId(value || null)
+                    setChargePriceColumnKey(null)
+                  }}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select table..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {pricingTables.map((pt) => (
+                      <SelectItem key={pt.id} value={pt.id}>
+                        {pt.name} ({pt.code})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
               <div>
                 <label className="block text-xs font-medium mb-1">Price Column</label>
-                <select value={chargePriceColumnKey ?? ''} onChange={(e) => setChargePriceColumnKey(e.target.value || null)} className="w-full rounded-md border px-2 py-1.5 text-sm" disabled={!selectedPricingTable}>
-                  <option value="">Select column...</option>
-                  {selectedPricingTable?.priceColumns.map((col) => (
-                    <option key={col.key} value={col.key}>{col.label} ({col.key})</option>
-                  ))}
-                </select>
+                <Select
+                  value={chargePriceColumnKey ?? ''}
+                  onValueChange={(value) => setChargePriceColumnKey(value || null)}
+                  disabled={!selectedPricingTable}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select column..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {selectedPricingTable?.priceColumns.map((col) => (
+                      <SelectItem key={col.key} value={col.key}>
+                        {col.label} ({col.key})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
             </div>
           )}
 
           <div className="flex gap-2 pt-1">
-            <button
+            <Button
+              type="button"
               onClick={saveChargesForSelected}
               disabled={saving || !chargeForm.code || !chargeForm.name}
-              className="inline-flex items-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
             >
-              {saving ? 'Saving...' : `Create Charge for ${selectedIds.size} Offering${selectedIds.size > 1 ? 's' : ''}`}
-            </button>
-            <button
-              onClick={() => setChargeFormOpen(false)}
-              className="inline-flex items-center rounded-md border px-4 py-2 text-sm font-medium hover:bg-muted"
-            >
+              {saving
+                ? 'Saving...'
+                : `Create Charge for ${bulkChargeTargets.length} Offering${bulkChargeTargets.length > 1 ? 's' : ''}`}
+            </Button>
+            <Button type="button" variant="outline" onClick={() => setBulkChargeOpen(false)}>
               Cancel
-            </button>
+            </Button>
           </div>
         </div>
       )}
 
-      {loading ? (
-        <div className="text-sm text-muted-foreground">{t('common.loading', 'Loading...')}</div>
-      ) : items.length === 0 ? (
-        <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
-          {t('cpq.offerings.empty', 'No product offerings found. Create one to define a sellable variant of a product specification.')}
-        </div>
-      ) : (
-        <div className="rounded-lg border">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b bg-muted/50">
-                <th className="px-3 py-3 w-8">
-                  <input type="checkbox" checked={selectedIds.size === items.length && items.length > 0} onChange={toggleAll} className="rounded border" />
-                </th>
-                <th className="px-4 py-3 text-left font-medium">{t('cpq.offerings.code', 'Code')}</th>
-                <th className="px-4 py-3 text-left font-medium">{t('cpq.offerings.name', 'Name')}</th>
-                <th className="px-4 py-3 text-left font-medium">{t('cpq.offerings.isActive', 'Is Active?')}</th>
-                <th className="px-4 py-3 text-left font-medium">{t('cpq.offerings.lifecycleStatus', 'Lifecycle Status')}</th>
-                <th className="px-4 py-3 text-left font-medium">{t('cpq.offerings.charges', 'Charges')}</th>
-                <th className="px-4 py-3 text-left font-medium">{t('cpq.offerings.description', 'Description')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((offering) => (
-                <tr
-                  key={offering.id}
-                  onClick={() => router.push(`/backend/cpq/offerings/${offering.id}`)}
-                  className={`border-b cursor-pointer hover:bg-muted/30 transition-colors ${selectedIds.has(offering.id) ? 'bg-primary/5' : ''}`}
-                >
-                  <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
-                    <input type="checkbox" checked={selectedIds.has(offering.id)} onChange={() => toggleSelection(offering.id)} className="rounded border" />
-                  </td>
-                  <td className="px-4 py-3 font-mono text-xs">{offering.code}</td>
-                  <td className="px-4 py-3 font-medium">
-                    {offering.name}
-                    {offering.offeringType === 'bundle' && (
-                      <span className="ml-2 inline-flex items-center rounded-full bg-purple-100 text-purple-800 px-2 py-0.5 text-[10px] font-medium">bundle</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3"><input type="checkbox" checked={offering.isActive} disabled className="rounded border" /></td>
-                  <td className="px-4 py-3">
-                    <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${STATUS_COLORS[offering.lifecycleStatus] ?? 'bg-gray-100 text-gray-700'}`}>
-                      {offering.lifecycleStatus}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
-                    {(offeringCharges[offering.id] ?? []).length > 0 ? (
-                      <div className="flex flex-wrap gap-1">
-                        {(offeringCharges[offering.id] ?? []).map((ch) => (
-                          <ChargePopover key={ch.id} charge={ch} />
-                        ))}
-                      </div>
-                    ) : (
-                      <span className="text-xs text-muted-foreground">—</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 text-muted-foreground truncate max-w-xs">{offering.description ?? '—'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
+      <DataTable<Offering>
+        title={t('cpq.offerings.list.title', 'Product Offerings')}
+        actions={
+          <Button asChild>
+            <a href="/backend/cpq/offerings/new">
+              {t('cpq.offerings.add', 'New Offering')}
+            </a>
+          </Button>
+        }
+        refreshButton={{
+          label: t('cpq.offerings.actions.refresh', 'Refresh'),
+          onRefresh: handleRefresh,
+          isRefreshing: isLoading,
+        }}
+        columns={columns}
+        data={rows}
+        searchValue={search}
+        onSearchChange={handleSearchChange}
+        searchPlaceholder={t('cpq.offerings.search.placeholder', 'Search offerings...')}
+        filters={filters}
+        filterValues={filterValues}
+        onFiltersApply={handleFiltersApply}
+        onFiltersClear={handleFiltersClear}
+        sorting={sorting}
+        onSortingChange={setSorting}
+        bulkActions={bulkActions}
+        selectionScopeKey="cpq.offerings"
+        onRowClick={(row) => router.push(`/backend/cpq/offerings/${row.id}`)}
+        perspective={{ tableId: 'cpq.offerings.list' }}
+        columnChooser={{ auto: true }}
+        pagination={{
+          page,
+          pageSize: PAGE_SIZE,
+          total,
+          totalPages,
+          onPageChange: setPage,
+        }}
+        isLoading={isLoading}
+        emptyState={
+          <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
+            {t(
+              'cpq.offerings.empty',
+              'No product offerings found. Create one to define a sellable variant of a product specification.',
+            )}
+          </div>
+        }
+      />
+      {ConfirmDialogElement}
+      </PageBody>
+    </Page>
   )
 }

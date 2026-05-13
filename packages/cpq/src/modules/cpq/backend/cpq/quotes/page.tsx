@@ -8,7 +8,13 @@ import { Input } from '@open-mercato/ui/primitives/input'
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
 import { Plus, Search as SearchIcon } from 'lucide-react'
 import { RowActions } from '@open-mercato/ui/backend/RowActions'
+import { Tag } from '@open-mercato/ui/primitives/tag'
 import { CpqListView, useCpqListData } from '../../../components/CpqListView'
+import {
+  formatStatusLabel,
+  quoteCpqStatusMap,
+  type QuoteCpqStatus,
+} from '../../../components/statusMaps'
 
 type QuoteConfig = {
   id: string
@@ -36,18 +42,6 @@ type Customer = {
 }
 
 const PAGE_SIZE = 50
-
-const STATUS_COLORS: Record<string, string> = {
-  new: 'bg-blue-100 text-blue-800',
-  incomplete: 'bg-yellow-100 text-yellow-800',
-  ready: 'bg-green-100 text-green-800',
-  in_approval: 'bg-purple-100 text-purple-800',
-  approved: 'bg-green-100 text-green-800',
-  with_customer: 'bg-sky-100 text-sky-800',
-  accepted: 'bg-emerald-100 text-emerald-800',
-  rejected: 'bg-red-100 text-red-800',
-  cancelled: 'bg-gray-100 text-gray-800',
-}
 
 function fmt(amount: number | undefined, currency: string): string {
   if (amount == null || amount === 0) return '—'
@@ -278,13 +272,9 @@ export default function CpqQuotesListPage() {
         accessorKey: 'cpqStatus',
         header: t('cpq.quotes.table.status', 'Status'),
         cell: ({ row }) => (
-          <span
-            className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
-              STATUS_COLORS[row.original.cpqStatus] ?? 'bg-gray-100 text-gray-800'
-            }`}
-          >
-            {row.original.cpqStatus.replace(/_/g, ' ')}
-          </span>
+          <Tag variant={quoteCpqStatusMap[row.original.cpqStatus as QuoteCpqStatus] ?? 'neutral'} dot>
+            {formatStatusLabel(row.original.cpqStatus)}
+          </Tag>
         ),
       },
       {

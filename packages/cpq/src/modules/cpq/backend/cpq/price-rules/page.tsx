@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import type { ColumnDef } from '@tanstack/react-table'
 import { Button } from '@open-mercato/ui/primitives/button'
+import { Tag } from '@open-mercato/ui/primitives/tag'
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
 import { CpqListView, useCpqListData } from '../../../components/CpqListView'
 import {
@@ -199,13 +200,9 @@ export default function PriceRulesPage() {
         accessorKey: 'isActive',
         header: t('cpq.priceRules.table.status', 'Status'),
         cell: ({ row }) => (
-          <span
-            className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
-              row.original.isActive ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'
-            }`}
-          >
+          <Tag variant={row.original.isActive ? 'success' : 'neutral'} dot>
             {row.original.isActive ? 'Active' : 'Inactive'}
-          </span>
+          </Tag>
         ),
       },
     ],

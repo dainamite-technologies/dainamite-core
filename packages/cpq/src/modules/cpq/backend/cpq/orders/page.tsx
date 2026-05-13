@@ -5,7 +5,13 @@ import { useT } from '@open-mercato/shared/lib/i18n/context'
 import type { ColumnDef } from '@tanstack/react-table'
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
 import { RowActions } from '@open-mercato/ui/backend/RowActions'
+import { Tag } from '@open-mercato/ui/primitives/tag'
 import { CpqListView, useCpqListData } from '../../../components/CpqListView'
+import {
+  formatStatusLabel,
+  orderCpqStatusMap,
+  type OrderCpqStatus,
+} from '../../../components/statusMaps'
 
 type OrderConfig = {
   id: string
@@ -23,14 +29,6 @@ type OrderConfig = {
 }
 
 const PAGE_SIZE = 50
-
-const STATUS_COLORS: Record<string, string> = {
-  draft: 'bg-blue-100 text-blue-800',
-  pending_activation: 'bg-yellow-100 text-yellow-800',
-  active: 'bg-green-100 text-green-800',
-  fulfilled: 'bg-emerald-100 text-emerald-800',
-  cancelled: 'bg-gray-100 text-gray-800',
-}
 
 function fmt(amount: number | undefined, currency: string): string {
   if (amount == null || amount === 0) return '—'
@@ -100,13 +98,9 @@ export default function CpqOrdersListPage() {
         accessorKey: 'cpqStatus',
         header: t('cpq.orders.table.status', 'Status'),
         cell: ({ row }) => (
-          <span
-            className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
-              STATUS_COLORS[row.original.cpqStatus] ?? 'bg-gray-100 text-gray-800'
-            }`}
-          >
-            {row.original.cpqStatus.replace(/_/g, ' ')}
-          </span>
+          <Tag variant={orderCpqStatusMap[row.original.cpqStatus as OrderCpqStatus] ?? 'neutral'} dot>
+            {formatStatusLabel(row.original.cpqStatus)}
+          </Tag>
         ),
       },
       {

@@ -1,6 +1,12 @@
 "use client"
 import * as React from 'react'
 import { useRouter, useParams } from 'next/navigation'
+import { Tag } from '@open-mercato/ui/primitives/tag'
+import {
+  assetStatusMap,
+  formatStatusLabel,
+  type AssetStatus,
+} from '../../../../../components/statusMaps'
 
 type AssetDetail = {
   id: string
@@ -30,15 +36,6 @@ type AssetDetail = {
   updatedAt: string
 }
 
-const STATUS_COLORS: Record<string, string> = {
-  active: 'bg-green-100 text-green-800',
-  pending: 'bg-blue-100 text-blue-800',
-  delivered: 'bg-teal-100 text-teal-800',
-  returned: 'bg-orange-100 text-orange-800',
-  cancelled: 'bg-gray-100 text-gray-800',
-  terminated: 'bg-red-100 text-red-800',
-}
-
 const ALLOWED_TRANSITIONS: Record<string, string[]> = {
   pending: ['delivered', 'active', 'cancelled'],
   delivered: ['active', 'returned'],
@@ -60,11 +57,10 @@ function fmt(amount: number | string, currency: string): string {
 }
 
 function StatusBadge({ status }: { status: string }) {
-  const color = STATUS_COLORS[status] ?? 'bg-gray-100 text-gray-800'
   return (
-    <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${color}`}>
-      {status}
-    </span>
+    <Tag variant={assetStatusMap[status as AssetStatus] ?? 'neutral'} dot>
+      {formatStatusLabel(status)}
+    </Tag>
   )
 }
 
@@ -181,15 +177,17 @@ export default function AssetDetailPage(props: { params?: { id?: string } }) {
               if (transitions.length > 0) setShowStatusMenu((v) => !v)
             }}
             disabled={transitioning}
-            className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium ${STATUS_COLORS[asset.status] ?? 'bg-gray-100 text-gray-800'} ${(ALLOWED_TRANSITIONS[asset.status] ?? []).length > 0 ? 'cursor-pointer hover:ring-2 hover:ring-primary/30' : ''} disabled:opacity-50`}
+            className={`inline-flex items-center gap-1 disabled:opacity-50 ${(ALLOWED_TRANSITIONS[asset.status] ?? []).length > 0 ? 'cursor-pointer hover:ring-2 hover:ring-primary/30 rounded-full' : ''}`}
           >
             {transitioning && <Spinner />}
-            {asset.status}
-            {(ALLOWED_TRANSITIONS[asset.status] ?? []).length > 0 && (
-              <svg className={`h-3 w-3 transition-transform ${showStatusMenu ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
-              </svg>
-            )}
+            <Tag variant={assetStatusMap[asset.status as AssetStatus] ?? 'neutral'} dot>
+              {STATUS_LABELS[asset.status] ?? formatStatusLabel(asset.status)}
+              {(ALLOWED_TRANSITIONS[asset.status] ?? []).length > 0 && (
+                <svg className={`h-3 w-3 transition-transform ${showStatusMenu ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+                </svg>
+              )}
+            </Tag>
           </button>
           {showStatusMenu && (
             <div className="absolute left-0 top-full mt-1 z-50 min-w-[180px] rounded-md border bg-card shadow-lg py-1">
@@ -200,16 +198,16 @@ export default function AssetDetailPage(props: { params?: { id?: string } }) {
                   onClick={() => transitionStatus(status)}
                   className="w-full px-3 py-1.5 text-left text-sm hover:bg-muted transition-colors flex items-center gap-2"
                 >
-                  <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${STATUS_COLORS[status] ?? 'bg-gray-100 text-gray-800'}`}>
-                    {STATUS_LABELS[status] ?? status}
-                  </span>
+                  <Tag variant={assetStatusMap[status as AssetStatus] ?? 'neutral'} dot>
+                    {STATUS_LABELS[status] ?? formatStatusLabel(status)}
+                  </Tag>
                 </button>
               ))}
             </div>
           )}
         </div>
         <span className="text-xs text-muted-foreground font-mono">{asset.code}</span>
-        <span className="inline-flex items-center rounded-full bg-purple-100 px-2 py-0.5 text-xs font-medium text-purple-800">{asset.assetType.replace(/_/g, ' ')}</span>
+        <Tag variant="brand">{asset.assetType.replace(/_/g, ' ')}</Tag>
       </div>
 
       {error && <ErrorBanner message={error} />}

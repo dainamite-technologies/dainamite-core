@@ -2,6 +2,8 @@
 import * as React from 'react'
 import { useRouter } from 'next/navigation'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { Button } from '@open-mercato/ui/primitives/button'
+import { Tag, type TagVariant } from '@open-mercato/ui/primitives/tag'
 
 // XD-250 — Expiring Subscriptions list (operator triage view).
 //
@@ -41,14 +43,14 @@ function relativeFromNow(iso: string | null): string {
   return `in ${diffDays}d`
 }
 
-function diffChipColor(iso: string | null): string {
-  if (!iso) return 'bg-gray-100 text-gray-700'
+function urgencyVariant(iso: string | null): TagVariant {
+  if (!iso) return 'neutral'
   const target = new Date(iso).getTime()
   const days = Math.round((target - Date.now()) / (24 * 60 * 60 * 1000))
-  if (days < 0) return 'bg-red-100 text-red-800'
-  if (days <= 7) return 'bg-orange-100 text-orange-800'
-  if (days <= 30) return 'bg-yellow-100 text-yellow-800'
-  return 'bg-blue-100 text-blue-800'
+  if (days < 0) return 'error'
+  if (days <= 7) return 'warning'
+  if (days <= 30) return 'warning'
+  return 'info'
 }
 
 export default function ExpiringSubscriptionsPage() {
@@ -233,31 +235,31 @@ export default function ExpiringSubscriptionsPage() {
                           ? new Date(s.currentTermEnd).toLocaleDateString()
                           : '—'}
                       </span>
-                      <span
-                        className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${diffChipColor(
-                          s.currentTermEnd,
-                        )}`}
-                      >
+                      <Tag variant={urgencyVariant(s.currentTermEnd)} dot>
                         {relativeFromNow(s.currentTermEnd)}
-                      </span>
+                      </Tag>
                     </div>
                   </td>
                   <td className="px-4 py-3 text-right">
                     <div className="inline-flex gap-1">
-                      <button
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
                         disabled={actionInFlight === s.id + ':renew'}
                         onClick={() => startArcQuote(s.id, 'renew')}
-                        className="rounded-md border border-blue-300 bg-blue-50 text-blue-700 px-2 py-1 text-xs hover:bg-blue-100 disabled:opacity-50"
                       >
                         {t('cpq.arc.renew', 'Renew')}
-                      </button>
-                      <button
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
                         disabled={actionInFlight === s.id + ':amend'}
                         onClick={() => startArcQuote(s.id, 'amend')}
-                        className="rounded-md border border-green-300 bg-green-50 text-green-700 px-2 py-1 text-xs hover:bg-green-100 disabled:opacity-50"
                       >
                         {t('cpq.arc.modify', 'Modify')}
-                      </button>
+                      </Button>
                     </div>
                   </td>
                 </tr>

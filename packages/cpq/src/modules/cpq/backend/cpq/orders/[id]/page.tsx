@@ -1,6 +1,14 @@
 "use client"
 import * as React from 'react'
 import { useRouter, useParams } from 'next/navigation'
+import { Play, X } from 'lucide-react'
+import { Button } from '@open-mercato/ui/primitives/button'
+import { Tag } from '@open-mercato/ui/primitives/tag'
+import {
+  formatStatusLabel,
+  orderCpqStatusMap,
+  type OrderCpqStatus,
+} from '../../../../components/statusMaps'
 
 // ─── Types ───────────────────────────────────────────────────────
 
@@ -59,14 +67,6 @@ const ARC_BADGE_STYLES: Record<string, string> = {
 }
 
 // ─── Constants ───────────────────────────────────────────────────
-
-const STATUS_COLORS: Record<string, string> = {
-  draft: 'bg-blue-100 text-blue-800',
-  pending_activation: 'bg-yellow-100 text-yellow-800',
-  active: 'bg-green-100 text-green-800',
-  fulfilled: 'bg-emerald-100 text-emerald-800',
-  cancelled: 'bg-gray-100 text-gray-800',
-}
 
 function fmt(amount: number, currency: string): string {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(amount)
@@ -217,9 +217,9 @@ export default function CpqOrderDetailPage(props: { params?: { id?: string } }) 
               {order.quoteType}
             </span>
           )}
-          <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${STATUS_COLORS[order.cpqStatus] ?? 'bg-gray-100 text-gray-800'}`}>
-            {order.cpqStatus.replace(/_/g, ' ')}
-          </span>
+          <Tag variant={orderCpqStatusMap[order.cpqStatus as OrderCpqStatus] ?? 'neutral'} dot>
+            {formatStatusLabel(order.cpqStatus)}
+          </Tag>
           <span className="text-xs text-muted-foreground">{currency}</span>
           <button
             onClick={() => router.push(`/backend/sales/orders/${order.orderId}`)}
@@ -241,25 +241,16 @@ export default function CpqOrderDetailPage(props: { params?: { id?: string } }) 
         </div>
         <div className="flex items-center gap-2">
           {canCancel && (
-            <button
-              onClick={cancelOrder}
-              className="inline-flex items-center gap-1.5 rounded-md border border-red-200 px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-50 transition-colors"
-            >
+            <Button type="button" variant="destructive-outline" onClick={cancelOrder}>
+              <X className="h-4 w-4" />
               Cancel Order
-            </button>
+            </Button>
           )}
           {canActivate && (
-            <button
-              onClick={activateOrder}
-              disabled={activating}
-              className="inline-flex items-center gap-1.5 rounded-md bg-green-600 px-4 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-green-700 transition-colors disabled:opacity-50"
-            >
-              {activating && <Spinner />}
-              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.985V5.653z" />
-              </svg>
+            <Button type="button" onClick={activateOrder} disabled={activating}>
+              {activating ? <Spinner /> : <Play className="h-4 w-4" />}
               Activate Order
-            </button>
+            </Button>
           )}
         </div>
       </div>

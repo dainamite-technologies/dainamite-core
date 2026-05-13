@@ -1,6 +1,13 @@
 "use client"
 import * as React from 'react'
 import { useRouter, useParams } from 'next/navigation'
+import { Button } from '@open-mercato/ui/primitives/button'
+import { Tag } from '@open-mercato/ui/primitives/tag'
+import {
+  formatStatusLabel,
+  subscriptionStatusMap,
+  type SubscriptionStatus,
+} from '../../../../../components/statusMaps'
 
 // XD-250 — ARC integration on subscription detail.
 //   • header buttons (Amend / Renew / Cancel) call /from-subscription
@@ -134,15 +141,6 @@ type SubscriptionDetail = {
   items: SubscriptionItem[]
 }
 
-const STATUS_COLORS: Record<string, string> = {
-  active: 'bg-green-100 text-green-800',
-  pending: 'bg-blue-100 text-blue-800',
-  suspended: 'bg-yellow-100 text-yellow-800',
-  terminated: 'bg-red-100 text-red-800',
-  expired: 'bg-gray-100 text-gray-800',
-  cancelled: 'bg-gray-100 text-gray-800',
-}
-
 const ALLOWED_TRANSITIONS: Record<string, string[]> = {
   pending: ['active', 'terminated'],
   active: ['suspended', 'terminated', 'expired'],
@@ -164,11 +162,10 @@ function fmt(amount: number | string, currency: string): string {
 }
 
 function StatusBadge({ status }: { status: string }) {
-  const color = STATUS_COLORS[status] ?? 'bg-gray-100 text-gray-800'
   return (
-    <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${color}`}>
-      {status}
-    </span>
+    <Tag variant={subscriptionStatusMap[status as SubscriptionStatus] ?? 'neutral'} dot>
+      {formatStatusLabel(status)}
+    </Tag>
   )
 }
 
@@ -348,15 +345,17 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
                 if (transitions.length > 0) setShowStatusMenu((v) => !v)
               }}
               disabled={transitioning}
-              className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium ${STATUS_COLORS[sub.status] ?? 'bg-gray-100 text-gray-800'} ${(ALLOWED_TRANSITIONS[sub.status] ?? []).length > 0 ? 'cursor-pointer hover:ring-2 hover:ring-primary/30' : ''} disabled:opacity-50`}
+              className={`inline-flex items-center gap-1 disabled:opacity-50 ${(ALLOWED_TRANSITIONS[sub.status] ?? []).length > 0 ? 'cursor-pointer hover:ring-2 hover:ring-primary/30 rounded-full' : ''}`}
             >
               {transitioning && <Spinner />}
-              {sub.status}
-              {(ALLOWED_TRANSITIONS[sub.status] ?? []).length > 0 && (
-                <svg className={`h-3 w-3 transition-transform ${showStatusMenu ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
-                </svg>
-              )}
+              <Tag variant={subscriptionStatusMap[sub.status as SubscriptionStatus] ?? 'neutral'} dot>
+                {STATUS_LABELS[sub.status] ?? formatStatusLabel(sub.status)}
+                {(ALLOWED_TRANSITIONS[sub.status] ?? []).length > 0 && (
+                  <svg className={`h-3 w-3 transition-transform ${showStatusMenu ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+                  </svg>
+                )}
+              </Tag>
             </button>
             {showStatusMenu && (
               <div className="absolute left-0 top-full mt-1 z-50 min-w-[180px] rounded-md border bg-card shadow-lg py-1">
@@ -367,9 +366,9 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
                     onClick={() => transitionStatus(status)}
                     className="w-full px-3 py-1.5 text-left text-sm hover:bg-muted transition-colors flex items-center gap-2"
                   >
-                    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${STATUS_COLORS[status] ?? 'bg-gray-100 text-gray-800'}`}>
-                      {STATUS_LABELS[status] ?? status}
-                    </span>
+                    <Tag variant={subscriptionStatusMap[status as SubscriptionStatus] ?? 'neutral'} dot>
+                      {STATUS_LABELS[status] ?? formatStatusLabel(status)}
+                    </Tag>
                   </button>
                 ))}
               </div>
@@ -380,27 +379,30 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
         {/* XD-250 ARC actions */}
         {(sub.status === 'active' || sub.status === 'suspended') && (
           <div className="flex gap-2">
-            <button
+            <Button
+              type="button"
+              variant="outline"
               disabled={arcInFlight !== null}
               onClick={() => startArcQuote('amend')}
-              className="rounded-md border border-green-300 bg-green-50 text-green-700 px-3 py-1.5 text-sm hover:bg-green-100 disabled:opacity-50"
             >
               Amend
-            </button>
-            <button
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
               disabled={arcInFlight !== null}
               onClick={() => startArcQuote('renew')}
-              className="rounded-md border border-blue-300 bg-blue-50 text-blue-700 px-3 py-1.5 text-sm hover:bg-blue-100 disabled:opacity-50"
             >
               Renew
-            </button>
-            <button
+            </Button>
+            <Button
+              type="button"
+              variant="destructive-outline"
               disabled={arcInFlight !== null}
               onClick={() => startArcQuote('cancel')}
-              className="rounded-md border border-red-300 bg-red-50 text-red-700 px-3 py-1.5 text-sm hover:bg-red-100 disabled:opacity-50"
             >
               Cancel
-            </button>
+            </Button>
           </div>
         )}
       </div>

@@ -1,25 +1,29 @@
 "use client"
 import * as React from 'react'
+import { Tag } from '@open-mercato/ui/primitives/tag'
+import {
+  assetStatusMap,
+  formatStatusLabel,
+  subscriptionStatusMap,
+  type AssetStatus,
+  type SubscriptionStatus,
+} from '../../../components/statusMaps'
 
-const STATUS_COLORS: Record<string, string> = {
-  active: 'bg-green-100 text-green-800',
-  pending: 'bg-blue-100 text-blue-800',
-  suspended: 'bg-yellow-100 text-yellow-800',
-  terminated: 'bg-red-100 text-red-800',
-  expired: 'bg-gray-100 text-gray-800',
-  delivered: 'bg-teal-100 text-teal-800',
-  returned: 'bg-orange-100 text-orange-800',
-  cancelled: 'bg-gray-100 text-gray-800',
-}
-
+/**
+ * Subscription / asset status pill. Looks up the OM Tag variant from the
+ * shared maps so palettes stay consistent with the rest of the CPQ surface.
+ * Falls back to `neutral` for unknown values so a renamed enum value still
+ * renders without crashing.
+ */
 export function StatusBadge({ status }: { status: string }) {
-  const color = STATUS_COLORS[status] ?? 'bg-gray-100 text-gray-800'
+  const variant =
+    subscriptionStatusMap[status as SubscriptionStatus] ??
+    assetStatusMap[status as AssetStatus] ??
+    'neutral'
   return (
-    <span
-      className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${color}`}
-    >
-      {status}
-    </span>
+    <Tag variant={variant} dot>
+      {formatStatusLabel(status)}
+    </Tag>
   )
 }
 

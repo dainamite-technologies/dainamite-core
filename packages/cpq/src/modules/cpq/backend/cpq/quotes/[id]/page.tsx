@@ -4,7 +4,15 @@ import { useRouter, useParams, useSearchParams } from 'next/navigation'
 import ArcQuoteConfigurator, {
   type AttachedTarget,
 } from './_components/ArcQuoteConfigurator'
+import { ArrowRight, Trash2 } from 'lucide-react'
+import { Button } from '@open-mercato/ui/primitives/button'
+import { Tag } from '@open-mercato/ui/primitives/tag'
 import { NumberInput } from '../../../../components/NumberInput'
+import {
+  formatStatusLabel,
+  quoteCpqStatusMap,
+  type QuoteCpqStatus,
+} from '../../../../components/statusMaps'
 
 // ─── Types ───────────────────────────────────────────────────────
 
@@ -115,17 +123,6 @@ type BundleTree = {
 
 // ─── Constants ───────────────────────────────────────────────────
 
-const STATUS_COLORS: Record<string, string> = {
-  new: 'bg-blue-100 text-blue-800',
-  incomplete: 'bg-yellow-100 text-yellow-800',
-  ready: 'bg-green-100 text-green-800',
-  in_approval: 'bg-purple-100 text-purple-800',
-  approved: 'bg-green-100 text-green-800',
-  with_customer: 'bg-sky-100 text-sky-800',
-  accepted: 'bg-emerald-100 text-emerald-800',
-  rejected: 'bg-red-100 text-red-800',
-  cancelled: 'bg-gray-100 text-gray-800',
-}
 
 const ALLOWED_TRANSITIONS: Record<string, string[]> = {
   new: ['incomplete', 'ready', 'cancelled'],
@@ -560,9 +557,7 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
           <button onClick={() => router.push('/backend/cpq/quotes')} className="text-sm text-muted-foreground hover:text-foreground">← Back</button>
           <h1 className="text-2xl font-bold">Quote {cpqQuote.quoteNumber || cpqQuote.quoteId.slice(0, 8)}</h1>
           {arcQuoteType !== 'new' && (
-            <span className="rounded-full bg-purple-100 text-purple-800 px-2.5 py-0.5 text-xs font-medium uppercase">
-              {arcQuoteType}
-            </span>
+            <Tag variant="brand" className="uppercase">{arcQuoteType}</Tag>
           )}
           <div className="relative" ref={statusMenuRef}>
             <button
@@ -571,15 +566,17 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
                 if (transitions.length > 0) setShowStatusMenu((v) => !v)
               }}
               disabled={transitioning}
-              className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium ${STATUS_COLORS[cpqQuote.cpqStatus] ?? 'bg-gray-100 text-gray-800'} ${(ALLOWED_TRANSITIONS[cpqQuote.cpqStatus] ?? []).length > 0 ? 'cursor-pointer hover:ring-2 hover:ring-primary/30' : ''} disabled:opacity-50`}
+              className={`inline-flex items-center gap-1 disabled:opacity-50 ${(ALLOWED_TRANSITIONS[cpqQuote.cpqStatus] ?? []).length > 0 ? 'cursor-pointer hover:ring-2 hover:ring-primary/30 rounded-full' : ''}`}
             >
               {transitioning ? <Spinner /> : null}
-              {cpqQuote.cpqStatus.replace(/_/g, ' ')}
-              {(ALLOWED_TRANSITIONS[cpqQuote.cpqStatus] ?? []).length > 0 && (
-                <svg className={`h-3 w-3 transition-transform ${showStatusMenu ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
-                </svg>
-              )}
+              <Tag variant={quoteCpqStatusMap[cpqQuote.cpqStatus as QuoteCpqStatus] ?? 'neutral'} dot>
+                {formatStatusLabel(cpqQuote.cpqStatus)}
+                {(ALLOWED_TRANSITIONS[cpqQuote.cpqStatus] ?? []).length > 0 && (
+                  <svg className={`h-3 w-3 transition-transform ${showStatusMenu ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+                  </svg>
+                )}
+              </Tag>
             </button>
             {showStatusMenu && (
               <div className="absolute left-0 top-full mt-1 z-50 min-w-[180px] rounded-md border bg-card shadow-lg py-1">
@@ -590,9 +587,9 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
                     onClick={() => transitionStatus(status)}
                     className="w-full px-3 py-1.5 text-left text-sm hover:bg-muted transition-colors flex items-center gap-2"
                   >
-                    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${STATUS_COLORS[status] ?? 'bg-gray-100 text-gray-800'}`}>
-                      {STATUS_LABELS[status] ?? status.replace(/_/g, ' ')}
-                    </span>
+                    <Tag variant={quoteCpqStatusMap[status as QuoteCpqStatus] ?? 'neutral'} dot>
+                      {STATUS_LABELS[status] ?? formatStatusLabel(status)}
+                    </Tag>
                   </button>
                 ))}
               </div>
@@ -611,24 +608,16 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
         </div>
         <div className="flex items-center gap-2">
           {cpqQuote.cpqStatus === 'accepted' && (
-            <button onClick={convertToOrder} disabled={converting} className="inline-flex items-center gap-1.5 rounded-md bg-green-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-green-700 transition-colors disabled:opacity-50">
-              {converting ? <Spinner /> : (
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 0l3 3m-3-3l3-3m-3 3V3m0 18a9 9 0 110-18" />
-                </svg>
-              )}
+            <Button type="button" onClick={convertToOrder} disabled={converting}>
+              {converting ? <Spinner /> : <ArrowRight className="h-4 w-4" />}
               Convert to Order
-            </button>
+            </Button>
           )}
           {!['accepted', 'rejected', 'cancelled'].includes(cpqQuote.cpqStatus) && (
-            <button onClick={() => setShowDeleteConfirm(true)} disabled={deleting} className="inline-flex items-center gap-1.5 rounded-md border border-red-200 px-3 py-1.5 text-sm font-medium text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50">
-              {deleting ? <Spinner /> : (
-                <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
-                </svg>
-              )}
+            <Button type="button" variant="destructive-outline" onClick={() => setShowDeleteConfirm(true)} disabled={deleting}>
+              {deleting ? <Spinner /> : <Trash2 className="h-3.5 w-3.5" />}
               Delete
-            </button>
+            </Button>
           )}
           <button onClick={recalculate} disabled={submitting} className="inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-muted transition-colors disabled:opacity-50">
             <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
@@ -703,10 +692,12 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
               <p className="text-sm text-muted-foreground">Are you sure you want to delete this quote? This will soft-delete the quote and all its line items.</p>
             </div>
             <div className="flex justify-end gap-2 px-4 py-3 border-t">
-              <button onClick={() => setShowDeleteConfirm(false)} className="rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-muted transition-colors">Cancel</button>
-              <button onClick={deleteQuote} disabled={deleting} className="inline-flex items-center gap-1.5 rounded-md bg-red-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-red-700 transition-colors disabled:opacity-50">
+              <Button type="button" variant="outline" onClick={() => setShowDeleteConfirm(false)}>
+                Cancel
+              </Button>
+              <Button type="button" variant="destructive" onClick={deleteQuote} disabled={deleting}>
                 {deleting ? <Spinner /> : null} Delete
-              </button>
+              </Button>
             </div>
           </div>
         </div>

@@ -5,8 +5,14 @@ import { useRouter } from 'next/navigation'
 import type { ColumnDef } from '@tanstack/react-table'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { Checkbox } from '@open-mercato/ui/primitives/checkbox'
+import { Tag } from '@open-mercato/ui/primitives/tag'
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
 import { CpqListView, useCpqListData } from '../../../components/CpqListView'
+import {
+  formatStatusLabel,
+  lifecycleStatusMap,
+  type LifecycleStatus,
+} from '../../../components/statusMaps'
 
 type Specification = {
   id: string
@@ -23,13 +29,6 @@ type Specification = {
 }
 
 const PAGE_SIZE = 50
-
-const STATUS_COLORS: Record<string, string> = {
-  draft: 'bg-gray-100 text-gray-700',
-  active: 'bg-green-100 text-green-800',
-  deprecated: 'bg-yellow-100 text-yellow-800',
-  retired: 'bg-red-100 text-red-700',
-}
 
 function buildFilterParams(values: FilterValues, params: URLSearchParams) {
   if (typeof values.lifecycleStatus === 'string' && values.lifecycleStatus) {
@@ -115,14 +114,14 @@ export default function SpecificationsListPage() {
           <span className="font-medium">
             {row.original.name}
             {row.original.specType === 'bundle' && (
-              <span className="ml-2 inline-flex items-center rounded-full bg-purple-100 text-purple-800 px-2 py-0.5 text-[10px] font-medium">
+              <Tag variant="brand" className="ml-2 px-2 text-[10px]">
                 bundle
-              </span>
+              </Tag>
             )}
             {row.original.isAssetizable && (
-              <span className="ml-1 inline-flex items-center rounded-full bg-orange-100 text-orange-800 px-2 py-0.5 text-[10px] font-medium">
+              <Tag variant="warning" className="ml-1 px-2 text-[10px]">
                 asset
-              </span>
+              </Tag>
             )}
           </span>
         ),
@@ -136,13 +135,9 @@ export default function SpecificationsListPage() {
         accessorKey: 'lifecycleStatus',
         header: t('cpq.specifications.lifecycleStatus', 'Lifecycle Status'),
         cell: ({ row }) => (
-          <span
-            className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
-              STATUS_COLORS[row.original.lifecycleStatus] ?? 'bg-gray-100 text-gray-700'
-            }`}
-          >
-            {row.original.lifecycleStatus}
-          </span>
+          <Tag variant={lifecycleStatusMap[row.original.lifecycleStatus as LifecycleStatus] ?? 'neutral'} dot>
+            {formatStatusLabel(row.original.lifecycleStatus)}
+          </Tag>
         ),
       },
       {

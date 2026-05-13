@@ -16,8 +16,16 @@ import {
 } from '@open-mercato/ui/primitives/select'
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
 import { flash } from '@open-mercato/ui/backend/FlashMessages'
+import { Tag } from '@open-mercato/ui/primitives/tag'
 import { CpqListView, useCpqListData } from '../../../components/CpqListView'
 import { NumberInput } from '../../../components/NumberInput'
+import {
+  chargeTypeMap,
+  formatStatusLabel,
+  lifecycleStatusMap,
+  type ChargeType,
+  type LifecycleStatus,
+} from '../../../components/statusMaps'
 
 type Charge = {
   id: string
@@ -54,34 +62,18 @@ type PricingTableRef = {
 
 const PAGE_SIZE = 50
 
-const CHARGE_TYPE_COLORS: Record<string, string> = {
-  mrc: 'bg-blue-100 text-blue-800',
-  nrc: 'bg-green-100 text-green-800',
-  usage: 'bg-purple-100 text-purple-800',
-}
-
-const STATUS_COLORS: Record<string, string> = {
-  draft: 'bg-gray-100 text-gray-700',
-  active: 'bg-green-100 text-green-800',
-  deprecated: 'bg-yellow-100 text-yellow-800',
-  retired: 'bg-red-100 text-red-700',
-}
-
 function ChargePopover({ charge }: { charge: Charge }) {
   const [open, setOpen] = React.useState(false)
+  const variant = chargeTypeMap[charge.chargeType as ChargeType] ?? 'neutral'
   return (
     <span
       className="relative inline-flex"
       onMouseEnter={() => setOpen(true)}
       onMouseLeave={() => setOpen(false)}
     >
-      <span
-        className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium cursor-default ${
-          CHARGE_TYPE_COLORS[charge.chargeType] ?? 'bg-gray-100 text-gray-700'
-        }`}
-      >
+      <Tag variant={variant} className="cursor-default px-2 text-[10px]">
         {charge.chargeType.toUpperCase()}
-      </span>
+      </Tag>
       {open && (
         <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-50 w-56 rounded-lg border bg-popover p-3 shadow-md text-popover-foreground text-xs space-y-1.5">
           <div className="font-medium text-sm">{charge.name}</div>
@@ -95,7 +87,7 @@ function ChargePopover({ charge }: { charge: Charge }) {
               </span>
             )}
           </div>
-          {!charge.isActive && <div className="text-yellow-600 font-medium">Inactive</div>}
+          {!charge.isActive && <Tag variant="warning" dot>Inactive</Tag>}
           <div className="absolute left-1/2 -translate-x-1/2 top-full w-2 h-2 bg-popover border-b border-r rotate-45 -mt-1" />
         </div>
       )}
@@ -287,9 +279,9 @@ export default function OfferingsListPage() {
           <span className="font-medium">
             {row.original.name}
             {row.original.offeringType === 'bundle' && (
-              <span className="ml-2 inline-flex items-center rounded-full bg-purple-100 text-purple-800 px-2 py-0.5 text-[10px] font-medium">
+              <Tag variant="brand" className="ml-2 px-2 text-[10px]">
                 bundle
-              </span>
+              </Tag>
             )}
           </span>
         ),
@@ -303,13 +295,9 @@ export default function OfferingsListPage() {
         accessorKey: 'lifecycleStatus',
         header: t('cpq.offerings.lifecycleStatus', 'Lifecycle Status'),
         cell: ({ row }) => (
-          <span
-            className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
-              STATUS_COLORS[row.original.lifecycleStatus] ?? 'bg-gray-100 text-gray-700'
-            }`}
-          >
-            {row.original.lifecycleStatus}
-          </span>
+          <Tag variant={lifecycleStatusMap[row.original.lifecycleStatus as LifecycleStatus] ?? 'neutral'} dot>
+            {formatStatusLabel(row.original.lifecycleStatus)}
+          </Tag>
         ),
       },
       {

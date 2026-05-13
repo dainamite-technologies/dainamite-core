@@ -7,6 +7,7 @@ import { Button } from '@open-mercato/ui/primitives/button'
 import { Input } from '@open-mercato/ui/primitives/input'
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
 import { Plus, Search as SearchIcon } from 'lucide-react'
+import { RowActions } from '@open-mercato/ui/backend/RowActions'
 import { CpqListView, useCpqListData } from '../../../components/CpqListView'
 
 type QuoteConfig = {
@@ -343,6 +344,17 @@ export default function CpqQuotesListPage() {
         </Button>
       }
       onRowClick={(row) => router.push(`/backend/cpq/quotes/${row.id}`)}
+      rowActions={(row) => (
+        <RowActions
+          items={[
+            {
+              id: 'open',
+              label: t('cpq.quotes.actions.open', 'Open'),
+              href: `/backend/cpq/quotes/${row.id}`,
+            },
+          ]}
+        />
+      )}
       toolbarContent={
         <CustomerPickerModal
           open={showCustomerPicker}

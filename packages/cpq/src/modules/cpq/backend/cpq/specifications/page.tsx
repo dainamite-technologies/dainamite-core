@@ -6,10 +6,10 @@ import type { ColumnDef } from '@tanstack/react-table'
 import { type BulkAction } from '@open-mercato/ui/backend/DataTable'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { Checkbox } from '@open-mercato/ui/primitives/checkbox'
+import { RowActions } from '@open-mercato/ui/backend/RowActions'
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
-import { flash } from '@open-mercato/ui/backend/FlashMessages'
-import { useConfirmDialog } from '@open-mercato/ui/backend/confirm-dialog'
 import { CpqListView, useCpqListData } from '../../../components/CpqListView'
+import { useCpqRowActions } from '../../../components/useCpqRowActions'
 
 type Specification = {
   id: string
@@ -50,13 +50,19 @@ function buildFilterParams(values: FilterValues, params: URLSearchParams) {
 export default function SpecificationsListPage() {
   const t = useT()
   const router = useRouter()
-  const { confirm, ConfirmDialogElement } = useConfirmDialog()
 
   const data = useCpqListData<Specification>({
     endpoint: '/api/cpq/product-specifications',
     pageSize: PAGE_SIZE,
     buildFilterParams,
     loadErrorMessage: t('cpq.specifications.list.error.load', 'Failed to load specifications'),
+  })
+
+  const rowActionsApi = useCpqRowActions<Specification>({
+    endpoint: '/api/cpq/product-specifications',
+    entityName: t('cpq.specifications.entityName', 'specification'),
+    editHref: (row) => `/backend/cpq/specifications/${row.id}`,
+    onReload: data.reload,
   })
 
   const lifecycleOptions = React.useMemo(
@@ -166,50 +172,16 @@ export default function SpecificationsListPage() {
     [t],
   )
 
-  const deleteSelected = React.useCallback(
-    async (selectedRows: Specification[]) => {
-      if (!selectedRows.length) return { ok: false as const }
-      const confirmed = await confirm({
-        title: t(
-          'cpq.specifications.bulk.deleteConfirm',
-          `Delete ${selectedRows.length} specification${selectedRows.length > 1 ? 's' : ''}?`,
-        ),
-        variant: 'destructive',
-      })
-      if (!confirmed) return { ok: false as const }
-      let failed = 0
-      for (const row of selectedRows) {
-        const res = await fetch('/api/cpq/product-specifications', {
-          method: 'DELETE',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id: row.id }),
-        })
-        if (!res.ok) failed += 1
-      }
-      if (failed > 0) {
-        flash(
-          t('cpq.specifications.flash.deleteFailed', `Failed to delete ${failed} specification(s)`),
-          'error',
-        )
-      } else {
-        flash(t('cpq.specifications.flash.deleted', 'Specifications deleted'), 'success')
-      }
-      data.reload()
-      return { ok: failed === 0, affectedCount: selectedRows.length - failed }
-    },
-    [confirm, data, t],
-  )
-
   const bulkActions = React.useMemo<BulkAction<Specification>[]>(
     () => [
       {
         id: 'delete',
         label: t('cpq.specifications.bulk.deleteSelected', 'Delete selected'),
         destructive: true,
-        onExecute: deleteSelected,
+        onExecute: rowActionsApi.bulkDelete,
       },
     ],
-    [deleteSelected, t],
+    [rowActionsApi.bulkDelete, t],
   )
 
   return (
@@ -230,6 +202,7 @@ export default function SpecificationsListPage() {
       }
       bulkActions={bulkActions}
       onRowClick={(row) => router.push(`/backend/cpq/specifications/${row.id}`)}
+      rowActions={(row) => <RowActions items={rowActionsApi.buildItems(row)} />}
       emptyState={
         <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
           {t(
@@ -238,7 +211,7 @@ export default function SpecificationsListPage() {
           )}
         </div>
       }
-      footerContent={ConfirmDialogElement}
+      footerContent={rowActionsApi.ConfirmDialogElement}
     />
   )
 }

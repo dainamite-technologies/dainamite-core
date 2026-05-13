@@ -16,8 +16,9 @@ import {
 } from '@open-mercato/ui/primitives/select'
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
 import { flash } from '@open-mercato/ui/backend/FlashMessages'
-import { useConfirmDialog } from '@open-mercato/ui/backend/confirm-dialog'
+import { RowActions } from '@open-mercato/ui/backend/RowActions'
 import { CpqListView, useCpqListData } from '../../../components/CpqListView'
+import { useCpqRowActions } from '../../../components/useCpqRowActions'
 
 type Charge = {
   id: string
@@ -117,13 +118,19 @@ function buildFilterParams(values: FilterValues, params: URLSearchParams) {
 export default function OfferingsListPage() {
   const t = useT()
   const router = useRouter()
-  const { confirm, ConfirmDialogElement } = useConfirmDialog()
 
   const data = useCpqListData<Offering>({
     endpoint: '/api/cpq/product-offerings',
     pageSize: PAGE_SIZE,
     buildFilterParams,
     loadErrorMessage: t('cpq.offerings.list.error.load', 'Failed to load offerings'),
+  })
+
+  const rowActionsApi = useCpqRowActions<Offering>({
+    endpoint: '/api/cpq/product-offerings',
+    entityName: t('cpq.offerings.entityName', 'offering'),
+    editHref: (row) => `/backend/cpq/offerings/${row.id}`,
+    onReload: data.reload,
   })
 
   // Bulk charge creation state
@@ -340,40 +347,6 @@ export default function OfferingsListPage() {
     [t],
   )
 
-  const deleteSelected = React.useCallback(
-    async (selectedRows: Offering[]) => {
-      if (!selectedRows.length) return { ok: false as const }
-      const confirmed = await confirm({
-        title: t(
-          'cpq.offerings.bulk.deleteConfirm',
-          `Delete ${selectedRows.length} offering${selectedRows.length > 1 ? 's' : ''}?`,
-        ),
-        variant: 'destructive',
-      })
-      if (!confirmed) return { ok: false as const }
-      let failed = 0
-      for (const row of selectedRows) {
-        const res = await fetch('/api/cpq/product-offerings', {
-          method: 'DELETE',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id: row.id }),
-        })
-        if (!res.ok) failed += 1
-      }
-      if (failed > 0) {
-        flash(
-          t('cpq.offerings.flash.deleteFailed', `Failed to delete ${failed} offering(s)`),
-          'error',
-        )
-      } else {
-        flash(t('cpq.offerings.flash.deleted', 'Offerings deleted'), 'success')
-      }
-      data.reload()
-      return { ok: failed === 0, affectedCount: selectedRows.length - failed }
-    },
-    [confirm, data, t],
-  )
-
   const bulkActions = React.useMemo<BulkAction<Offering>[]>(
     () => [
       {
@@ -389,10 +362,10 @@ export default function OfferingsListPage() {
         id: 'delete',
         label: t('cpq.offerings.bulk.deleteSelected', 'Delete selected'),
         destructive: true,
-        onExecute: deleteSelected,
+        onExecute: rowActionsApi.bulkDelete,
       },
     ],
-    [deleteSelected, openBulkChargeForm, t],
+    [openBulkChargeForm, rowActionsApi.bulkDelete, t],
   )
 
   const bulkChargeForm = bulkChargeOpen && bulkChargeTargets.length > 0 && (
@@ -598,8 +571,9 @@ export default function OfferingsListPage() {
       }
       bulkActions={bulkActions}
       onRowClick={(row) => router.push(`/backend/cpq/offerings/${row.id}`)}
+      rowActions={(row) => <RowActions items={rowActionsApi.buildItems(row)} />}
       toolbarContent={toolbarContent}
-      footerContent={ConfirmDialogElement}
+      footerContent={rowActionsApi.ConfirmDialogElement}
       emptyState={
         <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
           {t(

@@ -5,10 +5,10 @@ import { useRouter } from 'next/navigation'
 import type { ColumnDef } from '@tanstack/react-table'
 import { type BulkAction } from '@open-mercato/ui/backend/DataTable'
 import { Button } from '@open-mercato/ui/primitives/button'
+import { RowActions } from '@open-mercato/ui/backend/RowActions'
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
-import { flash } from '@open-mercato/ui/backend/FlashMessages'
-import { useConfirmDialog } from '@open-mercato/ui/backend/confirm-dialog'
 import { CpqListView, useCpqListData } from '../../../components/CpqListView'
+import { useCpqRowActions } from '../../../components/useCpqRowActions'
 
 type PricingTable = {
   id: string
@@ -29,13 +29,19 @@ function buildFilterParams(values: FilterValues, params: URLSearchParams) {
 export default function PricingTablesPage() {
   const t = useT()
   const router = useRouter()
-  const { confirm, ConfirmDialogElement } = useConfirmDialog()
 
   const data = useCpqListData<PricingTable>({
     endpoint: '/api/cpq/pricing-tables',
     pageSize: PAGE_SIZE,
     buildFilterParams,
     loadErrorMessage: t('cpq.pricing.list.error.load', 'Failed to load pricing tables'),
+  })
+
+  const rowActionsApi = useCpqRowActions<PricingTable>({
+    endpoint: '/api/cpq/pricing-tables',
+    entityName: t('cpq.pricing.entityName', 'pricing table'),
+    editHref: (row) => `/backend/cpq/pricing/${row.id}`,
+    onReload: data.reload,
   })
 
   const filters = React.useMemo<FilterDef[]>(
@@ -88,50 +94,16 @@ export default function PricingTablesPage() {
     [t],
   )
 
-  const deleteSelected = React.useCallback(
-    async (selectedRows: PricingTable[]) => {
-      if (!selectedRows.length) return { ok: false as const }
-      const confirmed = await confirm({
-        title: t(
-          'cpq.pricing.bulk.deleteConfirm',
-          `Delete ${selectedRows.length} pricing table${selectedRows.length > 1 ? 's' : ''}?`,
-        ),
-        variant: 'destructive',
-      })
-      if (!confirmed) return { ok: false as const }
-      let failed = 0
-      for (const row of selectedRows) {
-        const res = await fetch('/api/cpq/pricing-tables', {
-          method: 'DELETE',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id: row.id }),
-        })
-        if (!res.ok) failed += 1
-      }
-      if (failed > 0) {
-        flash(
-          t('cpq.pricing.flash.deleteFailed', `Failed to delete ${failed} pricing table(s)`),
-          'error',
-        )
-      } else {
-        flash(t('cpq.pricing.flash.deleted', 'Pricing tables deleted'), 'success')
-      }
-      data.reload()
-      return { ok: failed === 0, affectedCount: selectedRows.length - failed }
-    },
-    [confirm, data, t],
-  )
-
   const bulkActions = React.useMemo<BulkAction<PricingTable>[]>(
     () => [
       {
         id: 'delete',
         label: t('cpq.pricing.bulk.deleteSelected', 'Delete selected'),
         destructive: true,
-        onExecute: deleteSelected,
+        onExecute: rowActionsApi.bulkDelete,
       },
     ],
-    [deleteSelected, t],
+    [rowActionsApi.bulkDelete, t],
   )
 
   return (
@@ -150,12 +122,13 @@ export default function PricingTablesPage() {
       }
       bulkActions={bulkActions}
       onRowClick={(row) => router.push(`/backend/cpq/pricing/${row.id}`)}
+      rowActions={(row) => <RowActions items={rowActionsApi.buildItems(row)} />}
       emptyState={
         <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
           {t('cpq.pricing.empty', 'No pricing tables found.')}
         </div>
       }
-      footerContent={ConfirmDialogElement}
+      footerContent={rowActionsApi.ConfirmDialogElement}
     />
   )
 }

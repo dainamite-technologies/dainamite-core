@@ -4,8 +4,10 @@ import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { useRouter } from 'next/navigation'
 import type { ColumnDef } from '@tanstack/react-table'
 import { DataTable } from '@open-mercato/ui/backend/DataTable'
+import { RowActions } from '@open-mercato/ui/backend/RowActions'
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
 import { useCpqListData } from '../../../components/CpqListView'
+import { useCpqRowActions } from '../../../components/useCpqRowActions'
 import { StatusBadge, formatCurrency } from './shared'
 
 type Asset = {
@@ -47,6 +49,16 @@ export function AssetsTable() {
     pageSize: PAGE_SIZE,
     buildFilterParams,
     loadErrorMessage: t('cpq.inventory.assets.error.load', 'Failed to load assets'),
+  })
+
+  // Assets follow a `delivered → active → returned` lifecycle; deletion only
+  // makes sense before the asset is provisioned, so gate by status.
+  const rowActionsApi = useCpqRowActions<Asset>({
+    endpoint: '/api/cpq/inventory/assets',
+    entityName: t('cpq.inventory.assets.entityName', 'asset'),
+    editHref: (row) => `/backend/cpq/inventory/assets/${row.id}`,
+    onReload: data.reload,
+    canDelete: (row) => row.status === 'pending' || row.status === 'cancelled',
   })
 
   const filters = React.useMemo<FilterDef[]>(
@@ -110,7 +122,9 @@ export function AssetsTable() {
   )
 
   return (
-    <DataTable<Asset>
+    <>
+      {rowActionsApi.ConfirmDialogElement}
+      <DataTable<Asset>
       title={t('cpq.inventory.assets', 'Assets')}
       refreshButton={{
         label: t('cpq.inventory.actions.refresh', 'Refresh'),
@@ -129,6 +143,7 @@ export function AssetsTable() {
       sorting={data.sorting}
       onSortingChange={data.setSorting}
       onRowClick={(row) => router.push(`/backend/cpq/inventory/assets/${row.id}`)}
+      rowActions={(row) => <RowActions items={rowActionsApi.buildItems(row)} />}
       perspective={{ tableId: 'cpq.inventory.assets.list' }}
       columnChooser={{ auto: true }}
       pagination={{
@@ -145,5 +160,6 @@ export function AssetsTable() {
         </div>
       }
     />
+    </>
   )
 }

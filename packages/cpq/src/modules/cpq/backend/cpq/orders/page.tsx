@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import type { ColumnDef } from '@tanstack/react-table'
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
+import { RowActions } from '@open-mercato/ui/backend/RowActions'
 import { CpqListView, useCpqListData } from '../../../components/CpqListView'
 
 type OrderConfig = {
@@ -163,6 +164,17 @@ export default function CpqOrdersListPage() {
       pageSize={PAGE_SIZE}
       searchPlaceholder={t('cpq.orders.search.placeholder', 'Search by order / customer id...')}
       onRowClick={(row) => router.push(`/backend/cpq/orders/${row.id}`)}
+      rowActions={(row) => (
+        <RowActions
+          items={[
+            {
+              id: 'open',
+              label: t('cpq.orders.actions.open', 'Open'),
+              href: `/backend/cpq/orders/${row.id}`,
+            },
+          ]}
+        />
+      )}
       emptyState={
         <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
           {t(

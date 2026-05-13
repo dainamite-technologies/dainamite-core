@@ -4,8 +4,10 @@ import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { useRouter } from 'next/navigation'
 import type { ColumnDef } from '@tanstack/react-table'
 import { DataTable } from '@open-mercato/ui/backend/DataTable'
+import { RowActions } from '@open-mercato/ui/backend/RowActions'
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
 import { useCpqListData } from '../../../components/CpqListView'
+import { useCpqRowActions } from '../../../components/useCpqRowActions'
 import { StatusBadge, formatCurrency } from './shared'
 
 type Subscription = {
@@ -50,6 +52,17 @@ export function SubscriptionsTable() {
     pageSize: PAGE_SIZE,
     buildFilterParams,
     loadErrorMessage: t('cpq.inventory.subscriptions.error.load', 'Failed to load subscriptions'),
+  })
+
+  // Subscriptions are lifecycle-managed; deleting an active one usually means
+  // "terminate", which the API rejects. Allow deletion only from non-active
+  // states so the row-actions menu doesn't dangle a useless "Delete" item.
+  const rowActionsApi = useCpqRowActions<Subscription>({
+    endpoint: '/api/cpq/inventory/subscriptions',
+    entityName: t('cpq.inventory.subscriptions.entityName', 'subscription'),
+    editHref: (row) => `/backend/cpq/inventory/subscriptions/${row.id}`,
+    onReload: data.reload,
+    canDelete: (row) => row.status !== 'active',
   })
 
   const filters = React.useMemo<FilterDef[]>(
@@ -124,7 +137,9 @@ export function SubscriptionsTable() {
   )
 
   return (
-    <DataTable<Subscription>
+    <>
+      {rowActionsApi.ConfirmDialogElement}
+      <DataTable<Subscription>
       title={t('cpq.inventory.subscriptions', 'Subscriptions')}
       refreshButton={{
         label: t('cpq.inventory.actions.refresh', 'Refresh'),
@@ -143,6 +158,7 @@ export function SubscriptionsTable() {
       sorting={data.sorting}
       onSortingChange={data.setSorting}
       onRowClick={(row) => router.push(`/backend/cpq/inventory/subscriptions/${row.id}`)}
+      rowActions={(row) => <RowActions items={rowActionsApi.buildItems(row)} />}
       perspective={{ tableId: 'cpq.inventory.subscriptions.list' }}
       columnChooser={{ auto: true }}
       pagination={{
@@ -159,5 +175,6 @@ export function SubscriptionsTable() {
         </div>
       }
     />
+    </>
   )
 }

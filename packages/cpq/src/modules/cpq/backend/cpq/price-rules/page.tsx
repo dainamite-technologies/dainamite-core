@@ -6,16 +6,14 @@ import type { ColumnDef } from '@tanstack/react-table'
 import { type BulkAction } from '@open-mercato/ui/backend/DataTable'
 import { Button } from '@open-mercato/ui/primitives/button'
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
-import { flash } from '@open-mercato/ui/backend/FlashMessages'
-import { useConfirmDialog } from '@open-mercato/ui/backend/confirm-dialog'
 import { RowActions } from '@open-mercato/ui/backend/RowActions'
 import { CpqListView, useCpqListData } from '../../../components/CpqListView'
+import { useCpqRowActions } from '../../../components/useCpqRowActions'
 import {
   PriceRuleForm,
   RULE_TYPE_LABELS,
   emptyPriceRuleForm,
   priceRuleFormToPayload,
-  priceRuleToFormData,
   type PriceRule,
   type PriceRuleFormData,
   type ProductOffering,
@@ -44,7 +42,6 @@ function formatValue(rule: PriceRule) {
 export default function PriceRulesPage() {
   const t = useT()
   const router = useRouter()
-  const { confirm, ConfirmDialogElement } = useConfirmDialog()
 
   const data = useCpqListData<PriceRule>({
     endpoint: '/api/cpq/price-rules',
@@ -54,8 +51,16 @@ export default function PriceRulesPage() {
     loadErrorMessage: t('cpq.priceRules.list.error.load', 'Failed to load price rules'),
   })
 
+  // Price Rules: the row's primary affordance is "Edit inline" (opens the
+  // page-level form), so `editHref` is replaced below by an `onSelect` extra.
+  const rowActionsApi = useCpqRowActions<PriceRule>({
+    endpoint: '/api/cpq/price-rules',
+    entityName: t('cpq.priceRules.entityName', 'price rule'),
+    editHref: (row) => `/backend/cpq/price-rules/${row.id}`,
+    onReload: data.reload,
+  })
+
   const [showForm, setShowForm] = React.useState(false)
-  const [editingId, setEditingId] = React.useState<string | null>(null)
   const [form, setForm] = React.useState<PriceRuleFormData>(emptyPriceRuleForm)
   const [saving, setSaving] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
@@ -111,15 +116,7 @@ export default function PriceRulesPage() {
   )
 
   const openCreate = React.useCallback(() => {
-    setEditingId(null)
     setForm(emptyPriceRuleForm)
-    setError(null)
-    setShowForm(true)
-  }, [])
-
-  const openEdit = React.useCallback((rule: PriceRule) => {
-    setEditingId(rule.id)
-    setForm(priceRuleToFormData(rule))
     setError(null)
     setShowForm(true)
   }, [])
@@ -129,27 +126,14 @@ export default function PriceRulesPage() {
     setError(null)
     try {
       const payload = priceRuleFormToPayload(form)
-      if (editingId) {
-        payload.id = editingId
-        const res = await fetch('/api/cpq/price-rules', {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        })
-        if (!res.ok) {
-          const err = await res.json()
-          throw new Error(err.error ?? 'Failed to update')
-        }
-      } else {
-        const res = await fetch('/api/cpq/price-rules', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        })
-        if (!res.ok) {
-          const err = await res.json()
-          throw new Error(err.details ? JSON.stringify(err.details) : err.error ?? 'Failed to create')
-        }
+      const res = await fetch('/api/cpq/price-rules', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      if (!res.ok) {
+        const err = await res.json()
+        throw new Error(err.details ? JSON.stringify(err.details) : err.error ?? 'Failed to create')
       }
       setShowForm(false)
       data.reload()
@@ -158,58 +142,7 @@ export default function PriceRulesPage() {
     } finally {
       setSaving(false)
     }
-  }, [data, editingId, form])
-
-  const handleDeleteSingle = React.useCallback(
-    async (rule: PriceRule) => {
-      const confirmed = await confirm({
-        title: t('cpq.priceRules.deleteConfirm', `Delete rule "${rule.name}"?`),
-        variant: 'destructive',
-      })
-      if (!confirmed) return
-      await fetch('/api/cpq/price-rules', {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: rule.id }),
-      })
-      data.reload()
-    },
-    [confirm, data, t],
-  )
-
-  const deleteSelected = React.useCallback(
-    async (selectedRows: PriceRule[]) => {
-      if (!selectedRows.length) return { ok: false as const }
-      const confirmed = await confirm({
-        title: t(
-          'cpq.priceRules.bulk.deleteConfirm',
-          `Delete ${selectedRows.length} price rule${selectedRows.length > 1 ? 's' : ''}?`,
-        ),
-        variant: 'destructive',
-      })
-      if (!confirmed) return { ok: false as const }
-      let failed = 0
-      for (const row of selectedRows) {
-        const res = await fetch('/api/cpq/price-rules', {
-          method: 'DELETE',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id: row.id }),
-        })
-        if (!res.ok) failed += 1
-      }
-      if (failed > 0) {
-        flash(
-          t('cpq.priceRules.flash.deleteFailed', `Failed to delete ${failed} rule(s)`),
-          'error',
-        )
-      } else {
-        flash(t('cpq.priceRules.flash.deleted', 'Price rules deleted'), 'success')
-      }
-      data.reload()
-      return { ok: failed === 0, affectedCount: selectedRows.length - failed }
-    },
-    [confirm, data, t],
-  )
+  }, [data, form])
 
   const bulkActions = React.useMemo<BulkAction<PriceRule>[]>(
     () => [
@@ -217,10 +150,10 @@ export default function PriceRulesPage() {
         id: 'delete',
         label: t('cpq.priceRules.bulk.deleteSelected', 'Delete selected'),
         destructive: true,
-        onExecute: deleteSelected,
+        onExecute: rowActionsApi.bulkDelete,
       },
     ],
-    [deleteSelected, t],
+    [rowActionsApi.bulkDelete, t],
   )
 
   const columns = React.useMemo<ColumnDef<PriceRule>[]>(
@@ -319,29 +252,11 @@ export default function PriceRulesPage() {
       }
       bulkActions={bulkActions}
       onRowClick={(row) => router.push(`/backend/cpq/price-rules/${row.id}`)}
-      rowActions={(row) => (
-        <RowActions
-          items={[
-            {
-              id: 'edit',
-              label: t('cpq.priceRules.actions.edit', 'Edit'),
-              onSelect: () => openEdit(row),
-            },
-            {
-              id: 'delete',
-              label: t('cpq.priceRules.actions.delete', 'Delete'),
-              destructive: true,
-              onSelect: () => {
-                void handleDeleteSingle(row)
-              },
-            },
-          ]}
-        />
-      )}
+      rowActions={(row) => <RowActions items={rowActionsApi.buildItems(row)} />}
       toolbarContent={
         showForm ? (
           <PriceRuleForm
-            editingId={editingId}
+            editingId={null}
             form={form}
             onFormChange={setForm}
             offerings={offerings}
@@ -352,7 +267,7 @@ export default function PriceRulesPage() {
           />
         ) : null
       }
-      footerContent={ConfirmDialogElement}
+      footerContent={rowActionsApi.ConfirmDialogElement}
       emptyState={
         <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
           No price rules found. Click &quot;Create Rule&quot; to add one.

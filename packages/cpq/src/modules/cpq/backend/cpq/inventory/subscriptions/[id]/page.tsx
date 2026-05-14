@@ -191,6 +191,12 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
   const [productNames, setProductNames] = React.useState<Record<string, string>>({})
   const [offeringNames, setOfferingNames] = React.useState<Record<string, string>>({})
   const [specNames, setSpecNames] = React.useState<Record<string, string>>({})
+  // Resolved quote / order numbers per change log row (id → number).
+  const [logQuoteNumbers, setLogQuoteNumbers] = React.useState<Record<string, string>>({})
+  const [logOrderNumbers, setLogOrderNumbers] = React.useState<Record<string, string>>({})
+  // Status transition menu (Activate / Suspend / Reactivate / Terminate).
+  const [statusMenuOpen, setStatusMenuOpen] = React.useState(false)
+  const statusMenuRef = React.useRef<HTMLDivElement>(null)
   // XD-250 ARC state
   const [arcInFlight, setArcInFlight] = React.useState<'amend' | 'renew' | 'cancel' | null>(null)
   const [changeLog, setChangeLog] = React.useState<ChangeLogRow[]>([])
@@ -261,7 +267,33 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
         const r = await fetch(`/api/cpq/inventory/subscriptions/${subId}/change-log?pageSize=50`)
         if (r.ok && !cancelled) {
           const data = await r.json()
-          setChangeLog(data.items ?? [])
+          const rows: ChangeLogRow[] = data.items ?? []
+          setChangeLog(rows)
+          // Resolve the quote / order numbers referenced by each row so
+          // the history list shows "Quote QUOTE-…-00005" instead of
+          // "Quote 270b8e08…".
+          const qIds = new Set(rows.map((r2) => r2.sourceQuoteId).filter((x): x is string => !!x))
+          const oIds = new Set(rows.map((r2) => r2.sourceOrderId).filter((x): x is string => !!x))
+          for (const qId of qIds) {
+            fetch(`/api/cpq/quotes/${qId}`)
+              .then((r2) => (r2.ok ? r2.json() : null))
+              .then((q) => {
+                if (q?.quoteNumber && !cancelled) {
+                  setLogQuoteNumbers((prev) => ({ ...prev, [qId]: q.quoteNumber }))
+                }
+              })
+              .catch(() => {})
+          }
+          for (const oId of oIds) {
+            fetch(`/api/cpq/orders/${oId}`)
+              .then((r2) => (r2.ok ? r2.json() : null))
+              .then((o) => {
+                if (o?.orderNumber && !cancelled) {
+                  setLogOrderNumbers((prev) => ({ ...prev, [oId]: o.orderNumber }))
+                }
+              })
+              .catch(() => {})
+          }
         }
       } finally {
         if (!cancelled) setChangeLogLoading(false)
@@ -270,6 +302,18 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
     if (subId) void loadLog()
     return () => { cancelled = true }
   }, [subId])
+
+  // Close the status menu on click outside.
+  React.useEffect(() => {
+    if (!statusMenuOpen) return
+    const handler = (e: MouseEvent) => {
+      if (statusMenuRef.current && !statusMenuRef.current.contains(e.target as Node)) {
+        setStatusMenuOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [statusMenuOpen])
 
   React.useEffect(() => {
     let cancelled = false
@@ -342,11 +386,14 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
               .catch(() => {})
           }
           for (const productId of productIds) {
+            // Catalog products route is paginated — `?id=…` filters to one
+            // row but the response is still `{ items: […] }`.
             fetch(`/api/catalog/products?id=${productId}`)
               .then((r) => (r.ok ? r.json() : null))
-              .then((p) => {
-                if (!p || cancelled) return
-                const name = p.title ?? p.name ?? p.handle ?? null
+              .then((res) => {
+                if (!res || cancelled) return
+                const p = (res.items ?? res)[0] ?? res
+                const name = p?.title ?? p?.name ?? p?.handle ?? null
                 if (name) setProductNames((prev) => ({ ...prev, [productId]: name }))
               })
               .catch(() => {})
@@ -388,21 +435,22 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
   const flatItems = flattenItems(sub.items)
 
   const canArc = sub.status === 'active' || sub.status === 'suspended'
+  const statusTransitions = ALLOWED_TRANSITIONS[sub.status] ?? []
 
   return (
     <div className="space-y-6">
       {/* Header — standard FormHeader detail mode, mirrors the CPQ quote /
-          order layout. Title is the human subscription name; the
-          short code lives in the secondary line; status / cycle tags
-          sit under the title; ARC actions (Amend / Renew / Cancel)
-          live on the right. */}
+          order layout. Title is the human subscription name; status /
+          cycle tags sit under it; ARC actions (Amend / Renew / Cancel)
+          + a "Change status" dropdown live on the right. The short
+          subscription code lives in the Subscription Details card
+          below — it's reference info, not header content. */}
       <FormHeader
         mode="detail"
         backHref="/backend/cpq/inventory"
         backLabel="Back to Customer Inventory"
         entityTypeLabel="Subscription"
         title={sub.name}
-        subtitle={sub.code}
         statusBadge={
           <div className="flex flex-wrap items-center gap-2 pt-1">
             <Tag variant={subscriptionStatusMap[sub.status as SubscriptionStatus] ?? 'neutral'} dot>
@@ -413,34 +461,71 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
           </div>
         }
         actionsContent={
-          canArc ? (
-            <>
-              <Button
-                type="button"
-                variant="outline"
-                disabled={arcInFlight !== null}
-                onClick={() => startArcQuote('amend')}
-              >
-                Amend
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                disabled={arcInFlight !== null}
-                onClick={() => startArcQuote('renew')}
-              >
-                Renew
-              </Button>
-              <Button
-                type="button"
-                variant="destructive-outline"
-                disabled={arcInFlight !== null}
-                onClick={() => startArcQuote('cancel')}
-              >
-                Cancel
-              </Button>
-            </>
-          ) : null
+          <>
+            {canArc && (
+              <>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={arcInFlight !== null}
+                  onClick={() => startArcQuote('amend')}
+                >
+                  Amend
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={arcInFlight !== null}
+                  onClick={() => startArcQuote('renew')}
+                >
+                  Renew
+                </Button>
+                <Button
+                  type="button"
+                  variant="destructive-outline"
+                  disabled={arcInFlight !== null}
+                  onClick={() => startArcQuote('cancel')}
+                >
+                  Cancel
+                </Button>
+              </>
+            )}
+            {statusTransitions.length > 0 && (
+              <div className="relative" ref={statusMenuRef}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setStatusMenuOpen((v) => !v)}
+                  disabled={transitioning}
+                >
+                  Change Status
+                  <svg className="h-3 w-3 ml-1" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+                  </svg>
+                </Button>
+                {statusMenuOpen && (
+                  <div className="absolute right-0 top-full mt-1 z-50 min-w-[180px] rounded-md border bg-popover shadow-md py-1">
+                    <p className="px-3 py-1.5 text-xs text-muted-foreground font-medium">Transition to:</p>
+                    {statusTransitions.map((target) => (
+                      <button
+                        key={target}
+                        type="button"
+                        onClick={() => {
+                          setStatusMenuOpen(false)
+                          void transitionStatus(target)
+                        }}
+                        className="w-full px-3 py-2 text-left text-sm hover:bg-accent focus:bg-accent focus:outline-none transition-colors flex items-center gap-2"
+                      >
+                        <Tag variant={subscriptionStatusMap[target as SubscriptionStatus] ?? 'neutral'} dot>
+                          {STATUS_LABELS[target] ?? formatStatusLabel(target)}
+                        </Tag>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </>
         }
       />
 
@@ -457,6 +542,7 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
         <div className="rounded-lg border bg-card p-4 space-y-3">
           <h3 className="text-sm font-medium">Subscription Details</h3>
           <div className="grid grid-cols-2 gap-x-4 gap-y-2">
+            <Field label="Code" value={sub.code} mono />
             <Field label="Status" value={sub.status} />
             <Field label="Billing Cycle" value={sub.billingCycle} />
             <Field label="Currency" value={currency} />
@@ -691,7 +777,7 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
                       onClick={() => router.push(`/backend/cpq/quotes/${row.sourceQuoteId}`)}
                       className="text-xs text-primary hover:underline"
                     >
-                      Quote {row.sourceQuoteId.slice(0, 8)}…
+                      Quote {logQuoteNumbers[row.sourceQuoteId] ?? `${row.sourceQuoteId.slice(0, 8)}…`}
                     </button>
                   )}
                   {row.sourceOrderId && (
@@ -699,7 +785,7 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
                       onClick={() => router.push(`/backend/cpq/orders/${row.sourceOrderId}`)}
                       className="text-xs text-primary hover:underline"
                     >
-                      Order {row.sourceOrderId.slice(0, 8)}…
+                      Order {logOrderNumbers[row.sourceOrderId] ?? `${row.sourceOrderId.slice(0, 8)}…`}
                     </button>
                   )}
                 </div>

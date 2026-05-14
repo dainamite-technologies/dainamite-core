@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import type { ColumnDef } from '@tanstack/react-table'
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
+import { RowActions } from '@open-mercato/ui/backend/RowActions'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { CpqListView, useCpqListData } from '../../../components/CpqListView'
 
@@ -56,7 +57,7 @@ export default function CpqWizardsPage() {
     [t],
   )
 
-  const handleStartWizard = React.useCallback(
+  const handlePreviewWizard = React.useCallback(
     (definitionCode: string) => {
       router.push(`/backend/cpq/wizards/${definitionCode}`)
     },
@@ -111,23 +112,25 @@ export default function CpqWizardsPage() {
       filters={filters}
       pageSize={PAGE_SIZE}
       searchPlaceholder={t('cpq.wizards.search.placeholder', 'Search wizards...')}
-      crud={{
-        endpoint: '/api/cpq/wizards',
-        entityName: t('cpq.wizards.entityName', 'wizard'),
-        editHref: (row) => `/backend/cpq/wizards/${row.code}/detail`,
-        extraRowItems: (row) =>
-          row.isActive
-            ? {
-                append: [
-                  {
-                    id: 'start',
-                    label: t('cpq.wizards.actions.start', 'Start'),
-                    onSelect: () => handleStartWizard(row.code),
-                  },
-                ],
-              }
-            : {},
-      }}
+      onRowClick={(row) => router.push(`/backend/cpq/wizards/${row.code}/detail`)}
+      // Wizards are read-only in the admin UI for now: no Edit / Delete
+      // entries — only `Preview` (run the wizard) and `View details`.
+      rowActions={(row) => (
+        <RowActions
+          items={[
+            {
+              id: 'preview',
+              label: t('cpq.wizards.actions.preview', 'Preview'),
+              onSelect: () => handlePreviewWizard(row.code),
+            },
+            {
+              id: 'details',
+              label: t('cpq.wizards.actions.details', 'View details'),
+              href: `/backend/cpq/wizards/${row.code}/detail`,
+            },
+          ]}
+        />
+      )}
       emptyState={
         <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
           {t('cpq.wizards.empty', 'No wizard definitions yet. Create one via the API.')}

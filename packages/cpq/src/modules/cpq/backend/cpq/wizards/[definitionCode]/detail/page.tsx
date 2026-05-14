@@ -2,6 +2,7 @@
 import * as React from 'react'
 import { useRouter } from 'next/navigation'
 import { Alert } from '@open-mercato/ui/primitives/alert'
+import { RowActions } from '@open-mercato/ui/backend/RowActions'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import type {
   WizardDefinitionResult,
@@ -253,15 +254,18 @@ export default function CpqWizardDetailPage({ params }: { params: Record<string,
             <p className="text-sm text-muted-foreground mt-1">{definition.description}</p>
           )}
         </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <button
-            type="button"
-            onClick={() => router.push(`/backend/cpq/wizards/${definitionCode}`)}
-            disabled={!definition.isActive}
-            className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            Start Wizard
-          </button>
+        {/* Actions live in a 3-dot menu — wizards are read-only in admin UI
+            for the time being, so only `Preview` is exposed. */}
+        <div className="shrink-0">
+          <RowActions
+            items={[
+              {
+                id: 'preview',
+                label: 'Preview',
+                onSelect: () => router.push(`/backend/cpq/wizards/${definitionCode}`),
+              },
+            ]}
+          />
         </div>
       </div>
 

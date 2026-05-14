@@ -432,9 +432,23 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
           )}
         </div>
         {!isNew && (
-          <Button type="button" variant="destructive" onClick={deleteOffering}>
-            {t('common.delete', 'Delete')}
-          </Button>
+          <div className="flex items-center gap-2">
+            {generalMode === 'view' && tab === 'general' && (
+              <Button
+                type="button"
+                onClick={() => {
+                  setFormSnapshot(form)
+                  setDesignTimeSnapshot(designTimeValues)
+                  setGeneralMode('edit')
+                }}
+              >
+                {t('common.edit', 'Edit')}
+              </Button>
+            )}
+            <Button type="button" variant="destructive" onClick={deleteOffering}>
+              {t('common.delete', 'Delete')}
+            </Button>
+          </div>
         )}
       </div>
 
@@ -646,47 +660,37 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
             </div>
           )}
 
-          <div className="flex gap-3">
-            {generalMode === 'view' && !isNew ? (
+          {/* In view mode the Edit button lives in the page header next to
+              Delete (OM standard). Here we only render the Save/Cancel
+              pair when actually editing. */}
+          {!(generalMode === 'view' && !isNew) && (
+            <div className="flex gap-3">
               <Button
                 type="button"
+                onClick={saveOffering}
+                disabled={saving || !form.code || !form.name || (isNew && !form.specId)}
+              >
+                {saving ? t('common.saving', 'Saving...') : t('common.save', 'Save')}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
                 onClick={() => {
-                  setFormSnapshot(form)
-                  setDesignTimeSnapshot(designTimeValues)
-                  setGeneralMode('edit')
+                  if (isNew) {
+                    router.push('/backend/cpq/offerings')
+                    return
+                  }
+                  if (formSnapshot) setForm(formSnapshot)
+                  if (designTimeSnapshot) setDesignTimeValues(designTimeSnapshot)
+                  setFormSnapshot(null)
+                  setDesignTimeSnapshot(null)
+                  setGeneralMode('view')
                 }}
               >
-                {t('common.edit', 'Edit')}
+                {t('common.cancel', 'Cancel')}
               </Button>
-            ) : (
-              <>
-                <Button
-                  type="button"
-                  onClick={saveOffering}
-                  disabled={saving || !form.code || !form.name || (isNew && !form.specId)}
-                >
-                  {saving ? t('common.saving', 'Saving...') : t('common.save', 'Save')}
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => {
-                    if (isNew) {
-                      router.push('/backend/cpq/offerings')
-                      return
-                    }
-                    if (formSnapshot) setForm(formSnapshot)
-                    if (designTimeSnapshot) setDesignTimeValues(designTimeSnapshot)
-                    setFormSnapshot(null)
-                    setDesignTimeSnapshot(null)
-                    setGeneralMode('view')
-                  }}
-                >
-                  {t('common.cancel', 'Cancel')}
-                </Button>
-              </>
-            )}
-          </div>
+            </div>
+          )}
         </div>
       )}
 

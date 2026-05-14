@@ -752,9 +752,25 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
           )}
         </div>
         {!isNew && (
-          <Button type="button" variant="destructive" onClick={deleteSpec}>
-            {t('common.delete', 'Delete')}
-          </Button>
+          <div className="flex items-center gap-2">
+            {/* Edit lives in the page header next to Delete (OM standard
+                detail-page layout). The inline Edit button inside the
+                General card is removed in favour of this one. */}
+            {generalMode === 'view' && tab === 'general' && (
+              <Button
+                type="button"
+                onClick={() => {
+                  setFormSnapshot(form)
+                  setGeneralMode('edit')
+                }}
+              >
+                {t('common.edit', 'Edit')}
+              </Button>
+            )}
+            <Button type="button" variant="destructive" onClick={deleteSpec}>
+              {t('common.delete', 'Delete')}
+            </Button>
+          </div>
         )}
       </div>
 
@@ -921,45 +937,36 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
           {!isNew && (
             <span className="text-xs text-muted-foreground">Version {form.version}</span>
           )}
-          <div className="flex gap-3">
-            {isViewing ? (
+          {/* In view mode the Edit button lives in the page header next to
+              Delete (OM standard). Here we only render the Save/Cancel
+              pair when actually editing. */}
+          {!isViewing && (
+            <div className="flex gap-3">
               <Button
                 type="button"
+                onClick={saveSpec}
+                disabled={saving || !form.code || !form.name}
+              >
+                {saving ? t('common.saving', 'Saving...') : t('common.save', 'Save')}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
                 onClick={() => {
-                  setFormSnapshot(form)
-                  setGeneralMode('edit')
+                  if (isNew) {
+                    router.push('/backend/cpq/specifications')
+                    return
+                  }
+                  // Revert any in-flight edits and go back to read-only.
+                  if (formSnapshot) setForm(formSnapshot)
+                  setFormSnapshot(null)
+                  setGeneralMode('view')
                 }}
               >
-                {t('common.edit', 'Edit')}
+                {t('common.cancel', 'Cancel')}
               </Button>
-            ) : (
-              <>
-                <Button
-                  type="button"
-                  onClick={saveSpec}
-                  disabled={saving || !form.code || !form.name}
-                >
-                  {saving ? t('common.saving', 'Saving...') : t('common.save', 'Save')}
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => {
-                    if (isNew) {
-                      router.push('/backend/cpq/specifications')
-                      return
-                    }
-                    // Revert any in-flight edits and go back to read-only.
-                    if (formSnapshot) setForm(formSnapshot)
-                    setFormSnapshot(null)
-                    setGeneralMode('view')
-                  }}
-                >
-                  {t('common.cancel', 'Cancel')}
-                </Button>
-              </>
-            )}
-          </div>
+            </div>
+          )}
         </div>
         )
       })()}

@@ -36,7 +36,10 @@ export const cpqProductOfferingCreateSchema = z.object({
   description: z.string().nullish(),
   offeringType: z.enum(['simple', 'bundle']).optional().default('simple'),
   designTimeValues: z.record(z.string(), z.unknown()).optional().default({}),
-  lifecycleStatus: z.enum(['draft', 'active', 'deprecated', 'retired']).optional().default('draft'),
+  // `retired` was merged into `deprecated` — see migration
+  // `<timestamp>-merge-offering-retired-into-deprecated.ts`. Aligned with
+  // specifications: a single 3-state lifecycle keeps the UX uniform.
+  lifecycleStatus: z.enum(['draft', 'active', 'deprecated']).optional().default('draft'),
   effectiveFrom: z.string().datetime().nullish(),
   effectiveTo: z.string().datetime().nullish(),
   metadata: z.record(z.string(), z.unknown()).nullish(),

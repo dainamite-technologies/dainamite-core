@@ -1253,7 +1253,6 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                     <option value="draft">Draft</option>
                     <option value="active">Active</option>
                     <option value="deprecated">Deprecated</option>
-                    <option value="retired">Retired</option>
                   </select>
                 </div>
                 <div>

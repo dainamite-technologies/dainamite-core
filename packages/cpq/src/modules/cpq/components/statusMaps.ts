@@ -8,35 +8,31 @@
 
 import type { TagMap } from '@open-mercato/ui/primitives/tag'
 
-// ─── Specification lifecycle (3 states) ──────────────────────────
+// ─── Unified lifecycle (specifications + offerings) ──────────────
 //
-// Specifications no longer carry a `retired` state; reviewers found it
-// redundant with `deprecated`. Existing rows were migrated by the
-// `<timestamp>-merge-spec-retired-into-deprecated.ts` migration.
+// Both surfaces collapsed `retired` into `deprecated` after reviewer
+// feedback: a single 3-state ladder keeps the UI uniform and the
+// "what does retired mean here?" footnote goes away. Existing rows
+// were migrated by:
+//   - `<timestamp>-merge-spec-retired-into-deprecated.ts`
+//   - `<timestamp>-merge-offering-retired-into-deprecated.ts`
 
-export type SpecificationLifecycleStatus = 'draft' | 'active' | 'deprecated'
-
-export const specificationLifecycleStatusMap: TagMap<SpecificationLifecycleStatus> = {
-  draft: 'neutral',
-  active: 'success',
-  deprecated: 'warning',
-}
-
-// ─── Offering lifecycle (4 states) ───────────────────────────────
-//
-// Offerings keep `retired` because the semantics differ: `deprecated`
-// offerings can still be sold but are discouraged for new customers;
-// `retired` offerings cannot be sold at all and only stay around for
-// historical reporting.
-
-export type LifecycleStatus = 'draft' | 'active' | 'deprecated' | 'retired'
+export type LifecycleStatus = 'draft' | 'active' | 'deprecated'
 
 export const lifecycleStatusMap: TagMap<LifecycleStatus> = {
   draft: 'neutral',
   active: 'success',
   deprecated: 'warning',
-  retired: 'error',
 }
+
+/**
+ * @deprecated Use `LifecycleStatus` — kept as a re-export to avoid churn
+ * in spec detail / list pages that imported this name.
+ */
+export type SpecificationLifecycleStatus = LifecycleStatus
+
+/** @deprecated Use `lifecycleStatusMap`. */
+export const specificationLifecycleStatusMap = lifecycleStatusMap
 
 // ─── Quote CPQ status ────────────────────────────────────────────
 

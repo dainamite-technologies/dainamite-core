@@ -141,7 +141,6 @@ export default function OfferingsListPage() {
       { value: 'draft', label: t('cpq.offerings.lifecycle.draft', 'Draft') },
       { value: 'active', label: t('cpq.offerings.lifecycle.active', 'Active') },
       { value: 'deprecated', label: t('cpq.offerings.lifecycle.deprecated', 'Deprecated') },
-      { value: 'retired', label: t('cpq.offerings.lifecycle.retired', 'Retired') },
     ],
     [t],
   )

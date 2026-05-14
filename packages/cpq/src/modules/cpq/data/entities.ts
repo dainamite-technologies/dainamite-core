@@ -3,6 +3,10 @@ import { Entity, Index, PrimaryKey, Property, Unique } from '@mikro-orm/decorato
 
 // ─── CpqProductSpecification ─────────────────────────────────────
 
+// Additional indexes added in `Migration20260514110000_cpq_list_search_indexes`
+// (hand-written because MikroORM cannot express `gin_trgm_ops` / partial predicates):
+//   - GIN trigram on code/name/description (powers list `$ilike` search)
+//   - composite (org, tenant, deleted_at, created_at DESC) for default sort path
 @Entity({ tableName: 'cpq_product_specifications' })
 @Unique({ name: 'cpq_product_specifications_product_unique', properties: ['organizationId', 'tenantId', 'productId'] })
 @Unique({ name: 'cpq_product_specifications_code_unique', properties: ['organizationId', 'tenantId', 'code'] })
@@ -67,6 +71,10 @@ export class CpqProductSpecification {
 
 // ─── CpqProductOffering ─────────────────────────────────────────
 
+// Additional indexes added in `Migration20260514110000_cpq_list_search_indexes`
+// (hand-written because MikroORM cannot express `gin_trgm_ops` / partial predicates):
+//   - GIN trigram on code/name/description (powers list `$ilike` search)
+//   - composite (org, tenant, deleted_at, created_at DESC) for default sort path
 @Entity({ tableName: 'cpq_product_offerings' })
 @Unique({ name: 'cpq_product_offerings_code_unique', properties: ['organizationId', 'tenantId', 'code'] })
 @Index({ name: 'cpq_product_offerings_spec_idx', properties: ['organizationId', 'tenantId', 'specId'] })

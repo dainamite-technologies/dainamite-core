@@ -125,20 +125,59 @@ export default function CpqOrderDetailPage(props: { params?: { id?: string } }) 
   const [expandedLines, setExpandedLines] = React.useState<Set<string>>(new Set())
   const [pricingDetail, setPricingDetail] = React.useState<{ lineIdx: number; chargeIdx: number } | null>(null)
   const [customerName, setCustomerName] = React.useState<string | null>(null)
-  const [subscription, setSubscription] = React.useState<{ id: string; name: string; code: string; status: string } | null>(null)
+  const [linkedSubscriptions, setLinkedSubscriptions] = React.useState<Array<{
+    id: string
+    name: string
+    code: string
+    status: string
+  }>>([])
 
-  function fetchSubscription(cpqConfigId: string, cancelled?: boolean) {
-    fetch(`/api/cpq/inventory/subscriptions?sourceOrderId=${cpqConfigId}&pageSize=1`)
-      .then((r) => r.json())
-      .then((data) => {
-        const items = data?.items ?? (Array.isArray(data) ? data : [])
-        if (items.length > 0 && !cancelled) {
-          const sub = items[0]
-          setSubscription({ id: sub.id, name: sub.name, code: sub.code, status: sub.status })
-        }
-      })
-      .catch(() => {})
-  }
+  // Find every subscription this order touches. NEW orders write
+  // `sourceOrderId` on the freshly-created subscription, so a
+  // `?sourceOrderId=…` filter is enough there. ARC orders (amend /
+  // renew / cancel) mutate existing subscriptions in place — the
+  // subscription's `sourceOrderId` stays pinned to the original
+  // order, so we also resolve targets via the source quote.
+  const fetchLinkedSubscriptions = React.useCallback(
+    async (orderConfigId: string, sourceQuoteId: string | null) => {
+      const byOrderId = fetch(
+        `/api/cpq/inventory/subscriptions?sourceOrderId=${orderConfigId}&pageSize=10`,
+      )
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => (d?.items ?? (Array.isArray(d) ? d : [])) as Array<{ id: string; name: string; code: string; status: string }>)
+        .catch(() => [])
+
+      const byTargets = sourceQuoteId
+        ? fetch(`/api/cpq/quotes/${sourceQuoteId}/target-subscriptions`)
+            .then((r) => (r.ok ? r.json() : null))
+            .then(async (d) => {
+              const targets: Array<{ subscriptionId: string }> = d?.items ?? []
+              const fetched = await Promise.all(
+                targets.map((t) =>
+                  fetch(`/api/cpq/inventory/subscriptions?id=${t.subscriptionId}`)
+                    .then((r) => (r.ok ? r.json() : null))
+                    .catch(() => null),
+                ),
+              )
+              return fetched.filter(Boolean) as Array<{ id: string; name: string; code: string; status: string }>
+            })
+            .catch(() => [] as Array<{ id: string; name: string; code: string; status: string }>)
+        : Promise.resolve([] as Array<{ id: string; name: string; code: string; status: string }>)
+
+      const [a, b] = await Promise.all([byOrderId, byTargets])
+      // Dedupe by id — a single subscription may appear in both lists
+      // (e.g. a NEW order that was later amended into the same sub).
+      const seen = new Set<string>()
+      const merged: Array<{ id: string; name: string; code: string; status: string }> = []
+      for (const sub of [...a, ...b]) {
+        if (!sub || seen.has(sub.id)) continue
+        seen.add(sub.id)
+        merged.push({ id: sub.id, name: sub.name, code: sub.code, status: sub.status })
+      }
+      setLinkedSubscriptions(merged)
+    },
+    [],
+  )
 
   React.useEffect(() => {
     let cancelled = false
@@ -156,7 +195,7 @@ export default function CpqOrderDetailPage(props: { params?: { id?: string } }) 
             })
             .catch(() => {})
           if (result.cpqStatus === 'active' || result.cpqStatus === 'fulfilled') {
-            fetchSubscription(result.id, cancelled)
+            void fetchLinkedSubscriptions(result.id, result.sourceQuoteId)
           }
         }
       } catch (err) {
@@ -167,7 +206,7 @@ export default function CpqOrderDetailPage(props: { params?: { id?: string } }) 
     }
     load()
     return () => { cancelled = true }
-  }, [cpqOrderId])
+  }, [cpqOrderId, fetchLinkedSubscriptions])
 
   const activateOrder = async () => {
     if (!order) return
@@ -180,7 +219,7 @@ export default function CpqOrderDetailPage(props: { params?: { id?: string } }) 
         body: JSON.stringify({}),
       })
       setOrder(result)
-      fetchSubscription(result.id)
+      void fetchLinkedSubscriptions(result.id, result.sourceQuoteId)
     } catch (err) {
       setError((err as Error).message)
     } finally {
@@ -308,43 +347,50 @@ export default function CpqOrderDetailPage(props: { params?: { id?: string } }) 
 
       {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
 
-      {/* Linked subscription — single info card replacing the previous
-          double-popup (green "Order activated" alert + purple "Linked
-          Subscription" tile). The status pill + activation date inline
-          covers both pieces of information in one place. */}
-      {subscription && (
-        <div className="rounded-lg border bg-card p-4 flex items-center gap-4">
-          <div className="flex-1 min-w-0 space-y-1">
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                Linked Subscription
-              </span>
-              <Tag
-                variant={subscription.status === 'active' ? 'success' : 'info'}
-                dot
-                className="text-[10px] px-1.5"
-              >
-                {subscription.status}
-              </Tag>
-            </div>
-            <div className="text-sm font-medium">
-              {subscription.name}{' '}
-              <span className="text-muted-foreground font-mono text-xs">({subscription.code})</span>
-            </div>
-            {order.activatedAt && (
-              <div className="text-xs text-muted-foreground">
-                Activated on {new Date(order.activatedAt).toLocaleString()}
+      {/* Linked subscriptions — one card per subscription this order
+          touches. NEW orders write one fresh subscription; ARC orders
+          (amend / renew / cancel) reach one or more existing
+          subscriptions through the source quote's target list. */}
+      {linkedSubscriptions.length > 0 && (
+        <div className="space-y-2">
+          {linkedSubscriptions.map((sub) => (
+            <div
+              key={sub.id}
+              className="rounded-lg border bg-card p-4 flex items-center gap-4"
+            >
+              <div className="flex-1 min-w-0 space-y-1">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                    Linked Subscription
+                  </span>
+                  <Tag
+                    variant={sub.status === 'active' ? 'success' : 'info'}
+                    dot
+                    className="text-[10px] px-1.5"
+                  >
+                    {sub.status}
+                  </Tag>
+                </div>
+                <div className="text-sm font-medium">
+                  {sub.name}{' '}
+                  <span className="text-muted-foreground font-mono text-xs">({sub.code})</span>
+                </div>
+                {order.activatedAt && (
+                  <div className="text-xs text-muted-foreground">
+                    Activated on {new Date(order.activatedAt).toLocaleString()}
+                  </div>
+                )}
               </div>
-            )}
-          </div>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => router.push(`/backend/cpq/inventory/subscriptions/${subscription.id}`)}
-          >
-            <ArrowRight className="h-3.5 w-3.5" />
-            Open
-          </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => router.push(`/backend/cpq/inventory/subscriptions/${sub.id}`)}
+              >
+                <ArrowRight className="h-3.5 w-3.5" />
+                Open
+              </Button>
+            </div>
+          ))}
         </div>
       )}
 

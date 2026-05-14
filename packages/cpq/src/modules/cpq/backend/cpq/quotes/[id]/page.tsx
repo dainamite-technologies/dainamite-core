@@ -129,19 +129,10 @@ type BundleTree = {
 
 // ─── Constants ───────────────────────────────────────────────────
 
-
-const ALLOWED_TRANSITIONS: Record<string, string[]> = {
-  new: ['incomplete', 'ready', 'cancelled'],
-  incomplete: ['ready', 'incomplete', 'cancelled'],
-  ready: ['incomplete', 'in_approval', 'pre_approved', 'with_customer', 'cancelled'],
-  in_approval: ['approved', 'rejected', 'cancelled'],
-  pre_approved: ['with_customer'],
-  approved: ['with_customer'],
-  with_customer: ['accepted', 'rejected', 'cancelled'],
-  accepted: [],
-  rejected: [],
-  cancelled: [],
-}
+// `ALLOWED_TRANSITIONS` used to mirror the backend state machine on the
+// client to gate the inline status menu. Per product decision the UI
+// now lets the operator jump between any pair of statuses; the backend
+// is the single source of truth, so the table is no longer needed here.
 
 function fmt(amount: number, currency: string): string {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(amount)
@@ -208,19 +199,30 @@ function MoreActionsDropdown({ items }: { items: ActionItem[] }) {
         </svg>
       </Button>
       {open && (
-        <div className="absolute right-0 top-full mt-1 z-50 min-w-[200px] rounded-md border bg-card shadow-lg py-1">
-          {items.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              onClick={() => { setOpen(false); item.onSelect() }}
-              disabled={item.disabled || item.loading}
-              className="w-full px-3 py-1.5 text-left text-sm hover:bg-muted disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-            >
-              {item.icon ? <item.icon className="h-4 w-4 text-muted-foreground" /> : null}
-              <span>{item.label}</span>
-            </button>
-          ))}
+        <div className="absolute right-0 top-full mt-1 z-50 min-w-[200px] rounded-md border bg-popover shadow-md py-1">
+          {items.map((item) => {
+            const isDelete = item.id === 'delete'
+            return (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => { setOpen(false); item.onSelect() }}
+                disabled={item.disabled || item.loading}
+                // Use bg-accent on hover (same token as Radix-style menu items in OM)
+                // and tint delete with destructive colors so the affordance is obvious.
+                className={
+                  'w-full px-3 py-2 text-left text-sm flex items-center gap-2 transition-colors ' +
+                  'disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent ' +
+                  (isDelete
+                    ? 'text-destructive hover:bg-destructive/10 focus:bg-destructive/10 focus:outline-none'
+                    : 'hover:bg-accent focus:bg-accent focus:outline-none')
+                }
+              >
+                {item.icon ? <item.icon className="h-4 w-4 text-muted-foreground" /> : null}
+                <span>{item.label}</span>
+              </button>
+            )
+          })}
         </div>
       )}
     </div>
@@ -656,55 +658,57 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
             {cpqQuote.convertedOrderId && <Tag variant="success" dot>Converted</Tag>}
           </div>
         }
-        utilityActions={
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => router.push(`/backend/sales/quotes/${cpqQuote.quoteId}`)}
-          >
-            <ExternalLink className="h-3.5 w-3.5" />
-            View Sales Quote
-          </Button>
-        }
+        // FormHeader.detail ignores `utilityActions` whenever `actionsContent`
+        // is set, so we render the "View Sales Quote" link inline alongside
+        // the primary actions to keep it visible.
         actionsContent={
-          cpqQuote.convertedOrderId ? (
+          <>
             <Button
               type="button"
-              onClick={() => router.push(`/backend/cpq/orders/${cpqQuote.convertedOrderId}`)}
+              variant="outline"
+              onClick={() => router.push(`/backend/sales/quotes/${cpqQuote.quoteId}`)}
             >
-              <ArrowRight className="h-4 w-4" />
-              Go to order
+              <ExternalLink className="h-3.5 w-3.5" />
+              View Sales Quote
             </Button>
-          ) : view !== 'summary' ? (
-            <Button type="button" variant="outline" onClick={() => { resetConfigState(); setView('summary') }}>
-              Cancel
-            </Button>
-          ) : (
-            <>
-              <Button type="button" onClick={startAddOffering}>
-                <Plus className="h-4 w-4" />
-                Add Offering
+            {cpqQuote.convertedOrderId ? (
+              <Button
+                type="button"
+                onClick={() => router.push(`/backend/cpq/orders/${cpqQuote.convertedOrderId}`)}
+              >
+                <ArrowRight className="h-4 w-4" />
+                Go to order
               </Button>
-              {cpqQuote.cpqStatus === 'accepted' && (
-                <Button type="button" onClick={convertToOrder} disabled={converting}>
-                  {converting ? <Spinner /> : <ArrowRight className="h-4 w-4" />}
-                  Convert to Order
+            ) : view !== 'summary' ? (
+              <Button type="button" variant="outline" onClick={() => { resetConfigState(); setView('summary') }}>
+                Cancel
+              </Button>
+            ) : (
+              <>
+                <Button type="button" onClick={startAddOffering}>
+                  <Plus className="h-4 w-4" />
+                  Add Offering
                 </Button>
-              )}
-              <MoreActionsDropdown
-                items={buildMoreActions({
-                  arcEditable,
-                  openArcDrawer: () => setArcDrawerOpen(true),
-                  recalculate,
-                  submitting,
-                  deletable: !['accepted', 'rejected', 'cancelled'].includes(cpqQuote.cpqStatus),
-                  onDelete: () => setShowDeleteConfirm(true),
-                  deleting,
-                })}
-              />
-            </>
-          )
+                {cpqQuote.cpqStatus === 'accepted' && (
+                  <Button type="button" onClick={convertToOrder} disabled={converting}>
+                    {converting ? <Spinner /> : <ArrowRight className="h-4 w-4" />}
+                    Convert to Order
+                  </Button>
+                )}
+                <MoreActionsDropdown
+                  items={buildMoreActions({
+                    arcEditable,
+                    openArcDrawer: () => setArcDrawerOpen(true),
+                    recalculate,
+                    submitting,
+                    deletable: !['accepted', 'rejected', 'cancelled'].includes(cpqQuote.cpqStatus),
+                    onDelete: () => setShowDeleteConfirm(true),
+                    deleting,
+                  })}
+                />
+              </>
+            )}
+          </>
         }
       />
 
@@ -730,13 +734,13 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
         </MetaCard>
       </div>
 
-      {/* Status path — always interactive: even on a converted quote
-          the operator may still need to record acceptance / rejection
-          decisions. The convert-to-order guard handles the data side. */}
+      {/* Status path — every step is clickable so the operator can move
+          between any pair of statuses. Backend enforces ARC-specific
+          guards (validateArcQuote on submit-for-approval) but no longer
+          gates simple transitions. */}
       <div className="flex items-center gap-3 flex-wrap">
         <QuoteStatusPath
           current={cpqQuote.cpqStatus}
-          allowedTransitions={ALLOWED_TRANSITIONS[cpqQuote.cpqStatus] ?? []}
           onTransition={transitionStatus}
           disabled={transitioning}
         />

@@ -734,12 +734,11 @@ export class DefaultCpqQuotingService {
       }
     }
 
-    // Additional guards
-    if (['in_approval', 'pre_approved', 'with_customer'].includes(targetStatus) && currentStatus === 'ready') {
-      // OK — allowed from ready
-    } else if (targetStatus === 'with_customer' && !['approved', 'pre_approved', 'ready'].includes(currentStatus)) {
-      throw new QuotingError(422, `Quote must be in 'approved', 'pre_approved', or 'ready' status`, currentStatus)
-    }
+    // The previous service-level guard required `with_customer` to come
+    // from `approved` / `pre_approved` / `ready`. That conflicted with the
+    // product decision to let operators jump between any pair of statuses,
+    // so it was removed. ARC validation above remains as the real guard
+    // against semantic inconsistency on the submit-for-approval path.
 
     cpqConfig.cpqStatus = targetStatus
     await em.flush()

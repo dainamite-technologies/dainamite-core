@@ -164,30 +164,77 @@ describe('DefaultCpqQuotingService.createQuote — guards', () => {
 })
 
 describe('DefaultCpqQuotingService.transitionStatus — state machine guard', () => {
-  it('throws 409 for an illegal transition (new → approved)', async () => {
+  // Per operator-override decision, "any → any" is allowed except for
+  // self-transitions and ARC-specific guard violations.
+  it('persists previously-illegal new → approved jump (operator override)', async () => {
     const { em, service } = makeService()
+    const cpqConfig = {
+      id: 'cpq-1',
+      quoteId: 'sq-1',
+      cpqStatus: 'new',
+      customerId: 'cust',
+      currencyCode: 'USD',
+      version: 1,
+      parentQuoteId: null,
+      validationResult: { valid: true, errors: [] },
+      pricingSummary: {
+        nrcTotal: 0,
+        mrcTotal: 0,
+        usageCharges: [],
+        usageTotalEstimated: null,
+        discountTotal: 0,
+        surchargeTotal: 0,
+        currencyCode: 'USD',
+      },
+    }
     em.findOne
-      .mockResolvedValueOnce({
-        id: 'cpq-1',
-        quoteId: 'sq-1',
-        cpqStatus: 'new',
-      })
+      .mockResolvedValueOnce(cpqConfig)
       .mockResolvedValueOnce({ id: 'sq-1', currencyCode: 'USD', quoteNumber: 'Q-001' })
+    em.find.mockResolvedValueOnce([]) // line configs
 
-    await expect(service.transitionStatus('cpq-1', 'approved', SCOPE)).rejects.toMatchObject({
-      status: 409,
-      message: "Cannot transition from 'new' to 'approved'",
-    })
+    await service.transitionStatus('cpq-1', 'approved', SCOPE)
+    expect(cpqConfig.cpqStatus).toBe('approved')
   })
 
-  it('throws 409 from terminal accepted', async () => {
+  it('persists previously-illegal accepted → with_customer jump (operator override)', async () => {
+    const { em, service } = makeService()
+    const cpqConfig = {
+      id: 'cpq-1',
+      quoteId: 'sq-1',
+      cpqStatus: 'accepted',
+      customerId: 'cust',
+      currencyCode: 'USD',
+      version: 1,
+      parentQuoteId: null,
+      validationResult: { valid: true, errors: [] },
+      pricingSummary: {
+        nrcTotal: 0,
+        mrcTotal: 0,
+        usageCharges: [],
+        usageTotalEstimated: null,
+        discountTotal: 0,
+        surchargeTotal: 0,
+        currencyCode: 'USD',
+      },
+    }
+    em.findOne
+      .mockResolvedValueOnce(cpqConfig)
+      .mockResolvedValueOnce({ id: 'sq-1', currencyCode: 'USD' })
+    em.find.mockResolvedValueOnce([]) // line configs
+
+    await service.transitionStatus('cpq-1', 'with_customer', SCOPE)
+    expect(cpqConfig.cpqStatus).toBe('with_customer')
+  })
+
+  it('still rejects self-transition (new → new)', async () => {
     const { em, service } = makeService()
     em.findOne
-      .mockResolvedValueOnce({ id: 'cpq-1', quoteId: 'sq-1', cpqStatus: 'accepted' })
-      .mockResolvedValueOnce({ id: 'sq-1', currencyCode: 'USD' })
+      .mockResolvedValueOnce({ id: 'cpq-1', quoteId: 'sq-1', cpqStatus: 'new' })
+      .mockResolvedValueOnce({ id: 'sq-1', currencyCode: 'USD', quoteNumber: 'Q-001' })
 
-    await expect(service.transitionStatus('cpq-1', 'with_customer', SCOPE)).rejects.toMatchObject({
+    await expect(service.transitionStatus('cpq-1', 'new', SCOPE)).rejects.toMatchObject({
       status: 409,
+      message: "Cannot transition from 'new' to 'new'",
     })
   })
 

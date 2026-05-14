@@ -91,29 +91,35 @@ describe('CPQ quote lifecycle (CPQ_STATUSES / ALLOWED_TRANSITIONS)', () => {
     })
   })
 
-  describe('illegal transitions', () => {
-    it('forbids new → approved (cannot bypass approval flow)', () => {
-      expect(ALLOWED_TRANSITIONS.new).not.toContain('approved')
+  describe('operator override: any → any', () => {
+    // Product decision: the status path is operator-driven. ALLOWED_TRANSITIONS
+    // now encodes only the no-self-transition rule; semantic guards
+    // (validateArcQuote, concurrent-ARC checks) live in transitionStatus.
+    it.each([
+      ['new', 'approved'],
+      ['new', 'in_approval'],
+      ['ready', 'approved'],
+      ['incomplete', 'in_approval'],
+      ['approved', 'accepted'],
+      ['pre_approved', 'approved'],
+      ['accepted', 'ready'],
+      ['cancelled', 'new'],
+    ] as const)('allows %s → %s', (from, to) => {
+      expect(ALLOWED_TRANSITIONS[from]).toContain(to)
     })
 
-    it('forbids new → in_approval (must pass through ready first)', () => {
-      expect(ALLOWED_TRANSITIONS.new).not.toContain('in_approval')
+    it('forbids self-transitions for every status', () => {
+      for (const status of CPQ_STATUSES) {
+        expect(ALLOWED_TRANSITIONS[status]).not.toContain(status)
+      }
     })
 
-    it('forbids ready → approved (must go through in_approval)', () => {
-      expect(ALLOWED_TRANSITIONS.ready).not.toContain('approved')
-    })
-
-    it('forbids incomplete → in_approval (must reach ready first)', () => {
-      expect(ALLOWED_TRANSITIONS.incomplete).not.toContain('in_approval')
-    })
-
-    it('forbids approved → accepted directly (must go via with_customer)', () => {
-      expect(ALLOWED_TRANSITIONS.approved).not.toContain('accepted')
-    })
-
-    it('forbids pre_approved → approved (alternate path is one-way)', () => {
-      expect(ALLOWED_TRANSITIONS.pre_approved).not.toContain('approved')
+    it('every source can reach every other status', () => {
+      for (const from of CPQ_STATUSES) {
+        const reachable = ALLOWED_TRANSITIONS[from]
+        const others = CPQ_STATUSES.filter((s) => s !== from)
+        expect(reachable.sort()).toEqual([...others].sort())
+      }
     })
   })
 
@@ -126,9 +132,15 @@ describe('CPQ quote lifecycle (CPQ_STATUSES / ALLOWED_TRANSITIONS)', () => {
     })
 
     it.each(['accepted', 'rejected', 'cancelled'] as const)(
-      '%s is terminal: no outgoing transitions',
+      '%s is terminal metadata: still navigable per operator override',
       (status) => {
-        expect(ALLOWED_TRANSITIONS[status]).toEqual([])
+        // After the override we no longer expect terminals to have zero
+        // outgoing transitions — operators can manually undo a terminal
+        // decision (e.g. flip an accidental "rejected" back to "ready").
+        expect(ALLOWED_TRANSITIONS[status].length).toBeGreaterThan(0)
+        // But TERMINAL_STATUSES still flags these for other call sites
+        // (e.g. removeQuoteItem blocks edits on terminals).
+        expect(TERMINAL_STATUSES).toContain(status)
       },
     )
   })

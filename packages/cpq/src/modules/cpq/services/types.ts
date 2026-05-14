@@ -52,18 +52,15 @@ export type CpqStatus = (typeof CPQ_STATUSES)[number]
 
 export const TERMINAL_STATUSES: CpqStatus[] = ['accepted', 'rejected', 'cancelled']
 
-export const ALLOWED_TRANSITIONS: Record<CpqStatus, CpqStatus[]> = {
-  new: ['incomplete', 'ready', 'cancelled'],
-  incomplete: ['ready', 'incomplete', 'cancelled'],
-  ready: ['incomplete', 'in_approval', 'pre_approved', 'with_customer', 'cancelled'],
-  in_approval: ['approved', 'rejected', 'cancelled'],
-  pre_approved: ['with_customer'],
-  approved: ['with_customer'],
-  with_customer: ['accepted', 'rejected', 'cancelled'],
-  accepted: [],
-  rejected: [],
-  cancelled: [],
-}
+// Per product decision: the CPQ status path is operator-driven and can
+// jump between any pair of statuses. Self-transitions are excluded
+// because they're no-ops. ARC-specific guards (`validateArcQuote`,
+// concurrent-ARC checks) still run inside `transitionStatus` and are
+// the real safety net — this table only enforces the "no self loop"
+// invariant.
+export const ALLOWED_TRANSITIONS: Record<CpqStatus, CpqStatus[]> = Object.fromEntries(
+  CPQ_STATUSES.map((from) => [from, CPQ_STATUSES.filter((to) => to !== from)]),
+) as Record<CpqStatus, CpqStatus[]>
 
 // ─── Service input/output types ──────────────────────────────────
 

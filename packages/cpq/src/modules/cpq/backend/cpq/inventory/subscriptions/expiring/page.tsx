@@ -2,6 +2,7 @@
 import * as React from 'react'
 import { useRouter } from 'next/navigation'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { Alert } from '@open-mercato/ui/primitives/alert'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { Tag, type TagVariant } from '@open-mercato/ui/primitives/tag'
 
@@ -174,11 +175,7 @@ export default function ExpiringSubscriptionsPage() {
         </div>
       </div>
 
-      {error && (
-        <div className="rounded-md bg-red-50 border border-red-200 p-3 text-sm text-red-700">
-          {error}
-        </div>
-      )}
+      {error && <Alert variant="destructive">{error}</Alert>}
 
       {loading ? (
         <div className="text-sm text-muted-foreground">{t('common.loading', 'Loading...')}</div>

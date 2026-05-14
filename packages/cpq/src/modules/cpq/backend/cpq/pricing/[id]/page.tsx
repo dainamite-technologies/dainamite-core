@@ -2,6 +2,8 @@
 import * as React from 'react'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { useParams, useRouter } from 'next/navigation'
+import { Alert } from '@open-mercato/ui/primitives/alert'
+import { Tag } from '@open-mercato/ui/primitives/tag'
 
 type Dimension = { key: string; label: string }
 type PriceColumn = { key: string; label: string }
@@ -84,9 +86,7 @@ export default function PricingTableDetailPage(props: { params?: { id?: string }
         >
           ← {t('common.back', 'Back')}
         </button>
-        <div className="rounded-md bg-red-50 border border-red-200 p-3 text-sm text-red-700">
-          {error ?? 'Not found'}
-        </div>
+        <Alert variant="destructive">{error ?? 'Not found'}</Alert>
       </div>
     )
   }
@@ -103,13 +103,9 @@ export default function PricingTableDetailPage(props: { params?: { id?: string }
           ← {t('common.back', 'Back')}
         </button>
         <h1 className="text-2xl font-bold">{table.name}</h1>
-        <span
-          className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
-            table.isActive ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'
-          }`}
-        >
+        <Tag variant={table.isActive ? 'success' : 'neutral'} dot>
           {table.isActive ? t('common.active', 'Active') : t('common.inactive', 'Inactive')}
-        </span>
+        </Tag>
       </div>
 
       <div className="rounded-lg border bg-card p-6">

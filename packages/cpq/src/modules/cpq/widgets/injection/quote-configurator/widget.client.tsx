@@ -2,6 +2,12 @@
 import * as React from 'react'
 import type { InjectionWidgetComponentProps } from '@open-mercato/shared/modules/widgets/injection'
 import { useRouter } from 'next/navigation'
+import { Tag } from '@open-mercato/ui/primitives/tag'
+import {
+  formatStatusLabel,
+  quoteCpqStatusMap,
+  type QuoteCpqStatus,
+} from '../../../components/statusMaps'
 
 // ─── Types ───────────────────────────────────────────────────────
 
@@ -47,18 +53,6 @@ type QuoteResult = {
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────
-
-const STATUS_COLORS: Record<string, string> = {
-  new: 'bg-blue-100 text-blue-800',
-  incomplete: 'bg-yellow-100 text-yellow-800',
-  ready: 'bg-green-100 text-green-800',
-  in_approval: 'bg-purple-100 text-purple-800',
-  approved: 'bg-green-100 text-green-800',
-  with_customer: 'bg-sky-100 text-sky-800',
-  accepted: 'bg-emerald-100 text-emerald-800',
-  rejected: 'bg-red-100 text-red-800',
-  cancelled: 'bg-gray-100 text-gray-800',
-}
 
 function fmt(amount: number, currency: string): string {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(amount)
@@ -121,7 +115,7 @@ export default function QuoteConfiguratorWidget({ data }: InjectionWidgetCompone
           </svg>
           Create CPQ Quote
         </button>
-        {!custId && <p className="mt-2 text-xs text-orange-600">Assign a customer to this quote first.</p>}
+        {!custId && <p className="mt-2 text-xs text-status-warning-text">Assign a customer to this quote first.</p>}
       </div>
     )
   }
@@ -142,9 +136,9 @@ export default function QuoteConfiguratorWidget({ data }: InjectionWidgetCompone
       {/* Header */}
       <div className="flex items-center justify-between px-1">
         <div className="flex items-center gap-3">
-          <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${STATUS_COLORS[cpqQuote.cpqStatus] ?? 'bg-gray-100 text-gray-800'}`}>
-            {cpqQuote.cpqStatus.replace(/_/g, ' ')}
-          </span>
+          <Tag variant={quoteCpqStatusMap[cpqQuote.cpqStatus as QuoteCpqStatus] ?? 'neutral'} dot>
+            {formatStatusLabel(cpqQuote.cpqStatus)}
+          </Tag>
           <span className="text-xs text-muted-foreground">v{cpqQuote.version}</span>
           <span className="text-xs text-muted-foreground">{currency}</span>
         </div>
@@ -184,13 +178,13 @@ export default function QuoteConfiguratorWidget({ data }: InjectionWidgetCompone
                       <span className="font-medium text-sm">{line.offeringName}</span>
                       {line.quantity > 1 && <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-medium">×{line.quantity}</span>}
                       {line.isConfigured ? (
-                        <span className="inline-flex items-center rounded-full bg-green-100 px-1.5 py-0.5 text-xs font-medium text-green-700">configured</span>
+                        <Tag variant="success" className="px-1.5 text-xs">configured</Tag>
                       ) : (
-                        <span className="inline-flex items-center rounded-full bg-yellow-100 px-1.5 py-0.5 text-xs font-medium text-yellow-700">incomplete</span>
+                        <Tag variant="warning" className="px-1.5 text-xs">incomplete</Tag>
                       )}
                     </div>
                     {line.validationErrors && line.validationErrors.length > 0 && (
-                      <p className="text-xs text-red-600 mt-0.5">{line.validationErrors[0].message}</p>
+                      <p className="text-xs text-destructive mt-0.5">{line.validationErrors[0].message}</p>
                     )}
                   </div>
                   <div className="shrink-0 text-right text-xs space-y-0.5">

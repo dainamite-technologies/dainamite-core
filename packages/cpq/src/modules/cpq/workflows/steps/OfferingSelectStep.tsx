@@ -129,7 +129,7 @@ function ConfigPanel({
             <div key={attr.code}>
               <label className="block text-sm font-medium mb-1">
                 {attr.name}
-                {attr.isRequired && <span className="text-red-500 ml-0.5">*</span>}
+                {attr.isRequired && <span className="text-destructive ml-0.5">*</span>}
               </label>
               {renderAttribute(attr)}
               {attr.helpText && <p className="text-xs text-muted-foreground mt-1">{attr.helpText}</p>}

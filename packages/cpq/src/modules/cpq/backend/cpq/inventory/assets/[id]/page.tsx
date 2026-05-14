@@ -1,6 +1,7 @@
 "use client"
 import * as React from 'react'
 import { useRouter, useParams } from 'next/navigation'
+import { Alert } from '@open-mercato/ui/primitives/alert'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import {
   assetStatusMap,
@@ -351,9 +352,5 @@ function Spinner() {
 }
 
 function ErrorBanner({ message }: { message: string }) {
-  return (
-    <div className="rounded-md bg-red-50 border border-red-200 p-3 flex items-start gap-2">
-      <span className="text-sm text-red-700 flex-1">{message}</span>
-    </div>
-  )
+  return <Alert variant="destructive">{message}</Alert>
 }

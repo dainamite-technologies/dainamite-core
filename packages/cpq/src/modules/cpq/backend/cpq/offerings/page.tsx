@@ -16,6 +16,7 @@ import {
 } from '@open-mercato/ui/primitives/select'
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
 import { flash } from '@open-mercato/ui/backend/FlashMessages'
+import { Alert } from '@open-mercato/ui/primitives/alert'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { CpqListView, useCpqListData } from '../../../components/CpqListView'
 import { NumberInput } from '../../../components/NumberInput'
@@ -520,11 +521,7 @@ export default function OfferingsListPage() {
 
   const toolbarContent = (
     <>
-      {error && (
-        <div className="rounded-md bg-red-50 border border-red-200 p-3 text-sm text-red-700">
-          {error}
-        </div>
-      )}
+      {error && <Alert variant="destructive">{error}</Alert>}
       {bulkChargeForm}
     </>
   )

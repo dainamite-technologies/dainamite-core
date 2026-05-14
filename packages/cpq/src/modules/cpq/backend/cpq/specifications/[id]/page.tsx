@@ -2,7 +2,15 @@
 import * as React from 'react'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { useParams, useRouter } from 'next/navigation'
+import { Tag } from '@open-mercato/ui/primitives/tag'
+import { Alert } from '@open-mercato/ui/primitives/alert'
+import { Button } from '@open-mercato/ui/primitives/button'
 import { NumberInput } from '../../../../components/NumberInput'
+import {
+  formatStatusLabel,
+  lifecycleStatusMap,
+  type LifecycleStatus,
+} from '../../../../components/statusMaps'
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -187,13 +195,6 @@ const EMPTY_RELATIONSHIP: EditingRelationship = {
   cardinalityMax: null,
   condition: null,
   isActive: true,
-}
-
-const STATUS_COLORS: Record<string, string> = {
-  draft: 'bg-gray-100 text-gray-700',
-  active: 'bg-green-100 text-green-800',
-  deprecated: 'bg-yellow-100 text-yellow-800',
-  retired: 'bg-red-100 text-red-700',
 }
 
 // ─── Component ──────────────────────────────────────────────────
@@ -697,23 +698,20 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
             {isNew ? t('cpq.specifications.new', 'New Specification') : form.name}
           </h1>
           {!isNew && (
-            <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${STATUS_COLORS[form.lifecycleStatus] ?? ''}`}>
-              {form.lifecycleStatus}
-            </span>
+            <Tag variant={lifecycleStatusMap[form.lifecycleStatus as LifecycleStatus] ?? 'neutral'} dot>
+              {formatStatusLabel(form.lifecycleStatus)}
+            </Tag>
           )}
         </div>
         {!isNew && (
-          <button
-            onClick={deleteSpec}
-            className="inline-flex items-center justify-center rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700"
-          >
+          <Button type="button" variant="destructive" onClick={deleteSpec}>
             {t('common.delete', 'Delete')}
-          </button>
+          </Button>
         )}
       </div>
 
       {error && (
-        <div className="rounded-md bg-red-50 border border-red-200 p-3 text-sm text-red-700">{error}</div>
+        <Alert variant="destructive">{error}</Alert>
       )}
 
       {/* Tabs */}
@@ -955,7 +953,7 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                             <button
                               type="button"
                               onClick={() => setEditingOptions(editingOptions.filter((_, i) => i !== idx))}
-                              className="text-red-500 hover:text-red-700 text-sm px-1"
+                              className="text-destructive hover:text-destructive/80 text-sm px-1"
                               title="Remove"
                             >
                               ×
@@ -1051,15 +1049,15 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                       <td className="px-4 py-3">{attr.name}</td>
                       <td className="px-4 py-3">{attr.attributeType}</td>
                       <td className="px-4 py-3">
-                        <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${attr.resolutionTime === 'design_time' ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-700'}`}>
+                        <Tag variant={attr.resolutionTime === 'design_time' ? 'info' : 'neutral'} className="px-2 text-xs">
                           {attr.resolutionTime === 'design_time' ? 'design' : 'run'}
-                        </span>
+                        </Tag>
                       </td>
                       <td className="px-4 py-3 text-muted-foreground">{attr.options ? `${attr.options.length} options` : '—'}</td>
                       <td className="px-4 py-3">{attr.isRequired ? 'Yes' : 'No'}</td>
                       <td className="px-4 py-3 text-right">
                         <button onClick={() => startEditAttr(attr)} className="text-xs text-primary hover:underline mr-2">Edit</button>
-                        <button onClick={() => deleteAttribute(attr.id)} className="text-xs text-red-600 hover:underline">Delete</button>
+                        <button onClick={() => deleteAttribute(attr.id)} className="text-xs text-destructive hover:underline">Delete</button>
                       </td>
                     </tr>
                   ))}
@@ -1124,7 +1122,7 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                       <div key={attr.code}>
                         <label className="block text-xs font-medium mb-1">
                           {attr.name}
-                          {attr.isRequired && <span className="text-red-500 ml-0.5">*</span>}
+                          {attr.isRequired && <span className="text-destructive ml-0.5">*</span>}
                         </label>
                         {(attr.attributeType === 'select' || attr.attributeType === 'enum') && attr.options ? (
                           <select
@@ -1208,9 +1206,9 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                       <td className="px-3 py-3 font-mono text-xs">{o.code}</td>
                       <td className="px-3 py-3 font-medium">{o.name}</td>
                       <td className="px-3 py-3">
-                        <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${STATUS_COLORS[o.lifecycleStatus] ?? ''}`}>
-                          {o.lifecycleStatus}
-                        </span>
+                        <Tag variant={lifecycleStatusMap[o.lifecycleStatus as LifecycleStatus] ?? 'neutral'} dot>
+                          {formatStatusLabel(o.lifecycleStatus)}
+                        </Tag>
                       </td>
                       <td className="px-3 py-3 text-muted-foreground text-xs">
                         {Object.keys(o.designTimeValues).length > 0
@@ -1219,7 +1217,7 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                       </td>
                       <td className="px-3 py-3 text-right">
                         <button onClick={(e) => { e.stopPropagation(); startEditOffering(o) }} className="text-xs text-primary hover:underline mr-2">Edit</button>
-                        <button onClick={(e) => { e.stopPropagation(); deleteOffering(o.id) }} className="text-xs text-red-600 hover:underline">Delete</button>
+                        <button onClick={(e) => { e.stopPropagation(); deleteOffering(o.id) }} className="text-xs text-destructive hover:underline">Delete</button>
                       </td>
                     </tr>
                   ))}
@@ -1321,13 +1319,15 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                   {relationships.map((rel) => (
                     <tr key={rel.id} className="border-b">
                       <td className="px-4 py-3">
-                        <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                          rel.relationshipType === 'parent_child' ? 'bg-purple-100 text-purple-800' :
-                          rel.relationshipType === 'requires' ? 'bg-blue-100 text-blue-800' :
-                          'bg-red-100 text-red-700'
-                        }`}>
+                        <Tag
+                          variant={
+                            rel.relationshipType === 'parent_child' ? 'brand' :
+                            rel.relationshipType === 'requires' ? 'info' :
+                            'error'
+                          }
+                        >
                           {rel.relationshipType}
-                        </span>
+                        </Tag>
                       </td>
                       <td className="px-4 py-3 text-sm">{getSpecName(rel.sourceSpecId)}</td>
                       <td className="px-4 py-3 text-sm">{getSpecName(rel.targetSpecId)}</td>
@@ -1335,7 +1335,7 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                       <td className="px-4 py-3 text-muted-foreground text-xs">{rel.condition ? JSON.stringify(rel.condition) : '—'}</td>
                       <td className="px-4 py-3 text-right">
                         <button onClick={() => startEditRel(rel)} className="text-xs text-primary hover:underline mr-2">Edit</button>
-                        <button onClick={() => deleteRelationship(rel.id)} className="text-xs text-red-600 hover:underline">Delete</button>
+                        <button onClick={() => deleteRelationship(rel.id)} className="text-xs text-destructive hover:underline">Delete</button>
                       </td>
                     </tr>
                   ))}
@@ -1501,16 +1501,14 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                     <tr key={slot.id} className="border-b">
                       <td className="px-4 py-3 font-medium">{slot.name}</td>
                       <td className="px-4 py-3">
-                        <span className="inline-flex items-center rounded-full bg-blue-100 text-blue-800 px-2.5 py-0.5 text-xs font-medium">
-                          {slot.componentGroup}
-                        </span>
+                        <Tag variant="info">{slot.componentGroup}</Tag>
                       </td>
                       <td className="px-4 py-3 text-sm">
                         {slot.targetSpec ? (
                           <span>
                             {slot.targetSpec.name}
                             {slot.targetSpec.specType === 'bundle' && (
-                              <span className="ml-1 inline-flex items-center rounded-full bg-purple-100 text-purple-800 px-1.5 py-0.5 text-[10px] font-medium">bundle</span>
+                              <Tag variant="brand" className="ml-1 px-1.5 text-[10px]">bundle</Tag>
                             )}
                           </span>
                         ) : (
@@ -1554,7 +1552,7 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                               setError('Failed to delete slot')
                             }
                           }}
-                          className="text-xs text-red-600 hover:underline"
+                          className="text-xs text-destructive hover:underline"
                         >
                           Delete
                         </button>

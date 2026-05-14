@@ -1,7 +1,8 @@
 "use client"
 import * as React from 'react'
 import { useRouter, useParams } from 'next/navigation'
-import { Play, X } from 'lucide-react'
+import { CheckCircle2, Play, RefreshCw, X } from 'lucide-react'
+import { Alert } from '@open-mercato/ui/primitives/alert'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import {
@@ -60,10 +61,10 @@ type OrderResult = {
   lines: OrderLineResult[]
 }
 
-const ARC_BADGE_STYLES: Record<string, string> = {
-  amend: 'bg-purple-100 text-purple-800 border-purple-200',
-  renew: 'bg-green-100 text-green-800 border-green-200',
-  cancel: 'bg-red-100 text-red-800 border-red-200',
+const ARC_BADGE_VARIANTS: Record<string, 'brand' | 'success' | 'error'> = {
+  amend: 'brand',
+  renew: 'success',
+  cancel: 'error',
 }
 
 // ─── Constants ───────────────────────────────────────────────────
@@ -208,14 +209,13 @@ export default function CpqOrderDetailPage(props: { params?: { id?: string } }) 
           <button onClick={() => router.push('/backend/cpq/orders')} className="text-sm text-muted-foreground hover:text-foreground">← Back</button>
           <h1 className="text-2xl font-bold">Order {order.orderNumber || order.orderId.slice(0, 8)}</h1>
           {order.quoteType && order.quoteType !== 'new' && (
-            <span
-              className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-bold uppercase tracking-wide ${
-                ARC_BADGE_STYLES[order.quoteType] ?? 'bg-gray-100 text-gray-800 border-gray-200'
-              }`}
+            <Tag
+              variant={ARC_BADGE_VARIANTS[order.quoteType] ?? 'neutral'}
+              className="uppercase tracking-wide font-bold"
               title={`ARC ${order.quoteType} order — derived from a Customer Inventory subscription change`}
             >
               {order.quoteType}
-            </span>
+            </Tag>
           )}
           <Tag variant={orderCpqStatusMap[order.cpqStatus as OrderCpqStatus] ?? 'neutral'} dot>
             {formatStatusLabel(order.cpqStatus)}
@@ -259,11 +259,9 @@ export default function CpqOrderDetailPage(props: { params?: { id?: string } }) 
 
       {/* Success banner after activation */}
       {order.cpqStatus === 'active' && order.activatedAt && (
-        <div className="rounded-md bg-green-50 border border-green-200 p-3 flex items-center gap-2">
-          <svg className="h-5 w-5 text-green-500 shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
-          <span className="text-sm text-green-700">
+        <Alert variant="success" className="flex items-center gap-2">
+          <CheckCircle2 className="h-5 w-5 shrink-0" />
+          <span className="flex-1">
             Order activated on {new Date(order.activatedAt).toLocaleString()}.
             {subscription ? ' Subscription created.' : ' Inventory items have been created.'}
           </span>
@@ -271,39 +269,35 @@ export default function CpqOrderDetailPage(props: { params?: { id?: string } }) 
             {subscription && (
               <button
                 onClick={() => router.push(`/backend/cpq/inventory/subscriptions/${subscription.id}`)}
-                className="text-xs text-green-700 hover:underline font-medium"
+                className="text-xs hover:underline font-medium"
               >
                 View Subscription →
               </button>
             )}
             <button
               onClick={() => router.push('/backend/cpq/inventory')}
-              className="text-xs text-green-700 hover:underline font-medium"
+              className="text-xs hover:underline font-medium"
             >
               View Inventory →
             </button>
           </div>
-        </div>
+        </Alert>
       )}
 
       {/* Linked subscription */}
       {subscription && (
-        <div className="rounded-md bg-indigo-50 border border-indigo-200 p-3 flex items-center gap-3">
-          <svg className="h-5 w-5 text-indigo-500 shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182M2.985 19.644l3.181-3.183" />
-          </svg>
+        <div className="rounded-md border border-brand-violet/30 bg-brand-violet/10 p-3 flex items-center gap-3 text-brand-violet">
+          <RefreshCw className="h-5 w-5 shrink-0" />
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium text-indigo-900">Linked Subscription</p>
-            <p className="text-xs text-indigo-600">{subscription.name} ({subscription.code})</p>
+            <p className="text-sm font-medium">Linked Subscription</p>
+            <p className="text-xs opacity-90">{subscription.name} ({subscription.code})</p>
           </div>
-          <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
-            subscription.status === 'active' ? 'bg-green-100 text-green-800' : 'bg-indigo-100 text-indigo-800'
-          }`}>
+          <Tag variant={subscription.status === 'active' ? 'success' : 'brand'} dot>
             {subscription.status}
-          </span>
+          </Tag>
           <button
             onClick={() => router.push(`/backend/cpq/inventory/subscriptions/${subscription.id}`)}
-            className="inline-flex items-center gap-1 text-sm font-medium text-indigo-700 hover:text-indigo-900 hover:underline"
+            className="inline-flex items-center gap-1 text-sm font-medium hover:underline"
           >
             Open
             <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
@@ -374,9 +368,9 @@ function OrderLineTree({ lines, currency, expandedLines, onToggleLine }: {
               <div key={line.lineId}>
                 <OrderLineRow line={line} currency={currency} isExpanded={isExpanded} isBundle={isBundle} childCount={children.length} indent={0} onToggle={() => onToggleLine(line.lineId)} />
                 {isBundle && isExpanded && children.length > 0 && (
-                  <div className="border-t border-dashed border-indigo-200/50 bg-indigo-50/20">
+                  <div className="border-t border-dashed border-brand-violet/30 bg-brand-violet/5">
                     <div className="px-6 py-1.5">
-                      <span className="text-[10px] font-medium text-indigo-500 uppercase tracking-wider">Bundle Components ({children.length})</span>
+                      <span className="text-[10px] font-medium text-brand-violet uppercase tracking-wider">Bundle Components ({children.length})</span>
                     </div>
                     {children.map((child) => (
                       <OrderLineRow key={child.lineId} line={child} currency={currency} isExpanded={expandedLines.has(child.lineId)} isBundle={false} childCount={0} indent={1} onToggle={() => onToggleLine(child.lineId)} />
@@ -414,11 +408,11 @@ function OrderLineRow({ line, currency, isExpanded, isBundle, childCount, indent
           <div className="flex items-center gap-2">
             {indent > 0 && <span className="text-muted-foreground text-xs">└</span>}
             {isBundle && (
-              <span className="inline-flex items-center rounded bg-indigo-100 px-1.5 py-0.5 text-xs font-medium text-indigo-700">bundle</span>
+              <Tag variant="brand" className="px-1.5 text-xs">bundle</Tag>
             )}
             <span className="font-medium text-sm">{line.offeringName}</span>
             {line.quantity > 1 && <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-medium">×{line.quantity}</span>}
-            <span className="inline-flex items-center rounded-full bg-blue-100 px-1.5 py-0.5 text-xs font-medium text-blue-700">{line.action}</span>
+            <Tag variant="info" className="px-1.5 text-xs">{line.action}</Tag>
             {isBundle && <span className="text-xs text-muted-foreground">{childCount} component{childCount !== 1 ? 's' : ''}</span>}
           </div>
         </div>
@@ -537,10 +531,18 @@ function Spinner() {
 
 function ErrorBanner({ message, onDismiss }: { message: string; onDismiss?: () => void }) {
   return (
-    <div className="rounded-md bg-red-50 border border-red-200 p-3 flex items-start gap-2">
-      <span className="text-sm text-red-700 flex-1">{message}</span>
-      {onDismiss && <button onClick={onDismiss} className="text-red-400 hover:text-red-600 text-sm font-bold">×</button>}
-    </div>
+    <Alert variant="destructive" className="flex items-start gap-2">
+      <span className="flex-1">{message}</span>
+      {onDismiss && (
+        <button
+          onClick={onDismiss}
+          className="text-destructive/70 hover:text-destructive text-sm font-bold"
+          aria-label="Dismiss"
+        >
+          ×
+        </button>
+      )}
+    </Alert>
   )
 }
 
@@ -584,7 +586,7 @@ function ArcLineDiff({ line, currency }: { line: OrderLineResult; currency: stri
         </table>
       </div>
       {isCancel && (
-        <p className="text-xs text-red-700 mt-1 italic">
+        <p className="text-xs text-destructive mt-1 italic">
           Cancellation — item will be terminated on activation.
         </p>
       )}
@@ -616,7 +618,7 @@ function ArcDiffRow({
       <td className={`px-3 py-1 text-right font-mono ${dimAfter ? 'text-muted-foreground line-through' : ''}`}>
         {fmtVal(after)}
       </td>
-      <td className={`px-3 py-1 text-right font-mono font-medium ${showDelta ? (delta > 0 ? 'text-green-700' : 'text-red-700') : 'text-muted-foreground'}`}>
+      <td className={`px-3 py-1 text-right font-mono font-medium ${showDelta ? (delta > 0 ? 'text-status-success-text' : 'text-destructive') : 'text-muted-foreground'}`}>
         {showDelta ? `${delta > 0 ? '+' : ''}${fmtVal(delta)}` : '—'}
       </td>
     </tr>

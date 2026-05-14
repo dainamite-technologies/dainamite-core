@@ -5,6 +5,7 @@ import ArcQuoteConfigurator, {
   type AttachedTarget,
 } from './_components/ArcQuoteConfigurator'
 import { ArrowRight, Trash2 } from 'lucide-react'
+import { Alert, AlertTitle, AlertDescription } from '@open-mercato/ui/primitives/alert'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { NumberInput } from '../../../../components/NumberInput'
@@ -652,7 +653,7 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
       {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
 
       {arcQuoteType !== 'new' && arcTargets.length > 0 && (
-        <div className="rounded-md border bg-purple-50 border-purple-200 px-4 py-3 text-sm">
+        <div className="rounded-md border border-brand-violet/30 bg-brand-violet/10 px-4 py-3 text-sm text-brand-violet">
           <div className="flex items-center justify-between">
             <div>
               <span className="font-medium uppercase">{arcQuoteType}</span>
@@ -666,14 +667,14 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
                     onClick={() =>
                       router.push(`/backend/cpq/inventory/subscriptions/${t.subscriptionId}`)
                     }
-                    className="text-purple-700 hover:underline"
+                    className="text-brand-violet hover:underline"
                   >
                     {t.subscription?.code ?? t.subscriptionId.slice(0, 8)}
                   </button>
                 </span>
               ))}
               {isMergeRenew && (
-                <span className="ml-2 text-amber-700 font-medium">
+                <span className="ml-2 text-status-warning-text font-medium">
                   • Merging into a new contract
                 </span>
               )}
@@ -737,12 +738,14 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
 
           {/* Validation errors */}
           {!cpqQuote.validationResult.valid && (
-            <div className="rounded-md border border-yellow-200 bg-yellow-50 p-3">
-              <p className="text-sm font-medium text-yellow-800 mb-1">Validation Issues</p>
-              <ul className="text-xs text-yellow-700 space-y-0.5">
-                {cpqQuote.validationResult.errors.map((e, i) => <li key={i}>- {e.message}</li>)}
-              </ul>
-            </div>
+            <Alert variant="warning">
+              <AlertTitle>Validation Issues</AlertTitle>
+              <AlertDescription>
+                <ul className="text-xs space-y-0.5">
+                  {cpqQuote.validationResult.errors.map((e, i) => <li key={i}>- {e.message}</li>)}
+                </ul>
+              </AlertDescription>
+            </Alert>
           )}
 
           {/* Quote Lines */}
@@ -771,9 +774,9 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
       {view === 'add-offering' && (
         <>
           {addingToParentLineId && (
-            <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800">
+            <Alert variant="info">
               Adding component to bundle: <span className="font-medium">{cpqQuote.lines.find((l) => l.lineId === addingToParentLineId)?.offeringName ?? 'Bundle'}</span>
-            </div>
+            </Alert>
           )}
           <OfferingBrowser
             offerings={offerings}
@@ -1003,9 +1006,9 @@ function BundleSlotPanel({ bundleTree, treeLoading, children, allLines, currency
             <div className="flex items-center gap-2 px-6 py-2 bg-muted/20">
               <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">{slot.name}</span>
               {isRequired ? (
-                <span className="inline-flex items-center rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">required</span>
+                <Tag variant="warning" className="text-[10px] px-1.5">required</Tag>
               ) : (
-                <span className="inline-flex items-center rounded-full bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-500">optional</span>
+                <Tag variant="neutral" className="text-[10px] px-1.5">optional</Tag>
               )}
               <span className="text-[10px] text-muted-foreground">
                 {filledCount}/{slot.cardinalityMax ?? '∞'}
@@ -1023,9 +1026,9 @@ function BundleSlotPanel({ bundleTree, treeLoading, children, allLines, currency
                       disabled={isFilled || !canAdd}
                       className={`inline-flex items-center gap-1 rounded border px-2 py-1 text-[11px] font-medium transition-colors ${
                         isFilled
-                          ? 'border-green-200 bg-green-50 text-green-700 cursor-default'
+                          ? 'border-status-success-border bg-status-success-bg text-status-success-text cursor-default'
                           : canAdd
-                            ? 'border-border hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-700 cursor-pointer'
+                            ? 'border-border hover:border-primary hover:bg-primary/5 hover:text-primary cursor-pointer'
                             : 'border-border text-muted-foreground opacity-50 cursor-not-allowed'
                       }`}
                       title={isFilled ? 'Already added' : canAdd ? `Add ${comp.childOffering.offeringName}` : 'Slot is full'}
@@ -1116,30 +1119,31 @@ function QuoteLineRow({ line, lineIdx, currency, isExpanded, pricingDetail, isBu
               <span className="text-muted-foreground text-xs">└</span>
             )}
             {isBundle && (
-              <span className="inline-flex items-center rounded bg-indigo-100 px-1.5 py-0.5 text-xs font-medium text-indigo-700">bundle</span>
+              <Tag variant="brand" className="px-1.5 text-xs">bundle</Tag>
             )}
             <span className="font-medium text-sm">{line.offeringName}</span>
             {line.quantity > 1 && <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-medium">×{line.quantity}</span>}
             <ActionBadge action={line.action} />
             {targetCodes.size >= 2 && line.targetSubscriptionId && targetCodes.get(line.targetSubscriptionId) && (
-              <span
-                className="inline-flex items-center rounded-full bg-purple-50 px-1.5 py-0.5 text-xs font-medium text-purple-700 border border-purple-200"
+              <Tag
+                variant="brand"
+                className="px-1.5 text-xs"
                 title={`Acts on subscription ${targetCodes.get(line.targetSubscriptionId)}`}
               >
                 → {targetCodes.get(line.targetSubscriptionId)}
-              </span>
+              </Tag>
             )}
             {line.isConfigured ? (
-              <span className="inline-flex items-center rounded-full bg-green-100 px-1.5 py-0.5 text-xs font-medium text-green-700">configured</span>
+              <Tag variant="success" className="px-1.5 text-xs">configured</Tag>
             ) : (
-              <span className="inline-flex items-center rounded-full bg-yellow-100 px-1.5 py-0.5 text-xs font-medium text-yellow-700">incomplete</span>
+              <Tag variant="warning" className="px-1.5 text-xs">incomplete</Tag>
             )}
             {isBundle && (
               <span className="text-xs text-muted-foreground">{childCount} component{childCount !== 1 ? 's' : ''}</span>
             )}
           </div>
           {line.validationErrors && line.validationErrors.length > 0 && (
-            <p className="text-xs text-red-600 mt-0.5">{line.validationErrors[0].message}</p>
+            <p className="text-xs text-destructive mt-0.5">{line.validationErrors[0].message}</p>
           )}
         </div>
 
@@ -1152,7 +1156,7 @@ function QuoteLineRow({ line, lineIdx, currency, isExpanded, pricingDetail, isBu
         {/* Actions */}
         <div className="flex items-center gap-1 shrink-0">
           {onAddComponent && (
-            <button onClick={onAddComponent} className="rounded p-1.5 text-muted-foreground hover:text-indigo-600 hover:bg-indigo-50 transition-colors" title="Add Component">
+            <button onClick={onAddComponent} className="rounded p-1.5 text-muted-foreground hover:text-primary hover:bg-primary/5 transition-colors" title="Add Component">
               <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
               </svg>
@@ -1163,7 +1167,7 @@ function QuoteLineRow({ line, lineIdx, currency, isExpanded, pricingDetail, isBu
               <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0115.75 21H5.25A2.25 2.25 0 013 18.75V8.25A2.25 2.25 0 015.25 6H10" />
             </svg>
           </button>
-          <button onClick={onRemove} className="rounded p-1.5 text-muted-foreground hover:text-red-600 hover:bg-red-50 transition-colors" title="Remove">
+          <button onClick={onRemove} className="rounded p-1.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors" title="Remove">
             <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
             </svg>
@@ -1233,7 +1237,7 @@ function ArcLineDiff({ line, currency }: { line: QuoteLine; currency: string }) 
                   <td className={`px-3 py-1 text-right font-mono ${isCancel ? 'text-muted-foreground line-through' : ''}`}>
                     {fmtVal(r.after, r.asCurrency)}
                   </td>
-                  <td className={`px-3 py-1 text-right font-mono font-medium ${showDelta ? (delta > 0 ? 'text-green-700' : 'text-red-700') : 'text-muted-foreground'}`}>
+                  <td className={`px-3 py-1 text-right font-mono font-medium ${showDelta ? (delta > 0 ? 'text-status-success-text' : 'text-destructive') : 'text-muted-foreground'}`}>
                     {showDelta ? `${delta > 0 ? '+' : ''}${fmtVal(delta, r.asCurrency)}` : '—'}
                   </td>
                 </tr>
@@ -1243,22 +1247,22 @@ function ArcLineDiff({ line, currency }: { line: QuoteLine; currency: string }) 
         </table>
       </div>
       {isCancel && (
-        <p className="text-xs text-red-700 italic">Cancellation — item will be terminated on activation.</p>
+        <p className="text-xs text-destructive italic">Cancellation — item will be terminated on activation.</p>
       )}
     </div>
   )
 }
 
 function ActionBadge({ action }: { action: QuoteLineAction }) {
-  const styles: Record<QuoteLineAction, string> = {
-    add: 'bg-blue-100 text-blue-700',
-    modify: 'bg-amber-100 text-amber-700',
-    cancel: 'bg-red-100 text-red-700',
+  const variantByAction: Record<QuoteLineAction, 'info' | 'warning' | 'error'> = {
+    add: 'info',
+    modify: 'warning',
+    cancel: 'error',
   }
   return (
-    <span className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-xs font-medium ${styles[action]}`}>
+    <Tag variant={variantByAction[action]} className="px-1.5 text-xs">
       {action}
-    </span>
+    </Tag>
   )
 }
 
@@ -1394,7 +1398,7 @@ function ChargeBreakdown({ line, lineIdx, currency, pricingDetail, onTogglePrici
                                     <td className="py-0.5 text-right font-mono">{fmtRuleValue(adj, currency)}</td>
                                     <td className="py-0.5 text-right font-mono">{fmt(adj.unitPriceBefore, currency)}</td>
                                     <td className="py-0.5 text-right font-mono">{fmt(adj.unitPriceAfter, currency)}</td>
-                                    <td className={`py-0.5 text-right font-mono ${adj.delta < 0 ? 'text-red-500' : adj.delta > 0 ? 'text-green-600' : ''}`}>
+                                    <td className={`py-0.5 text-right font-mono ${adj.delta < 0 ? 'text-destructive' : adj.delta > 0 ? 'text-status-success-text' : ''}`}>
                                       {adj.delta > 0 ? '+' : ''}{fmt(adj.delta, currency)}
                                     </td>
                                   </tr>
@@ -1432,10 +1436,18 @@ function Spinner() {
 
 function ErrorBanner({ message, onDismiss }: { message: string; onDismiss?: () => void }) {
   return (
-    <div className="rounded-md bg-red-50 border border-red-200 p-3 flex items-start gap-2">
-      <span className="text-sm text-red-700 flex-1">{message}</span>
-      {onDismiss && <button onClick={onDismiss} className="text-red-400 hover:text-red-600 text-sm font-bold">×</button>}
-    </div>
+    <Alert variant="destructive" className="flex items-start gap-2">
+      <span className="flex-1">{message}</span>
+      {onDismiss && (
+        <button
+          onClick={onDismiss}
+          className="text-destructive/70 hover:text-destructive text-sm font-bold"
+          aria-label="Dismiss"
+        >
+          ×
+        </button>
+      )}
+    </Alert>
   )
 }
 
@@ -1496,7 +1508,7 @@ function ConfigurePanel({ title, attributes, config, quantity, arcTargetOptions,
           <div>
             <label className="block text-sm font-medium mb-1">
               Apply to subscription(s)
-              <span className="text-red-600 ml-1">*</span>
+              <span className="text-destructive ml-1">*</span>
             </label>
             <div className="space-y-1.5 rounded-md border bg-background px-3 py-2">
               {arcTargetOptions.map((opt) => {
@@ -1522,7 +1534,7 @@ function ConfigurePanel({ title, attributes, config, quantity, arcTargetOptions,
               Pick one or more — a separate line will be created on each selected subscription.
             </p>
             {noTargetsPicked && (
-              <p className="text-xs text-red-600 mt-1">Select at least one target.</p>
+              <p className="text-xs text-destructive mt-1">Select at least one target.</p>
             )}
           </div>
         )}
@@ -1559,7 +1571,7 @@ function AttributeField({ attribute, value, onChange }: { attribute: Constrained
   return (
     <div>
       <label className="block text-sm font-medium mb-1">
-        {name}{isRequired && <span className="text-red-500 ml-0.5">*</span>}
+        {name}{isRequired && <span className="text-destructive ml-0.5">*</span>}
       </label>
       {(attributeType === 'select' || attributeType === 'enum') && options && options.length > 0 ? (
         <select value={String(currentValue)} onChange={(e) => onChange(e.target.value)}
@@ -1569,7 +1581,7 @@ function AttributeField({ attribute, value, onChange }: { attribute: Constrained
         </select>
       ) : attributeType === 'boolean' ? (
         <label className="flex items-center gap-2">
-          <input type="checkbox" checked={Boolean(currentValue)} onChange={(e) => onChange(e.target.checked)} className="rounded border-gray-300" />
+          <input type="checkbox" checked={Boolean(currentValue)} onChange={(e) => onChange(e.target.checked)} className="rounded border-border" />
           <span className="text-sm text-muted-foreground">{helpText ?? 'Enable'}</span>
         </label>
       ) : attributeType === 'number' ? (

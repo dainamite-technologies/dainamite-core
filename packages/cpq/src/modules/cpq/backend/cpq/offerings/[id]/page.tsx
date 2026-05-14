@@ -2,7 +2,17 @@
 import * as React from 'react'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { useParams, useRouter } from 'next/navigation'
+import { Alert } from '@open-mercato/ui/primitives/alert'
+import { Button } from '@open-mercato/ui/primitives/button'
+import { Tag } from '@open-mercato/ui/primitives/tag'
 import { NumberInput } from '../../../../components/NumberInput'
+import {
+  chargeTypeMap,
+  formatStatusLabel,
+  lifecycleStatusMap,
+  type ChargeType,
+  type LifecycleStatus,
+} from '../../../../components/statusMaps'
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -120,12 +130,6 @@ const EMPTY_CHARGE: EditingCharge = {
   isActive: true,
 }
 
-const STATUS_COLORS: Record<string, string> = {
-  draft: 'bg-gray-100 text-gray-700',
-  active: 'bg-green-100 text-green-800',
-  deprecated: 'bg-yellow-100 text-yellow-800',
-  retired: 'bg-red-100 text-red-700',
-}
 
 const PRICING_METHOD_LABELS: Record<string, string> = {
   flat: 'flat price',
@@ -407,9 +411,9 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
             {isNew ? t('cpq.offerings.new', 'New Offering') : form.name}
           </h1>
           {!isNew && (
-            <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${STATUS_COLORS[form.lifecycleStatus] ?? ''}`}>
-              {form.lifecycleStatus}
-            </span>
+            <Tag variant={lifecycleStatusMap[form.lifecycleStatus as LifecycleStatus] ?? 'neutral'} dot>
+              {formatStatusLabel(form.lifecycleStatus)}
+            </Tag>
           )}
           {specDetail && (
             <span className="text-sm text-muted-foreground">
@@ -418,17 +422,14 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
           )}
         </div>
         {!isNew && (
-          <button
-            onClick={deleteOffering}
-            className="inline-flex items-center justify-center rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700"
-          >
+          <Button type="button" variant="destructive" onClick={deleteOffering}>
             {t('common.delete', 'Delete')}
-          </button>
+          </Button>
         )}
       </div>
 
       {error && (
-        <div className="rounded-md bg-red-50 border border-red-200 p-3 text-sm text-red-700">{error}</div>
+        <Alert variant="destructive">{error}</Alert>
       )}
 
       {/* Tabs */}
@@ -541,7 +542,7 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                   <div key={attr.code}>
                     <label className="block text-xs font-medium mb-1">
                       {attr.name}
-                      {attr.isRequired && <span className="text-red-500 ml-0.5">*</span>}
+                      {attr.isRequired && <span className="text-destructive ml-0.5">*</span>}
                     </label>
                     {(attr.attributeType === 'select' || attr.attributeType === 'enum') && attr.options ? (
                       <select
@@ -751,13 +752,9 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                       <td className="px-4 py-3 font-mono text-xs">{charge.code}</td>
                       <td className="px-4 py-3">{charge.name}</td>
                       <td className="px-4 py-3">
-                        <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
-                          charge.chargeType === 'mrc' ? 'bg-blue-100 text-blue-800' :
-                          charge.chargeType === 'nrc' ? 'bg-green-100 text-green-800' :
-                          'bg-purple-100 text-purple-800'
-                        }`}>
+                        <Tag variant={chargeTypeMap[charge.chargeType as ChargeType] ?? 'neutral'} className="px-2 text-xs">
                           {charge.chargeType.toUpperCase()}
-                        </span>
+                        </Tag>
                       </td>
                       <td className="px-4 py-3 text-xs">{PRICING_METHOD_LABELS[charge.pricingMethod] ?? charge.pricingMethod}</td>
                       <td className="px-4 py-3">
@@ -770,7 +767,7 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                       <td className="px-4 py-3">{charge.isActive ? 'Yes' : 'No'}</td>
                       <td className="px-4 py-3 text-right">
                         <button onClick={() => startEditCharge(charge)} className="text-xs text-primary hover:underline mr-2">Edit</button>
-                        <button onClick={() => deleteCharge(charge.id)} className="text-xs text-red-600 hover:underline">Delete</button>
+                        <button onClick={() => deleteCharge(charge.id)} className="text-xs text-destructive hover:underline">Delete</button>
                       </td>
                     </tr>
                   ))}
@@ -798,9 +795,9 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                     <div className="bg-muted/50 px-4 py-3 border-b flex items-center justify-between">
                       <div>
                         <span className="font-medium text-sm">{slot.name}</span>
-                        <span className="ml-2 inline-flex items-center rounded-full bg-blue-100 text-blue-800 px-2 py-0.5 text-[10px] font-medium">
+                        <Tag variant="info" className="ml-2 px-2 text-[10px]">
                           {slot.componentGroup}
-                        </span>
+                        </Tag>
                         <span className="ml-2 text-xs text-muted-foreground">
                           {slot.cardinalityMin}..{slot.cardinalityMax ?? '∞'}
                         </span>
@@ -906,7 +903,7 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                       <div className="p-4 text-center text-xs text-muted-foreground">
                         No components assigned to this slot
                         {slot.cardinalityMin > 0 && (
-                          <span className="ml-1 text-orange-600 font-medium">(required: min {slot.cardinalityMin})</span>
+                          <span className="ml-1 text-status-warning-text font-medium">(required: min {slot.cardinalityMin})</span>
                         )}
                       </div>
                     ) : (
@@ -927,9 +924,9 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                               <td className="px-4 py-2.5 text-muted-foreground text-xs">{comp.childOffering?.code ?? '—'}</td>
                               <td className="px-4 py-2.5">
                                 {comp.childOffering?.offeringType === 'bundle' ? (
-                                  <span className="inline-flex items-center rounded-full bg-purple-100 text-purple-800 px-2 py-0.5 text-[10px] font-medium">bundle</span>
+                                  <Tag variant="brand" className="px-2 text-[10px]">bundle</Tag>
                                 ) : (
-                                  <span className="inline-flex items-center rounded-full bg-gray-100 text-gray-800 px-2 py-0.5 text-[10px] font-medium">simple</span>
+                                  <Tag variant="neutral" className="px-2 text-[10px]">simple</Tag>
                                 )}
                               </td>
                               <td className="px-4 py-2.5">
@@ -946,11 +943,11 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                                       }
                                     } catch { /* ignore */ }
                                   }}
-                                  className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium cursor-pointer ${
-                                    comp.isDefault ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'
-                                  }`}
+                                  className="cursor-pointer"
                                 >
-                                  {comp.isDefault ? 'Yes' : 'No'}
+                                  <Tag variant={comp.isDefault ? 'success' : 'neutral'} className="px-2 text-[10px]">
+                                    {comp.isDefault ? 'Yes' : 'No'}
+                                  </Tag>
                                 </button>
                               </td>
                               <td className="px-4 py-2.5 text-right">
@@ -973,7 +970,7 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                                       setError('Failed to remove component')
                                     }
                                   }}
-                                  className="text-xs text-red-600 hover:underline"
+                                  className="text-xs text-destructive hover:underline"
                                 >
                                   Remove
                                 </button>

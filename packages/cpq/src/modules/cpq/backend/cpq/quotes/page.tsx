@@ -7,6 +7,7 @@ import { Button } from '@open-mercato/ui/primitives/button'
 import { Input } from '@open-mercato/ui/primitives/input'
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
 import { Plus, Search as SearchIcon } from 'lucide-react'
+import { Alert } from '@open-mercato/ui/primitives/alert'
 import { RowActions } from '@open-mercato/ui/backend/RowActions'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { CpqListView, useCpqListData } from '../../../components/CpqListView'
@@ -134,11 +135,7 @@ function CustomerPickerModal({ open, onClose, onSelect, creating, error }: Custo
           </button>
         </div>
         <div className="p-4 space-y-3">
-          {error && (
-            <div className="rounded-md bg-red-50 border border-red-200 p-3 text-sm text-red-700">
-              {error}
-            </div>
-          )}
+          {error && <Alert variant="destructive">{error}</Alert>}
           <div className="relative">
             <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input

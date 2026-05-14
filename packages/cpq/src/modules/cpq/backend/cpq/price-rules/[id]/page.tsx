@@ -1,6 +1,8 @@
 "use client"
 import * as React from 'react'
 import { useRouter, useParams } from 'next/navigation'
+import { Button } from '@open-mercato/ui/primitives/button'
+import { Tag } from '@open-mercato/ui/primitives/tag'
 import { NumberInput } from '../../../../components/NumberInput'
 
 const RULE_TYPE_LABELS: Record<string, string> = {
@@ -235,21 +237,14 @@ export default function PriceRuleDetailPage(props: { params?: { id?: string } })
             &larr; Back
           </button>
           <h1 className="text-2xl font-bold">{rule.name}</h1>
-          <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${rule.isActive ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}`}>
+          <Tag variant={rule.isActive ? 'success' : 'neutral'} dot>
             {rule.isActive ? 'Active' : 'Inactive'}
-          </span>
+          </Tag>
         </div>
         <div className="flex items-center gap-2">
-          <button
-            onClick={handleToggleActive}
-            className={`rounded-md border px-3 py-1.5 text-sm font-medium transition-colors ${
-              rule.isActive
-                ? 'border-amber-200 text-amber-700 hover:bg-amber-50'
-                : 'border-green-200 text-green-700 hover:bg-green-50'
-            }`}
-          >
+          <Button type="button" variant="outline" onClick={handleToggleActive}>
             {rule.isActive ? 'Deactivate' : 'Activate'}
-          </button>
+          </Button>
           {!editing && (
             <button
               onClick={startEdit}
@@ -417,13 +412,13 @@ export default function PriceRuleDetailPage(props: { params?: { id?: string } })
                 <dd className="text-sm">
                   {offering ? (
                     <span className="inline-flex items-center gap-1.5">
-                      <span className="inline-block w-2 h-2 rounded-full bg-blue-500" />
+                      <span className="inline-block w-2 h-2 rounded-full bg-status-info-icon" />
                       {offering.name}
                       <span className="text-muted-foreground font-mono text-xs">({offering.code})</span>
                     </span>
                   ) : (
                     <span className="inline-flex items-center gap-1.5">
-                      <span className="inline-block w-2 h-2 rounded-full bg-gray-400" />
+                      <span className="inline-block w-2 h-2 rounded-full bg-muted-foreground" />
                       Global (all offerings)
                     </span>
                   )}

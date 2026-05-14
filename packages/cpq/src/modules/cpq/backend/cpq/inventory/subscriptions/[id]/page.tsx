@@ -1,6 +1,7 @@
 "use client"
 import * as React from 'react'
 import { useRouter, useParams } from 'next/navigation'
+import { Alert } from '@open-mercato/ui/primitives/alert'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import {
@@ -67,12 +68,12 @@ const CHANGE_TYPE_LABELS: Record<string, string> = {
   'merge-source': 'Merged into a new contract',
 }
 
-const CHANGE_TYPE_COLORS: Record<string, string> = {
-  amend: 'bg-blue-100 text-blue-800',
-  renew: 'bg-green-100 text-green-800',
-  cancel: 'bg-red-100 text-red-800',
-  'merge-result': 'bg-purple-100 text-purple-800',
-  'merge-source': 'bg-orange-100 text-orange-800',
+const CHANGE_TYPE_VARIANTS: Record<string, 'info' | 'success' | 'error' | 'brand' | 'warning'> = {
+  amend: 'info',
+  renew: 'success',
+  cancel: 'error',
+  'merge-result': 'brand',
+  'merge-source': 'warning',
 }
 
 type SubscriptionItem = {
@@ -606,13 +607,9 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
             {changeLog.map((row) => (
               <div key={row.id} className="px-4 py-3 space-y-1">
                 <div className="flex items-center gap-2">
-                  <span
-                    className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
-                      CHANGE_TYPE_COLORS[row.changeType] ?? 'bg-gray-100 text-gray-800'
-                    }`}
-                  >
+                  <Tag variant={CHANGE_TYPE_VARIANTS[row.changeType] ?? 'neutral'}>
                     {CHANGE_TYPE_LABELS[row.changeType] ?? row.changeType}
-                  </span>
+                  </Tag>
                   <span className="text-xs text-muted-foreground">
                     {new Date(row.effectiveAt).toLocaleString()}
                   </span>
@@ -743,11 +740,7 @@ function Spinner() {
 }
 
 function ErrorBanner({ message }: { message: string }) {
-  return (
-    <div className="rounded-md bg-red-50 border border-red-200 p-3 flex items-start gap-2">
-      <span className="text-sm text-red-700 flex-1">{message}</span>
-    </div>
-  )
+  return <Alert variant="destructive">{message}</Alert>
 }
 
 // XD-250 — render the per-line summary of an ARC change, with inline product
@@ -860,9 +853,9 @@ function ChangeLogLineDetails({ row, currency }: { row: ChangeLogRow; currency: 
 }
 
 const ACTION_GLYPH: Record<'add' | 'modify' | 'cancel', { sign: string; color: string; label: string }> = {
-  add: { sign: '+', color: 'text-green-700', label: 'added' },
-  modify: { sign: '~', color: 'text-blue-700', label: 'modified' },
-  cancel: { sign: '−', color: 'text-red-700', label: 'removed' },
+  add: { sign: '+', color: 'text-status-success-text', label: 'added' },
+  modify: { sign: '~', color: 'text-status-info-text', label: 'modified' },
+  cancel: { sign: '−', color: 'text-destructive', label: 'removed' },
 }
 
 function ChangeLogLineRow({
@@ -915,7 +908,7 @@ function ChangeLogLineRow({
       )}
       {showDelta && (
         <span
-          className={`font-mono font-medium ${change.delta! > 0 ? 'text-green-700' : 'text-red-700'}`}
+          className={`font-mono font-medium ${change.delta! > 0 ? 'text-status-success-text' : 'text-destructive'}`}
         >
           ({change.delta! > 0 ? '+' : ''}
           {fmt(change.delta!, currency)}/mo)

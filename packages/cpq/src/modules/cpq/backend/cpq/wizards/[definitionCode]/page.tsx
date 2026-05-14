@@ -1,6 +1,7 @@
 "use client"
 import * as React from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
+import { Alert } from '@open-mercato/ui/primitives/alert'
 import { WizardRunner } from '../../../../workflows/WizardRunner'
 import { registerBuiltInStepTypes } from '../../../../workflows/steps'
 import type { WizardDefinitionResult } from '../../../../workflows/types'
@@ -56,7 +57,7 @@ function ParamsForm({
             <div key={key}>
               <label className="block text-sm font-medium mb-1">
                 {prop?.description || key}
-                {isRequired && <span className="text-red-500 ml-0.5">*</span>}
+                {isRequired && <span className="text-destructive ml-0.5">*</span>}
               </label>
               <input
                 type="text"
@@ -169,7 +170,7 @@ export default function CpqWizardRunnerPage({ params }: { params: Record<string,
   if (error) {
     return (
       <div className="space-y-4">
-        <div className="rounded-md bg-red-50 border border-red-200 p-3 text-sm text-red-700">{error}</div>
+        <Alert variant="destructive">{error}</Alert>
         <button
           type="button"
           onClick={() => router.push('/backend/cpq/wizards')}

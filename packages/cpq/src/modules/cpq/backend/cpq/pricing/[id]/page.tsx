@@ -6,9 +6,15 @@ import { Alert } from '@open-mercato/ui/primitives/alert'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { Input } from '@open-mercato/ui/primitives/input'
 import { Tag } from '@open-mercato/ui/primitives/tag'
-import { Download, Trash2 } from 'lucide-react'
+import { Download, Trash2, Upload } from 'lucide-react'
 import { EntriesEditor, type Entry } from './EntriesEditor'
 import { exportPricingTableToXlsx } from './xlsxExport'
+import {
+  commitImportDiff,
+  parsePricingTableXlsx,
+  type ImportDiff,
+} from './xlsxImport'
+import { ImportPreview } from './ImportPreview'
 
 type Dimension = { key: string; label: string }
 type PriceColumn = { key: string; label: string }
@@ -49,6 +55,11 @@ export default function PricingTableDetailPage(props: { params?: { id?: string }
   const [mode, setMode] = React.useState<'view' | 'edit'>(isNew ? 'edit' : 'view')
   const [draft, setDraft] = React.useState<PricingTable>(EMPTY_TABLE)
   const [saving, setSaving] = React.useState(false)
+
+  // Import state
+  const fileInputRef = React.useRef<HTMLInputElement>(null)
+  const [importDiff, setImportDiff] = React.useState<ImportDiff | null>(null)
+  const [importApplying, setImportApplying] = React.useState(false)
 
   // ─── Load ────────────────────────────────────────────────────
 
@@ -109,7 +120,31 @@ export default function PricingTableDetailPage(props: { params?: { id?: string }
     setError(null)
   }
 
+  // Mirror V-PT-1 from validators.ts so the user gets feedback before the
+  // server rejects the payload.
+  const configValidationError = React.useMemo(() => {
+    if (!draft.code.trim()) return 'Code is required'
+    if (!draft.name.trim()) return 'Name is required'
+    if (draft.currencyCodeList.length === 0) return 'At least one currency is required'
+    const checkList = (items: Array<{ key: string; label: string }>, label: string): string | null => {
+      const seen = new Set<string>()
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i]
+        if (!item.key.trim()) return `${label} #${i + 1}: key is required`
+        if (!item.label.trim()) return `${label} #${i + 1}: label is required`
+        if (seen.has(item.key)) return `${label}: duplicate key "${item.key}"`
+        seen.add(item.key)
+      }
+      return null
+    }
+    return checkList(draft.dimensions, 'Dimension') ?? checkList(draft.priceColumns, 'Price Column')
+  }, [draft])
+
   const saveConfig = async () => {
+    if (configValidationError) {
+      setError(configValidationError)
+      return
+    }
     setSaving(true)
     setError(null)
     try {
@@ -144,6 +179,48 @@ export default function PricingTableDetailPage(props: { params?: { id?: string }
     } finally {
       setSaving(false)
     }
+  }
+
+  // ─── Excel import ──────────────────────────────────────────
+
+  const handleImportFile = async (file: File) => {
+    setError(null)
+    const r = await parsePricingTableXlsx(
+      file,
+      {
+        dimensions: table.dimensions,
+        priceColumns: table.priceColumns,
+        currencyCodeList: table.currencyCodeList,
+      },
+      entries,
+    )
+    if (!r.ok) {
+      setError(r.error)
+      return
+    }
+    setImportDiff(r.diff)
+  }
+
+  const applyImportDiff = async () => {
+    if (!importDiff) return
+    setImportApplying(true)
+    setError(null)
+    try {
+      const r = await commitImportDiff(table.id, importDiff)
+      if (!r.ok) {
+        setError(r.error)
+        return
+      }
+      setImportDiff(null)
+      await load()
+    } finally {
+      setImportApplying(false)
+    }
+  }
+
+  const cancelImport = () => {
+    setImportDiff(null)
+    if (fileInputRef.current) fileInputRef.current.value = ''
   }
 
   const deleteTable = async () => {
@@ -219,6 +296,28 @@ export default function PricingTableDetailPage(props: { params?: { id?: string }
               <Download className="h-4 w-4 mr-1.5" />
               {t('cpq.pricing.export.button', 'Export to Excel')}
             </Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => fileInputRef.current?.click()}
+              title={t('cpq.pricing.import.tooltip', 'Upload an Excel file to add / update / delete entries')}
+              disabled={importDiff !== null}
+            >
+              <Upload className="h-4 w-4 mr-1.5" />
+              {t('cpq.pricing.import.button', 'Import from Excel')}
+            </Button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0]
+                if (file) void handleImportFile(file)
+                // reset so re-uploading the same file fires onChange again
+                e.target.value = ''
+              }}
+            />
             <Button type="button" onClick={startEdit}>{t('common.edit', 'Edit')}</Button>
             <Button type="button" variant="destructive" onClick={deleteTable}>
               {t('common.delete', 'Delete')}
@@ -228,6 +327,16 @@ export default function PricingTableDetailPage(props: { params?: { id?: string }
       </div>
 
       {error && <Alert variant="destructive">{error}</Alert>}
+
+      {/* Excel import preview — shown after a file is parsed, hides until user confirms / cancels */}
+      {importDiff && (
+        <ImportPreview
+          diff={importDiff}
+          saving={importApplying}
+          onConfirm={applyImportDiff}
+          onCancel={cancelImport}
+        />
+      )}
 
       {/* Configuration section */}
       <div className="rounded-lg border bg-card p-6 space-y-4">
@@ -309,18 +418,23 @@ export default function PricingTableDetailPage(props: { params?: { id?: string }
         />
 
         {editing && (
-          <div className="flex gap-2 pt-2 border-t">
-            <Button
-              type="button"
-              onClick={saveConfig}
-              disabled={saving || !draft.code || !draft.name || draft.currencyCodeList.length === 0}
-            >
-              {saving ? 'Saving...' : (isNew ? 'Create Pricing Table' : 'Save')}
-            </Button>
-            <Button type="button" variant="outline" onClick={cancelEdit} disabled={saving}>
-              Cancel
-            </Button>
-          </div>
+          <>
+            {configValidationError && (
+              <Alert variant="destructive">{configValidationError}</Alert>
+            )}
+            <div className="flex gap-2 pt-2 border-t">
+              <Button
+                type="button"
+                onClick={saveConfig}
+                disabled={saving || configValidationError !== null}
+              >
+                {saving ? 'Saving...' : (isNew ? 'Create Pricing Table' : 'Save')}
+              </Button>
+              <Button type="button" variant="outline" onClick={cancelEdit} disabled={saving}>
+                Cancel
+              </Button>
+            </div>
+          </>
         )}
       </div>
 
@@ -396,8 +510,12 @@ function KeyLabelListEditor({
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b bg-muted/30 text-xs">
-                <th className="px-3 py-2 text-left font-medium">Key</th>
-                <th className="px-3 py-2 text-left font-medium">Label</th>
+                <th className="px-3 py-2 text-left font-medium">
+                  Key {editing && <span className="text-destructive">*</span>}
+                </th>
+                <th className="px-3 py-2 text-left font-medium">
+                  Label {editing && <span className="text-destructive">*</span>}
+                </th>
                 {editing && <th className="px-3 py-2 w-8" aria-label="Actions" />}
               </tr>
             </thead>

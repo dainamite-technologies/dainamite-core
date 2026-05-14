@@ -413,6 +413,102 @@ describe('cpqPricingTableCreateSchema', () => {
     })
     expect(result.success).toBe(true)
   })
+
+  // ─── V-PT-1: key/label required + unique ──────────────────
+  it('V-PT-1: rejects dimension with empty key', () => {
+    const result = cpqPricingTableCreateSchema.safeParse({
+      code: 'PT',
+      name: 'PT',
+      dimensions: [{ key: '', label: 'Datacenter' }],
+      priceColumns: [{ key: 'list', label: 'List' }],
+      currencyCodeList: ['USD'],
+    })
+    expect(result.success).toBe(false)
+    if (result.success) return
+    expect(result.error.issues.some((i) => i.path.includes('dimensions') && i.path.includes('key'))).toBe(true)
+  })
+
+  it('V-PT-1: rejects dimension with empty label', () => {
+    const result = cpqPricingTableCreateSchema.safeParse({
+      code: 'PT',
+      name: 'PT',
+      dimensions: [{ key: 'dc', label: '' }],
+      priceColumns: [{ key: 'list', label: 'List' }],
+      currencyCodeList: ['USD'],
+    })
+    expect(result.success).toBe(false)
+    if (result.success) return
+    expect(result.error.issues.some((i) => i.path.includes('dimensions') && i.path.includes('label'))).toBe(true)
+  })
+
+  it('V-PT-1: rejects priceColumn with empty key', () => {
+    const result = cpqPricingTableCreateSchema.safeParse({
+      code: 'PT',
+      name: 'PT',
+      dimensions: [{ key: 'dc', label: 'Datacenter' }],
+      priceColumns: [{ key: '', label: 'List' }],
+      currencyCodeList: ['USD'],
+    })
+    expect(result.success).toBe(false)
+    if (result.success) return
+    expect(result.error.issues.some((i) => i.path.includes('priceColumns') && i.path.includes('key'))).toBe(true)
+  })
+
+  it('V-PT-1: rejects priceColumn with empty label', () => {
+    const result = cpqPricingTableCreateSchema.safeParse({
+      code: 'PT',
+      name: 'PT',
+      dimensions: [{ key: 'dc', label: 'Datacenter' }],
+      priceColumns: [{ key: 'list', label: '' }],
+      currencyCodeList: ['USD'],
+    })
+    expect(result.success).toBe(false)
+    if (result.success) return
+    expect(result.error.issues.some((i) => i.path.includes('priceColumns') && i.path.includes('label'))).toBe(true)
+  })
+
+  it('V-PT-1: rejects duplicate dimension keys', () => {
+    const result = cpqPricingTableCreateSchema.safeParse({
+      code: 'PT',
+      name: 'PT',
+      dimensions: [
+        { key: 'dc', label: 'Datacenter' },
+        { key: 'dc', label: 'Datacenter again' },
+      ],
+      priceColumns: [{ key: 'list', label: 'List' }],
+      currencyCodeList: ['USD'],
+    })
+    expect(result.success).toBe(false)
+    if (result.success) return
+    expect(result.error.issues.some((i) => /duplicate/.test(i.message))).toBe(true)
+  })
+
+  it('V-PT-1: rejects duplicate priceColumn keys', () => {
+    const result = cpqPricingTableCreateSchema.safeParse({
+      code: 'PT',
+      name: 'PT',
+      dimensions: [{ key: 'dc', label: 'Datacenter' }],
+      priceColumns: [
+        { key: 'list', label: 'List' },
+        { key: 'list', label: 'List dup' },
+      ],
+      currencyCodeList: ['USD'],
+    })
+    expect(result.success).toBe(false)
+    if (result.success) return
+    expect(result.error.issues.some((i) => /duplicate/.test(i.message))).toBe(true)
+  })
+
+  it('V-PT-1: accepts empty dimensions / priceColumns arrays (table with no lookup keys yet)', () => {
+    const result = cpqPricingTableCreateSchema.safeParse({
+      code: 'PT',
+      name: 'PT',
+      dimensions: [],
+      priceColumns: [],
+      currencyCodeList: ['USD'],
+    })
+    expect(result.success).toBe(true)
+  })
 })
 
 describe('cpqPricingTableEntryCreateSchema', () => {

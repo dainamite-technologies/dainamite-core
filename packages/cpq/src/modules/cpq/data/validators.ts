@@ -254,11 +254,34 @@ export const cpqPriceRuleUpdateSchema = cpqPriceRuleCreateSchema.partial().exten
 
 // ─── Pricing Table ───────────────────────────────────────────────
 
+// V-PT-1: every dimension / price column needs a non-empty key + label,
+// and keys must be unique within their list (charges reference them by
+// key — duplicates would make lookup ambiguous).
+const keyLabelItem = z.object({
+  key: z.string().min(1, 'Key is required'),
+  label: z.string().min(1, 'Label is required'),
+})
+
+const uniqueKeys = (label: string) =>
+  (items: Array<{ key: string }>, ctx: z.RefinementCtx) => {
+    const seen = new Set<string>()
+    items.forEach((item, idx) => {
+      if (seen.has(item.key)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [idx, 'key'],
+          message: `V-PT-1: duplicate ${label} key "${item.key}"`,
+        })
+      }
+      seen.add(item.key)
+    })
+  }
+
 export const cpqPricingTableCreateSchema = z.object({
   code: z.string().min(1),
   name: z.string().min(1),
-  dimensions: z.array(z.object({ key: z.string(), label: z.string() })),
-  priceColumns: z.array(z.object({ key: z.string(), label: z.string() })),
+  dimensions: z.array(keyLabelItem).superRefine(uniqueKeys('dimension')),
+  priceColumns: z.array(keyLabelItem).superRefine(uniqueKeys('price column')),
   currencyCodeList: z.array(z.string().min(1)).min(1),
   isActive: z.boolean().optional().default(true),
 })

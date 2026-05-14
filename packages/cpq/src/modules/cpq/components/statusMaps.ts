@@ -8,7 +8,26 @@
 
 import type { TagMap } from '@open-mercato/ui/primitives/tag'
 
-// ─── Generic lifecycle (specifications, offerings) ───────────────
+// ─── Specification lifecycle (3 states) ──────────────────────────
+//
+// Specifications no longer carry a `retired` state; reviewers found it
+// redundant with `deprecated`. Existing rows were migrated by the
+// `<timestamp>-merge-spec-retired-into-deprecated.ts` migration.
+
+export type SpecificationLifecycleStatus = 'draft' | 'active' | 'deprecated'
+
+export const specificationLifecycleStatusMap: TagMap<SpecificationLifecycleStatus> = {
+  draft: 'neutral',
+  active: 'success',
+  deprecated: 'warning',
+}
+
+// ─── Offering lifecycle (4 states) ───────────────────────────────
+//
+// Offerings keep `retired` because the semantics differ: `deprecated`
+// offerings can still be sold but are discouraged for new customers;
+// `retired` offerings cannot be sold at all and only stay around for
+// historical reporting.
 
 export type LifecycleStatus = 'draft' | 'active' | 'deprecated' | 'retired'
 

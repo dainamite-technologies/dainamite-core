@@ -10,8 +10,8 @@ import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar
 import { CpqListView, useCpqListData } from '../../../components/CpqListView'
 import {
   formatStatusLabel,
-  lifecycleStatusMap,
-  type LifecycleStatus,
+  specificationLifecycleStatusMap,
+  type SpecificationLifecycleStatus,
 } from '../../../components/statusMaps'
 
 type Specification = {
@@ -59,7 +59,6 @@ export default function SpecificationsListPage() {
       { value: 'draft', label: t('cpq.specifications.lifecycle.draft', 'Draft') },
       { value: 'active', label: t('cpq.specifications.lifecycle.active', 'Active') },
       { value: 'deprecated', label: t('cpq.specifications.lifecycle.deprecated', 'Deprecated') },
-      { value: 'retired', label: t('cpq.specifications.lifecycle.retired', 'Retired') },
     ],
     [t],
   )
@@ -135,7 +134,7 @@ export default function SpecificationsListPage() {
         accessorKey: 'lifecycleStatus',
         header: t('cpq.specifications.lifecycleStatus', 'Lifecycle Status'),
         cell: ({ row }) => (
-          <Tag variant={lifecycleStatusMap[row.original.lifecycleStatus as LifecycleStatus] ?? 'neutral'} dot>
+          <Tag variant={specificationLifecycleStatusMap[row.original.lifecycleStatus as SpecificationLifecycleStatus] ?? 'neutral'} dot>
             {formatStatusLabel(row.original.lifecycleStatus)}
           </Tag>
         ),

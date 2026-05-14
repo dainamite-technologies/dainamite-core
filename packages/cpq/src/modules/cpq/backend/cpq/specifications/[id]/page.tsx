@@ -9,7 +9,9 @@ import { NumberInput } from '../../../../components/NumberInput'
 import {
   formatStatusLabel,
   lifecycleStatusMap,
+  specificationLifecycleStatusMap,
   type LifecycleStatus,
+  type SpecificationLifecycleStatus,
 } from '../../../../components/statusMaps'
 
 // ─── Types ──────────────────────────────────────────────────────
@@ -698,7 +700,7 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
             {isNew ? t('cpq.specifications.new', 'New Specification') : form.name}
           </h1>
           {!isNew && (
-            <Tag variant={lifecycleStatusMap[form.lifecycleStatus as LifecycleStatus] ?? 'neutral'} dot>
+            <Tag variant={specificationLifecycleStatusMap[form.lifecycleStatus as SpecificationLifecycleStatus] ?? 'neutral'} dot>
               {formatStatusLabel(form.lifecycleStatus)}
             </Tag>
           )}
@@ -774,7 +776,6 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                 <option value="draft">Draft</option>
                 <option value="active">Active</option>
                 <option value="deprecated">Deprecated</option>
-                <option value="retired">Retired</option>
               </select>
             </div>
             <div>

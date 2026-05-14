@@ -9,7 +9,12 @@ export const cpqProductSpecificationCreateSchema = z.object({
   description: z.string().nullish(),
   specType: z.enum(['simple', 'bundle']).optional().default('simple'),
   isAssetizable: z.boolean().optional().default(false),
-  lifecycleStatus: z.enum(['draft', 'active', 'deprecated', 'retired']).optional().default('draft'),
+  // `retired` was merged into `deprecated` — see migration
+  // `<timestamp>-merge-spec-retired-into-deprecated.ts`. Offerings still have
+  // four states because the user-facing semantics there are different
+  // (a retired offering can't be re-sold; a deprecated one can but is
+  // discouraged).
+  lifecycleStatus: z.enum(['draft', 'active', 'deprecated']).optional().default('draft'),
   version: z.number().int().optional().default(1),
   effectiveFrom: z.string().datetime().nullish(),
   effectiveTo: z.string().datetime().nullish(),

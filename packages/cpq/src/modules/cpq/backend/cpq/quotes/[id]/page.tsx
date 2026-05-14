@@ -230,37 +230,27 @@ function MoreActionsDropdown({ items }: { items: ActionItem[] }) {
 }
 
 function buildMoreActions({
-  arcEditable,
-  openArcDrawer,
   recalculate,
   submitting,
   deletable,
   onDelete,
   deleting,
 }: {
-  arcEditable: boolean
-  openArcDrawer: () => void
   recalculate: () => void
   submitting: boolean
   deletable: boolean
   onDelete: () => void
   deleting: boolean
 }): ActionItem[] {
-  const items: ActionItem[] = []
-  if (arcEditable) {
-    items.push({
-      id: 'modify-subscription',
-      label: 'Modify Subscription',
-      onSelect: openArcDrawer,
-    })
-  }
-  items.push({
-    id: 'recalculate',
-    label: 'Recalculate',
-    onSelect: recalculate,
-    loading: submitting,
-    disabled: submitting,
-  })
+  const items: ActionItem[] = [
+    {
+      id: 'recalculate',
+      label: 'Recalculate',
+      onSelect: recalculate,
+      loading: submitting,
+      disabled: submitting,
+    },
+  ]
   if (deletable) {
     items.push({
       id: 'delete',
@@ -689,6 +679,11 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
                   <Plus className="h-4 w-4" />
                   Add Offering
                 </Button>
+                {arcEditable && (
+                  <Button type="button" variant="outline" onClick={() => setArcDrawerOpen(true)}>
+                    Modify Subscription
+                  </Button>
+                )}
                 {cpqQuote.cpqStatus === 'accepted' && (
                   <Button type="button" onClick={convertToOrder} disabled={converting}>
                     {converting ? <Spinner /> : <ArrowRight className="h-4 w-4" />}
@@ -697,8 +692,6 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
                 )}
                 <MoreActionsDropdown
                   items={buildMoreActions({
-                    arcEditable,
-                    openArcDrawer: () => setArcDrawerOpen(true),
                     recalculate,
                     submitting,
                     deletable: !['accepted', 'rejected', 'cancelled'].includes(cpqQuote.cpqStatus),
@@ -712,27 +705,13 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
         }
       />
 
-      {/* Meta cards — give the secondary context (customer, version,
-          currency) real estate of its own rather than burying it next
-          to the "View Sales Quote" link. Mirrors the sidebar tiles in
-          the standard sales-document detail layout. */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-        <MetaCard label="Customer">
-          {cpqQuote.customerName ? (
-            <span className="font-medium">{cpqQuote.customerName}</span>
-          ) : (
-            <span className="font-mono text-xs text-muted-foreground">
-              {cpqQuote.customerId.slice(0, 8)}…
-            </span>
-          )}
-        </MetaCard>
-        <MetaCard label="Version">
-          <span className="font-medium">v{cpqQuote.version}</span>
-        </MetaCard>
-        <MetaCard label="Currency">
-          <span className="font-medium">{currency}</span>
-        </MetaCard>
-      </div>
+      {/* Per user feedback, order below the FormHeader is:
+            1. Status path (operator-facing lifecycle nav)
+            2. ARC info (amend/renew/cancel banner with targets)
+            3. Customer / Version / Currency meta cards
+            4. Pricing summary + line items (further down in the page)
+         Status path and ARC info are higher because they describe what
+         the user is *doing*; the meta cards are reference info. */}
 
       {/* Status path — every step is clickable so the operator can move
           between any pair of statuses. Backend enforces ARC-specific
@@ -779,6 +758,27 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
           </div>
         </div>
       )}
+
+      {/* Meta cards — secondary reference info (customer, version,
+          currency). Mirrors the sidebar tiles in the standard
+          sales-document detail layout. */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+        <MetaCard label="Customer">
+          {cpqQuote.customerName ? (
+            <span className="font-medium">{cpqQuote.customerName}</span>
+          ) : (
+            <span className="font-mono text-xs text-muted-foreground">
+              {cpqQuote.customerId.slice(0, 8)}…
+            </span>
+          )}
+        </MetaCard>
+        <MetaCard label="Version">
+          <span className="font-medium">v{cpqQuote.version}</span>
+        </MetaCard>
+        <MetaCard label="Currency">
+          <span className="font-medium">{currency}</span>
+        </MetaCard>
+      </div>
 
       {showDeleteConfirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setShowDeleteConfirm(false)}>

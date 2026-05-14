@@ -13,8 +13,36 @@ import {
   type LifecycleStatus,
   type SpecificationLifecycleStatus,
 } from '../../../../components/statusMaps'
+import { DependsOnRulesEditor } from './DependsOnRulesEditor'
 
 // ─── Types ──────────────────────────────────────────────────────
+
+// Attribute → attribute dependency contract. The validator
+// (`cpqValidationService.validateAttributes`) reads `attributeCode` to look
+// up the parent value and walks `rules[].when` to decide what happens to
+// this attribute. `effect` controls the interpretation of `rules[].then`:
+//
+//   - `filter_options`: `then` is a comma-separated list of allowed values
+//     that this attribute may take when the parent matches `when`.
+//   - `set_value`: `then` is a single value to assign to this attribute
+//     when the parent matches `when`.
+//   - `toggle_required`: `then` is a boolean — `true` makes this attribute
+//     required when the parent matches `when`, `false` makes it optional.
+//
+// Storage stays generic (`{ when: string; then: unknown }`) so we don't
+// have to migrate older configs when the surface grows.
+export type DependsOnEffect = 'filter_options' | 'set_value' | 'toggle_required'
+
+export type DependsOnRule = {
+  when: string
+  then: unknown
+}
+
+export type AttributeDependsOn = {
+  attributeCode: string
+  effect: DependsOnEffect
+  rules: DependsOnRule[]
+}
 
 type Specification = {
   id: string
@@ -42,7 +70,7 @@ type Attribute = {
   constraints: Record<string, unknown> | null
   referenceEntity: string | null
   referenceFilter: Record<string, unknown> | null
-  dependsOn: Record<string, unknown> | null
+  dependsOn: AttributeDependsOn | null
   defaultValue: unknown | null
   helpText: string | null
   sortOrder: number
@@ -239,8 +267,17 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
   const [pricingTables, setPricingTables] = React.useState<PricingTableRef[]>([])
   const [conditionJson, setConditionJson] = React.useState('null')
   const [dependsOnAttrCode, setDependsOnAttrCode] = React.useState('')
-  const [dependsOnEffect, setDependsOnEffect] = React.useState<string>('filter_options')
+  const [dependsOnEffect, setDependsOnEffect] = React.useState<DependsOnEffect>('filter_options')
   const [dependsOnEnabled, setDependsOnEnabled] = React.useState(false)
+  const [dependsOnRules, setDependsOnRules] = React.useState<DependsOnRule[]>([])
+  // OM-standard detail page contract: existing records open in read-only
+  // "view" mode and require an explicit Edit click to allow editing. New
+  // records (`/specifications/new`) skip view mode since there's nothing
+  // to display yet.
+  const [generalMode, setGeneralMode] = React.useState<'view' | 'edit'>(isNew ? 'edit' : 'view')
+  // Snapshot of the form taken when entering edit mode — used by Cancel to
+  // revert local changes without re-fetching.
+  const [formSnapshot, setFormSnapshot] = React.useState<typeof EMPTY_SPEC | null>(null)
 
   // ─── Load data ──────────────────────────────────────────────
 
@@ -337,6 +374,9 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
           effectiveTo: saved.effectiveTo,
           isActive: saved.isActive,
         })
+        // Save succeeded — drop the snapshot and flip back to read-only.
+        setFormSnapshot(null)
+        setGeneralMode('view')
       }
     } catch {
       setError('Failed to save')
@@ -375,9 +415,14 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
         ? editingOptions.filter((o) => o.value.trim() !== '')
         : null
 
-      const dependsOn = dependsOnEnabled && dependsOnAttrCode
-        ? { attributeCode: dependsOnAttrCode, effect: dependsOnEffect, rules: [] }
-        : null
+      const dependsOn: AttributeDependsOn | null =
+        dependsOnEnabled && dependsOnAttrCode
+          ? {
+              attributeCode: dependsOnAttrCode,
+              effect: dependsOnEffect,
+              rules: dependsOnRules.filter((r) => r.when.trim().length > 0),
+            }
+          : null
 
       const isEdit = !!editingAttr.id
       const payload = {
@@ -430,10 +475,11 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
     if (editing.attributeType === 'enum') editing.attributeType = 'select'
     setEditingAttr(editing)
     setEditingOptions(editing.options ? [...editing.options] : [])
-    const dep = editing.dependsOn as { attributeCode?: string; effect?: string } | null
+    const dep = editing.dependsOn
     setDependsOnEnabled(!!dep)
     setDependsOnAttrCode(dep?.attributeCode ?? '')
-    setDependsOnEffect(dep?.effect ?? 'filter_options')
+    setDependsOnEffect((dep?.effect as DependsOnEffect) ?? 'filter_options')
+    setDependsOnRules(Array.isArray(dep?.rules) ? dep.rules : [])
   }
 
   // ─── Offering CRUD ──────────────────────────────────────────
@@ -744,108 +790,179 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
       )}
 
       {/* ─── General Tab / New Form ─────────────────────────────── */}
-      {(isNew || tab === 'general') && (
+      {(isNew || tab === 'general') && (() => {
+        const isViewing = generalMode === 'view' && !isNew
+        // Spec type can never be changed once anything depends on it. We
+        // still surface the constraint in the read-only view so a user
+        // doesn't toggle into edit mode and find a disabled field.
+        const specTypeLocked = !isNew && (offerings.length > 0 || bundleSlots.length > 0)
+        return (
         <div className="rounded-lg border bg-card p-6 space-y-4">
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium mb-1">{t('cpq.specifications.code', 'Code')}</label>
-              <input
-                type="text"
-                value={form.code}
-                onChange={(e) => setForm({ ...form, code: e.target.value })}
-                placeholder="e.g. gix-access-port"
-                className="w-full rounded-md border px-3 py-2 text-sm"
-              />
+              {isViewing ? (
+                <p className="text-sm font-mono py-2">{form.code || '—'}</p>
+              ) : (
+                <input
+                  type="text"
+                  value={form.code}
+                  onChange={(e) => setForm({ ...form, code: e.target.value })}
+                  placeholder="e.g. gix-access-port"
+                  className="w-full rounded-md border px-3 py-2 text-sm"
+                />
+              )}
             </div>
             <div>
               <label className="block text-sm font-medium mb-1">{t('cpq.specifications.name', 'Name')}</label>
-              <input
-                type="text"
-                value={form.name}
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
-                className="w-full rounded-md border px-3 py-2 text-sm"
-              />
+              {isViewing ? (
+                <p className="text-sm py-2">{form.name || '—'}</p>
+              ) : (
+                <input
+                  type="text"
+                  value={form.name}
+                  onChange={(e) => setForm({ ...form, name: e.target.value })}
+                  className="w-full rounded-md border px-3 py-2 text-sm"
+                />
+              )}
             </div>
             <div>
               <label className="block text-sm font-medium mb-1">{t('cpq.specifications.lifecycleStatus', 'Lifecycle Status')}</label>
-              <select
-                value={form.lifecycleStatus}
-                onChange={(e) => setForm({ ...form, lifecycleStatus: e.target.value })}
-                className="w-full rounded-md border px-3 py-2 text-sm"
-              >
-                <option value="draft">Draft</option>
-                <option value="active">Active</option>
-                <option value="deprecated">Deprecated</option>
-              </select>
+              {isViewing ? (
+                <div className="py-2">
+                  <Tag variant={specificationLifecycleStatusMap[form.lifecycleStatus as SpecificationLifecycleStatus] ?? 'neutral'} dot>
+                    {formatStatusLabel(form.lifecycleStatus)}
+                  </Tag>
+                </div>
+              ) : (
+                <select
+                  value={form.lifecycleStatus}
+                  onChange={(e) => setForm({ ...form, lifecycleStatus: e.target.value })}
+                  className="w-full rounded-md border px-3 py-2 text-sm"
+                >
+                  <option value="draft">Draft</option>
+                  <option value="active">Active</option>
+                  <option value="deprecated">Deprecated</option>
+                </select>
+              )}
             </div>
             <div>
               <label className="block text-sm font-medium mb-1">{t('cpq.specifications.isActive', 'Is Active?')}</label>
               <div className="flex items-center h-[38px]">
-                <input
-                  type="checkbox"
-                  checked={form.isActive}
-                  onChange={(e) => setForm({ ...form, isActive: e.target.checked })}
-                  className="rounded border"
-                />
+                {isViewing ? (
+                  <Tag variant={form.isActive ? 'success' : 'neutral'} dot>
+                    {form.isActive ? t('common.yes', 'Yes') : t('common.no', 'No')}
+                  </Tag>
+                ) : (
+                  <input
+                    type="checkbox"
+                    checked={form.isActive}
+                    onChange={(e) => setForm({ ...form, isActive: e.target.checked })}
+                    className="rounded border"
+                  />
+                )}
               </div>
             </div>
             <div>
               <label className="block text-sm font-medium mb-1">Spec Type</label>
-              <select
-                value={form.specType}
-                onChange={(e) => setForm({ ...form, specType: e.target.value })}
-                disabled={!isNew && (offerings.length > 0 || bundleSlots.length > 0)}
-                className="w-full rounded-md border px-3 py-2 text-sm disabled:opacity-50"
-              >
-                <option value="simple">Simple</option>
-                <option value="bundle">Bundle</option>
-              </select>
-              {!isNew && (offerings.length > 0 || bundleSlots.length > 0) && (
-                <p className="text-xs text-muted-foreground mt-1">Cannot change after offerings or slots exist</p>
+              {isViewing ? (
+                <p className="text-sm py-2">{form.specType === 'bundle' ? 'Bundle' : 'Simple'}</p>
+              ) : (
+                <>
+                  <select
+                    value={form.specType}
+                    onChange={(e) => setForm({ ...form, specType: e.target.value })}
+                    disabled={specTypeLocked}
+                    className="w-full rounded-md border px-3 py-2 text-sm disabled:opacity-50"
+                  >
+                    <option value="simple">Simple</option>
+                    <option value="bundle">Bundle</option>
+                  </select>
+                  {specTypeLocked && (
+                    <p className="text-xs text-muted-foreground mt-1">Cannot change after offerings or slots exist</p>
+                  )}
+                </>
               )}
             </div>
             <div>
               <label className="block text-sm font-medium mb-1">Is Assetizable?</label>
               <div className="flex items-center h-[38px]">
-                <input
-                  type="checkbox"
-                  checked={form.isAssetizable}
-                  onChange={(e) => setForm({ ...form, isAssetizable: e.target.checked })}
-                  className="rounded border"
-                />
-                <span className="ml-2 text-xs text-muted-foreground">Creates asset records during fulfilment</span>
+                {isViewing ? (
+                  <Tag variant={form.isAssetizable ? 'warning' : 'neutral'} dot>
+                    {form.isAssetizable ? t('common.yes', 'Yes') : t('common.no', 'No')}
+                  </Tag>
+                ) : (
+                  <>
+                    <input
+                      type="checkbox"
+                      checked={form.isAssetizable}
+                      onChange={(e) => setForm({ ...form, isAssetizable: e.target.checked })}
+                      className="rounded border"
+                    />
+                    <span className="ml-2 text-xs text-muted-foreground">Creates asset records during fulfilment</span>
+                  </>
+                )}
               </div>
             </div>
           </div>
           <div>
             <label className="block text-sm font-medium mb-1">{t('cpq.specifications.description', 'Description')}</label>
-            <textarea
-              value={form.description ?? ''}
-              onChange={(e) => setForm({ ...form, description: e.target.value })}
-              rows={3}
-              className="w-full rounded-md border px-3 py-2 text-sm"
-            />
+            {isViewing ? (
+              <p className="text-sm text-muted-foreground py-2 whitespace-pre-wrap">{form.description || '—'}</p>
+            ) : (
+              <textarea
+                value={form.description ?? ''}
+                onChange={(e) => setForm({ ...form, description: e.target.value })}
+                rows={3}
+                className="w-full rounded-md border px-3 py-2 text-sm"
+              />
+            )}
           </div>
           {!isNew && (
             <span className="text-xs text-muted-foreground">Version {form.version}</span>
           )}
           <div className="flex gap-3">
-            <button
-              onClick={saveSpec}
-              disabled={saving || !form.code || !form.name}
-              className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-            >
-              {saving ? t('common.saving', 'Saving...') : t('common.save', 'Save')}
-            </button>
-            <button
-              onClick={() => router.push('/backend/cpq/specifications')}
-              className="inline-flex items-center justify-center rounded-md border px-4 py-2 text-sm font-medium hover:bg-muted"
-            >
-              {t('common.cancel', 'Cancel')}
-            </button>
+            {isViewing ? (
+              <Button
+                type="button"
+                onClick={() => {
+                  setFormSnapshot(form)
+                  setGeneralMode('edit')
+                }}
+              >
+                {t('common.edit', 'Edit')}
+              </Button>
+            ) : (
+              <>
+                <Button
+                  type="button"
+                  onClick={saveSpec}
+                  disabled={saving || !form.code || !form.name}
+                >
+                  {saving ? t('common.saving', 'Saving...') : t('common.save', 'Save')}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    if (isNew) {
+                      router.push('/backend/cpq/specifications')
+                      return
+                    }
+                    // Revert any in-flight edits and go back to read-only.
+                    if (formSnapshot) setForm(formSnapshot)
+                    setFormSnapshot(null)
+                    setGeneralMode('view')
+                  }}
+                >
+                  {t('common.cancel', 'Cancel')}
+                </Button>
+              </>
+            )}
           </div>
         </div>
-      )}
+        )
+      })()}
 
       {/* ─── Attributes Tab ─────────────────────────────────────── */}
       {tab === 'attributes' && !isNew && (
@@ -975,35 +1092,63 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                     />
                     Depends on another attribute
                   </label>
-                  {dependsOnEnabled && (
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-xs font-medium mb-1">Parent Attribute Code</label>
-                        <select
-                          value={dependsOnAttrCode}
-                          onChange={(e) => setDependsOnAttrCode(e.target.value)}
-                          className="w-full rounded-md border px-2 py-1.5 text-sm"
-                        >
-                          <option value="">Select attribute...</option>
-                          {attributes.filter((a) => editingAttr && a.code !== editingAttr.code).map((a) => (
-                            <option key={a.code} value={a.code}>{a.name} ({a.code})</option>
-                          ))}
-                        </select>
+                  {dependsOnEnabled && (() => {
+                    const parentAttr = attributes.find((a) => a.code === dependsOnAttrCode)
+                    return (
+                      <div className="space-y-3">
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-xs font-medium mb-1">Parent Attribute Code</label>
+                            <select
+                              value={dependsOnAttrCode}
+                              onChange={(e) => {
+                                setDependsOnAttrCode(e.target.value)
+                                // Parent changed — `when` values that referenced the old
+                                // parent's options no longer make sense, but clearing them
+                                // would silently destroy user work. Leave them as text; the
+                                // RuleRow will fall back to free-text input when the new
+                                // parent doesn't have enumerated options.
+                              }}
+                              className="w-full rounded-md border px-2 py-1.5 text-sm"
+                            >
+                              <option value="">Select attribute...</option>
+                              {attributes.filter((a) => editingAttr && a.code !== editingAttr.code).map((a) => (
+                                <option key={a.code} value={a.code}>{a.name} ({a.code})</option>
+                              ))}
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium mb-1">Effect</label>
+                            <select
+                              value={dependsOnEffect}
+                              onChange={(e) => {
+                                const next = e.target.value as DependsOnEffect
+                                setDependsOnEffect(next)
+                                // `then` shape differs per effect — drop existing rules so
+                                // we never persist a mis-typed payload.
+                                setDependsOnRules([])
+                              }}
+                              className="w-full rounded-md border px-2 py-1.5 text-sm"
+                            >
+                              <option value="filter_options">Filter options</option>
+                              <option value="set_value">Set value</option>
+                              <option value="toggle_required">Toggle required</option>
+                            </select>
+                          </div>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium mb-2">Rules</label>
+                          <DependsOnRulesEditor
+                            effect={dependsOnEffect}
+                            rules={dependsOnRules}
+                            onChange={setDependsOnRules}
+                            parentOptions={parentAttr?.options ?? null}
+                            childOptions={editingOptions.length > 0 ? editingOptions : null}
+                          />
+                        </div>
                       </div>
-                      <div>
-                        <label className="block text-xs font-medium mb-1">Effect</label>
-                        <select
-                          value={dependsOnEffect}
-                          onChange={(e) => setDependsOnEffect(e.target.value)}
-                          className="w-full rounded-md border px-2 py-1.5 text-sm"
-                        >
-                          <option value="filter_options">Filter options</option>
-                          <option value="set_value">Set value</option>
-                          <option value="toggle_required">Toggle required</option>
-                        </select>
-                      </div>
-                    </div>
-                  )}
+                    )
+                  })()}
                 </div>
                 <div className="flex items-end gap-4">
                   <label className="flex items-center gap-1.5 text-sm">

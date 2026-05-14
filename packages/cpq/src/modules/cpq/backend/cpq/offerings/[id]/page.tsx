@@ -167,6 +167,12 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
 
   const [editingCharge, setEditingCharge] = React.useState<EditingCharge | null>(null)
 
+  // OM-standard detail page: existing offerings open read-only and require
+  // an explicit Edit click to allow changes. New offerings skip view mode.
+  const [generalMode, setGeneralMode] = React.useState<'view' | 'edit'>(isNew ? 'edit' : 'view')
+  const [formSnapshot, setFormSnapshot] = React.useState<typeof EMPTY_FORM | null>(null)
+  const [designTimeSnapshot, setDesignTimeSnapshot] = React.useState<Record<string, unknown> | null>(null)
+
   // ─── Load data ──────────────────────────────────────────────
 
   React.useEffect(() => {
@@ -290,6 +296,10 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
           specId: saved.specId,
         })
         setDesignTimeValues(saved.designTimeValues ?? {})
+        // Save succeeded — drop snapshots and flip back to read-only.
+        setFormSnapshot(null)
+        setDesignTimeSnapshot(null)
+        setGeneralMode('view')
       }
     } catch {
       setError('Failed to save')
@@ -481,56 +491,82 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium mb-1">{t('cpq.offerings.code', 'Code')}</label>
-              <input
-                type="text"
-                value={form.code}
-                onChange={(e) => setForm({ ...form, code: e.target.value })}
-                placeholder="e.g. gix-cloud-connect-aws"
-                className="w-full rounded-md border px-3 py-2 text-sm"
-              />
+              {generalMode === 'view' && !isNew ? (
+                <p className="text-sm font-mono py-2">{form.code || '—'}</p>
+              ) : (
+                <input
+                  type="text"
+                  value={form.code}
+                  onChange={(e) => setForm({ ...form, code: e.target.value })}
+                  placeholder="e.g. gix-cloud-connect-aws"
+                  className="w-full rounded-md border px-3 py-2 text-sm"
+                />
+              )}
             </div>
             <div>
               <label className="block text-sm font-medium mb-1">{t('cpq.offerings.name', 'Name')}</label>
-              <input
-                type="text"
-                value={form.name}
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
-                className="w-full rounded-md border px-3 py-2 text-sm"
-              />
+              {generalMode === 'view' && !isNew ? (
+                <p className="text-sm py-2">{form.name || '—'}</p>
+              ) : (
+                <input
+                  type="text"
+                  value={form.name}
+                  onChange={(e) => setForm({ ...form, name: e.target.value })}
+                  className="w-full rounded-md border px-3 py-2 text-sm"
+                />
+              )}
             </div>
             <div>
               <label className="block text-sm font-medium mb-1">{t('cpq.offerings.lifecycleStatus', 'Lifecycle Status')}</label>
-              <select
-                value={form.lifecycleStatus}
-                onChange={(e) => setForm({ ...form, lifecycleStatus: e.target.value })}
-                className="w-full rounded-md border px-3 py-2 text-sm"
-              >
-                <option value="draft">Draft</option>
-                <option value="active">Active</option>
-                <option value="deprecated">Deprecated</option>
-                <option value="retired">Retired</option>
-              </select>
+              {generalMode === 'view' && !isNew ? (
+                <div className="py-2">
+                  <Tag variant={lifecycleStatusMap[form.lifecycleStatus as LifecycleStatus] ?? 'neutral'} dot>
+                    {formatStatusLabel(form.lifecycleStatus)}
+                  </Tag>
+                </div>
+              ) : (
+                <select
+                  value={form.lifecycleStatus}
+                  onChange={(e) => setForm({ ...form, lifecycleStatus: e.target.value })}
+                  className="w-full rounded-md border px-3 py-2 text-sm"
+                >
+                  <option value="draft">Draft</option>
+                  <option value="active">Active</option>
+                  <option value="deprecated">Deprecated</option>
+                  <option value="retired">Retired</option>
+                </select>
+              )}
             </div>
             <div>
               <label className="block text-sm font-medium mb-1">{t('cpq.offerings.isActive', 'Is Active?')}</label>
               <div className="flex items-center h-[38px]">
-                <input
-                  type="checkbox"
-                  checked={form.isActive}
-                  onChange={(e) => setForm({ ...form, isActive: e.target.checked })}
-                  className="rounded border"
-                />
+                {generalMode === 'view' && !isNew ? (
+                  <Tag variant={form.isActive ? 'success' : 'neutral'} dot>
+                    {form.isActive ? t('common.yes', 'Yes') : t('common.no', 'No')}
+                  </Tag>
+                ) : (
+                  <input
+                    type="checkbox"
+                    checked={form.isActive}
+                    onChange={(e) => setForm({ ...form, isActive: e.target.checked })}
+                    className="rounded border"
+                  />
+                )}
               </div>
             </div>
           </div>
           <div>
             <label className="block text-sm font-medium mb-1">{t('cpq.offerings.description', 'Description')}</label>
-            <textarea
-              value={form.description ?? ''}
-              onChange={(e) => setForm({ ...form, description: e.target.value })}
-              rows={3}
-              className="w-full rounded-md border px-3 py-2 text-sm"
-            />
+            {generalMode === 'view' && !isNew ? (
+              <p className="text-sm text-muted-foreground py-2 whitespace-pre-wrap">{form.description || '—'}</p>
+            ) : (
+              <textarea
+                value={form.description ?? ''}
+                onChange={(e) => setForm({ ...form, description: e.target.value })}
+                rows={3}
+                className="w-full rounded-md border px-3 py-2 text-sm"
+              />
+            )}
           </div>
 
           {/* Design-time values */}
@@ -538,70 +574,118 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
             <div className="space-y-3">
               <label className="block text-sm font-medium">Design-Time Values</label>
               <div className="grid grid-cols-2 gap-3">
-                {designTimeAttrs.map((attr) => (
-                  <div key={attr.code}>
-                    <label className="block text-xs font-medium mb-1">
-                      {attr.name}
-                      {attr.isRequired && <span className="text-destructive ml-0.5">*</span>}
-                    </label>
-                    {(attr.attributeType === 'select' || attr.attributeType === 'enum') && attr.options ? (
-                      <select
-                        value={String(designTimeValues[attr.code] ?? '')}
-                        onChange={(e) => setDesignTimeValues({ ...designTimeValues, [attr.code]: e.target.value || null })}
-                        className="w-full rounded-md border px-2 py-1.5 text-sm"
-                      >
-                        <option value="">Select {attr.name}...</option>
-                        {attr.options.map((opt) => (
-                          <option key={opt.value} value={opt.value}>{opt.label}</option>
-                        ))}
-                      </select>
-                    ) : attr.attributeType === 'number' ? (
-                      <NumberInput
-                        value={typeof designTimeValues[attr.code] === 'number' ? (designTimeValues[attr.code] as number) : null}
-                        onChange={(n) => setDesignTimeValues({ ...designTimeValues, [attr.code]: n })}
-                      />
-                    ) : attr.attributeType === 'boolean' ? (
-                      <div className="pt-1">
-                        <label className="flex items-center gap-1.5 text-sm">
-                          <input
-                            type="checkbox"
-                            checked={!!designTimeValues[attr.code]}
-                            onChange={(e) => setDesignTimeValues({ ...designTimeValues, [attr.code]: e.target.checked })}
-                            className="rounded border"
-                          />
-                          {attr.name}
-                        </label>
-                      </div>
-                    ) : (
-                      <input
-                        type="text"
-                        value={String(designTimeValues[attr.code] ?? '')}
-                        onChange={(e) => setDesignTimeValues({ ...designTimeValues, [attr.code]: e.target.value || null })}
-                        className="w-full rounded-md border px-2 py-1.5 text-sm"
-                        placeholder={attr.helpText ?? undefined}
-                      />
-                    )}
-                    {attr.helpText && <p className="text-xs text-muted-foreground mt-0.5">{attr.helpText}</p>}
-                  </div>
-                ))}
+                {designTimeAttrs.map((attr) => {
+                  const value = designTimeValues[attr.code]
+                  const isViewing = generalMode === 'view' && !isNew
+                  // Lookup the human label for select-type values so the
+                  // read-only view doesn't show raw codes.
+                  const optionLabel =
+                    (attr.attributeType === 'select' || attr.attributeType === 'enum') && attr.options
+                      ? attr.options.find((o) => o.value === value)?.label
+                      : undefined
+                  return (
+                    <div key={attr.code}>
+                      <label className="block text-xs font-medium mb-1">
+                        {attr.name}
+                        {attr.isRequired && <span className="text-destructive ml-0.5">*</span>}
+                      </label>
+                      {isViewing ? (
+                        <p className="text-sm py-2">
+                          {value == null || value === '' ? (
+                            <span className="text-muted-foreground">—</span>
+                          ) : attr.attributeType === 'boolean' ? (
+                            <Tag variant={value ? 'success' : 'neutral'} dot>
+                              {value ? t('common.yes', 'Yes') : t('common.no', 'No')}
+                            </Tag>
+                          ) : (
+                            optionLabel ?? String(value)
+                          )}
+                        </p>
+                      ) : (attr.attributeType === 'select' || attr.attributeType === 'enum') && attr.options ? (
+                        <select
+                          value={String(value ?? '')}
+                          onChange={(e) => setDesignTimeValues({ ...designTimeValues, [attr.code]: e.target.value || null })}
+                          className="w-full rounded-md border px-2 py-1.5 text-sm"
+                        >
+                          <option value="">Select {attr.name}...</option>
+                          {attr.options.map((opt) => (
+                            <option key={opt.value} value={opt.value}>{opt.label}</option>
+                          ))}
+                        </select>
+                      ) : attr.attributeType === 'number' ? (
+                        <NumberInput
+                          value={typeof value === 'number' ? (value as number) : null}
+                          onChange={(n) => setDesignTimeValues({ ...designTimeValues, [attr.code]: n })}
+                        />
+                      ) : attr.attributeType === 'boolean' ? (
+                        <div className="pt-1">
+                          <label className="flex items-center gap-1.5 text-sm">
+                            <input
+                              type="checkbox"
+                              checked={!!value}
+                              onChange={(e) => setDesignTimeValues({ ...designTimeValues, [attr.code]: e.target.checked })}
+                              className="rounded border"
+                            />
+                            {attr.name}
+                          </label>
+                        </div>
+                      ) : (
+                        <input
+                          type="text"
+                          value={String(value ?? '')}
+                          onChange={(e) => setDesignTimeValues({ ...designTimeValues, [attr.code]: e.target.value || null })}
+                          className="w-full rounded-md border px-2 py-1.5 text-sm"
+                          placeholder={attr.helpText ?? undefined}
+                        />
+                      )}
+                      {attr.helpText && <p className="text-xs text-muted-foreground mt-0.5">{attr.helpText}</p>}
+                    </div>
+                  )
+                })}
               </div>
             </div>
           )}
 
           <div className="flex gap-3">
-            <button
-              onClick={saveOffering}
-              disabled={saving || !form.code || !form.name || (isNew && !form.specId)}
-              className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-            >
-              {saving ? t('common.saving', 'Saving...') : t('common.save', 'Save')}
-            </button>
-            <button
-              onClick={() => router.push('/backend/cpq/offerings')}
-              className="inline-flex items-center justify-center rounded-md border px-4 py-2 text-sm font-medium hover:bg-muted"
-            >
-              {t('common.cancel', 'Cancel')}
-            </button>
+            {generalMode === 'view' && !isNew ? (
+              <Button
+                type="button"
+                onClick={() => {
+                  setFormSnapshot(form)
+                  setDesignTimeSnapshot(designTimeValues)
+                  setGeneralMode('edit')
+                }}
+              >
+                {t('common.edit', 'Edit')}
+              </Button>
+            ) : (
+              <>
+                <Button
+                  type="button"
+                  onClick={saveOffering}
+                  disabled={saving || !form.code || !form.name || (isNew && !form.specId)}
+                >
+                  {saving ? t('common.saving', 'Saving...') : t('common.save', 'Save')}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    if (isNew) {
+                      router.push('/backend/cpq/offerings')
+                      return
+                    }
+                    if (formSnapshot) setForm(formSnapshot)
+                    if (designTimeSnapshot) setDesignTimeValues(designTimeSnapshot)
+                    setFormSnapshot(null)
+                    setDesignTimeSnapshot(null)
+                    setGeneralMode('view')
+                  }}
+                >
+                  {t('common.cancel', 'Cancel')}
+                </Button>
+              </>
+            )}
           </div>
         </div>
       )}

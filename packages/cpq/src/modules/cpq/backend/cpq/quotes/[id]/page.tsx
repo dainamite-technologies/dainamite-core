@@ -4,7 +4,8 @@ import { useRouter, useParams, useSearchParams } from 'next/navigation'
 import ArcQuoteConfigurator, {
   type AttachedTarget,
 } from './_components/ArcQuoteConfigurator'
-import { ArrowRight, Trash2 } from 'lucide-react'
+import { QuoteStatusPath } from './_components/QuoteStatusPath'
+import { ArrowRight, RefreshCw, Trash2, Plus } from 'lucide-react'
 import { Alert, AlertTitle, AlertDescription } from '@open-mercato/ui/primitives/alert'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { Tag } from '@open-mercato/ui/primitives/tag'
@@ -78,9 +79,11 @@ type QuoteResult = {
   quoteId: string
   quoteNumber: string
   customerId: string
+  customerName: string | null
   cpqStatus: string
   version: number
   currencyCode: string
+  convertedOrderId: string | null
   validationResult: { valid: boolean; errors: Array<{ message: string }> }
   pricingSummary: {
     nrcTotal: number
@@ -136,19 +139,6 @@ const ALLOWED_TRANSITIONS: Record<string, string[]> = {
   accepted: [],
   rejected: [],
   cancelled: [],
-}
-
-const STATUS_LABELS: Record<string, string> = {
-  new: 'New',
-  incomplete: 'Incomplete',
-  ready: 'Ready',
-  in_approval: 'In Approval',
-  pre_approved: 'Pre-Approved',
-  approved: 'Approved',
-  with_customer: 'With Customer',
-  accepted: 'Accepted',
-  rejected: 'Rejected',
-  cancelled: 'Cancelled',
 }
 
 function fmt(amount: number, currency: string): string {
@@ -209,11 +199,9 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
   const [expandedLines, setExpandedLines] = React.useState<Set<string>>(new Set())
   const [converting, setConverting] = React.useState(false)
   const [transitioning, setTransitioning] = React.useState(false)
-  const [showStatusMenu, setShowStatusMenu] = React.useState(false)
   const [deleting, setDeleting] = React.useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = React.useState(false)
   const [pricingDetail, setPricingDetail] = React.useState<{ lineIdx: number; chargeIdx: number } | null>(null)
-  const statusMenuRef = React.useRef<HTMLDivElement>(null)
 
   // ─── XD-250 ARC state ──────────────────────────────────────────
   const [arcTargets, setArcTargets] = React.useState<AttachedTarget[]>([])
@@ -241,17 +229,6 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
     if (!cpqConfigId || isNew) return
     void loadArcTargets()
   }, [cpqConfigId, isNew, loadArcTargets])
-
-  React.useEffect(() => {
-    if (!showStatusMenu) return
-    const handler = (e: MouseEvent) => {
-      if (statusMenuRef.current && !statusMenuRef.current.contains(e.target as Node)) {
-        setShowStatusMenu(false)
-      }
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [showStatusMenu])
 
   // ─── Load or create ──────────────────────────────────────────
 
@@ -402,7 +379,7 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
   const transitionStatus = async (targetStatus: string) => {
     if (!cpqQuote) return
     try {
-      setTransitioning(true); setError(null); setShowStatusMenu(false)
+      setTransitioning(true); setError(null)
       const result = await apiJson<QuoteResult>(`/api/cpq/quotes/${cpqQuote.id}/status`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -532,7 +509,7 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
         <ArcQuoteConfigurator
           quoteId={cpqQuote.id}
           customerId={cpqQuote.customerId}
-          customerName={null}
+          customerName={cpqQuote.customerName}
           currencyCode={cpqQuote.currencyCode}
           initialType={arcQuoteType}
           initialTargets={arcTargets}
@@ -552,102 +529,113 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
           }}
         />
       )}
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <button onClick={() => router.push('/backend/cpq/quotes')} className="text-sm text-muted-foreground hover:text-foreground">← Back</button>
-          <h1 className="text-2xl font-bold">Quote {cpqQuote.quoteNumber || cpqQuote.quoteId.slice(0, 8)}</h1>
-          {arcQuoteType !== 'new' && (
-            <Tag variant="brand" className="uppercase">{arcQuoteType}</Tag>
-          )}
-          <div className="relative" ref={statusMenuRef}>
-            <button
-              onClick={() => {
-                const transitions = ALLOWED_TRANSITIONS[cpqQuote.cpqStatus] ?? []
-                if (transitions.length > 0) setShowStatusMenu((v) => !v)
-              }}
-              disabled={transitioning}
-              className={`inline-flex items-center gap-1 disabled:opacity-50 ${(ALLOWED_TRANSITIONS[cpqQuote.cpqStatus] ?? []).length > 0 ? 'cursor-pointer hover:ring-2 hover:ring-primary/30 rounded-full' : ''}`}
-            >
-              {transitioning ? <Spinner /> : null}
-              <Tag variant={quoteCpqStatusMap[cpqQuote.cpqStatus as QuoteCpqStatus] ?? 'neutral'} dot>
-                {formatStatusLabel(cpqQuote.cpqStatus)}
-                {(ALLOWED_TRANSITIONS[cpqQuote.cpqStatus] ?? []).length > 0 && (
-                  <svg className={`h-3 w-3 transition-transform ${showStatusMenu ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
-                  </svg>
-                )}
-              </Tag>
-            </button>
-            {showStatusMenu && (
-              <div className="absolute left-0 top-full mt-1 z-50 min-w-[180px] rounded-md border bg-card shadow-lg py-1">
-                <p className="px-3 py-1.5 text-xs text-muted-foreground font-medium">Transition to:</p>
-                {(ALLOWED_TRANSITIONS[cpqQuote.cpqStatus] ?? []).map((status) => (
-                  <button
-                    key={status}
-                    onClick={() => transitionStatus(status)}
-                    className="w-full px-3 py-1.5 text-left text-sm hover:bg-muted transition-colors flex items-center gap-2"
-                  >
-                    <Tag variant={quoteCpqStatusMap[status as QuoteCpqStatus] ?? 'neutral'} dot>
-                      {STATUS_LABELS[status] ?? formatStatusLabel(status)}
-                    </Tag>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-          <span className="text-xs text-muted-foreground">v{cpqQuote.version} · {currency}</span>
+      {/* Header — matches the standard sales detail layout: Back · title ·
+          status badge · utility links on the left; primary actions on the
+          right in the requested order (Add Offering, Modify Subscription,
+          Recalculate, Delete). Once converted the lock takes over and the
+          right-hand side collapses to a single "Go to order" link. */}
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div className="flex items-start gap-3 min-w-0">
           <button
-            onClick={() => router.push(`/backend/sales/quotes/${cpqQuote.quoteId}`)}
-            className="inline-flex items-center gap-1 text-xs text-primary hover:underline ml-2"
+            onClick={() => router.push('/backend/cpq/quotes')}
+            className="text-sm text-muted-foreground hover:text-foreground mt-1"
           >
-            View Sales Quote
-            <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
-            </svg>
+            ← Back
           </button>
+          <div className="flex flex-col gap-2 min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs uppercase tracking-wide text-muted-foreground">CPQ Quote</span>
+              <h1 className="text-2xl font-bold truncate">
+                {cpqQuote.quoteNumber || (cpqQuote.customerName ?? 'Untitled')}
+              </h1>
+              {arcQuoteType !== 'new' && (
+                <Tag variant="brand" className="uppercase">{arcQuoteType}</Tag>
+              )}
+              {cpqQuote.convertedOrderId && (
+                <Tag variant="success" dot>Converted</Tag>
+              )}
+            </div>
+            <div className="text-xs text-muted-foreground flex items-center gap-2 flex-wrap">
+              {cpqQuote.customerName && <span>{cpqQuote.customerName}</span>}
+              {cpqQuote.customerName && <span aria-hidden>·</span>}
+              <span>v{cpqQuote.version}</span>
+              <span aria-hidden>·</span>
+              <span>{currency}</span>
+              <button
+                onClick={() => router.push(`/backend/sales/quotes/${cpqQuote.quoteId}`)}
+                className="inline-flex items-center gap-1 text-primary hover:underline"
+              >
+                View Sales Quote
+                <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
+                </svg>
+              </button>
+            </div>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          {cpqQuote.cpqStatus === 'accepted' && (
-            <Button type="button" onClick={convertToOrder} disabled={converting}>
-              {converting ? <Spinner /> : <ArrowRight className="h-4 w-4" />}
-              Convert to Order
-            </Button>
-          )}
-          {!['accepted', 'rejected', 'cancelled'].includes(cpqQuote.cpqStatus) && (
-            <Button type="button" variant="destructive-outline" onClick={() => setShowDeleteConfirm(true)} disabled={deleting}>
-              {deleting ? <Spinner /> : <Trash2 className="h-3.5 w-3.5" />}
-              Delete
-            </Button>
-          )}
-          <button onClick={recalculate} disabled={submitting} className="inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-muted transition-colors disabled:opacity-50">
-            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182" />
-            </svg>
-            Recalculate
-          </button>
-          {view === 'summary' && (
-            <button onClick={startAddOffering} className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground shadow-sm hover:bg-primary/90 transition-colors">
-              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-              </svg>
-              Add Offering
-            </button>
-          )}
-          {view !== 'summary' && (
-            <button onClick={() => { resetConfigState(); setView('summary') }} className="inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-muted transition-colors">
-              Cancel
-            </button>
-          )}
-          {arcEditable && (
-            <button
-              onClick={() => setArcDrawerOpen(true)}
-              className="inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-muted transition-colors"
+        <div className="flex items-center gap-2 flex-wrap justify-end">
+          {/* Converted lock: every editing action is hidden, replaced by
+              a single "Go to order" entry point. Recalculate stays out
+              of the lock because re-pricing read-only data is harmless,
+              but we still suppress it here per the user's requirement
+              that converted quotes are immutable from this surface. */}
+          {cpqQuote.convertedOrderId ? (
+            <Button
+              type="button"
+              onClick={() => router.push(`/backend/cpq/orders/${cpqQuote.convertedOrderId}`)}
             >
-              Modify subscription
-            </button>
+              <ArrowRight className="h-4 w-4" />
+              Go to order
+            </Button>
+          ) : (
+            <>
+              {view === 'summary' && (
+                <Button type="button" onClick={startAddOffering}>
+                  <Plus className="h-4 w-4" />
+                  Add Offering
+                </Button>
+              )}
+              {view !== 'summary' && (
+                <Button type="button" variant="outline" onClick={() => { resetConfigState(); setView('summary') }}>
+                  Cancel
+                </Button>
+              )}
+              {arcEditable && view === 'summary' && (
+                <Button type="button" variant="outline" onClick={() => setArcDrawerOpen(true)}>
+                  Modify Subscription
+                </Button>
+              )}
+              <Button type="button" variant="outline" onClick={recalculate} disabled={submitting}>
+                {submitting ? <Spinner /> : <RefreshCw className="h-3.5 w-3.5" />}
+                Recalculate
+              </Button>
+              {cpqQuote.cpqStatus === 'accepted' && (
+                <Button type="button" onClick={convertToOrder} disabled={converting}>
+                  {converting ? <Spinner /> : <ArrowRight className="h-4 w-4" />}
+                  Convert to Order
+                </Button>
+              )}
+              {!['accepted', 'rejected', 'cancelled'].includes(cpqQuote.cpqStatus) && (
+                <Button type="button" variant="destructive-outline" onClick={() => setShowDeleteConfirm(true)} disabled={deleting}>
+                  {deleting ? <Spinner /> : <Trash2 className="h-3.5 w-3.5" />}
+                  Delete
+                </Button>
+              )}
+            </>
           )}
         </div>
+      </div>
+
+      {/* Status path — breadcrumb of the quote lifecycle. Clickable steps
+          mirror the transition menu we used to render inline. */}
+      <div className="flex items-center gap-3 flex-wrap">
+        <QuoteStatusPath
+          current={cpqQuote.cpqStatus}
+          allowedTransitions={ALLOWED_TRANSITIONS[cpqQuote.cpqStatus] ?? []}
+          onTransition={transitionStatus}
+          disabled={transitioning || !!cpqQuote.convertedOrderId}
+        />
+        {transitioning && <Spinner />}
       </div>
 
       {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}

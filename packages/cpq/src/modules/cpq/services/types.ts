@@ -158,10 +158,18 @@ export interface QuoteResult {
   quoteId: string
   quoteNumber: string
   customerId: string
+  /** Resolved customer display name (CustomerEntity.displayName). */
+  customerName: string | null
   cpqStatus: string
   version: number
   parentQuoteId: string | null
   currencyCode: string
+  /**
+   * Set when this quote has been converted to a CPQ order. UI uses this
+   * to lock editing and surface a "Go to order" entry point instead of
+   * the Convert button. Backed by `CpqOrderConfiguration.sourceQuoteId`.
+   */
+  convertedOrderId: string | null
   validationResult: {
     valid: boolean
     errors: ValidationError[]

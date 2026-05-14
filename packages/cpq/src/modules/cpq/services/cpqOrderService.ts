@@ -158,6 +158,23 @@ export class DefaultCpqOrderService {
       throw new OrderError(409, `Cannot convert a quote in '${cpqConfig.cpqStatus}' status`)
     }
 
+    // Idempotency guard: a quote may only convert once. If an order with
+    // this quote as its `sourceQuoteId` already exists, the UI should
+    // surface "Go to order" instead of re-running conversion — return
+    // 409 with the existing id so the caller can redirect.
+    const existingOrder = await em.findOne(CpqOrderConfiguration, {
+      sourceQuoteId: cpqConfig.id,
+      organizationId: scope.organizationId,
+      tenantId: scope.tenantId,
+      deletedAt: null,
+    })
+    if (existingOrder) {
+      throw new OrderError(
+        409,
+        `Quote has already been converted to order ${existingOrder.orderId}`,
+      )
+    }
+
     const quoteLines = await em.find(CpqQuoteLineConfiguration, {
       quoteConfigurationId: cpqConfig.id,
       organizationId: scope.organizationId,

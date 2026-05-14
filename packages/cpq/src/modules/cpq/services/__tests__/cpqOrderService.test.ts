@@ -131,6 +131,30 @@ describe('DefaultCpqOrderService.convertQuoteToOrder — guard rails', () => {
     })
   })
 
+  it('throws 409 when quote has already been converted (existing CpqOrderConfiguration)', async () => {
+    const { em, service } = createService()
+    em.findOne
+      .mockResolvedValueOnce({
+        id: 'q1',
+        cpqStatus: 'accepted',
+        pricingSummary: null,
+        currencyCode: 'USD',
+        customerId: 'cust',
+      })
+      // The guard: there's already an order for this quote
+      .mockResolvedValueOnce({
+        id: 'existing-order-config',
+        orderId: 'existing-sales-order-id',
+      })
+
+    await expect(service.convertQuoteToOrder('q1', SCOPE)).rejects.toMatchObject({
+      status: 409,
+      message: expect.stringContaining('existing-sales-order-id'),
+    })
+    // Conversion never proceeds past the guard — no `find` for quote lines.
+    expect(em.find).not.toHaveBeenCalled()
+  })
+
   it('falls back to lookup-by-quoteId when lookup-by-id misses', async () => {
     const { em, service } = createService()
     em.findOne.mockResolvedValueOnce(null) // id miss

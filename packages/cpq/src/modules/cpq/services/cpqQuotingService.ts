@@ -8,6 +8,7 @@ import {
   CpqQuoteTargetSubscription,
   CpqInventorySubscription,
   CpqInventorySubscriptionItem,
+  CpqOrderConfiguration,
   CpqProductOffering,
   CpqProductSpecification,
 } from '../data/entities'
@@ -1050,15 +1051,19 @@ export class DefaultCpqQuotingService {
     const finalValidation = validationResult ?? (cpqConfig.validationResult as { valid: boolean; errors: ValidationError[] }) ?? { valid: true, errors: [] }
     const finalPricing = pricingSummary ?? computePricingSummary(lineConfigs, cpqConfig.currencyCode)
 
+    const { customerName, convertedOrderId } = await resolveQuoteSideData(em, cpqConfig)
+
     return {
       id: cpqConfig.id,
       quoteId: cpqConfig.quoteId,
       quoteNumber: salesQuote.quoteNumber ?? '',
       customerId: cpqConfig.customerId,
+      customerName,
       cpqStatus: cpqConfig.cpqStatus,
       version: cpqConfig.version,
       parentQuoteId: cpqConfig.parentQuoteId ?? null,
       currencyCode: cpqConfig.currencyCode,
+      convertedOrderId,
       validationResult: finalValidation,
       pricingSummary: finalPricing,
       lines,
@@ -1140,15 +1145,19 @@ export class DefaultCpqQuotingService {
       })
     }
 
+    const { customerName, convertedOrderId } = await resolveQuoteSideData(em, cpqConfig)
+
     return {
       id: cpqConfig.id,
       quoteId: cpqConfig.quoteId,
       quoteNumber: salesQuote.quoteNumber ?? '',
       customerId: cpqConfig.customerId,
+      customerName,
       cpqStatus: cpqConfig.cpqStatus,
       version: cpqConfig.version,
       parentQuoteId: cpqConfig.parentQuoteId ?? null,
       currencyCode: cpqConfig.currencyCode,
+      convertedOrderId,
       validationResult,
       pricingSummary,
       lines,
@@ -1157,6 +1166,35 @@ export class DefaultCpqQuotingService {
 }
 
 // ─── Pure helpers ──────────────────────────────────────────────────
+
+/**
+ * Load the bits of `QuoteResult` that don't live on `CpqQuoteConfiguration`
+ * itself: the customer display name (for header / drawer labels) and any
+ * existing converted order id (locks editing in the UI).
+ */
+async function resolveQuoteSideData(
+  em: EntityManager,
+  cpqConfig: CpqQuoteConfiguration,
+): Promise<{ customerName: string | null; convertedOrderId: string | null }> {
+  const scope = {
+    organizationId: cpqConfig.organizationId,
+    tenantId: cpqConfig.tenantId,
+  }
+
+  const [customer, existingOrder] = await Promise.all([
+    em.findOne(CustomerEntity, { id: cpqConfig.customerId, ...scope }),
+    em.findOne(
+      CpqOrderConfiguration,
+      { sourceQuoteId: cpqConfig.id, ...scope, deletedAt: null },
+      { fields: ['id', 'orderId'] as never },
+    ),
+  ])
+
+  return {
+    customerName: customer?.displayName ?? null,
+    convertedOrderId: existingOrder?.orderId ?? null,
+  }
+}
 
 function buildCustomerSnapshot(customer: CustomerEntity): Record<string, unknown> {
   return {

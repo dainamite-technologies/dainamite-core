@@ -119,6 +119,7 @@
   },
   "peerDependencies": {
     "@mikro-orm/core": "^7.0.0",
+    "@tanstack/react-table": "^8.0.0 || ^9.0.0",
     "@mikro-orm/decorators": "^7.0.0",
     "@mikro-orm/postgresql": "^7.0.0",
     "@open-mercato/core": "^0.6.0",

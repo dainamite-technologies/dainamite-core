@@ -11,7 +11,7 @@ import {
   orderCpqStatusMap,
   type OrderCpqStatus,
 } from '../../../../components/statusMaps'
-import { OrderStatusPath } from './_components/OrderStatusPath'
+import { StatusPath } from '../../../../components/StatusPath'
 
 // ─── Types ───────────────────────────────────────────────────────
 
@@ -342,7 +342,16 @@ export default function CpqOrderDetailPage(props: { params?: { id?: string } }) 
           dedicated Activate / Cancel buttons because activation has
           backend side effects (subscription / asset creation). */}
       <div className="flex items-center gap-3 flex-wrap">
-        <OrderStatusPath current={order.cpqStatus} />
+        <StatusPath
+          // Order path is read-only — activation has backend side effects
+          // (subscription / asset creation) so transitions go through the
+          // dedicated Activate / Cancel buttons.
+          current={order.cpqStatus}
+          path={['draft', 'pending_activation', 'active', 'fulfilled']}
+          terminals={['cancelled']}
+          statusMap={orderCpqStatusMap}
+          ariaLabel="Order status path"
+        />
       </div>
 
       {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}

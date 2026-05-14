@@ -4,7 +4,7 @@ import { useRouter, useParams, useSearchParams } from 'next/navigation'
 import ArcQuoteConfigurator, {
   type AttachedTarget,
 } from './_components/ArcQuoteConfigurator'
-import { QuoteStatusPath } from './_components/QuoteStatusPath'
+import { StatusPath } from '../../../../components/StatusPath'
 import { ArrowRight, ExternalLink, Plus } from 'lucide-react'
 import { Alert, AlertTitle, AlertDescription } from '@open-mercato/ui/primitives/alert'
 import { Button } from '@open-mercato/ui/primitives/button'
@@ -718,10 +718,22 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
           guards (validateArcQuote on submit-for-approval) but no longer
           gates simple transitions. */}
       <div className="flex items-center gap-3 flex-wrap">
-        <QuoteStatusPath
+        <StatusPath
+          // Per product decision the quote status path lets the operator
+          // jump between any pair of statuses, so `allowedTransitions` is
+          // omitted — backend validates ARC-specific guards.
+          // `pre_approved` aliases into the `approved` slot for layout.
           current={cpqQuote.cpqStatus}
+          path={
+            cpqQuote.cpqStatus === 'pre_approved'
+              ? ['new', 'incomplete', 'ready', 'in_approval', 'pre_approved', 'with_customer', 'accepted']
+              : ['new', 'incomplete', 'ready', 'in_approval', 'approved', 'with_customer', 'accepted']
+          }
+          terminals={['rejected', 'cancelled']}
+          statusMap={quoteCpqStatusMap}
           onTransition={transitionStatus}
           disabled={transitioning}
+          ariaLabel="Quote status path"
         />
         {transitioning && <Spinner />}
       </div>

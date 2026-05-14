@@ -10,6 +10,7 @@ import {
   formatStatusLabel,
   type AssetStatus,
 } from '../../../../../components/statusMaps'
+import { StatusPath } from '../../../../../components/StatusPath'
 
 type AssetDetail = {
   id: string
@@ -75,27 +76,13 @@ export default function AssetDetailPage(props: { params?: { id?: string } }) {
   const [specName, setSpecName] = React.useState<string | null>(null)
   const [sourceQuoteNumber, setSourceQuoteNumber] = React.useState<string | null>(null)
   const [sourceOrderNumber, setSourceOrderNumber] = React.useState<string | null>(null)
-  const [statusMenuOpen, setStatusMenuOpen] = React.useState(false)
   const [transitioning, setTransitioning] = React.useState(false)
-  const statusMenuRef = React.useRef<HTMLDivElement>(null)
-
-  React.useEffect(() => {
-    if (!statusMenuOpen) return
-    const handler = (e: MouseEvent) => {
-      if (statusMenuRef.current && !statusMenuRef.current.contains(e.target as Node)) {
-        setStatusMenuOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [statusMenuOpen])
 
   const transitionStatus = async (targetStatus: string) => {
     if (!asset) return
     try {
       setTransitioning(true)
       setError(null)
-      setStatusMenuOpen(false)
       const res = await fetch('/api/cpq/inventory/assets/status', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -239,44 +226,24 @@ export default function AssetDetailPage(props: { params?: { id?: string } }) {
             {transitioning && <Spinner />}
           </div>
         }
-        actionsContent={
-          statusTransitions.length > 0 ? (
-            <div className="relative" ref={statusMenuRef}>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setStatusMenuOpen((v) => !v)}
-                disabled={transitioning}
-              >
-                Change Status
-                <svg className="h-3 w-3 ml-1" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
-                </svg>
-              </Button>
-              {statusMenuOpen && (
-                <div className="absolute right-0 top-full mt-1 z-50 min-w-[180px] rounded-md border bg-popover shadow-md py-1">
-                  <p className="px-3 py-1.5 text-xs text-muted-foreground font-medium">Transition to:</p>
-                  {statusTransitions.map((target) => (
-                    <button
-                      key={target}
-                      type="button"
-                      onClick={() => {
-                        setStatusMenuOpen(false)
-                        void transitionStatus(target)
-                      }}
-                      className="w-full px-3 py-2 text-left text-sm hover:bg-accent focus:bg-accent focus:outline-none transition-colors flex items-center gap-2"
-                    >
-                      <Tag variant={assetStatusMap[target as AssetStatus] ?? 'neutral'} dot>
-                        {STATUS_LABELS[target] ?? formatStatusLabel(target)}
-                      </Tag>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          ) : null
-        }
       />
+
+      {/* Status path — interactive: clicking a non-current step in the
+          breadcrumb invokes /api/cpq/inventory/assets/status. */}
+      <div className="flex items-center gap-3 flex-wrap">
+        <StatusPath
+          current={asset.status}
+          path={['pending', 'delivered', 'active', 'returned']}
+          terminals={['cancelled']}
+          statusMap={assetStatusMap}
+          labels={STATUS_LABELS}
+          onTransition={transitionStatus}
+          allowedTransitions={statusTransitions}
+          disabled={transitioning}
+          ariaLabel="Asset status path"
+        />
+        {transitioning && <Spinner />}
+      </div>
 
       {error && <ErrorBanner message={error} />}
 

@@ -880,6 +880,8 @@ __metadata:
 "@dainamite/cpq@workspace:packages/cpq":
   version: 0.0.0-use.local
   resolution: "@dainamite/cpq@workspace:packages/cpq"
+  dependencies:
+    chokidar: "npm:^4.0.3"
   peerDependencies:
     "@mikro-orm/core": ^7.0.0
     "@mikro-orm/decorators": ^7.0.0

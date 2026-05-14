@@ -16,6 +16,9 @@
     "watch": "node watch.mjs",
     "typecheck": "tsc --noEmit"
   },
+  "devDependencies": {
+    "chokidar": "^4.0.3"
+  },
   "exports": {
     ".": {
       "types": "./src/modules/cpq/index.ts",

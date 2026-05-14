@@ -41,6 +41,11 @@ function buildFilterParams(values: FilterValues, params: URLSearchParams) {
   if (typeof values.billingCycle === 'string' && values.billingCycle.trim()) {
     params.set('billingCycle', values.billingCycle.trim())
   }
+  // Expiring window: replaces the standalone /expiring page. Save as a
+  // perspective ("Expiring 30d", "Expiring 90d", …) for quick recall.
+  if (typeof values.expiringWithinDays === 'string' && values.expiringWithinDays) {
+    params.set('expiringWithinDays', values.expiringWithinDays)
+  }
 }
 
 export function SubscriptionsTable() {
@@ -77,6 +82,19 @@ export function SubscriptionsTable() {
         id: 'billingCycle',
         label: t('cpq.inventory.filters.billingCycle', 'Billing Cycle'),
         type: 'text',
+      },
+      {
+        id: 'expiringWithinDays',
+        label: t('cpq.inventory.filters.expiringWithinDays', 'Expiring within (days)'),
+        type: 'select',
+        // Pick from common renewal-watch windows. Backend caps at 365.
+        options: [
+          { value: '7', label: '7 days' },
+          { value: '14', label: '14 days' },
+          { value: '30', label: '30 days' },
+          { value: '60', label: '60 days' },
+          { value: '90', label: '90 days' },
+        ],
       },
     ],
     [t],

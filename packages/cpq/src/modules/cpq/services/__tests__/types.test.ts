@@ -304,8 +304,9 @@ describe("ARC (XD-250) — quote types & enums", () => {
     expect(ARC_QUOTE_TYPES).toEqual(["amend", "renew", "cancel"])
   })
 
-  it("CHANGE_LOG_TYPES covers amend / renew / cancel + merge variants", () => {
+  it("CHANGE_LOG_TYPES covers created + amend / renew / cancel + merge variants", () => {
     expect(CHANGE_LOG_TYPES).toEqual([
+      "created",
       "amend",
       "renew",
       "cancel",

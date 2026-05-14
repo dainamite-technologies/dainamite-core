@@ -41,6 +41,11 @@ export async function GET(req: Request) {
     if (billingCycle) filters.billingCycle = billingCycle
     const search = url.searchParams.get('search')
     if (search) filters.search = search
+    const expiringWithinDays = url.searchParams.get('expiringWithinDays')
+    if (expiringWithinDays) {
+      const n = Number(expiringWithinDays)
+      if (Number.isFinite(n) && n > 0) filters.expiringWithinDays = Math.min(365, n)
+    }
 
     const ALLOWED_SORT_FIELDS = ['createdAt', 'updatedAt', 'code', 'name', 'status', 'startDate', 'currentTermEnd'] as const
     const sortFieldParam = url.searchParams.get('sortField') ?? ''

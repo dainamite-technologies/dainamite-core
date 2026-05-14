@@ -33,7 +33,6 @@ export const setup: ModuleSetupConfig = {
       'cpq.wizards.manage',
       'cpq.inventory.view',
       'cpq.inventory.manage',
-      'cpq.inventory.expiring.view',
       'cpq.orders.view',
       'cpq.orders.manage',
       // XD-250 ARC features — admins can drive every ARC flow.
@@ -51,7 +50,6 @@ export const setup: ModuleSetupConfig = {
       'cpq.offerings.view',
       'cpq.wizards.view',
       'cpq.inventory.view',
-      'cpq.inventory.expiring.view',
       'cpq.orders.view',
       // XD-250 ARC: anyone with cpq.quotes.manage drives ARC quotes.
       'cpq.arc.amend.manage',

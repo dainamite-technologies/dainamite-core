@@ -25,6 +25,8 @@ interface SubscriptionListFilters {
   productId?: string
   billingCycle?: string
   search?: string
+  /** Only subscriptions whose currentTermEnd falls within the next N days. */
+  expiringWithinDays?: number
   sortField?: 'createdAt' | 'updatedAt' | 'code' | 'name' | 'status' | 'startDate' | 'currentTermEnd'
   sortDir?: 'asc' | 'desc'
   page?: number
@@ -321,8 +323,24 @@ export class DefaultCpqInventoryService {
       where.id = { $in: subIds }
     }
 
-    const sortField = filters.sortField ?? 'createdAt'
-    const sortDir = filters.sortDir === 'asc' ? 'asc' : 'desc'
+    // Expiring window: subscriptions whose currentTermEnd is between now
+    // and now + N days. Replaces the separate /expiring page — operators
+    // save this as a perspective on the main list.
+    if (filters.expiringWithinDays != null && filters.expiringWithinDays > 0) {
+      const now = new Date()
+      const cutoff = new Date(now.getTime() + filters.expiringWithinDays * 24 * 60 * 60 * 1000)
+      where.currentTermEnd = { $gte: now, $lte: cutoff }
+    }
+
+    // Default sort for the expiring view is "soonest first"; otherwise
+    // the caller's choice (or newest-first).
+    const defaultSortField =
+      filters.expiringWithinDays != null && filters.expiringWithinDays > 0
+        ? 'currentTermEnd'
+        : 'createdAt'
+    const sortField = filters.sortField ?? defaultSortField
+    const sortDir = filters.sortDir === 'asc' ? 'asc' :
+      filters.sortField === undefined && filters.expiringWithinDays != null ? 'asc' : 'desc'
 
     const [items, total] = await this.em.findAndCount(
       CpqInventorySubscription,
@@ -421,6 +439,32 @@ export class DefaultCpqInventoryService {
     sub.mrcAmount = String(mrcSum)
     sub.nrcAmount = String(nrcSum)
 
+    // Seed the change log with a `created` entry so the Change History
+    // panel always shows where the subscription came from — same shape
+    // as the `amend` / `renew` / `cancel` entries written by ARC flows.
+    // beforeSnapshot is null because there is no prior state; the after
+    // snapshot is the freshly-built subscription so the UI can diff
+    // against subsequent changes.
+    await this.em.flush() // need sub.id and items persisted before snapshot
+    const afterSnapshot = await this.snapshotSubscription(sub, scope)
+    const log = this.createChangeLog({
+      subscription: sub,
+      changeType: 'created',
+      sourceQuoteId: input.sourceQuoteId ?? null,
+      sourceOrderId: input.sourceOrderId ?? null,
+      performedByUserId: null,
+      beforeSnapshot: null,
+      afterSnapshot,
+      lineChanges: items.map((item) => ({
+        action: 'add' as const,
+        itemId: item.id,
+        sourceQuoteLineId: item.sourceQuoteLineId ?? null,
+        mrcAmount: Number(item.mrcAmount),
+        nrcAmount: Number(item.nrcAmount),
+        quantity: item.quantity,
+      })),
+    })
+    sub.lastChangeLogId = log.id
     await this.em.flush()
     return sub
   }
@@ -1463,18 +1507,21 @@ export class DefaultCpqInventoryService {
     sub: CpqInventorySubscription,
     scope: TenantScope,
   ): Promise<Record<string, unknown>> {
-    const items = await this.em.find(CpqInventorySubscriptionItem, {
+    // `?? []` is defensive: in unit tests with a partially-mocked EM the
+    // `find` call may return undefined. Mikro at runtime always returns an
+    // array, so this only matters for harness code.
+    const items = (await this.em.find(CpqInventorySubscriptionItem, {
       subscriptionId: sub.id,
       organizationId: scope.organizationId,
       tenantId: scope.tenantId,
       deletedAt: null,
-    })
-    const assets = await this.em.find(CpqInventoryAsset, {
+    })) ?? []
+    const assets = (await this.em.find(CpqInventoryAsset, {
       subscriptionId: sub.id,
       organizationId: scope.organizationId,
       tenantId: scope.tenantId,
       deletedAt: null,
-    })
+    })) ?? []
     return {
       id: sub.id,
       code: sub.code,

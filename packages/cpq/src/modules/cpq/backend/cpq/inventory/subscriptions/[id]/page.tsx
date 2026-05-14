@@ -63,6 +63,7 @@ type ChangeLogRow = {
 }
 
 const CHANGE_TYPE_LABELS: Record<string, string> = {
+  created: 'Created',
   amend: 'Amended',
   renew: 'Renewed',
   cancel: 'Cancelled',
@@ -70,7 +71,8 @@ const CHANGE_TYPE_LABELS: Record<string, string> = {
   'merge-source': 'Merged into a new contract',
 }
 
-const CHANGE_TYPE_VARIANTS: Record<string, 'info' | 'success' | 'error' | 'brand' | 'warning'> = {
+const CHANGE_TYPE_VARIANTS: Record<string, 'info' | 'success' | 'error' | 'brand' | 'warning' | 'neutral'> = {
+  created: 'neutral',
   amend: 'info',
   renew: 'success',
   cancel: 'error',
@@ -248,7 +250,22 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data?.error ?? 'Status transition failed')
-      setSub((prev) => prev ? { ...prev, ...data } : prev)
+      // The status endpoint cascades to items and linked assets server-side,
+      // but only returns the subscription scalar fields. Re-fetch the full
+      // detail (which includes the item tree) and the asset list so the UI
+      // reflects every cascaded change without a hard refresh.
+      const [freshSub, freshAssets] = await Promise.all([
+        fetch(`/api/cpq/inventory/subscriptions?id=${sub.id}`).then((r) => (r.ok ? r.json() : null)),
+        fetch(`/api/cpq/inventory/assets?subscriptionId=${sub.id}&pageSize=50`)
+          .then((r) => (r.ok ? r.json() : null))
+          .then((r) => (r?.items ?? []) as LinkedAsset[]),
+      ])
+      if (freshSub) {
+        setSub(freshSub)
+      } else {
+        setSub((prev) => prev ? { ...prev, ...data } : prev)
+      }
+      setAssets(freshAssets)
     } catch (err) {
       setError((err as Error).message)
     } finally {

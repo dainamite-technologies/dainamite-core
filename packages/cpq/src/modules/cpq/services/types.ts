@@ -275,6 +275,7 @@ export type CpqQuoteType = (typeof CPQ_QUOTE_TYPES)[number]
 export const ARC_QUOTE_TYPES: ReadonlyArray<Exclude<CpqQuoteType, 'new'>> = ['amend', 'renew', 'cancel']
 
 export const CHANGE_LOG_TYPES = [
+  'created',
   'amend',
   'renew',
   'cancel',

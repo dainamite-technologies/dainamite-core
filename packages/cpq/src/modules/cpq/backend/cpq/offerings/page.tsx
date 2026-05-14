@@ -54,13 +54,6 @@ type Offering = {
   charges?: Charge[]
 }
 
-type PricingTableRef = {
-  id: string
-  code: string
-  name: string
-  priceColumns: Array<{ key: string; label: string }>
-}
-
 const PAGE_SIZE = 50
 
 function ChargePopover({ charge }: { charge: Charge }) {
@@ -118,7 +111,10 @@ export default function OfferingsListPage() {
     loadErrorMessage: t('cpq.offerings.list.error.load', 'Failed to load offerings'),
   })
 
-  // Bulk charge creation state
+  // Bulk charge creation is restricted to `flat` pricing — per_unit/tiered
+  // need a pricing table + a numeric quantity attribute that lives on the
+  // offering's spec, which differs between selected offerings. We push
+  // users to the per-offering detail page for those methods.
   const [bulkChargeOpen, setBulkChargeOpen] = React.useState(false)
   const [bulkChargeTargets, setBulkChargeTargets] = React.useState<Offering[]>([])
   const [chargeForm, setChargeForm] = React.useState({
@@ -126,13 +122,9 @@ export default function OfferingsListPage() {
     name: '',
     description: '',
     chargeType: 'mrc',
-    pricingMethod: 'flat',
   })
   const [chargePrices, setChargePrices] = React.useState<Record<string, string>>({})
-  const [chargePricingTableId, setChargePricingTableId] = React.useState<string | null>(null)
-  const [chargePriceColumnKey, setChargePriceColumnKey] = React.useState<string | null>(null)
   const [chargeCurrency, setChargeCurrency] = React.useState('USD')
-  const [pricingTables, setPricingTables] = React.useState<PricingTableRef[]>([])
   const [saving, setSaving] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
 
@@ -176,32 +168,16 @@ export default function OfferingsListPage() {
     [lifecycleOptions, offeringTypeOptions, t],
   )
 
-  const loadPricingTables = React.useCallback(async () => {
-    if (pricingTables.length > 0) return
-    try {
-      const res = await fetch('/api/cpq/pricing-tables?pageSize=200')
-      if (res.ok) {
-        const json = await res.json()
-        setPricingTables(json.items ?? [])
-      }
-    } catch {
-      // ignore — pricing tables are optional
-    }
-  }, [pricingTables.length])
-
   const openBulkChargeForm = React.useCallback(
     (targets: Offering[]) => {
       setBulkChargeTargets(targets)
-      setChargeForm({ code: '', name: '', description: '', chargeType: 'mrc', pricingMethod: 'flat' })
+      setChargeForm({ code: '', name: '', description: '', chargeType: 'mrc' })
       setChargePrices({})
-      setChargePricingTableId(null)
-      setChargePriceColumnKey(null)
       setChargeCurrency('USD')
       setError(null)
       setBulkChargeOpen(true)
-      void loadPricingTables()
     },
-    [loadPricingTables],
+    [],
   )
 
   const saveChargesForSelected = React.useCallback(async () => {
@@ -218,16 +194,11 @@ export default function OfferingsListPage() {
           name: chargeForm.name,
           description: chargeForm.description || null,
           chargeType: chargeForm.chargeType,
-          pricingMethod: chargeForm.pricingMethod,
+          pricingMethod: 'flat',
+          fixedPrice: chargePrices[offering.id] || null,
+          currencyCode: chargeCurrency,
           isActive: true,
           sortOrder: 0,
-        }
-        if (chargeForm.pricingMethod === 'flat') {
-          payload.fixedPrice = chargePrices[offering.id] || null
-          payload.currencyCode = chargeCurrency
-        } else {
-          payload.pricingTableId = chargePricingTableId
-          payload.priceColumnKey = chargePriceColumnKey
         }
         const res = await fetch('/api/cpq/product-charges', {
           method: 'POST',
@@ -254,16 +225,10 @@ export default function OfferingsListPage() {
     bulkChargeTargets,
     chargeCurrency,
     chargeForm,
-    chargePriceColumnKey,
     chargePrices,
-    chargePricingTableId,
     data,
     t,
   ])
-
-  const selectedPricingTable = chargePricingTableId
-    ? pricingTables.find((pt) => pt.id === chargePricingTableId)
-    : null
 
   const columns = React.useMemo<ColumnDef<Offering>[]>(
     () => [
@@ -347,13 +312,19 @@ export default function OfferingsListPage() {
   const bulkChargeForm = bulkChargeOpen && bulkChargeTargets.length > 0 && (
     <div className="rounded-lg border bg-card p-5 space-y-4">
       <h4 className="font-medium text-sm">
-        {t('cpq.offerings.bulk.formTitle', 'New Charge for')} {bulkChargeTargets.length}{' '}
+        {t('cpq.offerings.bulk.formTitle', 'New Flat-Price Charge for')} {bulkChargeTargets.length}{' '}
         {bulkChargeTargets.length > 1
           ? t('cpq.offerings.bulk.offeringsPlural', 'offerings')
           : t('cpq.offerings.bulk.offeringsSingular', 'offering')}
       </h4>
 
-      <div className="grid grid-cols-4 gap-3">
+      <Alert>
+        Bulk creation supports <strong>flat pricing only</strong>. For <em>per unit</em> or <em>tiered</em> pricing,
+        open each offering individually — those methods need a pricing table and a numeric attribute that lives on
+        the offering&apos;s spec, which usually differs between offerings.
+      </Alert>
+
+      <div className="grid grid-cols-3 gap-3">
         <div>
           <label className="block text-xs font-medium mb-1">Code</label>
           <Input
@@ -386,22 +357,6 @@ export default function OfferingsListPage() {
             </SelectContent>
           </Select>
         </div>
-        <div>
-          <label className="block text-xs font-medium mb-1">Pricing</label>
-          <Select
-            value={chargeForm.pricingMethod}
-            onValueChange={(value) => setChargeForm({ ...chargeForm, pricingMethod: value })}
-          >
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="flat">Fixed Price (per offering)</SelectItem>
-              <SelectItem value="per_unit">Per Unit (table lookup)</SelectItem>
-              <SelectItem value="tiered">Tiered (table lookup)</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
       </div>
 
       <div>
@@ -413,93 +368,46 @@ export default function OfferingsListPage() {
         />
       </div>
 
-      {chargeForm.pricingMethod === 'flat' && (
-        <div className="space-y-2">
-          <div className="flex items-center gap-3">
-            <label className="text-xs font-medium">Currency</label>
-            <Input
-              value={chargeCurrency}
-              onChange={(e) => setChargeCurrency(e.target.value.toUpperCase())}
-              maxLength={3}
-              className="w-20"
-            />
-          </div>
-          <div className="rounded border">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b bg-muted/30">
-                  <th className="px-3 py-2 text-left font-medium text-xs">Offering</th>
-                  <th className="px-3 py-2 text-left font-medium text-xs">Price ({chargeCurrency})</th>
+      <div className="space-y-2">
+        <div className="flex items-center gap-3">
+          <label className="text-xs font-medium">Currency</label>
+          <Input
+            value={chargeCurrency}
+            onChange={(e) => setChargeCurrency(e.target.value.toUpperCase())}
+            maxLength={3}
+            className="w-20"
+          />
+        </div>
+        <div className="rounded border">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b bg-muted/30">
+                <th className="px-3 py-2 text-left font-medium text-xs">Offering</th>
+                <th className="px-3 py-2 text-left font-medium text-xs">Price ({chargeCurrency})</th>
+              </tr>
+            </thead>
+            <tbody>
+              {bulkChargeTargets.map((o) => (
+                <tr key={o.id} className="border-b last:border-0">
+                  <td className="px-3 py-2 font-medium text-xs">
+                    {o.name} <span className="text-muted-foreground font-mono">({o.code})</span>
+                  </td>
+                  <td className="px-3 py-2">
+                    <NumberInput
+                      value={chargePrices[o.id] === undefined || chargePrices[o.id] === '' ? null : Number(chargePrices[o.id])}
+                      onChange={(n) =>
+                        setChargePrices({ ...chargePrices, [o.id]: n == null ? '' : String(n) })
+                      }
+                      placeholder="0.00"
+                      className="w-32"
+                    />
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {bulkChargeTargets.map((o) => (
-                  <tr key={o.id} className="border-b last:border-0">
-                    <td className="px-3 py-2 font-medium text-xs">
-                      {o.name} <span className="text-muted-foreground font-mono">({o.code})</span>
-                    </td>
-                    <td className="px-3 py-2">
-                      <NumberInput
-                        value={chargePrices[o.id] === undefined || chargePrices[o.id] === '' ? null : Number(chargePrices[o.id])}
-                        onChange={(n) =>
-                          setChargePrices({ ...chargePrices, [o.id]: n == null ? '' : String(n) })
-                        }
-                        placeholder="0.00"
-                        className="w-32"
-                      />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+              ))}
+            </tbody>
+          </table>
         </div>
-      )}
-
-      {chargeForm.pricingMethod !== 'flat' && (
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="block text-xs font-medium mb-1">Pricing Table</label>
-            <Select
-              value={chargePricingTableId ?? ''}
-              onValueChange={(value) => {
-                setChargePricingTableId(value || null)
-                setChargePriceColumnKey(null)
-              }}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Select table..." />
-              </SelectTrigger>
-              <SelectContent>
-                {pricingTables.map((pt) => (
-                  <SelectItem key={pt.id} value={pt.id}>
-                    {pt.name} ({pt.code})
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div>
-            <label className="block text-xs font-medium mb-1">Price Column</label>
-            <Select
-              value={chargePriceColumnKey ?? ''}
-              onValueChange={(value) => setChargePriceColumnKey(value || null)}
-              disabled={!selectedPricingTable}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Select column..." />
-              </SelectTrigger>
-              <SelectContent>
-                {selectedPricingTable?.priceColumns.map((col) => (
-                  <SelectItem key={col.key} value={col.key}>
-                    {col.label} ({col.key})
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-      )}
+      </div>
 
       <div className="flex gap-2 pt-1">
         <Button

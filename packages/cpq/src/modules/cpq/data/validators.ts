@@ -137,14 +137,46 @@ export const cpqProductAttributeUpdateSchema = cpqProductAttributeCreateSchema.p
   id: z.string().uuid(),
 })
 
-export const cpqProductChargeCreateSchema = z.object({
+// `fixed` is a legacy alias for `flat` — older seeds (`demo_puffin`,
+// `demo_gix`) emit it directly and ~30+ rows in prod use it. The pricing
+// service treats them identically (fixedPrice + currencyCode, no table
+// lookup). We accept it on input and normalise to `flat` so storage
+// stays canonical.
+const cpqChargePricingMethodEnum = z.enum(['flat', 'fixed', 'tiered', 'per_unit'])
+
+const requireField = (
+  ctx: z.RefinementCtx,
+  value: unknown,
+  path: string,
+  msg: string,
+) => {
+  if (value === undefined || value === null || value === '') {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: [path], message: msg })
+  }
+}
+
+const forbidField = (
+  ctx: z.RefinementCtx,
+  value: unknown,
+  path: string,
+  msg: string,
+) => {
+  if (value !== undefined && value !== null && value !== '') {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: [path], message: msg })
+  }
+}
+
+// Shared shape between create/update so the refinement logic stays in one
+// place. Update is `.partial()` so its refinement runs only when fields
+// are present.
+const cpqProductChargeBase = z.object({
   productId: z.string().uuid().optional(),
   offeringId: z.string().uuid().nullish(),
   code: z.string().min(1),
   name: z.string().min(1),
   description: z.string().nullish(),
   chargeType: z.enum(['nrc', 'mrc', 'usage']),
-  pricingMethod: z.enum(['flat', 'tiered', 'per_unit']),
+  pricingMethod: cpqChargePricingMethodEnum.transform((v) => (v === 'fixed' ? 'flat' : v)),
   pricingTableId: z.string().uuid().nullish(),
   priceColumnKey: z.string().nullish(),
   fixedPrice: z.union([z.string(), z.number().transform(String)]).nullish(),
@@ -155,8 +187,49 @@ export const cpqProductChargeCreateSchema = z.object({
   isActive: z.boolean().optional().default(true),
 })
 
-export const cpqProductChargeUpdateSchema = cpqProductChargeCreateSchema.partial().extend({
+// V-CHG-1: pricing method must match the configured fields.
+//  - flat     → fixedPrice + currencyCode required; table fields forbidden
+//  - per_unit → pricingTableId + priceColumnKey + quantityAttributeCode
+//               required; fixedPrice forbidden
+//  - tiered   → same as per_unit (rangeFrom/rangeTo come from the table)
+const refineChargePricingShape = (
+  ctx: z.RefinementCtx,
+  charge: {
+    pricingMethod?: 'flat' | 'tiered' | 'per_unit'
+    pricingTableId?: string | null
+    priceColumnKey?: string | null
+    fixedPrice?: string | null
+    currencyCode?: string | null
+    quantityAttributeCode?: string | null
+  },
+) => {
+  const method = charge.pricingMethod
+  if (!method) return
+  if (method === 'flat') {
+    requireField(ctx, charge.fixedPrice, 'fixedPrice', 'V-CHG-1: fixedPrice is required for flat pricing')
+    requireField(ctx, charge.currencyCode, 'currencyCode', 'V-CHG-1: currencyCode is required for flat pricing')
+    forbidField(ctx, charge.pricingTableId, 'pricingTableId', 'V-CHG-1: pricingTableId must be empty for flat pricing')
+    forbidField(ctx, charge.priceColumnKey, 'priceColumnKey', 'V-CHG-1: priceColumnKey must be empty for flat pricing')
+    forbidField(ctx, charge.quantityAttributeCode, 'quantityAttributeCode', 'V-CHG-1: quantityAttributeCode must be empty for flat pricing')
+    return
+  }
+  // per_unit | tiered
+  requireField(ctx, charge.pricingTableId, 'pricingTableId', `V-CHG-1: pricingTableId is required for ${method} pricing`)
+  requireField(ctx, charge.priceColumnKey, 'priceColumnKey', `V-CHG-1: priceColumnKey is required for ${method} pricing`)
+  requireField(ctx, charge.quantityAttributeCode, 'quantityAttributeCode', `V-CHG-1: quantityAttributeCode is required for ${method} pricing`)
+  forbidField(ctx, charge.fixedPrice, 'fixedPrice', `V-CHG-1: fixedPrice must be empty for ${method} pricing — price comes from the pricing table`)
+}
+
+export const cpqProductChargeCreateSchema = cpqProductChargeBase.superRefine((data, ctx) => {
+  refineChargePricingShape(ctx, data)
+})
+
+export const cpqProductChargeUpdateSchema = cpqProductChargeBase.partial().extend({
   id: z.string().uuid(),
+}).superRefine((data, ctx) => {
+  // On update, only enforce shape if pricingMethod is present in payload
+  // (PATCH semantics — service merges with the persisted row).
+  if (data.pricingMethod !== undefined) refineChargePricingShape(ctx, data)
 })
 
 // ─── Price Rule ──────────────────────────────────────────────────

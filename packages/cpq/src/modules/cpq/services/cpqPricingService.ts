@@ -241,6 +241,10 @@ export class DefaultCpqPricingService {
   }): Promise<ResolvedCharge> {
     const { charge, configuration, tenantId, organizationId, currencyCode } = params
 
+    // `fixed` is a legacy alias for `flat` — older seeds emit it directly
+    // and ~30+ rows in prod still carry it. Treat them identically.
+    const method = charge.pricingMethod === 'fixed' ? 'flat' : charge.pricingMethod
+
     // If charge has a fixed price and no pricing table, use fixed price directly
     if (charge.fixedPrice && !charge.pricingTableId) {
       const unitPrice = Number(charge.fixedPrice)
@@ -248,7 +252,7 @@ export class DefaultCpqPricingService {
         chargeCode: charge.code,
         chargeName: charge.name,
         chargeType: charge.chargeType as ResolvedCharge['chargeType'],
-        pricingMethod: charge.pricingMethod as ResolvedCharge['pricingMethod'],
+        pricingMethod: method as ResolvedCharge['pricingMethod'],
         unitPrice,
         quantity: 1,
         totalPrice: unitPrice,
@@ -261,7 +265,7 @@ export class DefaultCpqPricingService {
       chargeCode: charge.code,
       chargeName: charge.name,
       chargeType: charge.chargeType as ResolvedCharge['chargeType'],
-      pricingMethod: charge.pricingMethod as ResolvedCharge['pricingMethod'],
+      pricingMethod: method as ResolvedCharge['pricingMethod'],
       unitPrice: 0,
       quantity: 1,
       totalPrice: 0,
@@ -292,13 +296,13 @@ export class DefaultCpqPricingService {
 
     const priceKey = charge.priceColumnKey ?? ''
 
-    if (charge.pricingMethod === 'flat') {
+    if (method === 'flat') {
       return this.calculateFlat(base, charge, entries, table.dimensions, configuration, priceKey)
     }
-    if (charge.pricingMethod === 'per_unit') {
+    if (method === 'per_unit') {
       return this.calculatePerUnit(base, charge, entries, table.dimensions, configuration, priceKey)
     }
-    if (charge.pricingMethod === 'tiered') {
+    if (method === 'tiered') {
       return this.calculateTiered(base, charge, entries, configuration, priceKey)
     }
 

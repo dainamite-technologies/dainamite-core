@@ -230,50 +230,121 @@ describe('cpqProductAttributeCreateSchema', () => {
 })
 
 describe('cpqProductChargeCreateSchema', () => {
+  // Baseline flat-pricing payload — fixedPrice + currencyCode required by V-CHG-1.
+  const flatBase = {
+    code: 'setup',
+    name: 'Setup Fee',
+    chargeType: 'nrc' as const,
+    pricingMethod: 'flat' as const,
+    fixedPrice: '1500.00',
+    currencyCode: 'USD',
+  }
+
+  const perUnitBase = {
+    code: 'bw',
+    name: 'Bandwidth',
+    chargeType: 'mrc' as const,
+    pricingMethod: 'per_unit' as const,
+    pricingTableId: VALID_UUID,
+    priceColumnKey: 'per_mb',
+    quantityAttributeCode: 'bandwidth_mb',
+  }
+
   it('coerces numeric fixedPrice to string (per the union/transform)', () => {
-    const result = cpqProductChargeCreateSchema.safeParse({
-      code: 'setup',
-      name: 'Setup Fee',
-      chargeType: 'nrc',
-      pricingMethod: 'flat',
-      fixedPrice: 1500,
-    })
+    const result = cpqProductChargeCreateSchema.safeParse({ ...flatBase, fixedPrice: 1500 })
     expect(result.success).toBe(true)
     if (!result.success) return
     expect(result.data.fixedPrice).toBe('1500')
   })
 
   it('keeps string fixedPrice as-is', () => {
-    const result = cpqProductChargeCreateSchema.safeParse({
-      code: 'setup',
-      name: 'Setup Fee',
-      chargeType: 'nrc',
-      pricingMethod: 'flat',
-      fixedPrice: '1500.00',
-    })
+    const result = cpqProductChargeCreateSchema.safeParse(flatBase)
     expect(result.success).toBe(true)
     if (!result.success) return
     expect(result.data.fixedPrice).toBe('1500.00')
   })
 
   it.each(['nrc', 'mrc', 'usage'] as const)('accepts chargeType=%s', (chargeType) => {
-    expect(
-      cpqProductChargeCreateSchema.safeParse({
-        code: 'X',
-        name: 'X',
-        chargeType,
-        pricingMethod: 'flat',
-      }).success,
-    ).toBe(true)
+    expect(cpqProductChargeCreateSchema.safeParse({ ...flatBase, chargeType }).success).toBe(true)
   })
 
   it('rejects unknown pricingMethod', () => {
-    const result = cpqProductChargeCreateSchema.safeParse({
-      code: 'X',
-      name: 'X',
-      chargeType: 'nrc',
-      pricingMethod: 'graduated',
-    })
+    const result = cpqProductChargeCreateSchema.safeParse({ ...flatBase, pricingMethod: 'graduated' })
+    expect(result.success).toBe(false)
+  })
+
+  // ─── V-CHG-1: flat pricing shape ────────────────────────────
+  it('V-CHG-1: rejects flat without fixedPrice', () => {
+    const { fixedPrice: _, ...partial } = flatBase
+    const result = cpqProductChargeCreateSchema.safeParse(partial)
+    expect(result.success).toBe(false)
+    if (result.success) return
+    expect(result.error.issues.some((i) => i.path[0] === 'fixedPrice')).toBe(true)
+  })
+
+  it('V-CHG-1: rejects flat without currencyCode', () => {
+    const { currencyCode: _, ...partial } = flatBase
+    const result = cpqProductChargeCreateSchema.safeParse(partial)
+    expect(result.success).toBe(false)
+    if (result.success) return
+    expect(result.error.issues.some((i) => i.path[0] === 'currencyCode')).toBe(true)
+  })
+
+  it('V-CHG-1: rejects flat with stray pricingTableId', () => {
+    const result = cpqProductChargeCreateSchema.safeParse({ ...flatBase, pricingTableId: VALID_UUID })
+    expect(result.success).toBe(false)
+    if (result.success) return
+    expect(result.error.issues.some((i) => i.path[0] === 'pricingTableId')).toBe(true)
+  })
+
+  // ─── V-CHG-1: per_unit / tiered pricing shape ──────────────
+  it.each(['per_unit', 'tiered'] as const)('V-CHG-1: accepts complete %s config', (method) => {
+    const result = cpqProductChargeCreateSchema.safeParse({ ...perUnitBase, pricingMethod: method })
+    expect(result.success).toBe(true)
+  })
+
+  it.each(['per_unit', 'tiered'] as const)('V-CHG-1: rejects %s without pricingTableId', (method) => {
+    const { pricingTableId: _, ...partial } = perUnitBase
+    const result = cpqProductChargeCreateSchema.safeParse({ ...partial, pricingMethod: method })
+    expect(result.success).toBe(false)
+    if (result.success) return
+    expect(result.error.issues.some((i) => i.path[0] === 'pricingTableId')).toBe(true)
+  })
+
+  it.each(['per_unit', 'tiered'] as const)('V-CHG-1: rejects %s without priceColumnKey', (method) => {
+    const { priceColumnKey: _, ...partial } = perUnitBase
+    const result = cpqProductChargeCreateSchema.safeParse({ ...partial, pricingMethod: method })
+    expect(result.success).toBe(false)
+    if (result.success) return
+    expect(result.error.issues.some((i) => i.path[0] === 'priceColumnKey')).toBe(true)
+  })
+
+  it.each(['per_unit', 'tiered'] as const)('V-CHG-1: rejects %s without quantityAttributeCode', (method) => {
+    const { quantityAttributeCode: _, ...partial } = perUnitBase
+    const result = cpqProductChargeCreateSchema.safeParse({ ...partial, pricingMethod: method })
+    expect(result.success).toBe(false)
+    if (result.success) return
+    expect(result.error.issues.some((i) => i.path[0] === 'quantityAttributeCode')).toBe(true)
+  })
+
+  it.each(['per_unit', 'tiered'] as const)('V-CHG-1: rejects %s with stray fixedPrice', (method) => {
+    const result = cpqProductChargeCreateSchema.safeParse({ ...perUnitBase, pricingMethod: method, fixedPrice: '5' })
+    expect(result.success).toBe(false)
+    if (result.success) return
+    expect(result.error.issues.some((i) => i.path[0] === 'fixedPrice')).toBe(true)
+  })
+
+  // ─── Legacy `fixed` alias ──────────────────────────────────
+  it('normalises legacy `fixed` to `flat` on input', () => {
+    const result = cpqProductChargeCreateSchema.safeParse({ ...flatBase, pricingMethod: 'fixed' })
+    expect(result.success).toBe(true)
+    if (!result.success) return
+    expect(result.data.pricingMethod).toBe('flat')
+  })
+
+  it('legacy `fixed` still requires fixedPrice + currencyCode', () => {
+    const { fixedPrice: _, currencyCode: __, ...partial } = flatBase
+    const result = cpqProductChargeCreateSchema.safeParse({ ...partial, pricingMethod: 'fixed' })
     expect(result.success).toBe(false)
   })
 })

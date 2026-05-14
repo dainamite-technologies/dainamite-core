@@ -1,15 +1,17 @@
 "use client"
 import * as React from 'react'
 import { useRouter, useParams } from 'next/navigation'
-import { CheckCircle2, Play, RefreshCw, X } from 'lucide-react'
+import { ArrowRight, ExternalLink, Play, X } from 'lucide-react'
 import { Alert } from '@open-mercato/ui/primitives/alert'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { Tag } from '@open-mercato/ui/primitives/tag'
+import { FormHeader } from '@open-mercato/ui/backend/forms'
 import {
   formatStatusLabel,
   orderCpqStatusMap,
   type OrderCpqStatus,
 } from '../../../../components/statusMaps'
+import { OrderStatusPath } from './_components/OrderStatusPath'
 
 // ─── Types ───────────────────────────────────────────────────────
 
@@ -19,6 +21,21 @@ type ArcLineSource = {
   mrcAmount: number
   nrcAmount: number
   quantity: number
+}
+
+type TierBreakdownEntry = { tier: number; from: number; to: number; pricePerUnit: number; quantity: number; subtotal: number }
+type RuleAdjustment = { ruleCode: string; ruleName: string; ruleType: string; value: number; unitPriceBefore: number; unitPriceAfter: number; delta: number }
+
+type ResolvedCharge = {
+  chargeName?: string
+  chargeType?: string
+  pricingMethod?: 'flat' | 'tiered' | 'per_unit'
+  unitPrice?: number
+  quantity?: number | null
+  totalPrice?: number | null
+  note?: string | null
+  breakdown?: { tiers: TierBreakdownEntry[] } | null
+  adjustments?: RuleAdjustment[] | null
 }
 
 type OrderLineResult = {
@@ -37,7 +54,7 @@ type OrderLineResult = {
   endDate: string | null
   nrcTotal: number
   mrcTotal: number
-  charges: Array<{ chargeName?: string; chargeType?: string; unitPrice?: number; quantity?: number; totalPrice?: number }>
+  charges: ResolvedCharge[]
   sourceQuoteLineId: string | null
   arcSource: ArcLineSource | null
 }
@@ -67,6 +84,20 @@ const ARC_BADGE_VARIANTS: Record<string, 'brand' | 'success' | 'error'> = {
   cancel: 'error',
 }
 
+const RULE_TYPE_LABELS: Record<string, string> = {
+  discount_percent: '% discount',
+  discount_absolute: 'fixed discount',
+  surcharge_percent: '% surcharge',
+  surcharge_absolute: 'fixed surcharge',
+  price_override: 'override',
+}
+
+function fmtRuleValue(adj: RuleAdjustment, currency?: string): string {
+  if (adj.ruleType === 'discount_percent' || adj.ruleType === 'surcharge_percent') return `${adj.value}%`
+  if (currency) return fmt(adj.value, currency)
+  return String(adj.value)
+}
+
 // ─── Constants ───────────────────────────────────────────────────
 
 function fmt(amount: number, currency: string): string {
@@ -92,6 +123,7 @@ export default function CpqOrderDetailPage(props: { params?: { id?: string } }) 
   const [error, setError] = React.useState<string | null>(null)
   const [activating, setActivating] = React.useState(false)
   const [expandedLines, setExpandedLines] = React.useState<Set<string>>(new Set())
+  const [pricingDetail, setPricingDetail] = React.useState<{ lineIdx: number; chargeIdx: number } | null>(null)
   const [customerName, setCustomerName] = React.useState<string | null>(null)
   const [subscription, setSubscription] = React.useState<{ id: string; name: string; code: string; status: string } | null>(null)
 
@@ -201,116 +233,144 @@ export default function CpqOrderDetailPage(props: { params?: { id?: string } }) 
   const canCancel = order.cpqStatus === 'draft' || order.cpqStatus === 'pending_activation' || order.cpqStatus === 'active'
   const currency = order.currencyCode
 
+  const togglePricingDetail = (lineIdx: number, chargeIdx: number) => {
+    setPricingDetail((prev) =>
+      prev?.lineIdx === lineIdx && prev?.chargeIdx === chargeIdx ? null : { lineIdx, chargeIdx },
+    )
+  }
+
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <button onClick={() => router.push('/backend/cpq/orders')} className="text-sm text-muted-foreground hover:text-foreground">← Back</button>
-          <h1 className="text-2xl font-bold">Order {order.orderNumber || order.orderId.slice(0, 8)}</h1>
-          {order.quoteType && order.quoteType !== 'new' && (
-            <Tag
-              variant={ARC_BADGE_VARIANTS[order.quoteType] ?? 'neutral'}
-              className="uppercase tracking-wide font-bold"
-              title={`ARC ${order.quoteType} order — derived from a Customer Inventory subscription change`}
-            >
-              {order.quoteType}
+      {/* Header — standard FormHeader detail mode, mirrors the CPQ quote
+          layout so order ↔ quote stays consistent. Title is just the order
+          number; status / ARC / converted tags sit underneath; primary
+          actions (Activate, then Cancel) live on the right next to the
+          View Sales Order / Source Quote utility links. */}
+      <FormHeader
+        mode="detail"
+        backHref="/backend/cpq/orders"
+        backLabel="Back to CPQ Orders"
+        entityTypeLabel="CPQ Order"
+        title={order.orderNumber || order.orderId.slice(0, 8)}
+        statusBadge={
+          <div className="flex flex-wrap items-center gap-2 pt-1">
+            <Tag variant={orderCpqStatusMap[order.cpqStatus as OrderCpqStatus] ?? 'neutral'} dot>
+              {formatStatusLabel(order.cpqStatus)}
             </Tag>
-          )}
-          <Tag variant={orderCpqStatusMap[order.cpqStatus as OrderCpqStatus] ?? 'neutral'} dot>
-            {formatStatusLabel(order.cpqStatus)}
-          </Tag>
-          <span className="text-xs text-muted-foreground">{currency}</span>
-          <button
-            onClick={() => router.push(`/backend/sales/orders/${order.orderId}`)}
-            className="inline-flex items-center gap-1 text-xs text-primary hover:underline ml-2"
-          >
-            View Sales Order
-            <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
-            </svg>
-          </button>
-          {order.sourceQuoteId && (
-            <button
-              onClick={() => router.push(`/backend/cpq/quotes/${order.sourceQuoteId}`)}
-              className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground hover:underline"
+            {order.quoteType && order.quoteType !== 'new' && (
+              <Tag variant={ARC_BADGE_VARIANTS[order.quoteType] ?? 'neutral'} className="uppercase">
+                {order.quoteType}
+              </Tag>
+            )}
+          </div>
+        }
+        actionsContent={
+          <>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => router.push(`/backend/sales/orders/${order.orderId}`)}
             >
-              Source Quote
-            </button>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          {canCancel && (
-            <Button type="button" variant="destructive-outline" onClick={cancelOrder}>
-              <X className="h-4 w-4" />
-              Cancel Order
+              <ExternalLink className="h-3.5 w-3.5" />
+              View Sales Order
             </Button>
-          )}
-          {canActivate && (
-            <Button type="button" onClick={activateOrder} disabled={activating}>
-              {activating ? <Spinner /> : <Play className="h-4 w-4" />}
-              Activate Order
-            </Button>
-          )}
-        </div>
+            {order.sourceQuoteId && (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => router.push(`/backend/cpq/quotes/${order.sourceQuoteId}`)}
+              >
+                Source Quote
+              </Button>
+            )}
+            {canActivate && (
+              <Button type="button" onClick={activateOrder} disabled={activating}>
+                {activating ? <Spinner /> : <Play className="h-4 w-4" />}
+                Activate
+              </Button>
+            )}
+            {canCancel && (
+              <Button type="button" variant="destructive-outline" onClick={cancelOrder}>
+                <X className="h-4 w-4" />
+                Cancel
+              </Button>
+            )}
+          </>
+        }
+      />
+
+      {/* Status path — visual progress only. Orders advance via the
+          dedicated Activate / Cancel buttons because activation has
+          backend side effects (subscription / asset creation). */}
+      <div className="flex items-center gap-3 flex-wrap">
+        <OrderStatusPath current={order.cpqStatus} />
       </div>
 
       {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
 
-      {/* Success banner after activation */}
-      {order.cpqStatus === 'active' && order.activatedAt && (
-        <Alert variant="success" className="flex items-center gap-2">
-          <CheckCircle2 className="h-5 w-5 shrink-0" />
-          <span className="flex-1">
-            Order activated on {new Date(order.activatedAt).toLocaleString()}.
-            {subscription ? ' Subscription created.' : ' Inventory items have been created.'}
-          </span>
-          <div className="ml-auto flex items-center gap-3">
-            {subscription && (
-              <button
-                onClick={() => router.push(`/backend/cpq/inventory/subscriptions/${subscription.id}`)}
-                className="text-xs hover:underline font-medium"
-              >
-                View Subscription →
-              </button>
-            )}
-            <button
-              onClick={() => router.push('/backend/cpq/inventory')}
-              className="text-xs hover:underline font-medium"
-            >
-              View Inventory →
-            </button>
-          </div>
-        </Alert>
-      )}
-
-      {/* Linked subscription */}
+      {/* Linked subscription — single info card replacing the previous
+          double-popup (green "Order activated" alert + purple "Linked
+          Subscription" tile). The status pill + activation date inline
+          covers both pieces of information in one place. */}
       {subscription && (
-        <div className="rounded-md border border-brand-violet/30 bg-brand-violet/10 p-3 flex items-center gap-3 text-brand-violet">
-          <RefreshCw className="h-5 w-5 shrink-0" />
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium">Linked Subscription</p>
-            <p className="text-xs opacity-90">{subscription.name} ({subscription.code})</p>
+        <div className="rounded-lg border bg-card p-4 flex items-center gap-4">
+          <div className="flex-1 min-w-0 space-y-1">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                Linked Subscription
+              </span>
+              <Tag
+                variant={subscription.status === 'active' ? 'success' : 'info'}
+                dot
+                className="text-[10px] px-1.5"
+              >
+                {subscription.status}
+              </Tag>
+            </div>
+            <div className="text-sm font-medium">
+              {subscription.name}{' '}
+              <span className="text-muted-foreground font-mono text-xs">({subscription.code})</span>
+            </div>
+            {order.activatedAt && (
+              <div className="text-xs text-muted-foreground">
+                Activated on {new Date(order.activatedAt).toLocaleString()}
+              </div>
+            )}
           </div>
-          <Tag variant={subscription.status === 'active' ? 'success' : 'brand'} dot>
-            {subscription.status}
-          </Tag>
-          <button
+          <Button
+            type="button"
+            variant="outline"
             onClick={() => router.push(`/backend/cpq/inventory/subscriptions/${subscription.id}`)}
-            className="inline-flex items-center gap-1 text-sm font-medium hover:underline"
           >
+            <ArrowRight className="h-3.5 w-3.5" />
             Open
-            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
-            </svg>
-          </button>
+          </Button>
         </div>
       )}
+
+      {/* Meta cards — secondary reference info, matches the quote layout. */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+        <MetaCard label="Customer">
+          {customerName ? (
+            <span className="font-medium">{customerName}</span>
+          ) : (
+            <span className="font-mono text-xs text-muted-foreground">
+              {order.customerId.slice(0, 8)}…
+            </span>
+          )}
+        </MetaCard>
+        <MetaCard label="Created">
+          <span className="font-medium">{new Date(order.createdAt).toLocaleDateString()}</span>
+        </MetaCard>
+        <MetaCard label="Currency">
+          <span className="font-medium">{currency}</span>
+        </MetaCard>
+      </div>
 
       {/* Pricing Summary Card */}
       <div className="rounded-lg border bg-card p-4">
         <h3 className="text-sm font-medium mb-3">Pricing Summary</h3>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 gap-4">
           <div>
             <p className="text-xs text-muted-foreground">Non-Recurring (NRC)</p>
             <p className="text-lg font-semibold font-mono">{fmt(order.pricingSummary.nrcTotal, currency)}</p>
@@ -319,27 +379,49 @@ export default function CpqOrderDetailPage(props: { params?: { id?: string } }) 
             <p className="text-xs text-muted-foreground">Monthly Recurring (MRC)</p>
             <p className="text-lg font-semibold font-mono">{fmt(order.pricingSummary.mrcTotal, currency)}</p>
           </div>
-          <div>
-            <p className="text-xs text-muted-foreground">Created</p>
-            <p className="text-sm font-medium">{new Date(order.createdAt).toLocaleString()}</p>
-          </div>
-          <div>
-            <p className="text-xs text-muted-foreground">Customer</p>
-            <p className="text-sm font-medium">{customerName ?? order.customerId.slice(0, 12) + '…'}</p>
-          </div>
         </div>
       </div>
 
       {/* Order Lines */}
-      <OrderLineTree lines={order.lines} currency={currency} expandedLines={expandedLines} onToggleLine={toggleLine} />
+      <OrderLineTree
+        lines={order.lines}
+        currency={currency}
+        expandedLines={expandedLines}
+        pricingDetail={pricingDetail}
+        onToggleLine={toggleLine}
+        onTogglePricingDetail={togglePricingDetail}
+      />
+    </div>
+  )
+}
+
+function MetaCard({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="rounded-lg border bg-card p-4">
+      <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+        {label}
+      </div>
+      <div className="mt-1 text-sm">{children}</div>
     </div>
   )
 }
 
 // ─── Sub-components ──────────────────────────────────────────────
 
-function OrderLineTree({ lines, currency, expandedLines, onToggleLine }: {
-  lines: OrderLineResult[]; currency: string; expandedLines: Set<string>; onToggleLine: (id: string) => void
+function OrderLineTree({
+  lines,
+  currency,
+  expandedLines,
+  pricingDetail,
+  onToggleLine,
+  onTogglePricingDetail,
+}: {
+  lines: OrderLineResult[]
+  currency: string
+  expandedLines: Set<string>
+  pricingDetail: { lineIdx: number; chargeIdx: number } | null
+  onToggleLine: (id: string) => void
+  onTogglePricingDetail: (lineIdx: number, chargeIdx: number) => void
 }) {
   const rootLines = lines.filter((l) => !l.parentLineId)
   const childrenByParent = new Map<string, OrderLineResult[]>()
@@ -350,6 +432,11 @@ function OrderLineTree({ lines, currency, expandedLines, onToggleLine }: {
       childrenByParent.set(line.parentLineId, arr)
     }
   }
+
+  // Stable index per visible line so the pricing-detail toggle can be
+  // keyed by (lineIdx, chargeIdx) the same way the quote page does.
+  const indexOf = new Map<string, number>()
+  lines.forEach((l, i) => indexOf.set(l.lineId, i))
 
   return (
     <div>
@@ -364,17 +451,44 @@ function OrderLineTree({ lines, currency, expandedLines, onToggleLine }: {
             const isBundle = line.offeringType === 'bundle'
             const children = childrenByParent.get(line.lineId) ?? []
             const isExpanded = expandedLines.has(line.lineId)
+            const lineIdx = indexOf.get(line.lineId) ?? 0
             return (
               <div key={line.lineId}>
-                <OrderLineRow line={line} currency={currency} isExpanded={isExpanded} isBundle={isBundle} childCount={children.length} indent={0} onToggle={() => onToggleLine(line.lineId)} />
+                <OrderLineRow
+                  line={line}
+                  lineIdx={lineIdx}
+                  currency={currency}
+                  isExpanded={isExpanded}
+                  isBundle={isBundle}
+                  childCount={children.length}
+                  indent={0}
+                  pricingDetail={pricingDetail}
+                  onToggle={() => onToggleLine(line.lineId)}
+                  onTogglePricingDetail={onTogglePricingDetail}
+                />
                 {isBundle && isExpanded && children.length > 0 && (
                   <div className="border-t border-dashed border-brand-violet/30 bg-brand-violet/5">
                     <div className="px-6 py-1.5">
                       <span className="text-[10px] font-medium text-brand-violet uppercase tracking-wider">Bundle Components ({children.length})</span>
                     </div>
-                    {children.map((child) => (
-                      <OrderLineRow key={child.lineId} line={child} currency={currency} isExpanded={expandedLines.has(child.lineId)} isBundle={false} childCount={0} indent={1} onToggle={() => onToggleLine(child.lineId)} />
-                    ))}
+                    {children.map((child) => {
+                      const childIdx = indexOf.get(child.lineId) ?? 0
+                      return (
+                        <OrderLineRow
+                          key={child.lineId}
+                          line={child}
+                          lineIdx={childIdx}
+                          currency={currency}
+                          isExpanded={expandedLines.has(child.lineId)}
+                          isBundle={false}
+                          childCount={0}
+                          indent={1}
+                          pricingDetail={pricingDetail}
+                          onToggle={() => onToggleLine(child.lineId)}
+                          onTogglePricingDetail={onTogglePricingDetail}
+                        />
+                      )
+                    })}
                   </div>
                 )}
               </div>
@@ -386,8 +500,11 @@ function OrderLineTree({ lines, currency, expandedLines, onToggleLine }: {
   )
 }
 
-function OrderLineRow({ line, currency, isExpanded, isBundle, childCount, indent, onToggle }: {
-  line: OrderLineResult; currency: string; isExpanded: boolean; isBundle: boolean; childCount: number; indent: number; onToggle: () => void
+function OrderLineRow({ line, lineIdx, currency, isExpanded, isBundle, childCount, indent, pricingDetail, onToggle, onTogglePricingDetail }: {
+  line: OrderLineResult; lineIdx: number; currency: string; isExpanded: boolean; isBundle: boolean; childCount: number; indent: number
+  pricingDetail: { lineIdx: number; chargeIdx: number } | null
+  onToggle: () => void
+  onTogglePricingDetail: (lineIdx: number, chargeIdx: number) => void
 }) {
   const paddingLeft = indent > 0 ? `${indent * 2 + 1}rem` : undefined
 
@@ -479,28 +596,13 @@ function OrderLineRow({ line, currency, isExpanded, isBundle, childCount, indent
                 {hasCharges && (
                   <div>
                     <p className="text-xs font-medium text-muted-foreground mb-1">Charges</p>
-                    <table className="w-full text-xs">
-                      <thead>
-                        <tr className="text-muted-foreground">
-                          <th className="text-left py-1 font-medium">Charge</th>
-                          <th className="text-left py-1 font-medium">Type</th>
-                          <th className="text-right py-1 font-medium">Unit Price</th>
-                          <th className="text-right py-1 font-medium">Qty</th>
-                          <th className="text-right py-1 font-medium">Total</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {line.charges.map((c, i) => (
-                          <tr key={i} className="border-t border-dashed border-border/50">
-                            <td className="py-1">{c.chargeName ?? '—'}</td>
-                            <td className="py-1 uppercase">{c.chargeType ?? '—'}</td>
-                            <td className="py-1 text-right font-mono">{c.unitPrice != null ? fmt(c.unitPrice, currency) : '—'}</td>
-                            <td className="py-1 text-right font-mono">{c.quantity ?? '—'}</td>
-                            <td className="py-1 text-right font-mono">{c.totalPrice != null ? fmt(c.totalPrice, currency) : '—'}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                    <ChargeBreakdown
+                      line={line}
+                      lineIdx={lineIdx}
+                      currency={currency}
+                      pricingDetail={pricingDetail}
+                      onTogglePricingDetail={onTogglePricingDetail}
+                    />
                   </div>
                 )}
 
@@ -517,6 +619,144 @@ function OrderLineRow({ line, currency, isExpanded, isBundle, childCount, indent
         )
       })()}
     </div>
+  )
+}
+
+// Charge breakdown table with the waterfall ("show pricing details")
+// toggle. Same shape as the quote page so a charge looks identical on
+// both surfaces, including tier-by-tier subtotals and any price-rule
+// adjustments that fired during calculation.
+function ChargeBreakdown({ line, lineIdx, currency, pricingDetail, onTogglePricingDetail }: {
+  line: OrderLineResult; lineIdx: number; currency: string
+  pricingDetail: { lineIdx: number; chargeIdx: number } | null
+  onTogglePricingDetail: (lineIdx: number, chargeIdx: number) => void
+}) {
+  return (
+    <table className="w-full text-xs">
+      <thead>
+        <tr className="text-muted-foreground">
+          <th className="text-left py-1 font-medium">Charge</th>
+          <th className="text-left py-1 font-medium">Type</th>
+          <th className="text-right py-1 font-medium">Unit Price</th>
+          <th className="text-right py-1 font-medium">Qty</th>
+          <th className="text-right py-1 font-medium">Total</th>
+          <th className="w-8" />
+        </tr>
+      </thead>
+      <tbody>
+        {line.charges.map((c, i) => {
+          const hasDetail = !!(c.breakdown?.tiers?.length || c.adjustments?.length)
+          const isDetailOpen = pricingDetail?.lineIdx === lineIdx && pricingDetail?.chargeIdx === i
+          return (
+            <React.Fragment key={i}>
+              <tr className="border-t border-dashed border-border/50">
+                <td className="py-1">{c.chargeName ?? '—'}</td>
+                <td className="py-1 uppercase">{c.chargeType ?? '—'}</td>
+                <td className="py-1 text-right font-mono">{c.unitPrice != null ? fmt(c.unitPrice, currency) : '—'}</td>
+                <td className="py-1 text-right font-mono">{c.quantity ?? '—'}</td>
+                <td className="py-1 text-right font-mono">{c.totalPrice != null ? fmt(c.totalPrice, currency) : c.note ?? '—'}</td>
+                <td className="py-1 text-center">
+                  {hasDetail && (
+                    <button
+                      onClick={() => onTogglePricingDetail(lineIdx, i)}
+                      className="inline-flex items-center justify-center rounded p-0.5 hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+                      title="Show pricing breakdown"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3.5 h-3.5">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
+                      </svg>
+                    </button>
+                  )}
+                </td>
+              </tr>
+              {isDetailOpen && (
+                <tr>
+                  <td colSpan={6} className="pb-3 pt-1">
+                    <div className="rounded border bg-background p-3 space-y-3 text-xs">
+                      <div className="flex items-center justify-between">
+                        <span className="font-semibold text-sm">Pricing Details — {c.chargeName}</span>
+                        <span className="text-muted-foreground">{c.pricingMethod ?? 'flat'}</span>
+                      </div>
+
+                      {c.breakdown?.tiers && c.breakdown.tiers.length > 0 && (
+                        <div>
+                          <div className="font-medium text-muted-foreground mb-1">Tier Breakdown</div>
+                          <table className="w-full">
+                            <thead>
+                              <tr className="text-muted-foreground">
+                                <th className="text-left py-0.5 font-medium">Tier</th>
+                                <th className="text-right py-0.5 font-medium">Range</th>
+                                <th className="text-right py-0.5 font-medium">Price/Unit</th>
+                                <th className="text-right py-0.5 font-medium">Qty</th>
+                                <th className="text-right py-0.5 font-medium">Subtotal</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {c.breakdown.tiers.map((t) => (
+                                <tr key={t.tier} className="border-t border-border/30">
+                                  <td className="py-0.5">{t.tier}</td>
+                                  <td className="py-0.5 text-right font-mono">{t.from}–{t.to}</td>
+                                  <td className="py-0.5 text-right font-mono">{fmt(t.pricePerUnit, currency)}</td>
+                                  <td className="py-0.5 text-right font-mono">{t.quantity}</td>
+                                  <td className="py-0.5 text-right font-mono">{fmt(t.subtotal, currency)}</td>
+                                </tr>
+                              ))}
+                              <tr className="border-t font-medium">
+                                <td colSpan={4} className="py-0.5 text-right">Tiered Total</td>
+                                <td className="py-0.5 text-right font-mono">
+                                  {fmt(c.breakdown.tiers.reduce((s, t) => s + t.subtotal, 0), currency)}
+                                </td>
+                              </tr>
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+
+                      {c.adjustments && c.adjustments.length > 0 && (
+                        <div>
+                          <div className="font-medium text-muted-foreground mb-1">Applied Price Rules</div>
+                          <table className="w-full">
+                            <thead>
+                              <tr className="text-muted-foreground">
+                                <th className="text-left py-0.5 font-medium">Rule</th>
+                                <th className="text-left py-0.5 font-medium">Type</th>
+                                <th className="text-right py-0.5 font-medium">Value</th>
+                                <th className="text-right py-0.5 font-medium">Before</th>
+                                <th className="text-right py-0.5 font-medium">After</th>
+                                <th className="text-right py-0.5 font-medium">Delta</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {c.adjustments.map((adj, ai) => (
+                                <tr key={ai} className="border-t border-border/30">
+                                  <td className="py-0.5">{adj.ruleName}</td>
+                                  <td className="py-0.5">{RULE_TYPE_LABELS[adj.ruleType] ?? adj.ruleType}</td>
+                                  <td className="py-0.5 text-right font-mono">{fmtRuleValue(adj, currency)}</td>
+                                  <td className="py-0.5 text-right font-mono">{fmt(adj.unitPriceBefore, currency)}</td>
+                                  <td className="py-0.5 text-right font-mono">{fmt(adj.unitPriceAfter, currency)}</td>
+                                  <td className={`py-0.5 text-right font-mono ${adj.delta < 0 ? 'text-destructive' : adj.delta > 0 ? 'text-status-success-text' : ''}`}>
+                                    {adj.delta > 0 ? '+' : ''}{fmt(adj.delta, currency)}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+
+                      <div className="flex items-center justify-between pt-1 border-t text-sm font-semibold">
+                        <span>Final Total</span>
+                        <span className="font-mono">{c.totalPrice != null ? fmt(c.totalPrice, currency) : '—'}</span>
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+              )}
+            </React.Fragment>
+          )
+        })}
+      </tbody>
+    </table>
   )
 }
 

@@ -39,8 +39,17 @@ on:
 # Cancel an in-flight review when a force-push lands a new commit on the same
 # PR — re-runs against the latest sha rather than wasting minutes on the
 # stale tree.
+#
+# Concurrency key includes `github.event_name` so the `pull_request` and
+# `issue_comment` triggers don't cancel each other: a fresh PR fires both
+# events within ~2s of each other (the PR body counts as a comment), and
+# without the event-name suffix the issue_comment run silently cancels the
+# legitimate pull_request review even though the comment handler itself
+# skips (no @claude mention). With per-event groups, each trigger only
+# cancels its own in-flight peers — exactly the right behaviour for
+# force-pushes and rapid comment edits.
 concurrency:
-  group: claude-review-${{ github.event.pull_request.number || github.event.issue.number }}
+  group: claude-review-${{ github.event.pull_request.number || github.event.issue.number }}-${{ github.event_name }}
   cancel-in-progress: true
 
 permissions:

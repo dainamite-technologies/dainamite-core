@@ -15,9 +15,10 @@ test.describe('TC-CPQ-010: Inventory tabs (UI)', () => {
     await login(page, 'admin')
     await page.goto('/backend/cpq/inventory', { waitUntil: 'domcontentloaded' })
 
-    // Either translation key fires — accept either label
+    // Page-level h1 ("Customer Inventory") still exists; tab tables
+    // render their own <h2>. Either heading proves the page loaded.
     await expect(
-      page.getByRole('heading', { level: 1, name: /Customer Inventory|CPQ Subscriptions|Inventory/i }),
+      page.getByRole('heading', { name: /Customer Inventory|CPQ Subscriptions|Subscriptions/i }).first(),
     ).toBeVisible({ timeout: 10_000 })
 
     // Tabs (defined in code as { subscriptions, assets })

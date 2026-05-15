@@ -1,5 +1,31 @@
 # @dainamite/cpq
 
+## 0.2.2
+
+### Patch Changes
+
+- 73650dc: Add MIT license for first public release.
+
+  Switching `packages/cpq/package.json` `license` field from `UNLICENSED` (carry-over from the private era) to `MIT`, and shipping a `packages/cpq/LICENSE` file with the full license text. This matches the `@open-mercato/*` ecosystem and removes the "UNLICENSED" badge that public npm shows on packages without a recognized OSI license.
+
+  No code or API changes — purely a licensing/metadata clarification ahead of the first publish to https://www.npmjs.com/package/@dainamite/cpq.
+
+- 7b09790: Switch publish target from GitHub Packages to public npm.js.
+
+  Initial publish attempts as `@dainamite/cpq` on GitHub Packages failed
+  with `403 Forbidden — installation does not exist`: scope `@dainamite`
+  on GitHub belongs to a different (unrelated) "DAInamite" organization
+  based in Berlin. Switching to public npm.js, where the `@dainamite`
+  scope is free, lets us keep the brand without renaming everything to
+  `@dainamite-technologies/cpq`.
+
+  Open Mercato itself publishes to public npm.js
+  (`@open-mercato/core`, etc.), so this is also more consistent with the
+  upstream ecosystem and matches the L2 model from SPEC-001.
+
+  For consumers: install with plain `yarn add @dainamite/cpq` — no
+  `.npmrc` auth setup needed.
+
 ## 0.2.1
 
 ### Patch Changes

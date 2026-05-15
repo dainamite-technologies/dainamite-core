@@ -20,6 +20,8 @@ import {
 type QuoteConfig = {
   id: string
   quoteId: string
+  /** Resolved from SalesQuote.quoteNumber by the list API. */
+  quoteNumber: string | null
   customerId: string
   cpqStatus: string
   version: number
@@ -257,11 +259,15 @@ export default function CpqQuotesListPage() {
   const columns = React.useMemo<ColumnDef<QuoteConfig>[]>(
     () => [
       {
-        accessorKey: 'quoteId',
-        header: t('cpq.quotes.table.quoteId', 'Quote ID'),
+        accessorKey: 'quoteNumber',
+        header: t('cpq.quotes.table.quoteNumber', 'Quote Number'),
         cell: ({ row }) => (
-          <span className="font-mono text-xs text-primary">
-            {(row.original.quoteId ?? row.original.id).slice(0, 8)}…
+          <span className="font-medium">
+            {row.original.quoteNumber ?? (
+              <span className="font-mono text-xs text-muted-foreground">
+                {(row.original.quoteId ?? row.original.id).slice(0, 8)}…
+              </span>
+            )}
           </span>
         ),
       },

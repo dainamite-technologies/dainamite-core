@@ -5,6 +5,7 @@ import { cpqCreateQuoteSchema } from '../../data/validators'
 import { QuotingError } from '../../services/cpqQuotingService'
 import { resolveQuotingService } from '../resolveQuotingService'
 import { CpqQuoteConfiguration } from '../../data/entities'
+import { SalesQuote } from '@open-mercato/core/modules/sales/data/entities'
 
 export const metadata = {
   POST: { requireAuth: true, requireFeatures: ['cpq.quotes.manage'] },
@@ -69,8 +70,26 @@ export async function GET(req: Request) {
       orderBy: { [sortField]: sortDir },
     })
 
+    // Enrich rows with `quoteNumber` (e.g. "QUOTE-20260512-00005") so the
+    // list shows human-meaningful identifiers instead of truncated UUIDs.
+    // Batched lookup keeps the cost flat regardless of page size.
+    const salesQuoteIds = [...new Set(items.map((i) => i.quoteId).filter(Boolean))]
+    const salesQuotes = salesQuoteIds.length > 0
+      ? await ctx.em.find(SalesQuote, {
+          id: { $in: salesQuoteIds },
+          organizationId: ctx.organizationId,
+          tenantId: ctx.tenantId,
+        })
+      : []
+    const quoteNumberById = new Map<string, string | null>(
+      salesQuotes.map((q) => [q.id, q.quoteNumber ?? null]),
+    )
+
     return NextResponse.json({
-      items,
+      items: items.map((item) => ({
+        ...item,
+        quoteNumber: quoteNumberById.get(item.quoteId) ?? null,
+      })),
       total,
       page,
       pageSize,

@@ -850,9 +850,14 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
             <Alert variant="warning">
               <AlertTitle>Validation Issues</AlertTitle>
               <AlertDescription>
-                <ul className="text-xs space-y-0.5">
-                  {cpqQuote.validationResult.errors.map((e, i) => <li key={i}>- {e.message}</li>)}
-                </ul>
+                {/* AlertDescription renders a <p>, so the error list MUST be
+                    stacked <span>s — `<ul>`/`<li>` inside `<p>` is invalid
+                    HTML and Next 16 surfaces it as a hydration error. */}
+                <span className="text-xs space-y-0.5 block">
+                  {cpqQuote.validationResult.errors.map((e, i) => (
+                    <span key={i} className="block">— {e.message}</span>
+                  ))}
+                </span>
               </AlertDescription>
             </Alert>
           )}

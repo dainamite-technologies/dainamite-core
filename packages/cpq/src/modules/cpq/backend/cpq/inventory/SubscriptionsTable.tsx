@@ -6,9 +6,28 @@ import type { ColumnDef } from '@tanstack/react-table'
 import { DataTable } from '@open-mercato/ui/backend/DataTable'
 import { RowActions } from '@open-mercato/ui/backend/RowActions'
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@open-mercato/ui/primitives/select'
 import { useCpqListData } from '../../../components/CpqListView'
 import { useCpqRowActions } from '../../../components/useCpqRowActions'
 import { StatusBadge, formatCurrency } from './shared'
+
+// `all` is a sentinel value because Radix Select disallows empty strings
+// as option values. We map it back to "no filter" before writing to the
+// query.
+const EXPIRING_WINDOWS = [
+  { value: 'all', label: 'All subscriptions' },
+  { value: '7', label: 'Expiring in 7 days' },
+  { value: '14', label: 'Expiring in 14 days' },
+  { value: '30', label: 'Expiring in 30 days' },
+  { value: '60', label: 'Expiring in 60 days' },
+  { value: '90', label: 'Expiring in 90 days' },
+]
 
 type Subscription = {
   id: string
@@ -154,9 +173,37 @@ export function SubscriptionsTable() {
     [t],
   )
 
+  // One-click "Expiring within" picker that writes into the same filter
+  // key the FilterBar uses (`expiringWithinDays`). Operators get instant
+  // access without opening the filter overlay, and the value still rides
+  // into perspectives because it's stored in `data.filterValues`.
+  const currentExpiring = typeof data.filterValues.expiringWithinDays === 'string' && data.filterValues.expiringWithinDays
+    ? data.filterValues.expiringWithinDays
+    : 'all'
+  const onExpiringChange = (value: string) => {
+    const next: FilterValues = { ...data.filterValues }
+    if (value && value !== 'all') next.expiringWithinDays = value
+    else delete next.expiringWithinDays
+    data.setFilterValues(next)
+  }
+
   return (
     <>
       {rowActionsApi.ConfirmDialogElement}
+      <div className="flex justify-end -mb-2">
+        <Select value={currentExpiring} onValueChange={onExpiringChange}>
+          <SelectTrigger className="w-[220px]">
+            <SelectValue placeholder="All subscriptions" />
+          </SelectTrigger>
+          <SelectContent>
+            {EXPIRING_WINDOWS.map((w) => (
+              <SelectItem key={w.value} value={w.value}>
+                {w.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
       <DataTable<Subscription>
       title={t('cpq.inventory.subscriptions', 'Subscriptions')}
       refreshButton={{

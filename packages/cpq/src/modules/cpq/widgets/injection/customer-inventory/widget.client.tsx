@@ -212,29 +212,31 @@ function SummaryCard({ label, value, mono }: { label: string; value: string; mon
 function SubscriptionsTable({ items, currency, onOpen }: { items: Subscription[]; currency: string; onOpen: (id: string) => void }) {
   if (items.length === 0) return <EmptyTab />
   return (
-    <div className="rounded-lg border">
+    <div className="rounded-lg border bg-card overflow-hidden">
       <table className="w-full text-sm">
         <thead>
-          <tr className="border-b bg-muted/50">
-            <th className="px-4 py-3 text-left font-medium">Code</th>
-            <th className="px-4 py-3 text-left font-medium">Name</th>
-            <th className="px-4 py-3 text-left font-medium">Status</th>
-            <th className="px-4 py-3 text-right font-medium">MRC</th>
-            <th className="px-4 py-3 text-left font-medium">Billing</th>
-            <th className="px-4 py-3 text-left font-medium">Start Date</th>
-            <th className="px-4 py-3 text-left font-medium">Term End</th>
+          <tr className="border-b border-border bg-muted/40 text-muted-foreground">
+            <th className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wide">Name</th>
+            <th className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wide">Status</th>
+            <th className="px-4 py-2.5 text-right text-xs font-medium uppercase tracking-wide">MRC</th>
+            <th className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wide">Billing</th>
+            <th className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wide">Start Date</th>
+            <th className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wide">Term End</th>
           </tr>
         </thead>
         <tbody>
           {items.map((s) => (
-            <tr key={s.id} onClick={() => onOpen(s.id)} className="border-b cursor-pointer hover:bg-muted/30 transition-colors">
-              <td className="px-4 py-3 text-muted-foreground">{s.code}</td>
-              <td className="px-4 py-3 font-medium text-primary">{s.name}</td>
+            <tr
+              key={s.id}
+              onClick={() => onOpen(s.id)}
+              className="border-b border-border last:border-0 cursor-pointer hover:bg-accent/40 transition-colors"
+            >
+              <td className="px-4 py-3 font-medium">{s.name}</td>
               <td className="px-4 py-3"><StatusBadge status={s.status} /></td>
               <td className="px-4 py-3 text-right font-mono">{fmt(s.mrcAmount, s.currencyCode || currency)}</td>
-              <td className="px-4 py-3">{s.billingCycle}</td>
-              <td className="px-4 py-3">{s.startDate ? new Date(s.startDate).toLocaleDateString() : '—'}</td>
-              <td className="px-4 py-3">{s.currentTermEnd ? new Date(s.currentTermEnd).toLocaleDateString() : '—'}</td>
+              <td className="px-4 py-3 capitalize">{s.billingCycle}</td>
+              <td className="px-4 py-3 text-muted-foreground">{s.startDate ? new Date(s.startDate).toLocaleDateString() : '—'}</td>
+              <td className="px-4 py-3 text-muted-foreground">{s.currentTermEnd ? new Date(s.currentTermEnd).toLocaleDateString() : '—'}</td>
             </tr>
           ))}
         </tbody>
@@ -248,24 +250,26 @@ function SubscriptionsTable({ items, currency, onOpen }: { items: Subscription[]
 function SubscriptionItemsTable({ items, currency, onOpen }: { items: SubscriptionItem[]; currency: string; onOpen: (subscriptionId: string) => void }) {
   if (items.length === 0) return <EmptyTab />
   return (
-    <div className="rounded-lg border">
+    <div className="rounded-lg border bg-card overflow-hidden">
       <table className="w-full text-sm">
         <thead>
-          <tr className="border-b bg-muted/50">
-            <th className="px-4 py-3 text-left font-medium">Name</th>
-            <th className="px-4 py-3 text-left font-medium">Status</th>
-            <th className="px-4 py-3 text-left font-medium">Product</th>
-            <th className="px-4 py-3 text-right font-medium">MRC</th>
-            <th className="px-4 py-3 text-right font-medium">NRC</th>
-            <th className="px-4 py-3 text-right font-medium">Qty</th>
+          <tr className="border-b border-border bg-muted/40 text-muted-foreground">
+            <th className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wide">Name</th>
+            <th className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wide">Status</th>
+            <th className="px-4 py-2.5 text-right text-xs font-medium uppercase tracking-wide">MRC</th>
+            <th className="px-4 py-2.5 text-right text-xs font-medium uppercase tracking-wide">NRC</th>
+            <th className="px-4 py-2.5 text-right text-xs font-medium uppercase tracking-wide">Qty</th>
           </tr>
         </thead>
         <tbody>
           {items.map((item) => (
-            <tr key={item.id} onClick={() => onOpen(item.subscriptionId)} className="border-b cursor-pointer hover:bg-muted/30 transition-colors">
-              <td className="px-4 py-3 font-medium text-primary">{item.name}</td>
+            <tr
+              key={item.id}
+              onClick={() => onOpen(item.subscriptionId)}
+              className="border-b border-border last:border-0 cursor-pointer hover:bg-accent/40 transition-colors"
+            >
+              <td className="px-4 py-3 font-medium">{item.name}</td>
               <td className="px-4 py-3"><StatusBadge status={item.status} /></td>
-              <td className="px-4 py-3 text-muted-foreground">{item.productId ? item.productId.slice(0, 8) + '…' : '—'}</td>
               <td className="px-4 py-3 text-right font-mono">{fmt(item.mrcAmount, item.currencyCode || currency)}</td>
               <td className="px-4 py-3 text-right font-mono">{fmt(item.nrcAmount, item.currencyCode || currency)}</td>
               <td className="px-4 py-3 text-right font-mono">{item.quantity}</td>
@@ -282,24 +286,26 @@ function SubscriptionItemsTable({ items, currency, onOpen }: { items: Subscripti
 function AssetsTable({ items, currency, onOpen }: { items: Asset[]; currency: string; onOpen: (id: string) => void }) {
   if (items.length === 0) return <EmptyTab />
   return (
-    <div className="rounded-lg border">
+    <div className="rounded-lg border bg-card overflow-hidden">
       <table className="w-full text-sm">
         <thead>
-          <tr className="border-b bg-muted/50">
-            <th className="px-4 py-3 text-left font-medium">Code</th>
-            <th className="px-4 py-3 text-left font-medium">Name</th>
-            <th className="px-4 py-3 text-left font-medium">Type</th>
-            <th className="px-4 py-3 text-left font-medium">Status</th>
-            <th className="px-4 py-3 text-right font-medium">Price</th>
-            <th className="px-4 py-3 text-left font-medium">Linked To</th>
+          <tr className="border-b border-border bg-muted/40 text-muted-foreground">
+            <th className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wide">Name</th>
+            <th className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wide">Type</th>
+            <th className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wide">Status</th>
+            <th className="px-4 py-2.5 text-right text-xs font-medium uppercase tracking-wide">Price</th>
+            <th className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wide">Linked To</th>
           </tr>
         </thead>
         <tbody>
           {items.map((a) => (
-            <tr key={a.id} onClick={() => onOpen(a.id)} className="border-b cursor-pointer hover:bg-muted/30 transition-colors">
-              <td className="px-4 py-3 text-muted-foreground">{a.code}</td>
-              <td className="px-4 py-3 font-medium text-primary">{a.name}</td>
-              <td className="px-4 py-3">{a.assetType}</td>
+            <tr
+              key={a.id}
+              onClick={() => onOpen(a.id)}
+              className="border-b border-border last:border-0 cursor-pointer hover:bg-accent/40 transition-colors"
+            >
+              <td className="px-4 py-3 font-medium">{a.name}</td>
+              <td className="px-4 py-3 capitalize">{a.assetType.replace(/_/g, ' ')}</td>
               <td className="px-4 py-3"><StatusBadge status={a.status} /></td>
               <td className="px-4 py-3 text-right font-mono">{fmt(a.purchasePrice, a.currencyCode || currency)}</td>
               <td className="px-4 py-3 text-muted-foreground">

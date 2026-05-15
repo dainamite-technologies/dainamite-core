@@ -107,7 +107,7 @@ export function WizardTrigger({
         }}
       >
         {loading ? 'Starting...' : label}
-        {error && <span className="ml-2 text-xs text-red-600">{error}</span>}
+        {error && <span className="ml-2 text-xs text-destructive">{error}</span>}
       </a>
     )
   }
@@ -122,7 +122,7 @@ export function WizardTrigger({
         onKeyDown={(e) => { if (e.key === 'Enter') handleClick() }}
       >
         <p className="font-semibold text-sm">{label}</p>
-        {error && <p className="mt-1 text-xs text-red-600">{error}</p>}
+        {error && <p className="mt-1 text-xs text-destructive">{error}</p>}
       </div>
     )
   }
@@ -136,7 +136,7 @@ export function WizardTrigger({
       disabled={loading}
     >
       {loading ? 'Starting...' : label}
-      {error && <span className="ml-2 text-xs text-red-200">{error}</span>}
+      {error && <span className="ml-2 text-xs text-destructive/70">{error}</span>}
     </button>
   )
 }

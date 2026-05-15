@@ -1,6 +1,12 @@
 "use client"
 import * as React from 'react'
 import { useRouter } from 'next/navigation'
+import { useT } from '@open-mercato/shared/lib/i18n/context'
+import type { ColumnDef } from '@tanstack/react-table'
+import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
+import { RowActions } from '@open-mercato/ui/backend/RowActions'
+import { Tag } from '@open-mercato/ui/primitives/tag'
+import { CpqListView, useCpqListData } from '../../../components/CpqListView'
 
 type WizardDefinition = {
   id: string
@@ -14,100 +20,122 @@ type WizardDefinition = {
   createdAt: string
 }
 
-async function apiJson<T>(url: string): Promise<T> {
-  const res = await fetch(url)
-  if (!res.ok) throw new Error(`API error ${res.status}`)
-  return res.json() as Promise<T>
+const PAGE_SIZE = 50
+
+function buildFilterParams(values: FilterValues, params: URLSearchParams) {
+  if (typeof values.surface === 'string' && values.surface.trim()) {
+    params.set('surface', values.surface.trim())
+  }
+  if (values.isActive === true) params.set('isActive', 'true')
+  if (values.isActive === false) params.set('isActive', 'false')
 }
 
 export default function CpqWizardsPage() {
   const router = useRouter()
-  const [definitions, setDefinitions] = React.useState<WizardDefinition[]>([])
-  const [loading, setLoading] = React.useState(true)
+  const t = useT()
 
-  React.useEffect(() => {
-    async function load() {
-      setLoading(true)
-      try {
-        const defData = await apiJson<{ items: WizardDefinition[] }>('/api/cpq/wizards?pageSize=100')
-        setDefinitions(defData.items ?? [])
-      } finally {
-        setLoading(false)
-      }
-    }
-    load()
-  }, [])
+  const data = useCpqListData<WizardDefinition>({
+    endpoint: '/api/cpq/wizards',
+    pageSize: PAGE_SIZE,
+    buildFilterParams,
+    loadErrorMessage: t('cpq.wizards.list.error.load', 'Failed to load wizards'),
+  })
 
-  const handleStartWizard = React.useCallback((definitionCode: string) => {
-    router.push(`/backend/cpq/wizards/${definitionCode}`)
-  }, [router])
+  const filters = React.useMemo<FilterDef[]>(
+    () => [
+      {
+        id: 'surface',
+        label: t('cpq.wizards.filters.surface', 'Surface'),
+        type: 'text',
+      },
+      {
+        id: 'isActive',
+        label: t('cpq.wizards.filters.isActive', 'Active'),
+        type: 'checkbox',
+      },
+    ],
+    [t],
+  )
 
-  if (loading) {
-    return <div className="text-sm text-muted-foreground">Loading...</div>
-  }
+  const handlePreviewWizard = React.useCallback(
+    (definitionCode: string) => {
+      router.push(`/backend/cpq/wizards/${definitionCode}`)
+    },
+    [router],
+  )
+
+  const columns = React.useMemo<ColumnDef<WizardDefinition>[]>(
+    () => [
+      {
+        accessorKey: 'name',
+        header: t('cpq.wizards.table.name', 'Name'),
+        cell: ({ row }) => <span className="font-medium">{row.original.name}</span>,
+      },
+      {
+        accessorKey: 'code',
+        header: t('cpq.wizards.table.code', 'Code'),
+        cell: ({ row }) => <span className="font-mono text-xs">{row.original.code}</span>,
+      },
+      {
+        accessorKey: 'surface',
+        header: t('cpq.wizards.table.surface', 'Surface'),
+      },
+      {
+        id: 'steps',
+        header: t('cpq.wizards.table.steps', 'Steps'),
+        cell: ({ row }) => <span>{row.original.steps.length}</span>,
+      },
+      {
+        id: 'version',
+        header: t('cpq.wizards.table.version', 'Version'),
+        cell: ({ row }) => <span>v{row.original.version}</span>,
+      },
+      {
+        accessorKey: 'isActive',
+        header: t('cpq.wizards.table.active', 'Active'),
+        cell: ({ row }) => (
+          <Tag variant={row.original.isActive ? 'success' : 'neutral'} dot>
+            {row.original.isActive ? 'Yes' : 'No'}
+          </Tag>
+        ),
+      },
+    ],
+    [t],
+  )
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Wizards</h1>
-      </div>
-
-      {definitions.length === 0 ? (
-        <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
-          No wizard definitions yet. Create one via the API.
-        </div>
-      ) : (
-        <div className="rounded-lg border">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b bg-muted/50">
-                <th className="px-4 py-3 text-left font-medium">Name</th>
-                <th className="px-4 py-3 text-left font-medium">Code</th>
-                <th className="px-4 py-3 text-left font-medium">Surface</th>
-                <th className="px-4 py-3 text-left font-medium">Steps</th>
-                <th className="px-4 py-3 text-left font-medium">Version</th>
-                <th className="px-4 py-3 text-left font-medium">Active</th>
-                <th className="px-4 py-3 text-right font-medium"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {definitions.map((def) => (
-                <tr key={def.id} className="border-b hover:bg-muted/30 transition-colors">
-                  <td className="px-4 py-3 font-medium">{def.name}</td>
-                  <td className="px-4 py-3 font-mono text-xs">{def.code}</td>
-                  <td className="px-4 py-3">{def.surface}</td>
-                  <td className="px-4 py-3">{def.steps.length}</td>
-                  <td className="px-4 py-3">v{def.version}</td>
-                  <td className="px-4 py-3">
-                    <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${def.isActive ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-700'}`}>
-                      {def.isActive ? 'Yes' : 'No'}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    <div className="flex items-center justify-end gap-2">
-                      <button
-                        type="button"
-                        onClick={() => router.push(`/backend/cpq/wizards/${def.code}/detail`)}
-                        className="inline-flex items-center justify-center rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-muted"
-                      >
-                        View
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleStartWizard(def.code)}
-                        disabled={!def.isActive}
-                        className="inline-flex items-center justify-center rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        Start
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+    <CpqListView<WizardDefinition>
+      title={t('cpq.wizards.list.title', 'Wizards')}
+      tableId="cpq.wizards.list"
+      data={data}
+      columns={columns}
+      filters={filters}
+      pageSize={PAGE_SIZE}
+      searchPlaceholder={t('cpq.wizards.search.placeholder', 'Search wizards...')}
+      onRowClick={(row) => router.push(`/backend/cpq/wizards/${row.code}/detail`)}
+      // Wizards are read-only in the admin UI for now: no Edit / Delete
+      // entries — only `Preview` (run the wizard) and `View details`.
+      rowActions={(row) => (
+        <RowActions
+          items={[
+            {
+              id: 'preview',
+              label: t('cpq.wizards.actions.preview', 'Preview'),
+              onSelect: () => handlePreviewWizard(row.code),
+            },
+            {
+              id: 'details',
+              label: t('cpq.wizards.actions.details', 'View details'),
+              href: `/backend/cpq/wizards/${row.code}/detail`,
+            },
+          ]}
+        />
       )}
-    </div>
+      emptyState={
+        <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
+          {t('cpq.wizards.empty', 'No wizard definitions yet. Create one via the API.')}
+        </div>
+      }
+    />
   )
 }

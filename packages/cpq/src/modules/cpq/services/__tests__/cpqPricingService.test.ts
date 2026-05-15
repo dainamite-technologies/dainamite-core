@@ -42,7 +42,7 @@ interface ChargeStub {
   name: string
   description?: string | null
   chargeType: 'nrc' | 'mrc' | 'usage'
-  pricingMethod: 'flat' | 'tiered' | 'per_unit'
+  pricingMethod: 'flat' | 'fixed' | 'tiered' | 'per_unit'
   pricingTableId?: string | null
   priceColumnKey?: string | null
   fixedPrice?: string | null
@@ -255,6 +255,30 @@ describe('DefaultCpqPricingService.calculateCharge — fixed price', () => {
 
     expect(result.unitPrice).toBe(0)
     expect(result.totalPrice).toBe(0)
+  })
+
+  // Legacy seeds (demo_puffin, demo_gix) emit `pricingMethod: 'fixed'`.
+  // The service must treat it identically to `'flat'`.
+  it('treats legacy `fixed` pricingMethod as `flat`', async () => {
+    const charge = makeCharge({
+      code: 'legacy_nrc',
+      name: 'Legacy NRC',
+      chargeType: 'nrc',
+      pricingMethod: 'fixed',
+      fixedPrice: '49.50',
+      currencyCode: 'USD',
+    })
+
+    const result = await service.calculateCharge({
+      charge: charge as unknown as never,
+      configuration: {},
+      tenantId: SCOPE.tenantId,
+      organizationId: SCOPE.organizationId,
+    })
+
+    expect(result.pricingMethod).toBe('flat')
+    expect(result.unitPrice).toBe(49.5)
+    expect(result.totalPrice).toBe(49.5)
   })
 })
 

@@ -32,7 +32,7 @@ function StepRenderer({ scope }: { scope: TenantScope }) {
   if (!stepType) {
     return (
       <div className="rounded-lg border bg-card p-6 text-center space-y-3">
-        <p className="text-sm text-red-600">
+        <p className="text-sm text-destructive">
           Unknown step type: <strong>{currentStep.type}</strong>
         </p>
         <p className="text-sm text-muted-foreground">This step type is not registered. Register it via <code className="font-mono text-xs bg-muted px-1 py-0.5 rounded">registerStepType()</code>.</p>

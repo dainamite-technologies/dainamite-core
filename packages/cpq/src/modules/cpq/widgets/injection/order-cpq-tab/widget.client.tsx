@@ -2,6 +2,12 @@
 import * as React from 'react'
 import type { InjectionWidgetComponentProps } from '@open-mercato/shared/modules/widgets/injection'
 import { useRouter } from 'next/navigation'
+import { Tag } from '@open-mercato/ui/primitives/tag'
+import {
+  formatStatusLabel,
+  orderCpqStatusMap,
+  type OrderCpqStatus,
+} from '../../../components/statusMaps'
 
 type CpqOrderSummary = {
   id: string
@@ -13,14 +19,6 @@ type CpqOrderSummary = {
   pricingSummary: { nrcTotal: number; mrcTotal: number } | null
   activatedAt: string | null
   createdAt: string
-}
-
-const STATUS_COLORS: Record<string, string> = {
-  draft: 'bg-blue-100 text-blue-800',
-  pending_activation: 'bg-yellow-100 text-yellow-800',
-  active: 'bg-green-100 text-green-800',
-  fulfilled: 'bg-emerald-100 text-emerald-800',
-  cancelled: 'bg-gray-100 text-gray-800',
 }
 
 function fmt(amount: number | undefined | null, currency: string): string {
@@ -76,9 +74,9 @@ export default function OrderCpqTabWidget({ data }: InjectionWidgetComponentProp
           className="flex items-center justify-between rounded-lg border p-3 hover:bg-muted/30 cursor-pointer transition-colors"
         >
           <div className="flex items-center gap-3">
-            <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${STATUS_COLORS[o.cpqStatus] ?? 'bg-gray-100 text-gray-800'}`}>
-              {o.cpqStatus.replace(/_/g, ' ')}
-            </span>
+            <Tag variant={orderCpqStatusMap[o.cpqStatus as OrderCpqStatus] ?? 'neutral'} dot>
+              {formatStatusLabel(o.cpqStatus)}
+            </Tag>
             <span className="text-sm font-medium">{o.currencyCode}</span>
           </div>
           <div className="flex items-center gap-4 text-xs">

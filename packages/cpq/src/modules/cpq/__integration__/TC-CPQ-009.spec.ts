@@ -32,7 +32,8 @@ test.describe('TC-CPQ-009: Pricing tables list (UI)', () => {
       await login(page, 'admin')
       await page.goto('/backend/cpq/pricing', { waitUntil: 'domcontentloaded' })
 
-      await expect(page.getByRole('heading', { level: 1, name: /Pricing Tables/i })).toBeVisible({ timeout: 15_000 })
+      // Title now lives inside DataTable as <h2> (CpqListView refactor).
+      await expect(page.getByRole('heading', { name: /Pricing Tables/i }).first()).toBeVisible({ timeout: 15_000 })
       await expect(page.locator('body')).toContainText(code, { timeout: 15_000 })
     } finally {
       await apiRequest(request, 'DELETE', '/api/cpq/pricing-tables', {

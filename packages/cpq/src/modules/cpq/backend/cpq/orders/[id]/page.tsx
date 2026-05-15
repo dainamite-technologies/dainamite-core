@@ -1,6 +1,17 @@
 "use client"
 import * as React from 'react'
 import { useRouter, useParams } from 'next/navigation'
+import { ArrowRight, ExternalLink, Play, X } from 'lucide-react'
+import { Alert } from '@open-mercato/ui/primitives/alert'
+import { Button } from '@open-mercato/ui/primitives/button'
+import { Tag } from '@open-mercato/ui/primitives/tag'
+import { FormHeader } from '@open-mercato/ui/backend/forms'
+import {
+  formatStatusLabel,
+  orderCpqStatusMap,
+  type OrderCpqStatus,
+} from '../../../../components/statusMaps'
+import { StatusPath } from '../../../../components/StatusPath'
 
 // ─── Types ───────────────────────────────────────────────────────
 
@@ -10,6 +21,21 @@ type ArcLineSource = {
   mrcAmount: number
   nrcAmount: number
   quantity: number
+}
+
+type TierBreakdownEntry = { tier: number; from: number; to: number; pricePerUnit: number; quantity: number; subtotal: number }
+type RuleAdjustment = { ruleCode: string; ruleName: string; ruleType: string; value: number; unitPriceBefore: number; unitPriceAfter: number; delta: number }
+
+type ResolvedCharge = {
+  chargeName?: string
+  chargeType?: string
+  pricingMethod?: 'flat' | 'tiered' | 'per_unit'
+  unitPrice?: number
+  quantity?: number | null
+  totalPrice?: number | null
+  note?: string | null
+  breakdown?: { tiers: TierBreakdownEntry[] } | null
+  adjustments?: RuleAdjustment[] | null
 }
 
 type OrderLineResult = {
@@ -28,7 +54,7 @@ type OrderLineResult = {
   endDate: string | null
   nrcTotal: number
   mrcTotal: number
-  charges: Array<{ chargeName?: string; chargeType?: string; unitPrice?: number; quantity?: number; totalPrice?: number }>
+  charges: ResolvedCharge[]
   sourceQuoteLineId: string | null
   arcSource: ArcLineSource | null
 }
@@ -52,21 +78,27 @@ type OrderResult = {
   lines: OrderLineResult[]
 }
 
-const ARC_BADGE_STYLES: Record<string, string> = {
-  amend: 'bg-purple-100 text-purple-800 border-purple-200',
-  renew: 'bg-green-100 text-green-800 border-green-200',
-  cancel: 'bg-red-100 text-red-800 border-red-200',
+const ARC_BADGE_VARIANTS: Record<string, 'brand' | 'success' | 'error'> = {
+  amend: 'brand',
+  renew: 'success',
+  cancel: 'error',
+}
+
+const RULE_TYPE_LABELS: Record<string, string> = {
+  discount_percent: '% discount',
+  discount_absolute: 'fixed discount',
+  surcharge_percent: '% surcharge',
+  surcharge_absolute: 'fixed surcharge',
+  price_override: 'override',
+}
+
+function fmtRuleValue(adj: RuleAdjustment, currency?: string): string {
+  if (adj.ruleType === 'discount_percent' || adj.ruleType === 'surcharge_percent') return `${adj.value}%`
+  if (currency) return fmt(adj.value, currency)
+  return String(adj.value)
 }
 
 // ─── Constants ───────────────────────────────────────────────────
-
-const STATUS_COLORS: Record<string, string> = {
-  draft: 'bg-blue-100 text-blue-800',
-  pending_activation: 'bg-yellow-100 text-yellow-800',
-  active: 'bg-green-100 text-green-800',
-  fulfilled: 'bg-emerald-100 text-emerald-800',
-  cancelled: 'bg-gray-100 text-gray-800',
-}
 
 function fmt(amount: number, currency: string): string {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(amount)
@@ -91,21 +123,61 @@ export default function CpqOrderDetailPage(props: { params?: { id?: string } }) 
   const [error, setError] = React.useState<string | null>(null)
   const [activating, setActivating] = React.useState(false)
   const [expandedLines, setExpandedLines] = React.useState<Set<string>>(new Set())
+  const [pricingDetail, setPricingDetail] = React.useState<{ lineIdx: number; chargeIdx: number } | null>(null)
   const [customerName, setCustomerName] = React.useState<string | null>(null)
-  const [subscription, setSubscription] = React.useState<{ id: string; name: string; code: string; status: string } | null>(null)
+  const [linkedSubscriptions, setLinkedSubscriptions] = React.useState<Array<{
+    id: string
+    name: string
+    code: string
+    status: string
+  }>>([])
 
-  function fetchSubscription(cpqConfigId: string, cancelled?: boolean) {
-    fetch(`/api/cpq/inventory/subscriptions?sourceOrderId=${cpqConfigId}&pageSize=1`)
-      .then((r) => r.json())
-      .then((data) => {
-        const items = data?.items ?? (Array.isArray(data) ? data : [])
-        if (items.length > 0 && !cancelled) {
-          const sub = items[0]
-          setSubscription({ id: sub.id, name: sub.name, code: sub.code, status: sub.status })
-        }
-      })
-      .catch(() => {})
-  }
+  // Find every subscription this order touches. NEW orders write
+  // `sourceOrderId` on the freshly-created subscription, so a
+  // `?sourceOrderId=…` filter is enough there. ARC orders (amend /
+  // renew / cancel) mutate existing subscriptions in place — the
+  // subscription's `sourceOrderId` stays pinned to the original
+  // order, so we also resolve targets via the source quote.
+  const fetchLinkedSubscriptions = React.useCallback(
+    async (orderConfigId: string, sourceQuoteId: string | null) => {
+      const byOrderId = fetch(
+        `/api/cpq/inventory/subscriptions?sourceOrderId=${orderConfigId}&pageSize=10`,
+      )
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => (d?.items ?? (Array.isArray(d) ? d : [])) as Array<{ id: string; name: string; code: string; status: string }>)
+        .catch(() => [])
+
+      const byTargets = sourceQuoteId
+        ? fetch(`/api/cpq/quotes/${sourceQuoteId}/target-subscriptions`)
+            .then((r) => (r.ok ? r.json() : null))
+            .then(async (d) => {
+              const targets: Array<{ subscriptionId: string }> = d?.items ?? []
+              const fetched = await Promise.all(
+                targets.map((t) =>
+                  fetch(`/api/cpq/inventory/subscriptions?id=${t.subscriptionId}`)
+                    .then((r) => (r.ok ? r.json() : null))
+                    .catch(() => null),
+                ),
+              )
+              return fetched.filter(Boolean) as Array<{ id: string; name: string; code: string; status: string }>
+            })
+            .catch(() => [] as Array<{ id: string; name: string; code: string; status: string }>)
+        : Promise.resolve([] as Array<{ id: string; name: string; code: string; status: string }>)
+
+      const [a, b] = await Promise.all([byOrderId, byTargets])
+      // Dedupe by id — a single subscription may appear in both lists
+      // (e.g. a NEW order that was later amended into the same sub).
+      const seen = new Set<string>()
+      const merged: Array<{ id: string; name: string; code: string; status: string }> = []
+      for (const sub of [...a, ...b]) {
+        if (!sub || seen.has(sub.id)) continue
+        seen.add(sub.id)
+        merged.push({ id: sub.id, name: sub.name, code: sub.code, status: sub.status })
+      }
+      setLinkedSubscriptions(merged)
+    },
+    [],
+  )
 
   React.useEffect(() => {
     let cancelled = false
@@ -123,7 +195,7 @@ export default function CpqOrderDetailPage(props: { params?: { id?: string } }) 
             })
             .catch(() => {})
           if (result.cpqStatus === 'active' || result.cpqStatus === 'fulfilled') {
-            fetchSubscription(result.id, cancelled)
+            void fetchLinkedSubscriptions(result.id, result.sourceQuoteId)
           }
         }
       } catch (err) {
@@ -134,7 +206,7 @@ export default function CpqOrderDetailPage(props: { params?: { id?: string } }) 
     }
     load()
     return () => { cancelled = true }
-  }, [cpqOrderId])
+  }, [cpqOrderId, fetchLinkedSubscriptions])
 
   const activateOrder = async () => {
     if (!order) return
@@ -147,7 +219,7 @@ export default function CpqOrderDetailPage(props: { params?: { id?: string } }) 
         body: JSON.stringify({}),
       })
       setOrder(result)
-      fetchSubscription(result.id)
+      void fetchLinkedSubscriptions(result.id, result.sourceQuoteId)
     } catch (err) {
       setError((err as Error).message)
     } finally {
@@ -200,132 +272,160 @@ export default function CpqOrderDetailPage(props: { params?: { id?: string } }) 
   const canCancel = order.cpqStatus === 'draft' || order.cpqStatus === 'pending_activation' || order.cpqStatus === 'active'
   const currency = order.currencyCode
 
+  const togglePricingDetail = (lineIdx: number, chargeIdx: number) => {
+    setPricingDetail((prev) =>
+      prev?.lineIdx === lineIdx && prev?.chargeIdx === chargeIdx ? null : { lineIdx, chargeIdx },
+    )
+  }
+
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <button onClick={() => router.push('/backend/cpq/orders')} className="text-sm text-muted-foreground hover:text-foreground">← Back</button>
-          <h1 className="text-2xl font-bold">Order {order.orderNumber || order.orderId.slice(0, 8)}</h1>
-          {order.quoteType && order.quoteType !== 'new' && (
-            <span
-              className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-bold uppercase tracking-wide ${
-                ARC_BADGE_STYLES[order.quoteType] ?? 'bg-gray-100 text-gray-800 border-gray-200'
-              }`}
-              title={`ARC ${order.quoteType} order — derived from a Customer Inventory subscription change`}
+      {/* Header — standard FormHeader detail mode, mirrors the CPQ quote
+          layout so order ↔ quote stays consistent. Title is just the order
+          number; status / ARC / converted tags sit underneath; primary
+          actions (Activate, then Cancel) live on the right next to the
+          View Sales Order / Source Quote utility links. */}
+      <FormHeader
+        mode="detail"
+        backHref="/backend/cpq/orders"
+        backLabel="Back to CPQ Orders"
+        entityTypeLabel="CPQ Order"
+        title={order.orderNumber || order.orderId.slice(0, 8)}
+        statusBadge={
+          <div className="flex flex-wrap items-center gap-2 pt-1">
+            <Tag variant={orderCpqStatusMap[order.cpqStatus as OrderCpqStatus] ?? 'neutral'} dot>
+              {formatStatusLabel(order.cpqStatus)}
+            </Tag>
+            {order.quoteType && order.quoteType !== 'new' && (
+              <Tag variant={ARC_BADGE_VARIANTS[order.quoteType] ?? 'neutral'} className="uppercase">
+                {order.quoteType}
+              </Tag>
+            )}
+          </div>
+        }
+        actionsContent={
+          <>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => router.push(`/backend/sales/orders/${order.orderId}`)}
             >
-              {order.quoteType}
-            </span>
-          )}
-          <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${STATUS_COLORS[order.cpqStatus] ?? 'bg-gray-100 text-gray-800'}`}>
-            {order.cpqStatus.replace(/_/g, ' ')}
-          </span>
-          <span className="text-xs text-muted-foreground">{currency}</span>
-          <button
-            onClick={() => router.push(`/backend/sales/orders/${order.orderId}`)}
-            className="inline-flex items-center gap-1 text-xs text-primary hover:underline ml-2"
-          >
-            View Sales Order
-            <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
-            </svg>
-          </button>
-          {order.sourceQuoteId && (
-            <button
-              onClick={() => router.push(`/backend/cpq/quotes/${order.sourceQuoteId}`)}
-              className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground hover:underline"
-            >
-              Source Quote
-            </button>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          {canCancel && (
-            <button
-              onClick={cancelOrder}
-              className="inline-flex items-center gap-1.5 rounded-md border border-red-200 px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-50 transition-colors"
-            >
-              Cancel Order
-            </button>
-          )}
-          {canActivate && (
-            <button
-              onClick={activateOrder}
-              disabled={activating}
-              className="inline-flex items-center gap-1.5 rounded-md bg-green-600 px-4 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-green-700 transition-colors disabled:opacity-50"
-            >
-              {activating && <Spinner />}
-              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.985V5.653z" />
-              </svg>
-              Activate Order
-            </button>
-          )}
-        </div>
+              <ExternalLink className="h-3.5 w-3.5" />
+              View Sales Order
+            </Button>
+            {order.sourceQuoteId && (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => router.push(`/backend/cpq/quotes/${order.sourceQuoteId}`)}
+              >
+                Source Quote
+              </Button>
+            )}
+            {canActivate && (
+              <Button type="button" onClick={activateOrder} disabled={activating}>
+                {activating ? <Spinner /> : <Play className="h-4 w-4" />}
+                Activate
+              </Button>
+            )}
+            {canCancel && (
+              <Button type="button" variant="destructive-outline" onClick={cancelOrder}>
+                <X className="h-4 w-4" />
+                Cancel
+              </Button>
+            )}
+          </>
+        }
+      />
+
+      {/* Status path — visual progress only. Orders advance via the
+          dedicated Activate / Cancel buttons because activation has
+          backend side effects (subscription / asset creation). */}
+      <div className="flex items-center gap-3 flex-wrap">
+        <StatusPath
+          // Order path is read-only — activation has backend side effects
+          // (subscription / asset creation) so transitions go through the
+          // dedicated Activate / Cancel buttons.
+          current={order.cpqStatus}
+          path={['draft', 'pending_activation', 'active', 'fulfilled']}
+          terminals={['cancelled']}
+          statusMap={orderCpqStatusMap}
+          ariaLabel="Order status path"
+        />
       </div>
 
       {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
 
-      {/* Success banner after activation */}
-      {order.cpqStatus === 'active' && order.activatedAt && (
-        <div className="rounded-md bg-green-50 border border-green-200 p-3 flex items-center gap-2">
-          <svg className="h-5 w-5 text-green-500 shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
-          <span className="text-sm text-green-700">
-            Order activated on {new Date(order.activatedAt).toLocaleString()}.
-            {subscription ? ' Subscription created.' : ' Inventory items have been created.'}
-          </span>
-          <div className="ml-auto flex items-center gap-3">
-            {subscription && (
-              <button
-                onClick={() => router.push(`/backend/cpq/inventory/subscriptions/${subscription.id}`)}
-                className="text-xs text-green-700 hover:underline font-medium"
-              >
-                View Subscription →
-              </button>
-            )}
-            <button
-              onClick={() => router.push('/backend/cpq/inventory')}
-              className="text-xs text-green-700 hover:underline font-medium"
+      {/* Linked subscriptions — one card per subscription this order
+          touches. NEW orders write one fresh subscription; ARC orders
+          (amend / renew / cancel) reach one or more existing
+          subscriptions through the source quote's target list. */}
+      {linkedSubscriptions.length > 0 && (
+        <div className="space-y-2">
+          {linkedSubscriptions.map((sub) => (
+            <div
+              key={sub.id}
+              className="rounded-lg border bg-card p-4 flex items-center gap-4"
             >
-              View Inventory →
-            </button>
-          </div>
+              <div className="flex-1 min-w-0 space-y-1">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                    Linked Subscription
+                  </span>
+                  <Tag
+                    variant={sub.status === 'active' ? 'success' : 'info'}
+                    dot
+                    className="text-[10px] px-1.5"
+                  >
+                    {sub.status}
+                  </Tag>
+                </div>
+                <div className="text-sm font-medium">
+                  {sub.name}{' '}
+                  <span className="text-muted-foreground font-mono text-xs">({sub.code})</span>
+                </div>
+                {order.activatedAt && (
+                  <div className="text-xs text-muted-foreground">
+                    Activated on {new Date(order.activatedAt).toLocaleString()}
+                  </div>
+                )}
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => router.push(`/backend/cpq/inventory/subscriptions/${sub.id}`)}
+              >
+                <ArrowRight className="h-3.5 w-3.5" />
+                Open
+              </Button>
+            </div>
+          ))}
         </div>
       )}
 
-      {/* Linked subscription */}
-      {subscription && (
-        <div className="rounded-md bg-indigo-50 border border-indigo-200 p-3 flex items-center gap-3">
-          <svg className="h-5 w-5 text-indigo-500 shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182M2.985 19.644l3.181-3.183" />
-          </svg>
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium text-indigo-900">Linked Subscription</p>
-            <p className="text-xs text-indigo-600">{subscription.name} ({subscription.code})</p>
-          </div>
-          <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
-            subscription.status === 'active' ? 'bg-green-100 text-green-800' : 'bg-indigo-100 text-indigo-800'
-          }`}>
-            {subscription.status}
-          </span>
-          <button
-            onClick={() => router.push(`/backend/cpq/inventory/subscriptions/${subscription.id}`)}
-            className="inline-flex items-center gap-1 text-sm font-medium text-indigo-700 hover:text-indigo-900 hover:underline"
-          >
-            Open
-            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
-            </svg>
-          </button>
-        </div>
-      )}
+      {/* Meta cards — secondary reference info, matches the quote layout. */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+        <MetaCard label="Customer">
+          {customerName ? (
+            <span className="font-medium">{customerName}</span>
+          ) : (
+            <span className="font-mono text-xs text-muted-foreground">
+              {order.customerId.slice(0, 8)}…
+            </span>
+          )}
+        </MetaCard>
+        <MetaCard label="Created">
+          <span className="font-medium">{new Date(order.createdAt).toLocaleDateString()}</span>
+        </MetaCard>
+        <MetaCard label="Currency">
+          <span className="font-medium">{currency}</span>
+        </MetaCard>
+      </div>
 
       {/* Pricing Summary Card */}
       <div className="rounded-lg border bg-card p-4">
         <h3 className="text-sm font-medium mb-3">Pricing Summary</h3>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 gap-4">
           <div>
             <p className="text-xs text-muted-foreground">Non-Recurring (NRC)</p>
             <p className="text-lg font-semibold font-mono">{fmt(order.pricingSummary.nrcTotal, currency)}</p>
@@ -334,27 +434,49 @@ export default function CpqOrderDetailPage(props: { params?: { id?: string } }) 
             <p className="text-xs text-muted-foreground">Monthly Recurring (MRC)</p>
             <p className="text-lg font-semibold font-mono">{fmt(order.pricingSummary.mrcTotal, currency)}</p>
           </div>
-          <div>
-            <p className="text-xs text-muted-foreground">Created</p>
-            <p className="text-sm font-medium">{new Date(order.createdAt).toLocaleString()}</p>
-          </div>
-          <div>
-            <p className="text-xs text-muted-foreground">Customer</p>
-            <p className="text-sm font-medium">{customerName ?? order.customerId.slice(0, 12) + '…'}</p>
-          </div>
         </div>
       </div>
 
       {/* Order Lines */}
-      <OrderLineTree lines={order.lines} currency={currency} expandedLines={expandedLines} onToggleLine={toggleLine} />
+      <OrderLineTree
+        lines={order.lines}
+        currency={currency}
+        expandedLines={expandedLines}
+        pricingDetail={pricingDetail}
+        onToggleLine={toggleLine}
+        onTogglePricingDetail={togglePricingDetail}
+      />
+    </div>
+  )
+}
+
+function MetaCard({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="rounded-lg border bg-card p-4">
+      <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+        {label}
+      </div>
+      <div className="mt-1 text-sm">{children}</div>
     </div>
   )
 }
 
 // ─── Sub-components ──────────────────────────────────────────────
 
-function OrderLineTree({ lines, currency, expandedLines, onToggleLine }: {
-  lines: OrderLineResult[]; currency: string; expandedLines: Set<string>; onToggleLine: (id: string) => void
+function OrderLineTree({
+  lines,
+  currency,
+  expandedLines,
+  pricingDetail,
+  onToggleLine,
+  onTogglePricingDetail,
+}: {
+  lines: OrderLineResult[]
+  currency: string
+  expandedLines: Set<string>
+  pricingDetail: { lineIdx: number; chargeIdx: number } | null
+  onToggleLine: (id: string) => void
+  onTogglePricingDetail: (lineIdx: number, chargeIdx: number) => void
 }) {
   const rootLines = lines.filter((l) => !l.parentLineId)
   const childrenByParent = new Map<string, OrderLineResult[]>()
@@ -365,6 +487,11 @@ function OrderLineTree({ lines, currency, expandedLines, onToggleLine }: {
       childrenByParent.set(line.parentLineId, arr)
     }
   }
+
+  // Stable index per visible line so the pricing-detail toggle can be
+  // keyed by (lineIdx, chargeIdx) the same way the quote page does.
+  const indexOf = new Map<string, number>()
+  lines.forEach((l, i) => indexOf.set(l.lineId, i))
 
   return (
     <div>
@@ -379,17 +506,44 @@ function OrderLineTree({ lines, currency, expandedLines, onToggleLine }: {
             const isBundle = line.offeringType === 'bundle'
             const children = childrenByParent.get(line.lineId) ?? []
             const isExpanded = expandedLines.has(line.lineId)
+            const lineIdx = indexOf.get(line.lineId) ?? 0
             return (
               <div key={line.lineId}>
-                <OrderLineRow line={line} currency={currency} isExpanded={isExpanded} isBundle={isBundle} childCount={children.length} indent={0} onToggle={() => onToggleLine(line.lineId)} />
+                <OrderLineRow
+                  line={line}
+                  lineIdx={lineIdx}
+                  currency={currency}
+                  isExpanded={isExpanded}
+                  isBundle={isBundle}
+                  childCount={children.length}
+                  indent={0}
+                  pricingDetail={pricingDetail}
+                  onToggle={() => onToggleLine(line.lineId)}
+                  onTogglePricingDetail={onTogglePricingDetail}
+                />
                 {isBundle && isExpanded && children.length > 0 && (
-                  <div className="border-t border-dashed border-indigo-200/50 bg-indigo-50/20">
+                  <div className="border-t border-dashed border-brand-violet/30 bg-brand-violet/5">
                     <div className="px-6 py-1.5">
-                      <span className="text-[10px] font-medium text-indigo-500 uppercase tracking-wider">Bundle Components ({children.length})</span>
+                      <span className="text-[10px] font-medium text-brand-violet uppercase tracking-wider">Bundle Components ({children.length})</span>
                     </div>
-                    {children.map((child) => (
-                      <OrderLineRow key={child.lineId} line={child} currency={currency} isExpanded={expandedLines.has(child.lineId)} isBundle={false} childCount={0} indent={1} onToggle={() => onToggleLine(child.lineId)} />
-                    ))}
+                    {children.map((child) => {
+                      const childIdx = indexOf.get(child.lineId) ?? 0
+                      return (
+                        <OrderLineRow
+                          key={child.lineId}
+                          line={child}
+                          lineIdx={childIdx}
+                          currency={currency}
+                          isExpanded={expandedLines.has(child.lineId)}
+                          isBundle={false}
+                          childCount={0}
+                          indent={1}
+                          pricingDetail={pricingDetail}
+                          onToggle={() => onToggleLine(child.lineId)}
+                          onTogglePricingDetail={onTogglePricingDetail}
+                        />
+                      )
+                    })}
                   </div>
                 )}
               </div>
@@ -401,8 +555,11 @@ function OrderLineTree({ lines, currency, expandedLines, onToggleLine }: {
   )
 }
 
-function OrderLineRow({ line, currency, isExpanded, isBundle, childCount, indent, onToggle }: {
-  line: OrderLineResult; currency: string; isExpanded: boolean; isBundle: boolean; childCount: number; indent: number; onToggle: () => void
+function OrderLineRow({ line, lineIdx, currency, isExpanded, isBundle, childCount, indent, pricingDetail, onToggle, onTogglePricingDetail }: {
+  line: OrderLineResult; lineIdx: number; currency: string; isExpanded: boolean; isBundle: boolean; childCount: number; indent: number
+  pricingDetail: { lineIdx: number; chargeIdx: number } | null
+  onToggle: () => void
+  onTogglePricingDetail: (lineIdx: number, chargeIdx: number) => void
 }) {
   const paddingLeft = indent > 0 ? `${indent * 2 + 1}rem` : undefined
 
@@ -423,11 +580,11 @@ function OrderLineRow({ line, currency, isExpanded, isBundle, childCount, indent
           <div className="flex items-center gap-2">
             {indent > 0 && <span className="text-muted-foreground text-xs">└</span>}
             {isBundle && (
-              <span className="inline-flex items-center rounded bg-indigo-100 px-1.5 py-0.5 text-xs font-medium text-indigo-700">bundle</span>
+              <Tag variant="brand" className="px-1.5 text-xs">bundle</Tag>
             )}
             <span className="font-medium text-sm">{line.offeringName}</span>
             {line.quantity > 1 && <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-medium">×{line.quantity}</span>}
-            <span className="inline-flex items-center rounded-full bg-blue-100 px-1.5 py-0.5 text-xs font-medium text-blue-700">{line.action}</span>
+            <Tag variant="info" className="px-1.5 text-xs">{line.action}</Tag>
             {isBundle && <span className="text-xs text-muted-foreground">{childCount} component{childCount !== 1 ? 's' : ''}</span>}
           </div>
         </div>
@@ -494,28 +651,13 @@ function OrderLineRow({ line, currency, isExpanded, isBundle, childCount, indent
                 {hasCharges && (
                   <div>
                     <p className="text-xs font-medium text-muted-foreground mb-1">Charges</p>
-                    <table className="w-full text-xs">
-                      <thead>
-                        <tr className="text-muted-foreground">
-                          <th className="text-left py-1 font-medium">Charge</th>
-                          <th className="text-left py-1 font-medium">Type</th>
-                          <th className="text-right py-1 font-medium">Unit Price</th>
-                          <th className="text-right py-1 font-medium">Qty</th>
-                          <th className="text-right py-1 font-medium">Total</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {line.charges.map((c, i) => (
-                          <tr key={i} className="border-t border-dashed border-border/50">
-                            <td className="py-1">{c.chargeName ?? '—'}</td>
-                            <td className="py-1 uppercase">{c.chargeType ?? '—'}</td>
-                            <td className="py-1 text-right font-mono">{c.unitPrice != null ? fmt(c.unitPrice, currency) : '—'}</td>
-                            <td className="py-1 text-right font-mono">{c.quantity ?? '—'}</td>
-                            <td className="py-1 text-right font-mono">{c.totalPrice != null ? fmt(c.totalPrice, currency) : '—'}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                    <ChargeBreakdown
+                      line={line}
+                      lineIdx={lineIdx}
+                      currency={currency}
+                      pricingDetail={pricingDetail}
+                      onTogglePricingDetail={onTogglePricingDetail}
+                    />
                   </div>
                 )}
 
@@ -535,6 +677,144 @@ function OrderLineRow({ line, currency, isExpanded, isBundle, childCount, indent
   )
 }
 
+// Charge breakdown table with the waterfall ("show pricing details")
+// toggle. Same shape as the quote page so a charge looks identical on
+// both surfaces, including tier-by-tier subtotals and any price-rule
+// adjustments that fired during calculation.
+function ChargeBreakdown({ line, lineIdx, currency, pricingDetail, onTogglePricingDetail }: {
+  line: OrderLineResult; lineIdx: number; currency: string
+  pricingDetail: { lineIdx: number; chargeIdx: number } | null
+  onTogglePricingDetail: (lineIdx: number, chargeIdx: number) => void
+}) {
+  return (
+    <table className="w-full text-xs">
+      <thead>
+        <tr className="text-muted-foreground">
+          <th className="text-left py-1 font-medium">Charge</th>
+          <th className="text-left py-1 font-medium">Type</th>
+          <th className="text-right py-1 font-medium">Unit Price</th>
+          <th className="text-right py-1 font-medium">Qty</th>
+          <th className="text-right py-1 font-medium">Total</th>
+          <th className="w-8" />
+        </tr>
+      </thead>
+      <tbody>
+        {line.charges.map((c, i) => {
+          const hasDetail = !!(c.breakdown?.tiers?.length || c.adjustments?.length)
+          const isDetailOpen = pricingDetail?.lineIdx === lineIdx && pricingDetail?.chargeIdx === i
+          return (
+            <React.Fragment key={i}>
+              <tr className="border-t border-dashed border-border/50">
+                <td className="py-1">{c.chargeName ?? '—'}</td>
+                <td className="py-1 uppercase">{c.chargeType ?? '—'}</td>
+                <td className="py-1 text-right font-mono">{c.unitPrice != null ? fmt(c.unitPrice, currency) : '—'}</td>
+                <td className="py-1 text-right font-mono">{c.quantity ?? '—'}</td>
+                <td className="py-1 text-right font-mono">{c.totalPrice != null ? fmt(c.totalPrice, currency) : c.note ?? '—'}</td>
+                <td className="py-1 text-center">
+                  {hasDetail && (
+                    <button
+                      onClick={() => onTogglePricingDetail(lineIdx, i)}
+                      className="inline-flex items-center justify-center rounded p-0.5 hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+                      title="Show pricing breakdown"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3.5 h-3.5">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
+                      </svg>
+                    </button>
+                  )}
+                </td>
+              </tr>
+              {isDetailOpen && (
+                <tr>
+                  <td colSpan={6} className="pb-3 pt-1">
+                    <div className="rounded border bg-background p-3 space-y-3 text-xs">
+                      <div className="flex items-center justify-between">
+                        <span className="font-semibold text-sm">Pricing Details — {c.chargeName}</span>
+                        <span className="text-muted-foreground">{c.pricingMethod ?? 'flat'}</span>
+                      </div>
+
+                      {c.breakdown?.tiers && c.breakdown.tiers.length > 0 && (
+                        <div>
+                          <div className="font-medium text-muted-foreground mb-1">Tier Breakdown</div>
+                          <table className="w-full">
+                            <thead>
+                              <tr className="text-muted-foreground">
+                                <th className="text-left py-0.5 font-medium">Tier</th>
+                                <th className="text-right py-0.5 font-medium">Range</th>
+                                <th className="text-right py-0.5 font-medium">Price/Unit</th>
+                                <th className="text-right py-0.5 font-medium">Qty</th>
+                                <th className="text-right py-0.5 font-medium">Subtotal</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {c.breakdown.tiers.map((t) => (
+                                <tr key={t.tier} className="border-t border-border/30">
+                                  <td className="py-0.5">{t.tier}</td>
+                                  <td className="py-0.5 text-right font-mono">{t.from}–{t.to}</td>
+                                  <td className="py-0.5 text-right font-mono">{fmt(t.pricePerUnit, currency)}</td>
+                                  <td className="py-0.5 text-right font-mono">{t.quantity}</td>
+                                  <td className="py-0.5 text-right font-mono">{fmt(t.subtotal, currency)}</td>
+                                </tr>
+                              ))}
+                              <tr className="border-t font-medium">
+                                <td colSpan={4} className="py-0.5 text-right">Tiered Total</td>
+                                <td className="py-0.5 text-right font-mono">
+                                  {fmt(c.breakdown.tiers.reduce((s, t) => s + t.subtotal, 0), currency)}
+                                </td>
+                              </tr>
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+
+                      {c.adjustments && c.adjustments.length > 0 && (
+                        <div>
+                          <div className="font-medium text-muted-foreground mb-1">Applied Price Rules</div>
+                          <table className="w-full">
+                            <thead>
+                              <tr className="text-muted-foreground">
+                                <th className="text-left py-0.5 font-medium">Rule</th>
+                                <th className="text-left py-0.5 font-medium">Type</th>
+                                <th className="text-right py-0.5 font-medium">Value</th>
+                                <th className="text-right py-0.5 font-medium">Before</th>
+                                <th className="text-right py-0.5 font-medium">After</th>
+                                <th className="text-right py-0.5 font-medium">Delta</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {c.adjustments.map((adj, ai) => (
+                                <tr key={ai} className="border-t border-border/30">
+                                  <td className="py-0.5">{adj.ruleName}</td>
+                                  <td className="py-0.5">{RULE_TYPE_LABELS[adj.ruleType] ?? adj.ruleType}</td>
+                                  <td className="py-0.5 text-right font-mono">{fmtRuleValue(adj, currency)}</td>
+                                  <td className="py-0.5 text-right font-mono">{fmt(adj.unitPriceBefore, currency)}</td>
+                                  <td className="py-0.5 text-right font-mono">{fmt(adj.unitPriceAfter, currency)}</td>
+                                  <td className={`py-0.5 text-right font-mono ${adj.delta < 0 ? 'text-destructive' : adj.delta > 0 ? 'text-status-success-text' : ''}`}>
+                                    {adj.delta > 0 ? '+' : ''}{fmt(adj.delta, currency)}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+
+                      <div className="flex items-center justify-between pt-1 border-t text-sm font-semibold">
+                        <span>Final Total</span>
+                        <span className="font-mono">{c.totalPrice != null ? fmt(c.totalPrice, currency) : '—'}</span>
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+              )}
+            </React.Fragment>
+          )
+        })}
+      </tbody>
+    </table>
+  )
+}
+
 function Spinner() {
   return (
     <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
@@ -546,10 +826,18 @@ function Spinner() {
 
 function ErrorBanner({ message, onDismiss }: { message: string; onDismiss?: () => void }) {
   return (
-    <div className="rounded-md bg-red-50 border border-red-200 p-3 flex items-start gap-2">
-      <span className="text-sm text-red-700 flex-1">{message}</span>
-      {onDismiss && <button onClick={onDismiss} className="text-red-400 hover:text-red-600 text-sm font-bold">×</button>}
-    </div>
+    <Alert variant="destructive" className="flex items-start gap-2">
+      <span className="flex-1">{message}</span>
+      {onDismiss && (
+        <button
+          onClick={onDismiss}
+          className="text-destructive/70 hover:text-destructive text-sm font-bold"
+          aria-label="Dismiss"
+        >
+          ×
+        </button>
+      )}
+    </Alert>
   )
 }
 
@@ -593,7 +881,7 @@ function ArcLineDiff({ line, currency }: { line: OrderLineResult; currency: stri
         </table>
       </div>
       {isCancel && (
-        <p className="text-xs text-red-700 mt-1 italic">
+        <p className="text-xs text-destructive mt-1 italic">
           Cancellation — item will be terminated on activation.
         </p>
       )}
@@ -625,7 +913,7 @@ function ArcDiffRow({
       <td className={`px-3 py-1 text-right font-mono ${dimAfter ? 'text-muted-foreground line-through' : ''}`}>
         {fmtVal(after)}
       </td>
-      <td className={`px-3 py-1 text-right font-mono font-medium ${showDelta ? (delta > 0 ? 'text-green-700' : 'text-red-700') : 'text-muted-foreground'}`}>
+      <td className={`px-3 py-1 text-right font-mono font-medium ${showDelta ? (delta > 0 ? 'text-status-success-text' : 'text-destructive') : 'text-muted-foreground'}`}>
         {showDelta ? `${delta > 0 ? '+' : ''}${fmtVal(delta)}` : '—'}
       </td>
     </tr>

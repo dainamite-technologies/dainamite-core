@@ -41,6 +41,11 @@ const ALLOWED_IMPORT_PREFIXES = [
   'zod',
   '@dainamite/',
   'node:',
+  // UI table primitive — listed across @tanstack so future submodules
+  // (e.g. @tanstack/react-virtual) also pass without revisits.
+  '@tanstack/',
+  // Excel import/export on the pricing-tables detail page.
+  'xlsx',
 ]
 
 const NODE_BUILTINS = new Set([

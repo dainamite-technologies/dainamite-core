@@ -2,6 +2,8 @@
 
 import React, { useState, useEffect, useCallback } from 'react'
 import type { WizardStepProps } from '../types'
+import { Button } from '@open-mercato/ui/primitives/button'
+import { Tag } from '@open-mercato/ui/primitives/tag'
 
 type QuoteLine = {
   lineId: string
@@ -89,9 +91,9 @@ export function ItemListStep({ config, onComplete, onBack, stepData, completedSt
                 <span className="text-sm font-medium">{line.offeringName}</span>
                 {line.quantity > 1 && <span className="ml-2 text-xs text-muted-foreground">x{line.quantity}</span>}
                 {!line.isConfigured && (
-                  <span className="ml-2 inline-flex items-center rounded-full bg-yellow-100 px-2 py-0.5 text-xs font-medium text-yellow-800">
+                  <Tag variant="warning" className="ml-2">
                     Needs configuration
-                  </span>
+                  </Tag>
                 )}
               </div>
               <div className="flex items-center gap-3">
@@ -100,13 +102,14 @@ export function ItemListStep({ config, onComplete, onBack, stepData, completedSt
                     {fmt(line.nrcTotal)} NRC / {fmt(line.mrcTotal)} MRC
                   </span>
                 )}
-                <button
+                <Button
                   type="button"
+                  variant="destructive-outline"
+                  size="sm"
                   onClick={() => handleRemove(line.lineId)}
-                  className="inline-flex items-center rounded-md border border-red-200 px-2.5 py-1 text-xs text-red-600 hover:bg-red-50"
                 >
                   Remove
-                </button>
+                </Button>
               </div>
             </div>
           ))}

@@ -9,7 +9,12 @@ export const cpqProductSpecificationCreateSchema = z.object({
   description: z.string().nullish(),
   specType: z.enum(['simple', 'bundle']).optional().default('simple'),
   isAssetizable: z.boolean().optional().default(false),
-  lifecycleStatus: z.enum(['draft', 'active', 'deprecated', 'retired']).optional().default('draft'),
+  // `retired` was merged into `deprecated` — see migration
+  // `<timestamp>-merge-spec-retired-into-deprecated.ts`. Offerings still have
+  // four states because the user-facing semantics there are different
+  // (a retired offering can't be re-sold; a deprecated one can but is
+  // discouraged).
+  lifecycleStatus: z.enum(['draft', 'active', 'deprecated']).optional().default('draft'),
   version: z.number().int().optional().default(1),
   effectiveFrom: z.string().datetime().nullish(),
   effectiveTo: z.string().datetime().nullish(),
@@ -31,7 +36,10 @@ export const cpqProductOfferingCreateSchema = z.object({
   description: z.string().nullish(),
   offeringType: z.enum(['simple', 'bundle']).optional().default('simple'),
   designTimeValues: z.record(z.string(), z.unknown()).optional().default({}),
-  lifecycleStatus: z.enum(['draft', 'active', 'deprecated', 'retired']).optional().default('draft'),
+  // `retired` was merged into `deprecated` — see migration
+  // `<timestamp>-merge-offering-retired-into-deprecated.ts`. Aligned with
+  // specifications: a single 3-state lifecycle keeps the UX uniform.
+  lifecycleStatus: z.enum(['draft', 'active', 'deprecated']).optional().default('draft'),
   effectiveFrom: z.string().datetime().nullish(),
   effectiveTo: z.string().datetime().nullish(),
   metadata: z.record(z.string(), z.unknown()).nullish(),
@@ -129,14 +137,46 @@ export const cpqProductAttributeUpdateSchema = cpqProductAttributeCreateSchema.p
   id: z.string().uuid(),
 })
 
-export const cpqProductChargeCreateSchema = z.object({
+// `fixed` is a legacy alias for `flat` — older seeds (`demo_puffin`,
+// `demo_gix`) emit it directly and ~30+ rows in prod use it. The pricing
+// service treats them identically (fixedPrice + currencyCode, no table
+// lookup). We accept it on input and normalise to `flat` so storage
+// stays canonical.
+const cpqChargePricingMethodEnum = z.enum(['flat', 'fixed', 'tiered', 'per_unit'])
+
+const requireField = (
+  ctx: z.RefinementCtx,
+  value: unknown,
+  path: string,
+  msg: string,
+) => {
+  if (value === undefined || value === null || value === '') {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: [path], message: msg })
+  }
+}
+
+const forbidField = (
+  ctx: z.RefinementCtx,
+  value: unknown,
+  path: string,
+  msg: string,
+) => {
+  if (value !== undefined && value !== null && value !== '') {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: [path], message: msg })
+  }
+}
+
+// Shared shape between create/update so the refinement logic stays in one
+// place. Update is `.partial()` so its refinement runs only when fields
+// are present.
+const cpqProductChargeBase = z.object({
   productId: z.string().uuid().optional(),
   offeringId: z.string().uuid().nullish(),
   code: z.string().min(1),
   name: z.string().min(1),
   description: z.string().nullish(),
   chargeType: z.enum(['nrc', 'mrc', 'usage']),
-  pricingMethod: z.enum(['flat', 'tiered', 'per_unit']),
+  pricingMethod: cpqChargePricingMethodEnum.transform((v) => (v === 'fixed' ? 'flat' : v)),
   pricingTableId: z.string().uuid().nullish(),
   priceColumnKey: z.string().nullish(),
   fixedPrice: z.union([z.string(), z.number().transform(String)]).nullish(),
@@ -147,8 +187,49 @@ export const cpqProductChargeCreateSchema = z.object({
   isActive: z.boolean().optional().default(true),
 })
 
-export const cpqProductChargeUpdateSchema = cpqProductChargeCreateSchema.partial().extend({
+// V-CHG-1: pricing method must match the configured fields.
+//  - flat     → fixedPrice + currencyCode required; table fields forbidden
+//  - per_unit → pricingTableId + priceColumnKey + quantityAttributeCode
+//               required; fixedPrice forbidden
+//  - tiered   → same as per_unit (rangeFrom/rangeTo come from the table)
+const refineChargePricingShape = (
+  ctx: z.RefinementCtx,
+  charge: {
+    pricingMethod?: 'flat' | 'tiered' | 'per_unit'
+    pricingTableId?: string | null
+    priceColumnKey?: string | null
+    fixedPrice?: string | null
+    currencyCode?: string | null
+    quantityAttributeCode?: string | null
+  },
+) => {
+  const method = charge.pricingMethod
+  if (!method) return
+  if (method === 'flat') {
+    requireField(ctx, charge.fixedPrice, 'fixedPrice', 'V-CHG-1: fixedPrice is required for flat pricing')
+    requireField(ctx, charge.currencyCode, 'currencyCode', 'V-CHG-1: currencyCode is required for flat pricing')
+    forbidField(ctx, charge.pricingTableId, 'pricingTableId', 'V-CHG-1: pricingTableId must be empty for flat pricing')
+    forbidField(ctx, charge.priceColumnKey, 'priceColumnKey', 'V-CHG-1: priceColumnKey must be empty for flat pricing')
+    forbidField(ctx, charge.quantityAttributeCode, 'quantityAttributeCode', 'V-CHG-1: quantityAttributeCode must be empty for flat pricing')
+    return
+  }
+  // per_unit | tiered
+  requireField(ctx, charge.pricingTableId, 'pricingTableId', `V-CHG-1: pricingTableId is required for ${method} pricing`)
+  requireField(ctx, charge.priceColumnKey, 'priceColumnKey', `V-CHG-1: priceColumnKey is required for ${method} pricing`)
+  requireField(ctx, charge.quantityAttributeCode, 'quantityAttributeCode', `V-CHG-1: quantityAttributeCode is required for ${method} pricing`)
+  forbidField(ctx, charge.fixedPrice, 'fixedPrice', `V-CHG-1: fixedPrice must be empty for ${method} pricing — price comes from the pricing table`)
+}
+
+export const cpqProductChargeCreateSchema = cpqProductChargeBase.superRefine((data, ctx) => {
+  refineChargePricingShape(ctx, data)
+})
+
+export const cpqProductChargeUpdateSchema = cpqProductChargeBase.partial().extend({
   id: z.string().uuid(),
+}).superRefine((data, ctx) => {
+  // On update, only enforce shape if pricingMethod is present in payload
+  // (PATCH semantics — service merges with the persisted row).
+  if (data.pricingMethod !== undefined) refineChargePricingShape(ctx, data)
 })
 
 // ─── Price Rule ──────────────────────────────────────────────────
@@ -173,11 +254,34 @@ export const cpqPriceRuleUpdateSchema = cpqPriceRuleCreateSchema.partial().exten
 
 // ─── Pricing Table ───────────────────────────────────────────────
 
+// V-PT-1: every dimension / price column needs a non-empty key + label,
+// and keys must be unique within their list (charges reference them by
+// key — duplicates would make lookup ambiguous).
+const keyLabelItem = z.object({
+  key: z.string().min(1, 'Key is required'),
+  label: z.string().min(1, 'Label is required'),
+})
+
+const uniqueKeys = (label: string) =>
+  (items: Array<{ key: string }>, ctx: z.RefinementCtx) => {
+    const seen = new Set<string>()
+    items.forEach((item, idx) => {
+      if (seen.has(item.key)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [idx, 'key'],
+          message: `V-PT-1: duplicate ${label} key "${item.key}"`,
+        })
+      }
+      seen.add(item.key)
+    })
+  }
+
 export const cpqPricingTableCreateSchema = z.object({
   code: z.string().min(1),
   name: z.string().min(1),
-  dimensions: z.array(z.object({ key: z.string(), label: z.string() })),
-  priceColumns: z.array(z.object({ key: z.string(), label: z.string() })),
+  dimensions: z.array(keyLabelItem).superRefine(uniqueKeys('dimension')),
+  priceColumns: z.array(keyLabelItem).superRefine(uniqueKeys('price column')),
   currencyCodeList: z.array(z.string().min(1)).min(1),
   isActive: z.boolean().optional().default(true),
 })

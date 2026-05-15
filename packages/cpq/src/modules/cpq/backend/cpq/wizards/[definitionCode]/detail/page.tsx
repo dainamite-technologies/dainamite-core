@@ -1,6 +1,9 @@
 "use client"
 import * as React from 'react'
 import { useRouter } from 'next/navigation'
+import { Alert } from '@open-mercato/ui/primitives/alert'
+import { RowActions } from '@open-mercato/ui/backend/RowActions'
+import { Tag } from '@open-mercato/ui/primitives/tag'
 import type {
   WizardDefinitionResult,
   WizardStepDefinition,
@@ -17,13 +20,8 @@ async function apiJson<T>(url: string): Promise<T> {
 // ─── Sub-components ──────────────────────────────────────────────
 
 function Badge({ children, variant = 'default' }: { children: React.ReactNode; variant?: 'default' | 'success' | 'muted' }) {
-  const cls =
-    variant === 'success'
-      ? 'bg-green-100 text-green-800'
-      : variant === 'muted'
-        ? 'bg-gray-100 text-gray-700'
-        : 'bg-blue-100 text-blue-800'
-  return <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${cls}`}>{children}</span>
+  const tagVariant = variant === 'success' ? 'success' : variant === 'muted' ? 'neutral' : 'info'
+  return <Tag variant={tagVariant}>{children}</Tag>
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
@@ -220,7 +218,7 @@ export default function CpqWizardDetailPage({ params }: { params: Record<string,
   if (error) {
     return (
       <div className="space-y-4">
-        <div className="rounded-md bg-red-50 border border-red-200 p-3 text-sm text-red-700">{error}</div>
+        <Alert variant="destructive">{error}</Alert>
         <button type="button" onClick={() => router.push('/backend/cpq/wizards')} className="text-sm text-muted-foreground hover:text-foreground">
           &larr; Back to Wizards
         </button>
@@ -256,15 +254,18 @@ export default function CpqWizardDetailPage({ params }: { params: Record<string,
             <p className="text-sm text-muted-foreground mt-1">{definition.description}</p>
           )}
         </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <button
-            type="button"
-            onClick={() => router.push(`/backend/cpq/wizards/${definitionCode}`)}
-            disabled={!definition.isActive}
-            className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            Start Wizard
-          </button>
+        {/* Actions live in a 3-dot menu — wizards are read-only in admin UI
+            for the time being, so only `Preview` is exposed. */}
+        <div className="shrink-0">
+          <RowActions
+            items={[
+              {
+                id: 'preview',
+                label: 'Preview',
+                onSelect: () => router.push(`/backend/cpq/wizards/${definitionCode}`),
+              },
+            ]}
+          />
         </div>
       </div>
 

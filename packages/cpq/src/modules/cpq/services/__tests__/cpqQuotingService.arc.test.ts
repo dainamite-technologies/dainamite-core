@@ -55,8 +55,9 @@ describe('transitionStatus → validateArcQuote hook', () => {
     await service.transitionStatus('cpq-1', 'in_approval', SCOPE)
 
     expect(cpqConfig.cpqStatus).toBe('in_approval')
-    // Only the standard 2 findOne calls — no extra validateArcQuote roundtrips.
-    expect(em.findOne).toHaveBeenCalledTimes(2)
+    // The standard 2 transition findOnes + 2 from resolveQuoteSideData
+    // (customer lookup + converted-order lookup) — no extra validateArcQuote roundtrips.
+    expect(em.findOne).toHaveBeenCalledTimes(4)
   })
 
   it('rejects an amend quote with no target subscription on submit-for-approval', async () => {
@@ -135,7 +136,8 @@ describe('transitionStatus → validateArcQuote hook', () => {
     await service.transitionStatus('cpq-1', 'cancelled', SCOPE)
 
     expect(cpqConfig.cpqStatus).toBe('cancelled')
-    // No validateArcQuote roundtrips on cancelled-target transition.
-    expect(em.findOne).toHaveBeenCalledTimes(2)
+    // No validateArcQuote roundtrips; 2 transition findOnes + 2 from
+    // resolveQuoteSideData (customer + converted-order lookup).
+    expect(em.findOne).toHaveBeenCalledTimes(4)
   })
 })

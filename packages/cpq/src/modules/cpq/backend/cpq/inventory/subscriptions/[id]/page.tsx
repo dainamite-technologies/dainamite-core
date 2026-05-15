@@ -1,6 +1,16 @@
 "use client"
 import * as React from 'react'
 import { useRouter, useParams } from 'next/navigation'
+import { Alert } from '@open-mercato/ui/primitives/alert'
+import { Button } from '@open-mercato/ui/primitives/button'
+import { Tag } from '@open-mercato/ui/primitives/tag'
+import { FormHeader } from '@open-mercato/ui/backend/forms'
+import {
+  formatStatusLabel,
+  subscriptionStatusMap,
+  type SubscriptionStatus,
+} from '../../../../../components/statusMaps'
+import { StatusPath } from '../../../../../components/StatusPath'
 
 // XD-250 — ARC integration on subscription detail.
 //   • header buttons (Amend / Renew / Cancel) call /from-subscription
@@ -53,6 +63,7 @@ type ChangeLogRow = {
 }
 
 const CHANGE_TYPE_LABELS: Record<string, string> = {
+  created: 'Created',
   amend: 'Amended',
   renew: 'Renewed',
   cancel: 'Cancelled',
@@ -60,12 +71,13 @@ const CHANGE_TYPE_LABELS: Record<string, string> = {
   'merge-source': 'Merged into a new contract',
 }
 
-const CHANGE_TYPE_COLORS: Record<string, string> = {
-  amend: 'bg-blue-100 text-blue-800',
-  renew: 'bg-green-100 text-green-800',
-  cancel: 'bg-red-100 text-red-800',
-  'merge-result': 'bg-purple-100 text-purple-800',
-  'merge-source': 'bg-orange-100 text-orange-800',
+const CHANGE_TYPE_VARIANTS: Record<string, 'info' | 'success' | 'error' | 'brand' | 'warning' | 'neutral'> = {
+  created: 'neutral',
+  amend: 'info',
+  renew: 'success',
+  cancel: 'error',
+  'merge-result': 'brand',
+  'merge-source': 'warning',
 }
 
 type SubscriptionItem = {
@@ -134,15 +146,6 @@ type SubscriptionDetail = {
   items: SubscriptionItem[]
 }
 
-const STATUS_COLORS: Record<string, string> = {
-  active: 'bg-green-100 text-green-800',
-  pending: 'bg-blue-100 text-blue-800',
-  suspended: 'bg-yellow-100 text-yellow-800',
-  terminated: 'bg-red-100 text-red-800',
-  expired: 'bg-gray-100 text-gray-800',
-  cancelled: 'bg-gray-100 text-gray-800',
-}
-
 const ALLOWED_TRANSITIONS: Record<string, string[]> = {
   pending: ['active', 'terminated'],
   active: ['suspended', 'terminated', 'expired'],
@@ -164,11 +167,10 @@ function fmt(amount: number | string, currency: string): string {
 }
 
 function StatusBadge({ status }: { status: string }) {
-  const color = STATUS_COLORS[status] ?? 'bg-gray-100 text-gray-800'
   return (
-    <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${color}`}>
-      {status}
-    </span>
+    <Tag variant={subscriptionStatusMap[status as SubscriptionStatus] ?? 'neutral'} dot>
+      {formatStatusLabel(status)}
+    </Tag>
   )
 }
 
@@ -183,9 +185,17 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
   const [customerName, setCustomerName] = React.useState<string | null>(null)
   const [assets, setAssets] = React.useState<LinkedAsset[]>([])
   const [expandedItems, setExpandedItems] = React.useState<Set<string>>(new Set())
-  const [showStatusMenu, setShowStatusMenu] = React.useState(false)
   const [transitioning, setTransitioning] = React.useState(false)
-  const statusMenuRef = React.useRef<HTMLDivElement>(null)
+  // Resolved display names for ID references — fetched alongside the main
+  // subscription record so the UI never shows "62e90a3d…" placeholders.
+  const [sourceQuoteNumber, setSourceQuoteNumber] = React.useState<string | null>(null)
+  const [sourceOrderNumber, setSourceOrderNumber] = React.useState<string | null>(null)
+  const [productNames, setProductNames] = React.useState<Record<string, string>>({})
+  const [offeringNames, setOfferingNames] = React.useState<Record<string, string>>({})
+  const [specNames, setSpecNames] = React.useState<Record<string, string>>({})
+  // Resolved quote / order numbers per change log row (id → number).
+  const [logQuoteNumbers, setLogQuoteNumbers] = React.useState<Record<string, string>>({})
+  const [logOrderNumbers, setLogOrderNumbers] = React.useState<Record<string, string>>({})
   // XD-250 ARC state
   const [arcInFlight, setArcInFlight] = React.useState<'amend' | 'renew' | 'cancel' | null>(null)
   const [changeLog, setChangeLog] = React.useState<ChangeLogRow[]>([])
@@ -228,20 +238,11 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
     [router, sub],
   )
 
-  React.useEffect(() => {
-    function handleClickOutside(e: MouseEvent) {
-      if (statusMenuRef.current && !statusMenuRef.current.contains(e.target as Node)) setShowStatusMenu(false)
-    }
-    document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [])
-
   const transitionStatus = async (targetStatus: string) => {
     if (!sub) return
     try {
       setTransitioning(true)
       setError(null)
-      setShowStatusMenu(false)
       const res = await fetch('/api/cpq/inventory/subscriptions/status', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -249,7 +250,22 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data?.error ?? 'Status transition failed')
-      setSub((prev) => prev ? { ...prev, ...data } : prev)
+      // The status endpoint cascades to items and linked assets server-side,
+      // but only returns the subscription scalar fields. Re-fetch the full
+      // detail (which includes the item tree) and the asset list so the UI
+      // reflects every cascaded change without a hard refresh.
+      const [freshSub, freshAssets] = await Promise.all([
+        fetch(`/api/cpq/inventory/subscriptions?id=${sub.id}`).then((r) => (r.ok ? r.json() : null)),
+        fetch(`/api/cpq/inventory/assets?subscriptionId=${sub.id}&pageSize=50`)
+          .then((r) => (r.ok ? r.json() : null))
+          .then((r) => (r?.items ?? []) as LinkedAsset[]),
+      ])
+      if (freshSub) {
+        setSub(freshSub)
+      } else {
+        setSub((prev) => prev ? { ...prev, ...data } : prev)
+      }
+      setAssets(freshAssets)
     } catch (err) {
       setError((err as Error).message)
     } finally {
@@ -265,7 +281,33 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
         const r = await fetch(`/api/cpq/inventory/subscriptions/${subId}/change-log?pageSize=50`)
         if (r.ok && !cancelled) {
           const data = await r.json()
-          setChangeLog(data.items ?? [])
+          const rows: ChangeLogRow[] = data.items ?? []
+          setChangeLog(rows)
+          // Resolve the quote / order numbers referenced by each row so
+          // the history list shows "Quote QUOTE-…-00005" instead of
+          // "Quote 270b8e08…".
+          const qIds = new Set(rows.map((r2) => r2.sourceQuoteId).filter((x): x is string => !!x))
+          const oIds = new Set(rows.map((r2) => r2.sourceOrderId).filter((x): x is string => !!x))
+          for (const qId of qIds) {
+            fetch(`/api/cpq/quotes/${qId}`)
+              .then((r2) => (r2.ok ? r2.json() : null))
+              .then((q) => {
+                if (q?.quoteNumber && !cancelled) {
+                  setLogQuoteNumbers((prev) => ({ ...prev, [qId]: q.quoteNumber }))
+                }
+              })
+              .catch(() => {})
+          }
+          for (const oId of oIds) {
+            fetch(`/api/cpq/orders/${oId}`)
+              .then((r2) => (r2.ok ? r2.json() : null))
+              .then((o) => {
+                if (o?.orderNumber && !cancelled) {
+                  setLogOrderNumbers((prev) => ({ ...prev, [oId]: o.orderNumber }))
+                }
+              })
+              .catch(() => {})
+          }
         }
       } finally {
         if (!cancelled) setChangeLogLoading(false)
@@ -281,7 +323,7 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
       try {
         const res = await fetch(`/api/cpq/inventory/subscriptions?id=${subId}`)
         if (!res.ok) throw new Error('Subscription not found')
-        const data = await res.json()
+        const data: SubscriptionDetail = await res.json()
         if (!cancelled) {
           setSub(data)
           fetch(`/api/customers/companies?id=${data.customerId}&pageSize=1`)
@@ -298,6 +340,66 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
               if (!cancelled) setAssets(result.items ?? [])
             })
             .catch(() => {})
+
+          // Resolve display names for the ID references shown in the
+          // header and on every item row. Each lookup is fire-and-forget;
+          // the UI falls back to a short UUID until the name lands.
+          if (data.sourceQuoteId) {
+            fetch(`/api/cpq/quotes/${data.sourceQuoteId}`)
+              .then((r) => (r.ok ? r.json() : null))
+              .then((q) => {
+                if (q && !cancelled) setSourceQuoteNumber(q.quoteNumber ?? null)
+              })
+              .catch(() => {})
+          }
+          if (data.sourceOrderId) {
+            fetch(`/api/cpq/orders/${data.sourceOrderId}`)
+              .then((r) => (r.ok ? r.json() : null))
+              .then((o) => {
+                if (o && !cancelled) setSourceOrderNumber(o.orderNumber ?? null)
+              })
+              .catch(() => {})
+          }
+
+          // For items, dedupe IDs across the tree and resolve each once.
+          const flatChildren = (nodes: SubscriptionItem[]): SubscriptionItem[] =>
+            nodes.flatMap((n) => [n, ...flatChildren(n.children ?? [])])
+          const allItems = flatChildren(data.items ?? [])
+          const productIds = new Set(allItems.map((i) => i.productId).filter((x): x is string => !!x))
+          const offeringIds = new Set(allItems.map((i) => i.offeringId).filter((x): x is string => !!x))
+          const specIds = new Set(allItems.map((i) => i.specId).filter((x): x is string => !!x))
+
+          for (const offeringId of offeringIds) {
+            fetch(`/api/cpq/product-offerings?id=${offeringId}`)
+              .then((r) => (r.ok ? r.json() : null))
+              .then((o) => {
+                if (!o || cancelled) return
+                if (o.name) setOfferingNames((prev) => ({ ...prev, [offeringId]: o.name }))
+                if (o.specification?.name) setSpecNames((prev) => ({ ...prev, [o.specification.id]: o.specification.name }))
+              })
+              .catch(() => {})
+          }
+          for (const specId of specIds) {
+            fetch(`/api/cpq/product-specifications?id=${specId}`)
+              .then((r) => (r.ok ? r.json() : null))
+              .then((s) => {
+                if (s?.name && !cancelled) setSpecNames((prev) => ({ ...prev, [specId]: s.name }))
+              })
+              .catch(() => {})
+          }
+          for (const productId of productIds) {
+            // Catalog products route is paginated — `?id=…` filters to one
+            // row but the response is still `{ items: […] }`.
+            fetch(`/api/catalog/products?id=${productId}`)
+              .then((r) => (r.ok ? r.json() : null))
+              .then((res) => {
+                if (!res || cancelled) return
+                const p = (res.items ?? res)[0] ?? res
+                const name = p?.title ?? p?.name ?? p?.handle ?? null
+                if (name) setProductNames((prev) => ({ ...prev, [productId]: name }))
+              })
+              .catch(() => {})
+          }
         }
       } catch (err) {
         if (!cancelled) setError((err as Error).message)
@@ -334,75 +436,78 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
   const currency = sub.currencyCode || 'USD'
   const flatItems = flattenItems(sub.items)
 
+  const canArc = sub.status === 'active' || sub.status === 'suspended'
+  const statusTransitions = ALLOWED_TRANSITIONS[sub.status] ?? []
+
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <button onClick={() => router.push('/backend/cpq/inventory')} className="text-sm text-muted-foreground hover:text-foreground">← Back</button>
-          <h1 className="text-2xl font-bold">{sub.name}</h1>
-          <div className="relative" ref={statusMenuRef}>
-            <button
-              onClick={() => {
-                const transitions = ALLOWED_TRANSITIONS[sub.status] ?? []
-                if (transitions.length > 0) setShowStatusMenu((v) => !v)
-              }}
-              disabled={transitioning}
-              className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium ${STATUS_COLORS[sub.status] ?? 'bg-gray-100 text-gray-800'} ${(ALLOWED_TRANSITIONS[sub.status] ?? []).length > 0 ? 'cursor-pointer hover:ring-2 hover:ring-primary/30' : ''} disabled:opacity-50`}
-            >
-              {transitioning && <Spinner />}
-              {sub.status}
-              {(ALLOWED_TRANSITIONS[sub.status] ?? []).length > 0 && (
-                <svg className={`h-3 w-3 transition-transform ${showStatusMenu ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
-                </svg>
-              )}
-            </button>
-            {showStatusMenu && (
-              <div className="absolute left-0 top-full mt-1 z-50 min-w-[180px] rounded-md border bg-card shadow-lg py-1">
-                <p className="px-3 py-1.5 text-xs text-muted-foreground font-medium">Transition to:</p>
-                {(ALLOWED_TRANSITIONS[sub.status] ?? []).map((status) => (
-                  <button
-                    key={status}
-                    onClick={() => transitionStatus(status)}
-                    className="w-full px-3 py-1.5 text-left text-sm hover:bg-muted transition-colors flex items-center gap-2"
-                  >
-                    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${STATUS_COLORS[status] ?? 'bg-gray-100 text-gray-800'}`}>
-                      {STATUS_LABELS[status] ?? status}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            )}
+      {/* Header — standard FormHeader detail mode, mirrors the CPQ quote /
+          order layout. Title is the human subscription name; status /
+          cycle tags sit under it; ARC actions (Amend / Renew / Cancel)
+          + a "Change status" dropdown live on the right. The short
+          subscription code lives in the Subscription Details card
+          below — it's reference info, not header content. */}
+      <FormHeader
+        mode="detail"
+        backHref="/backend/cpq/inventory"
+        backLabel="Back to Customer Inventory"
+        entityTypeLabel="Subscription"
+        title={sub.name}
+        statusBadge={
+          <div className="flex flex-wrap items-center gap-2 pt-1">
+            <Tag variant={subscriptionStatusMap[sub.status as SubscriptionStatus] ?? 'neutral'} dot>
+              {STATUS_LABELS[sub.status] ?? formatStatusLabel(sub.status)}
+            </Tag>
+            <Tag variant="neutral" className="capitalize">{sub.billingCycle}</Tag>
+            {transitioning && <Spinner />}
           </div>
-          <span className="text-xs text-muted-foreground font-mono">{sub.code}</span>
-        </div>
-        {/* XD-250 ARC actions */}
-        {(sub.status === 'active' || sub.status === 'suspended') && (
-          <div className="flex gap-2">
-            <button
-              disabled={arcInFlight !== null}
-              onClick={() => startArcQuote('amend')}
-              className="rounded-md border border-green-300 bg-green-50 text-green-700 px-3 py-1.5 text-sm hover:bg-green-100 disabled:opacity-50"
-            >
-              Amend
-            </button>
-            <button
-              disabled={arcInFlight !== null}
-              onClick={() => startArcQuote('renew')}
-              className="rounded-md border border-blue-300 bg-blue-50 text-blue-700 px-3 py-1.5 text-sm hover:bg-blue-100 disabled:opacity-50"
-            >
-              Renew
-            </button>
-            <button
-              disabled={arcInFlight !== null}
-              onClick={() => startArcQuote('cancel')}
-              className="rounded-md border border-red-300 bg-red-50 text-red-700 px-3 py-1.5 text-sm hover:bg-red-100 disabled:opacity-50"
-            >
-              Cancel
-            </button>
-          </div>
-        )}
+        }
+        actionsContent={
+          canArc ? (
+            <>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={arcInFlight !== null}
+                onClick={() => startArcQuote('amend')}
+              >
+                Amend
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={arcInFlight !== null}
+                onClick={() => startArcQuote('renew')}
+              >
+                Renew
+              </Button>
+              <Button
+                type="button"
+                variant="destructive-outline"
+                disabled={arcInFlight !== null}
+                onClick={() => startArcQuote('cancel')}
+              >
+                Cancel
+              </Button>
+            </>
+          ) : null
+        }
+      />
+
+      {/* Status path — visual progress only, like the order page.
+          Transitions still happen via the dedicated endpoints. */}
+      <div className="flex items-center gap-3 flex-wrap">
+        <StatusPath
+          current={sub.status}
+          path={['pending', 'active']}
+          terminals={['suspended', 'terminated', 'expired']}
+          statusMap={subscriptionStatusMap}
+          labels={STATUS_LABELS}
+          onTransition={transitionStatus}
+          allowedTransitions={statusTransitions}
+          disabled={transitioning}
+          ariaLabel="Subscription status path"
+        />
       </div>
 
       {error && <ErrorBanner message={error} />}
@@ -412,6 +517,7 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
         <div className="rounded-lg border bg-card p-4 space-y-3">
           <h3 className="text-sm font-medium">Subscription Details</h3>
           <div className="grid grid-cols-2 gap-x-4 gap-y-2">
+            <Field label="Code" value={sub.code} mono />
             <Field label="Status" value={sub.status} />
             <Field label="Billing Cycle" value={sub.billingCycle} />
             <Field label="Currency" value={currency} />
@@ -449,13 +555,23 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
             {sub.sourceQuoteId && (
               <div>
                 <p className="text-xs text-muted-foreground">Source Quote</p>
-                <button onClick={() => router.push(`/backend/cpq/quotes/${sub.sourceQuoteId}`)} className="text-sm text-primary hover:underline">{sub.sourceQuoteId.slice(0, 8)}…</button>
+                <button
+                  onClick={() => router.push(`/backend/cpq/quotes/${sub.sourceQuoteId}`)}
+                  className="text-sm text-primary hover:underline"
+                >
+                  {sourceQuoteNumber ?? `${sub.sourceQuoteId.slice(0, 8)}…`}
+                </button>
               </div>
             )}
             {sub.sourceOrderId && (
               <div>
                 <p className="text-xs text-muted-foreground">Source Order</p>
-                <button onClick={() => router.push(`/backend/cpq/orders/${sub.sourceOrderId}`)} className="text-sm text-primary hover:underline">{sub.sourceOrderId.slice(0, 8)}…</button>
+                <button
+                  onClick={() => router.push(`/backend/cpq/orders/${sub.sourceOrderId}`)}
+                  className="text-sm text-primary hover:underline"
+                >
+                  {sourceOrderNumber ?? `${sub.sourceOrderId.slice(0, 8)}…`}
+                </button>
               </div>
             )}
           </div>
@@ -515,9 +631,30 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
                   {isExpanded && (
                     <div className="border-t bg-muted/10 px-12 py-3 space-y-3" style={{ paddingLeft: `${40 + indent * 24}px` }}>
                       <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-2">
-                        {item.productId && <Field label="Product ID" value={item.productId.slice(0, 12) + '…'} mono />}
-                        {item.offeringId && <Field label="Offering ID" value={item.offeringId.slice(0, 12) + '…'} mono />}
-                        {item.specId && <Field label="Spec ID" value={item.specId.slice(0, 12) + '…'} mono />}
+                        {item.offeringId && (
+                          <RefField
+                            label="Offering"
+                            name={offeringNames[item.offeringId]}
+                            fallback={item.offeringId}
+                            onClick={() => router.push(`/backend/cpq/offerings/${item.offeringId}`)}
+                          />
+                        )}
+                        {item.specId && (
+                          <RefField
+                            label="Specification"
+                            name={specNames[item.specId]}
+                            fallback={item.specId}
+                            onClick={() => router.push(`/backend/cpq/specifications/${item.specId}`)}
+                          />
+                        )}
+                        {item.productId && (
+                          <RefField
+                            label="Product"
+                            name={productNames[item.productId]}
+                            fallback={item.productId}
+                            onClick={() => router.push(`/backend/catalog/products/${item.productId}`)}
+                          />
+                        )}
                         <Field label="Currency" value={item.currencyCode || currency} />
                         <Field label="Quantity" value={String(item.quantity)} />
                         {item.capacityTotal && <Field label="Capacity" value={`${item.capacityUsed ?? '0'} / ${item.capacityTotal} ${item.capacityUnit ?? ''}`} />}
@@ -604,13 +741,9 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
             {changeLog.map((row) => (
               <div key={row.id} className="px-4 py-3 space-y-1">
                 <div className="flex items-center gap-2">
-                  <span
-                    className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
-                      CHANGE_TYPE_COLORS[row.changeType] ?? 'bg-gray-100 text-gray-800'
-                    }`}
-                  >
+                  <Tag variant={CHANGE_TYPE_VARIANTS[row.changeType] ?? 'neutral'}>
                     {CHANGE_TYPE_LABELS[row.changeType] ?? row.changeType}
-                  </span>
+                  </Tag>
                   <span className="text-xs text-muted-foreground">
                     {new Date(row.effectiveAt).toLocaleString()}
                   </span>
@@ -619,7 +752,7 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
                       onClick={() => router.push(`/backend/cpq/quotes/${row.sourceQuoteId}`)}
                       className="text-xs text-primary hover:underline"
                     >
-                      Quote {row.sourceQuoteId.slice(0, 8)}…
+                      Quote {logQuoteNumbers[row.sourceQuoteId] ?? `${row.sourceQuoteId.slice(0, 8)}…`}
                     </button>
                   )}
                   {row.sourceOrderId && (
@@ -627,7 +760,7 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
                       onClick={() => router.push(`/backend/cpq/orders/${row.sourceOrderId}`)}
                       className="text-xs text-primary hover:underline"
                     >
-                      Order {row.sourceOrderId.slice(0, 8)}…
+                      Order {logOrderNumbers[row.sourceOrderId] ?? `${row.sourceOrderId.slice(0, 8)}…`}
                     </button>
                   )}
                 </div>
@@ -731,6 +864,35 @@ function Field({ label, value, mono }: { label: string; value: string; mono?: bo
   )
 }
 
+// Field for a foreign-key reference: shows the resolved display name as
+// a primary-coloured link, falling back to a short UUID until the name
+// lands. Clicking navigates to the referenced record.
+function RefField({
+  label,
+  name,
+  fallback,
+  onClick,
+}: {
+  label: string
+  name: string | undefined
+  fallback: string
+  onClick: () => void
+}) {
+  return (
+    <div>
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <button
+        type="button"
+        onClick={onClick}
+        className="text-sm text-primary hover:underline text-left truncate max-w-full"
+        title={name ?? fallback}
+      >
+        {name ?? `${fallback.slice(0, 12)}…`}
+      </button>
+    </div>
+  )
+}
+
 function Spinner() {
   return (
     <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
@@ -741,11 +903,7 @@ function Spinner() {
 }
 
 function ErrorBanner({ message }: { message: string }) {
-  return (
-    <div className="rounded-md bg-red-50 border border-red-200 p-3 flex items-start gap-2">
-      <span className="text-sm text-red-700 flex-1">{message}</span>
-    </div>
-  )
+  return <Alert variant="destructive">{message}</Alert>
 }
 
 // XD-250 — render the per-line summary of an ARC change, with inline product
@@ -858,9 +1016,9 @@ function ChangeLogLineDetails({ row, currency }: { row: ChangeLogRow; currency: 
 }
 
 const ACTION_GLYPH: Record<'add' | 'modify' | 'cancel', { sign: string; color: string; label: string }> = {
-  add: { sign: '+', color: 'text-green-700', label: 'added' },
-  modify: { sign: '~', color: 'text-blue-700', label: 'modified' },
-  cancel: { sign: '−', color: 'text-red-700', label: 'removed' },
+  add: { sign: '+', color: 'text-status-success-text', label: 'added' },
+  modify: { sign: '~', color: 'text-status-info-text', label: 'modified' },
+  cancel: { sign: '−', color: 'text-destructive', label: 'removed' },
 }
 
 function ChangeLogLineRow({
@@ -913,7 +1071,7 @@ function ChangeLogLineRow({
       )}
       {showDelta && (
         <span
-          className={`font-mono font-medium ${change.delta! > 0 ? 'text-green-700' : 'text-red-700'}`}
+          className={`font-mono font-medium ${change.delta! > 0 ? 'text-status-success-text' : 'text-destructive'}`}
         >
           ({change.delta! > 0 ? '+' : ''}
           {fmt(change.delta!, currency)}/mo)

@@ -4,6 +4,19 @@ import { useRouter, useParams, useSearchParams } from 'next/navigation'
 import ArcQuoteConfigurator, {
   type AttachedTarget,
 } from './_components/ArcQuoteConfigurator'
+import { StatusPath } from '../../../../components/StatusPath'
+import { ArrowRight, ExternalLink, Plus } from 'lucide-react'
+import { Alert, AlertTitle, AlertDescription } from '@open-mercato/ui/primitives/alert'
+import { Button } from '@open-mercato/ui/primitives/button'
+import { Tag } from '@open-mercato/ui/primitives/tag'
+import { FormHeader } from '@open-mercato/ui/backend/forms'
+import type { ActionItem } from '@open-mercato/ui/backend/forms/ActionsDropdown'
+import { NumberInput } from '../../../../components/NumberInput'
+import {
+  formatStatusLabel,
+  quoteCpqStatusMap,
+  type QuoteCpqStatus,
+} from '../../../../components/statusMaps'
 
 // ─── Types ───────────────────────────────────────────────────────
 
@@ -68,9 +81,11 @@ type QuoteResult = {
   quoteId: string
   quoteNumber: string
   customerId: string
+  customerName: string | null
   cpqStatus: string
   version: number
   currencyCode: string
+  convertedOrderId: string | null
   validationResult: { valid: boolean; errors: Array<{ message: string }> }
   pricingSummary: {
     nrcTotal: number
@@ -114,43 +129,10 @@ type BundleTree = {
 
 // ─── Constants ───────────────────────────────────────────────────
 
-const STATUS_COLORS: Record<string, string> = {
-  new: 'bg-blue-100 text-blue-800',
-  incomplete: 'bg-yellow-100 text-yellow-800',
-  ready: 'bg-green-100 text-green-800',
-  in_approval: 'bg-purple-100 text-purple-800',
-  approved: 'bg-green-100 text-green-800',
-  with_customer: 'bg-sky-100 text-sky-800',
-  accepted: 'bg-emerald-100 text-emerald-800',
-  rejected: 'bg-red-100 text-red-800',
-  cancelled: 'bg-gray-100 text-gray-800',
-}
-
-const ALLOWED_TRANSITIONS: Record<string, string[]> = {
-  new: ['incomplete', 'ready', 'cancelled'],
-  incomplete: ['ready', 'incomplete', 'cancelled'],
-  ready: ['incomplete', 'in_approval', 'pre_approved', 'with_customer', 'cancelled'],
-  in_approval: ['approved', 'rejected', 'cancelled'],
-  pre_approved: ['with_customer'],
-  approved: ['with_customer'],
-  with_customer: ['accepted', 'rejected', 'cancelled'],
-  accepted: [],
-  rejected: [],
-  cancelled: [],
-}
-
-const STATUS_LABELS: Record<string, string> = {
-  new: 'New',
-  incomplete: 'Incomplete',
-  ready: 'Ready',
-  in_approval: 'In Approval',
-  pre_approved: 'Pre-Approved',
-  approved: 'Approved',
-  with_customer: 'With Customer',
-  accepted: 'Accepted',
-  rejected: 'Rejected',
-  cancelled: 'Cancelled',
-}
+// `ALLOWED_TRANSITIONS` used to mirror the backend state machine on the
+// client to gate the inline status menu. Per product decision the UI
+// now lets the operator jump between any pair of statuses; the backend
+// is the single source of truth, so the table is no longer needed here.
 
 function fmt(amount: number, currency: string): string {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(amount)
@@ -175,6 +157,110 @@ async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
   const json = await res.json()
   if (!res.ok) throw new Error(json?.error ?? `Request failed (${res.status})`)
   return json as T
+}
+
+// ─── Header sub-components ─────────────────────────────────────
+
+function MetaCard({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="rounded-lg border bg-card p-4">
+      <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+        {label}
+      </div>
+      <div className="mt-1 text-sm">{children}</div>
+    </div>
+  )
+}
+
+function MoreActionsDropdown({ items }: { items: ActionItem[] }) {
+  // Local dropdown — `ActionsDropdown` inside FormHeader.actionsContent
+  // would conflict with the inline button placement. This is a thin
+  // <details>-style trigger; menuActions on FormHeader would render it
+  // inside the header layout, but here we want it adjacent to other
+  // primary buttons.
+  const [open, setOpen] = React.useState(false)
+  const ref = React.useRef<HTMLDivElement>(null)
+  React.useEffect(() => {
+    if (!open) return
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [open])
+
+  if (items.length === 0) return null
+  return (
+    <div className="relative" ref={ref}>
+      <Button type="button" variant="outline" onClick={() => setOpen((v) => !v)}>
+        Actions
+        <svg className="h-3 w-3 ml-1" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+        </svg>
+      </Button>
+      {open && (
+        <div className="absolute right-0 top-full mt-1 z-50 min-w-[200px] rounded-md border bg-popover shadow-md py-1">
+          {items.map((item) => {
+            const isDelete = item.id === 'delete'
+            return (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => { setOpen(false); item.onSelect() }}
+                disabled={item.disabled || item.loading}
+                // Use bg-accent on hover (same token as Radix-style menu items in OM)
+                // and tint delete with destructive colors so the affordance is obvious.
+                className={
+                  'w-full px-3 py-2 text-left text-sm flex items-center gap-2 transition-colors ' +
+                  'disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent ' +
+                  (isDelete
+                    ? 'text-destructive hover:bg-destructive/10 focus:bg-destructive/10 focus:outline-none'
+                    : 'hover:bg-accent focus:bg-accent focus:outline-none')
+                }
+              >
+                {item.icon ? <item.icon className="h-4 w-4 text-muted-foreground" /> : null}
+                <span>{item.label}</span>
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function buildMoreActions({
+  recalculate,
+  submitting,
+  deletable,
+  onDelete,
+  deleting,
+}: {
+  recalculate: () => void
+  submitting: boolean
+  deletable: boolean
+  onDelete: () => void
+  deleting: boolean
+}): ActionItem[] {
+  const items: ActionItem[] = [
+    {
+      id: 'recalculate',
+      label: 'Recalculate',
+      onSelect: recalculate,
+      loading: submitting,
+      disabled: submitting,
+    },
+  ]
+  if (deletable) {
+    items.push({
+      id: 'delete',
+      label: 'Delete',
+      onSelect: onDelete,
+      disabled: deleting,
+      loading: deleting,
+    })
+  }
+  return items
 }
 
 // ─── Main Page ───────────────────────────────────────────────────
@@ -210,11 +296,9 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
   const [expandedLines, setExpandedLines] = React.useState<Set<string>>(new Set())
   const [converting, setConverting] = React.useState(false)
   const [transitioning, setTransitioning] = React.useState(false)
-  const [showStatusMenu, setShowStatusMenu] = React.useState(false)
   const [deleting, setDeleting] = React.useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = React.useState(false)
   const [pricingDetail, setPricingDetail] = React.useState<{ lineIdx: number; chargeIdx: number } | null>(null)
-  const statusMenuRef = React.useRef<HTMLDivElement>(null)
 
   // ─── XD-250 ARC state ──────────────────────────────────────────
   const [arcTargets, setArcTargets] = React.useState<AttachedTarget[]>([])
@@ -242,17 +326,6 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
     if (!cpqConfigId || isNew) return
     void loadArcTargets()
   }, [cpqConfigId, isNew, loadArcTargets])
-
-  React.useEffect(() => {
-    if (!showStatusMenu) return
-    const handler = (e: MouseEvent) => {
-      if (statusMenuRef.current && !statusMenuRef.current.contains(e.target as Node)) {
-        setShowStatusMenu(false)
-      }
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [showStatusMenu])
 
   // ─── Load or create ──────────────────────────────────────────
 
@@ -403,7 +476,7 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
   const transitionStatus = async (targetStatus: string) => {
     if (!cpqQuote) return
     try {
-      setTransitioning(true); setError(null); setShowStatusMenu(false)
+      setTransitioning(true); setError(null)
       const result = await apiJson<QuoteResult>(`/api/cpq/quotes/${cpqQuote.id}/status`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -533,7 +606,7 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
         <ArcQuoteConfigurator
           quoteId={cpqQuote.id}
           customerId={cpqQuote.customerId}
-          customerName={null}
+          customerName={cpqQuote.customerName}
           currencyCode={cpqQuote.currencyCode}
           initialType={arcQuoteType}
           initialTargets={arcTargets}
@@ -553,116 +626,122 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
           }}
         />
       )}
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <button onClick={() => router.push('/backend/cpq/quotes')} className="text-sm text-muted-foreground hover:text-foreground">← Back</button>
-          <h1 className="text-2xl font-bold">Quote {cpqQuote.quoteNumber || cpqQuote.quoteId.slice(0, 8)}</h1>
-          {arcQuoteType !== 'new' && (
-            <span className="rounded-full bg-purple-100 text-purple-800 px-2.5 py-0.5 text-xs font-medium uppercase">
-              {arcQuoteType}
-            </span>
-          )}
-          <div className="relative" ref={statusMenuRef}>
-            <button
-              onClick={() => {
-                const transitions = ALLOWED_TRANSITIONS[cpqQuote.cpqStatus] ?? []
-                if (transitions.length > 0) setShowStatusMenu((v) => !v)
-              }}
-              disabled={transitioning}
-              className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium ${STATUS_COLORS[cpqQuote.cpqStatus] ?? 'bg-gray-100 text-gray-800'} ${(ALLOWED_TRANSITIONS[cpqQuote.cpqStatus] ?? []).length > 0 ? 'cursor-pointer hover:ring-2 hover:ring-primary/30' : ''} disabled:opacity-50`}
-            >
-              {transitioning ? <Spinner /> : null}
-              {cpqQuote.cpqStatus.replace(/_/g, ' ')}
-              {(ALLOWED_TRANSITIONS[cpqQuote.cpqStatus] ?? []).length > 0 && (
-                <svg className={`h-3 w-3 transition-transform ${showStatusMenu ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
-                </svg>
-              )}
-            </button>
-            {showStatusMenu && (
-              <div className="absolute left-0 top-full mt-1 z-50 min-w-[180px] rounded-md border bg-card shadow-lg py-1">
-                <p className="px-3 py-1.5 text-xs text-muted-foreground font-medium">Transition to:</p>
-                {(ALLOWED_TRANSITIONS[cpqQuote.cpqStatus] ?? []).map((status) => (
-                  <button
-                    key={status}
-                    onClick={() => transitionStatus(status)}
-                    className="w-full px-3 py-1.5 text-left text-sm hover:bg-muted transition-colors flex items-center gap-2"
-                  >
-                    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${STATUS_COLORS[status] ?? 'bg-gray-100 text-gray-800'}`}>
-                      {STATUS_LABELS[status] ?? status.replace(/_/g, ' ')}
-                    </span>
-                  </button>
-                ))}
-              </div>
+      {/* Header — uses the standard Open Mercato `FormHeader mode="detail"`
+          so CPQ matches the rest of the admin. Title is just the quote
+          number (no "Quote …" prefix); badges sit underneath; secondary
+          context (customer / version / currency) lives in dedicated meta
+          cards below the header, not in a thin meta line. */}
+      <FormHeader
+        mode="detail"
+        backHref="/backend/cpq/quotes"
+        backLabel="Back to CPQ Quotes"
+        entityTypeLabel="CPQ Quote"
+        title={cpqQuote.quoteNumber || cpqQuote.customerName || 'Untitled'}
+        statusBadge={
+          <div className="flex flex-wrap items-center gap-2 pt-1">
+            <Tag variant={quoteCpqStatusMap[cpqQuote.cpqStatus as QuoteCpqStatus] ?? 'neutral'} dot>
+              {formatStatusLabel(cpqQuote.cpqStatus)}
+            </Tag>
+            {arcQuoteType !== 'new' && (
+              <Tag variant="brand" className="uppercase">{arcQuoteType}</Tag>
             )}
+            {cpqQuote.convertedOrderId && <Tag variant="success" dot>Converted</Tag>}
           </div>
-          <span className="text-xs text-muted-foreground">v{cpqQuote.version} · {currency}</span>
-          <button
-            onClick={() => router.push(`/backend/sales/quotes/${cpqQuote.quoteId}`)}
-            className="inline-flex items-center gap-1 text-xs text-primary hover:underline ml-2"
-          >
-            View Sales Quote
-            <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
-            </svg>
-          </button>
-        </div>
-        <div className="flex items-center gap-2">
-          {cpqQuote.cpqStatus === 'accepted' && (
-            <button onClick={convertToOrder} disabled={converting} className="inline-flex items-center gap-1.5 rounded-md bg-green-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-green-700 transition-colors disabled:opacity-50">
-              {converting ? <Spinner /> : (
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 0l3 3m-3-3l3-3m-3 3V3m0 18a9 9 0 110-18" />
-                </svg>
-              )}
-              Convert to Order
-            </button>
-          )}
-          {!['accepted', 'rejected', 'cancelled'].includes(cpqQuote.cpqStatus) && (
-            <button onClick={() => setShowDeleteConfirm(true)} disabled={deleting} className="inline-flex items-center gap-1.5 rounded-md border border-red-200 px-3 py-1.5 text-sm font-medium text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50">
-              {deleting ? <Spinner /> : (
-                <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
-                </svg>
-              )}
-              Delete
-            </button>
-          )}
-          <button onClick={recalculate} disabled={submitting} className="inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-muted transition-colors disabled:opacity-50">
-            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182" />
-            </svg>
-            Recalculate
-          </button>
-          {view === 'summary' && (
-            <button onClick={startAddOffering} className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground shadow-sm hover:bg-primary/90 transition-colors">
-              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-              </svg>
-              Add Offering
-            </button>
-          )}
-          {view !== 'summary' && (
-            <button onClick={() => { resetConfigState(); setView('summary') }} className="inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-muted transition-colors">
-              Cancel
-            </button>
-          )}
-          {arcEditable && (
-            <button
-              onClick={() => setArcDrawerOpen(true)}
-              className="inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-muted transition-colors"
+        }
+        // FormHeader.detail ignores `utilityActions` whenever `actionsContent`
+        // is set, so we render the "View Sales Quote" link inline alongside
+        // the primary actions to keep it visible.
+        actionsContent={
+          <>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => router.push(`/backend/sales/quotes/${cpqQuote.quoteId}`)}
             >
-              Modify subscription
-            </button>
-          )}
-        </div>
+              <ExternalLink className="h-3.5 w-3.5" />
+              View Sales Quote
+            </Button>
+            {cpqQuote.convertedOrderId ? (
+              <Button
+                type="button"
+                onClick={() => router.push(`/backend/cpq/orders/${cpqQuote.convertedOrderId}`)}
+              >
+                <ArrowRight className="h-4 w-4" />
+                Go to order
+              </Button>
+            ) : view !== 'summary' ? (
+              <Button type="button" variant="outline" onClick={() => { resetConfigState(); setView('summary') }}>
+                Cancel
+              </Button>
+            ) : (
+              <>
+                <Button type="button" onClick={startAddOffering}>
+                  <Plus className="h-4 w-4" />
+                  Add Offering
+                </Button>
+                {arcEditable && (
+                  <Button type="button" variant="outline" onClick={() => setArcDrawerOpen(true)}>
+                    Modify Subscription
+                  </Button>
+                )}
+                {cpqQuote.cpqStatus === 'accepted' && (
+                  <Button type="button" onClick={convertToOrder} disabled={converting}>
+                    {converting ? <Spinner /> : <ArrowRight className="h-4 w-4" />}
+                    Convert to Order
+                  </Button>
+                )}
+                <MoreActionsDropdown
+                  items={buildMoreActions({
+                    recalculate,
+                    submitting,
+                    deletable: !['accepted', 'rejected', 'cancelled'].includes(cpqQuote.cpqStatus),
+                    onDelete: () => setShowDeleteConfirm(true),
+                    deleting,
+                  })}
+                />
+              </>
+            )}
+          </>
+        }
+      />
+
+      {/* Per user feedback, order below the FormHeader is:
+            1. Status path (operator-facing lifecycle nav)
+            2. ARC info (amend/renew/cancel banner with targets)
+            3. Customer / Version / Currency meta cards
+            4. Pricing summary + line items (further down in the page)
+         Status path and ARC info are higher because they describe what
+         the user is *doing*; the meta cards are reference info. */}
+
+      {/* Status path — every step is clickable so the operator can move
+          between any pair of statuses. Backend enforces ARC-specific
+          guards (validateArcQuote on submit-for-approval) but no longer
+          gates simple transitions. */}
+      <div className="flex items-center gap-3 flex-wrap">
+        <StatusPath
+          // Per product decision the quote status path lets the operator
+          // jump between any pair of statuses, so `allowedTransitions` is
+          // omitted — backend validates ARC-specific guards.
+          // `pre_approved` aliases into the `approved` slot for layout.
+          current={cpqQuote.cpqStatus}
+          path={
+            cpqQuote.cpqStatus === 'pre_approved'
+              ? ['new', 'incomplete', 'ready', 'in_approval', 'pre_approved', 'with_customer', 'accepted']
+              : ['new', 'incomplete', 'ready', 'in_approval', 'approved', 'with_customer', 'accepted']
+          }
+          terminals={['rejected', 'cancelled']}
+          statusMap={quoteCpqStatusMap}
+          onTransition={transitionStatus}
+          disabled={transitioning}
+          ariaLabel="Quote status path"
+        />
+        {transitioning && <Spinner />}
       </div>
 
       {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
 
       {arcQuoteType !== 'new' && arcTargets.length > 0 && (
-        <div className="rounded-md border bg-purple-50 border-purple-200 px-4 py-3 text-sm">
+        <div className="rounded-md border border-brand-violet/30 bg-brand-violet/10 px-4 py-3 text-sm text-brand-violet">
           <div className="flex items-center justify-between">
             <div>
               <span className="font-medium uppercase">{arcQuoteType}</span>
@@ -676,14 +755,14 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
                     onClick={() =>
                       router.push(`/backend/cpq/inventory/subscriptions/${t.subscriptionId}`)
                     }
-                    className="text-purple-700 hover:underline"
+                    className="text-brand-violet hover:underline"
                   >
                     {t.subscription?.code ?? t.subscriptionId.slice(0, 8)}
                   </button>
                 </span>
               ))}
               {isMergeRenew && (
-                <span className="ml-2 text-amber-700 font-medium">
+                <span className="ml-2 text-status-warning-text font-medium">
                   • Merging into a new contract
                 </span>
               )}
@@ -691,6 +770,27 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
           </div>
         </div>
       )}
+
+      {/* Meta cards — secondary reference info (customer, version,
+          currency). Mirrors the sidebar tiles in the standard
+          sales-document detail layout. */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+        <MetaCard label="Customer">
+          {cpqQuote.customerName ? (
+            <span className="font-medium">{cpqQuote.customerName}</span>
+          ) : (
+            <span className="font-mono text-xs text-muted-foreground">
+              {cpqQuote.customerId.slice(0, 8)}…
+            </span>
+          )}
+        </MetaCard>
+        <MetaCard label="Version">
+          <span className="font-medium">v{cpqQuote.version}</span>
+        </MetaCard>
+        <MetaCard label="Currency">
+          <span className="font-medium">{currency}</span>
+        </MetaCard>
+      </div>
 
       {showDeleteConfirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setShowDeleteConfirm(false)}>
@@ -702,10 +802,12 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
               <p className="text-sm text-muted-foreground">Are you sure you want to delete this quote? This will soft-delete the quote and all its line items.</p>
             </div>
             <div className="flex justify-end gap-2 px-4 py-3 border-t">
-              <button onClick={() => setShowDeleteConfirm(false)} className="rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-muted transition-colors">Cancel</button>
-              <button onClick={deleteQuote} disabled={deleting} className="inline-flex items-center gap-1.5 rounded-md bg-red-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-red-700 transition-colors disabled:opacity-50">
+              <Button type="button" variant="outline" onClick={() => setShowDeleteConfirm(false)}>
+                Cancel
+              </Button>
+              <Button type="button" variant="destructive" onClick={deleteQuote} disabled={deleting}>
                 {deleting ? <Spinner /> : null} Delete
-              </button>
+              </Button>
             </div>
           </div>
         </div>
@@ -745,12 +847,14 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
 
           {/* Validation errors */}
           {!cpqQuote.validationResult.valid && (
-            <div className="rounded-md border border-yellow-200 bg-yellow-50 p-3">
-              <p className="text-sm font-medium text-yellow-800 mb-1">Validation Issues</p>
-              <ul className="text-xs text-yellow-700 space-y-0.5">
-                {cpqQuote.validationResult.errors.map((e, i) => <li key={i}>- {e.message}</li>)}
-              </ul>
-            </div>
+            <Alert variant="warning">
+              <AlertTitle>Validation Issues</AlertTitle>
+              <AlertDescription>
+                <ul className="text-xs space-y-0.5">
+                  {cpqQuote.validationResult.errors.map((e, i) => <li key={i}>- {e.message}</li>)}
+                </ul>
+              </AlertDescription>
+            </Alert>
           )}
 
           {/* Quote Lines */}
@@ -779,9 +883,9 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
       {view === 'add-offering' && (
         <>
           {addingToParentLineId && (
-            <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800">
+            <Alert variant="info">
               Adding component to bundle: <span className="font-medium">{cpqQuote.lines.find((l) => l.lineId === addingToParentLineId)?.offeringName ?? 'Bundle'}</span>
-            </div>
+            </Alert>
           )}
           <OfferingBrowser
             offerings={offerings}
@@ -1011,9 +1115,9 @@ function BundleSlotPanel({ bundleTree, treeLoading, children, allLines, currency
             <div className="flex items-center gap-2 px-6 py-2 bg-muted/20">
               <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">{slot.name}</span>
               {isRequired ? (
-                <span className="inline-flex items-center rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">required</span>
+                <Tag variant="warning" className="text-[10px] px-1.5">required</Tag>
               ) : (
-                <span className="inline-flex items-center rounded-full bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-500">optional</span>
+                <Tag variant="neutral" className="text-[10px] px-1.5">optional</Tag>
               )}
               <span className="text-[10px] text-muted-foreground">
                 {filledCount}/{slot.cardinalityMax ?? '∞'}
@@ -1031,9 +1135,9 @@ function BundleSlotPanel({ bundleTree, treeLoading, children, allLines, currency
                       disabled={isFilled || !canAdd}
                       className={`inline-flex items-center gap-1 rounded border px-2 py-1 text-[11px] font-medium transition-colors ${
                         isFilled
-                          ? 'border-green-200 bg-green-50 text-green-700 cursor-default'
+                          ? 'border-status-success-border bg-status-success-bg text-status-success-text cursor-default'
                           : canAdd
-                            ? 'border-border hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-700 cursor-pointer'
+                            ? 'border-border hover:border-primary hover:bg-primary/5 hover:text-primary cursor-pointer'
                             : 'border-border text-muted-foreground opacity-50 cursor-not-allowed'
                       }`}
                       title={isFilled ? 'Already added' : canAdd ? `Add ${comp.childOffering.offeringName}` : 'Slot is full'}
@@ -1124,30 +1228,31 @@ function QuoteLineRow({ line, lineIdx, currency, isExpanded, pricingDetail, isBu
               <span className="text-muted-foreground text-xs">└</span>
             )}
             {isBundle && (
-              <span className="inline-flex items-center rounded bg-indigo-100 px-1.5 py-0.5 text-xs font-medium text-indigo-700">bundle</span>
+              <Tag variant="brand" className="px-1.5 text-xs">bundle</Tag>
             )}
             <span className="font-medium text-sm">{line.offeringName}</span>
             {line.quantity > 1 && <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-medium">×{line.quantity}</span>}
             <ActionBadge action={line.action} />
             {targetCodes.size >= 2 && line.targetSubscriptionId && targetCodes.get(line.targetSubscriptionId) && (
-              <span
-                className="inline-flex items-center rounded-full bg-purple-50 px-1.5 py-0.5 text-xs font-medium text-purple-700 border border-purple-200"
+              <Tag
+                variant="brand"
+                className="px-1.5 text-xs"
                 title={`Acts on subscription ${targetCodes.get(line.targetSubscriptionId)}`}
               >
                 → {targetCodes.get(line.targetSubscriptionId)}
-              </span>
+              </Tag>
             )}
             {line.isConfigured ? (
-              <span className="inline-flex items-center rounded-full bg-green-100 px-1.5 py-0.5 text-xs font-medium text-green-700">configured</span>
+              <Tag variant="success" className="px-1.5 text-xs">configured</Tag>
             ) : (
-              <span className="inline-flex items-center rounded-full bg-yellow-100 px-1.5 py-0.5 text-xs font-medium text-yellow-700">incomplete</span>
+              <Tag variant="warning" className="px-1.5 text-xs">incomplete</Tag>
             )}
             {isBundle && (
               <span className="text-xs text-muted-foreground">{childCount} component{childCount !== 1 ? 's' : ''}</span>
             )}
           </div>
           {line.validationErrors && line.validationErrors.length > 0 && (
-            <p className="text-xs text-red-600 mt-0.5">{line.validationErrors[0].message}</p>
+            <p className="text-xs text-destructive mt-0.5">{line.validationErrors[0].message}</p>
           )}
         </div>
 
@@ -1160,7 +1265,7 @@ function QuoteLineRow({ line, lineIdx, currency, isExpanded, pricingDetail, isBu
         {/* Actions */}
         <div className="flex items-center gap-1 shrink-0">
           {onAddComponent && (
-            <button onClick={onAddComponent} className="rounded p-1.5 text-muted-foreground hover:text-indigo-600 hover:bg-indigo-50 transition-colors" title="Add Component">
+            <button onClick={onAddComponent} className="rounded p-1.5 text-muted-foreground hover:text-primary hover:bg-primary/5 transition-colors" title="Add Component">
               <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
               </svg>
@@ -1171,7 +1276,7 @@ function QuoteLineRow({ line, lineIdx, currency, isExpanded, pricingDetail, isBu
               <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0115.75 21H5.25A2.25 2.25 0 013 18.75V8.25A2.25 2.25 0 015.25 6H10" />
             </svg>
           </button>
-          <button onClick={onRemove} className="rounded p-1.5 text-muted-foreground hover:text-red-600 hover:bg-red-50 transition-colors" title="Remove">
+          <button onClick={onRemove} className="rounded p-1.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors" title="Remove">
             <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
             </svg>
@@ -1241,7 +1346,7 @@ function ArcLineDiff({ line, currency }: { line: QuoteLine; currency: string }) 
                   <td className={`px-3 py-1 text-right font-mono ${isCancel ? 'text-muted-foreground line-through' : ''}`}>
                     {fmtVal(r.after, r.asCurrency)}
                   </td>
-                  <td className={`px-3 py-1 text-right font-mono font-medium ${showDelta ? (delta > 0 ? 'text-green-700' : 'text-red-700') : 'text-muted-foreground'}`}>
+                  <td className={`px-3 py-1 text-right font-mono font-medium ${showDelta ? (delta > 0 ? 'text-status-success-text' : 'text-destructive') : 'text-muted-foreground'}`}>
                     {showDelta ? `${delta > 0 ? '+' : ''}${fmtVal(delta, r.asCurrency)}` : '—'}
                   </td>
                 </tr>
@@ -1251,22 +1356,22 @@ function ArcLineDiff({ line, currency }: { line: QuoteLine; currency: string }) 
         </table>
       </div>
       {isCancel && (
-        <p className="text-xs text-red-700 italic">Cancellation — item will be terminated on activation.</p>
+        <p className="text-xs text-destructive italic">Cancellation — item will be terminated on activation.</p>
       )}
     </div>
   )
 }
 
 function ActionBadge({ action }: { action: QuoteLineAction }) {
-  const styles: Record<QuoteLineAction, string> = {
-    add: 'bg-blue-100 text-blue-700',
-    modify: 'bg-amber-100 text-amber-700',
-    cancel: 'bg-red-100 text-red-700',
+  const variantByAction: Record<QuoteLineAction, 'info' | 'warning' | 'error'> = {
+    add: 'info',
+    modify: 'warning',
+    cancel: 'error',
   }
   return (
-    <span className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-xs font-medium ${styles[action]}`}>
+    <Tag variant={variantByAction[action]} className="px-1.5 text-xs">
       {action}
-    </span>
+    </Tag>
   )
 }
 
@@ -1402,7 +1507,7 @@ function ChargeBreakdown({ line, lineIdx, currency, pricingDetail, onTogglePrici
                                     <td className="py-0.5 text-right font-mono">{fmtRuleValue(adj, currency)}</td>
                                     <td className="py-0.5 text-right font-mono">{fmt(adj.unitPriceBefore, currency)}</td>
                                     <td className="py-0.5 text-right font-mono">{fmt(adj.unitPriceAfter, currency)}</td>
-                                    <td className={`py-0.5 text-right font-mono ${adj.delta < 0 ? 'text-red-500' : adj.delta > 0 ? 'text-green-600' : ''}`}>
+                                    <td className={`py-0.5 text-right font-mono ${adj.delta < 0 ? 'text-destructive' : adj.delta > 0 ? 'text-status-success-text' : ''}`}>
                                       {adj.delta > 0 ? '+' : ''}{fmt(adj.delta, currency)}
                                     </td>
                                   </tr>
@@ -1440,10 +1545,18 @@ function Spinner() {
 
 function ErrorBanner({ message, onDismiss }: { message: string; onDismiss?: () => void }) {
   return (
-    <div className="rounded-md bg-red-50 border border-red-200 p-3 flex items-start gap-2">
-      <span className="text-sm text-red-700 flex-1">{message}</span>
-      {onDismiss && <button onClick={onDismiss} className="text-red-400 hover:text-red-600 text-sm font-bold">×</button>}
-    </div>
+    <Alert variant="destructive" className="flex items-start gap-2">
+      <span className="flex-1">{message}</span>
+      {onDismiss && (
+        <button
+          onClick={onDismiss}
+          className="text-destructive/70 hover:text-destructive text-sm font-bold"
+          aria-label="Dismiss"
+        >
+          ×
+        </button>
+      )}
+    </Alert>
   )
 }
 
@@ -1504,7 +1617,7 @@ function ConfigurePanel({ title, attributes, config, quantity, arcTargetOptions,
           <div>
             <label className="block text-sm font-medium mb-1">
               Apply to subscription(s)
-              <span className="text-red-600 ml-1">*</span>
+              <span className="text-destructive ml-1">*</span>
             </label>
             <div className="space-y-1.5 rounded-md border bg-background px-3 py-2">
               {arcTargetOptions.map((opt) => {
@@ -1530,14 +1643,19 @@ function ConfigurePanel({ title, attributes, config, quantity, arcTargetOptions,
               Pick one or more — a separate line will be created on each selected subscription.
             </p>
             {noTargetsPicked && (
-              <p className="text-xs text-red-600 mt-1">Select at least one target.</p>
+              <p className="text-xs text-destructive mt-1">Select at least one target.</p>
             )}
           </div>
         )}
         <div>
           <label className="block text-sm font-medium mb-1">Quantity</label>
-          <input type="number" min={1} value={quantity} onChange={(e) => onQuantityChange(Math.max(1, parseInt(e.target.value) || 1))}
-            className="w-24 rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
+          <NumberInput
+            integer
+            min={1}
+            value={quantity}
+            onChange={(n) => onQuantityChange(Math.max(1, n ?? 1))}
+            className="w-24"
+          />
         </div>
         {attributes.length === 0 ? (
           <p className="text-sm text-muted-foreground">No configurable attributes for this offering.</p>
@@ -1562,7 +1680,7 @@ function AttributeField({ attribute, value, onChange }: { attribute: Constrained
   return (
     <div>
       <label className="block text-sm font-medium mb-1">
-        {name}{isRequired && <span className="text-red-500 ml-0.5">*</span>}
+        {name}{isRequired && <span className="text-destructive ml-0.5">*</span>}
       </label>
       {(attributeType === 'select' || attributeType === 'enum') && options && options.length > 0 ? (
         <select value={String(currentValue)} onChange={(e) => onChange(e.target.value)}
@@ -1572,16 +1690,22 @@ function AttributeField({ attribute, value, onChange }: { attribute: Constrained
         </select>
       ) : attributeType === 'boolean' ? (
         <label className="flex items-center gap-2">
-          <input type="checkbox" checked={Boolean(currentValue)} onChange={(e) => onChange(e.target.checked)} className="rounded border-gray-300" />
+          <input type="checkbox" checked={Boolean(currentValue)} onChange={(e) => onChange(e.target.checked)} className="rounded border-border" />
           <span className="text-sm text-muted-foreground">{helpText ?? 'Enable'}</span>
         </label>
       ) : attributeType === 'number' ? (
-        <input type="number" value={String(currentValue)}
+        <NumberInput
+          value={
+            typeof currentValue === 'number'
+              ? currentValue
+              : currentValue === '' || currentValue == null
+                ? null
+                : Number(currentValue)
+          }
           min={(constraints as Record<string, unknown>)?.min as number | undefined}
           max={(constraints as Record<string, unknown>)?.max as number | undefined}
-          step={(constraints as Record<string, unknown>)?.step as number | undefined}
-          onChange={(e) => onChange(e.target.value === '' ? '' : Number(e.target.value))}
-          className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
+          onChange={(n) => onChange(n ?? '')}
+        />
       ) : (
         <input type="text" value={String(currentValue)} onChange={(e) => onChange(e.target.value)}
           className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />

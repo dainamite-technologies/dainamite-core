@@ -17,13 +17,13 @@ import {
  * approval ladder, converted to an order, and activated. Activation runs
  * `cpqInventoryService.applyAmendment()` which writes a `CpqSubscriptionChangeLog`
  * row + emits `cpq.subscription.amended`. We assert UI at the entry points
- * (Amend button on the sub, Activate Order button on the order) and at the
- * exit (Change History (1) on the source sub) and drive the approval
- * lifecycle / convert via API to keep the test stable — those are tested
- * independently in TC-CPQ-ARC-006 (status route) and unit tests.
+ * (Amend button on the sub, Activate button on the order — renamed in
+ * commit 720db2b) and at the exit (Change History (2) on the source sub:
+ * one seeded `Created` row + one `Amended` row from the activation) and
+ * drive the approval lifecycle / convert via API to keep the test stable.
  */
 test.describe('TC-CPQ-ARC-011 — Full ARC lifecycle (UI + API hybrid)', () => {
-  test('amend → drive through statuses → convert → activate → Change History (1)', async ({
+  test('amend → drive through statuses → convert → activate → Change History (Created + Amended)', async ({
     page,
     request,
   }) => {
@@ -91,7 +91,9 @@ test.describe('TC-CPQ-ARC-011 — Full ARC lifecycle (UI + API hybrid)', () => {
         waitUntil: 'domcontentloaded',
       })
       await hideFloatingOverlays(page)
-      const activateBtn = page.getByRole('button', { name: /^Activate Order$/ })
+      // Button renamed to "Activate" in commit 720db2b (entity context is
+      // already in the FormHeader eyebrow, so the verb stands alone).
+      const activateBtn = page.getByRole('button', { name: /^Activate$/ })
       await expect(activateBtn).toBeVisible({ timeout: 15_000 })
       await activateBtn.click()
 
@@ -99,8 +101,9 @@ test.describe('TC-CPQ-ARC-011 — Full ARC lifecycle (UI + API hybrid)', () => {
       // the green success banner appears.
       await expect(page.locator('body')).toContainText(/active/i, { timeout: 30_000 })
 
-      // 5. UI — return to the source sub, expect Change History (1) with
-      // an "Amended" badge populated by the activation.
+      // 5. UI — return to the source sub. Expect Change History (2):
+      //    - the seeded `Created` row (commit fa5b899)
+      //    - the `Amended` row written by activation
       await page.goto(`/backend/cpq/inventory/subscriptions/${sub.id}`, {
         waitUntil: 'domcontentloaded',
       })
@@ -111,8 +114,12 @@ test.describe('TC-CPQ-ARC-011 — Full ARC lifecycle (UI + API hybrid)', () => {
       // with the heading's first paint.
       await expect.poll(async () => (await heading.textContent()) ?? '', {
         timeout: 15_000,
-      }).toMatch(/\(1\)/)
-      await expect(page.locator('body')).toContainText(/Amended/i, { timeout: 5_000 })
+      }).toMatch(/\(2\)/)
+      // Scope tag lookups to the Change History container so the
+      // "Created" tag isn't confused with the meta-card "Created" label.
+      const historySection = page.locator('div', { has: heading }).first()
+      await expect(historySection.getByText(/^Amended$/).first()).toBeVisible({ timeout: 5_000 })
+      await expect(historySection.getByText(/^Created$/).first()).toBeVisible({ timeout: 5_000 })
     } finally {
       await deleteSubscription(request, token, sub.id).catch(() => undefined)
       await deleteCustomer(request, token, customerId).catch(() => undefined)

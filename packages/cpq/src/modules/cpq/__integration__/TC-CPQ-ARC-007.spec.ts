@@ -11,14 +11,17 @@ import {
 } from './_helpers/cpqArcFixtures'
 
 /**
- * TC-CPQ-ARC-007 — Standalone renew from Expiring view (UI) (XD-250 scenario 3)
+ * TC-CPQ-ARC-007 — Renew from subscription detail (UI) (XD-250 scenario 3)
  *
- * Operator opens /backend/cpq/inventory/subscriptions/expiring, clicks the
- * Renew button on a sub whose currentTermEnd lands inside the default 30d
- * window, gets redirected to the new RENEW quote with the source attached.
+ * The standalone /expiring page was retired (commit fa5b899) — the Renew
+ * action moved onto the subscription detail page header. This test now
+ * navigates straight to the expiring subscription's detail and clicks
+ * Renew there. The "expiring" angle is preserved by seeding with
+ * currentTermEnd inside the 30d window so the sub would have appeared on
+ * the deprecated view; the renewal flow is identical regardless.
  */
-test.describe('TC-CPQ-ARC-007 — Renew from Expiring view (UI)', () => {
-  test('Renew button on an expiring sub creates a RENEW quote with the source as the only target', async ({
+test.describe('TC-CPQ-ARC-007 — Renew from subscription detail (UI)', () => {
+  test('Renew on an expiring sub creates a RENEW quote with the source as the only target', async ({
     page,
     request,
   }) => {
@@ -32,15 +35,16 @@ test.describe('TC-CPQ-ARC-007 — Renew from Expiring view (UI)', () => {
 
     try {
       await login(page, 'admin')
-      await page.goto('/backend/cpq/inventory/subscriptions/expiring', {
+      await page.goto(`/backend/cpq/inventory/subscriptions/${sub.id}`, {
         waitUntil: 'domcontentloaded',
       })
       await hideFloatingOverlays(page)
 
-      // Sub is within default 30d window, so its row + Renew button render.
-      await expect(page.locator('body')).toContainText(sub.code, { timeout: 15_000 })
-      const subRow = page.getByRole('row', { name: new RegExp(sub.code) })
-      await subRow.getByRole('button', { name: /^Renew$/ }).click()
+      // Subscription detail loads — its name is visible in the header.
+      await expect(page.locator('body')).toContainText(sub.name, { timeout: 15_000 })
+
+      // Click the Renew button in the FormHeader actions row.
+      await page.getByRole('button', { name: /^Renew$/ }).first().click()
 
       // After click, startArcQuote('renew') POSTs from-subscription then
       // router.push()es to the new quote. Wait for URL transition.

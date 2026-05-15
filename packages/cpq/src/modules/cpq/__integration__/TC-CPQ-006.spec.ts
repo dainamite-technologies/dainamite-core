@@ -18,8 +18,14 @@ test.describe('TC-CPQ-006: Specifications list page (UI)', () => {
     await login(page, 'admin')
     await page.goto('/backend/cpq/specifications', { waitUntil: 'domcontentloaded' })
 
-    await expect(page.getByRole('heading', { level: 1, name: /Product Specifications/i })).toBeVisible({ timeout: 15_000 })
-    await expect(page.getByRole('button', { name: /New Specification/i })).toBeVisible({ timeout: 15_000 })
+    // CpqListView refactor (commit 8c64a55) removed the page-level <h1>
+    // and renders the title inside DataTable as an <h2>. Match any
+    // heading level so the test stays resilient to further layout
+    // changes without going stringly-typed.
+    await expect(page.getByRole('heading', { name: /Product Specifications/i }).first()).toBeVisible({ timeout: 15_000 })
+    // CTA is `<Button asChild><a href=...>New Specification</a></Button>`
+    // which renders as a link (role="link"), not a button.
+    await expect(page.getByRole('link', { name: /New Specification/i })).toBeVisible({ timeout: 15_000 })
   })
 
   test('navigates to detail page when an existing spec row is clicked', async ({ page, request }) => {

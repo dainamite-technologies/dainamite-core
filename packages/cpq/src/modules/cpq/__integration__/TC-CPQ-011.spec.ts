@@ -15,7 +15,8 @@ test.describe('TC-CPQ-011: Orders list page (UI)', () => {
     await login(page, 'admin')
     await page.goto('/backend/cpq/orders', { waitUntil: 'domcontentloaded' })
 
-    await expect(page.getByRole('heading', { level: 1, name: /CPQ Orders/i })).toBeVisible({ timeout: 15_000 })
+    // Title now lives inside DataTable as <h2> (CpqListView refactor).
+    await expect(page.getByRole('heading', { name: /CPQ Orders/i }).first()).toBeVisible({ timeout: 15_000 })
 
     // Page rendered some content — table or empty-state message
     await expect(page.locator('body')).not.toBeEmpty()

@@ -77,6 +77,7 @@ These guides ship automatically when the corresponding module is installed.
 
 | Task | Load |
 |---|---|
+| **Any new page / service / list view / bulk op / report / refactor — START HERE** | `.ai/skills/engineering-principles/SKILL.md` |
 | Debug / fix errors | `.ai/skills/troubleshooter/SKILL.md` |
 | Review code changes | `.ai/skills/code-review/SKILL.md` |
 | Write a spec | `.ai/skills/spec-writing/SKILL.md`, `.ai/specs/SPEC-000-template.md` |

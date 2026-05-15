@@ -2,6 +2,17 @@
 import * as React from 'react'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { useParams, useRouter } from 'next/navigation'
+import { Alert } from '@open-mercato/ui/primitives/alert'
+import { Button } from '@open-mercato/ui/primitives/button'
+import { Tag } from '@open-mercato/ui/primitives/tag'
+import { NumberInput } from '../../../../components/NumberInput'
+import {
+  chargeTypeMap,
+  formatStatusLabel,
+  lifecycleStatusMap,
+  type ChargeType,
+  type LifecycleStatus,
+} from '../../../../components/statusMaps'
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -119,17 +130,42 @@ const EMPTY_CHARGE: EditingCharge = {
   isActive: true,
 }
 
-const STATUS_COLORS: Record<string, string> = {
-  draft: 'bg-gray-100 text-gray-700',
-  active: 'bg-green-100 text-green-800',
-  deprecated: 'bg-yellow-100 text-yellow-800',
-  retired: 'bg-red-100 text-red-700',
-}
 
 const PRICING_METHOD_LABELS: Record<string, string> = {
   flat: 'flat price',
+  fixed: 'flat price', // legacy alias — see validators.ts
   per_unit: 'per unit',
   tiered: 'tiered',
+}
+
+// V-CHG-1 in `validators.ts`: per_unit/tiered need table + column + qty
+// attribute; flat needs fixedPrice + currencyCode. Mirror it in the UI so
+// users see what's missing without round-tripping to the server.
+type ChargeShape = {
+  pricingMethod: string
+  pricingTableId: string | null
+  priceColumnKey: string | null
+  fixedPrice: string | null
+  currencyCode: string | null
+  quantityAttributeCode: string | null
+}
+
+function isChargeComplete(charge: ChargeShape): boolean {
+  return chargeMissingFields(charge).length === 0
+}
+
+function chargeMissingFields(charge: ChargeShape): string[] {
+  const method = charge.pricingMethod === 'fixed' ? 'flat' : charge.pricingMethod
+  const missing: string[] = []
+  if (method === 'flat') {
+    if (!charge.fixedPrice) missing.push('Fixed Price')
+    if (!charge.currencyCode) missing.push('Currency')
+  } else if (method === 'per_unit' || method === 'tiered') {
+    if (!charge.pricingTableId) missing.push('Pricing Table')
+    if (!charge.priceColumnKey) missing.push('Price Column')
+    if (!charge.quantityAttributeCode) missing.push('Quantity Attribute')
+  }
+  return missing
 }
 
 // ─── Component ──────────────────────────────────────────────────
@@ -161,6 +197,12 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
   const [error, setError] = React.useState<string | null>(null)
 
   const [editingCharge, setEditingCharge] = React.useState<EditingCharge | null>(null)
+
+  // OM-standard detail page: existing offerings open read-only and require
+  // an explicit Edit click to allow changes. New offerings skip view mode.
+  const [generalMode, setGeneralMode] = React.useState<'view' | 'edit'>(isNew ? 'edit' : 'view')
+  const [formSnapshot, setFormSnapshot] = React.useState<typeof EMPTY_FORM | null>(null)
+  const [designTimeSnapshot, setDesignTimeSnapshot] = React.useState<Record<string, unknown> | null>(null)
 
   // ─── Load data ──────────────────────────────────────────────
 
@@ -285,6 +327,10 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
           specId: saved.specId,
         })
         setDesignTimeValues(saved.designTimeValues ?? {})
+        // Save succeeded — drop snapshots and flip back to read-only.
+        setFormSnapshot(null)
+        setDesignTimeSnapshot(null)
+        setGeneralMode('view')
       }
     } catch {
       setError('Failed to save')
@@ -406,9 +452,9 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
             {isNew ? t('cpq.offerings.new', 'New Offering') : form.name}
           </h1>
           {!isNew && (
-            <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${STATUS_COLORS[form.lifecycleStatus] ?? ''}`}>
-              {form.lifecycleStatus}
-            </span>
+            <Tag variant={lifecycleStatusMap[form.lifecycleStatus as LifecycleStatus] ?? 'neutral'} dot>
+              {formatStatusLabel(form.lifecycleStatus)}
+            </Tag>
           )}
           {specDetail && (
             <span className="text-sm text-muted-foreground">
@@ -417,17 +463,28 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
           )}
         </div>
         {!isNew && (
-          <button
-            onClick={deleteOffering}
-            className="inline-flex items-center justify-center rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700"
-          >
-            {t('common.delete', 'Delete')}
-          </button>
+          <div className="flex items-center gap-2">
+            {generalMode === 'view' && tab === 'general' && (
+              <Button
+                type="button"
+                onClick={() => {
+                  setFormSnapshot(form)
+                  setDesignTimeSnapshot(designTimeValues)
+                  setGeneralMode('edit')
+                }}
+              >
+                {t('common.edit', 'Edit')}
+              </Button>
+            )}
+            <Button type="button" variant="destructive" onClick={deleteOffering}>
+              {t('common.delete', 'Delete')}
+            </Button>
+          </div>
         )}
       </div>
 
       {error && (
-        <div className="rounded-md bg-red-50 border border-red-200 p-3 text-sm text-red-700">{error}</div>
+        <Alert variant="destructive">{error}</Alert>
       )}
 
       {/* Tabs */}
@@ -479,56 +536,81 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium mb-1">{t('cpq.offerings.code', 'Code')}</label>
-              <input
-                type="text"
-                value={form.code}
-                onChange={(e) => setForm({ ...form, code: e.target.value })}
-                placeholder="e.g. gix-cloud-connect-aws"
-                className="w-full rounded-md border px-3 py-2 text-sm"
-              />
+              {generalMode === 'view' && !isNew ? (
+                <p className="text-sm font-mono py-2">{form.code || '—'}</p>
+              ) : (
+                <input
+                  type="text"
+                  value={form.code}
+                  onChange={(e) => setForm({ ...form, code: e.target.value })}
+                  placeholder="e.g. gix-cloud-connect-aws"
+                  className="w-full rounded-md border px-3 py-2 text-sm"
+                />
+              )}
             </div>
             <div>
               <label className="block text-sm font-medium mb-1">{t('cpq.offerings.name', 'Name')}</label>
-              <input
-                type="text"
-                value={form.name}
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
-                className="w-full rounded-md border px-3 py-2 text-sm"
-              />
+              {generalMode === 'view' && !isNew ? (
+                <p className="text-sm py-2">{form.name || '—'}</p>
+              ) : (
+                <input
+                  type="text"
+                  value={form.name}
+                  onChange={(e) => setForm({ ...form, name: e.target.value })}
+                  className="w-full rounded-md border px-3 py-2 text-sm"
+                />
+              )}
             </div>
             <div>
               <label className="block text-sm font-medium mb-1">{t('cpq.offerings.lifecycleStatus', 'Lifecycle Status')}</label>
-              <select
-                value={form.lifecycleStatus}
-                onChange={(e) => setForm({ ...form, lifecycleStatus: e.target.value })}
-                className="w-full rounded-md border px-3 py-2 text-sm"
-              >
-                <option value="draft">Draft</option>
-                <option value="active">Active</option>
-                <option value="deprecated">Deprecated</option>
-                <option value="retired">Retired</option>
-              </select>
+              {generalMode === 'view' && !isNew ? (
+                <div className="py-2">
+                  <Tag variant={lifecycleStatusMap[form.lifecycleStatus as LifecycleStatus] ?? 'neutral'} dot>
+                    {formatStatusLabel(form.lifecycleStatus)}
+                  </Tag>
+                </div>
+              ) : (
+                <select
+                  value={form.lifecycleStatus}
+                  onChange={(e) => setForm({ ...form, lifecycleStatus: e.target.value })}
+                  className="w-full rounded-md border px-3 py-2 text-sm"
+                >
+                  <option value="draft">Draft</option>
+                  <option value="active">Active</option>
+                  <option value="deprecated">Deprecated</option>
+                </select>
+              )}
             </div>
             <div>
               <label className="block text-sm font-medium mb-1">{t('cpq.offerings.isActive', 'Is Active?')}</label>
               <div className="flex items-center h-[38px]">
-                <input
-                  type="checkbox"
-                  checked={form.isActive}
-                  onChange={(e) => setForm({ ...form, isActive: e.target.checked })}
-                  className="rounded border"
-                />
+                {generalMode === 'view' && !isNew ? (
+                  <Tag variant={form.isActive ? 'success' : 'neutral'} dot>
+                    {form.isActive ? t('common.yes', 'Yes') : t('common.no', 'No')}
+                  </Tag>
+                ) : (
+                  <input
+                    type="checkbox"
+                    checked={form.isActive}
+                    onChange={(e) => setForm({ ...form, isActive: e.target.checked })}
+                    className="rounded border"
+                  />
+                )}
               </div>
             </div>
           </div>
           <div>
             <label className="block text-sm font-medium mb-1">{t('cpq.offerings.description', 'Description')}</label>
-            <textarea
-              value={form.description ?? ''}
-              onChange={(e) => setForm({ ...form, description: e.target.value })}
-              rows={3}
-              className="w-full rounded-md border px-3 py-2 text-sm"
-            />
+            {generalMode === 'view' && !isNew ? (
+              <p className="text-sm text-muted-foreground py-2 whitespace-pre-wrap">{form.description || '—'}</p>
+            ) : (
+              <textarea
+                value={form.description ?? ''}
+                onChange={(e) => setForm({ ...form, description: e.target.value })}
+                rows={3}
+                className="w-full rounded-md border px-3 py-2 text-sm"
+              />
+            )}
           </div>
 
           {/* Design-time values */}
@@ -536,73 +618,109 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
             <div className="space-y-3">
               <label className="block text-sm font-medium">Design-Time Values</label>
               <div className="grid grid-cols-2 gap-3">
-                {designTimeAttrs.map((attr) => (
-                  <div key={attr.code}>
-                    <label className="block text-xs font-medium mb-1">
-                      {attr.name}
-                      {attr.isRequired && <span className="text-red-500 ml-0.5">*</span>}
-                    </label>
-                    {(attr.attributeType === 'select' || attr.attributeType === 'enum') && attr.options ? (
-                      <select
-                        value={String(designTimeValues[attr.code] ?? '')}
-                        onChange={(e) => setDesignTimeValues({ ...designTimeValues, [attr.code]: e.target.value || null })}
-                        className="w-full rounded-md border px-2 py-1.5 text-sm"
-                      >
-                        <option value="">Select {attr.name}...</option>
-                        {attr.options.map((opt) => (
-                          <option key={opt.value} value={opt.value}>{opt.label}</option>
-                        ))}
-                      </select>
-                    ) : attr.attributeType === 'number' ? (
-                      <input
-                        type="number"
-                        value={designTimeValues[attr.code] != null ? String(designTimeValues[attr.code]) : ''}
-                        onChange={(e) => setDesignTimeValues({ ...designTimeValues, [attr.code]: e.target.value ? Number(e.target.value) : null })}
-                        className="w-full rounded-md border px-2 py-1.5 text-sm"
-                      />
-                    ) : attr.attributeType === 'boolean' ? (
-                      <div className="pt-1">
-                        <label className="flex items-center gap-1.5 text-sm">
-                          <input
-                            type="checkbox"
-                            checked={!!designTimeValues[attr.code]}
-                            onChange={(e) => setDesignTimeValues({ ...designTimeValues, [attr.code]: e.target.checked })}
-                            className="rounded border"
-                          />
-                          {attr.name}
-                        </label>
-                      </div>
-                    ) : (
-                      <input
-                        type="text"
-                        value={String(designTimeValues[attr.code] ?? '')}
-                        onChange={(e) => setDesignTimeValues({ ...designTimeValues, [attr.code]: e.target.value || null })}
-                        className="w-full rounded-md border px-2 py-1.5 text-sm"
-                        placeholder={attr.helpText ?? undefined}
-                      />
-                    )}
-                    {attr.helpText && <p className="text-xs text-muted-foreground mt-0.5">{attr.helpText}</p>}
-                  </div>
-                ))}
+                {designTimeAttrs.map((attr) => {
+                  const value = designTimeValues[attr.code]
+                  const isViewing = generalMode === 'view' && !isNew
+                  // Lookup the human label for select-type values so the
+                  // read-only view doesn't show raw codes.
+                  const optionLabel =
+                    (attr.attributeType === 'select' || attr.attributeType === 'enum') && attr.options
+                      ? attr.options.find((o) => o.value === value)?.label
+                      : undefined
+                  return (
+                    <div key={attr.code}>
+                      <label className="block text-xs font-medium mb-1">
+                        {attr.name}
+                        {attr.isRequired && <span className="text-destructive ml-0.5">*</span>}
+                      </label>
+                      {isViewing ? (
+                        <p className="text-sm py-2">
+                          {value == null || value === '' ? (
+                            <span className="text-muted-foreground">—</span>
+                          ) : attr.attributeType === 'boolean' ? (
+                            <Tag variant={value ? 'success' : 'neutral'} dot>
+                              {value ? t('common.yes', 'Yes') : t('common.no', 'No')}
+                            </Tag>
+                          ) : (
+                            optionLabel ?? String(value)
+                          )}
+                        </p>
+                      ) : (attr.attributeType === 'select' || attr.attributeType === 'enum') && attr.options ? (
+                        <select
+                          value={String(value ?? '')}
+                          onChange={(e) => setDesignTimeValues({ ...designTimeValues, [attr.code]: e.target.value || null })}
+                          className="w-full rounded-md border px-2 py-1.5 text-sm"
+                        >
+                          <option value="">Select {attr.name}...</option>
+                          {attr.options.map((opt) => (
+                            <option key={opt.value} value={opt.value}>{opt.label}</option>
+                          ))}
+                        </select>
+                      ) : attr.attributeType === 'number' ? (
+                        <NumberInput
+                          value={typeof value === 'number' ? (value as number) : null}
+                          onChange={(n) => setDesignTimeValues({ ...designTimeValues, [attr.code]: n })}
+                        />
+                      ) : attr.attributeType === 'boolean' ? (
+                        <div className="pt-1">
+                          <label className="flex items-center gap-1.5 text-sm">
+                            <input
+                              type="checkbox"
+                              checked={!!value}
+                              onChange={(e) => setDesignTimeValues({ ...designTimeValues, [attr.code]: e.target.checked })}
+                              className="rounded border"
+                            />
+                            {attr.name}
+                          </label>
+                        </div>
+                      ) : (
+                        <input
+                          type="text"
+                          value={String(value ?? '')}
+                          onChange={(e) => setDesignTimeValues({ ...designTimeValues, [attr.code]: e.target.value || null })}
+                          className="w-full rounded-md border px-2 py-1.5 text-sm"
+                          placeholder={attr.helpText ?? undefined}
+                        />
+                      )}
+                      {attr.helpText && <p className="text-xs text-muted-foreground mt-0.5">{attr.helpText}</p>}
+                    </div>
+                  )
+                })}
               </div>
             </div>
           )}
 
-          <div className="flex gap-3">
-            <button
-              onClick={saveOffering}
-              disabled={saving || !form.code || !form.name || (isNew && !form.specId)}
-              className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-            >
-              {saving ? t('common.saving', 'Saving...') : t('common.save', 'Save')}
-            </button>
-            <button
-              onClick={() => router.push('/backend/cpq/offerings')}
-              className="inline-flex items-center justify-center rounded-md border px-4 py-2 text-sm font-medium hover:bg-muted"
-            >
-              {t('common.cancel', 'Cancel')}
-            </button>
-          </div>
+          {/* In view mode the Edit button lives in the page header next to
+              Delete (OM standard). Here we only render the Save/Cancel
+              pair when actually editing. */}
+          {!(generalMode === 'view' && !isNew) && (
+            <div className="flex gap-3">
+              <Button
+                type="button"
+                onClick={saveOffering}
+                disabled={saving || !form.code || !form.name || (isNew && !form.specId)}
+              >
+                {saving ? t('common.saving', 'Saving...') : t('common.save', 'Save')}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  if (isNew) {
+                    router.push('/backend/cpq/offerings')
+                    return
+                  }
+                  if (formSnapshot) setForm(formSnapshot)
+                  if (designTimeSnapshot) setDesignTimeValues(designTimeSnapshot)
+                  setFormSnapshot(null)
+                  setDesignTimeSnapshot(null)
+                  setGeneralMode('view')
+                }}
+              >
+                {t('common.cancel', 'Cancel')}
+              </Button>
+            </div>
+          )}
         </div>
       )}
 
@@ -656,31 +774,38 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                     <option value="tiered">Tiered (table lookup)</option>
                   </select>
                 </div>
-                {editingCharge.pricingMethod === 'flat' ? (
+                {(editingCharge.pricingMethod === 'flat' || editingCharge.pricingMethod === 'fixed') ? (
                   <>
                     <div>
-                      <label className="block text-xs font-medium mb-1">Fixed Price</label>
+                      <label className="block text-xs font-medium mb-1">Fixed Price <span className="text-destructive">*</span></label>
                       <input type="text" value={editingCharge.fixedPrice ?? ''} onChange={(e) => setEditingCharge({ ...editingCharge, fixedPrice: e.target.value || null })} placeholder="0.00" className="w-full rounded-md border px-2 py-1.5 text-sm" />
                     </div>
                     <div>
-                      <label className="block text-xs font-medium mb-1">Currency</label>
+                      <label className="block text-xs font-medium mb-1">Currency <span className="text-destructive">*</span></label>
                       <input type="text" value={editingCharge.currencyCode ?? 'USD'} onChange={(e) => setEditingCharge({ ...editingCharge, currencyCode: e.target.value || null })} className="w-full rounded-md border px-2 py-1.5 text-sm" />
                     </div>
                   </>
                 ) : (
                   <>
                     <div>
-                      <label className="block text-xs font-medium mb-1">Pricing Table</label>
+                      <label className="block text-xs font-medium mb-1">Pricing Table <span className="text-destructive">*</span></label>
                       <select value={editingCharge.pricingTableId ?? ''} onChange={(e) => setEditingCharge({ ...editingCharge, pricingTableId: e.target.value || null, priceColumnKey: null })} className="w-full rounded-md border px-2 py-1.5 text-sm">
                         <option value="">Select table...</option>
                         {pricingTables.map((pt) => (
                           <option key={pt.id} value={pt.id}>{pt.name} ({pt.code})</option>
                         ))}
                       </select>
+                      {pricingTables.length === 0 && (
+                        <p className="text-xs text-warning mt-0.5">
+                          No pricing tables yet —{' '}
+                          <a href="/backend/cpq/pricing-tables" className="text-primary hover:underline">create one</a>{' '}
+                          before using {editingCharge.pricingMethod} pricing.
+                        </p>
+                      )}
                     </div>
                     <div>
-                      <label className="block text-xs font-medium mb-1">Price Column</label>
-                      <select value={editingCharge.priceColumnKey ?? ''} onChange={(e) => setEditingCharge({ ...editingCharge, priceColumnKey: e.target.value || null })} className="w-full rounded-md border px-2 py-1.5 text-sm">
+                      <label className="block text-xs font-medium mb-1">Price Column <span className="text-destructive">*</span></label>
+                      <select value={editingCharge.priceColumnKey ?? ''} onChange={(e) => setEditingCharge({ ...editingCharge, priceColumnKey: e.target.value || null })} className="w-full rounded-md border px-2 py-1.5 text-sm" disabled={!selectedPricingTable}>
                         <option value="">Select column...</option>
                         {selectedPricingTable?.priceColumns.map((col) => (
                           <option key={col.key} value={col.key}>{col.label}</option>
@@ -688,7 +813,7 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                       </select>
                     </div>
                     <div>
-                      <label className="block text-xs font-medium mb-1">Quantity Attribute</label>
+                      <label className="block text-xs font-medium mb-1">Quantity Attribute <span className="text-destructive">*</span></label>
                       <select value={editingCharge.quantityAttributeCode ?? ''} onChange={(e) => setEditingCharge({ ...editingCharge, quantityAttributeCode: e.target.value || null })} className="w-full rounded-md border px-2 py-1.5 text-sm">
                         <option value="">Select attribute...</option>
                         {attributes.filter((a) => a.attributeType === 'number').map((a) => (
@@ -696,12 +821,25 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                         ))}
                       </select>
                       <p className="text-xs text-muted-foreground mt-0.5">Attribute whose value drives the quantity for pricing</p>
+                      {attributes.filter((a) => a.attributeType === 'number').length === 0 && form.specId && (
+                        <p className="text-xs text-warning mt-0.5">
+                          Spec has no number attributes —{' '}
+                          <a href={`/backend/cpq/specifications/${form.specId}`} className="text-primary hover:underline">
+                            add one to the spec
+                          </a>{' '}
+                          first.
+                        </p>
+                      )}
                     </div>
                   </>
                 )}
                 <div>
                   <label className="block text-xs font-medium mb-1">Sort Order</label>
-                  <input type="number" value={editingCharge.sortOrder} onChange={(e) => setEditingCharge({ ...editingCharge, sortOrder: Number(e.target.value) })} className="w-full rounded-md border px-2 py-1.5 text-sm" />
+                  <NumberInput
+                    integer
+                    value={editingCharge.sortOrder}
+                    onChange={(n) => setEditingCharge({ ...editingCharge, sortOrder: n ?? 0 })}
+                  />
                 </div>
               </div>
               <div>
@@ -714,12 +852,25 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                   Active
                 </label>
               </div>
-              <div className="flex gap-2">
-                <button onClick={saveCharge} disabled={saving || !editingCharge.code || !editingCharge.name} className="inline-flex items-center rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50">
-                  {saving ? 'Saving...' : 'Save'}
-                </button>
-                <button onClick={() => setEditingCharge(null)} className="inline-flex items-center rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-muted">Cancel</button>
-              </div>
+              {(() => {
+                const missing = chargeMissingFields(editingCharge)
+                const blocked = saving || !editingCharge.code || !editingCharge.name || missing.length > 0
+                return (
+                  <>
+                    {missing.length > 0 && (
+                      <Alert variant="destructive">
+                        Missing required field{missing.length > 1 ? 's' : ''} for {editingCharge.pricingMethod} pricing: {missing.join(', ')}
+                      </Alert>
+                    )}
+                    <div className="flex gap-2">
+                      <button onClick={saveCharge} disabled={blocked} className="inline-flex items-center rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed">
+                        {saving ? 'Saving...' : 'Save'}
+                      </button>
+                      <button onClick={() => setEditingCharge(null)} className="inline-flex items-center rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-muted">Cancel</button>
+                    </div>
+                  </>
+                )
+              })()}
             </div>
           )}
 
@@ -743,34 +894,56 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                   </tr>
                 </thead>
                 <tbody>
-                  {charges.map((charge) => (
-                    <tr key={charge.id} className="border-b">
-                      <td className="px-4 py-3 font-mono text-xs">{charge.code}</td>
-                      <td className="px-4 py-3">{charge.name}</td>
-                      <td className="px-4 py-3">
-                        <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
-                          charge.chargeType === 'mrc' ? 'bg-blue-100 text-blue-800' :
-                          charge.chargeType === 'nrc' ? 'bg-green-100 text-green-800' :
-                          'bg-purple-100 text-purple-800'
-                        }`}>
-                          {charge.chargeType.toUpperCase()}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-xs">{PRICING_METHOD_LABELS[charge.pricingMethod] ?? charge.pricingMethod}</td>
-                      <td className="px-4 py-3">
-                        {charge.fixedPrice != null
-                          ? `${charge.currencyCode ?? 'USD'} ${charge.fixedPrice}`
-                          : charge.pricingTableId
-                            ? <span className="text-xs text-muted-foreground">table lookup</span>
-                            : '—'}
-                      </td>
-                      <td className="px-4 py-3">{charge.isActive ? 'Yes' : 'No'}</td>
-                      <td className="px-4 py-3 text-right">
-                        <button onClick={() => startEditCharge(charge)} className="text-xs text-primary hover:underline mr-2">Edit</button>
-                        <button onClick={() => deleteCharge(charge.id)} className="text-xs text-red-600 hover:underline">Delete</button>
-                      </td>
-                    </tr>
-                  ))}
+                  {charges.map((charge) => {
+                    const incomplete = !isChargeComplete(charge)
+                    const tableRef = charge.pricingTableId
+                      ? pricingTables.find((pt) => pt.id === charge.pricingTableId)
+                      : null
+                    const qtyAttr = charge.quantityAttributeCode
+                      ? attributes.find((a) => a.code === charge.quantityAttributeCode)
+                      : null
+                    const isFlat = charge.pricingMethod === 'flat' || charge.pricingMethod === 'fixed'
+                    return (
+                      <tr key={charge.id} className="border-b">
+                        <td className="px-4 py-3 font-mono text-xs">{charge.code}</td>
+                        <td className="px-4 py-3">
+                          {charge.name}
+                          {incomplete && (
+                            <Tag variant="error" className="ml-2 px-2 text-[10px]" dot>Incomplete</Tag>
+                          )}
+                        </td>
+                        <td className="px-4 py-3">
+                          <Tag variant={chargeTypeMap[charge.chargeType as ChargeType] ?? 'neutral'} className="px-2 text-xs">
+                            {charge.chargeType.toUpperCase()}
+                          </Tag>
+                        </td>
+                        <td className="px-4 py-3 text-xs">{PRICING_METHOD_LABELS[charge.pricingMethod] ?? charge.pricingMethod}</td>
+                        <td className="px-4 py-3 text-xs">
+                          {isFlat ? (
+                            charge.fixedPrice != null
+                              ? `${charge.currencyCode ?? 'USD'} ${charge.fixedPrice}`
+                              : <span className="text-muted-foreground">—</span>
+                          ) : (
+                            <div className="flex flex-col gap-0.5">
+                              <span>
+                                <span className="text-muted-foreground">Table:</span>{' '}
+                                {tableRef ? `${tableRef.name} → ${charge.priceColumnKey ?? '?'}` : <span className="text-destructive">missing</span>}
+                              </span>
+                              <span>
+                                <span className="text-muted-foreground">× Qty:</span>{' '}
+                                {qtyAttr ? `${qtyAttr.name} (${qtyAttr.code})` : <span className="text-destructive">missing</span>}
+                              </span>
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-4 py-3">{charge.isActive ? 'Yes' : 'No'}</td>
+                        <td className="px-4 py-3 text-right">
+                          <button onClick={() => startEditCharge(charge)} className="text-xs text-primary hover:underline mr-2">Edit</button>
+                          <button onClick={() => deleteCharge(charge.id)} className="text-xs text-destructive hover:underline">Delete</button>
+                        </td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
             </div>
@@ -795,9 +968,9 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                     <div className="bg-muted/50 px-4 py-3 border-b flex items-center justify-between">
                       <div>
                         <span className="font-medium text-sm">{slot.name}</span>
-                        <span className="ml-2 inline-flex items-center rounded-full bg-blue-100 text-blue-800 px-2 py-0.5 text-[10px] font-medium">
+                        <Tag variant="info" className="ml-2 px-2 text-[10px]">
                           {slot.componentGroup}
-                        </span>
+                        </Tag>
                         <span className="ml-2 text-xs text-muted-foreground">
                           {slot.cardinalityMin}..{slot.cardinalityMax ?? '∞'}
                         </span>
@@ -903,7 +1076,7 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                       <div className="p-4 text-center text-xs text-muted-foreground">
                         No components assigned to this slot
                         {slot.cardinalityMin > 0 && (
-                          <span className="ml-1 text-orange-600 font-medium">(required: min {slot.cardinalityMin})</span>
+                          <span className="ml-1 text-status-warning-text font-medium">(required: min {slot.cardinalityMin})</span>
                         )}
                       </div>
                     ) : (
@@ -924,9 +1097,9 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                               <td className="px-4 py-2.5 text-muted-foreground text-xs">{comp.childOffering?.code ?? '—'}</td>
                               <td className="px-4 py-2.5">
                                 {comp.childOffering?.offeringType === 'bundle' ? (
-                                  <span className="inline-flex items-center rounded-full bg-purple-100 text-purple-800 px-2 py-0.5 text-[10px] font-medium">bundle</span>
+                                  <Tag variant="brand" className="px-2 text-[10px]">bundle</Tag>
                                 ) : (
-                                  <span className="inline-flex items-center rounded-full bg-gray-100 text-gray-800 px-2 py-0.5 text-[10px] font-medium">simple</span>
+                                  <Tag variant="neutral" className="px-2 text-[10px]">simple</Tag>
                                 )}
                               </td>
                               <td className="px-4 py-2.5">
@@ -943,11 +1116,11 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                                       }
                                     } catch { /* ignore */ }
                                   }}
-                                  className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium cursor-pointer ${
-                                    comp.isDefault ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'
-                                  }`}
+                                  className="cursor-pointer"
                                 >
-                                  {comp.isDefault ? 'Yes' : 'No'}
+                                  <Tag variant={comp.isDefault ? 'success' : 'neutral'} className="px-2 text-[10px]">
+                                    {comp.isDefault ? 'Yes' : 'No'}
+                                  </Tag>
                                 </button>
                               </td>
                               <td className="px-4 py-2.5 text-right">
@@ -970,7 +1143,7 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                                       setError('Failed to remove component')
                                     }
                                   }}
-                                  className="text-xs text-red-600 hover:underline"
+                                  className="text-xs text-destructive hover:underline"
                                 >
                                   Remove
                                 </button>

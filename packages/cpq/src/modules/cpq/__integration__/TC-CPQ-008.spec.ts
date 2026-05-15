@@ -19,13 +19,19 @@ test.describe('TC-CPQ-008: Quotes list (UI)', () => {
     await login(page, 'admin')
     await page.goto('/backend/cpq/quotes', { waitUntil: 'domcontentloaded' })
 
-    await expect(page.getByRole('heading', { level: 1, name: /CPQ Quotes/i })).toBeVisible({ timeout: 15_000 })
+    // Title now lives inside DataTable as <h2> (CpqListView refactor).
+    await expect(page.getByRole('heading', { name: /CPQ Quotes/i }).first()).toBeVisible({ timeout: 15_000 })
     await expect(page.getByRole('button', { name: /New Quote/i })).toBeVisible({ timeout: 15_000 })
 
     // Table renders OR empty state appears. NOTE: cross-org admin scopes were observed during
     // initial development — admins may see different quote rows depending on the active org context,
     // so we don't pin to a specific row. UI list-load smoke is the goal here.
-    const tableHeader = page.getByRole('columnheader', { name: /Quote ID/i })
+    // Column was renamed "Quote ID" → "Quote Number" when the list started
+    // resolving SalesQuote.quoteNumber server-side (commit 209ca7a).
+    // Use getByText instead of role=columnheader because tanstack-table
+    // wraps headers in a sort-button container, and the accessibility
+    // name on the <th> often doesn't surface the plain header text.
+    const tableHeader = page.getByText(/Quote Number/i)
     const emptyState = page.getByText(/no quote|empty|create one/i)
     await expect(tableHeader.or(emptyState).first()).toBeVisible({ timeout: 15_000 })
   })

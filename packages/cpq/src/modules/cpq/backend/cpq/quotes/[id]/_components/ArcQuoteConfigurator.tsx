@@ -1,5 +1,7 @@
 "use client"
 import * as React from 'react'
+import { Alert } from '@open-mercato/ui/primitives/alert'
+import { NumberInput as BaseNumberInput } from '../../../../../components/NumberInput'
 
 // XD-250 — ARC configurator drawer.
 //
@@ -386,7 +388,7 @@ export default function ArcQuoteConfigurator(
                               : ''}
                           </div>
                           {currencyMismatch && (
-                            <div className="text-xs text-orange-600 mt-1">
+                            <div className="text-xs text-status-warning-text mt-1">
                               Currency mismatch ({s.currencyCode} vs {currencyCode}) — cannot include
                             </div>
                           )}
@@ -397,14 +399,14 @@ export default function ArcQuoteConfigurator(
                 </div>
               )}
               {!cyclesMatch && (
-                <div className="rounded-md bg-orange-50 border border-orange-200 p-2 text-xs text-orange-800">
+                <Alert variant="warning" className="text-xs">
                   Picked targets have different billing cycles — merge requires matching cycles.
-                </div>
+                </Alert>
               )}
               {isMergeRenew && (
-                <div className="rounded-md bg-amber-50 border border-amber-200 p-2 text-xs text-amber-800">
+                <Alert variant="warning" className="text-xs">
                   Merging {pickedList.length} contracts into a new one — sources will be marked Merged at activation.
-                </div>
+                </Alert>
               )}
             </div>
           )}
@@ -570,13 +572,11 @@ export default function ArcQuoteConfigurator(
                   </li>
                 )}
               </ul>
-              <div className="rounded-md bg-yellow-50 border border-yellow-200 p-2 text-xs text-yellow-800">
+              <Alert variant="warning" className="text-xs">
                 Submitting locks the quote type. Lines will be edited on the host page after this completes.
-              </div>
+              </Alert>
               {submitError && (
-                <div className="rounded-md bg-red-50 border border-red-200 p-2 text-xs text-red-700">
-                  {submitError}
-                </div>
+                <Alert variant="destructive" className="text-xs">{submitError}</Alert>
               )}
             </div>
           )}
@@ -586,7 +586,7 @@ export default function ArcQuoteConfigurator(
           )}
 
           {step === 'done' && (
-            <div className="text-sm text-green-700">
+            <div className="text-sm text-status-success-text">
               Done — close to return to the quote.
             </div>
           )}
@@ -686,16 +686,20 @@ function DateInput(props: { label: string; value: string; onChange: (v: string) 
   )
 }
 
+// Local "labelled number" wrapper kept as a string-in/string-out facade so
+// the surrounding code (which threads `value` through `mergeTerm.months` as
+// a string) doesn't have to change. The actual input behaviour comes from
+// the shared `NumberInput` component (select-on-focus + internal string
+// state — see components/NumberInput.tsx for the rationale).
 function NumberInput(props: { label: string; value: string; onChange: (v: string) => void }) {
   return (
     <div>
       <label className="block text-xs text-muted-foreground mb-1">{props.label}</label>
-      <input
-        type="number"
+      <BaseNumberInput
+        integer
         min={1}
-        value={props.value}
-        onChange={(e) => props.onChange(e.target.value)}
-        className="w-full rounded-md border border-input bg-background px-2 py-1.5 text-sm"
+        value={props.value === '' ? null : Number(props.value)}
+        onChange={(n) => props.onChange(n == null ? '' : String(n))}
       />
     </div>
   )

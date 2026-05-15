@@ -32,10 +32,11 @@ test.describe('TC-CPQ-005: CPQ sidebar (UI)', () => {
       // Page must not be a 401 / "access denied" redirect for an admin.
       expect(page.url(), `nav to ${route.url} bounced to ${page.url()}`).toContain(route.url)
 
-      // Top-level heading is present (resilient to translation).
+      // List page renders the title inside DataTable as an <h2> after the
+      // CpqListView refactor (commit 8c64a55); accept any heading level.
       await expect(
-        page.getByRole('heading', { level: 1, name: route.heading }),
-        `expected H1 matching ${route.heading} on ${route.url}`,
+        page.getByRole('heading', { name: route.heading }).first(),
+        `expected heading matching ${route.heading} on ${route.url}`,
       ).toBeVisible({ timeout: 10_000 })
     }
   })

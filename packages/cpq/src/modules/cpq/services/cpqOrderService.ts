@@ -33,6 +33,10 @@ interface OrderListFilters {
   sourceQuoteId?: string
   salesOrderId?: string
   cpqStatus?: string | string[]
+  currencyCode?: string
+  search?: string
+  sortField?: 'createdAt' | 'updatedAt' | 'cpqStatus' | 'activatedAt' | 'currencyCode'
+  sortDir?: 'asc' | 'desc'
   page?: number
   pageSize?: number
 }
@@ -152,6 +156,23 @@ export class DefaultCpqOrderService {
     const blockedStatuses = ['cancelled', 'rejected']
     if (blockedStatuses.includes(cpqConfig.cpqStatus)) {
       throw new OrderError(409, `Cannot convert a quote in '${cpqConfig.cpqStatus}' status`)
+    }
+
+    // Idempotency guard: a quote may only convert once. If an order with
+    // this quote as its `sourceQuoteId` already exists, the UI should
+    // surface "Go to order" instead of re-running conversion — return
+    // 409 with the existing id so the caller can redirect.
+    const existingOrder = await em.findOne(CpqOrderConfiguration, {
+      sourceQuoteId: cpqConfig.id,
+      organizationId: scope.organizationId,
+      tenantId: scope.tenantId,
+      deletedAt: null,
+    })
+    if (existingOrder) {
+      throw new OrderError(
+        409,
+        `Quote has already been converted to order ${existingOrder.orderId}`,
+      )
     }
 
     const quoteLines = await em.find(CpqQuoteLineConfiguration, {
@@ -740,16 +761,28 @@ export class DefaultCpqOrderService {
     if (filters.customerId) where.customerId = filters.customerId
     if (filters.sourceQuoteId) where.sourceQuoteId = filters.sourceQuoteId
     if (filters.salesOrderId) where.orderId = filters.salesOrderId
+    if (filters.currencyCode) where.currencyCode = filters.currencyCode
     if (filters.cpqStatus) {
       where.cpqStatus = Array.isArray(filters.cpqStatus)
         ? { $in: filters.cpqStatus }
         : filters.cpqStatus
     }
 
+    const search = filters.search?.trim()
+    if (search) {
+      where.$or = [
+        { orderId: { $ilike: `%${search}%` } },
+        { customerId: { $ilike: `%${search}%` } },
+      ]
+    }
+
+    const sortField = filters.sortField ?? 'createdAt'
+    const sortDir = filters.sortDir === 'asc' ? 'asc' : 'desc'
+
     const [configs, total] = await this.em.findAndCount(
       CpqOrderConfiguration,
       where,
-      { limit: pageSize, offset, orderBy: { createdAt: 'desc' } },
+      { limit: pageSize, offset, orderBy: { [sortField]: sortDir } },
     )
 
     const orderIds = configs.map((c) => c.orderId)

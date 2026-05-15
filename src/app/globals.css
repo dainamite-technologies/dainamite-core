@@ -261,6 +261,16 @@ TODO: Fix that latter to have reference by the package names
   body {
     @apply bg-background text-foreground;
   }
+  /* Every <button> is interactive unless disabled — Tailwind v4 dropped the
+     UA default. OM's Button primitive sets `cursor-pointer` itself; this rule
+     covers raw <button> tags (tab switchers, picker rows, charge badges, etc).
+     Anchors with hrefs already get the pointer cursor from the UA stylesheet. */
+  button:not(:disabled):not([aria-disabled='true']) {
+    cursor: pointer;
+  }
+  [role='button']:not([aria-disabled='true']) {
+    cursor: pointer;
+  }
   select,
   select option {
     background-color: var(--background);

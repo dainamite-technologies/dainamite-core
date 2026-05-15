@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react'
 import type { WizardStepProps } from '../types'
+import { NumberInput } from '../../components/NumberInput'
 
 type Offering = {
   id: string
@@ -103,7 +104,10 @@ function ConfigPanel({
     }
     if (attr.attributeType === 'number') {
       return (
-        <input type="number" value={value === '' ? '' : Number(value)} onChange={(e) => handleChange(attr.code, e.target.value ? Number(e.target.value) : '')} className="w-full rounded-md border px-3 py-2 text-sm" />
+        <NumberInput
+          value={value === '' || value == null ? null : Number(value)}
+          onChange={(n) => handleChange(attr.code, n ?? '')}
+        />
       )
     }
     return <input type="text" value={String(value)} onChange={(e) => handleChange(attr.code, e.target.value)} className="w-full rounded-md border px-3 py-2 text-sm" />
@@ -125,7 +129,7 @@ function ConfigPanel({
             <div key={attr.code}>
               <label className="block text-sm font-medium mb-1">
                 {attr.name}
-                {attr.isRequired && <span className="text-red-500 ml-0.5">*</span>}
+                {attr.isRequired && <span className="text-destructive ml-0.5">*</span>}
               </label>
               {renderAttribute(attr)}
               {attr.helpText && <p className="text-xs text-muted-foreground mt-1">{attr.helpText}</p>}

@@ -37,7 +37,11 @@ export class DefaultCpqWizardService {
   // ─── Definitions ────────────────────────────────────────────
 
   async listDefinitions(
-    filter: WizardDefinitionFilter,
+    filter: WizardDefinitionFilter & {
+      search?: string | null
+      sortField?: 'createdAt' | 'updatedAt' | 'name' | 'code' | 'surface'
+      sortDir?: 'asc' | 'desc'
+    },
     scope: TenantScope,
     page = 1,
     pageSize = 50,
@@ -50,10 +54,22 @@ export class DefaultCpqWizardService {
     if (filter.surface && filter.surface !== 'any') where.surface = filter.surface
     if (filter.isActive !== undefined) where.isActive = filter.isActive
 
+    const search = filter.search?.trim()
+    if (search) {
+      where.$or = [
+        { code: { $ilike: `%${search}%` } },
+        { name: { $ilike: `%${search}%` } },
+        { description: { $ilike: `%${search}%` } },
+      ]
+    }
+
+    const sortField = filter.sortField ?? 'createdAt'
+    const sortDir = filter.sortDir === 'asc' ? 'asc' : 'desc'
+
     const [items, total] = await this.em.findAndCount(CpqWizardDefinition, where, {
       limit: pageSize,
       offset: (page - 1) * pageSize,
-      orderBy: { createdAt: 'desc' },
+      orderBy: { [sortField]: sortDir },
     })
 
     return {

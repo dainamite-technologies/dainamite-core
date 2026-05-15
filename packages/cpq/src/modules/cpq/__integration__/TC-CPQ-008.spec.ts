@@ -28,7 +28,10 @@ test.describe('TC-CPQ-008: Quotes list (UI)', () => {
     // so we don't pin to a specific row. UI list-load smoke is the goal here.
     // Column was renamed "Quote ID" → "Quote Number" when the list started
     // resolving SalesQuote.quoteNumber server-side (commit 209ca7a).
-    const tableHeader = page.getByRole('columnheader', { name: /Quote Number/i })
+    // Use getByText instead of role=columnheader because tanstack-table
+    // wraps headers in a sort-button container, and the accessibility
+    // name on the <th> often doesn't surface the plain header text.
+    const tableHeader = page.getByText(/Quote Number/i)
     const emptyState = page.getByText(/no quote|empty|create one/i)
     await expect(tableHeader.or(emptyState).first()).toBeVisible({ timeout: 15_000 })
   })

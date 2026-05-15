@@ -23,7 +23,9 @@ test.describe('TC-CPQ-006: Specifications list page (UI)', () => {
     // heading level so the test stays resilient to further layout
     // changes without going stringly-typed.
     await expect(page.getByRole('heading', { name: /Product Specifications/i }).first()).toBeVisible({ timeout: 15_000 })
-    await expect(page.getByRole('button', { name: /New Specification/i })).toBeVisible({ timeout: 15_000 })
+    // CTA is `<Button asChild><a href=...>New Specification</a></Button>`
+    // which renders as a link (role="link"), not a button.
+    await expect(page.getByRole('link', { name: /New Specification/i })).toBeVisible({ timeout: 15_000 })
   })
 
   test('navigates to detail page when an existing spec row is clicked', async ({ page, request }) => {

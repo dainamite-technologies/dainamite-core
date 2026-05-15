@@ -56,8 +56,15 @@ test.describe('TC-CPQ-ARC-005 — Expiring view filter (UI)', () => {
       const body = page.locator('body')
       await expect(body).toContainText(subSoon.code, { timeout: 15_000 })
 
-      // The inline picker is a Radix Select. Open it and pick "30 days".
-      await page.getByRole('combobox', { name: /All subscriptions|Expiring/i }).first().click()
+      // The inline picker is a Radix Select.Trigger with role=combobox.
+      // Accessibility-name matching is brittle (SelectValue can render
+      // before its item mounts), so we target the trigger element
+      // directly and rely on its visible text content for assertions.
+      const picker = page.locator('[role="combobox"]').first()
+      await expect(picker).toBeVisible({ timeout: 15_000 })
+
+      // Open and pick "30 days".
+      await picker.click()
       await page.getByRole('option', { name: /Expiring in 30 days/i }).click()
 
       // 30d window → Soon (5d) + Soonish (20d) visible, Later (60d) NOT.
@@ -66,7 +73,7 @@ test.describe('TC-CPQ-ARC-005 — Expiring view filter (UI)', () => {
       await expect(body).not.toContainText(subLater.code)
 
       // Switch to 90 days → all three appear.
-      await page.getByRole('combobox', { name: /Expiring in 30 days/i }).first().click()
+      await picker.click()
       await page.getByRole('option', { name: /Expiring in 90 days/i }).click()
       await expect(body).toContainText(subLater.code, { timeout: 10_000 })
     } finally {

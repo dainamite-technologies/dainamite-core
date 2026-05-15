@@ -59,7 +59,9 @@ test.describe('TC-CPQ-007: Offerings list page (UI)', () => {
 
       // Title now lives inside DataTable as <h2> (CpqListView refactor).
       await expect(page.getByRole('heading', { name: /Product Offerings/i }).first()).toBeVisible({ timeout: 15_000 })
-      await expect(page.getByRole('button', { name: /New Offering/i })).toBeVisible({ timeout: 15_000 })
+      // CTA is `<Button asChild><a href=...>New Offering</a></Button>`
+      // which renders as a link (role="link"), not a button.
+      await expect(page.getByRole('link', { name: /New Offering/i })).toBeVisible({ timeout: 15_000 })
 
       // Column headers (English fallback)
       const tableScope = page.locator('table').first()

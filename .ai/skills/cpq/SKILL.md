@@ -11,7 +11,30 @@ on GitHub Packages. Read [`packages/cpq/MIGRATION.md`](../../../packages/cpq/MIG
 and [`.ai/specs/SPEC-001-2026-04-23-module-distribution-architecture.md`](../../specs/SPEC-001-2026-04-23-module-distribution-architecture.md)
 before doing anything that affects the public surface.
 
-## Engineering bar — non-negotiable
+## Authority — what this skill does NOT restate
+
+These OM skills (and `AGENTS.md`, which is always loaded) are the authority on
+cross-cutting concerns. **Do not re-derive them from CPQ docs** — if a CPQ
+rule looks the same as one of these, the OM source wins.
+
+| Concern | Authority |
+|---|---|
+| Tenant scoping, organization_id, standard columns, no cross-module ORM, FK strings, DI, openApi export, useT, lucide icons, `pageSize ≤ 100` | [`../../../AGENTS.md`](../../../AGENTS.md) "Architecture Rules" + "Naming Conventions" |
+| Generic components, decomposition / file-size ceilings, scale-first (100k+, no N+1, paginate, indexes), extracted utilities | [`../engineering-principles/SKILL.md`](../engineering-principles/SKILL.md) |
+| Review workflow, CI/CD gate (`yarn generate / typecheck / test / build`), severity classification, output format | [`../code-review/SKILL.md`](../code-review/SKILL.md) |
+| Mock-EM patterns, error-throw forms, `getBaseCurrencyCode` gotcha, what-to-test matrix | [`../unit-tests/SKILL.md`](../unit-tests/SKILL.md) |
+| Entity design, relationships, migration lifecycle, jsonb, cross-module references | [`../data-model-design/SKILL.md`](../data-model-design/SKILL.md) |
+| `CrudForm` / `DataTable` / `FormHeader` / `Page` layout, list+detail page pattern, keyboard shortcuts | [`../backend-ui-design/SKILL.md`](../backend-ui-design/SKILL.md) |
+| L1 / L2 / L3 placement, `@app` vs `@dainamite/*` promotion, when to eject | [`../dainamite-layering/SKILL.md`](../dainamite-layering/SKILL.md) |
+| UMES extension primitives — enrichers, interceptors, widgets, mutation guards, component replacement | [`../system-extension/SKILL.md`](../system-extension/SKILL.md) |
+| Spec writing, spec implementation across phases | [`../spec-writing/SKILL.md`](../spec-writing/SKILL.md), [`../implement-spec/SKILL.md`](../implement-spec/SKILL.md) |
+| MikroORM v6→v7, Knex→Kysely, decorator imports | [`../migrate-mikro-orm/SKILL.md`](../migrate-mikro-orm/SKILL.md) |
+
+The rest of this document is **CPQ-specific** — invariants, domain
+vocabulary, file layout, sub-skill routing — that the OM skills cannot
+know about.
+
+## Engineering bar — CPQ-specific lens
 
 You are working at a **senior Open Mercato engineer / architect** level. That
 is the bar for every change that lands in CPQ. Concretely:
@@ -43,25 +66,22 @@ framework convention. Get this wrong and the code won't even hot-reload.
 - See [`../../CLAUDE.md`](../../../CLAUDE.md) → "Framework reference map"
   for the per-package doc index.
 
-### 1. Senior engineer mindset
+### 1. Senior engineer mindset — CPQ-specific invariants
 
-- **Read before you write.** Open the existing service, validator, migration,
-  and the relevant manual + spec. CPQ is a 6KLOC service layer with non-obvious
-  invariants (charge uniqueness, atomic flush, status state-machines, FK-only
-  cross-module references). Patterns guessed from one file don't transfer.
-- **Identify hidden coupling.** Cross-module ORM relations are forbidden
-  (FK-string only). Two CPQ services sharing an `EntityManager` need
-  `withAtomicFlush`. Status changes propagate through state-machines, not
-  raw property writes. Spot these before changing data shape.
-- **Push back.** If the request would break a documented invariant
-  (FK-string-only, charge-uniqueness, no-direct-sales-mutation, etc.) — call
-  it out and propose the alternative. Don't paper over it with a hack.
-- **No half-finished work.** Either ship the change end-to-end (entity →
-  validator → service → API → UI list → UI detail → tests → manual update)
-  or split the spec into phases and finish each one cleanly.
-- **Idempotent, observable, recoverable.** Worker / activation / cleanup
-  paths must be safe under retry. Server-side errors carry enough context
-  to diagnose without local repro.
+Generic "read before write / no half-finished work / idempotent workers"
+guidance lives in [`../../../AGENTS.md`](../../../AGENTS.md) and
+[`../engineering-principles/SKILL.md`](../engineering-principles/SKILL.md).
+CPQ adds these non-obvious invariants you must know before touching code:
+
+- **CPQ is a ~6KLOC service layer** with hidden coupling — charge uniqueness
+  per offering, `withAtomicFlush` around mutate-then-query on the same EM,
+  status state-machines, FK-only cross-module references. Open the relevant
+  service / manual / spec before guessing.
+- **Status changes propagate through state-machines, not raw property
+  writes.** All four live in `services/types.ts` — see §4 below.
+- **Push back on requests that break a documented CPQ invariant** —
+  FK-string-only, charge-uniqueness, no-direct-sales-mutation. Call it out
+  and propose the alternative.
 
 ### 2. API-first
 
@@ -80,27 +100,21 @@ framework convention. Get this wrong and the code won't even hot-reload.
 5. Every route file MUST `export const openApi`. No exceptions; the OpenAPI
    bundle generation will fail otherwise.
 
-### 3. Every entity has a detail page
+### 3. Every entity has a detail page — CPQ surface conventions
 
-If you introduce a new entity (or expose an existing one in the admin UI),
-you ship **both** a list page and a detail page. The detail page is not
-optional. Concretely:
+The generic list + detail pattern (`FormHeader` in `detail` mode, loading /
+404 / error states, `CrudForm` composition, breadcrumb / `navHidden` /
+`pageGroupKey` wiring) lives in
+[`../backend-ui-design/SKILL.md`](../backend-ui-design/SKILL.md). CPQ-specific
+additions:
 
-- `backend/cpq/<entity>/page.tsx` — list (DataTable)
-- `backend/cpq/<entity>/[id]/page.tsx` — detail (CrudForm in `edit` mode +
-  related sections via injection slots)
-- `backend/cpq/<entity>/[id]/page.meta.ts` — `navHidden: true`, breadcrumb
-  pointing back to the list, same `pageGroup` / `pageGroupKey`
-
-The detail page MUST:
-- Use `FormHeader` in `detail` mode (large title + entity-type label +
-  status badge if applicable + Actions dropdown for `menuActions`).
-- Render `LoadingMessage` / `ErrorMessage` for loading / error / 404 states
-  (treat 404 as a distinct state — don't fall through to a blank `CrudForm`).
-- Expose `crud-form:cpq.<entity>:fields` and `data-table:*` injection
-  surfaces so cross-module add-ons can extend without forking CPQ.
-- Carry the same RBAC features as the list (`cpq.<domain>.view` to read,
-  `cpq.<domain>.manage` to edit).
+- File layout: `backend/cpq/<entity>/page.tsx` (list) +
+  `backend/cpq/<entity>/[id]/page.tsx` (detail) +
+  `[id]/page.meta.ts`.
+- Injection slots: `crud-form:cpq.<entity>:fields` and `data-table:*`
+  MUST be exposed so cross-module add-ons can extend without forking CPQ.
+- RBAC: list uses `cpq.<domain>.view`, detail edit gate uses
+  `cpq.<domain>.manage` (see "ACL features" below for the exact prefixes).
 
 ### 4. Unit tests are obligatory
 
@@ -135,23 +149,23 @@ For end-to-end flows (sidebar, full quote-to-order journey) use the
 Playwright suite — see [`.ai/skills/integration-tests/SKILL.md`](../integration-tests/SKILL.md).
 Unit and integration tests are **complementary, not substitutes**.
 
-### Definition of Done — applies to every CPQ change
+### Definition of Done — CPQ-specific additions
 
-- [ ] Read the relevant manual + spec + sub-skill BEFORE coding
-- [ ] OpenAPI block written / updated for any new or changed route
-- [ ] Validators (Zod) updated; types derived via `z.infer`
+The OM CI/CD gate (`yarn generate / typecheck / test / build`) and the
+framework baseline (FK strings, `useT`, `openApi` export, tenant scope, ACL
+features) are enforced by [`../code-review/SKILL.md`](../code-review/SKILL.md)
+and [`../../../AGENTS.md`](../../../AGENTS.md). Don't restate them in PR
+descriptions. On top of that, every CPQ change ships with:
+
+- [ ] Relevant manual + spec + sub-skill read BEFORE coding (see "Reference
+      reading order" below)
 - [ ] Service-layer changes have unit tests for happy path + each edge
-- [ ] If a new entity is exposed: list page **and** detail page exist
-- [ ] Detail page handles loading / 404 / error states distinctly
-- [ ] Cross-module references are FK strings (no `@ManyToOne` outside CPQ)
+      (see [`../unit-tests/SKILL.md`](../unit-tests/SKILL.md) + §4 below)
 - [ ] `withAtomicFlush` wraps any "mutate scalars then query on same EM"
       sequence
 - [ ] ACL features added to `acl.ts` AND wired in `setup.ts`
-- [ ] User-facing strings via `useT()` / `resolveTranslations()`
-- [ ] `yarn generate` re-run after touching auto-discovered files
-- [ ] `yarn mercato db generate` re-run after entity changes; migration
-      reviewed before applying
-- [ ] `yarn typecheck` and `yarn test` green locally
+      `defaultRoleFeatures` (the CPQ-specific wiring step)
+- [ ] Status enums extended in `services/types.ts`, never inline
 - [ ] Manuals (`manuals/xd-*.md`) updated if behavior changed
 - [ ] `packages/cpq/MIGRATION.md` updated if a public contract changed
 
@@ -206,23 +220,30 @@ CPQ uses `api/<resource>/route.ts` (Next.js style). The framework default for
 new modules is `api/<method>/<path>.ts`. **For CPQ, follow CPQ.** For any new
 sibling module under `src/modules/`, follow the framework default.
 
-## Hard rules
+## Hard rules — CPQ-specific only
 
-- Every entity is tenant-scoped: `organization_id` + `tenant_id` indexed,
-  `created_at` / `updated_at` / `deleted_at` / `is_active` columns, UUID PK.
-- **No ORM relations to non-CPQ entities** — `customer_id`, `product_id`,
-  `quote_id`, etc. are FK strings. Use Response Enrichers / Widget Injection
-  to surface joined data in UI.
-- Status enums live in `services/types.ts` (`CPQ_STATUSES`,
+Framework-wide hard rules (tenant scoping, `organization_id` + standard
+columns, no cross-module ORM, FK strings, `yarn generate` after structural
+edits, `yarn mercato db generate` for entity changes, `useT()` for strings,
+`lucide-react` icons only) are in
+[`../../../AGENTS.md`](../../../AGENTS.md) and apply to every module.
+CPQ adds:
+
+- **Status enums live in `services/types.ts`** (`CPQ_STATUSES`,
   `INVENTORY_SUBSCRIPTION_STATUSES`, `INVENTORY_ASSET_STATUSES`,
-  `CPQ_ORDER_STATUSES`) — extend there, not inline.
-- After editing entities, run `yarn mercato db generate` (NEVER hand-write a
-  migration). Confirm with the user before `yarn mercato db migrate`.
-- After touching `acl.ts`, `ce.ts`, `events.ts`, `data/enrichers.ts`, any
-  `api/`, `subscribers/`, `workers/`, or widget files, run `yarn generate`.
-- All user-facing strings via `useT()` / `resolveTranslations()` — never
-  hardcoded.
-- Sidebar icons via `lucide-react` only.
+  `CPQ_ORDER_STATUSES`) — extend there, not inline. Transition tables
+  (`ALLOWED_TRANSITIONS`, `INVENTORY_SUBSCRIPTION_TRANSITIONS`, etc.) sit
+  alongside.
+- **Charges are unique per offering** (migration
+  `Migration20260331000000_cpq_charge_unique_per_offering.ts`) — guard
+  this invariant before persisting a `CpqProductCharge`.
+- **CPQ does not own the sales quote / order header** — never mutate
+  `sales_*` rows directly; go through `salesQuoteService` /
+  `salesOrderService` or emit a domain event.
+- **CPQ uses `api/<resource>/route.ts`** (Next.js style), not the framework
+  default `api/<method>/<path>.ts`. See "Routing convention" below.
+- **CPQ DI uses closure resolution** (`container.resolve(...)` inside each
+  factory). See "DI quirk" below.
 
 ## ACL features (don't invent new prefixes)
 
@@ -253,18 +274,20 @@ When evaluating raw granted features in runtime code, use `hasFeature` /
 6. [`manuals/xd-250-arc-flow.md`](../../../manuals/xd-250-arc-flow.md) + [`specs/implementation/xd-250-arc-spec.md`](../../../specs/implementation/xd-250-arc-spec.md) — Amend / Renew / Cancel operator flow on live subscriptions
 7. [`specs/implementation/`](../../../specs/implementation/) — the long-form specs behind each manual
 
-## Self-review checklist (CPQ-specific)
+## Self-review checklist — CPQ-specific only
+
+Framework-wide checks (FK strings, tenant scoping, translations, `yarn
+generate`, `yarn mercato db generate`) are covered by
+[`../code-review/SKILL.md`](../code-review/SKILL.md) and
+[`../../../AGENTS.md`](../../../AGENTS.md). CPQ-specific additions:
 
 - [ ] Touched only files under `src/modules/cpq/` — no leakage into other
-      `src/modules/<x>/`.
-- [ ] All cross-module references are FK strings, not ORM relations.
-- [ ] Entities are tenant-scoped with the standard columns.
+      `src/modules/<x>/` (customer tweaks belong in
+      `src/modules/@app/<feature>/`).
 - [ ] Used the closure-resolution DI pattern for new services.
-- [ ] Followed `api/<resource>/route.ts` layout.
+- [ ] Followed `api/<resource>/route.ts` layout (not the framework default).
 - [ ] Status enums updated in `services/types.ts`, not inline.
 - [ ] ACL features added to `acl.ts` AND wired in `setup.ts`
       `defaultRoleFeatures`.
-- [ ] User-facing strings translated.
-- [ ] Ran `yarn generate` and `yarn mercato db generate` as appropriate.
 - [ ] Documented any breaking change in [`packages/cpq/MIGRATION.md`](../../../packages/cpq/MIGRATION.md)
       so it lands in the eventual `@dainamite/cpq` CHANGELOG.

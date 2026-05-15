@@ -187,25 +187,30 @@ export function SubscriptionsTable() {
     data.setFilterValues(next)
   }
 
+  // Render the picker inline with the DataTable's title-row actions
+  // (right next to Refresh / kebab menu) so it sits flush with the
+  // card chrome instead of floating outside.
+  const expiringPicker = (
+    <Select value={currentExpiring} onValueChange={onExpiringChange}>
+      <SelectTrigger className="h-9 w-[200px]">
+        <SelectValue placeholder="All subscriptions" />
+      </SelectTrigger>
+      <SelectContent>
+        {EXPIRING_WINDOWS.map((w) => (
+          <SelectItem key={w.value} value={w.value}>
+            {w.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  )
+
   return (
     <>
       {rowActionsApi.ConfirmDialogElement}
-      <div className="flex justify-end -mb-2">
-        <Select value={currentExpiring} onValueChange={onExpiringChange}>
-          <SelectTrigger className="w-[220px]">
-            <SelectValue placeholder="All subscriptions" />
-          </SelectTrigger>
-          <SelectContent>
-            {EXPIRING_WINDOWS.map((w) => (
-              <SelectItem key={w.value} value={w.value}>
-                {w.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
       <DataTable<Subscription>
       title={t('cpq.inventory.subscriptions', 'Subscriptions')}
+      actions={expiringPicker}
       refreshButton={{
         label: t('cpq.inventory.actions.refresh', 'Refresh'),
         onRefresh: data.reload,

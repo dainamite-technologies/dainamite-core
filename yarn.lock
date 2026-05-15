@@ -890,6 +890,7 @@ __metadata:
     "@open-mercato/events": ^0.6.0
     "@open-mercato/shared": ^0.6.0
     "@open-mercato/ui": ^0.6.0
+    "@tanstack/react-table": ^8.0.0 || ^9.0.0
     awilix: ^12.0.0
     bcryptjs: ^3.0.0
     lucide-react: ^0.400.0

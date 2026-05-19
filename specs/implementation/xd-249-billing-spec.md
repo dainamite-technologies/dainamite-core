@@ -1049,10 +1049,99 @@ weeks (end of Phase 2).
 |-------|--------|------|-------|
 | Phase 0 — Scaffold | Done | 2026-05-19 | Workspace, 6 entities, 12 ACL features, setup.ts, reaper worker stub, initial migration, 76 unit tests passing |
 | Phase 1 — REST API | Done | 2026-05-19 | 3 CRUD routes via `makeCrudRoute`, lean command pattern (no undo yet), `source_ref` idempotency on items + usage, per-tenant advisory-lock primitive ready for Phase 2, 119 unit tests passing |
-| Phase 2 — Bill Run engine | Not Started | — | — |
+| Phase 2 — Bill Run engine | Done | 2026-05-19 | Bill Run orchestrator (lock + savepoints + dry/test/real + catch-up + open-draft check + item-level guard); calendar-aware period math (month-end clamp); item selector; invoice writer (creates `core/sales` drafts with full metadata); trigger + retry-failed commands; 3 new API routes; 166 unit tests passing |
 | Phase 3 — Usage rating | Not Started | — | — |
 | Phase 4 — Admin UI + v1 release | Not Started | — | — |
 | Phase 5 — `@dainamite/cpq-billing-connector` | Not Started | — | — |
+
+### Phase 2 — Detailed Progress
+
+- [x] `lib/billPeriod.ts` — calendar-aware cycle arithmetic.
+      `deriveBillPeriod(nextBillDate, cycle) → { periodStart, periodEnd }`,
+      `advanceNextBillDate(...)`, `isCycleDue(...)`. Hand-rolled
+      month-end clamp (JS `setUTCMonth` overflows, doesn't clamp), so
+      `Jan 31 + 1 month → Feb 29` (leap) and `Mar 31 - 1 month → Feb 28`
+      match Postgres `+ interval '1 month'` semantics.
+- [x] `lib/itemSelector.ts` — predicates the spec's
+      "Mid-cycle recurring items" rule and the per-item `billed_to_date`
+      guard. Skip reasons are surfaced for diagnostics. `usage` items
+      route to the Phase 3 rater (not yet implemented; selector returns
+      `reason: 'usage-handled-by-rater'`).
+- [x] `lib/invoiceWriter.ts` — direct create of `core/sales`
+      `SalesInvoice` + `SalesInvoiceLine` rows with the spec's
+      `metadata` shape. Resolves the draft `DictionaryEntry` once per
+      `(tenantId, organizationId)` and caches it. Builds invoice lines
+      from items per the spec's per-type pricing rules. Test mode uses
+      a `TEST-<uuid>` placeholder number so production sequences don't
+      advance.
+- [x] `lib/billRunEngine.ts` — full orchestrator:
+      - Wraps in `withTenantLock(...)` (Phase 1 primitive) for at-most-
+        one-run-per-tenant concurrency.
+      - Creates `BillRun` row with `status='running'`.
+      - Selects accounts where `next_bill_date <= as_of_date`,
+        scoped by `scopedAccountIds` when set.
+      - Each account runs inside an `em.transactional(...)` (PG
+        SAVEPOINT) so per-account failure rolls back only that
+        account's work.
+      - Modes: `real` (persist + advance), `test` (persist as test,
+        no advance), `dry` (compute only).
+      - Catch-up loop on manual + `catch_up=true` (max 60 cycles
+        safety cap).
+      - Open-draft anti-duplicate via direct SQL on
+        `sales_invoices.metadata->>'bill_account_id' / 'bill_period_*'`.
+      - Item-level `billed_to_date` set on real-mode success.
+      - Account `next_bill_date` + `last_bill_date` advance on
+        real-mode success.
+      - Aggregates outcomes into `BillRun.summary` with the spec's
+        `{ accounts_processed, drafts_created, drafts_skipped_existing,
+        accounts_failed, accounts_with_warnings, usage_records_rated }`
+        shape.
+      - Returns `partial_failure` when any outcome is `failed`, else
+        `completed`.
+- [x] Trigger + retry commands (`commands/runs.ts`):
+      - `billing.runs.trigger` — manual trigger; `triggeredBy='manual'`
+        injected by route layer (not client-controllable).
+      - `billing.runs.retry_failed` — re-runs failed accounts of a
+        parent run, inheriting `asOfDate` / `catch_up` and setting
+        `parent_run_id`. Throws 409 if there are no failed outcomes.
+      - Both map `TenantLockBusyError` to HTTP 409 with
+        `code: 'billing.run.lock_busy'`.
+- [x] REST routes:
+      - `GET / POST /api/billing/runs` (list + manual trigger)
+      - `POST /api/billing/runs/retry-failed`
+      - `GET /api/billing/run-outcomes`
+- [x] Unit tests: `billPeriod.test.ts` (16 cases — spec reference
+      table + leap-year + chained drift), `itemSelector.test.ts` (15
+      cases — every inclusion / skip path), `invoiceWriter.test.ts`
+      (8 cases — per-type pricing, rounding edge cases, usage
+      exclusion), `billRunEngine.test.ts` (8 cases — happy path,
+      zero-accounts, open-draft skip, dry-run, test-mode, currency
+      mismatch warnings, empty-items advance, multi-account summary).
+- [x] Full validation gate green: `yarn workspace @dainamite/billing
+      build`, `yarn generate` (routes auto-discovered in
+      `api-routes.generated.ts`), `yarn typecheck`, `yarn test` (35
+      suites, 726 total tests, 0 regressions).
+
+### Phase 2 — Deviations from spec
+
+1. **`SalesInvoice.invoice_number` is `NOT NULL` upstream** (vs the
+   spec's "sequence number assigned at Post"). Real-mode drafts get a
+   real number via `salesDocumentNumberGenerator.generate({ kind:
+   'invoice' })` at draft-create time. Gap-free atomic SQL upsert
+   semantics are preserved; only the timing differs from the spec
+   wording. Phase 4 (post + status transition) does NOT re-assign the
+   number — "Post" just transitions status `draft → posted`.
+
+2. **Test-mode invoice numbers use a `TEST-<uuid>` placeholder** rather
+   than the real sequence. Test runs stay idempotent and don't burn
+   production numbers. The wipe-out endpoint
+   (`DELETE /api/billing/test-invoices?bill_run_id=X` — Phase 4) can
+   filter both by `metadata.test_run=true` and by the prefix.
+
+3. **VAT not computed on drafts.** Per the spec, `core/sales` tax
+   service owns `tax_rate` / `tax_amount`. The engine ships zeroes in
+   those columns; gross == net for the draft. Phase 4 post operation
+   will run the tax service.
 
 ### Phase 1 — Detailed Progress
 

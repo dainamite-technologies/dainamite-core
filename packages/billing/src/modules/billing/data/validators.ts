@@ -398,3 +398,42 @@ export type BillingUsageListQuery = z.infer<typeof billingUsageListQuerySchema>
 // Suppress unused-export TS warning — `ratePayloadByType` is reserved for
 // reuse by a future per-tenant rate-validation CLI tool.
 void ratePayloadByType
+
+// ─── Bill Run trigger payloads (Phase 2) ─────────────────────────
+
+export const BILL_RUN_MODES = ['real', 'test', 'dry'] as const
+export type BillRunMode = (typeof BILL_RUN_MODES)[number]
+
+export const billingRunTriggerSchema = scopedSchema.extend({
+  // `triggeredBy` is filled in by the route layer (always 'manual' for
+  // API triggers; the cron worker sets 'schedule'). The client cannot
+  // forge a 'schedule' trigger — the field is intentionally omitted
+  // from the input shape.
+  mode: z.enum(BILL_RUN_MODES).default('real'),
+  asOfDate: z.coerce.date().optional(),
+  scopedAccountIds: z.array(z.string().uuid()).optional(),
+  catchUp: z.boolean().optional(),
+})
+
+export type BillingRunTriggerInput = z.infer<typeof billingRunTriggerSchema>
+
+export const billingRunRetryFailedSchema = scopedSchema.extend({
+  billRunId: z.string().uuid(),
+  mode: z.enum(BILL_RUN_MODES).default('real'),
+})
+
+export type BillingRunRetryFailedInput = z.infer<typeof billingRunRetryFailedSchema>
+
+export const billingRunListQuerySchema = z
+  .object({
+    ...listPaginationBase,
+    status: z.enum(BILL_RUN_STATUSES).optional(),
+    triggeredBy: z.enum(BILL_RUN_TRIGGERS).optional(),
+    parentRunId: z.string().uuid().optional(),
+    asOfDateFrom: z.coerce.date().optional(),
+    asOfDateTo: z.coerce.date().optional(),
+  })
+  .passthrough()
+
+export type BillingRunListQuery = z.infer<typeof billingRunListQuerySchema>
+

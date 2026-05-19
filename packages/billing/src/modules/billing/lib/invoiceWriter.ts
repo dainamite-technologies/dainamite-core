@@ -4,13 +4,13 @@ import {
   SalesInvoice,
   SalesInvoiceLine,
 } from '@open-mercato/core/modules/sales/data/entities'
-import {
-  Dictionary,
-  DictionaryEntry,
-} from '@open-mercato/core/modules/dictionaries/data/entities'
 import type { SalesDocumentNumberGenerator } from '@open-mercato/core/modules/sales/services/salesDocumentNumberGenerator'
 import type { BillingAccount, BillingItem } from '../data/entities'
 import type { BillPeriod } from './billPeriod'
+import {
+  __resetInvoiceStatusCacheForTests,
+  resolveInvoiceStatusEntryId,
+} from './invoiceStatus'
 
 /**
  * Writes a `core/sales` draft invoice for a billing account's bill period.
@@ -69,46 +69,13 @@ export type WrittenInvoice = {
 }
 
 const DRAFT_INVOICE_STATUS_VALUE = 'draft'
-const SALES_INVOICE_STATUS_DICTIONARY_KEY = 'sales.invoice_status'
-
-const draftStatusEntryCache = new Map<string, string>()
-
-function statusCacheKey(tenantId: string, organizationId: string): string {
-  return `${tenantId}:${organizationId}`
-}
-
-async function resolveDraftStatusEntryId(
-  em: EntityManager,
-  tenantId: string,
-  organizationId: string,
-): Promise<string | null> {
-  const key = statusCacheKey(tenantId, organizationId)
-  const cached = draftStatusEntryCache.get(key)
-  if (cached) return cached
-  const dictionary = await em.findOne(Dictionary, {
-    tenantId,
-    organizationId,
-    key: SALES_INVOICE_STATUS_DICTIONARY_KEY,
-    deletedAt: null,
-  })
-  if (!dictionary) return null
-  const entry = await em.findOne(DictionaryEntry, {
-    dictionary,
-    tenantId,
-    organizationId,
-    value: DRAFT_INVOICE_STATUS_VALUE,
-  })
-  if (!entry) return null
-  draftStatusEntryCache.set(key, entry.id)
-  return entry.id
-}
 
 /**
- * Test hook — clears the resolved-status cache. Unit tests reset
- * between runs so the cache doesn't leak across mocked EMs.
+ * Test hook — clears the shared resolver's status cache so the engine
+ * test suite stays deterministic across mocked-EM environments.
  */
 export function __resetInvoiceWriterCacheForTests(): void {
-  draftStatusEntryCache.clear()
+  __resetInvoiceStatusCacheForTests()
 }
 
 function generateTestInvoiceNumber(): string {
@@ -173,10 +140,11 @@ export async function writeDraftInvoice(
     invoiceNumber = generated.number
   }
 
-  const statusEntryId = await resolveDraftStatusEntryId(
+  const statusEntryId = await resolveInvoiceStatusEntryId(
     em,
     account.tenantId,
     account.organizationId,
+    'draft',
   )
 
   const now = new Date()

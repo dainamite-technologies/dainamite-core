@@ -437,3 +437,11 @@ export const billingRunListQuerySchema = z
 
 export type BillingRunListQuery = z.infer<typeof billingRunListQuerySchema>
 
+// ─── Invoice post (Phase 4) ──────────────────────────────────────
+
+export const billingInvoicePostSchema = scopedSchema.extend({
+  invoiceId: z.string().uuid(),
+})
+
+export type BillingInvoicePostInput = z.infer<typeof billingInvoicePostSchema>
+

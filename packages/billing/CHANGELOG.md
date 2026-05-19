@@ -1,5 +1,47 @@
 # @dainamite/billing
 
+## 0.5.0 — Phase 4a posting + payment subscriber (unreleased)
+
+- **Post invoice command** `billing.invoices.post`:
+  - Asserts the invoice is currently `draft` (refuses with HTTP 409 +
+    `billing.invoice.not_draft` otherwise).
+  - Refuses test-mode invoices (`metadata.test_run=true`) with HTTP
+    409 + `billing.invoice.test_run` — operators wipe test drafts
+    through a dedicated endpoint (Phase 4b), never by posting them.
+  - Resolves the `posted` `DictionaryEntry` once via the shared
+    cache, flips `status` + `status_entry_id`.
+  - Emits `billing.invoice.posted` once + one
+    `billing.invoice.line_posted` per line. Events carry the
+    spec-mandated traceability payload (`billRunId`, `billAccountId`,
+    `billPeriodStart` / `End`, line metadata).
+  - Invoice number is **not** re-assigned at post (Phase 2 deviation:
+    `SalesInvoice.invoice_number` is `NOT NULL` upstream → numbers
+    are issued at draft-create via `salesDocumentNumberGenerator`).
+- **Post API route** `POST /api/billing/invoices/post`. RBAC-gated by
+  the new `billing.invoice.post` feature (already declared in
+  `acl.ts` since Phase 0). Returns
+  `{ invoiceId, invoiceNumber, status: 'posted', lineCount }`.
+- **Payment-captured subscriber**
+  `subscribers/payment-captured-to-paid.ts`:
+  - Listens to `payment_gateways.payment.captured` (the actual
+    upstream event — the spec's `payments.payment.completed` doesn't
+    exist; this resolves the Phase 0-flagged deviation #2).
+  - Matches `payload.paymentId` against `SalesInvoice.id` scoped by
+    tenant + organization. Foreign payments (non-billing invoices) →
+    silent no-op. Idempotent re-fire on already-paid invoices.
+  - Sets `paidTotalAmount = grand_total_gross`, `outstanding = 0`,
+    `status = 'paid'`, `status_entry_id = <paid entry>`.
+- **Shared invoice-status resolver** in `lib/invoiceStatus.ts` —
+  factored out of `invoiceWriter`'s previously-private cache so the
+  draft/posted/paid lookups share one chokepoint. Per-tenant +
+  per-status cache.
+- 6 new unit tests for the resolver (199 total for billing).
+
+Deferred to **Phase 4b**:
+- Draft-edit endpoint + `DraftInvoiceEdit` audit row writing.
+- GDPR-portability `GET /api/billing/export/account/{id}`.
+- Admin UI (backend pages for accounts / items / runs / draft review).
+
 ## 0.4.0 — Phase 3 usage rating (unreleased)
 
 - **Usage rater** in `lib/usageRater.ts` — pure functions for all four

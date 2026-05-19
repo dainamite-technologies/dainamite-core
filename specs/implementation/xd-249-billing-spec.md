@@ -1051,7 +1051,8 @@ weeks (end of Phase 2).
 | Phase 1 — REST API | Done | 2026-05-19 | 3 CRUD routes via `makeCrudRoute`, lean command pattern (no undo yet), `source_ref` idempotency on items + usage, per-tenant advisory-lock primitive ready for Phase 2, 119 unit tests passing |
 | Phase 2 — Bill Run engine | Done | 2026-05-19 | Bill Run orchestrator (lock + savepoints + dry/test/real + catch-up + open-draft check + item-level guard); calendar-aware period math (month-end clamp); item selector; invoice writer (creates `core/sales` drafts with full metadata); trigger + retry-failed commands; 3 new API routes; 166 unit tests passing |
 | Phase 3 — Usage rating | Done | 2026-05-19 | All four rate shapes (simple flat + volume / graduated / flat tier); usage runner aggregates records per `uom_code`, rates, emits one line per matched item; `rated_in_bill_run_id` marking via bulk update; `unmatched_usage_uoms` warning; per-tier breakdown in invoice-line metadata; 193 unit tests passing. Per-record `line_description` itemization deferred to Phase 4. |
-| Phase 4 — Admin UI + v1 release | Not Started | — | — |
+| Phase 4a — Posting + payment subscriber | Done | 2026-05-19 | `billing.invoices.post` command + `POST /api/billing/invoices/post`; refuses non-draft + test-mode; fires `billing.invoice.posted` + per-line events. Payment-captured subscriber wires `paymentId == invoiceId` matches to `posted→paid`. Shared invoice-status resolver. 199 unit tests passing. Resolves Phase 0 deviation #2. |
+| Phase 4b — Admin UI + draft edit + GDPR | Not Started | — | Backend pages (account / item / run / draft review), draft-edit endpoint with `DraftInvoiceEdit` auditing, GDPR portability export. |
 | Phase 5 — `@dainamite/cpq-billing-connector` | Not Started | — | — |
 
 ### Phase 2 — Detailed Progress

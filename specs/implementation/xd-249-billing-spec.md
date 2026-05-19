@@ -1053,7 +1053,7 @@ weeks (end of Phase 2).
 | Phase 3 — Usage rating | Done | 2026-05-19 | All four rate shapes (simple flat + volume / graduated / flat tier); usage runner aggregates records per `uom_code`, rates, emits one line per matched item; `rated_in_bill_run_id` marking via bulk update; `unmatched_usage_uoms` warning; per-tier breakdown in invoice-line metadata; 193 unit tests passing. Per-record `line_description` itemization deferred to Phase 4. |
 | Phase 4a — Posting + payment subscriber | Done | 2026-05-19 | `billing.invoices.post` command + `POST /api/billing/invoices/post`; refuses non-draft + test-mode; fires `billing.invoice.posted` + per-line events. Payment-captured subscriber wires `paymentId == invoiceId` matches to `posted→paid`. Shared invoice-status resolver. 199 unit tests passing. Resolves Phase 0 deviation #2. |
 | Phase 4b — Admin UI + draft edit + GDPR | Not Started | — | Backend pages (account / item / run / draft review), draft-edit endpoint with `DraftInvoiceEdit` auditing, GDPR portability export. |
-| Phase 5 — `@dainamite/cpq-billing-connector` | Not Started | — | — |
+| Phase 5 — `@dainamite/cpq-billing-connector` | Done | 2026-05-19 | New `packages/cpq-billing-connector/` workspace. 6 subscribers (`activated` / `amended` / `renewed` / `cancelled` / `merged` / `superseded`). `chargeMapper` (CPQ charge → billing item payload, one_time + recurring split, deterministic `source_ref`), `prorationHelper` (linear-days, half-up 2dp), `billingApiClient` (commandBus-backed wrapper). 23 unit tests. Upstream PR to CPQ for `cpq.subscription.activated` event still pending — subscriber is registered today and will start firing once the event lands. |
 
 ### Phase 2 — Detailed Progress
 

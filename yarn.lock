@@ -901,6 +901,25 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@dainamite/cpq-billing-connector@workspace:packages/cpq-billing-connector":
+  version: 0.0.0-use.local
+  resolution: "@dainamite/cpq-billing-connector@workspace:packages/cpq-billing-connector"
+  dependencies:
+    chokidar: "npm:^4.0.3"
+  peerDependencies:
+    "@dainamite/billing": ^0.5.0
+    "@dainamite/cpq": ^0.2.0
+    "@mikro-orm/core": ^7.0.0
+    "@mikro-orm/decorators": ^7.0.0
+    "@mikro-orm/postgresql": ^7.0.0
+    "@open-mercato/core": ^0.6.0
+    "@open-mercato/events": ^0.6.0
+    "@open-mercato/shared": ^0.6.0
+    awilix: ^12.0.0
+    zod: ^4.0.0
+  languageName: unknown
+  linkType: soft
+
 "@dainamite/cpq@workspace:packages/cpq":
   version: 0.0.0-use.local
   resolution: "@dainamite/cpq@workspace:packages/cpq"

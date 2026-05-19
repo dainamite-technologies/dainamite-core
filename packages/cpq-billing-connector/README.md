@@ -1,0 +1,41 @@
+# @dainamite/cpq-billing-connector
+
+Pre-built integration that wires `@dainamite/cpq` subscription lifecycle
+events to `@dainamite/billing` API calls.
+
+Install it as a sibling module alongside `@dainamite/cpq` and
+`@dainamite/billing`:
+
+```typescript
+// src/modules.ts
+{ id: 'cpq', from: '@dainamite/cpq' }
+{ id: 'billing', from: '@dainamite/billing' }
+{ id: 'cpq_billing_connector', from: '@dainamite/cpq-billing-connector' }
+```
+
+The connector subscribes to six CPQ lifecycle events and translates each
+to the billing API contract:
+
+| CPQ event | Connector action |
+|---|---|
+| `cpq.subscription.activated` *(NEW — upstream PR pending)* | Create Billing Account if missing; create Billing Items per charge (one-time + recurring split) |
+| `cpq.subscription.amended` | Create new Billing Items for added subscription items; compute proration value for the partial cycle and post as `one_time` Billing Item; set `bill_end_date` on removed items |
+| `cpq.subscription.renewed` | Extend `bill_end_date` on existing Billing Items; create new Items for any added subscription items |
+| `cpq.subscription.cancelled` | Set `bill_end_date` on all Billing Items for the subscription |
+| `cpq.subscription.merged` | Move Billing Items from source subscriptions to the merged subscription (update `subscription_id`) |
+| `cpq.subscription.superseded` | Set `bill_end_date` on all Billing Items for the superseded subscription |
+
+## Status
+
+**Phase 5 — initial release.** Subscribers cover the 5 CPQ events that
+exist today; the `cpq.subscription.activated` subscriber is in place but
+will only start firing after the upstream CPQ PR adds the event. Proration
+math lives in this package per the spec (CPQ stays neutral on billing
+calendar semantics).
+
+See [`specs/implementation/xd-249-billing-spec.md`](../../specs/implementation/xd-249-billing-spec.md)
+§ CPQ Integration for the full design.
+
+## License
+
+MIT

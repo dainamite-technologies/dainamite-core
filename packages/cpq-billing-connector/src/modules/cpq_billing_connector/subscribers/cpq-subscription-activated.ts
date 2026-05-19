@@ -1,0 +1,125 @@
+import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
+import { BillingApiClient, type Scope, type AccountSeed } from '../lib/billingApiClient'
+import { mapSubscriptionItemsToBillingItems } from '../lib/chargeMapper'
+import type { CpqSubscriptionItem } from '../lib/chargeMapper'
+
+/**
+ * Subscriber: `cpq.subscription.activated` → billing onboarding.
+ *
+ * **Status:** the event itself does not yet exist in the upstream
+ * `@dainamite/cpq` events list — it's the one new event the Phase 5
+ * upstream PR adds. Registering the subscriber today is a no-op
+ * until that PR lands; nothing breaks.
+ *
+ * Behaviour when fired:
+ *   1. Get-or-create the Billing Account for `(tenant, org, customerId)`.
+ *      Missing account → shell account with placeholders (operator
+ *      must configure before billing fires). `nextBillDate` defaults
+ *      to today + one month so the Bill Run won't bill an under-
+ *      configured account until the operator advances it.
+ *   2. For every charge on every CPQ subscription item, create a
+ *      Billing Item via `billing.items.create`. `source_ref` is the
+ *      deterministic `cpq-<subId>-<subItemId>-<chargeType>` key, so
+ *      re-firing the activation event hits the idempotency guard
+ *      instead of duplicating items.
+ *
+ * Errors propagate to the persistent queue worker, which retries
+ * per the OM queue contract.
+ */
+
+export const metadata = {
+  event: 'cpq.subscription.activated',
+  persistent: true,
+  id: 'cpq-billing-connector:subscription-activated',
+}
+
+type ActivatedPayload = {
+  tenantId: string
+  organizationId: string
+  subscriptionId: string
+  customerId: string
+  currencyCode: string
+  /** Optional richer customer fields — used when present, otherwise placeholders. */
+  customerName?: string
+  invoiceEmail?: string
+  invoiceLanguage?: string
+  invoiceAddress?: Record<string, unknown>
+  billCycle?: 'monthly' | 'quarterly' | 'annually' | 'weekly'
+  billCycleAnchor?: string
+  nextBillDate?: string
+  taxId?: string | null
+  items: CpqSubscriptionItem[]
+  /** Activation date — used as bill_start_date on every created item. */
+  activationDate?: string
+}
+
+function isoDateAddMonths(months: number): string {
+  const d = new Date()
+  d.setUTCMonth(d.getUTCMonth() + months)
+  return d.toISOString().slice(0, 10)
+}
+
+function todayIsoDate(): string {
+  return new Date().toISOString().slice(0, 10)
+}
+
+function buildAccountSeed(payload: ActivatedPayload): AccountSeed {
+  return {
+    customerId: payload.customerId,
+    name: payload.customerName ?? `Customer ${payload.customerId}`,
+    currencyCode: payload.currencyCode,
+    billCycle: payload.billCycle ?? 'monthly',
+    billCycleAnchor: payload.billCycleAnchor ?? '1',
+    invoiceEmail:
+      payload.invoiceEmail ?? `billing+${payload.customerId}@invalid.local`,
+    invoiceLanguage: payload.invoiceLanguage ?? 'en',
+    invoiceAddress: payload.invoiceAddress ?? {
+      line1: 'TBD',
+      city: 'TBD',
+      postal_code: 'TBD',
+      country: 'XX',
+    },
+    nextBillDate: payload.nextBillDate
+      ? new Date(payload.nextBillDate)
+      : new Date(isoDateAddMonths(1)),
+    taxId: payload.taxId ?? null,
+  }
+}
+
+export default async function handle(payload: ActivatedPayload): Promise<void> {
+  if (!payload?.tenantId || !payload.organizationId || !payload.customerId) {
+    return
+  }
+  if (!payload.subscriptionId || !Array.isArray(payload.items) || payload.items.length === 0) {
+    return
+  }
+
+  const container = await createRequestContainer()
+  const billingApi = new BillingApiClient(container)
+  const scope: Scope = {
+    tenantId: payload.tenantId,
+    organizationId: payload.organizationId,
+  }
+
+  const account = await billingApi.getOrCreateAccount(scope, buildAccountSeed(payload))
+
+  const billStartDate = payload.activationDate ?? todayIsoDate()
+  const itemPayloads = mapSubscriptionItemsToBillingItems({
+    subscriptionId: payload.subscriptionId,
+    items: payload.items,
+    billStartDate,
+  })
+
+  for (const item of itemPayloads) {
+    await billingApi.createItem(scope, {
+      billAccountId: account.id,
+      type: item.type,
+      billStartDate: item.billStartDate,
+      description: item.description,
+      rateJson: item.rateJson,
+      subscriptionId: item.subscriptionId,
+      subscriptionItemId: item.subscriptionItemId,
+      sourceRef: item.sourceRef,
+    })
+  }
+}

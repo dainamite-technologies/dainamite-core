@@ -1,0 +1,530 @@
+import { OptionalProps } from '@mikro-orm/core'
+import { Entity, Index, PrimaryKey, Property, Unique } from '@mikro-orm/decorators/legacy'
+
+// ─── BillingAccount ──────────────────────────────────────────────
+//
+// A container per customer (typically one customer = one account, but the
+// engine does not enforce uniqueness — multi-account-per-customer is a
+// legitimate model for B2B with separate budgets / currencies / branches).
+//
+// The `(tenant_id, next_bill_date)` partial index is the Bill Run hot path —
+// every nightly run filters on it.
+
+@Entity({ tableName: 'billing_accounts' })
+@Index({
+  name: 'billing_accounts_next_bill_date_idx',
+  properties: ['tenantId', 'nextBillDate'],
+  expression:
+    'CREATE INDEX "billing_accounts_next_bill_date_idx" ON "billing_accounts" ("tenant_id", "next_bill_date") WHERE "deleted_at" IS NULL',
+})
+@Index({
+  name: 'billing_accounts_customer_idx',
+  properties: ['organizationId', 'tenantId', 'customerId'],
+})
+@Index({
+  name: 'billing_accounts_sort_idx',
+  properties: ['organizationId', 'tenantId', 'deletedAt', 'createdAt'],
+})
+export class BillingAccount {
+  [OptionalProps]?:
+    | 'taxId'
+    | 'lastBillDate'
+    | 'isActive'
+    | 'createdAt'
+    | 'updatedAt'
+    | 'deletedAt'
+
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @Property({ name: 'organization_id', type: 'uuid' })
+  organizationId!: string
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  // String FK to customers.person.id (or any external customer system).
+  // Kept as text so the package stays installable without the customers
+  // module — see SPEC-001 cross-package data rule.
+  @Property({ name: 'customer_id', type: 'text' })
+  customerId!: string
+
+  @Property({ type: 'text' })
+  name!: string
+
+  // ISO 4217 currency code. An account is single-currency by design —
+  // multi-currency = multiple accounts.
+  @Property({ name: 'currency_code', type: 'text' })
+  currencyCode!: string
+
+  // 'monthly' | 'quarterly' | 'annually' | 'weekly'. Validated at API ingress.
+  @Property({ name: 'bill_cycle', type: 'text' })
+  billCycle!: string
+
+  // Day-of-month for monthly/quarterly/annually (1–28), or weekday code
+  // ('mon'…'sun') for weekly. Text so both shapes coexist.
+  @Property({ name: 'bill_cycle_anchor', type: 'text' })
+  billCycleAnchor!: string
+
+  @Property({ name: 'invoice_email', type: 'text' })
+  invoiceEmail!: string
+
+  // ISO 639-1 (`en`, `pl`, …). Used by mailer / template renderer.
+  @Property({ name: 'invoice_language', type: 'text' })
+  invoiceLanguage!: string
+
+  // NIP / VATIN / TaxID. Nullable for individuals without a registered tax ID.
+  @Property({ name: 'tax_id', type: 'text', nullable: true })
+  taxId?: string | null
+
+  // { line1, line2?, city, postal_code, country } — JSONB because address
+  // shape differs across countries and we never query by address fields.
+  @Property({ name: 'invoice_address', type: 'jsonb' })
+  invoiceAddress!: Record<string, unknown>
+
+  // Anchor of the NEXT bill period to be processed (advanced by Bill Run
+  // on success). Date-only — calendar-aware cycle arithmetic.
+  @Property({ name: 'next_bill_date', type: 'date', columnType: 'date' })
+  nextBillDate!: Date
+
+  // Anchor of the most recently billed period; null for fresh accounts.
+  @Property({ name: 'last_bill_date', type: 'date', columnType: 'date', nullable: true })
+  lastBillDate?: Date | null
+
+  @Property({ name: 'is_active', type: 'boolean', default: true })
+  isActive: boolean = true
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+
+  @Property({ name: 'updated_at', type: Date, onUpdate: () => new Date() })
+  updatedAt: Date = new Date()
+
+  @Property({ name: 'deleted_at', type: Date, nullable: true })
+  deletedAt?: Date | null
+}
+
+// ─── BillingItem ─────────────────────────────────────────────────
+//
+// A single line that will appear on an invoice. Three flavours:
+// `one_time` / `recurring` / `usage` — see rate_json shape per type in
+// data/validators.ts.
+//
+// `(tenant_id, bill_account_id, source_ref)` is unique for idempotency.
+// Postgres treats NULLs as distinct, so items without a source_ref do not
+// conflict — that is intentional (CSV imports / manual entries).
+
+@Entity({ tableName: 'billing_items' })
+@Unique({
+  name: 'billing_items_source_ref_unique',
+  properties: ['tenantId', 'billAccountId', 'sourceRef'],
+})
+@Index({
+  name: 'billing_items_account_type_idx',
+  properties: ['billAccountId', 'type'],
+})
+@Index({
+  name: 'billing_items_account_active_idx',
+  properties: ['billAccountId', 'type', 'isActive'],
+  expression:
+    'CREATE INDEX "billing_items_account_active_idx" ON "billing_items" ("bill_account_id", "type", "is_active") WHERE "deleted_at" IS NULL',
+})
+@Index({
+  name: 'billing_items_subscription_idx',
+  properties: ['organizationId', 'tenantId', 'subscriptionId'],
+})
+export class BillingItem {
+  [OptionalProps]?:
+    | 'billEndDate'
+    | 'uomCode'
+    | 'subscriptionId'
+    | 'subscriptionItemId'
+    | 'sourceRef'
+    | 'currencyMismatch'
+    | 'billedToDate'
+    | 'isActive'
+    | 'createdAt'
+    | 'updatedAt'
+    | 'deletedAt'
+
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @Property({ name: 'organization_id', type: 'uuid' })
+  organizationId!: string
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  // FK string to BillingAccount.id (intra-module; no ORM relation kept to
+  // avoid coupling — we resolve at runtime).
+  @Property({ name: 'bill_account_id', type: 'uuid' })
+  billAccountId!: string
+
+  // 'one_time' | 'recurring' | 'usage'.
+  @Property({ type: 'text' })
+  type!: string
+
+  @Property({ name: 'bill_start_date', type: 'date', columnType: 'date' })
+  billStartDate!: Date
+
+  // Null = open-ended (typical for ongoing recurring items).
+  @Property({ name: 'bill_end_date', type: 'date', columnType: 'date', nullable: true })
+  billEndDate?: Date | null
+
+  @Property({ type: 'text' })
+  description!: string
+
+  // Pricing definition. Shape validated by Zod per `type`; see
+  // data/validators.ts.
+  @Property({ name: 'rate_json', type: 'jsonb' })
+  rateJson!: Record<string, unknown>
+
+  // Required for type='usage' (must match a Usage record's uom_code
+  // exactly — no conversion). Ignored for other types.
+  @Property({ name: 'uom_code', type: 'text', nullable: true })
+  uomCode?: string | null
+
+  // String FK to upstream subscription (e.g. CPQ's
+  // cpq_inventory_subscriptions.id). Null for CSV / manual / non-subscription
+  // contexts.
+  @Property({ name: 'subscription_id', type: 'text', nullable: true })
+  subscriptionId?: string | null
+
+  @Property({ name: 'subscription_item_id', type: 'text', nullable: true })
+  subscriptionItemId?: string | null
+
+  // Idempotency key — duplicate POST returns the existing row.
+  @Property({ name: 'source_ref', type: 'text', nullable: true })
+  sourceRef?: string | null
+
+  // Set when the integrator POSTed a value in a different currency than the
+  // account's currency_code. Operator sees a warning on the draft.
+  @Property({ name: 'currency_mismatch', type: 'boolean', default: false })
+  currencyMismatch: boolean = false
+
+  // Anti-double-bill guard at the item level — see spec
+  // "Why two anti-duplicate guards".
+  @Property({ name: 'billed_to_date', type: 'date', columnType: 'date', nullable: true })
+  billedToDate?: Date | null
+
+  @Property({ name: 'is_active', type: 'boolean', default: true })
+  isActive: boolean = true
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+
+  @Property({ name: 'updated_at', type: Date, onUpdate: () => new Date() })
+  updatedAt: Date = new Date()
+
+  @Property({ name: 'deleted_at', type: Date, nullable: true })
+  deletedAt?: Date | null
+}
+
+// ─── BillingAccountUsage ─────────────────────────────────────────
+//
+// Bucket for pre-aggregated usage uploaded by external systems. The
+// selection index `(bill_account_id, uom_code, rated_in_bill_run_id,
+// period_end)` matches the Bill Run "find unrated records" predicate
+// exactly — keep it in sync if that predicate changes.
+
+@Entity({ tableName: 'billing_account_usage' })
+@Unique({
+  name: 'billing_account_usage_source_ref_unique',
+  properties: ['tenantId', 'billAccountId', 'sourceRef'],
+})
+@Index({
+  name: 'billing_account_usage_rating_idx',
+  properties: ['billAccountId', 'uomCode', 'ratedInBillRunId', 'periodEnd'],
+})
+export class BillingAccountUsage {
+  [OptionalProps]?:
+    | 'lineDescription'
+    | 'sourceRef'
+    | 'ratedInBillRunId'
+    | 'isActive'
+    | 'createdAt'
+    | 'updatedAt'
+    | 'deletedAt'
+
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @Property({ name: 'organization_id', type: 'uuid' })
+  organizationId!: string
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  @Property({ name: 'bill_account_id', type: 'uuid' })
+  billAccountId!: string
+
+  // Must match the `uom_code` on a corresponding `type='usage'` Billing Item.
+  @Property({ name: 'uom_code', type: 'text' })
+  uomCode!: string
+
+  // numeric(18,4) → string in app code (standard MikroORM numeric handling).
+  @Property({ type: 'numeric', columnType: 'numeric(18, 4)' })
+  quantity!: string
+
+  @Property({ name: 'period_start', type: Date })
+  periodStart!: Date
+
+  @Property({ name: 'period_end', type: Date })
+  periodEnd!: Date
+
+  // Optional per-record description. When set, Bill Run emits one invoice
+  // line per Usage record with this description. When null, the run
+  // aggregates all matching Usage records into a single line using the
+  // Billing Item's `description`.
+  @Property({ name: 'line_description', type: 'text', nullable: true })
+  lineDescription?: string | null
+
+  @Property({ name: 'source_ref', type: 'text', nullable: true })
+  sourceRef?: string | null
+
+  // Set when consumed; prevents double-rating on retry.
+  @Property({ name: 'rated_in_bill_run_id', type: 'uuid', nullable: true })
+  ratedInBillRunId?: string | null
+
+  @Property({ name: 'is_active', type: 'boolean', default: true })
+  isActive: boolean = true
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+
+  @Property({ name: 'updated_at', type: Date, onUpdate: () => new Date() })
+  updatedAt: Date = new Date()
+
+  @Property({ name: 'deleted_at', type: Date, nullable: true })
+  deletedAt?: Date | null
+}
+
+// ─── BillRun ─────────────────────────────────────────────────────
+//
+// A single execution of the engine — one row per trigger (schedule or
+// manual). The concurrency lock is a Postgres transaction-scoped advisory
+// lock keyed by hash(tenant_id || 'billing-run'); it is NOT stored on this
+// row. Crash recovery for zombie `status='running'` rows is handled by
+// workers/reap-stale-bill-runs.ts.
+
+@Entity({ tableName: 'billing_runs' })
+@Index({
+  name: 'billing_runs_tenant_status_idx',
+  properties: ['tenantId', 'status', 'startedAt'],
+})
+@Index({
+  name: 'billing_runs_parent_idx',
+  properties: ['parentRunId'],
+})
+export class BillRun {
+  [OptionalProps]?:
+    | 'parentRunId'
+    | 'dryRun'
+    | 'testMode'
+    | 'catchUp'
+    | 'scopedAccountIds'
+    | 'startedAt'
+    | 'finishedAt'
+    | 'summary'
+    | 'isActive'
+    | 'createdAt'
+    | 'updatedAt'
+    | 'deletedAt'
+
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @Property({ name: 'organization_id', type: 'uuid' })
+  organizationId!: string
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  // 'schedule' | 'manual'.
+  @Property({ name: 'triggered_by', type: 'text' })
+  triggeredBy!: string
+
+  // Set when this run is a "retry failed" of a previous run.
+  @Property({ name: 'parent_run_id', type: 'uuid', nullable: true })
+  parentRunId?: string | null
+
+  // True → compute everything but persist nothing (preview).
+  @Property({ name: 'dry_run', type: 'boolean', default: false })
+  dryRun: boolean = false
+
+  // True → persist drafts flagged as test, but do not advance state.
+  @Property({ name: 'test_mode', type: 'boolean', default: false })
+  testMode: boolean = false
+
+  // True → loop missed cycles per account in one run (manual only).
+  @Property({ name: 'catch_up', type: 'boolean', default: false })
+  catchUp: boolean = false
+
+  // Optional — run processes only these accounts when set. JSONB
+  // (Postgres arrays would work too, but jsonb keeps tooling uniform
+  // across this package).
+  @Property({ name: 'scoped_account_ids', type: 'jsonb', nullable: true })
+  scopedAccountIds?: string[] | null
+
+  // The "today" the run uses to evaluate `next_bill_date <= as_of_date`.
+  @Property({ name: 'as_of_date', type: 'date', columnType: 'date' })
+  asOfDate!: Date
+
+  @Property({ name: 'started_at', type: Date, nullable: true })
+  startedAt?: Date | null
+
+  @Property({ name: 'finished_at', type: Date, nullable: true })
+  finishedAt?: Date | null
+
+  // 'running' | 'completed' | 'partial_failure' | 'failed'.
+  @Property({ type: 'text' })
+  status!: string
+
+  // { accounts_processed, drafts_created, drafts_skipped_existing,
+  //   accounts_failed, accounts_with_warnings, usage_records_rated }
+  @Property({ type: 'jsonb', nullable: true })
+  summary?: Record<string, unknown> | null
+
+  @Property({ name: 'is_active', type: 'boolean', default: true })
+  isActive: boolean = true
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+
+  @Property({ name: 'updated_at', type: Date, onUpdate: () => new Date() })
+  updatedAt: Date = new Date()
+
+  @Property({ name: 'deleted_at', type: Date, nullable: true })
+  deletedAt?: Date | null
+}
+
+// ─── BillRunOutcome ──────────────────────────────────────────────
+//
+// Per-account outcome of a Bill Run. Stored in its own table (not as a
+// JSONB array on BillRun.summary) so operators can query failures across
+// runs without jsonb_array_elements gymnastics. See spec rationale.
+
+@Entity({ tableName: 'billing_run_outcomes' })
+@Index({
+  name: 'billing_run_outcomes_run_status_idx',
+  properties: ['billRunId', 'status'],
+})
+@Index({
+  name: 'billing_run_outcomes_account_history_idx',
+  properties: ['organizationId', 'tenantId', 'billAccountId', 'createdAt'],
+})
+export class BillRunOutcome {
+  [OptionalProps]?:
+    | 'errorMessage'
+    | 'warnings'
+    | 'draftInvoiceId'
+    | 'isActive'
+    | 'createdAt'
+    | 'updatedAt'
+    | 'deletedAt'
+
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @Property({ name: 'organization_id', type: 'uuid' })
+  organizationId!: string
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  @Property({ name: 'bill_run_id', type: 'uuid' })
+  billRunId!: string
+
+  @Property({ name: 'bill_account_id', type: 'uuid' })
+  billAccountId!: string
+
+  // 'success' | 'success_with_warnings' | 'skipped_existing_draft' | 'failed'.
+  @Property({ type: 'text' })
+  status!: string
+
+  @Property({ name: 'error_message', type: 'text', nullable: true })
+  errorMessage?: string | null
+
+  // E.g. `{ unmatched_usage_uoms: ["api_request"] }`.
+  @Property({ type: 'jsonb', nullable: true })
+  warnings?: Record<string, unknown> | null
+
+  // FK string to the core/sales invoice (drafted by the run). Null when
+  // the run skipped (status='skipped_existing_draft' or 'failed').
+  @Property({ name: 'draft_invoice_id', type: 'uuid', nullable: true })
+  draftInvoiceId?: string | null
+
+  @Property({ name: 'is_active', type: 'boolean', default: true })
+  isActive: boolean = true
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+
+  @Property({ name: 'updated_at', type: Date, onUpdate: () => new Date() })
+  updatedAt: Date = new Date()
+
+  @Property({ name: 'deleted_at', type: Date, nullable: true })
+  deletedAt?: Date | null
+}
+
+// ─── DraftInvoiceEdit (audit) ────────────────────────────────────
+//
+// Append-only audit of every operator edit on a draft invoice line.
+// Pattern mirrors `cpq_subscription_change_logs` — minimal columns
+// (no updated_at / is_active), append-only, soft-delete reserved for
+// compliance erasure only.
+
+@Entity({ tableName: 'billing_draft_invoice_edits' })
+@Index({
+  name: 'billing_draft_invoice_edits_invoice_idx',
+  properties: ['organizationId', 'tenantId', 'invoiceId', 'createdAt'],
+})
+@Index({
+  name: 'billing_draft_invoice_edits_user_idx',
+  properties: ['organizationId', 'tenantId', 'userId', 'createdAt'],
+})
+export class DraftInvoiceEdit {
+  [OptionalProps]?: 'invoiceLineId' | 'beforeJson' | 'afterJson' | 'createdAt' | 'deletedAt'
+
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @Property({ name: 'organization_id', type: 'uuid' })
+  organizationId!: string
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  // FK string to the core/sales invoice (no ORM relation across packages).
+  @Property({ name: 'invoice_id', type: 'uuid' })
+  invoiceId!: string
+
+  // Null for `line_added` / `line_removed` actions whose target line does
+  // not yet (or no longer) exist on the invoice.
+  @Property({ name: 'invoice_line_id', type: 'uuid', nullable: true })
+  invoiceLineId?: string | null
+
+  @Property({ name: 'user_id', type: 'uuid' })
+  userId!: string
+
+  // 'line_added' | 'line_removed' | 'line_edited'.
+  @Property({ type: 'text' })
+  action!: string
+
+  // Snapshot before the edit. Null for `line_added` (no prior state).
+  @Property({ name: 'before_json', type: 'jsonb', nullable: true })
+  beforeJson?: Record<string, unknown> | null
+
+  // Snapshot after the edit. Null for `line_removed` (no resulting state).
+  @Property({ name: 'after_json', type: 'jsonb', nullable: true })
+  afterJson?: Record<string, unknown> | null
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+
+  // Reserved for compliance erasure only; runtime never deletes audit rows
+  // through normal flows.
+  @Property({ name: 'deleted_at', type: Date, nullable: true })
+  deletedAt?: Date | null
+}

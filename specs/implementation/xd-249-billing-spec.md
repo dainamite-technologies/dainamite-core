@@ -1040,3 +1040,116 @@ weeks (end of Phase 2).
 - [node_modules/@open-mercato/core/src/modules/sales/AGENTS.md](../../node_modules/@open-mercato/core/src/modules/sales/AGENTS.md) — invoice + sequence number patterns
 - [node_modules/@open-mercato/core/AGENTS.md](../../node_modules/@open-mercato/core/AGENTS.md) — command pattern, `withAtomicFlush`, ACL
 - [node_modules/@open-mercato/queue/AGENTS.md](../../node_modules/@open-mercato/queue/AGENTS.md) — worker contract, idempotency, for the Bill Run scheduler
+
+---
+
+## Implementation Status
+
+| Phase | Status | Date | Notes |
+|-------|--------|------|-------|
+| Phase 0 — Scaffold | Done | 2026-05-19 | Workspace, 6 entities, 12 ACL features, setup.ts, reaper worker stub, initial migration, 76 unit tests passing |
+| Phase 1 — REST API | Done | 2026-05-19 | 3 CRUD routes via `makeCrudRoute`, lean command pattern (no undo yet), `source_ref` idempotency on items + usage, per-tenant advisory-lock primitive ready for Phase 2, 119 unit tests passing |
+| Phase 2 — Bill Run engine | Not Started | — | — |
+| Phase 3 — Usage rating | Not Started | — | — |
+| Phase 4 — Admin UI + v1 release | Not Started | — | — |
+| Phase 5 — `@dainamite/cpq-billing-connector` | Not Started | — | — |
+
+### Phase 1 — Detailed Progress
+
+- [x] `data/validators.ts` extended with CRUD payload schemas (account /
+      item / usage create / update / list, all scoped via `scopedSchema`)
+- [x] `lib/tenantLock.ts` — `withTenantLock(...)` + `TenantLockBusyError`
+      + `buildLockKey(...)` helper exposed for tests. The Phase 2 Bill Run
+      engine consumes this directly.
+- [x] `lib/idempotency.ts` — shared `findBySourceRef(...)` helper
+      (single chokepoint for the source-ref pre-check)
+- [x] `commands/` directory with three files
+      (`accounts.ts` / `items.ts` / `usage.ts`) plus `index.ts` barrel
+      that side-effect-registers every command into the global
+      `commandBus`. Imported from `index.ts` so the registrations run at
+      module load.
+- [x] `api/openapi.ts` — billing CRUD OpenAPI factory
+- [x] `api/accounts/route.ts` — `/api/billing/accounts` GET/POST/PUT/DELETE
+- [x] `api/items/route.ts` — `/api/billing/items` GET/POST/PUT/DELETE;
+      POST returns `{ id, deduplicated }` with HTTP 200 always (idempotent
+      semantics per spec — duplicate POST returns the existing row, never
+      creates a duplicate)
+- [x] `api/usage/route.ts` — `/api/billing/usage` GET/POST (append-only,
+      idempotent on POST)
+- [x] CLI patch extended again — `@open-mercato/cli`'s
+      `parseExportedClassNamesFromFile` still doesn't recognize the
+      compiled `let X = class {}` shape, so `E.billing.*` stays empty.
+      Worked around with a local `data/entityIds.ts` const (single
+      source of truth until upstream lands the fix). Captured at
+      [`.yarn/patches/@open-mercato-cli-npm-0.6.0-ef9f262596.patch`](../../.yarn/patches/@open-mercato-cli-npm-0.6.0-ef9f262596.patch)
+      — current patch already covers the resolver (Phase 0); the
+      compiled-class detection is a deeper change deferred to the
+      framework team.
+- [x] Unit tests: `lib/tenantLock.test.ts` (6 cases), `lib/idempotency.test.ts`
+      (4 cases), extended `validators.test.ts` with 33 new CRUD-schema
+      cases — 43 new tests, 119 total for the package
+- [x] Full validation gate green: `yarn workspace @dainamite/billing
+      build`, `yarn generate`, `yarn typecheck`, `yarn test` (31 suites,
+      679 total tests, 0 regressions)
+
+### Phase 0 — Detailed Progress
+
+- [x] `packages/billing/` workspace scaffold (`package.json` with peer-only deps, tsconfig pair, `build.mjs` / `watch.mjs` mirroring cpq)
+- [x] Module skeleton at `packages/billing/src/modules/billing/` (`index.ts`, `acl.ts`, `events.ts`, `translations.ts`, `di.ts`, `ce.ts`)
+- [x] 6 billing-owned entities in `data/entities.ts` with the spec's required indexes (`(tenant_id, next_bill_date)` partial, `(bill_account_id, type, is_active)` partial, `(bill_account_id, uom_code, rated_in_bill_run_id, period_end)` for the Bill Run hot path)
+- [x] Zod validators in `data/validators.ts` covering all three `rate_json` shapes (one_time / recurring / usage simple) plus the discriminated tiered union (volume / graduated / flat) with progression + key-shape rules
+- [x] 12 ACL features in `acl.ts`; default role mappings in `setup.ts` for `admin` (wildcard) + `billing_admin` / `billing_finance_user` / `billing_usage_writer`
+- [x] `setup.ts` seeds: UoM dictionary (16 codes), `sales.invoice_status` dictionary (4 statuses — see deviation note), billing cron configs (`billing.cron_schedule`, `billing.cron_enabled`), billing invoice-number defaults (`billing.invoice_number.format`, `.reset_cycle`)
+- [x] Reaper worker stub at `workers/reap-stale-bill-runs.ts` (full advisory-lock check lands with the engine in Phase 2)
+- [x] Module registered in [`src/modules.ts`](../../src/modules.ts) as `{ id: 'billing', from: '@dainamite/billing' }`; `billing:watch` script added to root [`package.json`](../../package.json)
+- [x] Initial migration `Migration20260519000000_billing.ts` — see "Hand-written migration" deviation below
+- [x] Unit tests under `__tests__/`: rate_json shapes (44 cases), setup contract (15 cases), package isolation guard (6 cases including the no-`@ManyToOne`-across-packages rule)
+- [x] `yarn install`, `yarn workspace @dainamite/billing build`, `yarn generate`, `yarn typecheck`, `yarn test` — all green
+
+### Phase 0 — Deviations from spec (discovered during cross-check vs code)
+
+These should be picked up by the implementer of the relevant phase.
+
+1. **Invoice-line price split (Phase 2 impact).** The spec describes
+   `InvoiceLine.unit_price` as a single column. In real code,
+   `@open-mercato/core/sales` splits it into `unitPriceNet` +
+   `unitPriceGross`, with line totals as `totalNetAmount` /
+   `totalGrossAmount`. The Bill Run engine in Phase 2 must write both
+   when creating draft invoice lines and source the rounded amount from
+   `totalNetAmount`. Reflect this in `BillingItem → InvoiceLine` mapping
+   when the engine is implemented.
+
+2. **Payment-completed event (Phase 4 impact).** The spec's `paid`-status
+   wiring assumes a `payments.payment.completed` event. The actual events
+   exported by `@open-mercato/core/payment_gateways/events.ts` are
+   `.authorized`, `.captured`, `.failed`, `.refunded`, `.cancelled` —
+   no `.completed`. Phase 4 should either subscribe to `.captured` (and
+   verify its payload carries `invoice_id`) or land an upstream PR that
+   adds `payment.completed`. Either path is acceptable; pick whichever
+   matches the gateway provider's actual capture semantics.
+
+3. **Invoice-status dictionary seeding (handled in Phase 0).** The spec
+   assumes the `core/sales` `Invoice` entity has the four statuses
+   (`draft` / `posted` / `paid` / `void`) pre-seeded. Cross-check showed
+   `core/sales` ships dictionaries for `order_status`,
+   `order_line_status`, `shipment_status`, `payment_status`,
+   `deal_loss_reasons`, `adjustment_kind` — but **not**
+   `invoice_status`. Phase 0 seeds it under key `sales.invoice_status`
+   in `setup.ts`. If `core/sales` later seeds the same key, the helper
+   becomes a no-op (idempotent).
+
+4. **Hand-written initial migration (Phase 0).** `yarn mercato db
+   generate` does not currently discover entities for `@dainamite/*`
+   workspaces in standalone-app mode — the resolver hard-codes
+   `@open-mercato/*` scope and looks for `data/entities.ts` against the
+   `dist` symlink which only contains `entities.js`. Phase 0 extends the
+   existing `@open-mercato/cli` yarn patch
+   ([`.yarn/patches/@open-mercato-cli-npm-0.6.0-ef9f262596.patch`](../../.yarn/patches/@open-mercato-cli-npm-0.6.0-ef9f262596.patch))
+   to teach the resolver about `@dainamite/*` (regex
+   `/^(?:@open-mercato|@dainamite)\/(.+)$/`). The candidates-list /
+   `.js`-source quirk still requires a deeper fix; until that lands
+   upstream, billing migrations are hand-written following
+   [`Migration20260519000000_billing.ts`](../../packages/billing/src/modules/billing/migrations/Migration20260519000000_billing.ts).
+   No snapshot file is shipped — when CLI support lands, the first
+   generate run produces a clean snapshot from the entity state and
+   future runs use it normally.

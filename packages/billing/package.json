@@ -1,0 +1,149 @@
+{
+  "name": "@dainamite/billing",
+  "version": "0.2.0",
+  "description": "Dainamite Billing — lightweight recurring-billing engine for Open Mercato (Bill Runs, one-time / recurring / usage items, draft invoices in core/sales with human approval).",
+  "type": "module",
+  "main": "./dist/modules/billing/index.js",
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "node build.mjs",
+    "watch": "node watch.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "chokidar": "^4.0.3"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/modules/billing/index.ts",
+      "default": "./dist/modules/billing/index.js"
+    },
+    "./modules/billing": {
+      "types": "./src/modules/billing/index.ts",
+      "default": "./dist/modules/billing/index.js"
+    },
+    "./*.ts": {
+      "types": "./src/*.ts",
+      "default": "./dist/*.js"
+    },
+    "./*.tsx": {
+      "types": "./src/*.tsx",
+      "default": "./dist/*.js"
+    },
+    "./*.json": "./src/*.json",
+    "./*": {
+      "types": [
+        "./src/*.ts",
+        "./src/*.tsx"
+      ],
+      "default": "./dist/*.js"
+    },
+    "./*/*.json": "./src/*/*.json",
+    "./*/*": {
+      "types": [
+        "./src/*/*.ts",
+        "./src/*/*.tsx"
+      ],
+      "default": "./dist/*/*.js"
+    },
+    "./*/*/*.json": "./src/*/*/*.json",
+    "./*/*/*": {
+      "types": [
+        "./src/*/*/*.ts",
+        "./src/*/*/*.tsx"
+      ],
+      "default": "./dist/*/*/*.js"
+    },
+    "./*/*/*/*.json": "./src/*/*/*/*.json",
+    "./*/*/*/*": {
+      "types": [
+        "./src/*/*/*/*.ts",
+        "./src/*/*/*/*.tsx"
+      ],
+      "default": "./dist/*/*/*/*.js"
+    },
+    "./*/*/*/*/*.json": "./src/*/*/*/*/*.json",
+    "./*/*/*/*/*": {
+      "types": [
+        "./src/*/*/*/*/*.ts",
+        "./src/*/*/*/*/*.tsx"
+      ],
+      "default": "./dist/*/*/*/*/*.js"
+    },
+    "./*/*/*/*/*/*.json": "./src/*/*/*/*/*/*.json",
+    "./*/*/*/*/*/*": {
+      "types": [
+        "./src/*/*/*/*/*/*.ts",
+        "./src/*/*/*/*/*/*.tsx"
+      ],
+      "default": "./dist/*/*/*/*/*/*.js"
+    },
+    "./*/*/*/*/*/*/*.json": "./src/*/*/*/*/*/*/*.json",
+    "./*/*/*/*/*/*/*": {
+      "types": [
+        "./src/*/*/*/*/*/*/*.ts",
+        "./src/*/*/*/*/*/*/*.tsx"
+      ],
+      "default": "./dist/*/*/*/*/*/*/*.js"
+    },
+    "./*/*/*/*/*/*/*/*.json": "./src/*/*/*/*/*/*/*/*.json",
+    "./*/*/*/*/*/*/*/*": {
+      "types": [
+        "./src/*/*/*/*/*/*/*/*.ts",
+        "./src/*/*/*/*/*/*/*/*.tsx"
+      ],
+      "default": "./dist/*/*/*/*/*/*/*/*.js"
+    },
+    "./*/*/*/*/*/*/*/*/*.json": "./src/*/*/*/*/*/*/*/*/*.json",
+    "./*/*/*/*/*/*/*/*/*": {
+      "types": [
+        "./src/*/*/*/*/*/*/*/*/*.ts",
+        "./src/*/*/*/*/*/*/*/*/*.tsx"
+      ],
+      "default": "./dist/*/*/*/*/*/*/*/*/*.js"
+    },
+    "./*/*/*/*/*/*/*/*/*/*.json": "./src/*/*/*/*/*/*/*/*/*/*.json",
+    "./*/*/*/*/*/*/*/*/*/*": {
+      "types": [
+        "./src/*/*/*/*/*/*/*/*/*/*.ts",
+        "./src/*/*/*/*/*/*/*/*/*/*.tsx"
+      ],
+      "default": "./dist/*/*/*/*/*/*/*/*/*/*.js"
+    }
+  },
+  "peerDependencies": {
+    "@mikro-orm/core": "^7.0.0",
+    "@mikro-orm/decorators": "^7.0.0",
+    "@mikro-orm/postgresql": "^7.0.0",
+    "@open-mercato/core": "^0.6.0",
+    "@open-mercato/events": "^0.6.0",
+    "@open-mercato/queue": "^0.6.0",
+    "@open-mercato/shared": "^0.6.0",
+    "@open-mercato/ui": "^0.6.0",
+    "@tanstack/react-table": "^8.0.0 || ^9.0.0",
+    "awilix": "^12.0.0",
+    "lucide-react": "^0.400.0",
+    "next": "^16.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "zod": "^4.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dainamite-technologies/dainamite-core.git",
+    "directory": "packages/billing"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "private": true
+}

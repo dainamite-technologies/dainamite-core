@@ -445,3 +445,62 @@ export const billingInvoicePostSchema = scopedSchema.extend({
 
 export type BillingInvoicePostInput = z.infer<typeof billingInvoicePostSchema>
 
+// ─── Draft invoice edits (Phase 4b) ──────────────────────────────
+
+/**
+ * Fields the operator may change on a draft invoice line. Per spec:
+ * "operator CAN: add lines, remove lines, edit line description /
+ * quantity / unit_price / amount". `taxRate` is owned by core/sales
+ * tax service and `currencyCode` is frozen at account create — both
+ * intentionally absent from this schema.
+ */
+const lineEditableFields = z.object({
+  description: z.string().trim().min(1).max(500).optional(),
+  quantity: z.coerce.number().finite().nonnegative().optional(),
+  unitPriceNet: z.coerce.number().finite().optional(),
+  // `totalNetAmount` is operator-overridable for the "I know better
+  // than `unit_price × quantity`" cases (rare; mostly for negative
+  // credits or rounding fix-ups). When provided, it short-circuits
+  // the auto-compute path.
+  totalNetAmount: z.coerce.number().finite().optional(),
+})
+
+export const billingInvoiceEditLineSchema = scopedSchema.extend({
+  invoiceId: z.string().uuid(),
+  invoiceLineId: z.string().uuid(),
+  changes: lineEditableFields,
+})
+
+export type BillingInvoiceEditLineInput = z.infer<typeof billingInvoiceEditLineSchema>
+
+export const billingInvoiceAddLineSchema = scopedSchema.extend({
+  invoiceId: z.string().uuid(),
+  description: z.string().trim().min(1).max(500),
+  quantity: z.coerce.number().finite().nonnegative(),
+  unitPriceNet: z.coerce.number().finite(),
+  // Optional metadata for traceability — typically operators leave
+  // `billing_item_id` blank because ad-hoc lines aren't tied to a
+  // Billing Item.
+  billingItemId: z.string().uuid().optional(),
+  billingType: z.enum(BILLING_ITEM_TYPES).optional(),
+})
+
+export type BillingInvoiceAddLineInput = z.infer<typeof billingInvoiceAddLineSchema>
+
+export const billingInvoiceRemoveLineSchema = scopedSchema.extend({
+  invoiceId: z.string().uuid(),
+  invoiceLineId: z.string().uuid(),
+})
+
+export type BillingInvoiceRemoveLineInput = z.infer<typeof billingInvoiceRemoveLineSchema>
+
+// ─── Test-invoices wipe (Phase 4b) ───────────────────────────────
+
+export const billingWipeTestInvoicesSchema = scopedSchema.extend({
+  /** Optional — when set, wipes only test invoices from this run. */
+  billRunId: z.string().uuid().optional(),
+})
+
+export type BillingWipeTestInvoicesInput = z.infer<typeof billingWipeTestInvoicesSchema>
+
+

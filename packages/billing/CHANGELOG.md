@@ -1,5 +1,54 @@
 # @dainamite/billing
 
+## 0.6.0 — Phase 4b backend slice (unreleased)
+
+Draft-edit audit pipeline + GDPR portability + test-invoice wipe.
+The Admin UI half of Phase 4 (backend pages) is intentionally
+deferred to its own dedicated effort — every command shipped here is
+fully usable from the REST surface today.
+
+- **Three draft-edit commands**, each writing a `DraftInvoiceEdit`
+  audit row with the spec's before/after snapshot contract:
+  - `billing.invoices.edit_draft_line` — change `description`,
+    `quantity`, `unit_price`, or an explicit `totalNetAmount`
+    override. Recomputes invoice totals from the surviving lines.
+    Audit row carries both `before_json` and `after_json`.
+  - `billing.invoices.add_draft_line` — operator-added line (e.g.
+    one-off adjustment). `before_json` is `null` per spec.
+  - `billing.invoices.remove_draft_line` — hard delete with the
+    pre-removal snapshot preserved in `before_json`. `after_json`
+    and `invoice_line_id` are `null`.
+- All three refuse non-draft invoices with `HTTP 409 +
+  billing.invoice.not_draft` and require the
+  `billing.invoice.edit_draft` feature.
+- **Test-invoice wipe command** `billing.invoices.wipe_test`:
+  hard-deletes invoices flagged `metadata.test_run=true`, optionally
+  scoped to a single `billRunId`. Test data never pollutes production
+  history. Gated by `billing.run.trigger`.
+- **GDPR portability endpoint** `GET /api/billing/export/account/[id]`:
+  returns a single-account JSON dump covering the account itself,
+  every Billing Item, every Usage record, every BillRunOutcome
+  referencing the account, every emitted `core/sales` invoice
+  (matched via `metadata`), and every `DraftInvoiceEdit` audit row
+  for those invoices. Tenant- + organization-scoped via the caller's
+  auth — 404 for cross-tenant UUIDs.
+- New REST routes:
+  - `POST /api/billing/invoices/edit-line`
+  - `POST /api/billing/invoices/add-line`
+  - `POST /api/billing/invoices/remove-line`
+  - `POST /api/billing/test-invoices/wipe`
+  - `GET /api/billing/export/account/[id]`
+- 15 new unit tests covering the command contract: non-draft
+  refusal, audit row before/after population, totals recompute
+  (unit_price × quantity + explicit override path), null
+  invoice/line resolution, wipe scope safety (with vs without
+  `billRunId`).
+
+Deferred to **Phase 4c** (UI dedicated effort):
+- Backend pages (DataTable + CrudForm) for accounts / items / usage /
+  bill runs / draft invoice review.
+- Sidebar navigation + page metadata.
+
 ## 0.5.0 — Phase 4a posting + payment subscriber (unreleased)
 
 - **Post invoice command** `billing.invoices.post`:

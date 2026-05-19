@@ -2,18 +2,22 @@
 import * as React from 'react'
 import { useParams } from 'next/navigation'
 import type { ColumnDef } from '@tanstack/react-table'
+import { Pencil, Plus, Trash2 } from 'lucide-react'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
 import { DataTable } from '@open-mercato/ui/backend/DataTable'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { Button } from '@open-mercato/ui/primitives/button'
+import { IconButton } from '@open-mercato/ui/primitives/icon-button'
 import { LoadingMessage, ErrorMessage } from '@open-mercato/ui/backend/detail'
 import { flash } from '@open-mercato/ui/backend/FlashMessages'
+import { useConfirmDialog } from '@open-mercato/ui/backend/confirm-dialog'
 import {
   apiCallOrThrow,
   readApiResultOrThrow,
 } from '@open-mercato/ui/backend/utils/apiCall'
 import { normalizeCrudServerError } from '@open-mercato/ui/backend/utils/serverErrors'
+import { LineFormDialog, type LineFormValues } from '../../../../components/LineFormDialog'
 
 type BillingInvoice = {
   id: string
@@ -118,6 +122,15 @@ export default function BillingInvoiceDetailPage() {
   const [posting, setPosting] = React.useState(false)
   const [wiping, setWiping] = React.useState(false)
 
+  // Inline line-edit dialog state. `dialogMode === null` → closed.
+  const [dialogMode, setDialogMode] = React.useState<'add' | 'edit' | null>(null)
+  const [dialogTargetLine, setDialogTargetLine] = React.useState<InvoiceLine | null>(null)
+  const [dialogSubmitting, setDialogSubmitting] = React.useState(false)
+
+  // Confirm flows: wipe-test + remove-line both use ConfirmDialog
+  // (per UI AGENTS.md: NEVER `window.confirm`).
+  const { confirm, ConfirmDialogElement } = useConfirmDialog()
+
   const load = React.useCallback(async () => {
     if (!invoiceId) return
     setError(null)
@@ -168,9 +181,16 @@ export default function BillingInvoiceDetailPage() {
 
   const handleWipeTest = React.useCallback(async () => {
     if (!invoice) return
-    if (!window.confirm(t('billing.invoices.wipe.confirm', 'Delete this test invoice? This cannot be undone.'))) {
-      return
-    }
+    const ok = await confirm({
+      title: t('billing.invoices.wipe.confirm.title', 'Wipe test invoices?'),
+      text: t(
+        'billing.invoices.wipe.confirm.text',
+        'Every test invoice from this Bill Run will be permanently deleted. This cannot be undone.',
+      ),
+      confirmText: t('billing.invoices.wipe.confirm.button', 'Delete test invoices'),
+      variant: 'destructive',
+    })
+    if (!ok) return
     setWiping(true)
     try {
       const billRunId = invoice.metadata?.bill_run_id
@@ -197,7 +217,92 @@ export default function BillingInvoiceDetailPage() {
     } finally {
       setWiping(false)
     }
-  }, [invoice, load, t])
+  }, [confirm, invoice, load, t])
+
+  // ─── Line add / edit / remove ────────────────────────────────
+
+  const handleSubmitLine = React.useCallback(
+    async (values: LineFormValues) => {
+      if (!invoice) return
+      setDialogSubmitting(true)
+      try {
+        if (dialogMode === 'add') {
+          await apiCallOrThrow('/api/billing/invoices/add-line', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              invoiceId: invoice.id,
+              description: values.description,
+              quantity: values.quantity,
+              unitPriceNet: values.unitPriceNet,
+            }),
+          })
+          flash(t('billing.invoices.lines.add.success', 'Line added'), 'success')
+        } else if (dialogMode === 'edit' && dialogTargetLine) {
+          await apiCallOrThrow('/api/billing/invoices/edit-line', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              invoiceId: invoice.id,
+              invoiceLineId: dialogTargetLine.id,
+              changes: {
+                description: values.description,
+                quantity: values.quantity,
+                unitPriceNet: values.unitPriceNet,
+                ...(values.totalNetAmount !== undefined
+                  ? { totalNetAmount: values.totalNetAmount }
+                  : {}),
+              },
+            }),
+          })
+          flash(t('billing.invoices.lines.edit.success', 'Line updated'), 'success')
+        }
+        setDialogMode(null)
+        setDialogTargetLine(null)
+        void load()
+      } catch (err) {
+        const { message } = normalizeCrudServerError(err)
+        flash(message || t('billing.invoices.lines.save.error', 'Save failed'), 'error')
+      } finally {
+        setDialogSubmitting(false)
+      }
+    },
+    [dialogMode, dialogTargetLine, invoice, load, t],
+  )
+
+  const handleRemoveLine = React.useCallback(
+    async (line: InvoiceLine) => {
+      if (!invoice) return
+      const ok = await confirm({
+        title: t('billing.invoices.lines.remove.confirm.title', 'Remove line?'),
+        text: t(
+          'billing.invoices.lines.remove.confirm.text',
+          'The line will be deleted and recorded in the draft-edit audit log.',
+        ),
+        confirmText: t('billing.invoices.lines.remove.confirm.button', 'Remove line'),
+        variant: 'destructive',
+      })
+      if (!ok) return
+      try {
+        await apiCallOrThrow('/api/billing/invoices/remove-line', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            invoiceId: invoice.id,
+            invoiceLineId: line.id,
+          }),
+        })
+        flash(t('billing.invoices.lines.remove.success', 'Line removed'), 'success')
+        void load()
+      } catch (err) {
+        const { message } = normalizeCrudServerError(err)
+        flash(message || t('billing.invoices.lines.remove.error', 'Remove failed'), 'error')
+      }
+    },
+    [confirm, invoice, load, t],
+  )
+
+  const canEditLines = invoice?.status === 'draft'
 
   const lineColumns = React.useMemo<ColumnDef<InvoiceLine>[]>(
     () => [
@@ -242,9 +347,48 @@ export default function BillingInvoiceDetailPage() {
         cell: ({ row }) =>
           formatMoney(row.original.total_net_amount, row.original.currency_code),
       },
+      {
+        id: 'actions',
+        header: '',
+        cell: ({ row }) => {
+          if (!canEditLines) return null
+          return (
+            <div className="flex items-center justify-end gap-1">
+              <IconButton
+                type="button"
+                variant="ghost"
+                aria-label={t('billing.invoices.lines.actions.edit', 'Edit line')}
+                onClick={() => {
+                  setDialogTargetLine(row.original)
+                  setDialogMode('edit')
+                }}
+              >
+                <Pencil size={16} />
+              </IconButton>
+              <IconButton
+                type="button"
+                variant="ghost"
+                aria-label={t('billing.invoices.lines.actions.remove', 'Remove line')}
+                onClick={() => void handleRemoveLine(row.original)}
+              >
+                <Trash2 size={16} />
+              </IconButton>
+            </div>
+          )
+        },
+      },
     ],
-    [t],
+    [canEditLines, handleRemoveLine, t],
   )
+
+  const dialogInitial = React.useMemo<Partial<LineFormValues> | undefined>(() => {
+    if (dialogMode !== 'edit' || !dialogTargetLine) return undefined
+    return {
+      description: dialogTargetLine.description ?? '',
+      quantity: Number.parseFloat(dialogTargetLine.quantity),
+      unitPriceNet: Number.parseFloat(dialogTargetLine.unit_price_net),
+    }
+  }, [dialogMode, dialogTargetLine])
 
   if (error) {
     return (
@@ -363,10 +507,38 @@ export default function BillingInvoiceDetailPage() {
           </div>
         </div>
 
-        <h2 className="text-base font-semibold mb-2">
-          {t('billing.invoices.lines.title', 'Lines')}
-        </h2>
+        <div className="flex items-center justify-between mb-2 mt-4">
+          <h2 className="text-base font-semibold">
+            {t('billing.invoices.lines.title', 'Lines')}
+          </h2>
+          {canEditLines ? (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setDialogTargetLine(null)
+                setDialogMode('add')
+              }}
+            >
+              <Plus size={16} />
+              {t('billing.invoices.lines.add.action', 'Add line')}
+            </Button>
+          ) : null}
+        </div>
         <DataTable columns={lineColumns} data={lines} isLoading={false} />
+
+        <LineFormDialog
+          open={dialogMode !== null}
+          mode={dialogMode ?? 'add'}
+          initial={dialogInitial}
+          submitting={dialogSubmitting}
+          onCancel={() => {
+            setDialogMode(null)
+            setDialogTargetLine(null)
+          }}
+          onSubmit={handleSubmitLine}
+        />
+        {ConfirmDialogElement}
       </PageBody>
     </Page>
   )

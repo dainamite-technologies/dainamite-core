@@ -1,5 +1,39 @@
 # @dainamite/billing
 
+## 0.9.0 — Phase 4c v3 — inline line editing (unreleased)
+
+Closes the last operator-UX gap on the draft-review surface — line
+edits no longer require `curl`.
+
+- **`components/LineFormDialog.tsx`** — shared add / edit form. Fields:
+  description (Textarea), quantity, unit_price_net, and an optional
+  `totalNetAmount` override (operator "I know better than
+  qty × unit_price" path; pre-shows the computed total as a
+  placeholder). UX per OM convention: `Cmd/Ctrl + Enter` submits,
+  `Escape` cancels (Radix Dialog handles cancel for free).
+  Footer hint row uses `Kbd` / `KbdShortcut` (no raw `<span>`).
+- **Per-line row actions** on the detail page (visible only when
+  `invoice.status === 'draft'`): Edit (opens the dialog pre-filled
+  from the row) and Remove (opens `ConfirmDialog` then calls
+  `billing.invoices.remove_draft_line`).
+- **"+ Add line" button** next to the Lines header (draft-only).
+  Opens the same dialog in `mode='add'`.
+- **`ConfirmDialog` replaces `window.confirm`** for both the wipe-
+  test-invoices flow and the line-remove flow, satisfying the
+  UI AGENTS.md MUST rule.
+- All writes go through the existing `billing.invoices.{edit,add,
+  remove}_draft_line` commands — every line mutation is still
+  audited via `DraftInvoiceEdit` with before/after snapshots, and
+  invoice totals are recomputed by the engine on each write.
+
+Validation: yarn build + generate + typecheck + test all green;
+797 repo tests, 0 regressions; 6 billing API routes + 5 backend
+pages + 1 shared component.
+
+Deferred to follow-up:
+- Account / item editor pages
+- Locale files (en, pl)
+
 ## 0.8.0 — Phase 4c v2 — invoice review UI (unreleased)
 
 The "I want to see and post drafts from the UI" workflow. Closes the

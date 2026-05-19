@@ -1,6 +1,6 @@
 {
   "name": "@dainamite/billing",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "Dainamite Billing — lightweight recurring-billing engine for Open Mercato (Bill Runs, one-time / recurring / usage items, draft invoices in core/sales with human approval).",
   "type": "module",
   "main": "./dist/modules/billing/index.js",

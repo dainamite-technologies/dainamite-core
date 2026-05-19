@@ -1,5 +1,48 @@
 # @dainamite/billing
 
+## 0.11.0 — Phase 4e — item create + edit UI (unreleased)
+
+Billing Item management from the admin closes the last UI gap.
+Operators can now hand-create one-off charges (e.g. manual
+adjustments, custom proration credits) or inspect what the CPQ
+connector created — without dropping to `curl`.
+
+- `components/ItemForm.tsx` — shared form (create + edit). Renders
+  account picker (create-only), type selector (create-only,
+  immutable on edit per `billingItemUpdateSchema`), bill dates,
+  description, **type-discriminated rate fields**:
+  - `one_time`: single `amount` input (negative allowed for
+    refunds / credits).
+  - `recurring`: `unit_price` input.
+  - `usage` (simple): `unit_price` + required `uom_code`.
+  - `usage` (tiered): raw-JSON textarea for the advanced shape.
+    Server validators (Phase 0 Zod) reject malformed structures;
+    the textarea includes the canonical example as placeholder.
+  Plus optional `subscriptionId` / `subscriptionItemId` external
+  references. UX matches `AccountForm` (Cmd/Ctrl+Enter submit, Kbd
+  footer hint, no raw HTML buttons).
+- `/backend/billing/items` — list with filters (type, account,
+  subscription, active) + per-row "Open" link. **New item** CTA in
+  the page header.
+- `/backend/billing/items/create` — pre-loads the account picker,
+  supports `?billAccountId=<id>` deep-link for future "Add item from
+  account detail" CTAs. POSTs `/api/billing/items`, navigates to
+  detail on success.
+- `/backend/billing/items/[id]` — detail + edit. Read-only badges
+  at the top surface engine-managed state the operator can't change
+  (`currencyMismatch`, `billedToDate`, `sourceRef`). Account ID is
+  a deep-link back into `/backend/billing/accounts/[id]`. **Soft
+  Delete** button with `ConfirmDialog` gate.
+
+Validation: yarn build + generate + typecheck + test all green;
+797 repo tests, 0 regressions; all 10 billing backend pages now
+auto-discovered (3 accounts + 3 items + 2 runs + 2 invoices).
+
+Deferred to follow-up:
+- Locale files (en, pl) — UI ships with inline English fallbacks.
+- "Add item" button on the account detail page (uses the deep-link
+  parameter the create page already supports).
+
 ## 0.10.0 — Phase 4d — account create + edit UI (unreleased)
 
 Account management from the admin — no more REST-only onboarding.

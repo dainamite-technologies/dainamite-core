@@ -4,6 +4,7 @@ import {
   BillRun,
   BillRunOutcome,
   BillingAccount,
+  BillingAccountUsage,
   BillingItem,
 } from '../../data/entities'
 
@@ -29,6 +30,7 @@ function createEnvironment(
   options: {
     accounts: BillingAccount[]
     itemsByAccount: Map<string, BillingItem[]>
+    usageByAccount?: Map<string, BillingAccountUsage[]>
     openDraftIds?: Map<string, string> // accountId → existing-draft id
     lockAcquired?: boolean
     accountFails?: Set<string>
@@ -38,6 +40,7 @@ function createEnvironment(
   container: unknown
   captured: Captured
   numberGenerator: { generate: jest.MockedFunction<(...args: unknown[]) => unknown> }
+  usageMarkedAs: jest.MockedFunction<(entity: unknown, where: unknown, data: unknown) => Promise<number>>
 } {
   const captured: Captured = { persisted: [], flushes: 0, findCalls: [] }
   const numberGenerator = {
@@ -56,6 +59,7 @@ function createEnvironment(
     flush: jest.MockedFunction<() => Promise<void>>
     find: jest.MockedFunction<(entity: unknown, where: unknown) => Promise<unknown[]>>
     findOne: jest.MockedFunction<(entity: unknown, where: unknown) => Promise<unknown>>
+    nativeUpdate: jest.MockedFunction<(entity: unknown, where: unknown, data: unknown) => Promise<number>>
   }
 
   const em: EmShape = {
@@ -94,9 +98,31 @@ function createEnvironment(
         if (!accountId) return []
         return (options.itemsByAccount.get(accountId) ?? []) as unknown[]
       }
+      if (entity === BillingAccountUsage) {
+        const accountId = (where as { billAccountId?: string }).billAccountId
+        if (!accountId) return []
+        const records = options.usageByAccount?.get(accountId) ?? []
+        // Apply mock filtering for rated_in_bill_run_id IS NULL
+        return records.filter((r) => r.ratedInBillRunId === null) as unknown[]
+      }
       return []
     }),
     findOne: jest.fn(async (_entity: unknown, _where: unknown) => null),
+    nativeUpdate: jest.fn(async (entity: unknown, where: unknown, data: unknown) => {
+      if (entity === BillingAccountUsage) {
+        const ids = (where as { id?: { $in?: string[] } }).id?.$in ?? []
+        for (const records of options.usageByAccount?.values() ?? []) {
+          for (const record of records) {
+            if (ids.includes(record.id)) {
+              record.ratedInBillRunId =
+                (data as { ratedInBillRunId?: string }).ratedInBillRunId ?? null
+            }
+          }
+        }
+        return ids.length
+      }
+      return 0
+    }),
   }
 
   // For failure injection — wire the per-account hook
@@ -124,7 +150,7 @@ function createEnvironment(
     return null
   }) }
 
-  return { em, container, captured, numberGenerator }
+  return { em, container, captured, numberGenerator, usageMarkedAs: em.nativeUpdate }
 }
 
 function makeAccount(overrides: Partial<BillingAccount>): BillingAccount {
@@ -307,6 +333,174 @@ describe('runBillRun — orchestration', () => {
     const { outcomes } = await runBillRun(em as never, container as never, params({}))
     expect(outcomes[0].status).toBe('success')
     expect(account.nextBillDate.toISOString().slice(0, 10)).toBe('2026-07-01')
+  })
+
+  // ─── Phase 3 — usage flow ────────────────────────────────────
+
+  function makeUsageItem(
+    billAccountId: string,
+    uomCode: string,
+    rate: Record<string, unknown>,
+  ): BillingItem {
+    return {
+      id: `usage-item-${uomCode}`,
+      organizationId: 'org-1',
+      tenantId: 'tenant-1',
+      billAccountId,
+      type: 'usage',
+      billStartDate: new Date('2026-01-01T00:00:00Z'),
+      billEndDate: null,
+      description: `Usage — ${uomCode}`,
+      rateJson: rate,
+      uomCode,
+      subscriptionId: null,
+      subscriptionItemId: null,
+      sourceRef: null,
+      currencyMismatch: false,
+      billedToDate: null,
+      isActive: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      deletedAt: null,
+    } as BillingItem
+  }
+
+  function makeUsageRecord(
+    id: string,
+    billAccountId: string,
+    uomCode: string,
+    quantity: number,
+  ): BillingAccountUsage {
+    return {
+      id,
+      organizationId: 'org-1',
+      tenantId: 'tenant-1',
+      billAccountId,
+      uomCode,
+      quantity: quantity.toFixed(4),
+      periodStart: new Date('2026-05-01T00:00:00Z'),
+      periodEnd: new Date('2026-05-31T23:59:59Z'),
+      lineDescription: null,
+      sourceRef: null,
+      ratedInBillRunId: null,
+      isActive: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      deletedAt: null,
+    } as BillingAccountUsage
+  }
+
+  it('aggregates usage records: graduated 25k → 15 EUR + marks rated_in_bill_run_id', async () => {
+    const account = makeAccount({})
+    const usageItem = makeUsageItem(account.id, 'api_request', {
+      model: 'graduated',
+      tiers: [
+        { up_to: 10000, unit_price: 0 },
+        { up_to: null, unit_price: 0.001 },
+      ],
+    })
+    const u1 = makeUsageRecord('u1', account.id, 'api_request', 10000)
+    const u2 = makeUsageRecord('u2', account.id, 'api_request', 15000)
+    const { em, container, captured } = createEnvironment({
+      accounts: [account],
+      itemsByAccount: new Map([[account.id, [usageItem]]]),
+      usageByAccount: new Map([[account.id, [u1, u2]]]),
+    })
+
+    const { billRun, outcomes } = await runBillRun(em as never, container as never, params({}))
+
+    expect(outcomes[0].status).toBe('success')
+    // Persisted SalesInvoiceLine for the usage item with the right total
+    const usageLine = captured.persisted.find((p) => {
+      const m = (p as { metadata?: { billing_type?: string } }).metadata
+      return m?.billing_type === 'usage'
+    })
+    expect(usageLine).toBeDefined()
+    expect((usageLine as { totalNetAmount?: string }).totalNetAmount).toBe('15.0000')
+
+    // Real-mode marks records as rated
+    expect(u1.ratedInBillRunId).toBe(billRun.id)
+    expect(u2.ratedInBillRunId).toBe(billRun.id)
+    expect(billRun.summary).toMatchObject({ usage_records_rated: 2 })
+  })
+
+  it('unmatched usage uom → success_with_warnings, records left un-rated', async () => {
+    const account = makeAccount({})
+    const orphan = makeUsageRecord('u-orphan', account.id, 'mystery_meter', 999)
+    const { em, container } = createEnvironment({
+      accounts: [account],
+      itemsByAccount: new Map([[account.id, []]]),
+      usageByAccount: new Map([[account.id, [orphan]]]),
+    })
+
+    const { outcomes } = await runBillRun(em as never, container as never, params({}))
+
+    expect(outcomes[0].status).toBe('success_with_warnings')
+    expect((outcomes[0].warnings as { unmatched_usage_uoms?: string[] } | null)
+      ?.unmatched_usage_uoms).toEqual(['mystery_meter'])
+    // Critically: orphan is NOT marked rated
+    expect(orphan.ratedInBillRunId).toBeNull()
+  })
+
+  it('simple flat-rate usage emits unit_price on the invoice line', async () => {
+    const account = makeAccount({})
+    const usageItem = makeUsageItem(account.id, 'api_request', { unit_price: 0.001 })
+    const u1 = makeUsageRecord('u1', account.id, 'api_request', 12000)
+    const { em, container, captured } = createEnvironment({
+      accounts: [account],
+      itemsByAccount: new Map([[account.id, [usageItem]]]),
+      usageByAccount: new Map([[account.id, [u1]]]),
+    })
+
+    await runBillRun(em as never, container as never, params({}))
+
+    const usageLine = captured.persisted.find((p) => {
+      const m = (p as { metadata?: { billing_type?: string } }).metadata
+      return m?.billing_type === 'usage'
+    }) as { unitPriceNet?: string; totalNetAmount?: string; quantity?: string } | undefined
+    expect(usageLine?.unitPriceNet).toBe('0.0010')
+    expect(usageLine?.quantity).toBe('12000.0000')
+    expect(usageLine?.totalNetAmount).toBe('12.0000')
+  })
+
+  it('test mode: rates usage on draft but does NOT mark records as rated', async () => {
+    const account = makeAccount({})
+    const usageItem = makeUsageItem(account.id, 'api_request', { unit_price: 0.001 })
+    const u1 = makeUsageRecord('u1', account.id, 'api_request', 1000)
+    const { em, container } = createEnvironment({
+      accounts: [account],
+      itemsByAccount: new Map([[account.id, [usageItem]]]),
+      usageByAccount: new Map([[account.id, [u1]]]),
+    })
+
+    await runBillRun(em as never, container as never, params({ mode: 'test' }))
+
+    expect(u1.ratedInBillRunId).toBeNull()
+  })
+
+  it('mixed recurring + usage: invoice has BOTH lines, total = sum', async () => {
+    const account = makeAccount({})
+    const mrc = makeRecurringItem(account.id, 'mrc')
+    const usageItem = makeUsageItem(account.id, 'api_request', { unit_price: 0.001 })
+    const u1 = makeUsageRecord('u1', account.id, 'api_request', 12000)
+    const { em, container, captured } = createEnvironment({
+      accounts: [account],
+      itemsByAccount: new Map([[account.id, [mrc, usageItem]]]),
+      usageByAccount: new Map([[account.id, [u1]]]),
+    })
+
+    await runBillRun(em as never, container as never, params({}))
+
+    const lines = captured.persisted.filter((p) => {
+      const m = (p as { metadata?: { billing_type?: string } }).metadata
+      return m?.billing_type === 'recurring' || m?.billing_type === 'usage'
+    })
+    expect(lines).toHaveLength(2)
+    // Invoice header totalNet should be 49.99 (MRC) + 12.00 (usage) = 61.99
+    const invoice = captured.persisted.find(
+      (p) => (p as { invoiceNumber?: string }).invoiceNumber,
+    ) as { grandTotalNetAmount?: string } | undefined
+    expect(invoice?.grandTotalNetAmount).toBe('61.9900')
   })
 
   it('summary aggregates drafts_created / accounts_failed / accounts_with_warnings', async () => {

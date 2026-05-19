@@ -1050,7 +1050,7 @@ weeks (end of Phase 2).
 | Phase 0 — Scaffold | Done | 2026-05-19 | Workspace, 6 entities, 12 ACL features, setup.ts, reaper worker stub, initial migration, 76 unit tests passing |
 | Phase 1 — REST API | Done | 2026-05-19 | 3 CRUD routes via `makeCrudRoute`, lean command pattern (no undo yet), `source_ref` idempotency on items + usage, per-tenant advisory-lock primitive ready for Phase 2, 119 unit tests passing |
 | Phase 2 — Bill Run engine | Done | 2026-05-19 | Bill Run orchestrator (lock + savepoints + dry/test/real + catch-up + open-draft check + item-level guard); calendar-aware period math (month-end clamp); item selector; invoice writer (creates `core/sales` drafts with full metadata); trigger + retry-failed commands; 3 new API routes; 166 unit tests passing |
-| Phase 3 — Usage rating | Not Started | — | — |
+| Phase 3 — Usage rating | Done | 2026-05-19 | All four rate shapes (simple flat + volume / graduated / flat tier); usage runner aggregates records per `uom_code`, rates, emits one line per matched item; `rated_in_bill_run_id` marking via bulk update; `unmatched_usage_uoms` warning; per-tier breakdown in invoice-line metadata; 193 unit tests passing. Per-record `line_description` itemization deferred to Phase 4. |
 | Phase 4 — Admin UI + v1 release | Not Started | — | — |
 | Phase 5 — `@dainamite/cpq-billing-connector` | Not Started | — | — |
 

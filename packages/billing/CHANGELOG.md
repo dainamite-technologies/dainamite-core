@@ -1,5 +1,67 @@
 # @dainamite/billing
 
+## 0.4.0 — Phase 3 usage rating (unreleased)
+
+- **Usage rater** in `lib/usageRater.ts` — pure functions for all four
+  spec-mandated rate shapes:
+  - Simple flat (`{ unit_price }`): `quantity × unit_price`.
+  - Volume tier (`{ model: 'volume', tiers }`): entire quantity at the
+    `unit_price` of the tier its total falls into.
+  - Graduated tier (`{ model: 'graduated', tiers }`): per-unit pricing
+    by tier, the canonical "metered API" model.
+  - Flat tier (`{ model: 'flat', tiers }`): one `flat_amount` for the
+    highest tier reached.
+
+  Returns `{ amount, breakdown }` where `breakdown` is the per-tier
+  audit trail persisted into `SalesInvoiceLine.metadata
+  .usage_tier_breakdown`. Half-up rounding to 2dp on the amount;
+  unit prices preserve sub-cent precision via the dedicated
+  `formatUnitPrice` helper (e.g. `0.001 → "0.0010"` instead of being
+  rounded to zero).
+
+- **Usage runner** in `lib/usageRunner.ts` — per-account processor:
+  - Selects unrated usage records (`rated_in_bill_run_id IS NULL`,
+    `period_end <= bill_period_end`).
+  - Groups by `uom_code`, matches against the account's `type=usage`
+    Billing Items (exact match — NO conversion per spec).
+  - Aggregates quantity per uom, rates, emits ONE invoice line per
+    matched item with the breakdown in metadata.
+  - Surfaces `unmatched_usage_uoms` for usage records that have no
+    matching Billing Item — operator's `success_with_warnings`
+    signal to add the missing item then trigger retry-failed.
+
+- **Engine integration** in `lib/billRunEngine.ts`:
+  - Per-cycle loop now combines `buildInvoiceLinesFromItems` (one_time
+    + recurring) with `processUsageForAccount` (usage) into a single
+    `SalesInvoice` write.
+  - Real-mode commits mark consumed usage records'
+    `rated_in_bill_run_id` via a single `nativeUpdate` (scales to
+    accounts with thousands of records per cycle).
+  - `AccountWarnings` now carries `unmatched_usage_uoms` alongside
+    `currency_mismatch_items`; both raise the outcome status to
+    `success_with_warnings`.
+  - `BillRun.summary.usage_records_rated` is populated by summing the
+    per-account totals — the spec's required summary key, previously
+    a hard-coded zero.
+
+- **Per-record `line_description` itemization** (emitting one invoice
+  line per Usage record when `line_description` is set) is
+  intentionally deferred to Phase 4 (admin UI iteration). Phase 3
+  ships one aggregated line per matched usage item — sufficient for
+  correct billing; richer invoice presentation lands when there's a
+  UI to show it.
+
+- 27 new unit tests (193 total for the package):
+  - `usageRater` covers every spec example end-to-end (`25k vs
+    [10k=0, ∞=0.001]` graduated → 15 EUR, `25k vs [10k=0,
+    50k=0.001, ∞=0.0005]` volume → 25 EUR, `25k vs
+    [10k=50, 50k=200, ∞=1000]` flat → 200 EUR) plus boundary
+    conditions and the `1.005 → 1.01` half-up edge case.
+  - Engine integration: graduated 25k → 15 EUR end-to-end, unmatched
+    UoM warning + un-rated guard, simple-flat unit_price emission,
+    test-mode does NOT mark records, mixed recurring + usage line
+    aggregation (49.99 + 12.00 = 61.99).
+
 ## 0.3.0 — Phase 2 Bill Run engine (unreleased)
 
 - **Bill Run engine** in `lib/billRunEngine.ts` — the heart of the

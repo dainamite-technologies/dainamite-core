@@ -2,6 +2,7 @@ import type { EntityManager } from '@mikro-orm/postgresql'
 import type { AwilixContainer } from 'awilix'
 import {
   BillingAccount,
+  BillingAccountUsage,
   BillingItem,
   BillRun,
   BillRunOutcome,
@@ -14,9 +15,11 @@ import {
 import {
   buildInvoiceLinesFromItems,
   writeDraftInvoice,
+  type InvoiceLineDescriptor,
   type WriteMode,
 } from './invoiceWriter'
 import { withTenantLock } from './tenantLock'
+import { processUsageForAccount } from './usageRunner'
 import type { BillCycle } from '../data/validators'
 
 /**
@@ -72,6 +75,7 @@ export type RunBillRunResult = {
 
 type AccountWarnings = {
   currency_mismatch_items?: string[]
+  unmatched_usage_uoms?: string[]
 }
 
 type AccountProcessSuccess = {
@@ -79,6 +83,7 @@ type AccountProcessSuccess = {
   warnings: AccountWarnings | null
   draftInvoiceId: string | null
   cyclesEmitted: number
+  usageRecordsRated: number
 }
 
 type AccountProcessFailed = {
@@ -131,9 +136,13 @@ async function executeRunWithinLock(
 
   const accounts = await selectTargetAccounts(em, params)
   const outcomes: BillRunOutcome[] = []
+  let totalUsageRecordsRated = 0
 
   for (const account of accounts) {
     const processResult = await processAccountSafely(em, container, billRun, account, params)
+    if (processResult.status !== 'failed') {
+      totalUsageRecordsRated += processResult.usageRecordsRated
+    }
     const outcome = em.create(BillRunOutcome, {
       organizationId: params.organizationId,
       tenantId: params.tenantId,
@@ -158,7 +167,7 @@ async function executeRunWithinLock(
   billRun.status = computeFinalRunStatus(outcomes)
   billRun.finishedAt = new Date()
   billRun.updatedAt = billRun.finishedAt
-  billRun.summary = buildRunSummary(outcomes, accounts.length)
+  billRun.summary = buildRunSummary(outcomes, accounts.length, totalUsageRecordsRated)
   await em.flush()
 
   return { billRun, outcomes }
@@ -213,6 +222,7 @@ async function processAccount(
 
   let cyclesEmitted = 0
   let lastDraftInvoiceId: string | null = null
+  let totalUsageRatedThisAccount = 0
   const aggregatedWarnings: AccountWarnings = {}
 
   while (cyclesEmitted < maxCycles && isCycleDue(account.nextBillDate, params.asOfDate)) {
@@ -227,6 +237,7 @@ async function processAccount(
           warnings: null,
           draftInvoiceId: existing,
           cyclesEmitted,
+          usageRecordsRated: totalUsageRatedThisAccount,
         }
       }
     }
@@ -238,24 +249,13 @@ async function processAccount(
       deletedAt: null,
     } as never)
 
-    const { included } = selectItemsForPeriod(items as SelectableItem[], period)
-    if (included.length === 0) {
-      // Nothing to bill this cycle — still advance so the account moves
-      // forward in real mode. In test / dry, no advance, so we'd loop
-      // forever; break out.
-      if (params.mode !== 'real') break
-      account.nextBillDate = advanceNextBillDate(
-        account.nextBillDate,
-        account.billCycle as BillCycle,
-      )
-      account.lastBillDate = period.periodEnd
-      account.updatedAt = new Date()
-      cyclesEmitted += 1
-      continue
-    }
+    const usageItems = (items as BillingItem[]).filter((it) => it.type === 'usage')
 
-    const fullItems = included as unknown as BillingItem[]
-    const currencyMismatchIds = fullItems
+    // Non-usage path: one_time + recurring filtered by the selector.
+    const { included } = selectItemsForPeriod(items as SelectableItem[], period)
+    const billableItems = included as unknown as BillingItem[]
+
+    const currencyMismatchIds = billableItems
       .filter((it) => it.currencyMismatch)
       .map((it) => it.id)
     if (currencyMismatchIds.length > 0) {
@@ -264,9 +264,23 @@ async function processAccount(
         ...currencyMismatchIds,
       ]
     }
+    const itemLines = buildInvoiceLinesFromItems(billableItems)
 
-    const lines = buildInvoiceLinesFromItems(fullItems)
-    if (lines.length === 0) {
+    // Usage path: aggregate matching usage records per uom_code, rate,
+    // emit one line per matched usage item, warn about unmatched UoMs.
+    const usageResult = await processUsageForAccount(em, account, period, usageItems)
+    if (usageResult.unmatchedUoms.length > 0) {
+      aggregatedWarnings.unmatched_usage_uoms = [
+        ...(aggregatedWarnings.unmatched_usage_uoms ?? []),
+        ...usageResult.unmatchedUoms,
+      ]
+    }
+
+    const allLines: InvoiceLineDescriptor[] = [...itemLines, ...usageResult.lines]
+    if (allLines.length === 0) {
+      // Nothing to bill this cycle — still advance so the account moves
+      // forward in real mode. In test / dry, no advance, so we'd loop
+      // forever; break out.
       if (params.mode !== 'real') break
       account.nextBillDate = advanceNextBillDate(
         account.nextBillDate,
@@ -283,16 +297,26 @@ async function processAccount(
       account,
       period,
       billRunId: billRun.id,
-      lines,
+      lines: allLines,
     })
     lastDraftInvoiceId = written.invoiceId
 
     if (params.mode === 'real') {
       const now = new Date()
-      for (const item of fullItems) {
+      for (const item of billableItems) {
         item.billedToDate = period.periodEnd
         item.updatedAt = now
       }
+      // Mark consumed usage records — single bulk update so we don't
+      // round-trip per record on accounts with thousands of usage rows.
+      if (usageResult.consumedUsageIds.length > 0) {
+        await em.nativeUpdate(
+          BillingAccountUsage,
+          { id: { $in: usageResult.consumedUsageIds } } as never,
+          { ratedInBillRunId: billRun.id, updatedAt: now } as never,
+        )
+      }
+      totalUsageRatedThisAccount += usageResult.ratedCount
       account.nextBillDate = advanceNextBillDate(
         account.nextBillDate,
         account.billCycle as BillCycle,
@@ -308,13 +332,17 @@ async function processAccount(
     cyclesEmitted += 1
   }
 
-  const hasWarnings =
-    aggregatedWarnings.currency_mismatch_items && aggregatedWarnings.currency_mismatch_items.length > 0
+  const hasCurrencyWarnings =
+    (aggregatedWarnings.currency_mismatch_items ?? []).length > 0
+  const hasUnmatchedUsage =
+    (aggregatedWarnings.unmatched_usage_uoms ?? []).length > 0
+  const hasWarnings = hasCurrencyWarnings || hasUnmatchedUsage
   return {
     status: hasWarnings ? 'success_with_warnings' : 'success',
     warnings: hasWarnings ? aggregatedWarnings : null,
     draftInvoiceId: lastDraftInvoiceId,
     cyclesEmitted,
+    usageRecordsRated: totalUsageRatedThisAccount,
   }
 }
 
@@ -357,6 +385,7 @@ function computeFinalRunStatus(
 function buildRunSummary(
   outcomes: readonly BillRunOutcome[],
   totalAccounts: number,
+  usageRecordsRated: number,
 ): Record<string, unknown> {
   return {
     accounts_processed: totalAccounts,
@@ -368,6 +397,6 @@ function buildRunSummary(
     accounts_failed: outcomes.filter((o) => o.status === 'failed').length,
     accounts_with_warnings: outcomes.filter((o) => o.status === 'success_with_warnings')
       .length,
-    usage_records_rated: 0, // wired in Phase 3
+    usage_records_rated: usageRecordsRated,
   }
 }

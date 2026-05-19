@@ -261,6 +261,10 @@ export function buildInvoiceLinesFromItems(
     if (item.type === 'one_time') {
       const rate = item.rateJson as { amount?: number } | null
       if (!rate || typeof rate.amount !== 'number') continue
+      // For one_time the per-unit price IS the total — quantity is 1.
+      // Both fields therefore carry the same value, with the 2dp
+      // half-up policy applied (unit price + line total are the same
+      // numeric column at numeric(18,4)).
       const amount = format4dp(rate.amount)
       lines.push({
         billingItemId: item.id,

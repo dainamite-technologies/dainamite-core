@@ -1,0 +1,248 @@
+"use client"
+import * as React from 'react'
+import Link from 'next/link'
+import type { ColumnDef } from '@tanstack/react-table'
+import { useT } from '@open-mercato/shared/lib/i18n/context'
+import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
+import { Page, PageBody } from '@open-mercato/ui/backend/Page'
+import { DataTable } from '@open-mercato/ui/backend/DataTable'
+import { Tag } from '@open-mercato/ui/primitives/tag'
+import { readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
+
+/**
+ * Bill Runs admin list page.
+ *
+ * Read-only surface: lists every Bill Run for the operator's tenant
+ * with status, mode, summary stats, and a link into the detail page.
+ * Manual triggers + retry-failed remain API-driven for v1 (operators
+ * curl `/api/billing/runs` or `/api/billing/runs/retry-failed`); a
+ * trigger button on this page lands in a follow-up iteration once
+ * the operator UX is signed off.
+ */
+
+type BillRunRow = {
+  id: string
+  triggeredBy: 'schedule' | 'manual'
+  parentRunId: string | null
+  dryRun: boolean
+  testMode: boolean
+  catchUp: boolean
+  asOfDate: string
+  startedAt: string | null
+  finishedAt: string | null
+  status: 'running' | 'completed' | 'partial_failure' | 'failed'
+  summary: {
+    accounts_processed?: number
+    drafts_created?: number
+    drafts_skipped_existing?: number
+    accounts_failed?: number
+    accounts_with_warnings?: number
+    usage_records_rated?: number
+  } | null
+  createdAt: string
+  updatedAt: string
+}
+
+type ListResponse = {
+  items: BillRunRow[]
+  total: number
+  totalPages: number
+}
+
+function formatDate(value: string | null | undefined): string {
+  if (!value) return '—'
+  const parsed = new Date(value)
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString()
+}
+
+function formatDateOnly(value: string | null | undefined): string {
+  if (!value) return '—'
+  const parsed = new Date(value)
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleDateString()
+}
+
+function statusVariant(
+  status: BillRunRow['status'],
+): 'default' | 'success' | 'warning' | 'error' {
+  switch (status) {
+    case 'completed':
+      return 'success'
+    case 'partial_failure':
+      return 'warning'
+    case 'failed':
+      return 'error'
+    case 'running':
+    default:
+      return 'default'
+  }
+}
+
+function modeBadge(row: BillRunRow): { label: string; variant: 'default' | 'warning' } | null {
+  if (row.dryRun) return { label: 'Dry-run', variant: 'warning' }
+  if (row.testMode) return { label: 'Test', variant: 'warning' }
+  return null
+}
+
+export default function BillRunsListPage() {
+  const t = useT()
+  const [rows, setRows] = React.useState<BillRunRow[]>([])
+  const [page, setPage] = React.useState(1)
+  const [pageSize] = React.useState(25)
+  const [filters, setFilters] = React.useState<FilterValues>({})
+  const [total, setTotal] = React.useState(0)
+  const [totalPages, setTotalPages] = React.useState(1)
+  const [loading, setLoading] = React.useState(true)
+
+  const filterDefs = React.useMemo<FilterDef[]>(
+    () => [
+      {
+        id: 'status',
+        label: t('billing.runs.filters.status', 'Status'),
+        type: 'select',
+        options: [
+          { value: 'running', label: t('billing.runs.status.running', 'Running') },
+          { value: 'completed', label: t('billing.runs.status.completed', 'Completed') },
+          {
+            value: 'partial_failure',
+            label: t('billing.runs.status.partial_failure', 'Partial failure'),
+          },
+          { value: 'failed', label: t('billing.runs.status.failed', 'Failed') },
+        ],
+      },
+      {
+        id: 'triggeredBy',
+        label: t('billing.runs.filters.triggered_by', 'Trigger'),
+        type: 'select',
+        options: [
+          { value: 'schedule', label: t('billing.runs.trigger.schedule', 'Schedule') },
+          { value: 'manual', label: t('billing.runs.trigger.manual', 'Manual') },
+        ],
+      },
+    ],
+    [t],
+  )
+
+  const loadRows = React.useCallback(async () => {
+    setLoading(true)
+    try {
+      const params = new URLSearchParams({
+        page: String(page),
+        pageSize: String(pageSize),
+        sortField: 'startedAt',
+        sortDir: 'desc',
+      })
+      if (typeof filters.status === 'string' && filters.status) {
+        params.set('status', filters.status)
+      }
+      if (typeof filters.triggeredBy === 'string' && filters.triggeredBy) {
+        params.set('triggeredBy', filters.triggeredBy)
+      }
+      const result = await readApiResultOrThrow<ListResponse>(
+        `/api/billing/runs?${params.toString()}`,
+      )
+      setRows(result.items ?? [])
+      setTotal(result.total ?? 0)
+      setTotalPages(result.totalPages ?? 1)
+    } finally {
+      setLoading(false)
+    }
+  }, [filters.status, filters.triggeredBy, page, pageSize])
+
+  React.useEffect(() => {
+    void loadRows()
+  }, [loadRows])
+
+  const columns = React.useMemo<ColumnDef<BillRunRow>[]>(
+    () => [
+      {
+        accessorKey: 'status',
+        header: t('billing.runs.columns.status', 'Status'),
+        cell: ({ row }) => {
+          const mode = modeBadge(row.original)
+          return (
+            <div className="flex items-center gap-2">
+              <Tag variant={statusVariant(row.original.status)}>
+                {row.original.status}
+              </Tag>
+              {mode ? <Tag variant={mode.variant}>{mode.label}</Tag> : null}
+            </div>
+          )
+        },
+      },
+      {
+        accessorKey: 'asOfDate',
+        header: t('billing.runs.columns.as_of_date', 'As-of date'),
+        cell: ({ row }) => formatDateOnly(row.original.asOfDate),
+      },
+      {
+        accessorKey: 'triggeredBy',
+        header: t('billing.runs.columns.triggered_by', 'Trigger'),
+      },
+      {
+        id: 'drafts_created',
+        header: t('billing.runs.columns.drafts', 'Drafts'),
+        cell: ({ row }) => row.original.summary?.drafts_created ?? '—',
+      },
+      {
+        id: 'accounts_processed',
+        header: t('billing.runs.columns.accounts', 'Accounts'),
+        cell: ({ row }) => row.original.summary?.accounts_processed ?? '—',
+      },
+      {
+        id: 'accounts_failed',
+        header: t('billing.runs.columns.failed', 'Failed'),
+        cell: ({ row }) => {
+          const failed = row.original.summary?.accounts_failed ?? 0
+          if (failed === 0) return '—'
+          return <Tag variant="error">{failed}</Tag>
+        },
+      },
+      {
+        accessorKey: 'startedAt',
+        header: t('billing.runs.columns.started_at', 'Started'),
+        cell: ({ row }) => formatDate(row.original.startedAt),
+      },
+      {
+        accessorKey: 'finishedAt',
+        header: t('billing.runs.columns.finished_at', 'Finished'),
+        cell: ({ row }) => formatDate(row.original.finishedAt),
+      },
+      {
+        id: 'actions',
+        header: '',
+        cell: ({ row }) => (
+          <Link
+            href={`/backend/billing/runs/${row.original.id}`}
+            className="text-sm font-medium text-primary hover:underline"
+          >
+            {t('billing.runs.actions.open', 'Open')}
+          </Link>
+        ),
+      },
+    ],
+    [t],
+  )
+
+  return (
+    <Page title={t('billing.runs.title', 'Bill Runs')}>
+      <PageBody>
+        <DataTable
+          columns={columns}
+          data={rows}
+          isLoading={loading}
+          pagination={{
+            page,
+            pageSize,
+            total,
+            totalPages,
+            onPageChange: setPage,
+          }}
+          filters={filterDefs}
+          filterValues={filters}
+          onFiltersApply={setFilters}
+          onFiltersClear={() => setFilters({})}
+        />
+      </PageBody>
+    </Page>
+  )
+}

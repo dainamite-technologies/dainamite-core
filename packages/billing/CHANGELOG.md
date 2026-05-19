@@ -1,5 +1,45 @@
 # @dainamite/billing
 
+## 0.7.0 — Phase 4c admin UI v1 (unreleased)
+
+Three operator-facing backend pages — the minimum viable shell so
+operators can drive billing from the admin without `curl`:
+
+- `/backend/billing/runs` — Bill Runs list. Status / mode tags
+  (running / completed / partial_failure / failed + dry-run / test /
+  catch-up flags), as-of date, accounts processed / drafts created /
+  failed counts, started + finished timestamps. Filter on status +
+  triggered-by. Open into detail.
+- `/backend/billing/runs/[id]` — Bill Run detail. Header card with
+  status badges, full summary (accounts processed / drafts / skipped
+  / warnings / failed / usage records rated), "Retry failed accounts
+  (N)" button (POSTs `billing.runs.retry_failed`, enabled only when
+  N > 0). Outcomes table below: per-account status / draft invoice
+  id / error message / warnings JSON.
+- `/backend/billing/accounts` — Billing Accounts list. Read-only for
+  v1 (CRUD lives at `/api/billing/accounts` — admin edit UI ships
+  in a follow-up). Filters on bill cycle / currency / active; search
+  on name. Status badges from the shared OM `Tag` primitive
+  (`success` / `default`).
+
+Sidebar nav: each page declares `pageGroup: 'Billing'` /
+`pageGroupKey: 'billing.nav.group'` so all three appear under one
+collapsible Billing group; detail page sets `navHidden: true`.
+
+All i18n keys default to inline English fallbacks (`t('key',
+'English')` shape). Locale files ship in a follow-up — operators
+running the dev server see correct copy out of the box.
+
+Validation: yarn build + generate + typecheck + test all green;
+797 repo tests, 0 regressions; routes registered in
+`.mercato/generated/backend-routes.generated.ts`.
+
+Deferred to a follow-up:
+- Account / item / usage / draft-invoice editor pages
+- Triggers (manual Bill Run / dry-run preview) as buttons in the
+  list page
+- Locale files (en/pl)
+
 ## 0.6.0 — Phase 4b backend slice (unreleased)
 
 Draft-edit audit pipeline + GDPR portability + test-invoice wipe.

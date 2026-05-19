@@ -1,5 +1,53 @@
 # @dainamite/billing
 
+## 0.12.0 — Phase 4f — scale audit + bulk refactor (unreleased)
+
+Audit of hot paths against the spec's Performance Considerations
+(Shape A: many accounts × few items; Shape B: few accounts × millions
+of usage records). Two real OOM risks closed; one UI deep-link added
+on the way through.
+
+- **Usage runner: load-all-records → SQL aggregate.** Pre-Phase-4f the
+  per-account usage path did `em.find(BillingAccountUsage, {…})` with
+  no limit, materialising every row in JS memory before summing. For
+  a telco account with 1M usage records per cycle this OOMs. New
+  implementation does a single `SELECT uom_code, SUM(quantity),
+  COUNT(*) FROM billing_account_usage WHERE … GROUP BY uom_code` —
+  result set is `O(distinct uom_codes)` (typically 1-20) regardless
+  of record count. Index `(bill_account_id, uom_code,
+  rated_in_bill_run_id, period_end)` already exists from Phase 0.
+- **Engine rated-marking: id list → predicate update.** The
+  follow-up "mark consumed records" step used to take a `consumedUsageIds`
+  array and issue `UPDATE … WHERE id IN (millions of UUIDs)`. New
+  shape: the runner returns `matchedUoms` (small) and the engine does
+  `UPDATE … WHERE uom_code IN (matchedUoms) AND <account scope>
+  AND rated_in_bill_run_id IS NULL AND period_end <= ?` — no ID list
+  ever leaves Postgres. Memory-bounded regardless of how many records
+  the predicate touches.
+- **GDPR export: time window + hard cap.** The
+  `GET /api/billing/export/account/[id]` endpoint used to do
+  unbounded `em.find` against usage / outcomes / invoices —
+  pathological for telco accounts with millions of usage rows. Now:
+  defaults to the last 12 months (regulator lifetime requests
+  override via `?since=1970-01-01&until=...`), every collection
+  capped by `EXPORT_HARD_LIMIT = 50_000`, response carries the
+  `window: { since, until, hardLimit }` block so the operator
+  knows what was sliced. Lifetime dumps for outlier accounts need
+  a follow-up chunked NDJSON background job — documented in the
+  endpoint's OpenAPI description.
+- **Account detail UI: "View items" + "Add item" deep-link** buttons
+  that pass `?billAccountId=<id>` to the items list and items create
+  pages. Items list pre-fills the filter on mount when the param is
+  present.
+
+Engine tests updated to mock the new aggregate path
+(`em.execute(SELECT … GROUP BY uom_code)` + `em.nativeUpdate` with
+the `uomCode: { $in: [...] }` predicate). All 12 billing test suites
+still green (214 cases).
+
+Validation: yarn build + generate + typecheck + test all green; 797
+repo tests, 0 regressions.
+
 ## 0.11.0 — Phase 4e — item create + edit UI (unreleased)
 
 Billing Item management from the admin closes the last UI gap.

@@ -70,9 +70,30 @@ function createEnvironment(
       }
       return fn(em)
     }),
-    execute: jest.fn(async (_sql: string, params?: unknown[]) => {
+    execute: jest.fn(async (sql: string, params?: unknown[]) => {
+      // Usage aggregate: SELECT uom_code, SUM(quantity), COUNT(*) FROM
+      // billing_account_usage WHERE ... GROUP BY uom_code. Buckets the
+      // test fixture records by uom for the runner.
+      if (sql.includes('billing_account_usage') && sql.includes('GROUP BY uom_code')) {
+        const accountId = (params?.[2] ?? '') as string
+        const recs = (options.usageByAccount?.get(accountId) ?? []).filter(
+          (r) => r.ratedInBillRunId === null,
+        )
+        const grouped = new Map<string, { sum: number; count: number }>()
+        for (const r of recs) {
+          const prev = grouped.get(r.uomCode) ?? { sum: 0, count: 0 }
+          prev.sum += Number.parseFloat(r.quantity)
+          prev.count += 1
+          grouped.set(r.uomCode, prev)
+        }
+        return Array.from(grouped.entries()).map(([uom, agg]) => ({
+          uom_code: uom,
+          total_quantity: String(agg.sum),
+          record_count: String(agg.count),
+        })) as unknown
+      }
       // Open-draft check: SELECT id FROM sales_invoices ... bill_account_id = ?
-      if (params && Array.isArray(params) && params.length >= 3) {
+      if (sql.includes('sales_invoices') && params && Array.isArray(params) && params.length >= 3) {
         const accountId = params[2] as string
         const existing = options.openDraftIds?.get(accountId)
         if (existing) return [{ id: existing }] as unknown
@@ -110,16 +131,28 @@ function createEnvironment(
     findOne: jest.fn(async (_entity: unknown, _where: unknown) => null),
     nativeUpdate: jest.fn(async (entity: unknown, where: unknown, data: unknown) => {
       if (entity === BillingAccountUsage) {
-        const ids = (where as { id?: { $in?: string[] } }).id?.$in ?? []
-        for (const records of options.usageByAccount?.values() ?? []) {
-          for (const record of records) {
-            if (ids.includes(record.id)) {
-              record.ratedInBillRunId =
-                (data as { ratedInBillRunId?: string }).ratedInBillRunId ?? null
-            }
-          }
+        // Predicate-based bulk update (post-Phase-4f refactor): the
+        // engine now passes `{ billAccountId, uomCode: { $in: [...] },
+        // ratedInBillRunId: null, periodEnd: { $lte: <date> }, ... }`
+        // and we never see an explicit id list.
+        const w = where as {
+          billAccountId?: string
+          uomCode?: { $in?: string[] }
+          ratedInBillRunId?: null
         }
-        return ids.length
+        const accountId = w.billAccountId
+        const uoms = new Set(w.uomCode?.$in ?? [])
+        if (!accountId || uoms.size === 0) return 0
+        const records = options.usageByAccount?.get(accountId) ?? []
+        let touched = 0
+        for (const record of records) {
+          if (record.ratedInBillRunId !== null) continue
+          if (!uoms.has(record.uomCode)) continue
+          record.ratedInBillRunId =
+            (data as { ratedInBillRunId?: string }).ratedInBillRunId ?? null
+          touched += 1
+        }
+        return touched
       }
       return 0
     }),

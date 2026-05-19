@@ -1,6 +1,7 @@
 "use client"
 import * as React from 'react'
 import Link from 'next/link'
+import { useSearchParams } from 'next/navigation'
 import { Plus } from 'lucide-react'
 import type { ColumnDef } from '@tanstack/react-table'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
@@ -64,10 +65,17 @@ function typeVariant(
 
 export default function BillingItemsListPage() {
   const t = useT()
+  const searchParams = useSearchParams()
+  // Deep-link from the account detail page: `?billAccountId=<id>` pre-
+  // filters the list so the operator lands on "items for this account".
+  const initialAccountId = searchParams.get('billAccountId') ?? ''
+
   const [rows, setRows] = React.useState<BillingItemRow[]>([])
   const [page, setPage] = React.useState(1)
   const [pageSize] = React.useState(25)
-  const [filters, setFilters] = React.useState<FilterValues>({})
+  const [filters, setFilters] = React.useState<FilterValues>(
+    initialAccountId ? { billAccountId: initialAccountId } : {},
+  )
   const [total, setTotal] = React.useState(0)
   const [totalPages, setTotalPages] = React.useState(1)
   const [loading, setLoading] = React.useState(true)

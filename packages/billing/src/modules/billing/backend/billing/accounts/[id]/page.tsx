@@ -1,5 +1,7 @@
 "use client"
 import * as React from 'react'
+import Link from 'next/link'
+import { Plus } from 'lucide-react'
 import { useParams, useRouter } from 'next/navigation'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { Page, PageBody, PageHeader } from '@open-mercato/ui/backend/Page'
@@ -219,16 +221,29 @@ export default function BillingAccountDetailPage() {
             <div className="text-base font-semibold">{row.name}</div>
             <div className="text-xs text-muted-foreground font-mono">{row.id}</div>
           </div>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={handleDelete}
-            disabled={deleting}
-          >
-            {deleting
-              ? t('billing.accounts.detail.delete.in_progress', 'Deleting…')
-              : t('billing.accounts.detail.delete.action', 'Soft delete')}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button asChild variant="outline">
+              <Link href={`/backend/billing/items?billAccountId=${row.id}`}>
+                {t('billing.accounts.detail.view_items', 'View items')}
+              </Link>
+            </Button>
+            <Button asChild>
+              <Link href={`/backend/billing/items/create?billAccountId=${row.id}`}>
+                <Plus size={16} />
+                {t('billing.accounts.detail.add_item', 'Add item')}
+              </Link>
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={handleDelete}
+              disabled={deleting}
+            >
+              {deleting
+                ? t('billing.accounts.detail.delete.in_progress', 'Deleting…')
+                : t('billing.accounts.detail.delete.action', 'Soft delete')}
+            </Button>
+          </div>
         </div>
 
         <AccountForm

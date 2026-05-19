@@ -309,10 +309,24 @@ async function processAccount(
       }
       // Mark consumed usage records — single bulk update so we don't
       // round-trip per record on accounts with thousands of usage rows.
-      if (usageResult.consumedUsageIds.length > 0) {
+      if (usageResult.matchedUoms.length > 0) {
+        // Predicate-based bulk update: marks every still-unrated record
+        // for the matched uoms in the account's period with a single
+        // SQL UPDATE — no id list ever leaves Postgres. Stays
+        // memory-bounded even for telco accounts with millions of
+        // usage records per cycle (spec Performance Considerations
+        // "Shape B").
         await em.nativeUpdate(
           BillingAccountUsage,
-          { id: { $in: usageResult.consumedUsageIds } } as never,
+          {
+            tenantId: account.tenantId,
+            organizationId: account.organizationId,
+            billAccountId: account.id,
+            uomCode: { $in: usageResult.matchedUoms },
+            ratedInBillRunId: null,
+            periodEnd: { $lte: period.periodEnd },
+            deletedAt: null,
+          } as never,
           { ratedInBillRunId: billRun.id, updatedAt: now } as never,
         )
       }

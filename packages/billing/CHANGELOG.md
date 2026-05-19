@@ -1,5 +1,49 @@
 # @dainamite/billing
 
+## 0.8.0 — Phase 4c v2 — invoice review UI (unreleased)
+
+The "I want to see and post drafts from the UI" workflow. Closes the
+biggest remaining operator UX gap — drafts no longer require `curl`
+to review or post.
+
+- `GET /api/billing/invoices` — billing-managed invoices list. Filters
+  by `metadata->>'bill_run_id'` presence so non-billing invoices
+  (sales orders, etc.) never appear on this surface. Supports
+  status / billRunId / billAccountId / testRun / search filters.
+- `GET /api/billing/invoices/[id]` — invoice detail with all lines.
+  Hand-rolled because the filter predicate (`metadata ? 'bill_run_id'`)
+  doesn't map onto `makeCrudRoute`'s where shape, and the entity
+  itself is owned by `core/sales`.
+- `/backend/billing/invoices` — list page. Shows invoice number with
+  TEST tag for `metadata.test_run`, status (draft / posted / paid /
+  void), bill-period range, gross total, outstanding amount, issue
+  date. Filters on status + test-run inclusion.
+- `/backend/billing/invoices/[id]` — detail page. Header card with
+  status + period + metadata refs, four-tile totals (subtotal /
+  grand total / paid / outstanding), lines DataTable with billing-type
+  tag per line (`one_time` / `recurring` / `usage`), operator-added
+  flag. Two operator actions:
+  - **Post invoice** — visible only for `draft` non-test invoices.
+    POSTs `billing.invoices.post`. Refresh on success.
+  - **Wipe test invoices for this run** — visible only for
+    `metadata.test_run=true`. Hard-deletes every test invoice from
+    the same `bill_run_id` via `billing.invoices.wipe_test`. `window
+    .confirm` gate (will move to `ConfirmDialog` in a follow-up to
+    match the OM UX convention).
+
+Sidebar entry under the `Billing` group at order 30.
+
+Validation: yarn build + generate + typecheck + test all green; 797
+repo tests, 0 regressions. 6 billing API routes total now (post,
+add-line, edit-line, remove-line, invoices list, invoices detail);
+5 backend pages.
+
+Deferred to follow-up:
+- Inline line edit / add / remove dialogs on the detail page (REST
+  endpoints already exist from Phase 4b).
+- ConfirmDialog instead of `window.confirm` for the wipe action.
+- Account / item editor pages.
+
 ## 0.7.0 — Phase 4c admin UI v1 (unreleased)
 
 Three operator-facing backend pages — the minimum viable shell so

@@ -1,5 +1,36 @@
 # @dainamite/billing
 
+## 0.10.0 — Phase 4d — account create + edit UI (unreleased)
+
+Account management from the admin — no more REST-only onboarding.
+
+- `components/AccountForm.tsx` — shared form (create + edit modes).
+  Renders 9 scalar fields + 5 `invoiceAddress` sub-fields + an
+  `isActive` switch (edit-only). On `mode='edit'`, `customerId` and
+  `currencyCode` are disabled with explanatory copy — both fields are
+  immutable per `billingAccountUpdateSchema`. UX per OM convention:
+  `Cmd/Ctrl + Enter` submits, footer hint via `Kbd` / `KbdShortcut`.
+- `/backend/billing/accounts/create` — POSTs `/api/billing/accounts`.
+  On success, navigates to the new account's detail page.
+- `/backend/billing/accounts/[id]` — loads via `GET /api/billing/accounts?id=<id>`
+  (saves a dedicated `[id]` route). Form in edit mode for in-place
+  updates via PUT. **Soft Delete** button at the top-right with a
+  `ConfirmDialog` gate; on success, navigates back to the list.
+- List page (`/backend/billing/accounts`) now has a **New account**
+  CTA in the page header + an **Open** row link per account row.
+- **Bonus fix**: every existing backend page (`runs`, `runs/[id]`,
+  `invoices`, `invoices/[id]`) used `<Page title="…">` which silently
+  passed `title` as an HTML attribute (a tooltip), so no visible
+  title rendered. All migrated to the proper `PageHeader` wrapper.
+
+Validation: yarn build + generate + typecheck + test all green; 797
+repo tests, 0 regressions; all 7 backend pages auto-discovered.
+
+Deferred to follow-up:
+- Item create / edit pages (items are typically integration-driven —
+  the REST API at `/api/billing/items` covers operator-side needs).
+- Locale files (en, pl).
+
 ## 0.9.0 — Phase 4c v3 — inline line editing (unreleased)
 
 Closes the last operator-UX gap on the draft-review surface — line

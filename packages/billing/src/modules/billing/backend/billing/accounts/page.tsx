@@ -1,11 +1,14 @@
 "use client"
 import * as React from 'react'
+import Link from 'next/link'
+import { Plus } from 'lucide-react'
 import type { ColumnDef } from '@tanstack/react-table'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
-import { Page, PageBody } from '@open-mercato/ui/backend/Page'
+import { Page, PageBody, PageHeader } from '@open-mercato/ui/backend/Page'
 import { DataTable } from '@open-mercato/ui/backend/DataTable'
 import { Tag } from '@open-mercato/ui/primitives/tag'
+import { Button } from '@open-mercato/ui/primitives/button'
 import { readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
 
 /**
@@ -165,12 +168,35 @@ export default function BillingAccountsListPage() {
             <Tag variant="default">{t('billing.common.inactive', 'Inactive')}</Tag>
           ),
       },
+      {
+        id: 'actions',
+        header: '',
+        cell: ({ row }) => (
+          <Link
+            href={`/backend/billing/accounts/${row.original.id}`}
+            className="text-sm font-medium text-primary hover:underline"
+          >
+            {t('billing.accounts.actions.open', 'Open')}
+          </Link>
+        ),
+      },
     ],
     [t],
   )
 
   return (
-    <Page title={t('billing.accounts.title', 'Billing Accounts')}>
+    <Page>
+      <PageHeader
+        title={t('billing.accounts.title', 'Billing Accounts')}
+        actions={
+          <Button asChild>
+            <Link href="/backend/billing/accounts/create">
+              <Plus size={16} />
+              {t('billing.accounts.create.action', 'New account')}
+            </Link>
+          </Button>
+        }
+      />
       <PageBody>
         <DataTable
           columns={columns}

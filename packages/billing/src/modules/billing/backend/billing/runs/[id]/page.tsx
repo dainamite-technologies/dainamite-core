@@ -3,7 +3,7 @@ import * as React from 'react'
 import { useParams } from 'next/navigation'
 import type { ColumnDef } from '@tanstack/react-table'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
-import { Page, PageBody } from '@open-mercato/ui/backend/Page'
+import { Page, PageBody, PageHeader } from '@open-mercato/ui/backend/Page'
 import { DataTable } from '@open-mercato/ui/backend/DataTable'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { Button } from '@open-mercato/ui/primitives/button'
@@ -246,7 +246,8 @@ export default function BillRunDetailPage() {
 
   if (runError) {
     return (
-      <Page title={t('billing.runs.detail.title', 'Bill Run')}>
+      <Page>
+        <PageHeader title={t('billing.runs.detail.title', 'Bill Run')} />
         <PageBody>
           <ErrorMessage label={runError} />
         </PageBody>
@@ -256,7 +257,8 @@ export default function BillRunDetailPage() {
 
   if (!run) {
     return (
-      <Page title={t('billing.runs.detail.title', 'Bill Run')}>
+      <Page>
+        <PageHeader title={t('billing.runs.detail.title', 'Bill Run')} />
         <PageBody>
           <LoadingMessage label={t('billing.runs.detail.loading', 'Loading run…')} />
         </PageBody>

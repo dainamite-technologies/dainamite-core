@@ -4,7 +4,7 @@ import { useParams } from 'next/navigation'
 import type { ColumnDef } from '@tanstack/react-table'
 import { Pencil, Plus, Trash2 } from 'lucide-react'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
-import { Page, PageBody } from '@open-mercato/ui/backend/Page'
+import { Page, PageBody, PageHeader } from '@open-mercato/ui/backend/Page'
 import { DataTable } from '@open-mercato/ui/backend/DataTable'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { Button } from '@open-mercato/ui/primitives/button'
@@ -392,7 +392,8 @@ export default function BillingInvoiceDetailPage() {
 
   if (error) {
     return (
-      <Page title={t('billing.invoices.detail.title', 'Billing Invoice')}>
+      <Page>
+        <PageHeader title={t('billing.invoices.detail.title', 'Billing Invoice')} />
         <PageBody>
           <ErrorMessage label={error} />
         </PageBody>
@@ -401,7 +402,8 @@ export default function BillingInvoiceDetailPage() {
   }
   if (loading || !invoice) {
     return (
-      <Page title={t('billing.invoices.detail.title', 'Billing Invoice')}>
+      <Page>
+        <PageHeader title={t('billing.invoices.detail.title', 'Billing Invoice')} />
         <PageBody>
           <LoadingMessage label={t('billing.invoices.detail.loading', 'Loading invoice…')} />
         </PageBody>

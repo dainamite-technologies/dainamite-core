@@ -1,5 +1,36 @@
 # @dainamite/billing
 
+## 0.17.0 — Bill Run + invoices live fixes, CPQ-style list views (unreleased)
+
+Continued live-database shakedown — running an actual Bill Run and
+opening the invoice screens surfaced two more bugs, plus a UI
+consistency pass on the list views.
+
+- **Bill Run crashed on every account.** `billPeriod.ts`'s
+  `cloneAtMidnight` called `date.getTime()`, but MikroORM returns
+  `date`-typed columns (`next_bill_date` etc.) as `'YYYY-MM-DD'`
+  strings, not Date objects — so every account outcome failed with
+  "date.getTime is not a function". `cloneAtMidnight` now coerces
+  `Date | string | number`, making all period math input-tolerant
+  (same approach `itemSelector` already used).
+- **Invoice list + detail returned 500.** Both invoice GET endpoints
+  filtered with the raw-SQL JSONB operator `metadata ? 'bill_run_id'`,
+  but `em.execute` treats a literal `?` as a positional parameter
+  placeholder — the binding count never matched. Switched to the
+  function form `jsonb_exists(metadata, 'bill_run_id')`.
+- **List views aligned to the CPQ layout.** The account / item /
+  invoice / Bill Run lists rendered their title in a separate
+  `PageHeader` above the table; CPQ (and OM core) render it inside the
+  `DataTable` card. All four now pass `title` / `actions` /
+  `refreshButton` / `columnChooser` / `perspective` to `DataTable`
+  directly and drop the standalone header — matching the CPQ look
+  (billing can't import `CpqListView` across the package boundary, so
+  it uses the same shared `DataTable` props).
+
+Validation: yarn typecheck + 804 unit tests + 15 Playwright tests all
+green; verified end to end against a live database (5 demo accounts,
+10 items, a completed test Bill Run, 3 draft invoices).
+
 ## 0.16.0 — admin UI + CRUD API end-to-end fixes (unreleased)
 
 First run of the billing admin against a live database surfaced a set

@@ -6,7 +6,7 @@ import { Plus } from 'lucide-react'
 import type { ColumnDef } from '@tanstack/react-table'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
-import { Page, PageBody, PageHeader } from '@open-mercato/ui/backend/Page'
+import { Page, PageBody } from '@open-mercato/ui/backend/Page'
 import { DataTable } from '@open-mercato/ui/backend/DataTable'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { Button } from '@open-mercato/ui/primitives/button'
@@ -220,19 +220,24 @@ export default function BillingItemsListPage() {
 
   return (
     <Page>
-      <PageHeader
-        title={t('billing.items.title', 'Billing Items')}
-        actions={
-          <Button asChild>
-            <Link href="/backend/billing/items/create">
-              <Plus size={16} />
-              {t('billing.items.create.action', 'New item')}
-            </Link>
-          </Button>
-        }
-      />
       <PageBody>
         <DataTable
+          title={t('billing.items.title', 'Billing Items')}
+          actions={
+            <Button asChild>
+              <Link href="/backend/billing/items/create">
+                <Plus size={16} />
+                {t('billing.items.create.action', 'New item')}
+              </Link>
+            </Button>
+          }
+          refreshButton={{
+            label: t('billing.common.refresh', 'Refresh'),
+            onRefresh: loadRows,
+            isRefreshing: loading,
+          }}
+          columnChooser={{ auto: true }}
+          perspective={{ tableId: 'billing-items' }}
           columns={columns}
           data={rows}
           isLoading={loading}

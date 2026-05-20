@@ -82,14 +82,17 @@ export async function GET(req: Request) {
 
     const em = (container.resolve('em') as EntityManager).fork()
 
-    // Build the predicate.  `metadata ? 'bill_run_id'` is the JSONB
-    // "key exists" operator — keeps us narrow to billing-managed
-    // invoices, never bleeds into invoices written by other modules.
+    // Build the predicate. `jsonb_exists(metadata, 'bill_run_id')` is
+    // the function form of the JSONB `?` "key exists" operator — the
+    // operator form cannot be used here because `em.execute` treats a
+    // literal `?` as a positional parameter placeholder. Keeps us
+    // narrow to billing-managed invoices, never bleeding into invoices
+    // written by other modules.
     const whereClauses: string[] = [
       'tenant_id = ?',
       'organization_id = ?',
       'deleted_at IS NULL',
-      "(metadata ? 'bill_run_id')",
+      "jsonb_exists(metadata, 'bill_run_id')",
     ]
     const params: unknown[] = [auth.tenantId, organizationId]
 

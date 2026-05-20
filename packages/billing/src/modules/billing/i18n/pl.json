@@ -65,6 +65,7 @@
   "billing.common.active": "Aktywne",
   "billing.common.cancel": "Anuluj",
   "billing.common.inactive": "Nieaktywne",
+  "billing.common.refresh": "Odśwież",
   "billing.common.save": "Zapisz",
   "billing.cycle.annually": "Rocznie",
   "billing.cycle.monthly": "Miesięcznie",

@@ -4,7 +4,7 @@ import Link from 'next/link'
 import type { ColumnDef } from '@tanstack/react-table'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
-import { Page, PageBody, PageHeader } from '@open-mercato/ui/backend/Page'
+import { Page, PageBody } from '@open-mercato/ui/backend/Page'
 import { DataTable } from '@open-mercato/ui/backend/DataTable'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
@@ -226,9 +226,16 @@ export default function BillRunsListPage() {
 
   return (
     <Page>
-      <PageHeader title={t('billing.runs.title', 'Bill Runs')} />
       <PageBody>
         <DataTable
+          title={t('billing.runs.title', 'Bill Runs')}
+          refreshButton={{
+            label: t('billing.common.refresh', 'Refresh'),
+            onRefresh: loadRows,
+            isRefreshing: loading,
+          }}
+          columnChooser={{ auto: true }}
+          perspective={{ tableId: 'billing-runs' }}
           columns={columns}
           data={rows}
           isLoading={loading}

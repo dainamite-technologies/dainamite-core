@@ -88,7 +88,7 @@ export async function GET(
          AND tenant_id = ?
          AND organization_id = ?
          AND deleted_at IS NULL
-         AND (metadata ? 'bill_run_id')`,
+         AND jsonb_exists(metadata, 'bill_run_id')`,
       [invoiceId, auth.tenantId, organizationId],
     )) as unknown as InvoiceRow[]
 

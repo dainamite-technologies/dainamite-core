@@ -29,11 +29,12 @@ export type BillPeriod = {
   periodEnd: Date
 }
 
-function cloneAtMidnight(date: Date): Date {
-  // The MikroORM date round-trip already drops time-of-day, but copying
-  // explicitly keeps the helpers safe to call from non-Mikro paths
-  // (engine unit tests pass plain `new Date('2026-06-01')` values).
-  const result = new Date(date.getTime())
+function cloneAtMidnight(date: Date | string | number): Date {
+  // MikroORM hands `date`-typed columns back as 'YYYY-MM-DD' strings,
+  // not Date objects — coerce so every helper here is input-tolerant
+  // whether called from the engine (DB rows) or unit tests (plain
+  // `new Date('2026-06-01')` values).
+  const result = new Date(date instanceof Date ? date.getTime() : date)
   result.setUTCHours(0, 0, 0, 0)
   return result
 }

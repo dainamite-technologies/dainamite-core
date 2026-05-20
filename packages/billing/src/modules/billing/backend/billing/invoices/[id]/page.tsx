@@ -111,10 +111,12 @@ function formatMoney(value: string, currency: string): string {
   }
 }
 
-export default function BillingInvoiceDetailPage() {
+export default function BillingInvoiceDetailPage(props: { params?: { id?: string } }) {
   const t = useT()
-  const params = useParams<{ id: string }>()
-  const invoiceId = typeof params.id === 'string' ? params.id : ''
+  // OM serves backend pages through a catch-all route — the dynamic
+  // `[id]` segment arrives as a page prop; `useParams()` is the fallback.
+  const urlParams = useParams<{ id: string }>()
+  const invoiceId = (props.params?.id ?? urlParams?.id ?? '') as string
 
   const [invoice, setInvoice] = React.useState<BillingInvoice | null>(null)
   const [lines, setLines] = React.useState<InvoiceLine[]>([])

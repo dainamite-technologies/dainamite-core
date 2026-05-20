@@ -19,18 +19,20 @@ import { readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
  * page for inspect + edit + soft-delete.
  */
 
+// API list rows are snake_case — the billing list endpoints project
+// raw column names (see `api/accounts/route.ts` `fields`).
 type BillingAccountRow = {
   id: string
-  customerId: string
+  customer_id: string
   name: string
-  currencyCode: string
-  billCycle: 'monthly' | 'quarterly' | 'annually' | 'weekly'
-  billCycleAnchor: string
-  invoiceEmail: string
-  nextBillDate: string
-  lastBillDate: string | null
-  isActive: boolean
-  createdAt: string
+  currency_code: string
+  bill_cycle: 'monthly' | 'quarterly' | 'annually' | 'weekly'
+  bill_cycle_anchor: string
+  invoice_email: string
+  next_bill_date: string
+  last_bill_date: string | null
+  is_active: boolean
+  created_at: string
 }
 
 type ListResponse = {
@@ -127,41 +129,41 @@ export default function BillingAccountsListPage() {
         header: t('billing.accounts.columns.name', 'Name'),
       },
       {
-        accessorKey: 'customerId',
+        accessorKey: 'customer_id',
         header: t('billing.accounts.columns.customer', 'Customer'),
         cell: ({ row }) => (
-          <span className="font-mono text-xs">{row.original.customerId}</span>
+          <span className="font-mono text-xs">{row.original.customer_id}</span>
         ),
       },
       {
-        accessorKey: 'currencyCode',
+        accessorKey: 'currency_code',
         header: t('billing.accounts.columns.currency', 'Currency'),
       },
       {
-        accessorKey: 'billCycle',
+        accessorKey: 'bill_cycle',
         header: t('billing.accounts.columns.cycle', 'Cycle'),
         cell: ({ row }) => (
           <span>
-            {row.original.billCycle}
-            <span className="text-muted-foreground"> · {row.original.billCycleAnchor}</span>
+            {row.original.bill_cycle}
+            <span className="text-muted-foreground"> · {row.original.bill_cycle_anchor}</span>
           </span>
         ),
       },
       {
-        accessorKey: 'nextBillDate',
+        accessorKey: 'next_bill_date',
         header: t('billing.accounts.columns.next_bill', 'Next bill'),
-        cell: ({ row }) => formatDate(row.original.nextBillDate),
+        cell: ({ row }) => formatDate(row.original.next_bill_date),
       },
       {
-        accessorKey: 'lastBillDate',
+        accessorKey: 'last_bill_date',
         header: t('billing.accounts.columns.last_bill', 'Last bill'),
-        cell: ({ row }) => formatDate(row.original.lastBillDate),
+        cell: ({ row }) => formatDate(row.original.last_bill_date),
       },
       {
-        accessorKey: 'isActive',
+        accessorKey: 'is_active',
         header: t('billing.accounts.columns.status', 'Status'),
         cell: ({ row }) =>
-          row.original.isActive ? (
+          row.original.is_active ? (
             <Tag variant="success">{t('billing.common.active', 'Active')}</Tag>
           ) : (
             <Tag variant="default">{t('billing.common.inactive', 'Inactive')}</Tag>

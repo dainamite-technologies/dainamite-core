@@ -26,16 +26,18 @@ import { normalizeCrudServerError } from '@open-mercato/ui/backend/utils/serverE
  * `/backend/billing/runs`).
  */
 
+// API list rows are snake_case (see `api/runs/route.ts` +
+// `api/run-outcomes/route.ts` `fields`).
 type BillRun = {
   id: string
-  triggeredBy: 'schedule' | 'manual'
-  parentRunId: string | null
-  dryRun: boolean
-  testMode: boolean
-  catchUp: boolean
-  asOfDate: string
-  startedAt: string | null
-  finishedAt: string | null
+  triggered_by: 'schedule' | 'manual'
+  parent_run_id: string | null
+  dry_run: boolean
+  test_mode: boolean
+  catch_up: boolean
+  as_of_date: string
+  started_at: string | null
+  finished_at: string | null
   status: 'running' | 'completed' | 'partial_failure' | 'failed'
   summary: {
     accounts_processed?: number
@@ -45,21 +47,21 @@ type BillRun = {
     accounts_with_warnings?: number
     usage_records_rated?: number
   } | null
-  organizationId: string
-  tenantId: string
-  createdAt: string
-  updatedAt: string
+  organization_id: string
+  tenant_id: string
+  created_at: string
+  updated_at: string
 }
 
 type BillRunOutcome = {
   id: string
-  billRunId: string
-  billAccountId: string
+  bill_run_id: string
+  bill_account_id: string
   status: 'success' | 'success_with_warnings' | 'skipped_existing_draft' | 'failed'
-  errorMessage: string | null
+  error_message: string | null
   warnings: Record<string, unknown> | null
-  draftInvoiceId: string | null
-  createdAt: string
+  draft_invoice_id: string | null
+  created_at: string
 }
 
 type ListResponse<T> = {
@@ -105,10 +107,12 @@ function outcomeStatusVariant(
   }
 }
 
-export default function BillRunDetailPage() {
+export default function BillRunDetailPage(props: { params?: { id?: string } }) {
   const t = useT()
-  const params = useParams<{ id: string }>()
-  const runId = typeof params.id === 'string' ? params.id : ''
+  // OM serves backend pages through a catch-all route — the dynamic
+  // `[id]` segment arrives as a page prop; `useParams()` is the fallback.
+  const urlParams = useParams<{ id: string }>()
+  const runId = (props.params?.id ?? urlParams?.id ?? '') as string
 
   const [run, setRun] = React.useState<BillRun | null>(null)
   const [runError, setRunError] = React.useState<string | null>(null)
@@ -201,10 +205,10 @@ export default function BillRunDetailPage() {
   const outcomeColumns = React.useMemo<ColumnDef<BillRunOutcome>[]>(
     () => [
       {
-        accessorKey: 'billAccountId',
+        accessorKey: 'bill_account_id',
         header: t('billing.runs.outcomes.columns.account', 'Account'),
         cell: ({ row }) => (
-          <span className="font-mono text-xs">{row.original.billAccountId}</span>
+          <span className="font-mono text-xs">{row.original.bill_account_id}</span>
         ),
       },
       {
@@ -217,19 +221,19 @@ export default function BillRunDetailPage() {
         ),
       },
       {
-        accessorKey: 'draftInvoiceId',
+        accessorKey: 'draft_invoice_id',
         header: t('billing.runs.outcomes.columns.invoice', 'Invoice'),
         cell: ({ row }) =>
-          row.original.draftInvoiceId ? (
-            <span className="font-mono text-xs">{row.original.draftInvoiceId}</span>
+          row.original.draft_invoice_id ? (
+            <span className="font-mono text-xs">{row.original.draft_invoice_id}</span>
           ) : (
             '—'
           ),
       },
       {
-        accessorKey: 'errorMessage',
+        accessorKey: 'error_message',
         header: t('billing.runs.outcomes.columns.error', 'Error'),
-        cell: ({ row }) => row.original.errorMessage ?? '—',
+        cell: ({ row }) => row.original.error_message ?? '—',
       },
       {
         accessorKey: 'warnings',
@@ -277,9 +281,9 @@ export default function BillRunDetailPage() {
         statusBadge={
           <div className="flex items-center gap-2 flex-wrap">
             <Tag variant={runStatusVariant(run.status)}>{run.status}</Tag>
-            {run.dryRun ? <Tag variant="warning">Dry-run</Tag> : null}
-            {run.testMode ? <Tag variant="warning">Test</Tag> : null}
-            {run.catchUp ? <Tag variant="default">Catch-up</Tag> : null}
+            {run.dry_run ? <Tag variant="warning">Dry-run</Tag> : null}
+            {run.test_mode ? <Tag variant="warning">Test</Tag> : null}
+            {run.catch_up ? <Tag variant="default">Catch-up</Tag> : null}
           </div>
         }
         actionsContent={
@@ -301,25 +305,25 @@ export default function BillRunDetailPage() {
             <dt className="text-muted-foreground">
               {t('billing.runs.detail.field.triggered_by', 'Trigger')}
             </dt>
-            <dd>{run.triggeredBy}</dd>
+            <dd>{run.triggered_by}</dd>
             <dt className="text-muted-foreground">
               {t('billing.runs.detail.field.as_of_date', 'As-of date')}
             </dt>
-            <dd>{run.asOfDate?.slice(0, 10) ?? '—'}</dd>
+            <dd>{run.as_of_date?.slice(0, 10) ?? '—'}</dd>
             <dt className="text-muted-foreground">
               {t('billing.runs.detail.field.started_at', 'Started')}
             </dt>
-            <dd>{formatDate(run.startedAt)}</dd>
+            <dd>{formatDate(run.started_at)}</dd>
             <dt className="text-muted-foreground">
               {t('billing.runs.detail.field.finished_at', 'Finished')}
             </dt>
-            <dd>{formatDate(run.finishedAt)}</dd>
-            {run.parentRunId ? (
+            <dd>{formatDate(run.finished_at)}</dd>
+            {run.parent_run_id ? (
               <>
                 <dt className="text-muted-foreground">
                   {t('billing.runs.detail.field.parent_run', 'Parent run')}
                 </dt>
-                <dd className="font-mono text-xs">{run.parentRunId}</dd>
+                <dd className="font-mono text-xs">{run.parent_run_id}</dd>
               </>
             ) : null}
           </dl>

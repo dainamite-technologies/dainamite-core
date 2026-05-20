@@ -20,16 +20,17 @@ import { readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
  * the operator UX is signed off.
  */
 
+// API list rows are snake_case (see `api/runs/route.ts` `fields`).
 type BillRunRow = {
   id: string
-  triggeredBy: 'schedule' | 'manual'
-  parentRunId: string | null
-  dryRun: boolean
-  testMode: boolean
-  catchUp: boolean
-  asOfDate: string
-  startedAt: string | null
-  finishedAt: string | null
+  triggered_by: 'schedule' | 'manual'
+  parent_run_id: string | null
+  dry_run: boolean
+  test_mode: boolean
+  catch_up: boolean
+  as_of_date: string
+  started_at: string | null
+  finished_at: string | null
   status: 'running' | 'completed' | 'partial_failure' | 'failed'
   summary: {
     accounts_processed?: number
@@ -39,8 +40,8 @@ type BillRunRow = {
     accounts_with_warnings?: number
     usage_records_rated?: number
   } | null
-  createdAt: string
-  updatedAt: string
+  created_at: string
+  updated_at: string
 }
 
 type ListResponse = {
@@ -78,8 +79,8 @@ function statusVariant(
 }
 
 function modeBadge(row: BillRunRow): { label: string; variant: 'default' | 'warning' } | null {
-  if (row.dryRun) return { label: 'Dry-run', variant: 'warning' }
-  if (row.testMode) return { label: 'Test', variant: 'warning' }
+  if (row.dry_run) return { label: 'Dry-run', variant: 'warning' }
+  if (row.test_mode) return { label: 'Test', variant: 'warning' }
   return null
 }
 
@@ -170,12 +171,12 @@ export default function BillRunsListPage() {
         },
       },
       {
-        accessorKey: 'asOfDate',
+        accessorKey: 'as_of_date',
         header: t('billing.runs.columns.as_of_date', 'As-of date'),
-        cell: ({ row }) => formatDateOnly(row.original.asOfDate),
+        cell: ({ row }) => formatDateOnly(row.original.as_of_date),
       },
       {
-        accessorKey: 'triggeredBy',
+        accessorKey: 'triggered_by',
         header: t('billing.runs.columns.triggered_by', 'Trigger'),
       },
       {
@@ -198,14 +199,14 @@ export default function BillRunsListPage() {
         },
       },
       {
-        accessorKey: 'startedAt',
+        accessorKey: 'started_at',
         header: t('billing.runs.columns.started_at', 'Started'),
-        cell: ({ row }) => formatDate(row.original.startedAt),
+        cell: ({ row }) => formatDate(row.original.started_at),
       },
       {
-        accessorKey: 'finishedAt',
+        accessorKey: 'finished_at',
         header: t('billing.runs.columns.finished_at', 'Finished'),
-        cell: ({ row }) => formatDate(row.original.finishedAt),
+        cell: ({ row }) => formatDate(row.original.finished_at),
       },
       {
         id: 'actions',

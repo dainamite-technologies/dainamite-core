@@ -26,25 +26,26 @@ const routeMetadata = {
 
 export const metadata = routeMetadata
 
+// The list endpoint projects raw column names — snake_case.
 const billingItemListItemSchema = z.object({
   id: z.string().uuid(),
-  billAccountId: z.string().uuid(),
+  bill_account_id: z.string().uuid(),
   type: z.string(),
-  billStartDate: z.string(),
-  billEndDate: z.string().nullable(),
+  bill_start_date: z.string(),
+  bill_end_date: z.string().nullable(),
   description: z.string(),
-  rateJson: z.record(z.string(), z.unknown()),
-  uomCode: z.string().nullable(),
-  subscriptionId: z.string().nullable(),
-  subscriptionItemId: z.string().nullable(),
-  sourceRef: z.string().nullable(),
-  currencyMismatch: z.boolean(),
-  billedToDate: z.string().nullable(),
-  isActive: z.boolean(),
-  organizationId: z.string().uuid(),
-  tenantId: z.string().uuid(),
-  createdAt: z.string(),
-  updatedAt: z.string(),
+  rate_json: z.record(z.string(), z.unknown()),
+  uom_code: z.string().nullable(),
+  subscription_id: z.string().nullable(),
+  subscription_item_id: z.string().nullable(),
+  source_ref: z.string().nullable(),
+  currency_mismatch: z.boolean(),
+  billed_to_date: z.string().nullable(),
+  is_active: z.boolean(),
+  organization_id: z.string().uuid(),
+  tenant_id: z.string().uuid(),
+  created_at: z.string(),
+  updated_at: z.string(),
 })
 
 // Response for create includes `deduplicated` so integrators can tell
@@ -97,6 +98,11 @@ const crud = makeCrudRoute({
     },
     buildFilters: async (query) => {
       const filters: Record<string, unknown> = {}
+      // `?id=<uuid>` narrows the list to one row — the detail page
+      // reads a single item through this filter.
+      if (typeof query.id === 'string' && query.id) {
+        filters.id = { $eq: query.id }
+      }
       if (typeof query.billAccountId === 'string' && query.billAccountId) {
         filters.bill_account_id = { $eq: query.billAccountId }
       }
@@ -156,11 +162,20 @@ const crud = makeCrudRoute({
       schema: rawBodySchema,
       mapInput: async ({ raw, ctx }) => {
         const { translate } = await resolveTranslations()
-        const scoped = withScopedPayload(raw ?? {}, ctx, translate)
+        // The factory hands delete a `{ body, query }` envelope — the
+        // id may arrive in either, depending on the caller.
+        const envelope = (raw ?? {}) as {
+          body?: Record<string, unknown>
+          query?: Record<string, unknown>
+        }
+        const body = envelope.body ?? {}
+        const query = envelope.query ?? {}
+        const scoped = withScopedPayload(body, ctx, translate)
         const id =
-          (raw && typeof raw === 'object' && 'id' in raw ? (raw as { id?: unknown }).id : null) ??
-          (ctx.request ? new URL(ctx.request.url).searchParams.get('id') : null)
-        if (typeof id !== 'string' || !id) {
+          (typeof body.id === 'string' && body.id) ||
+          (typeof query.id === 'string' && query.id) ||
+          null
+        if (!id) {
           throw new Error('id is required')
         }
         return {

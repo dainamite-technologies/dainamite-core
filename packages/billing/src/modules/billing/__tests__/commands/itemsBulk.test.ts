@@ -45,6 +45,7 @@ function createEnv(
   const existingItems = options.existingItems ?? []
   let flushes = 0
   let persists = 0
+  const pendingPersist: Record<string, unknown>[] = []
 
   const em: Env['em'] = {
     find: jest.fn(async (entity: unknown, where: unknown) => {
@@ -68,14 +69,24 @@ function createEnv(
       return []
     }) as never,
     create: jest.fn((_entity: unknown, data: Record<string, unknown>) => {
-      createSeq += 1
-      return { ...data, id: `new-item-${createSeq}` }
+      // Real MikroORM leaves the UUID PK unassigned until flush — the
+      // mock mirrors that so id-before-flush bugs surface in tests.
+      return { ...data }
     }) as never,
-    persist: jest.fn(() => {
+    persist: jest.fn((entity: unknown) => {
       persists += 1
+      pendingPersist.push(entity as Record<string, unknown>)
     }) as never,
     flush: jest.fn(async () => {
       flushes += 1
+      // The flush is what assigns the DB-generated UUID PK.
+      for (const entity of pendingPersist) {
+        if (!entity.id) {
+          createSeq += 1
+          entity.id = `new-item-${createSeq}`
+        }
+      }
+      pendingPersist.length = 0
     }) as never,
     fork: jest.fn() as never,
   }
@@ -133,6 +144,12 @@ describe('bulkCreateItemsCommand', () => {
     expect(result.created).toBe(3)
     expect(result.deduplicated).toBe(0)
     expect(result.items).toHaveLength(3)
+    // Every created row carries the id the flush assigned — the
+    // result must not snapshot the pre-flush (undefined) value.
+    for (const item of result.items) {
+      expect(item.id).toMatch(/^new-item-/)
+      expect(item.deduplicated).toBe(false)
+    }
     // The batching contract: ONE flush for the whole batch.
     expect(env.flushCount()).toBe(1)
     expect(env.persistedCount()).toBe(3)
@@ -198,6 +215,12 @@ describe('bulkCreateItemsCommand', () => {
     expect(result.created).toBe(1)
     expect(result.deduplicated).toBe(1)
     expect(env.persistedCount()).toBe(1)
+    // The repeat reports the SAME id as the row that persisted, and
+    // that id is the flush-assigned value (not '' captured pre-flush).
+    const created = result.items.find((i) => !i.deduplicated)
+    const repeated = result.items.find((i) => i.deduplicated)
+    expect(created?.id).toMatch(/^new-item-/)
+    expect(repeated?.id).toBe(created?.id)
   })
 
   it('items without source_ref are always created (no dedup)', async () => {

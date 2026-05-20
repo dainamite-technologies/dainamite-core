@@ -22,18 +22,19 @@ import { readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
  * entry / one-off adjustments.
  */
 
+// API list rows are snake_case (see `api/items/route.ts` `fields`).
 type BillingItemRow = {
   id: string
-  billAccountId: string
+  bill_account_id: string
   type: 'one_time' | 'recurring' | 'usage'
   description: string
-  billStartDate: string
-  billEndDate: string | null
-  uomCode: string | null
-  subscriptionId: string | null
-  sourceRef: string | null
-  isActive: boolean
-  createdAt: string
+  bill_start_date: string
+  bill_end_date: string | null
+  uom_code: string | null
+  subscription_id: string | null
+  source_ref: string | null
+  is_active: boolean
+  created_at: string
 }
 
 type ListResponse = {
@@ -165,37 +166,37 @@ export default function BillingItemsListPage() {
         header: t('billing.items.columns.description', 'Description'),
       },
       {
-        accessorKey: 'billAccountId',
+        accessorKey: 'bill_account_id',
         header: t('billing.items.columns.account', 'Account'),
         cell: ({ row }) => (
           <Link
-            href={`/backend/billing/accounts/${row.original.billAccountId}`}
+            href={`/backend/billing/accounts/${row.original.bill_account_id}`}
             className="font-mono text-xs text-primary hover:underline"
           >
-            {row.original.billAccountId.slice(0, 8)}…
+            {row.original.bill_account_id.slice(0, 8)}…
           </Link>
         ),
       },
       {
-        accessorKey: 'billStartDate',
+        accessorKey: 'bill_start_date',
         header: t('billing.items.columns.start', 'Start'),
-        cell: ({ row }) => formatDate(row.original.billStartDate),
+        cell: ({ row }) => formatDate(row.original.bill_start_date),
       },
       {
-        accessorKey: 'billEndDate',
+        accessorKey: 'bill_end_date',
         header: t('billing.items.columns.end', 'End'),
-        cell: ({ row }) => formatDate(row.original.billEndDate),
+        cell: ({ row }) => formatDate(row.original.bill_end_date),
       },
       {
-        accessorKey: 'uomCode',
+        accessorKey: 'uom_code',
         header: t('billing.items.columns.uom', 'UoM'),
-        cell: ({ row }) => row.original.uomCode ?? '—',
+        cell: ({ row }) => row.original.uom_code ?? '—',
       },
       {
-        accessorKey: 'isActive',
+        accessorKey: 'is_active',
         header: t('billing.items.columns.status', 'Status'),
         cell: ({ row }) =>
-          row.original.isActive ? (
+          row.original.is_active ? (
             <Tag variant="success">{t('billing.common.active', 'Active')}</Tag>
           ) : (
             <Tag variant="default">{t('billing.common.inactive', 'Inactive')}</Tag>

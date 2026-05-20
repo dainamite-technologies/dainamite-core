@@ -259,6 +259,7 @@ export type BillingAccountDeleteInput = z.infer<typeof billingAccountDeleteSchem
 export const billingAccountListQuerySchema = z
   .object({
     ...listPaginationBase,
+    id: z.string().uuid().optional(),
     customerId: z.string().optional(),
     currencyCode: z.string().optional(),
     billCycle: z.enum(BILL_CYCLES).optional(),
@@ -396,6 +397,7 @@ export type BillingItemDeleteInput = z.infer<typeof billingItemDeleteSchema>
 export const billingItemListQuerySchema = z
   .object({
     ...listPaginationBase,
+    id: z.string().uuid().optional(),
     billAccountId: z.string().uuid().optional(),
     type: z.enum(BILLING_ITEM_TYPES).optional(),
     subscriptionId: z.string().optional(),
@@ -475,6 +477,7 @@ export type BillingRunRetryFailedInput = z.infer<typeof billingRunRetryFailedSch
 export const billingRunListQuerySchema = z
   .object({
     ...listPaginationBase,
+    id: z.string().uuid().optional(),
     status: z.enum(BILL_RUN_STATUSES).optional(),
     triggeredBy: z.enum(BILL_RUN_TRIGGERS).optional(),
     parentRunId: z.string().uuid().optional(),

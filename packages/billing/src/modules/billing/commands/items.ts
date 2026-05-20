@@ -316,6 +316,11 @@ const bulkCreateItemsCommand: CommandHandler<
     const now = new Date()
     const results: BulkCreateResultEntry[] = []
     const createdEntities: BillingItem[] = []
+    // Result entries whose `id` is only known after the flush — the
+    // BillingItem PK is a DB-generated UUID, unassigned until then.
+    // Covers freshly-created rows and in-batch dedup rows that point
+    // at a sibling created earlier in the same payload.
+    const deferredIdLinks: Array<{ result: BulkCreateResultEntry; entity: BillingItem }> = []
 
     // Track source_refs created within THIS batch so a payload that
     // repeats the same source_ref twice dedups against itself (the
@@ -339,11 +344,13 @@ const bulkCreateItemsCommand: CommandHandler<
           const firstCreated = createdEntities.find(
             (e) => e.billAccountId === entry.billAccountId && e.sourceRef === entry.sourceRef,
           )
-          results.push({
+          const dedupResult: BulkCreateResultEntry = {
             sourceRef: entry.sourceRef ?? null,
-            id: firstCreated?.id ?? '',
+            id: '',
             deduplicated: true,
-          })
+          }
+          results.push(dedupResult)
+          if (firstCreated) deferredIdLinks.push({ result: dedupResult, entity: firstCreated })
           continue
         }
         seenInBatch.add(sourceKey)
@@ -371,12 +378,24 @@ const bulkCreateItemsCommand: CommandHandler<
       })
       em.persist(item)
       createdEntities.push(item)
-      results.push({ sourceRef: entry.sourceRef ?? null, id: item.id, deduplicated: false })
+      const createdResult: BulkCreateResultEntry = {
+        sourceRef: entry.sourceRef ?? null,
+        id: '',
+        deduplicated: false,
+      }
+      results.push(createdResult)
+      deferredIdLinks.push({ result: createdResult, entity: item })
     }
 
     // Single flush for the whole batch.
     if (createdEntities.length > 0) {
       await em.flush()
+    }
+
+    // The BillingItem UUID PK is assigned by the flush — backfill it
+    // into the result entries now that the value exists.
+    for (const link of deferredIdLinks) {
+      link.result.id = link.entity.id
     }
 
     // Side effects after the commit. Emitting per-entity keeps the

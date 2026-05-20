@@ -35,39 +35,40 @@ import {
  * cannot edit but needs to see for troubleshooting).
  */
 
+// API list rows are snake_case (see `api/items/route.ts` `fields`).
 type BillingItemRow = {
   id: string
-  billAccountId: string
+  bill_account_id: string
   type: 'one_time' | 'recurring' | 'usage'
-  billStartDate: string
-  billEndDate: string | null
+  bill_start_date: string
+  bill_end_date: string | null
   description: string
-  rateJson: Record<string, unknown> | null
-  uomCode: string | null
-  subscriptionId: string | null
-  subscriptionItemId: string | null
-  sourceRef: string | null
-  currencyMismatch: boolean
-  billedToDate: string | null
-  isActive: boolean
-  createdAt: string
-  updatedAt: string
+  rate_json: Record<string, unknown> | null
+  uom_code: string | null
+  subscription_id: string | null
+  subscription_item_id: string | null
+  source_ref: string | null
+  currency_mismatch: boolean
+  billed_to_date: string | null
+  is_active: boolean
+  created_at: string
+  updated_at: string
 }
 
 type ListResponse = { items: BillingItemRow[] }
 
 function toFormValues(row: BillingItemRow): Partial<ItemFormValues> {
-  const rate = (row.rateJson ?? {}) as Record<string, unknown>
+  const rate = (row.rate_json ?? {}) as Record<string, unknown>
   const out: Partial<ItemFormValues> = {
-    billAccountId: row.billAccountId,
+    billAccountId: row.bill_account_id,
     type: row.type,
-    billStartDate: row.billStartDate?.slice(0, 10) ?? '',
-    billEndDate: row.billEndDate?.slice(0, 10) ?? '',
+    billStartDate: row.bill_start_date?.slice(0, 10) ?? '',
+    billEndDate: row.bill_end_date?.slice(0, 10) ?? '',
     description: row.description,
-    uomCode: row.uomCode ?? '',
-    subscriptionId: row.subscriptionId ?? '',
-    subscriptionItemId: row.subscriptionItemId ?? '',
-    isActive: row.isActive,
+    uomCode: row.uom_code ?? '',
+    subscriptionId: row.subscription_id ?? '',
+    subscriptionItemId: row.subscription_item_id ?? '',
+    isActive: row.is_active,
   }
   if (row.type === 'one_time' && typeof rate.amount === 'number') {
     out.oneTimeAmount = String(rate.amount)
@@ -85,11 +86,13 @@ function toFormValues(row: BillingItemRow): Partial<ItemFormValues> {
   return out
 }
 
-export default function BillingItemDetailPage() {
+export default function BillingItemDetailPage(props: { params?: { id?: string } }) {
   const t = useT()
   const router = useRouter()
-  const params = useParams<{ id: string }>()
-  const itemId = typeof params.id === 'string' ? params.id : ''
+  // OM serves backend pages through a catch-all route — the dynamic
+  // `[id]` segment arrives as a page prop; `useParams()` is the fallback.
+  const urlParams = useParams<{ id: string }>()
+  const itemId = (props.params?.id ?? urlParams?.id ?? '') as string
 
   const [row, setRow] = React.useState<BillingItemRow | null>(null)
   const [loading, setLoading] = React.useState(true)
@@ -135,7 +138,7 @@ export default function BillingItemDetailPage() {
           billStartDate: assembled.billStartDate,
           description: assembled.description,
           rateJson: assembled.rateJson,
-          isActive: assembled.isActive ?? row.isActive,
+          isActive: assembled.isActive ?? row.is_active,
         }
         // Optional fields — submit null when the operator cleared them
         // so the column actually resets (the schema validators accept
@@ -222,24 +225,24 @@ export default function BillingItemDetailPage() {
         statusBadge={
           <div className="flex items-center gap-2 flex-wrap">
             <Tag variant="info">{row.type}</Tag>
-            {row.currencyMismatch ? (
+            {row.currency_mismatch ? (
               <Tag variant="warning">
                 {t('billing.items.detail.currency_mismatch', 'Currency mismatch')}
               </Tag>
             ) : null}
-            {row.billedToDate ? (
+            {row.billed_to_date ? (
               <Tag variant="default">
                 {t('billing.items.detail.billed_to', 'Billed through {date}').replace(
                   '{date}',
-                  row.billedToDate.slice(0, 10),
+                  row.billed_to_date.slice(0, 10),
                 )}
               </Tag>
             ) : null}
-            {row.sourceRef ? (
+            {row.source_ref ? (
               <Tag variant="default">
                 {t('billing.items.detail.source_ref', 'source_ref: {ref}').replace(
                   '{ref}',
-                  row.sourceRef,
+                  row.source_ref,
                 )}
               </Tag>
             ) : null}
@@ -262,10 +265,10 @@ export default function BillingItemDetailPage() {
         <div className="text-xs text-muted-foreground">
           {t('billing.items.detail.field.account', 'Account')}:{' '}
           <Link
-            href={`/backend/billing/accounts/${row.billAccountId}`}
+            href={`/backend/billing/accounts/${row.bill_account_id}`}
             className="font-mono text-primary hover:underline"
           >
-            {row.billAccountId}
+            {row.bill_account_id}
           </Link>
         </div>
 

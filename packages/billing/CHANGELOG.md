@@ -1,5 +1,43 @@
 # @dainamite/billing
 
+## 0.16.0 — admin UI + CRUD API end-to-end fixes (unreleased)
+
+First run of the billing admin against a live database surfaced a set
+of bugs in code paths that had only ever been typechecked. All found
+and fixed; covered by new Playwright integration tests.
+
+- **List read casing.** The list endpoints (`accounts` / `items` /
+  `runs`) project raw column names, so responses are snake_case — but
+  the account / item / Bill Run list and detail pages were written
+  against camelCase keys, so every non-name column rendered blank and
+  the detail edit forms loaded empty. Pages now read the snake_case
+  keys the API actually returns (matching the already-correct invoice
+  pages); the routes' OpenAPI list-item schemas were camelCase too and
+  are corrected to match.
+- **Detail pages couldn't read their own id.** OM serves backend
+  pages through a catch-all route — the dynamic `[id]` segment arrives
+  as a page prop, not via `useParams()`. The four detail pages only
+  read `useParams().id`, so they hung on "Loading…" forever. They now
+  read `props.params?.id` with `useParams()` as the fallback.
+- **`DELETE` returned 500.** The CRUD factory hands a delete action a
+  `{ body, query }` envelope as `raw`; the accounts/items delete
+  `mapInput` read `raw.id` directly, never found it, and threw
+  "id is required". `mapInput` now unwraps the envelope.
+- **`?id=` list filter was a no-op.** `GET /api/billing/{accounts,
+  items,runs}?id=<uuid>` is how the detail pages fetch one record,
+  but `buildFilters` never handled `id`, so the endpoint returned an
+  unrelated row. `id` is now an indexed filter on all three list
+  routes (and added to the list query schemas).
+- **`billing.items.bulk_create` reported empty ids.** The result
+  entries captured `item.id` before `em.flush()` assigned the
+  DB-generated UUID, so every created/in-batch-deduped entry came back
+  with `id: ''`. Ids are now backfilled after the flush. The unit-test
+  mock was assigning ids at `create()` time, hiding the bug — it now
+  mirrors MikroORM and assigns at `flush()`.
+
+Validation: yarn typecheck + 804 unit tests + 15 Playwright
+integration tests (`TC-BILL-001..003`) all green.
+
 ## 0.15.0 — detail pages on FormHeader (unreleased)
 
 UI consistency pass against the CPQ module and the Open Mercato core

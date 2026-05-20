@@ -29,24 +29,25 @@ export const metadata = routeMetadata
 
 // ─── List response item shape (informational — used by OpenAPI) ──
 
+// The list endpoint projects raw column names — snake_case.
 const billingAccountListItemSchema = z.object({
   id: z.string().uuid(),
-  customerId: z.string(),
+  customer_id: z.string(),
   name: z.string(),
-  currencyCode: z.string(),
-  billCycle: z.string(),
-  billCycleAnchor: z.string(),
-  invoiceEmail: z.string(),
-  invoiceLanguage: z.string(),
-  taxId: z.string().nullable(),
-  invoiceAddress: z.record(z.string(), z.unknown()),
-  nextBillDate: z.string(),
-  lastBillDate: z.string().nullable(),
-  isActive: z.boolean(),
-  organizationId: z.string().uuid(),
-  tenantId: z.string().uuid(),
-  createdAt: z.string(),
-  updatedAt: z.string(),
+  currency_code: z.string(),
+  bill_cycle: z.string(),
+  bill_cycle_anchor: z.string(),
+  invoice_email: z.string(),
+  invoice_language: z.string(),
+  tax_id: z.string().nullable(),
+  invoice_address: z.record(z.string(), z.unknown()),
+  next_bill_date: z.string(),
+  last_bill_date: z.string().nullable(),
+  is_active: z.boolean(),
+  organization_id: z.string().uuid(),
+  tenant_id: z.string().uuid(),
+  created_at: z.string(),
+  updated_at: z.string(),
 })
 
 const rawBodySchema = z.object({}).passthrough()
@@ -92,6 +93,11 @@ const crud = makeCrudRoute({
     },
     buildFilters: async (query) => {
       const filters: Record<string, unknown> = {}
+      // `?id=<uuid>` narrows the list to one row — the detail page
+      // reads a single account through this filter.
+      if (typeof query.id === 'string' && query.id) {
+        filters.id = { $eq: query.id }
+      }
       if (typeof query.customerId === 'string' && query.customerId) {
         filters.customer_id = { $eq: query.customerId }
       }
@@ -138,11 +144,20 @@ const crud = makeCrudRoute({
       schema: rawBodySchema,
       mapInput: async ({ raw, ctx }) => {
         const { translate } = await resolveTranslations()
-        const scoped = withScopedPayload(raw ?? {}, ctx, translate)
+        // The factory hands delete a `{ body, query }` envelope — the
+        // id may arrive in either, depending on the caller.
+        const envelope = (raw ?? {}) as {
+          body?: Record<string, unknown>
+          query?: Record<string, unknown>
+        }
+        const body = envelope.body ?? {}
+        const query = envelope.query ?? {}
+        const scoped = withScopedPayload(body, ctx, translate)
         const id =
-          (raw && typeof raw === 'object' && 'id' in raw ? (raw as { id?: unknown }).id : null) ??
-          (ctx.request ? new URL(ctx.request.url).searchParams.get('id') : null)
-        if (typeof id !== 'string' || !id) {
+          (typeof body.id === 'string' && body.id) ||
+          (typeof query.id === 'string' && query.id) ||
+          null
+        if (!id) {
           throw new Error('id is required')
         }
         return {

@@ -31,59 +31,62 @@ import { AccountForm, type AccountFormValues } from '../../../../components/Acco
  * rejects them per `billingAccountUpdateSchema`.
  */
 
+// API list rows are snake_case (see `api/accounts/route.ts` `fields`).
 type AccountRow = {
   id: string
-  customerId: string
+  customer_id: string
   name: string
-  currencyCode: string
-  billCycle: 'weekly' | 'monthly' | 'quarterly' | 'annually'
-  billCycleAnchor: string
-  invoiceEmail: string
-  invoiceLanguage: string
-  taxId: string | null
-  invoiceAddress: {
+  currency_code: string
+  bill_cycle: 'weekly' | 'monthly' | 'quarterly' | 'annually'
+  bill_cycle_anchor: string
+  invoice_email: string
+  invoice_language: string
+  tax_id: string | null
+  invoice_address: {
     line1?: string
     line2?: string
     city?: string
     postal_code?: string
     country?: string
   } | null
-  nextBillDate: string
-  lastBillDate: string | null
-  isActive: boolean
-  createdAt: string
-  updatedAt: string
+  next_bill_date: string
+  last_bill_date: string | null
+  is_active: boolean
+  created_at: string
+  updated_at: string
 }
 
 type ListResponse = { items: AccountRow[] }
 
 function toFormValues(row: AccountRow): AccountFormValues {
   return {
-    customerId: row.customerId,
+    customerId: row.customer_id,
     name: row.name,
-    currencyCode: row.currencyCode,
-    billCycle: row.billCycle,
-    billCycleAnchor: row.billCycleAnchor,
-    invoiceEmail: row.invoiceEmail,
-    invoiceLanguage: row.invoiceLanguage,
-    taxId: row.taxId ?? '',
+    currencyCode: row.currency_code,
+    billCycle: row.bill_cycle,
+    billCycleAnchor: row.bill_cycle_anchor,
+    invoiceEmail: row.invoice_email,
+    invoiceLanguage: row.invoice_language,
+    taxId: row.tax_id ?? '',
     invoiceAddress: {
-      line1: row.invoiceAddress?.line1 ?? '',
-      line2: row.invoiceAddress?.line2 ?? '',
-      city: row.invoiceAddress?.city ?? '',
-      postal_code: row.invoiceAddress?.postal_code ?? '',
-      country: row.invoiceAddress?.country ?? '',
+      line1: row.invoice_address?.line1 ?? '',
+      line2: row.invoice_address?.line2 ?? '',
+      city: row.invoice_address?.city ?? '',
+      postal_code: row.invoice_address?.postal_code ?? '',
+      country: row.invoice_address?.country ?? '',
     },
-    nextBillDate: row.nextBillDate?.slice(0, 10) ?? '',
-    isActive: row.isActive,
+    nextBillDate: row.next_bill_date?.slice(0, 10) ?? '',
+    isActive: row.is_active,
   }
 }
 
-export default function BillingAccountDetailPage() {
+export default function BillingAccountDetailPage(props: { params?: { id?: string } }) {
   const t = useT()
   const router = useRouter()
-  const params = useParams<{ id: string }>()
-  const accountId = typeof params.id === 'string' ? params.id : ''
+  // OM serves backend pages through a catch-all route — the dynamic
+  // `[id]` segment arrives as a page prop; `useParams()` is the fallback.
+  const urlParams = useParams<{ id: string }>()
+  const accountId = (props.params?.id ?? urlParams?.id ?? '') as string
 
   const [row, setRow] = React.useState<AccountRow | null>(null)
   const [loading, setLoading] = React.useState(true)

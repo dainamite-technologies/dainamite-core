@@ -33,23 +33,24 @@ const routeMetadata = {
 
 export const metadata = routeMetadata
 
+// The list endpoint projects raw column names — snake_case.
 const billRunListItemSchema = z.object({
   id: z.string().uuid(),
-  triggeredBy: z.string(),
-  parentRunId: z.string().uuid().nullable(),
-  dryRun: z.boolean(),
-  testMode: z.boolean(),
-  catchUp: z.boolean(),
-  scopedAccountIds: z.array(z.string().uuid()).nullable(),
-  asOfDate: z.string(),
-  startedAt: z.string().nullable(),
-  finishedAt: z.string().nullable(),
+  triggered_by: z.string(),
+  parent_run_id: z.string().uuid().nullable(),
+  dry_run: z.boolean(),
+  test_mode: z.boolean(),
+  catch_up: z.boolean(),
+  scoped_account_ids: z.array(z.string().uuid()).nullable(),
+  as_of_date: z.string(),
+  started_at: z.string().nullable(),
+  finished_at: z.string().nullable(),
   status: z.string(),
   summary: z.record(z.string(), z.unknown()).nullable(),
-  organizationId: z.string().uuid(),
-  tenantId: z.string().uuid(),
-  createdAt: z.string(),
-  updatedAt: z.string(),
+  organization_id: z.string().uuid(),
+  tenant_id: z.string().uuid(),
+  created_at: z.string(),
+  updated_at: z.string(),
 })
 
 const triggerResponseSchema = z.object({
@@ -98,6 +99,11 @@ const crud = makeCrudRoute({
     },
     buildFilters: async (query) => {
       const filters: Record<string, unknown> = {}
+      // `?id=<uuid>` narrows the list to one row — the detail page
+      // reads a single Bill Run through this filter.
+      if (typeof query.id === 'string' && query.id) {
+        filters.id = { $eq: query.id }
+      }
       if (typeof query.status === 'string') filters.status = { $eq: query.status }
       if (typeof query.triggeredBy === 'string') filters.triggered_by = { $eq: query.triggeredBy }
       if (typeof query.parentRunId === 'string') filters.parent_run_id = { $eq: query.parentRunId }

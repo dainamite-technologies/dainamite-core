@@ -1,5 +1,29 @@
 # @dainamite/billing
 
+## 0.14.0 — i18n locale files (unreleased)
+
+Phase 4c deferred the admin-UI locale files — the pages shipped with
+inline English `useT()` fallbacks only. This adds the real
+dictionaries so the Billing admin renders in Polish (the target
+market) as well as English.
+
+- **`i18n/en.json` + `i18n/pl.json`** — 263 keys covering every
+  `t('billing.…')` call across the account / item / invoice / Bill
+  Run list, detail, create and form surfaces. The framework's
+  generator auto-discovers `src/modules/billing/i18n/<lang>.json`
+  and wires them into the module's `translations` map; no manual
+  registration needed.
+- **Split `billing.items.type.*` into two key sets.** The same key
+  was used with two different fallbacks — the list filter wanted the
+  short label ("One-time"), the create form wanted the descriptive
+  one ("One-time charge"). Since a locale value resolves a key
+  globally, the form selector now uses a dedicated
+  `billing.items.form.type.*` set; the filter keeps the short
+  `billing.items.type.*`.
+
+Validation: yarn generate (i18n imports confirmed in the registry) +
+typecheck + test all green; 804 tests, 0 regressions.
+
 ## 0.13.0 — Phase 4g — bulk item create (unreleased)
 
 The CPQ connector created Billing Items one command-bus round-trip at

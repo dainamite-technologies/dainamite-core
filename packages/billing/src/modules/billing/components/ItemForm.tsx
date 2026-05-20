@@ -311,13 +311,13 @@ export function ItemForm({
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="one_time">
-                  {t('billing.items.type.one_time', 'One-time charge')}
+                  {t('billing.items.form.type.one_time', 'One-time charge')}
                 </SelectItem>
                 <SelectItem value="recurring">
-                  {t('billing.items.type.recurring', 'Recurring (per cycle)')}
+                  {t('billing.items.form.type.recurring', 'Recurring (per cycle)')}
                 </SelectItem>
                 <SelectItem value="usage">
-                  {t('billing.items.type.usage', 'Usage (metered)')}
+                  {t('billing.items.form.type.usage', 'Usage (metered)')}
                 </SelectItem>
               </SelectContent>
             </Select>

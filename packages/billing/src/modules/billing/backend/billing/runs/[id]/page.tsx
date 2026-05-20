@@ -4,6 +4,7 @@ import { useParams } from 'next/navigation'
 import type { ColumnDef } from '@tanstack/react-table'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { Page, PageBody, PageHeader } from '@open-mercato/ui/backend/Page'
+import { FormHeader } from '@open-mercato/ui/backend/forms'
 import { DataTable } from '@open-mercato/ui/backend/DataTable'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { Button } from '@open-mercato/ui/primitives/button'
@@ -268,58 +269,60 @@ export default function BillRunDetailPage() {
 
   return (
     <Page>
-      <PageHeader title={t('billing.runs.detail.title', 'Bill Run')} />
-      <PageBody>
-        <div className="rounded-lg border border-border bg-card p-6 mb-4">
-          <div className="flex items-start justify-between gap-4 flex-wrap">
-            <div>
-              <div className="flex items-center gap-2 mb-2">
-                <Tag variant={runStatusVariant(run.status)}>{run.status}</Tag>
-                {run.dryRun ? <Tag variant="warning">Dry-run</Tag> : null}
-                {run.testMode ? <Tag variant="warning">Test</Tag> : null}
-                {run.catchUp ? <Tag variant="default">Catch-up</Tag> : null}
-              </div>
-              <div className="text-xs text-muted-foreground font-mono mb-3">{run.id}</div>
-              <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
-                <dt className="text-muted-foreground">
-                  {t('billing.runs.detail.field.triggered_by', 'Trigger')}
-                </dt>
-                <dd>{run.triggeredBy}</dd>
-                <dt className="text-muted-foreground">
-                  {t('billing.runs.detail.field.as_of_date', 'As-of date')}
-                </dt>
-                <dd>{run.asOfDate?.slice(0, 10) ?? '—'}</dd>
-                <dt className="text-muted-foreground">
-                  {t('billing.runs.detail.field.started_at', 'Started')}
-                </dt>
-                <dd>{formatDate(run.startedAt)}</dd>
-                <dt className="text-muted-foreground">
-                  {t('billing.runs.detail.field.finished_at', 'Finished')}
-                </dt>
-                <dd>{formatDate(run.finishedAt)}</dd>
-                {run.parentRunId ? (
-                  <>
-                    <dt className="text-muted-foreground">
-                      {t('billing.runs.detail.field.parent_run', 'Parent run')}
-                    </dt>
-                    <dd className="font-mono text-xs">{run.parentRunId}</dd>
-                  </>
-                ) : null}
-              </dl>
-            </div>
-            <div className="flex flex-col gap-2 items-end">
-              <Button
-                variant={failedCount > 0 ? 'default' : 'outline'}
-                disabled={failedCount === 0 || retrying}
-                onClick={handleRetryFailed}
-              >
-                {retrying
-                  ? t('billing.runs.retry.in_progress', 'Retrying…')
-                  : t('billing.runs.retry.action', 'Retry failed accounts')}
-                {failedCount > 0 ? ` (${failedCount})` : null}
-              </Button>
-            </div>
+      <FormHeader
+        mode="detail"
+        backHref="/backend/billing/runs"
+        entityTypeLabel={t('billing.runs.detail.title', 'Bill Run')}
+        title={run.id}
+        statusBadge={
+          <div className="flex items-center gap-2 flex-wrap">
+            <Tag variant={runStatusVariant(run.status)}>{run.status}</Tag>
+            {run.dryRun ? <Tag variant="warning">Dry-run</Tag> : null}
+            {run.testMode ? <Tag variant="warning">Test</Tag> : null}
+            {run.catchUp ? <Tag variant="default">Catch-up</Tag> : null}
           </div>
+        }
+        actionsContent={
+          <Button
+            variant={failedCount > 0 ? 'default' : 'outline'}
+            disabled={failedCount === 0 || retrying}
+            onClick={handleRetryFailed}
+          >
+            {retrying
+              ? t('billing.runs.retry.in_progress', 'Retrying…')
+              : t('billing.runs.retry.action', 'Retry failed accounts')}
+            {failedCount > 0 ? ` (${failedCount})` : null}
+          </Button>
+        }
+      />
+      <PageBody>
+        <div className="rounded-lg border border-border bg-card p-6">
+          <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
+            <dt className="text-muted-foreground">
+              {t('billing.runs.detail.field.triggered_by', 'Trigger')}
+            </dt>
+            <dd>{run.triggeredBy}</dd>
+            <dt className="text-muted-foreground">
+              {t('billing.runs.detail.field.as_of_date', 'As-of date')}
+            </dt>
+            <dd>{run.asOfDate?.slice(0, 10) ?? '—'}</dd>
+            <dt className="text-muted-foreground">
+              {t('billing.runs.detail.field.started_at', 'Started')}
+            </dt>
+            <dd>{formatDate(run.startedAt)}</dd>
+            <dt className="text-muted-foreground">
+              {t('billing.runs.detail.field.finished_at', 'Finished')}
+            </dt>
+            <dd>{formatDate(run.finishedAt)}</dd>
+            {run.parentRunId ? (
+              <>
+                <dt className="text-muted-foreground">
+                  {t('billing.runs.detail.field.parent_run', 'Parent run')}
+                </dt>
+                <dd className="font-mono text-xs">{run.parentRunId}</dd>
+              </>
+            ) : null}
+          </dl>
           {run.summary ? (
             <div className="mt-4 grid grid-cols-3 sm:grid-cols-6 gap-3 text-xs">
               <div>

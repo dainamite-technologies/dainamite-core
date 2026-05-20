@@ -5,6 +5,7 @@ import type { ColumnDef } from '@tanstack/react-table'
 import { Pencil, Plus, Trash2 } from 'lucide-react'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { Page, PageBody, PageHeader } from '@open-mercato/ui/backend/Page'
+import { FormHeader } from '@open-mercato/ui/backend/forms'
 import { DataTable } from '@open-mercato/ui/backend/DataTable'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { Button } from '@open-mercato/ui/primitives/button'
@@ -416,64 +417,66 @@ export default function BillingInvoiceDetailPage() {
 
   return (
     <Page>
-      <PageHeader title={t('billing.invoices.detail.title', 'Billing Invoice')} />
-      <PageBody>
-        <div className="rounded-lg border border-border bg-card p-6 mb-4">
-          <div className="flex items-start justify-between gap-4 flex-wrap">
-            <div>
-              <div className="flex items-center gap-2 mb-2">
-                <Tag variant={statusVariant(invoice.status)}>{invoice.status ?? '—'}</Tag>
-                {isTest ? <Tag variant="warning">TEST</Tag> : null}
-              </div>
-              <div className="text-base font-semibold font-mono mb-1">
-                {invoice.invoice_number}
-              </div>
-              <div className="text-xs text-muted-foreground font-mono mb-3">{invoice.id}</div>
-              <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
-                <dt className="text-muted-foreground">
-                  {t('billing.invoices.detail.field.period', 'Bill period')}
-                </dt>
-                <dd>
-                  {invoice.metadata?.bill_period_start ?? '—'} →{' '}
-                  {invoice.metadata?.bill_period_end ?? '—'}
-                </dd>
-                <dt className="text-muted-foreground">
-                  {t('billing.invoices.detail.field.bill_run', 'Bill Run')}
-                </dt>
-                <dd className="font-mono text-xs">{invoice.metadata?.bill_run_id ?? '—'}</dd>
-                <dt className="text-muted-foreground">
-                  {t('billing.invoices.detail.field.account', 'Billing Account')}
-                </dt>
-                <dd className="font-mono text-xs">
-                  {invoice.metadata?.bill_account_id ?? '—'}
-                </dd>
-                <dt className="text-muted-foreground">
-                  {t('billing.invoices.detail.field.issued', 'Issued')}
-                </dt>
-                <dd>{invoice.issue_date?.slice(0, 10) ?? '—'}</dd>
-              </dl>
-            </div>
-            <div className="flex flex-col gap-2 items-end">
-              {isDraft && !isTest ? (
-                <Button onClick={handlePost} disabled={posting}>
-                  {posting
-                    ? t('billing.invoices.post.in_progress', 'Posting…')
-                    : t('billing.invoices.post.action', 'Post invoice')}
-                </Button>
-              ) : null}
-              {isTest ? (
-                <Button
-                  variant="outline"
-                  onClick={handleWipeTest}
-                  disabled={wiping}
-                >
-                  {wiping
-                    ? t('billing.invoices.wipe.in_progress', 'Wiping…')
-                    : t('billing.invoices.wipe.action', 'Wipe test invoices for this run')}
-                </Button>
-              ) : null}
-            </div>
+      <FormHeader
+        mode="detail"
+        backHref="/backend/billing/invoices"
+        entityTypeLabel={t('billing.invoices.detail.title', 'Billing Invoice')}
+        title={invoice.invoice_number}
+        subtitle={invoice.id}
+        statusBadge={
+          <div className="flex items-center gap-2 flex-wrap">
+            <Tag variant={statusVariant(invoice.status)}>{invoice.status ?? '—'}</Tag>
+            {isTest ? <Tag variant="warning">TEST</Tag> : null}
           </div>
+        }
+        actionsContent={
+          <>
+            {isDraft && !isTest ? (
+              <Button onClick={handlePost} disabled={posting}>
+                {posting
+                  ? t('billing.invoices.post.in_progress', 'Posting…')
+                  : t('billing.invoices.post.action', 'Post invoice')}
+              </Button>
+            ) : null}
+            {isTest ? (
+              <Button
+                variant="outline"
+                onClick={handleWipeTest}
+                disabled={wiping}
+              >
+                {wiping
+                  ? t('billing.invoices.wipe.in_progress', 'Wiping…')
+                  : t('billing.invoices.wipe.action', 'Wipe test invoices for this run')}
+              </Button>
+            ) : null}
+          </>
+        }
+      />
+      <PageBody>
+        <div className="rounded-lg border border-border bg-card p-6">
+          <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
+            <dt className="text-muted-foreground">
+              {t('billing.invoices.detail.field.period', 'Bill period')}
+            </dt>
+            <dd>
+              {invoice.metadata?.bill_period_start ?? '—'} →{' '}
+              {invoice.metadata?.bill_period_end ?? '—'}
+            </dd>
+            <dt className="text-muted-foreground">
+              {t('billing.invoices.detail.field.bill_run', 'Bill Run')}
+            </dt>
+            <dd className="font-mono text-xs">{invoice.metadata?.bill_run_id ?? '—'}</dd>
+            <dt className="text-muted-foreground">
+              {t('billing.invoices.detail.field.account', 'Billing Account')}
+            </dt>
+            <dd className="font-mono text-xs">
+              {invoice.metadata?.bill_account_id ?? '—'}
+            </dd>
+            <dt className="text-muted-foreground">
+              {t('billing.invoices.detail.field.issued', 'Issued')}
+            </dt>
+            <dd>{invoice.issue_date?.slice(0, 10) ?? '—'}</dd>
+          </dl>
           <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
             <div>
               <div className="text-muted-foreground">

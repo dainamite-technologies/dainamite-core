@@ -1,5 +1,28 @@
 # @dainamite/billing
 
+## 0.15.0 — detail pages on FormHeader (unreleased)
+
+UI consistency pass against the CPQ module and the Open Mercato core
+reference modules. Both render entity detail pages through
+`FormHeader` in `detail` mode — a documented non-negotiable ("Detail
+uses FormHeader in detail mode"). The billing detail pages had
+shipped with an ad-hoc `PageHeader` + custom card header instead.
+
+- **Account / Item / Invoice / Bill Run detail pages** now render
+  their header via `FormHeader mode="detail"` — back link, entity
+  type label, entity title, status badge and action buttons in the
+  framework's standard slots. The page body keeps the field grid /
+  totals / edit form / outcomes table unchanged.
+- No behaviour change to actions — Post / Wipe / Retry / Soft delete /
+  View items / Add item keep their existing handlers, relocated into
+  the header's `actionsContent` slot.
+- Loading and 404/error states keep their `PageHeader` fallback
+  (there is no entity to title yet).
+
+Validation: yarn typecheck + test green; 804 tests, 0 regressions.
+UI not exercised in a browser — local PostgreSQL was unavailable so
+the dev server could not be started.
+
 ## 0.14.0 — i18n locale files (unreleased)
 
 Phase 4c deferred the admin-UI locale files — the pages shipped with

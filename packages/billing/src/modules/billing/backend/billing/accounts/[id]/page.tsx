@@ -5,6 +5,7 @@ import { Plus } from 'lucide-react'
 import { useParams, useRouter } from 'next/navigation'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { Page, PageBody, PageHeader } from '@open-mercato/ui/backend/Page'
+import { FormHeader } from '@open-mercato/ui/backend/forms'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { LoadingMessage, ErrorMessage } from '@open-mercato/ui/backend/detail'
 import { flash } from '@open-mercato/ui/backend/FlashMessages'
@@ -215,14 +216,14 @@ export default function BillingAccountDetailPage() {
 
   return (
     <Page>
-      <PageHeader title={t('billing.accounts.detail.title', 'Billing Account')} />
-      <PageBody>
-        <div className="flex items-start justify-between gap-3 mb-4">
-          <div>
-            <div className="text-base font-semibold">{row.name}</div>
-            <div className="text-xs text-muted-foreground font-mono">{row.id}</div>
-          </div>
-          <div className="flex items-center gap-2">
+      <FormHeader
+        mode="detail"
+        backHref="/backend/billing/accounts"
+        entityTypeLabel={t('billing.accounts.detail.title', 'Billing Account')}
+        title={row.name}
+        subtitle={row.id}
+        actionsContent={
+          <>
             <Button asChild variant="outline">
               <Link href={`/backend/billing/items?billAccountId=${row.id}`}>
                 {t('billing.accounts.detail.view_items', 'View items')}
@@ -244,9 +245,10 @@ export default function BillingAccountDetailPage() {
                 ? t('billing.accounts.detail.delete.in_progress', 'Deleting…')
                 : t('billing.accounts.detail.delete.action', 'Soft delete')}
             </Button>
-          </div>
-        </div>
-
+          </>
+        }
+      />
+      <PageBody>
         <AccountForm
           mode="edit"
           initial={toFormValues(row)}

@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { useParams, useRouter } from 'next/navigation'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { Page, PageBody, PageHeader } from '@open-mercato/ui/backend/Page'
+import { FormHeader } from '@open-mercato/ui/backend/forms'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { LoadingMessage, ErrorMessage } from '@open-mercato/ui/backend/detail'
@@ -212,46 +213,39 @@ export default function BillingItemDetailPage() {
 
   return (
     <Page>
-      <PageHeader title={t('billing.items.detail.title', 'Billing Item')} />
-      <PageBody>
-        <div className="flex items-start justify-between gap-3 mb-4">
-          <div>
-            <div className="flex items-center gap-2 mb-1">
-              <Tag variant="info">{row.type}</Tag>
-              {row.currencyMismatch ? (
-                <Tag variant="warning">
-                  {t('billing.items.detail.currency_mismatch', 'Currency mismatch')}
-                </Tag>
-              ) : null}
-              {row.billedToDate ? (
-                <Tag variant="default">
-                  {t('billing.items.detail.billed_to', 'Billed through {date}').replace(
-                    '{date}',
-                    row.billedToDate.slice(0, 10),
-                  )}
-                </Tag>
-              ) : null}
-              {row.sourceRef ? (
-                <Tag variant="default">
-                  {t('billing.items.detail.source_ref', 'source_ref: {ref}').replace(
-                    '{ref}',
-                    row.sourceRef,
-                  )}
-                </Tag>
-              ) : null}
-            </div>
-            <div className="text-base font-semibold">{row.description}</div>
-            <div className="text-xs text-muted-foreground font-mono">{row.id}</div>
-            <div className="text-xs text-muted-foreground mt-1">
-              {t('billing.items.detail.field.account', 'Account')}:{' '}
-              <Link
-                href={`/backend/billing/accounts/${row.billAccountId}`}
-                className="font-mono text-primary hover:underline"
-              >
-                {row.billAccountId}
-              </Link>
-            </div>
+      <FormHeader
+        mode="detail"
+        backHref="/backend/billing/items"
+        entityTypeLabel={t('billing.items.detail.title', 'Billing Item')}
+        title={row.description}
+        subtitle={row.id}
+        statusBadge={
+          <div className="flex items-center gap-2 flex-wrap">
+            <Tag variant="info">{row.type}</Tag>
+            {row.currencyMismatch ? (
+              <Tag variant="warning">
+                {t('billing.items.detail.currency_mismatch', 'Currency mismatch')}
+              </Tag>
+            ) : null}
+            {row.billedToDate ? (
+              <Tag variant="default">
+                {t('billing.items.detail.billed_to', 'Billed through {date}').replace(
+                  '{date}',
+                  row.billedToDate.slice(0, 10),
+                )}
+              </Tag>
+            ) : null}
+            {row.sourceRef ? (
+              <Tag variant="default">
+                {t('billing.items.detail.source_ref', 'source_ref: {ref}').replace(
+                  '{ref}',
+                  row.sourceRef,
+                )}
+              </Tag>
+            ) : null}
           </div>
+        }
+        actionsContent={
           <Button
             type="button"
             variant="outline"
@@ -262,6 +256,17 @@ export default function BillingItemDetailPage() {
               ? t('billing.items.detail.delete.in_progress', 'Deleting…')
               : t('billing.items.detail.delete.action', 'Soft delete')}
           </Button>
+        }
+      />
+      <PageBody>
+        <div className="text-xs text-muted-foreground">
+          {t('billing.items.detail.field.account', 'Account')}:{' '}
+          <Link
+            href={`/backend/billing/accounts/${row.billAccountId}`}
+            className="font-mono text-primary hover:underline"
+          >
+            {row.billAccountId}
+          </Link>
         </div>
 
         <ItemForm

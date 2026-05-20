@@ -14,8 +14,8 @@ import { readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
  *
  * Read-only surface: lists every Bill Run for the operator's tenant
  * with status, mode, summary stats, and a link into the detail page.
- * Manual triggers + retry-failed remain API-driven for v1 (operators
- * curl `/api/billing/runs` or `/api/billing/runs/retry-failed`); a
+ * Retry-failed is wired into the run detail page; manual triggers
+ * remain API-driven for v1 (operators curl `/api/billing/runs`) — a
  * trigger button on this page lands in a follow-up iteration once
  * the operator UX is signed off.
  */

@@ -12,12 +12,11 @@ import { Button } from '@open-mercato/ui/primitives/button'
 import { readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
 
 /**
- * Billing Accounts admin list — read-only for v1.
+ * Billing Accounts admin list.
  *
- * CRUD lives at `/api/billing/accounts` (REST). The admin UI for
- * editing accounts ships in a follow-up iteration once the operator
- * workflow is signed off — for now operators create + edit accounts
- * via the REST API or via integrations.
+ * Search + filter by bill cycle / currency / active state. The
+ * "New account" CTA opens the create page; rows link into the detail
+ * page for inspect + edit + soft-delete.
  */
 
 type BillingAccountRow = {

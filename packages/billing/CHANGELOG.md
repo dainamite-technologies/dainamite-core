@@ -33,6 +33,13 @@ write path.
   `renewed` subscribers now make one `bulkCreateItems` call instead
   of an N-item `createItem` loop; `amended` folds its proration
   `one_time` line into the same batch.
+- **Fix: detail-page headings silently missing.** The invoice,
+  account and Bill Run detail pages passed `title` straight to
+  `<Page>` on their main render path. `Page` only spreads
+  `HTMLAttributes`, so `title` landed as a `<div title>` tooltip
+  instead of an `<h1>` — the heading rendered on the loading/error
+  branches but vanished once data arrived. All three now render the
+  heading through `<PageHeader>`.
 
 Validation: yarn typecheck + test all green; 804 repo tests
 (7 new in `__tests__/commands/itemsBulk.test.ts`), 0 regressions.

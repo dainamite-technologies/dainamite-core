@@ -415,7 +415,8 @@ export default function BillingInvoiceDetailPage() {
   const isDraft = invoice.status === 'draft'
 
   return (
-    <Page title={t('billing.invoices.detail.title', 'Billing Invoice')}>
+    <Page>
+      <PageHeader title={t('billing.invoices.detail.title', 'Billing Invoice')} />
       <PageBody>
         <div className="rounded-lg border border-border bg-card p-6 mb-4">
           <div className="flex items-start justify-between gap-4 flex-wrap">

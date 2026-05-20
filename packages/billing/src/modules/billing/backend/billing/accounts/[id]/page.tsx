@@ -214,7 +214,8 @@ export default function BillingAccountDetailPage() {
   }
 
   return (
-    <Page title={t('billing.accounts.detail.title', 'Billing Account')}>
+    <Page>
+      <PageHeader title={t('billing.accounts.detail.title', 'Billing Account')} />
       <PageBody>
         <div className="flex items-start justify-between gap-3 mb-4">
           <div>

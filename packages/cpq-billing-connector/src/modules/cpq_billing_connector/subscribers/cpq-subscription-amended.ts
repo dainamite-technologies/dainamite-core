@@ -97,26 +97,26 @@ export default async function handle(payload: AmendedPayload): Promise<void> {
     null
   if (!accountId) return
 
-  // 1. Create new items.
-  const newItemPayloads = mapSubscriptionItemsToBillingItems({
+  // 1 + 2. Collect new items AND proration one-time lines into a
+  // single bulk-create call. The proration line for each added
+  // recurring charge covers the partial current cycle (the new
+  // recurring item itself is skipped by the engine's mid-cycle rule
+  // until the next full cycle).
+  const itemsToCreate = mapSubscriptionItemsToBillingItems({
     subscriptionId: payload.subscriptionId,
     items: payload.addedItems ?? [],
     billStartDate: payload.effectiveDate,
-  })
-  for (const item of newItemPayloads) {
-    await billingApi.createItem(scope, {
-      billAccountId: accountId,
-      type: item.type,
-      billStartDate: item.billStartDate,
-      description: item.description,
-      rateJson: item.rateJson,
-      subscriptionId: item.subscriptionId,
-      subscriptionItemId: item.subscriptionItemId,
-      sourceRef: item.sourceRef,
-    })
-  }
+  }).map((item) => ({
+    billAccountId: accountId,
+    type: item.type,
+    billStartDate: item.billStartDate,
+    description: item.description,
+    rateJson: item.rateJson,
+    subscriptionId: item.subscriptionId,
+    subscriptionItemId: item.subscriptionItemId,
+    sourceRef: item.sourceRef,
+  }))
 
-  // 2. Proration one_time line per added recurring charge.
   for (const addedItem of payload.addedItems ?? []) {
     for (const charge of addedItem.charges) {
       if (charge.type !== 'recurring' || typeof charge.unitPrice !== 'number') continue
@@ -132,7 +132,7 @@ export default async function handle(payload: AmendedPayload): Promise<void> {
         effectiveDate: payload.effectiveDate,
         cycleEnd: payload.proration.cycleEnd,
       })
-      await billingApi.createItem(scope, {
+      itemsToCreate.push({
         billAccountId: accountId,
         type: 'one_time',
         billStartDate: payload.effectiveDate,
@@ -144,6 +144,8 @@ export default async function handle(payload: AmendedPayload): Promise<void> {
       })
     }
   }
+
+  await billingApi.bulkCreateItems(scope, itemsToCreate)
 
   // 3. End-date removed items.
   const endDate = isoDateMinusOneDay(payload.effectiveDate)

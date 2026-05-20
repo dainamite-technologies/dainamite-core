@@ -1,5 +1,42 @@
 # @dainamite/billing
 
+## 0.13.0 — Phase 4g — bulk item create (unreleased)
+
+The CPQ connector created Billing Items one command-bus round-trip at
+a time — a subscription with N charges meant N account lookups, N
+idempotency queries and N flushes. For a multi-line enterprise order
+that is N× the work it needs to be. Phase 4g adds a single batched
+write path.
+
+- **`billing.items.bulk_create` command.** New command accepting
+  `{ tenantId, organizationId, items: [...] }` (1–500 entries). It:
+  - validates every referenced account in **one** `id: { $in: [...] }`
+    query over the distinct account ids — a missing account throws the
+    same `404 { billAccountId }` shape as the single-item command;
+  - runs **one** idempotency query over all `source_ref`s in the batch
+    (`sourceRef: { $in }` + `billAccountId: { $in }`) instead of one
+    per item;
+  - dedups `source_ref`s repeated *within* the same payload (first
+    wins — the unique index would reject the rest on flush anyway);
+  - `em.create` + `persist`s every new row, then issues a **single**
+    `em.flush()` for the whole batch;
+  - emits per-entity CRUD side effects (`markOrmEntityChange` +
+    events) only after the flush commits.
+  - Returns `{ created, deduplicated, items: [{ sourceRef, id,
+    deduplicated }] }` so callers can map results back to inputs.
+- **`POST /api/billing/items/bulk`** — REST surface for the command,
+  gated by `billing.item.manage`, `openApi` documented.
+- **Validators.** `billingItemBulkEntrySchema` (per-item, no scope,
+  full `rate_json` discriminated-union validation) and
+  `billingItemBulkCreateSchema` (scoped wrapper, `items` 1–500).
+- **CPQ connector switched to bulk.** `activated` / `amended` /
+  `renewed` subscribers now make one `bulkCreateItems` call instead
+  of an N-item `createItem` loop; `amended` folds its proration
+  `one_time` line into the same batch.
+
+Validation: yarn typecheck + test all green; 804 repo tests
+(7 new in `__tests__/commands/itemsBulk.test.ts`), 0 regressions.
+
 ## 0.12.0 — Phase 4f — scale audit + bulk refactor (unreleased)
 
 Audit of hot paths against the spec's Performance Considerations

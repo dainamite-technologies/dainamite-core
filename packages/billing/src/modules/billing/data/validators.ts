@@ -322,6 +322,54 @@ export const billingItemCreateSchema = scopedSchema
 
 export type BillingItemCreateInput = z.infer<typeof billingItemCreateSchema>
 
+// ─── Bulk item create (Phase 4g) ─────────────────────────────────
+//
+// One scope envelope, N item payloads. The CPQ connector activating
+// a large subscription used to fire one `billing.items.create` per
+// charge — bulk-create collapses that into a single command with a
+// batched `source_ref` idempotency check + single flush.
+
+const billingItemBulkEntrySchema = z
+  .object({
+    billAccountId: z.string().uuid(),
+    type: z.enum(BILLING_ITEM_TYPES),
+    billStartDate: z.coerce.date(),
+    billEndDate: z.coerce.date().nullable().optional(),
+    description: z.string().trim().min(1).max(500),
+    rateJson: z.unknown(),
+    uomCode: z.string().trim().max(64).optional(),
+    subscriptionId: z.string().trim().max(255).optional(),
+    subscriptionItemId: z.string().trim().max(255).optional(),
+    sourceRef: z.string().trim().min(1).max(255).optional(),
+  })
+  .superRefine((val, ctx) => {
+    try {
+      validateRateJson(val.type, val.rateJson)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'rate_json is invalid for this type'
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['rateJson'], message })
+    }
+    if (val.type === 'usage' && !val.uomCode) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['uomCode'],
+        message: 'uomCode is required for type=usage',
+      })
+    }
+  })
+
+export type BillingItemBulkEntry = z.infer<typeof billingItemBulkEntrySchema>
+
+export const billingItemBulkCreateSchema = scopedSchema.extend({
+  // Cap at 500 per call — keeps a single bulk transaction bounded.
+  // A CPQ subscription with >500 charges should be split by the
+  // caller (the connector); 500 is already far past any realistic
+  // single-subscription charge count.
+  items: z.array(billingItemBulkEntrySchema).min(1).max(500),
+})
+
+export type BillingItemBulkCreateInput = z.infer<typeof billingItemBulkCreateSchema>
+
 export const billingItemUpdateSchema = scopedSchema.extend({
   id: z.string().uuid(),
   // `type` is immutable — changing one_time → recurring would silently

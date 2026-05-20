@@ -110,8 +110,12 @@ export default async function handle(payload: ActivatedPayload): Promise<void> {
     billStartDate,
   })
 
-  for (const item of itemPayloads) {
-    await billingApi.createItem(scope, {
+  // Bulk-create — one command for the whole subscription's charges
+  // instead of one round-trip per charge. Idempotent per source_ref,
+  // so a re-fired activation event is a no-op.
+  await billingApi.bulkCreateItems(
+    scope,
+    itemPayloads.map((item) => ({
       billAccountId: account.id,
       type: item.type,
       billStartDate: item.billStartDate,
@@ -120,6 +124,6 @@ export default async function handle(payload: ActivatedPayload): Promise<void> {
       subscriptionId: item.subscriptionId,
       subscriptionItemId: item.subscriptionItemId,
       sourceRef: item.sourceRef,
-    })
-  }
+    })),
+  )
 }

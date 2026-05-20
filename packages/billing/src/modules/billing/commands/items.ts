@@ -15,10 +15,12 @@ import { BillingAccount, BillingItem } from '../data/entities'
 import { billingEntityIds } from '../data/entityIds'
 import { findBySourceRef } from '../lib/idempotency'
 import {
+  billingItemBulkCreateSchema,
   billingItemCreateSchema,
   billingItemDeleteSchema,
   billingItemUpdateSchema,
   validateRateJson,
+  type BillingItemBulkCreateInput,
   type BillingItemCreateInput,
   type BillingItemDeleteInput,
   type BillingItemUpdateInput,
@@ -240,8 +242,178 @@ const deleteItemCommand: CommandHandler<BillingItemDeleteInput, { id: string }> 
   },
 }
 
+// ─── Bulk create (idempotent, batched) ───────────────────────────
+//
+// Collapses N `billing.items.create` round-trips into one command.
+// The CPQ connector activating a large subscription is the primary
+// caller — it used to fire one create per charge.
+//
+// Idempotency is still per-`source_ref` but the existence check is a
+// SINGLE query over all source_refs in the batch, instead of one
+// `findOne` per item. Inserts are one `em.flush()` for the whole
+// batch. So a 200-charge activation goes from ~200 round-trips +
+// 200 flushes to ~3 queries + 1 flush.
+
+type BulkCreateResultEntry = {
+  sourceRef: string | null
+  id: string
+  deduplicated: boolean
+}
+
+const bulkCreateItemsCommand: CommandHandler<
+  BillingItemBulkCreateInput,
+  { created: number; deduplicated: number; items: BulkCreateResultEntry[] }
+> = {
+  id: 'billing.items.bulk_create',
+
+  async execute(rawInput, ctx) {
+    const parsed = billingItemBulkCreateSchema.parse(rawInput)
+    ensureTenantScope(ctx, parsed.tenantId)
+    ensureOrganizationScope(ctx, parsed.organizationId)
+
+    const em = getEm(ctx)
+
+    // Validate every referenced account exists + is in scope. One
+    // `$in` query for the distinct account ids, not one per item.
+    const accountIds = Array.from(new Set(parsed.items.map((i) => i.billAccountId)))
+    const accounts = await em.find(BillingAccount, {
+      id: { $in: accountIds },
+      tenantId: parsed.tenantId,
+      organizationId: parsed.organizationId,
+      deletedAt: null,
+    } as never)
+    const knownAccountIds = new Set(accounts.map((a) => a.id))
+    const missingAccount = accountIds.find((id) => !knownAccountIds.has(id))
+    if (missingAccount) {
+      throw new CrudHttpError(404, {
+        error: 'Billing account not found',
+        billAccountId: missingAccount,
+      })
+    }
+
+    // Batched idempotency check — one query over every source_ref in
+    // the batch. `source_ref` is unique per `(tenant, bill_account,
+    // source_ref)`, so we key the existing-set on that triple.
+    const sourceRefs = parsed.items
+      .map((i) => i.sourceRef)
+      .filter((ref): ref is string => typeof ref === 'string' && ref.length > 0)
+    const existingBySourceKey = new Map<string, string>()
+    if (sourceRefs.length > 0) {
+      const existing = await em.find(BillingItem, {
+        tenantId: parsed.tenantId,
+        organizationId: parsed.organizationId,
+        billAccountId: { $in: accountIds },
+        sourceRef: { $in: Array.from(new Set(sourceRefs)) },
+        deletedAt: null,
+      } as never)
+      for (const row of existing) {
+        if (row.sourceRef) {
+          existingBySourceKey.set(`${row.billAccountId}::${row.sourceRef}`, row.id)
+        }
+      }
+    }
+
+    const now = new Date()
+    const results: BulkCreateResultEntry[] = []
+    const createdEntities: BillingItem[] = []
+
+    // Track source_refs created within THIS batch so a payload that
+    // repeats the same source_ref twice dedups against itself (the
+    // unique index would otherwise blow up the whole flush).
+    const seenInBatch = new Set<string>()
+
+    for (const entry of parsed.items) {
+      const sourceKey = entry.sourceRef
+        ? `${entry.billAccountId}::${entry.sourceRef}`
+        : null
+
+      if (sourceKey) {
+        const existingId = existingBySourceKey.get(sourceKey)
+        if (existingId) {
+          results.push({ sourceRef: entry.sourceRef ?? null, id: existingId, deduplicated: true })
+          continue
+        }
+        if (seenInBatch.has(sourceKey)) {
+          // Duplicate source_ref inside the same payload — first wins,
+          // the repeat is reported deduplicated against the first.
+          const firstCreated = createdEntities.find(
+            (e) => e.billAccountId === entry.billAccountId && e.sourceRef === entry.sourceRef,
+          )
+          results.push({
+            sourceRef: entry.sourceRef ?? null,
+            id: firstCreated?.id ?? '',
+            deduplicated: true,
+          })
+          continue
+        }
+        seenInBatch.add(sourceKey)
+      }
+
+      validateRateJson(entry.type, entry.rateJson)
+      const item = em.create(BillingItem, {
+        organizationId: parsed.organizationId,
+        tenantId: parsed.tenantId,
+        billAccountId: entry.billAccountId,
+        type: entry.type,
+        billStartDate: entry.billStartDate,
+        billEndDate: entry.billEndDate ?? null,
+        description: entry.description,
+        rateJson: entry.rateJson as Record<string, unknown>,
+        uomCode: entry.uomCode ?? null,
+        subscriptionId: entry.subscriptionId ?? null,
+        subscriptionItemId: entry.subscriptionItemId ?? null,
+        sourceRef: entry.sourceRef ?? null,
+        currencyMismatch: false,
+        billedToDate: null,
+        isActive: true,
+        createdAt: now,
+        updatedAt: now,
+      })
+      em.persist(item)
+      createdEntities.push(item)
+      results.push({ sourceRef: entry.sourceRef ?? null, id: item.id, deduplicated: false })
+    }
+
+    // Single flush for the whole batch.
+    if (createdEntities.length > 0) {
+      await em.flush()
+    }
+
+    // Side effects after the commit. Emitting per-entity keeps the
+    // query-index + event contract identical to single-create — the
+    // engine / search index can't tell a bulk insert from N singles.
+    const dataEngine = getDataEngine(ctx)
+    for (const item of createdEntities) {
+      await emitCrudSideEffects({
+        dataEngine,
+        action: 'created',
+        entity: item,
+        identifiers: {
+          id: item.id,
+          tenantId: item.tenantId,
+          organizationId: item.organizationId,
+        },
+        indexer: itemIndexer,
+        events: itemEvents,
+      })
+    }
+
+    return {
+      created: createdEntities.length,
+      deduplicated: results.filter((r) => r.deduplicated).length,
+      items: results,
+    }
+  },
+}
+
 registerCommand(createItemCommand)
 registerCommand(updateItemCommand)
 registerCommand(deleteItemCommand)
+registerCommand(bulkCreateItemsCommand)
 
-export { createItemCommand, updateItemCommand, deleteItemCommand }
+export {
+  createItemCommand,
+  updateItemCommand,
+  deleteItemCommand,
+  bulkCreateItemsCommand,
+}

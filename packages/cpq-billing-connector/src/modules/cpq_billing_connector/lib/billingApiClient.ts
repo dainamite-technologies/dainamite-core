@@ -154,6 +154,45 @@ export class BillingApiClient {
     return r ?? { id: '', deduplicated: false }
   }
 
+  /**
+   * Batch-create items in a single `billing.items.bulk_create`
+   * command. Use this whenever a subscriber has more than one item
+   * to create — it collapses N command-bus round-trips + N flushes
+   * into one. Idempotent per `source_ref` exactly like `createItem`.
+   *
+   * No-ops on an empty payload so callers skip the length guard.
+   */
+  async bulkCreateItems(
+    scope: Scope,
+    items: ItemCreatePayload[],
+  ): Promise<{
+    created: number
+    deduplicated: number
+    items: Array<{ sourceRef: string | null; id: string; deduplicated: boolean }>
+  }> {
+    if (items.length === 0) {
+      return { created: 0, deduplicated: 0, items: [] }
+    }
+    const result = await this.commandBus.execute('billing.items.bulk_create', {
+      input: {
+        tenantId: scope.tenantId,
+        organizationId: scope.organizationId,
+        items,
+      },
+      ctx: buildSystemCtx(this.container, scope),
+    })
+    const r = (
+      result as {
+        result?: {
+          created: number
+          deduplicated: number
+          items: Array<{ sourceRef: string | null; id: string; deduplicated: boolean }>
+        }
+      }
+    ).result
+    return r ?? { created: 0, deduplicated: 0, items: [] }
+  }
+
   async updateItem(scope: Scope, payload: ItemUpdatePayload): Promise<{ id: string }> {
     const result = await this.commandBus.execute('billing.items.update', {
       input: {

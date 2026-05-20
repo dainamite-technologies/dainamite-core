@@ -76,8 +76,9 @@ export default async function handle(payload: RenewedPayload): Promise<void> {
     items: payload.addedItems ?? [],
     billStartDate: payload.newTermStart,
   })
-  for (const item of newPayloads) {
-    await billingApi.createItem(scope, {
+  await billingApi.bulkCreateItems(
+    scope,
+    newPayloads.map((item) => ({
       billAccountId: accountId,
       type: item.type,
       billStartDate: item.billStartDate,
@@ -86,6 +87,6 @@ export default async function handle(payload: RenewedPayload): Promise<void> {
       subscriptionId: item.subscriptionId,
       subscriptionItemId: item.subscriptionItemId,
       sourceRef: item.sourceRef,
-    })
-  }
+    })),
+  )
 }

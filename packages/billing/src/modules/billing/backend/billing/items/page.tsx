@@ -80,6 +80,7 @@ export default function BillingItemsListPage() {
   const [total, setTotal] = React.useState(0)
   const [totalPages, setTotalPages] = React.useState(1)
   const [loading, setLoading] = React.useState(true)
+  const [search, setSearch] = React.useState('')
 
   const filterDefs = React.useMemo<FilterDef[]>(
     () => [
@@ -125,6 +126,7 @@ export default function BillingItemsListPage() {
         sortField: 'createdAt',
         sortDir: 'desc',
       })
+      if (search.trim()) params.set('search', search.trim())
       if (typeof filters.type === 'string' && filters.type) {
         params.set('type', filters.type)
       }
@@ -146,7 +148,7 @@ export default function BillingItemsListPage() {
     } finally {
       setLoading(false)
     }
-  }, [filters.billAccountId, filters.isActive, filters.subscriptionId, filters.type, page, pageSize])
+  }, [filters.billAccountId, filters.isActive, filters.subscriptionId, filters.type, page, pageSize, search])
 
   React.useEffect(() => {
     void loadRows()
@@ -252,6 +254,8 @@ export default function BillingItemsListPage() {
           filterValues={filters}
           onFiltersApply={setFilters}
           onFiltersClear={() => setFilters({})}
+          searchValue={search}
+          onSearchChange={setSearch}
         />
       </PageBody>
     </Page>

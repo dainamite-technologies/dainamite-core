@@ -1,214 +1,184 @@
-# Billing — UI testing manual
+# Billing — manual testowania UI
 
-How to exercise the `@dainamite/billing` admin UI end to end on a local
-dev environment. Covers stack setup, demo data, every billing screen,
-and the full Bill Run → draft invoice → post flow.
+Przewodnik krok po kroku: **co kliknąć**, żeby przejść przez cały moduł
+billing w panelu admina. Każdy krok mówi, co kliknąć i co powinieneś
+zobaczyć. Nie ma tu komend do wpisywania — po prostu klikasz po systemie.
 
-> Billing is the recurring-billing engine (XD-249): Billing Accounts hold
-> Billing Items (one-time / recurring / usage), a **Bill Run** turns due
-> items into **draft invoices** in `core/sales`, and an operator reviews
-> and **posts** them. See `specs/implementation/xd-249-billing-spec.md`
-> for the full design.
-
----
-
-## 1. Start the stack
-
-```bash
-docker compose up -d postgres redis     # database + queue backend
-yarn mercato db migrate                 # apply billing migrations (first run only)
-yarn dev                                # dev server -> http://localhost:3000
-```
-
-Log in at `http://localhost:3000/login`:
-
-| Role | Email | Password |
-|---|---|---|
-| Admin | `admin@acme.com` | `secret` |
-
-The `admin` role needs the `billing.*` ACL features. They are granted by
-the billing module's `setup.ts`, which runs on tenant creation. If
-billing was added to an **existing** tenant and the sidebar group does
-not appear, run once:
-
-```bash
-yarn mercato auth sync-role-acls
-```
-
-then restart `yarn dev` (the server caches role ACLs at boot).
+> Billing to silnik rozliczeń cyklicznych: **konta** mają **pozycje**
+> (jednorazowe / cykliczne / wg zużycia), **przebieg rozliczeniowy**
+> zamienia należne pozycje na **faktury robocze**, a operator je
+> sprawdza i **księguje**.
 
 ---
 
-## 2. Seed demo data
+## Zanim zaczniesz
+
+1. Aplikacja musi być uruchomiona — otwórz w przeglądarce
+   `http://localhost:3000`.
+2. Zaloguj się: e-mail **`admin@acme.com`**, hasło **`secret`**.
+3. Dane testowe są już wgrane: **5 firm**, **10 pozycji**,
+   **1 przebieg rozliczeniowy** i **3 faktury robocze**. Jeśli ich nie
+   ma — patrz „Reset danych" na końcu.
+
+## Jak wejść do billingu
+
+W menu po lewej stronie przewiń w dół do grupy **Billing**. Są w niej
+cztery pozycje:
+
+| Pozycja menu | Co to |
+|---|---|
+| **Billing Accounts** | Konta rozliczeniowe (klienci) |
+| **Billing Items** | Pozycje — usługi i opłaty na koncie |
+| **Billing Invoices** | Faktury wygenerowane przez billing |
+| **Bill Runs** | Przebiegi rozliczeniowe |
+
+Gdyby grupy „Billing" nie było widać — odśwież stronę (menu jest
+cache'owane).
+
+---
+
+## 1. Konta rozliczeniowe (Billing Accounts)
+
+### 1a. Przeglądanie listy
+1. Kliknij w menu **Billing → Billing Accounts**.
+2. Zobaczysz **5 kont**: Acme Telecom, Globex Networks, Initech Cloud,
+   Contoso Analytics, Northwind Studio.
+3. Sprawdź, że kolumny są wypełnione — *Currency* (PLN / EUR),
+   *Cycle* (np. `monthly · 1`), *Next bill*, *Status*.
+4. W pole **Search** u góry wpisz `Acme` — lista zawęża się do jednego
+   konta. Wyczyść pole, żeby wrócić do pełnej listy.
+5. Kliknij **Filters** → ustaw *Currency* = `EUR` → kliknij **Apply**.
+   Zostają 2 konta (Initech, Contoso). Wyczyść filtr.
+6. Kliknij ikonę odświeżania (↻, prawy górny róg karty) — lista się
+   przeładowuje.
+
+### 1b. Tworzenie konta
+1. Kliknij **New account** (prawy górny róg).
+2. Wypełnij formularz: *Name*, *Customer ID*, *Currency* (np. `PLN`),
+   *Bill cycle*, *Cycle anchor* (`1`), *Invoice email*, adres faktury
+   (*Line 1* + *City* + *Postal code* + *Country*) oraz *Next bill date*.
+3. Kliknij **Create account** (albo wciśnij `Ctrl/Cmd + Enter`).
+4. Wracasz na listę — nowe konto jest na niej widoczne.
+
+### 1c. Szczegóły, edycja, usuwanie
+1. Kliknij wiersz konta **Acme Telecom** (albo link **Open** po prawej).
+2. Otwiera się strona szczegółów — w nagłówku nazwa konta, niżej
+   formularz wypełniony danymi konta.
+3. Zmień np. *Invoice email* i kliknij **Save changes** — u dołu
+   pojawia się zielony komunikat o zapisie.
+4. Kliknij **View items** — przejdziesz do listy pozycji odfiltrowanej
+   do tego konta.
+5. Wróć (strzałka ← w nagłówku) i kliknij **Add item** — otworzy się
+   formularz nowej pozycji z już wybranym kontem.
+6. Wróć i kliknij **Soft delete** → potwierdź w oknie dialogowym →
+   konto znika z listy (jego pozycje zostają w bazie do audytu).
+
+## 2. Pozycje rozliczeniowe (Billing Items)
+
+### 2a. Przeglądanie listy
+1. Kliknij **Billing → Billing Items** — zobaczysz **10 pozycji**.
+2. Kolumna *Type* pokazuje tag: `recurring`, `one_time` lub `usage`.
+3. W pole **Search** wpisz fragment opisu, np. `Hosting` — lista
+   filtruje po opisie.
+4. Kliknij **Filters** → *Type* = `recurring` → **Apply**.
+
+### 2b. Tworzenie pozycji
+1. Kliknij **New item**.
+2. Wybierz **Billing Account** z listy.
+3. Wybierz **Type** — od tego zależą kolejne pola:
+   - **One-time charge** → pole *Amount*.
+   - **Recurring (per cycle)** → pole *Unit price per cycle*.
+   - **Usage (metered)** → pole *UoM code* (np. `gb`, `api_request`)
+     oraz *Rate model*: `Simple flat rate` (jedna stawka) lub
+     `Tiered` (JSON progowy — volume / graduated / flat).
+4. Wpisz *Description* i *Bill start date*.
+5. Kliknij **Create item**.
+
+### 2c. Szczegóły pozycji
+1. Kliknij wiersz pozycji (lub **Open**) → strona szczegółów.
+2. W nagłówku opis pozycji i tagi (typ, ewentualnie „Currency
+   mismatch" albo „Billed through…").
+3. Zmień stawkę lub opis i kliknij **Save changes**.
+
+## 3. Faktury (Billing Invoices)
+
+Na tej liście są **tylko faktury wygenerowane przez billing** (przez
+przebieg rozliczeniowy) — zwykłe faktury sprzedaży się tu nie pokazują.
+
+### 3a. Przeglądanie listy
+1. Kliknij **Billing → Billing Invoices** — zobaczysz **3 faktury
+   robocze** (status `draft`).
+2. Kolumny: *Number*, *Status*, *Period*, *Total*, *Outstanding*,
+   *Issued*.
+3. Kliknij **Filters** → *Status* = `draft`.
+
+### 3b. Szczegóły i edycja pozycji faktury
+1. Kliknij wiersz faktury → strona szczegółów.
+2. W nagłówku: numer faktury, status, okres rozliczeniowy oraz
+   powiązany przebieg i konto.
+3. Pod nagłówkiem kafelki kwot — *Subtotal net*, *Grand total*,
+   *Paid*, *Outstanding*.
+4. Sekcja **Lines** — pozycje faktury.
+5. Kliknij **Add line** → wpisz opis, ilość i cenę → zatwierdź. Sumy
+   przeliczają się automatycznie.
+6. Najedź na pozycję w tabeli i kliknij ikonę ołówka (edycja) albo
+   kosza (usunięcie). Każda zmiana trafia do dziennika audytu.
+
+### 3c. Zaksięgowanie faktury
+1. Na stronie szczegółów faktury roboczej kliknij **Post invoice**.
+2. Status zmienia się z `draft` na `posted` i pojawia się komunikat
+   potwierdzający.
+
+## 4. Przebiegi rozliczeniowe (Bill Runs)
+
+Przebieg skanuje konta, którym minął termin rozliczenia, i tworzy z ich
+należnych pozycji faktury robocze.
+
+### 4a. Lista i szczegóły
+1. Kliknij **Billing → Bill Runs** — jest **1 przebieg** (status
+   **Completed**).
+2. Kliknij wiersz → strona szczegółów.
+3. W nagłówku status przebiegu; niżej siatka pól (trigger, data,
+   czasy) i kafelki podsumowania (konta, faktury, błędy…).
+4. Tabela **Per-account outcomes** — 3 konta, status **success**,
+   każde z numerem utworzonej faktury.
+5. Gdyby któreś konto miało status **failed**, w nagłówku pojawia się
+   przycisk **Retry failed accounts** — uruchamia nowy przebieg tylko
+   dla nieudanych kont.
+
+### 4b. Nowy przebieg
+Ręczne uruchomienie przebiegu działa na razie przez API i harmonogram
+(cron) — w UI nie ma jeszcze przycisku „uruchom". Dane testowe
+zawierają gotowy, zakończony przebieg do przeglądania.
+
+## 5. Szybki scenariusz end-to-end (~5 minut)
+
+1. **Billing Accounts** → otwórz **Acme Telecom** → sprawdź, że
+   formularz jest wypełniony danymi.
+2. **Billing Items** → przefiltruj *Type* = `usage` → otwórz pozycję
+   „Transfer danych ponad limit".
+3. **Bill Runs** → otwórz przebieg → zobacz 3 udane wyniki, każdy z
+   numerem faktury.
+4. **Billing Invoices** → otwórz fakturę → kliknij **Add line**, dodaj
+   pozycję → zobacz przeliczone sumy → kliknij **Post invoice**.
+
+---
+
+## Reset danych testowych *(operacja techniczna — opcjonalna)*
+
+Jeśli chcesz wyczyścić billing i wgrać dane od nowa, w terminalu:
 
 ```bash
-node packages/billing/scripts/seed-demo.mjs
-```
-
-This creates, through the REST API:
-
-- **5 Billing Accounts** — Netia, Orange, Pixel (PLN, due in May),
-  CloudFlow (EUR, quarterly, due July), DataPeak (EUR, annual, due June).
-- **10 Billing Items** — a mix of recurring, one-time and usage.
-- **3 usage records** on Netia's metered "Transfer danych" item.
-- **1 test-mode Bill Run** → **3 draft invoices** (Netia / Orange /
-  Pixel — the three accounts whose `next_bill_date` has already passed).
-
-### Reset to a clean slate
-
-```bash
+# 1. wyczyść tabele billingu
 docker exec dainamite-core-postgres-1 psql -U postgres -d open-mercato -c "
 DELETE FROM sales_invoice_lines WHERE invoice_id IN (SELECT id FROM sales_invoices WHERE jsonb_exists(metadata,'bill_run_id'));
 DELETE FROM sales_invoices WHERE jsonb_exists(metadata,'bill_run_id');
-DELETE FROM billing_run_outcomes;
-DELETE FROM billing_runs;
-DELETE FROM billing_account_usage;
-DELETE FROM billing_items;
-DELETE FROM billing_accounts;"
+DELETE FROM billing_run_outcomes; DELETE FROM billing_runs;
+DELETE FROM billing_account_usage; DELETE FROM billing_items; DELETE FROM billing_accounts;"
+
+# 2. wgraj dane demo na nowo (aplikacja musi działać)
+node packages/billing/scripts/seed-demo.mjs
 ```
 
-Then re-run the seeder.
-
----
-
-## 3. Where billing lives
-
-After login, in the left sidebar there is a **Billing** group:
-
-| Screen | URL | What to test |
-|---|---|---|
-| Billing Accounts | `/backend/billing/accounts` | list, search, filters, create, detail |
-| Billing Items | `/backend/billing/items` | list, type/account/active filters, create |
-| Billing Invoices | `/backend/billing/invoices` | review queue, post, line edits |
-| Bill Runs | `/backend/billing/runs` | run history, per-account outcomes |
-
-The UI is bilingual — switch language with the `locale` cookie
-(`pl` / `en`) or the account language picker; headings and column
-labels are translated from `packages/billing/src/modules/billing/i18n/`.
-
----
-
-## 4. Billing Accounts
-
-**List** (`/backend/billing/accounts`)
-- Columns: Name, Customer, Currency, Cycle (`monthly · 1`), Next bill,
-  Last bill, Status.
-- Toolbar: Search (by name), Filters (bill cycle / currency / active),
-  Refresh, column chooser, saved views.
-- "New account" opens the create form.
-
-**Create** — required: name, customer ID, currency (ISO 4217), bill
-cycle + anchor, invoice email, invoice address (line 1 + city), next
-bill date. Submit with `Cmd/Ctrl+Enter`.
-
-**Detail** (`/backend/billing/accounts/[id]`)
-- `FormHeader` shows the account name + id; actions: **View items**,
-  **Add item**, **Soft delete**.
-- Edit any mutable field and Save. `currencyCode` and `customerId` are
-  immutable on edit (disabled).
-- **Soft delete** asks for confirmation, then the account drops out of
-  the list (its items + usage stay for audit).
-
-## 5. Billing Items
-
-**List** (`/backend/billing/items`)
-- Columns: Type (tag), Description, Account, Start, End, UoM, Status.
-- Filters: type (one-time / recurring / usage), Billing Account ID,
-  Subscription ID, active.
-- Deep link: `/backend/billing/items?billAccountId=<id>` pre-filters to
-  one account (this is what "View items" on the account detail uses).
-
-**Create** — pick an account and a type:
-- **one-time** / **recurring** → a single Amount / Unit price.
-- **usage** → a UoM code (must match usage records exactly, e.g. `gb`)
-  plus either a Simple flat rate or a Tiered rate JSON
-  (`volume` / `graduated` / `flat`; exactly one tier `up_to: null`).
-
-**Detail** (`/backend/billing/items/[id]`) — edit the rate / dates /
-description; read-only badges show currency mismatch, billed-through
-date and `source_ref`.
-
-## 6. Bill Runs
-
-A **Bill Run** scans accounts whose `next_bill_date <= as-of date`,
-selects their due items, and writes draft invoices.
-
-> The manual trigger is **API-only** for v1 — there is no button on the
-> Bill Runs list yet. Trigger one with curl:
-
-```bash
-TOKEN=$(curl -s -X POST http://localhost:3000/api/auth/login \
-  -H 'Content-Type: application/x-www-form-urlencoded' \
-  --data-urlencode 'email=admin@acme.com' --data-urlencode 'password=secret' \
-  | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>console.log(JSON.parse(d).token))")
-
-curl -s -X POST http://localhost:3000/api/billing/runs \
-  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"mode":"test","asOfDate":"2026-05-20"}'
-```
-
-Modes:
-- `dry` — computes, persists nothing. Preview only.
-- `test` — persists draft invoices flagged `test_run` (numbered
-  `TEST-…`); does **not** advance `next_bill_date`. Safe to repeat.
-- `real` — persists real draft invoices and advances the cycle.
-
-**List** (`/backend/billing/runs`) — every run with status
-(running / completed / partial failure / failed), mode badges, summary
-stats (accounts, drafts, failed…).
-
-**Detail** (`/backend/billing/runs/[id]`) — header with status badges,
-a field grid, the summary tiles, and a **per-account outcomes** table.
-If any account failed, **Retry failed accounts** spawns a new run
-scoped to just those accounts.
-
-## 7. Billing Invoices
-
-Only invoices the billing engine emitted are listed here (filtered on
-`metadata.bill_run_id`) — plain sales invoices are not shown.
-
-**List** (`/backend/billing/invoices`) — Number (with a `TEST` tag for
-test-run invoices), Status, Period, Total, Outstanding, Issued. Filter
-by status and test/real.
-
-**Detail** (`/backend/billing/invoices/[id]`)
-- Header: status badge, invoice number, period / Bill Run / account.
-- Totals tiles + the invoice **Lines** table.
-- While **draft**: add a line, edit a line, remove a line — each edit
-  is recorded in the draft-edit audit log and totals recompute.
-- **Post invoice** (draft, non-test) → moves it to `posted`.
-- **Wipe test invoices for this run** (test invoices) → hard-deletes
-  every test invoice from that Bill Run.
-
----
-
-## 8. End-to-end smoke test (5 minutes)
-
-1. Seed: `node packages/billing/scripts/seed-demo.mjs`.
-2. Open **Billing Accounts** — 5 accounts, columns populated.
-3. Open **Netia Biznes** → detail loads with the edit form filled.
-4. Open **Billing Items** — 10 items; filter by type `usage`.
-5. Open **Bill Runs** — one `completed` run; open it → 3 successful
-   outcomes, each linked to a draft invoice.
-6. Open **Billing Invoices** — 3 `TEST-…` draft invoices. Open one →
-   lines visible; add a line and watch the totals recompute.
-7. Trigger a fresh run (curl above) and confirm it appears in the list.
-
----
-
-## 9. Automated coverage
-
-Playwright integration tests live in
-`packages/billing/src/modules/billing/__integration__/`
-(`TC-BILL-001..003` — account CRUD, item + bulk create, admin UI).
-
-```bash
-npx playwright test --config .ai/qa/tests/playwright.config.ts \
-  packages/billing/src/modules/billing/__integration__
-```
-
-Unit tests (engine, period math, validators, commands):
-
-```bash
-yarn test
-```
+Skrypt tworzy 5 firm, 10 pozycji, rekordy zużycia i jeden przebieg
+rozliczeniowy z fakturami — wszystko przez REST API.

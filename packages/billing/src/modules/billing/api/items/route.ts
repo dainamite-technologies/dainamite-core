@@ -103,6 +103,10 @@ const crud = makeCrudRoute({
       if (typeof query.id === 'string' && query.id) {
         filters.id = { $eq: query.id }
       }
+      if (typeof query.search === 'string' && query.search.trim()) {
+        const pattern = `%${query.search.trim().replace(/[%_]/g, (m) => `\\${m}`)}%`
+        filters.description = { $ilike: pattern }
+      }
       if (typeof query.billAccountId === 'string' && query.billAccountId) {
         filters.bill_account_id = { $eq: query.billAccountId }
       }

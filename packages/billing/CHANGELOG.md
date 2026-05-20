@@ -25,7 +25,11 @@ consistency pass on the list views.
   `refreshButton` / `columnChooser` / `perspective` to `DataTable`
   directly and drop the standalone header — matching the CPQ look
   (billing can't import `CpqListView` across the package boundary, so
-  it uses the same shared `DataTable` props).
+  it uses the same shared `DataTable` props). The item and Bill Run
+  lists also gained a search box so all four toolbars render the same
+  single integrated row — items search by description, Bill Runs by
+  pasted run id (`?search=` is now wired into those two list routes'
+  `buildFilters`).
 
 Validation: yarn typecheck + 804 unit tests + 15 Playwright tests all
 green; verified end to end against a live database (5 demo accounts,

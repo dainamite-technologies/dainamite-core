@@ -5,8 +5,8 @@
  * admin UI has something to click through:
  *   - 5 billing accounts (PLN / EUR, monthly / quarterly / annually)
  *   - 10 billing items (recurring / one-time / usage)
- *   - 3 usage records on the metered Netia item
- *   - 1 test-mode Bill Run -> 3 draft invoices
+ *   - 3 usage records on the metered Acme Telecom item
+ *   - 1 Bill Run -> 3 draft invoices (ready to review + post)
  *
  * Every row goes through the REST API, so it exercises the real
  * command / event path (not a raw DB insert).
@@ -59,81 +59,82 @@ async function api(token, method, path, payload) {
   return { ok: true, status: res.status, json }
 }
 
+// Fully fictional companies / addresses / tax ids — no real-world data.
 const ACCOUNTS = [
   {
-    customerId: 'cust-netia-001',
-    name: 'Netia Biznes Sp. z o.o.',
+    customerId: 'cust-acme-001',
+    name: 'Acme Telecom Sp. z o.o.',
     currencyCode: 'PLN',
     billCycle: 'monthly',
     billCycleAnchor: '1',
-    invoiceEmail: 'faktury@netia-biznes.example',
+    invoiceEmail: 'faktury@acme-telecom.example',
     invoiceLanguage: 'pl',
     nextBillDate: '2026-05-01',
-    invoiceAddress: { line1: 'ul. Poleczki 13', city: 'Warszawa', postal_code: '02-822', country: 'PL' },
-    taxId: '5213017228',
+    invoiceAddress: { line1: 'ul. Przykładowa 1', city: 'Warszawa', postal_code: '00-001', country: 'PL' },
+    taxId: '1234567890',
     items: [
-      { type: 'recurring', description: 'Łącze światłowodowe 1 Gb/s', rateJson: { unit_price: 199.0 } },
+      { type: 'recurring', description: 'Łącze internetowe 1 Gb/s', rateJson: { unit_price: 199.0 } },
       { type: 'one_time', description: 'Opłata aktywacyjna', rateJson: { amount: 99.0 } },
       { type: 'usage', description: 'Transfer danych ponad limit', rateJson: { unit_price: 0.05 }, uomCode: 'gb' },
     ],
   },
   {
-    customerId: 'cust-orange-002',
-    name: 'Orange Polska S.A.',
+    customerId: 'cust-globex-002',
+    name: 'Globex Networks Sp. z o.o.',
     currencyCode: 'PLN',
     billCycle: 'monthly',
     billCycleAnchor: '15',
-    invoiceEmail: 'rozliczenia@orange.example',
+    invoiceEmail: 'rozliczenia@globex-networks.example',
     invoiceLanguage: 'pl',
     nextBillDate: '2026-05-15',
-    invoiceAddress: { line1: 'al. Jerozolimskie 160', city: 'Warszawa', postal_code: '02-326', country: 'PL' },
-    taxId: '5260250995',
+    invoiceAddress: { line1: 'ul. Testowa 15', city: 'Kraków', postal_code: '30-001', country: 'PL' },
+    taxId: '9876543210',
     items: [
-      { type: 'recurring', description: 'Abonament Flota — 50 kart SIM', rateJson: { unit_price: 2499.0 } },
-      { type: 'recurring', description: 'Pakiet roaming UE', rateJson: { unit_price: 149.0 } },
+      { type: 'recurring', description: 'Abonament flotowy — 50 kart SIM', rateJson: { unit_price: 2499.0 } },
+      { type: 'recurring', description: 'Pakiet roamingowy', rateJson: { unit_price: 149.0 } },
     ],
   },
   {
-    customerId: 'cust-cloudflow-003',
-    name: 'CloudFlow GmbH',
+    customerId: 'cust-initech-003',
+    name: 'Initech Cloud GmbH',
     currencyCode: 'EUR',
     billCycle: 'quarterly',
     billCycleAnchor: '1',
-    invoiceEmail: 'billing@cloudflow.example',
+    invoiceEmail: 'billing@initech-cloud.example',
     invoiceLanguage: 'en',
     nextBillDate: '2026-07-01',
-    invoiceAddress: { line1: 'Friedrichstrasse 88', city: 'Berlin', postal_code: '10117', country: 'DE' },
-    taxId: 'DE811907980',
+    invoiceAddress: { line1: 'Musterstrasse 10', city: 'Berlin', postal_code: '10115', country: 'DE' },
+    taxId: 'DE100000000',
     items: [
       { type: 'recurring', description: 'SaaS Platform — Enterprise plan', rateJson: { unit_price: 899.0 } },
       { type: 'usage', description: 'API calls', rateJson: { unit_price: 0.001 }, uomCode: 'api_request' },
     ],
   },
   {
-    customerId: 'cust-datapeak-004',
-    name: 'DataPeak Analytics Ltd.',
+    customerId: 'cust-contoso-004',
+    name: 'Contoso Analytics Ltd.',
     currencyCode: 'EUR',
     billCycle: 'annually',
     billCycleAnchor: '1',
-    invoiceEmail: 'ap@datapeak.example',
+    invoiceEmail: 'ap@contoso-analytics.example',
     invoiceLanguage: 'en',
     nextBillDate: '2026-06-01',
-    invoiceAddress: { line1: '5 Old Street', city: 'London', postal_code: 'EC1V 9HL', country: 'GB' },
+    invoiceAddress: { line1: '1 Example Street', city: 'London', postal_code: 'EC1A 1AA', country: 'GB' },
     items: [
       { type: 'recurring', description: 'Annual License — 100 seats', rateJson: { unit_price: 12000.0 } },
       { type: 'one_time', description: 'Onboarding & migration', rateJson: { amount: 2500.0 } },
     ],
   },
   {
-    customerId: 'cust-pixel-005',
-    name: 'Pixel Studio s.c.',
+    customerId: 'cust-northwind-005',
+    name: 'Northwind Studio s.c.',
     currencyCode: 'PLN',
     billCycle: 'monthly',
     billCycleAnchor: '1',
-    invoiceEmail: 'biuro@pixel-studio.example',
+    invoiceEmail: 'biuro@northwind-studio.example',
     invoiceLanguage: 'pl',
     nextBillDate: '2026-05-01',
-    invoiceAddress: { line1: 'ul. Piękna 24', city: 'Kraków', postal_code: '31-000', country: 'PL' },
+    invoiceAddress: { line1: 'ul. Demonstracyjna 7', city: 'Gdańsk', postal_code: '80-001', country: 'PL' },
     items: [
       { type: 'recurring', description: 'Hosting + domena (pakiet PRO)', rateJson: { unit_price: 79.0 } },
     ],
@@ -167,23 +168,23 @@ async function main() {
   }
 
   console.log('Pushing usage records...')
-  const netia = created.find((c) => c.name.startsWith('Netia'))
-  if (netia) {
+  const metered = created.find((c) => c.name.startsWith('Acme'))
+  if (metered) {
     for (const qty of [620, 410, 533]) {
       await api(token, 'POST', '/api/billing/usage', {
-        billAccountId: netia.accountId,
+        billAccountId: metered.accountId,
         uomCode: 'gb',
         quantity: qty,
         periodStart: '2026-04-01',
         periodEnd: '2026-04-30',
-        sourceRef: `seed:usage:netia:${qty}`,
+        sourceRef: `seed:usage:acme:${qty}`,
       })
     }
-    console.log('  + 3 usage records (Netia, gb)')
+    console.log('  + 3 usage records (Acme Telecom, gb)')
   }
 
-  console.log('Triggering a test-mode Bill Run...')
-  const run = await api(token, 'POST', '/api/billing/runs', { mode: 'test', asOfDate: '2026-05-20' })
+  console.log('Triggering a Bill Run...')
+  const run = await api(token, 'POST', '/api/billing/runs', { mode: 'real', asOfDate: '2026-05-20' })
   if (run.ok) console.log(`  + Bill Run ${run.json.billRunId} -> ${run.json.status}`)
 
   console.log('Seed complete.')

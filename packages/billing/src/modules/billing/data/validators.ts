@@ -398,6 +398,7 @@ export const billingItemListQuerySchema = z
   .object({
     ...listPaginationBase,
     id: z.string().uuid().optional(),
+    search: z.string().optional(),
     billAccountId: z.string().uuid().optional(),
     type: z.enum(BILLING_ITEM_TYPES).optional(),
     subscriptionId: z.string().optional(),
@@ -478,6 +479,7 @@ export const billingRunListQuerySchema = z
   .object({
     ...listPaginationBase,
     id: z.string().uuid().optional(),
+    search: z.string().optional(),
     status: z.enum(BILL_RUN_STATUSES).optional(),
     triggeredBy: z.enum(BILL_RUN_TRIGGERS).optional(),
     parentRunId: z.string().uuid().optional(),

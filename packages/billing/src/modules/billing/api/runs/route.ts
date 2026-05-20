@@ -104,6 +104,10 @@ const crud = makeCrudRoute({
       if (typeof query.id === 'string' && query.id) {
         filters.id = { $eq: query.id }
       }
+      // Run ids are UUIDs — search matches a pasted id exactly.
+      if (typeof query.search === 'string' && /^[0-9a-fA-F-]{36}$/.test(query.search.trim())) {
+        filters.id = { $eq: query.search.trim() }
+      }
       if (typeof query.status === 'string') filters.status = { $eq: query.status }
       if (typeof query.triggeredBy === 'string') filters.triggered_by = { $eq: query.triggeredBy }
       if (typeof query.parentRunId === 'string') filters.parent_run_id = { $eq: query.parentRunId }

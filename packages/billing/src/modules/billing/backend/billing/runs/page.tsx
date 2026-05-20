@@ -93,6 +93,7 @@ export default function BillRunsListPage() {
   const [total, setTotal] = React.useState(0)
   const [totalPages, setTotalPages] = React.useState(1)
   const [loading, setLoading] = React.useState(true)
+  const [search, setSearch] = React.useState('')
 
   const filterDefs = React.useMemo<FilterDef[]>(
     () => [
@@ -132,6 +133,7 @@ export default function BillRunsListPage() {
         sortField: 'startedAt',
         sortDir: 'desc',
       })
+      if (search.trim()) params.set('search', search.trim())
       if (typeof filters.status === 'string' && filters.status) {
         params.set('status', filters.status)
       }
@@ -147,7 +149,7 @@ export default function BillRunsListPage() {
     } finally {
       setLoading(false)
     }
-  }, [filters.status, filters.triggeredBy, page, pageSize])
+  }, [filters.status, filters.triggeredBy, page, pageSize, search])
 
   React.useEffect(() => {
     void loadRows()
@@ -250,6 +252,8 @@ export default function BillRunsListPage() {
           filterValues={filters}
           onFiltersApply={setFilters}
           onFiltersClear={() => setFilters({})}
+          searchValue={search}
+          onSearchChange={setSearch}
         />
       </PageBody>
     </Page>

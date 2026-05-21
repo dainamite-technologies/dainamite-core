@@ -115,4 +115,4 @@ RUN adduser -D -u 1001 omuser \
 USER omuser
 
 EXPOSE ${CONTAINER_PORT}
-CMD ["yarn", "start"]
+CMD ["sh", "-c", "yarn db:migrate && exec yarn start"]

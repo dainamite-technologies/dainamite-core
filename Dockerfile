@@ -11,6 +11,7 @@ RUN corepack enable && corepack prepare yarn@4.12.0 --activate
 
 COPY package.json yarn.lock .yarnrc.yml ./
 COPY .yarn/patches ./.yarn/patches
+COPY packages/cpq/package.json ./packages/cpq/package.json
 RUN if grep -Eq 'http://(localhost|127\\.0\\.0\\.1):' .yarnrc.yml; then \
       sed \
         -e "s#http://localhost:#http://${OPEN_MERCATO_DOCKER_REGISTRY_HOST}:#g" \
@@ -24,6 +25,7 @@ RUN if grep -Eq 'http://(localhost|127\\.0\\.0\\.1):' .yarnrc.yml; then \
 RUN yarn install
 
 COPY . .
+RUN yarn workspace @dainamite/cpq build
 RUN yarn generate
 RUN NODE_ENV=production yarn build
 
@@ -41,6 +43,7 @@ RUN corepack enable && corepack prepare yarn@4.12.0 --activate
 
 COPY package.json yarn.lock .yarnrc.yml ./
 COPY .yarn/patches ./.yarn/patches
+COPY packages/cpq/package.json ./packages/cpq/package.json
 RUN if grep -Eq 'http://(localhost|127\\.0\\.0\\.1):' .yarnrc.yml; then \
       sed \
         -e "s#http://localhost:#http://${OPEN_MERCATO_DOCKER_REGISTRY_HOST}:#g" \
@@ -80,6 +83,7 @@ RUN corepack enable && corepack prepare yarn@4.12.0 --activate
 
 COPY package.json yarn.lock .yarnrc.yml ./
 COPY .yarn/patches ./.yarn/patches
+COPY packages/cpq/package.json ./packages/cpq/package.json
 RUN if grep -Eq 'http://(localhost|127\\.0\\.0\\.1):' .yarnrc.yml; then \
       sed \
         -e "s#http://localhost:#http://${OPEN_MERCATO_DOCKER_REGISTRY_HOST}:#g" \
@@ -101,6 +105,7 @@ COPY --from=builder /app/next.config.ts ./next.config.ts
 COPY --from=builder /app/postcss.config.mjs ./postcss.config.mjs
 COPY --from=builder /app/components.json ./components.json
 COPY --from=builder /app/tsconfig.json ./tsconfig.json
+COPY --from=builder /app/packages/cpq/dist ./packages/cpq/dist
 COPY docker/scripts/init-or-migrate.sh /app/docker/scripts/init-or-migrate.sh
 RUN chmod +x /app/docker/scripts/init-or-migrate.sh
 

@@ -1,5 +1,6 @@
 "use client"
 import * as React from 'react'
+import Link from 'next/link'
 import { useParams } from 'next/navigation'
 import type { ColumnDef } from '@tanstack/react-table'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
@@ -15,6 +16,13 @@ import {
   readApiResultOrThrow,
 } from '@open-mercato/ui/backend/utils/apiCall'
 import { normalizeCrudServerError } from '@open-mercato/ui/backend/utils/serverErrors'
+import { billRunName } from '../../../../lib/billRunLabel'
+import {
+  DetailCard,
+  DetailField,
+  Stat,
+  StatCard,
+} from '../../../../components/DetailFields'
 
 /**
  * Bill Run detail — header card + outcomes list.
@@ -57,10 +65,12 @@ type BillRunOutcome = {
   id: string
   bill_run_id: string
   bill_account_id: string
+  bill_account_name: string | null
   status: 'success' | 'success_with_warnings' | 'skipped_existing_draft' | 'failed'
   error_message: string | null
   warnings: Record<string, unknown> | null
   draft_invoice_id: string | null
+  invoice_number: string | null
   created_at: string
 }
 
@@ -208,7 +218,12 @@ export default function BillRunDetailPage(props: { params?: { id?: string } }) {
         accessorKey: 'bill_account_id',
         header: t('billing.runs.outcomes.columns.account', 'Account'),
         cell: ({ row }) => (
-          <span className="font-mono text-xs">{row.original.bill_account_id}</span>
+          <Link
+            href={`/backend/billing/accounts/${row.original.bill_account_id}`}
+            className="text-sm text-primary hover:underline"
+          >
+            {row.original.bill_account_name ?? row.original.bill_account_id}
+          </Link>
         ),
       },
       {
@@ -225,7 +240,12 @@ export default function BillRunDetailPage(props: { params?: { id?: string } }) {
         header: t('billing.runs.outcomes.columns.invoice', 'Invoice'),
         cell: ({ row }) =>
           row.original.draft_invoice_id ? (
-            <span className="font-mono text-xs">{row.original.draft_invoice_id}</span>
+            <Link
+              href={`/backend/billing/invoices/${row.original.draft_invoice_id}`}
+              className="text-sm text-primary hover:underline"
+            >
+              {row.original.invoice_number ?? row.original.draft_invoice_id}
+            </Link>
           ) : (
             '—'
           ),
@@ -277,14 +297,9 @@ export default function BillRunDetailPage(props: { params?: { id?: string } }) {
         mode="detail"
         backHref="/backend/billing/runs"
         entityTypeLabel={t('billing.runs.detail.title', 'Bill Run')}
-        title={run.id}
+        title={billRunName(run.as_of_date)}
         statusBadge={
-          <div className="flex items-center gap-2 flex-wrap">
-            <Tag variant={runStatusVariant(run.status)}>{run.status}</Tag>
-            {run.dry_run ? <Tag variant="warning">Dry-run</Tag> : null}
-            {run.test_mode ? <Tag variant="warning">Test</Tag> : null}
-            {run.catch_up ? <Tag variant="default">Catch-up</Tag> : null}
-          </div>
+          <Tag variant={runStatusVariant(run.status)}>{run.status}</Tag>
         }
         actionsContent={
           <Button
@@ -300,102 +315,89 @@ export default function BillRunDetailPage(props: { params?: { id?: string } }) {
         }
       />
       <PageBody>
-        <div className="rounded-lg border border-border bg-card p-6">
-          <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
-            <dt className="text-muted-foreground">
-              {t('billing.runs.detail.field.triggered_by', 'Trigger')}
-            </dt>
-            <dd>{run.triggered_by}</dd>
-            <dt className="text-muted-foreground">
-              {t('billing.runs.detail.field.as_of_date', 'As-of date')}
-            </dt>
-            <dd>{run.as_of_date?.slice(0, 10) ?? '—'}</dd>
-            <dt className="text-muted-foreground">
-              {t('billing.runs.detail.field.started_at', 'Started')}
-            </dt>
-            <dd>{formatDate(run.started_at)}</dd>
-            <dt className="text-muted-foreground">
-              {t('billing.runs.detail.field.finished_at', 'Finished')}
-            </dt>
-            <dd>{formatDate(run.finished_at)}</dd>
+        <div className="space-y-6">
+          <DetailCard>
+            <DetailField label={t('billing.runs.detail.field.run_id', 'Run ID')}>
+              <span className="font-mono text-xs">{run.id}</span>
+            </DetailField>
+            <DetailField label={t('billing.runs.detail.field.triggered_by', 'Trigger')}>
+              {run.triggered_by}
+            </DetailField>
+            <DetailField label={t('billing.runs.detail.field.mode', 'Mode')}>
+              <div className="flex flex-wrap gap-1">
+                {run.dry_run ? (
+                  <Tag variant="warning">Dry-run</Tag>
+                ) : run.test_mode ? (
+                  <Tag variant="warning">Test</Tag>
+                ) : (
+                  <Tag variant="default">Real</Tag>
+                )}
+                {run.catch_up ? <Tag variant="default">Catch-up</Tag> : null}
+              </div>
+            </DetailField>
+            <DetailField label={t('billing.runs.detail.field.as_of_date', 'As-of date')}>
+              {run.as_of_date?.slice(0, 10) ?? '—'}
+            </DetailField>
+            <DetailField label={t('billing.runs.detail.field.started_at', 'Started')}>
+              {formatDate(run.started_at)}
+            </DetailField>
+            <DetailField label={t('billing.runs.detail.field.finished_at', 'Finished')}>
+              {formatDate(run.finished_at)}
+            </DetailField>
             {run.parent_run_id ? (
-              <>
-                <dt className="text-muted-foreground">
-                  {t('billing.runs.detail.field.parent_run', 'Parent run')}
-                </dt>
-                <dd className="font-mono text-xs">{run.parent_run_id}</dd>
-              </>
+              <DetailField label={t('billing.runs.detail.field.parent_run', 'Parent run')}>
+                <span className="font-mono text-xs">{run.parent_run_id}</span>
+              </DetailField>
             ) : null}
-          </dl>
-          {run.summary ? (
-            <div className="mt-4 grid grid-cols-3 sm:grid-cols-6 gap-3 text-xs">
-              <div>
-                <div className="text-muted-foreground">
-                  {t('billing.runs.summary.accounts', 'Accounts')}
-                </div>
-                <div className="text-lg font-semibold">
-                  {run.summary.accounts_processed ?? 0}
-                </div>
-              </div>
-              <div>
-                <div className="text-muted-foreground">
-                  {t('billing.runs.summary.drafts', 'Drafts')}
-                </div>
-                <div className="text-lg font-semibold">
-                  {run.summary.drafts_created ?? 0}
-                </div>
-              </div>
-              <div>
-                <div className="text-muted-foreground">
-                  {t('billing.runs.summary.skipped', 'Skipped')}
-                </div>
-                <div className="text-lg font-semibold">
-                  {run.summary.drafts_skipped_existing ?? 0}
-                </div>
-              </div>
-              <div>
-                <div className="text-muted-foreground">
-                  {t('billing.runs.summary.warnings', 'Warnings')}
-                </div>
-                <div className="text-lg font-semibold">
-                  {run.summary.accounts_with_warnings ?? 0}
-                </div>
-              </div>
-              <div>
-                <div className="text-muted-foreground">
-                  {t('billing.runs.summary.failed', 'Failed')}
-                </div>
-                <div className="text-lg font-semibold">
-                  {run.summary.accounts_failed ?? 0}
-                </div>
-              </div>
-              <div>
-                <div className="text-muted-foreground">
-                  {t('billing.runs.summary.usage', 'Usage rated')}
-                </div>
-                <div className="text-lg font-semibold">
-                  {run.summary.usage_records_rated ?? 0}
-                </div>
-              </div>
-            </div>
-          ) : null}
-        </div>
+          </DetailCard>
 
-        <h2 className="text-base font-semibold mb-2">
-          {t('billing.runs.outcomes.title', 'Per-account outcomes')}
-        </h2>
-        <DataTable
-          columns={outcomeColumns}
-          data={outcomes}
-          isLoading={outcomesLoading}
-          pagination={{
-            page: outcomesPage,
-            pageSize: 50,
-            total: outcomesTotal,
-            totalPages: outcomesTotalPages,
-            onPageChange: setOutcomesPage,
-          }}
-        />
+          {run.summary ? (
+            <StatCard title={t('billing.runs.summary.title', 'Summary')}>
+              <Stat
+                label={t('billing.runs.summary.accounts', 'Accounts')}
+                value={run.summary.accounts_processed ?? 0}
+              />
+              <Stat
+                label={t('billing.runs.summary.drafts', 'Drafts')}
+                value={run.summary.drafts_created ?? 0}
+              />
+              <Stat
+                label={t('billing.runs.summary.skipped', 'Skipped')}
+                value={run.summary.drafts_skipped_existing ?? 0}
+              />
+              <Stat
+                label={t('billing.runs.summary.warnings', 'Warnings')}
+                value={run.summary.accounts_with_warnings ?? 0}
+              />
+              <Stat
+                label={t('billing.runs.summary.failed', 'Failed')}
+                value={run.summary.accounts_failed ?? 0}
+              />
+              <Stat
+                label={t('billing.runs.summary.usage', 'Usage rated')}
+                value={run.summary.usage_records_rated ?? 0}
+              />
+            </StatCard>
+          ) : null}
+
+          <div>
+            <h2 className="text-base font-semibold mb-2">
+              {t('billing.runs.outcomes.title', 'Per-account outcomes')}
+            </h2>
+            <DataTable
+              columns={outcomeColumns}
+              data={outcomes}
+              isLoading={outcomesLoading}
+              pagination={{
+                page: outcomesPage,
+                pageSize: 50,
+                total: outcomesTotal,
+                totalPages: outcomesTotalPages,
+                onPageChange: setOutcomesPage,
+              }}
+            />
+          </div>
+        </div>
       </PageBody>
     </Page>
   )

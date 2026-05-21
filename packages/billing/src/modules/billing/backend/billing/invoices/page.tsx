@@ -1,6 +1,6 @@
 "use client"
 import * as React from 'react'
-import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import type { ColumnDef } from '@tanstack/react-table'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
@@ -82,6 +82,7 @@ function formatMoney(value: string, currency: string): string {
 
 export default function BillingInvoicesListPage() {
   const t = useT()
+  const router = useRouter()
   const [rows, setRows] = React.useState<BillingInvoiceRow[]>([])
   const [page, setPage] = React.useState(1)
   const [pageSize] = React.useState(25)
@@ -158,7 +159,9 @@ export default function BillingInvoicesListPage() {
           const isTest = row.original.metadata?.test_run === true
           return (
             <div className="flex items-center gap-2">
-              <span className="font-mono text-xs">{row.original.invoice_number}</span>
+              <span className="text-sm font-medium text-primary">
+                {row.original.invoice_number}
+              </span>
               {isTest ? <Tag variant="warning">TEST</Tag> : null}
             </div>
           )
@@ -202,18 +205,6 @@ export default function BillingInvoicesListPage() {
         header: t('billing.invoices.columns.issued', 'Issued'),
         cell: ({ row }) => formatDate(row.original.issue_date),
       },
-      {
-        id: 'actions',
-        header: '',
-        cell: ({ row }) => (
-          <Link
-            href={`/backend/billing/invoices/${row.original.id}`}
-            className="text-sm font-medium text-primary hover:underline"
-          >
-            {t('billing.invoices.actions.open', 'Open')}
-          </Link>
-        ),
-      },
     ],
     [t],
   )
@@ -232,6 +223,7 @@ export default function BillingInvoicesListPage() {
           perspective={{ tableId: 'billing-invoices' }}
           columns={columns}
           data={rows}
+          onRowClick={(row) => router.push(`/backend/billing/invoices/${row.id}`)}
           isLoading={loading}
           pagination={{
             page,

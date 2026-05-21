@@ -1,7 +1,7 @@
 "use client"
 import * as React from 'react'
 import Link from 'next/link'
-import { useSearchParams } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { Plus } from 'lucide-react'
 import type { ColumnDef } from '@tanstack/react-table'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
@@ -26,6 +26,7 @@ import { readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
 type BillingItemRow = {
   id: string
   bill_account_id: string
+  bill_account_name: string | null
   type: 'one_time' | 'recurring' | 'usage'
   description: string
   bill_start_date: string
@@ -66,6 +67,7 @@ function typeVariant(
 
 export default function BillingItemsListPage() {
   const t = useT()
+  const router = useRouter()
   const searchParams = useSearchParams()
   // Deep-link from the account detail page: `?billAccountId=<id>` pre-
   // filters the list so the operator lands on "items for this account".
@@ -82,6 +84,17 @@ export default function BillingItemsListPage() {
   const [loading, setLoading] = React.useState(true)
   const [search, setSearch] = React.useState('')
 
+  // Resolve account id → name from the loaded rows (each carries
+  // `bill_account_name` from the items route's afterList hook) so the
+  // active `billAccountId` filter chip shows a name, not a UUID.
+  const accountNames = React.useMemo(() => {
+    const map: Record<string, string> = {}
+    for (const r of rows) {
+      if (r.bill_account_name) map[r.bill_account_id] = r.bill_account_name
+    }
+    return map
+  }, [rows])
+
   const filterDefs = React.useMemo<FilterDef[]>(
     () => [
       {
@@ -96,8 +109,9 @@ export default function BillingItemsListPage() {
       },
       {
         id: 'billAccountId',
-        label: t('billing.items.filters.account', 'Billing Account ID'),
+        label: t('billing.items.filters.account', 'Billing Account'),
         type: 'text',
+        formatValue: (id: string) => accountNames[id] ?? id,
       },
       {
         id: 'subscriptionId',
@@ -114,7 +128,7 @@ export default function BillingItemsListPage() {
         ],
       },
     ],
-    [t],
+    [t, accountNames],
   )
 
   const loadRows = React.useCallback(async () => {
@@ -157,6 +171,15 @@ export default function BillingItemsListPage() {
   const columns = React.useMemo<ColumnDef<BillingItemRow>[]>(
     () => [
       {
+        accessorKey: 'description',
+        header: t('billing.items.columns.description', 'Description'),
+        cell: ({ row }) => (
+          <span className="text-sm font-medium text-primary">
+            {row.original.description}
+          </span>
+        ),
+      },
+      {
         accessorKey: 'type',
         header: t('billing.items.columns.type', 'Type'),
         cell: ({ row }) => (
@@ -164,18 +187,15 @@ export default function BillingItemsListPage() {
         ),
       },
       {
-        accessorKey: 'description',
-        header: t('billing.items.columns.description', 'Description'),
-      },
-      {
         accessorKey: 'bill_account_id',
         header: t('billing.items.columns.account', 'Account'),
         cell: ({ row }) => (
           <Link
             href={`/backend/billing/accounts/${row.original.bill_account_id}`}
-            className="font-mono text-xs text-primary hover:underline"
+            className="text-sm text-primary hover:underline"
+            onClick={(e) => e.stopPropagation()}
           >
-            {row.original.bill_account_id.slice(0, 8)}…
+            {row.original.bill_account_name ?? row.original.bill_account_id}
           </Link>
         ),
       },
@@ -204,18 +224,6 @@ export default function BillingItemsListPage() {
             <Tag variant="default">{t('billing.common.inactive', 'Inactive')}</Tag>
           ),
       },
-      {
-        id: 'actions',
-        header: '',
-        cell: ({ row }) => (
-          <Link
-            href={`/backend/billing/items/${row.original.id}`}
-            className="text-sm font-medium text-primary hover:underline"
-          >
-            {t('billing.items.actions.open', 'Open')}
-          </Link>
-        ),
-      },
     ],
     [t],
   )
@@ -242,6 +250,7 @@ export default function BillingItemsListPage() {
           perspective={{ tableId: 'billing-items' }}
           columns={columns}
           data={rows}
+          onRowClick={(row) => router.push(`/backend/billing/items/${row.id}`)}
           isLoading={loading}
           pagination={{
             page,

@@ -1,8 +1,10 @@
 import { z } from 'zod'
+import type { EntityManager } from '@mikro-orm/postgresql'
+import type { AwilixContainer } from 'awilix'
 import { makeCrudRoute } from '@open-mercato/shared/lib/crud/factory'
 import { withScopedPayload } from '@open-mercato/shared/lib/api/scoped'
 import { resolveTranslations } from '@open-mercato/shared/lib/i18n/server'
-import { BillingItem } from '../../data/entities'
+import { BillingAccount, BillingItem } from '../../data/entities'
 import { billingEntityIds } from '../../data/entityIds'
 import {
   billingItemCreateSchema,
@@ -30,6 +32,7 @@ export const metadata = routeMetadata
 const billingItemListItemSchema = z.object({
   id: z.string().uuid(),
   bill_account_id: z.string().uuid(),
+  bill_account_name: z.string().nullable(),
   type: z.string(),
   bill_start_date: z.string(),
   bill_end_date: z.string().nullable(),
@@ -189,6 +192,32 @@ const crud = makeCrudRoute({
         }
       },
       response: () => ({ ok: true }),
+    },
+  },
+  hooks: {
+    // Items reference their account by FK id only; the list + detail UI
+    // wants the human-readable account name. One bounded query
+    // (≤ pageSize ids) resolves it after the page is fetched.
+    afterList: async (payload: unknown, ctx: unknown) => {
+      const items = ((payload as { items?: unknown[] } | null)?.items ?? []) as Array<
+        Record<string, unknown>
+      >
+      const accountIds = Array.from(
+        new Set(
+          items
+            .map((row) => row.bill_account_id)
+            .filter((v): v is string => typeof v === 'string' && v.length > 0),
+        ),
+      )
+      if (accountIds.length === 0) return
+      const em = (ctx as { container: AwilixContainer }).container.resolve<EntityManager>('em')
+      const accounts = await em.find(BillingAccount, { id: { $in: accountIds } })
+      const nameById = new Map(
+        accounts.map((a) => [String(a.id), a.name] as [string, unknown]),
+      )
+      for (const row of items) {
+        row.bill_account_name = nameById.get(String(row.bill_account_id)) ?? null
+      }
     },
   },
 })

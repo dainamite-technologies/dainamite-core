@@ -1,6 +1,7 @@
 "use client"
 import * as React from 'react'
 import Link from 'next/link'
+import { Pencil } from 'lucide-react'
 import { useParams, useRouter } from 'next/navigation'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { Page, PageBody, PageHeader } from '@open-mercato/ui/backend/Page'
@@ -20,15 +21,15 @@ import {
   type AssembledItemPayload,
   type ItemFormValues,
 } from '../../../../components/ItemForm'
+import { DetailCard, DetailField } from '../../../../components/DetailFields'
 
 /**
- * `/backend/billing/items/[id]` — Billing Item detail + edit.
+ * `/backend/billing/items/[id]` — Billing Item detail.
  *
- * Loads the item via the existing list endpoint (`?id=<id>`). Edits
- * go through `PUT /api/billing/items`. Soft-delete via `DELETE` with
- * a `ConfirmDialog` gate. The form is in `mode='edit'` — type is
- * hidden (immutable per spec), account / type / sourceRef are not
- * editable.
+ * Opens read-only (field grid). The `Edit` button swaps the grid for
+ * the `ItemForm`; Save / Cancel return to the read-only view. Loads
+ * via the list endpoint (`?id=<id>`), edits through `PUT`, soft-delete
+ * via `DELETE` with a `ConfirmDialog` gate.
  *
  * Two read-only badges at the top: `currencyMismatch` and
  * `billedToDate` (Bill Run engine-managed columns the operator
@@ -36,9 +37,11 @@ import {
  */
 
 // API list rows are snake_case (see `api/items/route.ts` `fields`).
+// `bill_account_name` is resolved by the route's `afterList` hook.
 type BillingItemRow = {
   id: string
   bill_account_id: string
+  bill_account_name: string | null
   type: 'one_time' | 'recurring' | 'usage'
   bill_start_date: string
   bill_end_date: string | null
@@ -56,6 +59,31 @@ type BillingItemRow = {
 }
 
 type ListResponse = { items: BillingItemRow[] }
+
+function formatDate(value: string | null | undefined): string {
+  if (!value) return '—'
+  const parsed = new Date(value)
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleDateString()
+}
+
+function formatRate(row: BillingItemRow): string {
+  const rate = (row.rate_json ?? {}) as Record<string, unknown>
+  if (row.type === 'one_time' && typeof rate.amount === 'number') {
+    return String(rate.amount)
+  }
+  if (row.type === 'recurring' && typeof rate.unit_price === 'number') {
+    return String(rate.unit_price)
+  }
+  if (row.type === 'usage') {
+    if ('model' in rate && 'tiers' in rate) {
+      return `tiered (${String(rate.model)})`
+    }
+    if (typeof rate.unit_price === 'number') {
+      return String(rate.unit_price)
+    }
+  }
+  return '—'
+}
 
 function toFormValues(row: BillingItemRow): Partial<ItemFormValues> {
   const rate = (row.rate_json ?? {}) as Record<string, unknown>
@@ -86,6 +114,74 @@ function toFormValues(row: BillingItemRow): Partial<ItemFormValues> {
   return out
 }
 
+// ─── Read-only view ──────────────────────────────────────────────
+
+function ItemView({ row }: { row: BillingItemRow }) {
+  const t = useT()
+  return (
+    <DetailCard>
+      <DetailField label={t('billing.items.detail.field.account', 'Account')}>
+        <Link
+          href={`/backend/billing/accounts/${row.bill_account_id}`}
+          className="text-primary hover:underline"
+        >
+          {row.bill_account_name ?? row.bill_account_id}
+        </Link>
+      </DetailField>
+      <DetailField label={t('billing.items.columns.type', 'Type')}>
+        <Tag variant="info">{row.type}</Tag>
+      </DetailField>
+      <DetailField label={t('billing.items.columns.start', 'Start')}>
+        {formatDate(row.bill_start_date)}
+      </DetailField>
+      <DetailField label={t('billing.items.columns.end', 'End')}>
+        {formatDate(row.bill_end_date)}
+      </DetailField>
+      <DetailField label={t('billing.items.form.rate.title', 'Rate')}>
+        {formatRate(row)}
+      </DetailField>
+      <DetailField label={t('billing.items.columns.uom', 'UoM')}>
+        {row.uom_code || '—'}
+      </DetailField>
+      <DetailField label={t('billing.items.form.subscription_id', 'Subscription ID')}>
+        {row.subscription_id || '—'}
+      </DetailField>
+      <DetailField
+        label={t('billing.items.form.subscription_item_id', 'Subscription item ID')}
+      >
+        {row.subscription_item_id || '—'}
+      </DetailField>
+      <DetailField label={t('billing.items.detail.field.source_ref', 'Source ref')}>
+        {row.source_ref ? (
+          <span className="font-mono text-xs">{row.source_ref}</span>
+        ) : (
+          '—'
+        )}
+      </DetailField>
+      <DetailField label={t('billing.items.detail.field.billed_to', 'Billed through')}>
+        {row.billed_to_date ? formatDate(row.billed_to_date) : '—'}
+      </DetailField>
+      {row.currency_mismatch ? (
+        <DetailField
+          label={t('billing.items.detail.currency_mismatch', 'Currency mismatch')}
+        >
+          <Tag variant="warning">{t('billing.common.yes', 'Yes')}</Tag>
+        </DetailField>
+      ) : null}
+      <DetailField label={t('billing.items.columns.status', 'Status')}>
+        {row.is_active ? (
+          <Tag variant="success">{t('billing.common.active', 'Active')}</Tag>
+        ) : (
+          <Tag variant="default">{t('billing.common.inactive', 'Inactive')}</Tag>
+        )}
+      </DetailField>
+      <DetailField label={t('billing.common.id', 'ID')}>
+        <span className="font-mono text-xs">{row.id}</span>
+      </DetailField>
+    </DetailCard>
+  )
+}
+
 export default function BillingItemDetailPage(props: { params?: { id?: string } }) {
   const t = useT()
   const router = useRouter()
@@ -97,6 +193,7 @@ export default function BillingItemDetailPage(props: { params?: { id?: string } 
   const [row, setRow] = React.useState<BillingItemRow | null>(null)
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState<string | null>(null)
+  const [editing, setEditing] = React.useState(false)
   const [saving, setSaving] = React.useState(false)
   const [deleting, setDeleting] = React.useState(false)
 
@@ -154,6 +251,7 @@ export default function BillingItemDetailPage(props: { params?: { id?: string } 
           body: JSON.stringify(payload),
         })
         flash(t('billing.items.detail.save.success', 'Item updated'), 'success')
+        setEditing(false)
         void load()
       } catch (err) {
         const { message } = normalizeCrudServerError(err)
@@ -221,64 +319,46 @@ export default function BillingItemDetailPage(props: { params?: { id?: string } 
         backHref="/backend/billing/items"
         entityTypeLabel={t('billing.items.detail.title', 'Billing Item')}
         title={row.description}
-        subtitle={row.id}
         statusBadge={
-          <div className="flex items-center gap-2 flex-wrap">
-            <Tag variant="info">{row.type}</Tag>
-            {row.currency_mismatch ? (
-              <Tag variant="warning">
-                {t('billing.items.detail.currency_mismatch', 'Currency mismatch')}
-              </Tag>
-            ) : null}
-            {row.billed_to_date ? (
-              <Tag variant="default">
-                {t('billing.items.detail.billed_to', 'Billed through {date}').replace(
-                  '{date}',
-                  row.billed_to_date.slice(0, 10),
-                )}
-              </Tag>
-            ) : null}
-            {row.source_ref ? (
-              <Tag variant="default">
-                {t('billing.items.detail.source_ref', 'source_ref: {ref}').replace(
-                  '{ref}',
-                  row.source_ref,
-                )}
-              </Tag>
-            ) : null}
-          </div>
+          row.is_active ? (
+            <Tag variant="success">{t('billing.common.active', 'Active')}</Tag>
+          ) : (
+            <Tag variant="default">{t('billing.common.inactive', 'Inactive')}</Tag>
+          )
         }
         actionsContent={
-          <Button
-            type="button"
-            variant="outline"
-            onClick={handleDelete}
-            disabled={deleting}
-          >
-            {deleting
-              ? t('billing.items.detail.delete.in_progress', 'Deleting…')
-              : t('billing.items.detail.delete.action', 'Soft delete')}
-          </Button>
+          <>
+            {!editing ? (
+              <Button type="button" onClick={() => setEditing(true)}>
+                <Pencil size={16} />
+                {t('billing.common.edit', 'Edit')}
+              </Button>
+            ) : null}
+            <Button
+              type="button"
+              variant="outline"
+              onClick={handleDelete}
+              disabled={deleting}
+            >
+              {deleting
+                ? t('billing.items.detail.delete.in_progress', 'Deleting…')
+                : t('billing.items.detail.delete.action', 'Soft delete')}
+            </Button>
+          </>
         }
       />
       <PageBody>
-        <div className="text-xs text-muted-foreground">
-          {t('billing.items.detail.field.account', 'Account')}:{' '}
-          <Link
-            href={`/backend/billing/accounts/${row.bill_account_id}`}
-            className="font-mono text-primary hover:underline"
-          >
-            {row.bill_account_id}
-          </Link>
-        </div>
-
-        <ItemForm
-          mode="edit"
-          initial={toFormValues(row)}
-          submitting={saving}
-          onSubmit={handleSubmit}
-          onCancel={() => router.push('/backend/billing/items')}
-        />
+        {editing ? (
+          <ItemForm
+            mode="edit"
+            initial={toFormValues(row)}
+            submitting={saving}
+            onSubmit={handleSubmit}
+            onCancel={() => setEditing(false)}
+          />
+        ) : (
+          <ItemView row={row} />
+        )}
         {ConfirmDialogElement}
       </PageBody>
     </Page>

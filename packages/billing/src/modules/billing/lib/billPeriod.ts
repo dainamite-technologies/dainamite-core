@@ -136,6 +136,34 @@ export function advanceNextBillDate(currentNextBillDate: Date, cycle: BillCycle)
 }
 
 /**
+ * The bill cycle that `target` falls into, given any known cycle
+ * boundary `anchor` (e.g. an account's `nextBillDate`). Returned
+ * `periodStart` is inclusive, `periodEnd` is the last day of the cycle.
+ *
+ * Used by the cpq-billing-connector to prorate a mid-cycle amendment —
+ * the connector owns the billing-cycle knowledge, CPQ does not.
+ */
+export function cycleContaining(
+  anchor: Date | string | number,
+  cycle: BillCycle,
+  target: Date | string | number,
+): BillPeriod {
+  const targetMs = cloneAtMidnight(target).getTime()
+  let start = cloneAtMidnight(anchor)
+  let guard = 0
+  // Walk forward while the cycle starting at `start` ends before target.
+  while (addCycle(start, cycle).getTime() <= targetMs && guard++ < 600) {
+    start = addCycle(start, cycle)
+  }
+  guard = 0
+  // Walk backward while `start` itself is after target.
+  while (start.getTime() > targetMs && guard++ < 600) {
+    start = subtractCycle(start, cycle)
+  }
+  return { periodStart: start, periodEnd: subtractDays(addCycle(start, cycle), 1) }
+}
+
+/**
  * True when the account still has cycles to bill on or before
  * `asOfDate`. The engine uses this to drive the catch-up loop.
  */

@@ -1,6 +1,7 @@
 import {
   advanceNextBillDate,
   cloneAtMidnight,
+  cycleContaining,
   deriveBillPeriod,
   isCycleDue,
 } from '../../lib/billPeriod'
@@ -103,5 +104,28 @@ describe('cloneAtMidnight', () => {
     const result = cloneAtMidnight(src)
     expect(result.toISOString()).toBe('2026-06-01T00:00:00.000Z')
     expect(src.toISOString()).toBe('2026-06-01T13:45:30.000Z')
+  })
+})
+
+describe('cycleContaining', () => {
+  it.each([
+    // anchor (a known boundary), cycle, target, expectedStart, expectedEnd
+    ['2026-06-01', 'monthly', '2026-05-15', '2026-05-01', '2026-05-31'],
+    ['2026-06-01', 'monthly', '2026-06-01', '2026-06-01', '2026-06-30'], // anchor = cycle start
+    ['2026-06-01', 'monthly', '2026-06-10', '2026-06-01', '2026-06-30'],
+    ['2026-06-01', 'monthly', '2026-07-15', '2026-07-01', '2026-07-31'], // walk forward
+    ['2026-06-01', 'monthly', '2026-02-15', '2026-02-01', '2026-02-28'], // walk backward
+    ['2026-05-04', 'weekly', '2026-05-06', '2026-05-04', '2026-05-10'],
+    ['2026-07-01', 'quarterly', '2026-05-20', '2026-04-01', '2026-06-30'],
+  ] as const)('%s %s containing %s → %s..%s', (anchor, cycle, target, start, end) => {
+    const period = cycleContaining(date(anchor), cycle, date(target))
+    expect(iso(period.periodStart)).toBe(start)
+    expect(iso(period.periodEnd)).toBe(end)
+  })
+
+  it('accepts YYYY-MM-DD strings for anchor and target', () => {
+    const period = cycleContaining('2026-06-01', 'monthly', '2026-05-15')
+    expect(iso(period.periodStart)).toBe('2026-05-01')
+    expect(iso(period.periodEnd)).toBe('2026-05-31')
   })
 })

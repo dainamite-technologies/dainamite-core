@@ -1,6 +1,7 @@
 "use client"
 import * as React from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { Plus } from 'lucide-react'
 import type { ColumnDef } from '@tanstack/react-table'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
@@ -49,6 +50,7 @@ function formatDate(value: string | null | undefined): string {
 
 export default function BillingAccountsListPage() {
   const t = useT()
+  const router = useRouter()
   const [rows, setRows] = React.useState<BillingAccountRow[]>([])
   const [page, setPage] = React.useState(1)
   const [pageSize] = React.useState(25)
@@ -127,6 +129,9 @@ export default function BillingAccountsListPage() {
       {
         accessorKey: 'name',
         header: t('billing.accounts.columns.name', 'Name'),
+        cell: ({ row }) => (
+          <span className="text-sm font-medium text-primary">{row.original.name}</span>
+        ),
       },
       {
         accessorKey: 'customer_id',
@@ -169,18 +174,6 @@ export default function BillingAccountsListPage() {
             <Tag variant="default">{t('billing.common.inactive', 'Inactive')}</Tag>
           ),
       },
-      {
-        id: 'actions',
-        header: '',
-        cell: ({ row }) => (
-          <Link
-            href={`/backend/billing/accounts/${row.original.id}`}
-            className="text-sm font-medium text-primary hover:underline"
-          >
-            {t('billing.accounts.actions.open', 'Open')}
-          </Link>
-        ),
-      },
     ],
     [t],
   )
@@ -207,6 +200,7 @@ export default function BillingAccountsListPage() {
           perspective={{ tableId: 'billing-accounts' }}
           columns={columns}
           data={rows}
+          onRowClick={(row) => router.push(`/backend/billing/accounts/${row.id}`)}
           isLoading={loading}
           pagination={{
             page,

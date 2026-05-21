@@ -1,6 +1,9 @@
 import { z } from 'zod'
+import type { EntityManager } from '@mikro-orm/postgresql'
+import type { AwilixContainer } from 'awilix'
+import { SalesInvoice } from '@open-mercato/core/modules/sales/data/entities'
 import { makeCrudRoute } from '@open-mercato/shared/lib/crud/factory'
-import { BillRunOutcome } from '../../data/entities'
+import { BillingAccount, BillRunOutcome } from '../../data/entities'
 import { billingEntityIds } from '../../data/entityIds'
 import {
   BILL_RUN_OUTCOME_STATUSES,
@@ -42,6 +45,8 @@ const billRunOutcomeListItemSchema = z.object({
   errorMessage: z.string().nullable(),
   warnings: z.record(z.string(), z.unknown()).nullable(),
   draftInvoiceId: z.string().uuid().nullable(),
+  bill_account_name: z.string().nullable(),
+  invoice_number: z.string().nullable(),
   organizationId: z.string().uuid(),
   tenantId: z.string().uuid(),
   createdAt: z.string(),
@@ -84,6 +89,52 @@ const crud = makeCrudRoute({
       }
       if (typeof query.status === 'string') filters.status = { $eq: query.status }
       return filters
+    },
+  },
+  hooks: {
+    // Outcomes reference account + draft invoice by FK id only. The
+    // run detail UI wants names — resolve both in two bounded queries.
+    afterList: async (payload: unknown, ctx: unknown) => {
+      const items = ((payload as { items?: unknown[] } | null)?.items ?? []) as Array<
+        Record<string, unknown>
+      >
+      if (items.length === 0) return
+      const em = (ctx as { container: AwilixContainer }).container.resolve<EntityManager>('em')
+      const accountIds = Array.from(
+        new Set(
+          items
+            .map((row) => row.bill_account_id)
+            .filter((v): v is string => typeof v === 'string' && v.length > 0),
+        ),
+      )
+      const invoiceIds = Array.from(
+        new Set(
+          items
+            .map((row) => row.draft_invoice_id)
+            .filter((v): v is string => typeof v === 'string' && v.length > 0),
+        ),
+      )
+      const [accounts, invoices] = await Promise.all([
+        accountIds.length
+          ? em.find(BillingAccount, { id: { $in: accountIds } })
+          : [],
+        invoiceIds.length
+          ? em.find(SalesInvoice, { id: { $in: invoiceIds } })
+          : [],
+      ])
+      const accountName = new Map(
+        accounts.map((a) => [String(a.id), a.name] as [string, unknown]),
+      )
+      const invoiceNumber = new Map(
+        invoices.map((i) => [String(i.id), i.invoiceNumber] as [string, unknown]),
+      )
+      for (const row of items) {
+        row.bill_account_name = accountName.get(String(row.bill_account_id)) ?? null
+        row.invoice_number =
+          typeof row.draft_invoice_id === 'string'
+            ? invoiceNumber.get(row.draft_invoice_id) ?? null
+            : null
+      }
     },
   },
 })

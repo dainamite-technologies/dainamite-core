@@ -1,5 +1,6 @@
 "use client"
 import * as React from 'react'
+import Link from 'next/link'
 import { useParams } from 'next/navigation'
 import type { ColumnDef } from '@tanstack/react-table'
 import { Pencil, Plus, Trash2 } from 'lucide-react'
@@ -19,6 +20,13 @@ import {
 } from '@open-mercato/ui/backend/utils/apiCall'
 import { normalizeCrudServerError } from '@open-mercato/ui/backend/utils/serverErrors'
 import { LineFormDialog, type LineFormValues } from '../../../../components/LineFormDialog'
+import {
+  DetailCard,
+  DetailField,
+  Stat,
+  StatCard,
+} from '../../../../components/DetailFields'
+import { billRunName } from '../../../../lib/billRunLabel'
 
 type BillingInvoice = {
   id: string
@@ -120,6 +128,10 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
 
   const [invoice, setInvoice] = React.useState<BillingInvoice | null>(null)
   const [lines, setLines] = React.useState<InvoiceLine[]>([])
+  // Bill Run + Billing Account are stored as FK ids in invoice metadata;
+  // resolve their human names so the detail card shows names, not UUIDs.
+  const [accountName, setAccountName] = React.useState<string | null>(null)
+  const [runName, setRunName] = React.useState<string | null>(null)
   const [error, setError] = React.useState<string | null>(null)
   const [loading, setLoading] = React.useState(true)
   const [posting, setPosting] = React.useState(false)
@@ -155,6 +167,30 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
   React.useEffect(() => {
     void load()
   }, [load])
+
+  // Resolve the FK names once the invoice is loaded (one bounded
+  // request each — Bill Run name is derived from its as-of date).
+  const billRunId = invoice?.metadata?.bill_run_id
+  const billAccountId = invoice?.metadata?.bill_account_id
+  React.useEffect(() => {
+    if (billAccountId) {
+      readApiResultOrThrow<{ items: Array<{ name: string }> }>(
+        `/api/billing/accounts?id=${billAccountId}&pageSize=1`,
+      )
+        .then((r) => setAccountName(r.items?.[0]?.name ?? null))
+        .catch(() => setAccountName(null))
+    }
+    if (billRunId) {
+      readApiResultOrThrow<{ items: Array<{ as_of_date: string }> }>(
+        `/api/billing/runs?id=${billRunId}&pageSize=1`,
+      )
+        .then((r) => {
+          const asOf = r.items?.[0]?.as_of_date
+          setRunName(asOf ? billRunName(asOf) : null)
+        })
+        .catch(() => setRunName(null))
+    }
+  }, [billAccountId, billRunId])
 
   const handlePost = React.useCallback(async () => {
     if (!invoice) return
@@ -424,7 +460,6 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
         backHref="/backend/billing/invoices"
         entityTypeLabel={t('billing.invoices.detail.title', 'Billing Invoice')}
         title={invoice.invoice_number}
-        subtitle={invoice.id}
         statusBadge={
           <div className="flex items-center gap-2 flex-wrap">
             <Tag variant={statusVariant(invoice.status)}>{invoice.status ?? '—'}</Tag>
@@ -455,85 +490,87 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
         }
       />
       <PageBody>
-        <div className="rounded-lg border border-border bg-card p-6">
-          <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
-            <dt className="text-muted-foreground">
-              {t('billing.invoices.detail.field.period', 'Bill period')}
-            </dt>
-            <dd>
+        <div className="space-y-6">
+          <DetailCard>
+            <DetailField label={t('billing.invoices.detail.field.period', 'Bill period')}>
               {invoice.metadata?.bill_period_start ?? '—'} →{' '}
               {invoice.metadata?.bill_period_end ?? '—'}
-            </dd>
-            <dt className="text-muted-foreground">
-              {t('billing.invoices.detail.field.bill_run', 'Bill Run')}
-            </dt>
-            <dd className="font-mono text-xs">{invoice.metadata?.bill_run_id ?? '—'}</dd>
-            <dt className="text-muted-foreground">
-              {t('billing.invoices.detail.field.account', 'Billing Account')}
-            </dt>
-            <dd className="font-mono text-xs">
-              {invoice.metadata?.bill_account_id ?? '—'}
-            </dd>
-            <dt className="text-muted-foreground">
-              {t('billing.invoices.detail.field.issued', 'Issued')}
-            </dt>
-            <dd>{invoice.issue_date?.slice(0, 10) ?? '—'}</dd>
-          </dl>
-          <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-            <div>
-              <div className="text-muted-foreground">
-                {t('billing.invoices.detail.subtotal', 'Subtotal net')}
-              </div>
-              <div className="text-lg font-semibold">
-                {formatMoney(invoice.subtotal_net_amount, invoice.currency_code)}
-              </div>
+            </DetailField>
+            <DetailField label={t('billing.invoices.detail.field.bill_run', 'Bill Run')}>
+              {invoice.metadata?.bill_run_id ? (
+                <Link
+                  href={`/backend/billing/runs/${invoice.metadata.bill_run_id}`}
+                  className="text-primary hover:underline"
+                >
+                  {runName ?? invoice.metadata.bill_run_id}
+                </Link>
+              ) : (
+                '—'
+              )}
+            </DetailField>
+            <DetailField
+              label={t('billing.invoices.detail.field.account', 'Billing Account')}
+            >
+              {invoice.metadata?.bill_account_id ? (
+                <Link
+                  href={`/backend/billing/accounts/${invoice.metadata.bill_account_id}`}
+                  className="text-primary hover:underline"
+                >
+                  {accountName ?? invoice.metadata.bill_account_id}
+                </Link>
+              ) : (
+                '—'
+              )}
+            </DetailField>
+            <DetailField label={t('billing.invoices.detail.field.issued', 'Issued')}>
+              {invoice.issue_date?.slice(0, 10) ?? '—'}
+            </DetailField>
+            <DetailField label={t('billing.common.id', 'ID')}>
+              <span className="font-mono text-xs">{invoice.id}</span>
+            </DetailField>
+          </DetailCard>
+
+          <StatCard>
+            <Stat
+              label={t('billing.invoices.detail.subtotal', 'Subtotal net')}
+              value={formatMoney(invoice.subtotal_net_amount, invoice.currency_code)}
+            />
+            <Stat
+              label={t('billing.invoices.detail.total', 'Grand total')}
+              value={formatMoney(invoice.grand_total_gross_amount, invoice.currency_code)}
+            />
+            <Stat
+              label={t('billing.invoices.detail.paid', 'Paid')}
+              value={formatMoney(invoice.paid_total_amount, invoice.currency_code)}
+            />
+            <Stat
+              label={t('billing.invoices.detail.outstanding', 'Outstanding')}
+              value={formatMoney(invoice.outstanding_amount, invoice.currency_code)}
+            />
+          </StatCard>
+
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <h2 className="text-base font-semibold">
+                {t('billing.invoices.lines.title', 'Lines')}
+              </h2>
+              {canEditLines ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    setDialogTargetLine(null)
+                    setDialogMode('add')
+                  }}
+                >
+                  <Plus size={16} />
+                  {t('billing.invoices.lines.add.action', 'Add line')}
+                </Button>
+              ) : null}
             </div>
-            <div>
-              <div className="text-muted-foreground">
-                {t('billing.invoices.detail.total', 'Grand total')}
-              </div>
-              <div className="text-lg font-semibold">
-                {formatMoney(invoice.grand_total_gross_amount, invoice.currency_code)}
-              </div>
-            </div>
-            <div>
-              <div className="text-muted-foreground">
-                {t('billing.invoices.detail.paid', 'Paid')}
-              </div>
-              <div className="text-lg font-semibold">
-                {formatMoney(invoice.paid_total_amount, invoice.currency_code)}
-              </div>
-            </div>
-            <div>
-              <div className="text-muted-foreground">
-                {t('billing.invoices.detail.outstanding', 'Outstanding')}
-              </div>
-              <div className="text-lg font-semibold">
-                {formatMoney(invoice.outstanding_amount, invoice.currency_code)}
-              </div>
-            </div>
+            <DataTable columns={lineColumns} data={lines} isLoading={false} />
           </div>
         </div>
-
-        <div className="flex items-center justify-between mb-2 mt-4">
-          <h2 className="text-base font-semibold">
-            {t('billing.invoices.lines.title', 'Lines')}
-          </h2>
-          {canEditLines ? (
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => {
-                setDialogTargetLine(null)
-                setDialogMode('add')
-              }}
-            >
-              <Plus size={16} />
-              {t('billing.invoices.lines.add.action', 'Add line')}
-            </Button>
-          ) : null}
-        </div>
-        <DataTable columns={lineColumns} data={lines} isLoading={false} />
 
         <LineFormDialog
           open={dialogMode !== null}

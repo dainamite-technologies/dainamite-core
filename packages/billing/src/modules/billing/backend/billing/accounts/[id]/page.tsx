@@ -1,11 +1,14 @@
 "use client"
 import * as React from 'react'
 import Link from 'next/link'
-import { Plus } from 'lucide-react'
+import { Pencil, Plus } from 'lucide-react'
 import { useParams, useRouter } from 'next/navigation'
+import type { ColumnDef } from '@tanstack/react-table'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { Page, PageBody, PageHeader } from '@open-mercato/ui/backend/Page'
 import { FormHeader } from '@open-mercato/ui/backend/forms'
+import { DataTable } from '@open-mercato/ui/backend/DataTable'
+import { Tag } from '@open-mercato/ui/primitives/tag'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { LoadingMessage, ErrorMessage } from '@open-mercato/ui/backend/detail'
 import { flash } from '@open-mercato/ui/backend/FlashMessages'
@@ -16,19 +19,19 @@ import {
 } from '@open-mercato/ui/backend/utils/apiCall'
 import { normalizeCrudServerError } from '@open-mercato/ui/backend/utils/serverErrors'
 import { AccountForm, type AccountFormValues } from '../../../../components/AccountForm'
+import { DetailCard, DetailField } from '../../../../components/DetailFields'
 
 /**
- * `/backend/billing/accounts/[id]` — Billing Account detail + edit.
+ * `/backend/billing/accounts/[id]` — Billing Account detail.
  *
- * Loads the account via `GET /api/billing/accounts?id=<id>` (filter
- * shortcut on the existing list endpoint — saves us a dedicated
- * `[id]` route on the billing-accounts surface). Edits go through
- * `PUT /api/billing/accounts`. Delete is a confirmed soft-delete via
- * `DELETE /api/billing/accounts`.
+ * Opens read-only (field grid + the account's items). The `Edit`
+ * button swaps the grid for the `AccountForm`; Save / Cancel return
+ * to the read-only view. Loads via `GET /api/billing/accounts?id=<id>`,
+ * edits through `PUT`, soft-delete through `DELETE`.
  *
  * `customerId` + `currencyCode` are immutable on update — the form
- * disables both in `mode='edit'` and the underlying schema also
- * rejects them per `billingAccountUpdateSchema`.
+ * disables both in `mode='edit'` and the schema rejects them per
+ * `billingAccountUpdateSchema`.
  */
 
 // API list rows are snake_case (see `api/accounts/route.ts` `fields`).
@@ -58,6 +61,21 @@ type AccountRow = {
 
 type ListResponse = { items: AccountRow[] }
 
+// Minimal item shape for the embedded "Items" table.
+type AccountItemRow = {
+  id: string
+  description: string
+  type: 'one_time' | 'recurring' | 'usage'
+  bill_start_date: string
+  is_active: boolean
+}
+
+function formatDate(value: string | null | undefined): string {
+  if (!value) return '—'
+  const parsed = new Date(value)
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleDateString()
+}
+
 function toFormValues(row: AccountRow): AccountFormValues {
   return {
     customerId: row.customer_id,
@@ -80,6 +98,151 @@ function toFormValues(row: AccountRow): AccountFormValues {
   }
 }
 
+// ─── Read-only view ──────────────────────────────────────────────
+
+function AccountView({ row }: { row: AccountRow }) {
+  const t = useT()
+  const addr = row.invoice_address
+  const addressText = addr
+    ? [
+        addr.line1,
+        addr.line2,
+        [addr.postal_code, addr.city].filter(Boolean).join(' '),
+        addr.country,
+      ]
+        .map((part) => (part ?? '').trim())
+        .filter(Boolean)
+        .join(', ')
+    : ''
+  return (
+    <DetailCard>
+      <DetailField label={t('billing.accounts.form.customer_id', 'Customer ID')}>
+        <span className="font-mono text-xs">{row.customer_id}</span>
+      </DetailField>
+      <DetailField label={t('billing.accounts.columns.currency', 'Currency')}>
+        {row.currency_code}
+      </DetailField>
+      <DetailField label={t('billing.accounts.columns.cycle', 'Cycle')}>
+        {row.bill_cycle}
+        <span className="text-muted-foreground"> · {row.bill_cycle_anchor}</span>
+      </DetailField>
+      <DetailField label={t('billing.accounts.columns.next_bill', 'Next bill')}>
+        {formatDate(row.next_bill_date)}
+      </DetailField>
+      <DetailField label={t('billing.accounts.columns.last_bill', 'Last bill')}>
+        {formatDate(row.last_bill_date)}
+      </DetailField>
+      <DetailField label={t('billing.accounts.form.invoice_email', 'Invoice email')}>
+        {row.invoice_email}
+      </DetailField>
+      <DetailField label={t('billing.accounts.form.invoice_language', 'Invoice language')}>
+        {row.invoice_language}
+      </DetailField>
+      <DetailField label={t('billing.accounts.form.tax_id', 'Tax ID')}>
+        {row.tax_id || '—'}
+      </DetailField>
+      <DetailField label={t('billing.common.id', 'ID')}>
+        <span className="font-mono text-xs">{row.id}</span>
+      </DetailField>
+      <DetailField
+        label={t('billing.accounts.form.address.title', 'Invoice address')}
+        fullWidth
+      >
+        {addressText || '—'}
+      </DetailField>
+    </DetailCard>
+  )
+}
+
+// ─── Embedded items table ────────────────────────────────────────
+
+function AccountItemsSection({ accountId }: { accountId: string }) {
+  const t = useT()
+  const router = useRouter()
+  const [rows, setRows] = React.useState<AccountItemRow[]>([])
+  const [page, setPage] = React.useState(1)
+  const [total, setTotal] = React.useState(0)
+  const [totalPages, setTotalPages] = React.useState(1)
+  const [loading, setLoading] = React.useState(true)
+  const pageSize = 25
+
+  const load = React.useCallback(async () => {
+    setLoading(true)
+    try {
+      const result = await readApiResultOrThrow<{
+        items: AccountItemRow[]
+        total: number
+        totalPages: number
+      }>(
+        `/api/billing/items?billAccountId=${accountId}&page=${page}` +
+          `&pageSize=${pageSize}&sortField=createdAt&sortDir=desc`,
+      )
+      setRows(result.items ?? [])
+      setTotal(result.total ?? 0)
+      setTotalPages(result.totalPages ?? 1)
+    } finally {
+      setLoading(false)
+    }
+  }, [accountId, page])
+
+  React.useEffect(() => {
+    void load()
+  }, [load])
+
+  const columns = React.useMemo<ColumnDef<AccountItemRow>[]>(
+    () => [
+      {
+        accessorKey: 'description',
+        header: t('billing.items.columns.description', 'Description'),
+        cell: ({ row }) => (
+          <span className="text-sm font-medium text-primary">
+            {row.original.description}
+          </span>
+        ),
+      },
+      {
+        accessorKey: 'type',
+        header: t('billing.items.columns.type', 'Type'),
+        cell: ({ row }) => <Tag variant="info">{row.original.type}</Tag>,
+      },
+      {
+        accessorKey: 'bill_start_date',
+        header: t('billing.items.columns.start', 'Start'),
+        cell: ({ row }) => formatDate(row.original.bill_start_date),
+      },
+      {
+        accessorKey: 'is_active',
+        header: t('billing.items.columns.status', 'Status'),
+        cell: ({ row }) =>
+          row.original.is_active ? (
+            <Tag variant="success">{t('billing.common.active', 'Active')}</Tag>
+          ) : (
+            <Tag variant="default">{t('billing.common.inactive', 'Inactive')}</Tag>
+          ),
+      },
+    ],
+    [t],
+  )
+
+  return (
+    <div className="mt-6">
+      <DataTable
+        title={t('billing.accounts.detail.items.title', 'Items')}
+        columns={columns}
+        data={rows}
+        isLoading={loading}
+        onRowClick={(row) => router.push(`/backend/billing/items/${row.id}`)}
+        pagination={{ page, pageSize, total, totalPages, onPageChange: setPage }}
+        emptyState={
+          <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
+            {t('billing.accounts.detail.items.empty', 'No items for this account yet.')}
+          </div>
+        }
+      />
+    </div>
+  )
+}
+
 export default function BillingAccountDetailPage(props: { params?: { id?: string } }) {
   const t = useT()
   const router = useRouter()
@@ -91,6 +254,7 @@ export default function BillingAccountDetailPage(props: { params?: { id?: string
   const [row, setRow] = React.useState<AccountRow | null>(null)
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState<string | null>(null)
+  const [editing, setEditing] = React.useState(false)
   const [saving, setSaving] = React.useState(false)
   const [deleting, setDeleting] = React.useState(false)
 
@@ -154,6 +318,7 @@ export default function BillingAccountDetailPage(props: { params?: { id?: string
           body: JSON.stringify(payload),
         })
         flash(t('billing.accounts.detail.save.success', 'Account updated'), 'success')
+        setEditing(false)
         void load()
       } catch (err) {
         const { message } = normalizeCrudServerError(err)
@@ -224,20 +389,27 @@ export default function BillingAccountDetailPage(props: { params?: { id?: string
         backHref="/backend/billing/accounts"
         entityTypeLabel={t('billing.accounts.detail.title', 'Billing Account')}
         title={row.name}
-        subtitle={row.id}
+        statusBadge={
+          row.is_active ? (
+            <Tag variant="success">{t('billing.common.active', 'Active')}</Tag>
+          ) : (
+            <Tag variant="default">{t('billing.common.inactive', 'Inactive')}</Tag>
+          )
+        }
         actionsContent={
           <>
             <Button asChild variant="outline">
-              <Link href={`/backend/billing/items?billAccountId=${row.id}`}>
-                {t('billing.accounts.detail.view_items', 'View items')}
-              </Link>
-            </Button>
-            <Button asChild>
               <Link href={`/backend/billing/items/create?billAccountId=${row.id}`}>
                 <Plus size={16} />
                 {t('billing.accounts.detail.add_item', 'Add item')}
               </Link>
             </Button>
+            {!editing ? (
+              <Button type="button" onClick={() => setEditing(true)}>
+                <Pencil size={16} />
+                {t('billing.common.edit', 'Edit')}
+              </Button>
+            ) : null}
             <Button
               type="button"
               variant="outline"
@@ -252,13 +424,18 @@ export default function BillingAccountDetailPage(props: { params?: { id?: string
         }
       />
       <PageBody>
-        <AccountForm
-          mode="edit"
-          initial={toFormValues(row)}
-          submitting={saving}
-          onSubmit={handleSubmit}
-          onCancel={() => router.push('/backend/billing/accounts')}
-        />
+        {editing ? (
+          <AccountForm
+            mode="edit"
+            initial={toFormValues(row)}
+            submitting={saving}
+            onSubmit={handleSubmit}
+            onCancel={() => setEditing(false)}
+          />
+        ) : (
+          <AccountView row={row} />
+        )}
+        <AccountItemsSection accountId={row.id} />
         {ConfirmDialogElement}
       </PageBody>
     </Page>

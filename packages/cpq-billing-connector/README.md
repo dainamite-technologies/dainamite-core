@@ -18,7 +18,7 @@ to the billing API contract:
 
 | CPQ event | Connector action |
 |---|---|
-| `cpq.subscription.activated` *(NEW — upstream PR pending)* | Create Billing Account if missing; create Billing Items per charge (one-time + recurring split) |
+| `cpq.subscription.activated` | Create Billing Account if missing; create Billing Items per charge (one-time + recurring split) |
 | `cpq.subscription.amended` | Create new Billing Items for added subscription items; compute proration value for the partial cycle and post as `one_time` Billing Item; set `bill_end_date` on removed items |
 | `cpq.subscription.renewed` | Extend `bill_end_date` on existing Billing Items; create new Items for any added subscription items |
 | `cpq.subscription.cancelled` | Set `bill_end_date` on all Billing Items for the subscription |
@@ -27,11 +27,12 @@ to the billing API contract:
 
 ## Status
 
-**Phase 5 — initial release.** Subscribers cover the 5 CPQ events that
-exist today; the `cpq.subscription.activated` subscriber is in place but
-will only start firing after the upstream CPQ PR adds the event. Proration
-math lives in this package per the spec (CPQ stays neutral on billing
-calendar semantics).
+All six subscribers are wired end-to-end — `@dainamite/cpq` emits the
+matching events (`cpq.subscription.activated` on new-sale activation,
+the ARC events on amend / renew / cancel / merge). Proration math lives
+in this package: the `amended` subscriber derives the bill cycle from
+the billing account via billing's `cycleContaining` (CPQ stays neutral
+on billing-calendar semantics).
 
 See [`specs/implementation/xd-249-billing-spec.md`](../../specs/implementation/xd-249-billing-spec.md)
 § CPQ Integration for the full design.

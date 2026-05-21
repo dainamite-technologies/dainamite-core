@@ -10,7 +10,7 @@ export const metadata = {
   pageTitleKey: 'billing.invoices.title',
   pageGroup: 'Billing',
   pageGroupKey: 'billing.nav.group',
-  pageOrder: 30,
+  pageOrder: 40,
   icon: invoicesIcon,
   breadcrumb: [{ label: 'Billing Invoices', labelKey: 'billing.invoices.title' }],
 } as const

@@ -1,4 +1,6 @@
 import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
+import { cycleContaining } from '@dainamite/billing/modules/billing/lib/billPeriod'
+import type { BillCycle } from '@dainamite/billing/modules/billing/data/validators'
 import { BillingApiClient, type Scope } from '../lib/billingApiClient'
 import {
   mapSubscriptionItemsToBillingItems,
@@ -12,44 +14,24 @@ import {
 /**
  * Subscriber: `cpq.subscription.amended` → mid-cycle add / remove.
  *
- * Per the spec's CPQ-side payload contract, the amended event carries:
- *   - `addedItems` — same shape as activation items (charges arrays).
- *   - `removedSubscriptionItemIds` — items being cancelled mid-cycle.
- *   - `proration` — `{ daysInPeriod, daysRemaining, cycleStart, cycleEnd }`
- *     covering the cycle the amend lands in.
- *
- * Connector behaviour:
- *   1. For each added item: create the matching recurring + one-time
- *      Billing Items. The recurring items start on `effectiveDate`
- *      (mid-cycle — the engine's recurring selector will skip the
- *      current cycle and bill from the next full cycle onward).
- *   2. For each added RECURRING charge: post a separate `one_time`
- *      Billing Item carrying the prorated value for the partial
- *      current cycle, so the customer pays for the mid-cycle slice.
- *      Description matches spec example: "Proration: <product> from
- *      <effectiveDate> to <cycleEnd>".
- *   3. For each removed subscription_item_id: find every existing
- *      Billing Item for that subscription item and set
- *      `bill_end_date = effectiveDate - 1 day` so the engine stops
- *      including it next cycle.
- *
- * Mid-cycle credit on removal (per spec) is the integrator's
- * responsibility — the connector posts the bill_end_date so future
- * cycles drop, but the customer-credit one_time line lives in the
- * CPQ amend math, not here.
+ * CPQ's amended event carries `addedItems`, `removedSubscriptionItemIds`
+ * and the `effectiveDate` of the amendment. The connector:
+ *   1. Creates a Billing Item for every added charge — recurring items
+ *      start on `effectiveDate`; the engine's mid-cycle rule skips the
+ *      current cycle and bills from the next full cycle.
+ *   2. For every added RECURRING charge, posts a `one_time` proration
+ *      line covering the partial current cycle. The billing cycle is
+ *      derived HERE (not in CPQ) — proration is a billing concept, so
+ *      the connector computes it from the account's `nextBillDate` +
+ *      `billCycle` via billing's `cycleContaining`.
+ *   3. End-dates every Billing Item of each removed subscription item
+ *      at `effectiveDate - 1 day`.
  */
 
 export const metadata = {
   event: 'cpq.subscription.amended',
   persistent: true,
   id: 'cpq-billing-connector:subscription-amended',
-}
-
-type ProrationInfo = {
-  daysInPeriod: number
-  daysRemaining: number
-  cycleStart: string
-  cycleEnd: string
 }
 
 type AmendedPayload = {
@@ -59,9 +41,24 @@ type AmendedPayload = {
   customerId: string
   /** YYYY-MM-DD; the date the amend takes effect mid-cycle. */
   effectiveDate: string
-  addedItems: CpqSubscriptionItem[]
-  removedSubscriptionItemIds: string[]
-  proration: ProrationInfo
+  addedItems?: CpqSubscriptionItem[]
+  removedSubscriptionItemIds?: string[]
+}
+
+const DAY_MS = 86_400_000
+
+function toMidnightMs(value: Date | string): number {
+  const d =
+    value instanceof Date
+      ? new Date(value.getTime())
+      : new Date(`${value}T00:00:00.000Z`)
+  d.setUTCHours(0, 0, 0, 0)
+  return d.getTime()
+}
+
+/** Inclusive day count from `from` through `to`. */
+function inclusiveDays(from: Date | string, to: Date | string): number {
+  return Math.round((toMidnightMs(to) - toMidnightMs(from)) / DAY_MS) + 1
 }
 
 function isoDateMinusOneDay(iso: string): string {
@@ -74,6 +71,10 @@ export default async function handle(payload: AmendedPayload): Promise<void> {
   if (!payload?.tenantId || !payload.organizationId) return
   if (!payload.subscriptionId || !payload.effectiveDate) return
 
+  const added = payload.addedItems ?? []
+  const removed = payload.removedSubscriptionItemIds ?? []
+  if (added.length === 0 && removed.length === 0) return
+
   const container = await createRequestContainer()
   const billingApi = new BillingApiClient(container)
   const scope: Scope = {
@@ -81,33 +82,18 @@ export default async function handle(payload: AmendedPayload): Promise<void> {
     organizationId: payload.organizationId,
   }
 
-  // The connector trusts the subscription already has an account
-  // (activation ran first). If it doesn't, finding 0 items below
-  // surfaces the problem indirectly; addedItems will still attempt
-  // to create which will 404 on billAccountId — the queue retries
-  // until the account exists.
-  const existingItems = await billingApi.findItemsBySubscription(scope, payload.subscriptionId)
-  if (existingItems.length === 0 && Array.isArray(payload.addedItems) && payload.addedItems.length === 0) {
-    // No state to amend.
-    return
-  }
-  const accountId =
-    existingItems[0]?.billAccountId ??
-    (await billingApi.findAccountByCustomer(scope, payload.customerId))?.id ??
-    null
-  if (!accountId) return
+  // Activation runs first and creates the account. If it's missing,
+  // there is nothing to amend — the queue will have retried activation.
+  const account = await billingApi.findAccountByCustomer(scope, payload.customerId)
+  if (!account) return
 
-  // 1 + 2. Collect new items AND proration one-time lines into a
-  // single bulk-create call. The proration line for each added
-  // recurring charge covers the partial current cycle (the new
-  // recurring item itself is skipped by the engine's mid-cycle rule
-  // until the next full cycle).
+  // 1. New Billing Items for every added charge.
   const itemsToCreate = mapSubscriptionItemsToBillingItems({
     subscriptionId: payload.subscriptionId,
-    items: payload.addedItems ?? [],
+    items: added,
     billStartDate: payload.effectiveDate,
   }).map((item) => ({
-    billAccountId: accountId,
+    billAccountId: account.id,
     type: item.type,
     billStartDate: item.billStartDate,
     description: item.description,
@@ -117,39 +103,53 @@ export default async function handle(payload: AmendedPayload): Promise<void> {
     sourceRef: item.sourceRef,
   }))
 
-  for (const addedItem of payload.addedItems ?? []) {
-    for (const charge of addedItem.charges) {
-      if (charge.type !== 'recurring' || typeof charge.unitPrice !== 'number') continue
-      const { amount } = computeProration({
-        unitPrice: charge.unitPrice,
-        quantity: addedItem.quantity,
-        daysInPeriod: payload.proration.daysInPeriod,
-        daysRemaining: payload.proration.daysRemaining,
-      })
-      if (amount === 0) continue
-      const description = formatProrationDescription({
-        productName: addedItem.productName,
-        effectiveDate: payload.effectiveDate,
-        cycleEnd: payload.proration.cycleEnd,
-      })
-      itemsToCreate.push({
-        billAccountId: accountId,
-        type: 'one_time',
-        billStartDate: payload.effectiveDate,
-        description,
-        rateJson: { amount },
-        subscriptionId: payload.subscriptionId,
-        subscriptionItemId: addedItem.subscriptionItemId,
-        sourceRef: `cpq-${payload.subscriptionId}-${addedItem.subscriptionItemId}-proration-${payload.effectiveDate}`,
-      })
+  // 2. Mid-cycle proration. The billing cycle the amend lands in is
+  // derived from the account here — CPQ does not own the billing cycle.
+  if (added.length > 0) {
+    const period = cycleContaining(
+      account.nextBillDate,
+      account.billCycle as BillCycle,
+      payload.effectiveDate,
+    )
+    const cycleEnd = period.periodEnd.toISOString().slice(0, 10)
+    const daysInPeriod = inclusiveDays(period.periodStart, period.periodEnd)
+    const daysRemaining = inclusiveDays(payload.effectiveDate, period.periodEnd)
+
+    for (const addedItem of added) {
+      for (const charge of addedItem.charges) {
+        if (charge.type !== 'recurring' || typeof charge.unitPrice !== 'number') {
+          continue
+        }
+        const { amount } = computeProration({
+          unitPrice: charge.unitPrice,
+          quantity: addedItem.quantity,
+          daysInPeriod,
+          daysRemaining,
+        })
+        if (amount === 0) continue
+        itemsToCreate.push({
+          billAccountId: account.id,
+          type: 'one_time',
+          billStartDate: payload.effectiveDate,
+          description: formatProrationDescription({
+            productName: addedItem.productName,
+            effectiveDate: payload.effectiveDate,
+            cycleEnd,
+          }),
+          rateJson: { amount },
+          subscriptionId: payload.subscriptionId,
+          subscriptionItemId: addedItem.subscriptionItemId,
+          sourceRef: `cpq-${payload.subscriptionId}-${addedItem.subscriptionItemId}-proration-${payload.effectiveDate}`,
+        })
+      }
     }
   }
 
   await billingApi.bulkCreateItems(scope, itemsToCreate)
 
-  // 3. End-date removed items.
+  // 3. End-date every Billing Item of each removed subscription item.
   const endDate = isoDateMinusOneDay(payload.effectiveDate)
-  for (const removedSubItemId of payload.removedSubscriptionItemIds ?? []) {
+  for (const removedSubItemId of removed) {
     const items = await billingApi.findItemsBySubscriptionItem(scope, removedSubItemId)
     for (const item of items) {
       await billingApi.updateItem(scope, {

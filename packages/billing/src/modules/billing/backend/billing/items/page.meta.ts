@@ -10,7 +10,7 @@ export const metadata = {
   pageTitleKey: 'billing.items.title',
   pageGroup: 'Billing',
   pageGroupKey: 'billing.nav.group',
-  pageOrder: 25,
+  pageOrder: 20,
   icon: itemsIcon,
   breadcrumb: [{ label: 'Billing Items', labelKey: 'billing.items.title' }],
 } as const

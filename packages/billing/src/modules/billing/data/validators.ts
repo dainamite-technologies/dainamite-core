@@ -221,7 +221,10 @@ export const billingAccountCreateSchema = scopedSchema.extend({
   billCycleAnchor: billCycleAnchorSchema,
   invoiceEmail: z.string().trim().email().max(320),
   invoiceLanguage: z.string().trim().toLowerCase().min(2).max(5),
-  taxId: z.string().trim().max(64).optional(),
+  // Nullable + optional — consistent with the update schema, and the
+  // cpq-billing-connector's shell-account seed sends `taxId: null`
+  // for customers with no tax id.
+  taxId: z.string().trim().max(64).nullable().optional(),
   invoiceAddress: invoiceAddressSchema,
   nextBillDate: z.coerce.date(),
   lastBillDate: z.coerce.date().optional(),

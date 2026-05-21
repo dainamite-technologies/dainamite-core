@@ -6,10 +6,8 @@ import type { CpqSubscriptionItem } from '../lib/chargeMapper'
 /**
  * Subscriber: `cpq.subscription.activated` → billing onboarding.
  *
- * **Status:** the event itself does not yet exist in the upstream
- * `@dainamite/cpq` events list — it's the one new event the Phase 5
- * upstream PR adds. Registering the subscriber today is a no-op
- * until that PR lands; nothing breaks.
+ * `@dainamite/cpq` emits this event when a new-sale order is activated
+ * (`cpqOrderService.activateOrder`).
  *
  * Behaviour when fired:
  *   1. Get-or-create the Billing Account for `(tenant, org, customerId)`.

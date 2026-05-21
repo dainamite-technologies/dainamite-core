@@ -1,6 +1,6 @@
 "use client"
 import * as React from 'react'
-import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import type { ColumnDef } from '@tanstack/react-table'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
@@ -8,6 +8,7 @@ import { Page, PageBody } from '@open-mercato/ui/backend/Page'
 import { DataTable } from '@open-mercato/ui/backend/DataTable'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
+import { billRunName } from '../../../lib/billRunLabel'
 
 /**
  * Bill Runs admin list page.
@@ -86,6 +87,7 @@ function modeBadge(row: BillRunRow): { label: string; variant: 'default' | 'warn
 
 export default function BillRunsListPage() {
   const t = useT()
+  const router = useRouter()
   const [rows, setRows] = React.useState<BillRunRow[]>([])
   const [page, setPage] = React.useState(1)
   const [pageSize] = React.useState(25)
@@ -158,6 +160,15 @@ export default function BillRunsListPage() {
   const columns = React.useMemo<ColumnDef<BillRunRow>[]>(
     () => [
       {
+        id: 'name',
+        header: t('billing.runs.columns.name', 'Bill Run'),
+        cell: ({ row }) => (
+          <span className="text-sm font-medium text-primary">
+            {billRunName(row.original.as_of_date)}
+          </span>
+        ),
+      },
+      {
         accessorKey: 'status',
         header: t('billing.runs.columns.status', 'Status'),
         cell: ({ row }) => {
@@ -210,18 +221,6 @@ export default function BillRunsListPage() {
         header: t('billing.runs.columns.finished_at', 'Finished'),
         cell: ({ row }) => formatDate(row.original.finished_at),
       },
-      {
-        id: 'actions',
-        header: '',
-        cell: ({ row }) => (
-          <Link
-            href={`/backend/billing/runs/${row.original.id}`}
-            className="text-sm font-medium text-primary hover:underline"
-          >
-            {t('billing.runs.actions.open', 'Open')}
-          </Link>
-        ),
-      },
     ],
     [t],
   )
@@ -240,6 +239,7 @@ export default function BillRunsListPage() {
           perspective={{ tableId: 'billing-runs' }}
           columns={columns}
           data={rows}
+          onRowClick={(row) => router.push(`/backend/billing/runs/${row.id}`)}
           isLoading={loading}
           pagination={{
             page,

@@ -89,8 +89,14 @@ test.describe('TC-BILL-003: Billing admin UI (accounts)', () => {
     await expect(
       page.getByRole('heading', { level: 1, name: accountName }),
     ).toBeVisible({ timeout: 15_000 })
-    // The edit form rendered with the loaded record (not stuck on the
-    // loading state) — proving the detail read path works end to end.
+    // Detail page opens read-only with an Edit gate (commit 4dbb61a):
+    // the Edit button is the proof that the detail read path resolved
+    // a record (not stuck on Loading / Account not found).
+    const editButton = page.getByRole('button', { name: /^Edit$/i })
+    await expect(editButton).toBeVisible({ timeout: 15_000 })
+    // Click into edit mode → Save changes appears, confirming the form
+    // hydrated with the loaded record.
+    await editButton.click()
     await expect(
       page.getByRole('button', { name: /Save changes/i }),
     ).toBeVisible({ timeout: 15_000 })

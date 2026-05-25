@@ -142,7 +142,8 @@ const crud = makeCrudRoute({
     // whether the row actually exists vs the QE is filtering it out.
     afterList: async (payload: unknown, ctx: unknown) => {
       try {
-        const items = (payload as { items?: unknown[] } | null)?.items ?? []
+        const items = (payload as { items?: unknown[]; total?: number } | null)?.items ?? []
+        const total = (payload as { total?: number } | null)?.total
         const ctxAny = ctx as {
           auth?: { tenantId?: unknown; orgId?: unknown }
           selectedOrganizationId?: unknown
@@ -151,20 +152,30 @@ const crud = makeCrudRoute({
         }
         const queriedId = typeof ctxAny.query?.id === 'string' ? ctxAny.query.id : null
         let dbCount = -1
+        let scopedDbCount = -1
         if (queriedId) {
           const em = ctxAny.container.resolve('em') as {
             getConnection: () => { execute: (sql: string, params?: unknown[]) => Promise<unknown[]> }
           }
-          const rows = (await em.getConnection().execute(
+          const conn = em.getConnection()
+          const rows = (await conn.execute(
             "SELECT id, tenant_id::text AS tenant_id, organization_id::text AS organization_id, deleted_at FROM billing_accounts WHERE id = ?",
             [queriedId],
           )) as Array<Record<string, unknown>>
           dbCount = rows.length
+          // Try the exact filter the QE *should* be producing:
+          const scopedRows = (await conn.execute(
+            "SELECT id FROM billing_accounts WHERE id = ? AND tenant_id = ? AND organization_id = ? AND deleted_at IS NULL",
+            [queriedId, ctxAny.auth?.tenantId, ctxAny.auth?.orgId],
+          )) as Array<Record<string, unknown>>
+          scopedDbCount = scopedRows.length
           // eslint-disable-next-line no-console
           console.warn('[billing.accounts.afterList DEBUG]', JSON.stringify({
             queriedId,
             qeItemsCount: items.length,
+            qeTotal: total,
             dbCount,
+            scopedDbCount,
             dbRows: rows,
             ctxAuth: { tenantId: ctxAny.auth?.tenantId, orgId: ctxAny.auth?.orgId },
             selectedOrganizationId: ctxAny.selectedOrganizationId,

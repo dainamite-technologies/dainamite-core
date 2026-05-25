@@ -151,36 +151,62 @@ const crud = makeCrudRoute({
           container: { resolve: (name: string) => unknown }
         }
         const queriedId = typeof ctxAny.query?.id === 'string' ? ctxAny.query.id : null
-        let dbCount = -1
-        let scopedDbCount = -1
-        if (queriedId) {
-          const em = ctxAny.container.resolve('em') as {
-            getConnection: () => { execute: (sql: string, params?: unknown[]) => Promise<unknown[]> }
-          }
-          const conn = em.getConnection()
-          const rows = (await conn.execute(
-            "SELECT id, tenant_id::text AS tenant_id, organization_id::text AS organization_id, deleted_at FROM billing_accounts WHERE id = ?",
-            [queriedId],
-          )) as Array<Record<string, unknown>>
-          dbCount = rows.length
-          // Try the exact filter the QE *should* be producing:
-          const scopedRows = (await conn.execute(
-            "SELECT id FROM billing_accounts WHERE id = ? AND tenant_id = ? AND organization_id = ? AND deleted_at IS NULL",
-            [queriedId, ctxAny.auth?.tenantId, ctxAny.auth?.orgId],
-          )) as Array<Record<string, unknown>>
-          scopedDbCount = scopedRows.length
-          // eslint-disable-next-line no-console
-          console.warn('[billing.accounts.afterList DEBUG]', JSON.stringify({
-            queriedId,
-            qeItemsCount: items.length,
-            qeTotal: total,
-            dbCount,
-            scopedDbCount,
-            dbRows: rows,
-            ctxAuth: { tenantId: ctxAny.auth?.tenantId, orgId: ctxAny.auth?.orgId },
-            selectedOrganizationId: ctxAny.selectedOrganizationId,
-          }))
+        if (!queriedId) return
+
+        const em = ctxAny.container.resolve('em') as {
+          getConnection: () => { execute: (sql: string, params?: unknown[]) => Promise<unknown[]> }
         }
+        const conn = em.getConnection()
+        const rows = (await conn.execute(
+          "SELECT id, tenant_id::text AS tenant_id, organization_id::text AS organization_id, deleted_at FROM billing_accounts WHERE id = ?",
+          [queriedId],
+        )) as Array<Record<string, unknown>>
+        const dbCount = rows.length
+        const scopedRows = (await conn.execute(
+          "SELECT id FROM billing_accounts WHERE id = ? AND tenant_id = ? AND organization_id = ? AND deleted_at IS NULL",
+          [queriedId, ctxAny.auth?.tenantId, ctxAny.auth?.orgId],
+        )) as Array<Record<string, unknown>>
+        const scopedDbCount = scopedRows.length
+
+        // Cross-check: ask the QE directly with the same params the
+        // route should be passing. If THIS also returns 0 with row
+        // present in DB, the bug is reproducible from any caller — not
+        // factory-specific.
+        let qeDirectCount: number | string = 'skip'
+        let qeDirectErr: string | null = null
+        try {
+          const qe = ctxAny.container.resolve('queryEngine') as {
+            query: (
+              entity: string,
+              opts: Record<string, unknown>,
+            ) => Promise<{ items: unknown[]; total: number }>
+          }
+          const direct = await qe.query('billing:billing_account', {
+            tenantId: ctxAny.auth?.tenantId,
+            organizationId: ctxAny.auth?.orgId,
+            organizationIds: ctxAny.auth?.orgId ? [ctxAny.auth.orgId] : undefined,
+            filters: { id: { $eq: queriedId } },
+            fields: ['id', 'tenant_id', 'organization_id', 'deleted_at'],
+            page: { page: 1, pageSize: 5 },
+          })
+          qeDirectCount = direct.items.length
+        } catch (err) {
+          qeDirectErr = err instanceof Error ? err.message : String(err)
+        }
+
+        // eslint-disable-next-line no-console
+        console.warn('[billing.accounts.afterList DEBUG]', JSON.stringify({
+          queriedId,
+          qeItemsCount: items.length,
+          qeTotal: total,
+          qeDirectCount,
+          qeDirectErr,
+          dbCount,
+          scopedDbCount,
+          dbRows: rows,
+          ctxAuth: { tenantId: ctxAny.auth?.tenantId, orgId: ctxAny.auth?.orgId },
+          selectedOrganizationId: ctxAny.selectedOrganizationId,
+        }))
       } catch (err) {
         // eslint-disable-next-line no-console
         console.warn('[billing.accounts.afterList DEBUG] error', err instanceof Error ? err.message : err)

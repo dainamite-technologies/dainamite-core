@@ -194,6 +194,22 @@ const crud = makeCrudRoute({
           qeDirectErr = err instanceof Error ? err.message : String(err)
         }
 
+        // Also check what information_schema thinks about billing_accounts columns
+        // — the QE gates scope filters on columnExists() and might be reading
+        // a wrong table name.
+        let infoSchemaColumns: string[] = []
+        let infoSchemaTables: string[] = []
+        try {
+          const cols = (await conn.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_name = 'billing_accounts' ORDER BY column_name",
+          )) as Array<{ column_name: string }>
+          infoSchemaColumns = cols.map((c) => c.column_name)
+          const tables = (await conn.execute(
+            "SELECT table_name FROM information_schema.tables WHERE table_name LIKE 'billing%' ORDER BY table_name",
+          )) as Array<{ table_name: string }>
+          infoSchemaTables = tables.map((t) => t.table_name)
+        } catch {}
+
         // eslint-disable-next-line no-console
         console.warn('[billing.accounts.afterList DEBUG]', JSON.stringify({
           queriedId,
@@ -206,6 +222,8 @@ const crud = makeCrudRoute({
           dbRows: rows,
           ctxAuth: { tenantId: ctxAny.auth?.tenantId, orgId: ctxAny.auth?.orgId },
           selectedOrganizationId: ctxAny.selectedOrganizationId,
+          infoSchemaColumns,
+          infoSchemaTables,
         }))
       } catch (err) {
         // eslint-disable-next-line no-console

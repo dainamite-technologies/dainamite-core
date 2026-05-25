@@ -91,7 +91,27 @@ const crud = makeCrudRoute({
       updatedAt: 'updated_at',
       nextBillDate: 'next_bill_date',
     },
-    buildFilters: async (query) => {
+    buildFilters: async (query, ctx) => {
+      // TEMP DEBUG (XD-254): print auth/scope to understand why CI returns
+      // empty list while local prod returns the row. Remove once root
+      // cause is fixed.
+      try {
+        // eslint-disable-next-line no-console
+        console.warn(
+          '[billing.accounts.buildFilters DEBUG]',
+          JSON.stringify({
+            query,
+            auth: {
+              tenantId: (ctx as { auth?: { tenantId?: unknown } } | undefined)?.auth?.tenantId,
+              orgId: (ctx as { auth?: { orgId?: unknown } } | undefined)?.auth?.orgId,
+              sub: (ctx as { auth?: { sub?: unknown } } | undefined)?.auth?.sub,
+            },
+            selectedOrganizationId: (ctx as { selectedOrganizationId?: unknown } | undefined)
+              ?.selectedOrganizationId,
+            organizationIds: (ctx as { organizationIds?: unknown } | undefined)?.organizationIds,
+          }),
+        )
+      } catch {}
       const filters: Record<string, unknown> = {}
       // `?id=<uuid>` narrows the list to one row — the detail page
       // reads a single account through this filter.

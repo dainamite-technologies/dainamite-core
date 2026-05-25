@@ -137,6 +137,45 @@ const crud = makeCrudRoute({
       return filters
     },
   },
+  hooks: {
+    // TEMP DEBUG (XD-254): also probe the DB directly so we can see
+    // whether the row actually exists vs the QE is filtering it out.
+    afterList: async (payload: unknown, ctx: unknown) => {
+      try {
+        const items = (payload as { items?: unknown[] } | null)?.items ?? []
+        const ctxAny = ctx as {
+          auth?: { tenantId?: unknown; orgId?: unknown }
+          selectedOrganizationId?: unknown
+          query?: { id?: unknown }
+          container: { resolve: (name: string) => unknown }
+        }
+        const queriedId = typeof ctxAny.query?.id === 'string' ? ctxAny.query.id : null
+        let dbCount = -1
+        if (queriedId) {
+          const em = ctxAny.container.resolve('em') as {
+            getConnection: () => { execute: (sql: string, params?: unknown[]) => Promise<unknown[]> }
+          }
+          const rows = (await em.getConnection().execute(
+            "SELECT id, tenant_id::text AS tenant_id, organization_id::text AS organization_id, deleted_at FROM billing_accounts WHERE id = ?",
+            [queriedId],
+          )) as Array<Record<string, unknown>>
+          dbCount = rows.length
+          // eslint-disable-next-line no-console
+          console.warn('[billing.accounts.afterList DEBUG]', JSON.stringify({
+            queriedId,
+            qeItemsCount: items.length,
+            dbCount,
+            dbRows: rows,
+            ctxAuth: { tenantId: ctxAny.auth?.tenantId, orgId: ctxAny.auth?.orgId },
+            selectedOrganizationId: ctxAny.selectedOrganizationId,
+          }))
+        }
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn('[billing.accounts.afterList DEBUG] error', err instanceof Error ? err.message : err)
+      }
+    },
+  },
   actions: {
     create: {
       commandId: 'billing.accounts.create',

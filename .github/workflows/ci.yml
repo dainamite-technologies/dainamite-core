@@ -94,11 +94,16 @@ jobs:
         run: yarn install --no-immutable
 
       - name: Build workspace packages
-        # @dainamite/cpq must be built before typecheck so the package's
-        # `default` export (./dist/**/*.js) resolves. Without this, TS
-        # falls back to the `types` condition only, which works for .ts
-        # source but mismatches our esbuild output for .tsx files.
-        run: yarn workspace @dainamite/cpq build
+        # @dainamite/* packages must be built before typecheck / generate
+        # / initialize so each package's `default` export
+        # (./dist/**/*.js) resolves. Without this, TS falls back to the
+        # `types` condition only, which works for .ts source but
+        # mismatches our esbuild output for .tsx files; and `initialize`
+        # crashes resolving the entities `default` export.
+        run: |
+          yarn workspace @dainamite/cpq build
+          yarn workspace @dainamite/billing build
+          yarn workspace @dainamite/cpq-billing-connector build
 
       - name: Generate auto-discovered files
         run: yarn generate
@@ -227,9 +232,14 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Build workspace packages
-        # See unit-tests job for rationale — @dainamite/cpq dist/ must
-        # exist before generate / next build runs.
-        run: yarn workspace @dainamite/cpq build
+        # See unit-tests job for rationale — all @dainamite/* dist/
+        # folders must exist before generate / initialize / next build
+        # runs (initialize resolves entity classes from each package's
+        # `default` export).
+        run: |
+          yarn workspace @dainamite/cpq build
+          yarn workspace @dainamite/billing build
+          yarn workspace @dainamite/cpq-billing-connector build
 
       - name: Generate auto-discovered files
         run: yarn generate

@@ -122,6 +122,9 @@ function AccountView({ row }: { row: AccountRow }) {
       <DetailField label={t('billing.accounts.columns.currency', 'Currency')}>
         {row.currency_code}
       </DetailField>
+      <DetailField label={t('billing.common.id', 'ID')}>
+        <span className="font-mono text-xs">{row.id}</span>
+      </DetailField>
       <DetailField label={t('billing.accounts.columns.cycle', 'Cycle')}>
         {row.bill_cycle}
         <span className="text-muted-foreground"> · {row.bill_cycle_anchor}</span>
@@ -140,9 +143,6 @@ function AccountView({ row }: { row: AccountRow }) {
       </DetailField>
       <DetailField label={t('billing.accounts.form.tax_id', 'Tax ID')}>
         {row.tax_id || '—'}
-      </DetailField>
-      <DetailField label={t('billing.common.id', 'ID')}>
-        <span className="font-mono text-xs">{row.id}</span>
       </DetailField>
       <DetailField
         label={t('billing.accounts.form.address.title', 'Invoice address')}
@@ -321,8 +321,18 @@ export default function BillingAccountDetailPage(props: { params?: { id?: string
         setEditing(false)
         void load()
       } catch (err) {
-        const { message } = normalizeCrudServerError(err)
-        flash(message || t('billing.accounts.detail.save.error', 'Save failed'), 'error')
+        const { message, fieldErrors } = normalizeCrudServerError(err)
+        const fieldDetail =
+          fieldErrors && Object.keys(fieldErrors).length
+            ? Object.entries(fieldErrors)
+                .map(([field, msg]) => `${field}: ${msg}`)
+                .join('; ')
+            : null
+        const detailed =
+          fieldDetail && message
+            ? `${message} — ${fieldDetail}`
+            : fieldDetail || message
+        flash(detailed || t('billing.accounts.detail.save.error', 'Save failed'), 'error')
       } finally {
         setSaving(false)
       }

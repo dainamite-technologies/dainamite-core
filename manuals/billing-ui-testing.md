@@ -54,11 +54,17 @@ cache'owane).
 
 ### 1b. Tworzenie konta
 1. Kliknij **New account** (prawy górny róg).
-2. Wypełnij formularz: *Name*, *Customer ID*, *Currency* (np. `PLN`),
-   *Bill cycle*, *Cycle anchor* (`1`), *Invoice email*, adres faktury
-   (*Line 1* + *City* + *Postal code* + *Country*) oraz *Next bill date*.
-3. Kliknij **Create account** (albo wciśnij `Ctrl/Cmd + Enter`).
-4. Wracasz na listę — nowe konto jest na niej widoczne.
+2. W polu *Customer* zacznij wpisywać nazwę klienta (np. `Acme`) — pod
+   spodem pojawi się lista pasujących firm pobrana z modułu Customers.
+   Wybierz właściwego klienta strzałkami / kliknięciem (Enter zatwierdza).
+3. *Name* uzupełni się automatycznie nazwą wybranego klienta. Zostaw tak
+   albo nadpisz, jeśli jeden klient ma kilka kont billingowych
+   (np. „Acme — produkcja" / „Acme — testy").
+4. Wypełnij pozostałe pola: *Currency* (np. `PLN`), *Bill cycle*,
+   *Cycle anchor* (`1`), *Invoice email*, adres faktury (*Line 1* + *City*
+   + *Postal code* + *Country*) oraz *Next bill date*.
+5. Kliknij **Create account** (albo wciśnij `Ctrl/Cmd + Enter`).
+6. Wracasz na listę — nowe konto jest na niej widoczne.
 
 ### 1c. Szczegóły, edycja, usuwanie
 1. Kliknij wiersz konta **Acme Telecom** (albo link **Open** po prawej).
@@ -147,9 +153,21 @@ należnych pozycji faktury robocze.
    dla nieudanych kont.
 
 ### 4b. Nowy przebieg
-Ręczne uruchomienie przebiegu działa na razie przez API i harmonogram
-(cron) — w UI nie ma jeszcze przycisku „uruchom". Dane testowe
-zawierają gotowy, zakończony przebieg do przeglądania.
+1. Na liście **Bill Runs** kliknij **New run** (prawy górny róg).
+2. W dialogu wybierz **Mode**:
+   - **Real** — tworzy faktury robocze (`draft`), normalny przebieg.
+   - **Dry-run** — symulacja, nic nie zapisuje. Dobre do sprawdzenia
+     „co by się zafakturowało".
+   - **Test** — tworzy faktury oznaczone do późniejszego usunięcia
+     (przydatne na środowisku QA/demo).
+3. **As-of date** — domyślnie dzisiaj. Konta z `next_bill_date` ≤ tej
+   daty zostaną wybrane.
+4. **Run now** (albo `Ctrl/Cmd + Enter`) — po sukcesie przeskakujesz na
+   stronę szczegółów nowo utworzonego przebiegu.
+
+Harmonogram cron uruchamia analogiczny przebieg co noc w trybie
+`real`. Przycisk **New run** to ten sam endpoint, tylko z trigger
+`manual`.
 
 ## 5. Szybki scenariusz end-to-end (~5 minut)
 
@@ -161,6 +179,119 @@ zawierają gotowy, zakończony przebieg do przeglądania.
    numerem faktury.
 4. **Billing Invoices** → otwórz fakturę → kliknij **Add line**, dodaj
    pozycję → zobacz przeliczone sumy → kliknij **Post invoice**.
+
+---
+
+## 6. Pełny scenariusz: CPQ Quote → Order → Subskrypcja → Billing (~10 minut)
+
+Ten scenariusz pokazuje **co się dzieje w billingu, kiedy w CPQ
+aktywujesz nowy order**.
+
+> **Uwaga o nazewnictwie:** event który łączy CPQ z billingiem nazywa
+> się `cpq.subscription.activated`, ale **nie jest** sygnałem „status
+> subskrypcji zmienił się na *active*". To jest „onboarding nowego
+> orderu" — odpala się raz, w momencie kliknięcia *Activate Order*
+> w CPQ, **zanim** subskrypcja jeszcze ruszy. Sama subskrypcja powstaje
+> w statusie **`pending`** i jej późniejsza tranzycja `pending → active`
+> (z UI subskrypcji) **niczego po stronie billingu nie robi** — billing
+> dostał już wszystko, co potrzeba, z activate-order.
+
+Konektor `cpq-billing-connector` na ten event:
+
+1. zakłada (lub odnajduje) **Billing Account** dla danego customera,
+2. dla każdego *charge'a* na pozycjach subskrypcji tworzy odpowiedni
+   **Billing Item** (`recurring` / `one_time` / `usage`),
+3. nowo utworzone konto dostaje „shell" defaulty (placeholder e-mail,
+   `next_bill_date` = dziś + 1 miesiąc), żeby Bill Run **nie** zafakturował
+   go zanim operator nie dokończy konfiguracji.
+
+### 6a. Część CPQ — quote → order → activate
+
+Pełny przewodnik po stronie CPQ siedzi w
+[`cpq-quote-to-order-conversion.md`](cpq-quote-to-order-conversion.md).
+W skrócie:
+
+1. **CPQ → CPQ Quotes → + New Quote** → wybierz dowolnego customera
+   (zapisz sobie jego nazwę — zaraz znajdziesz go po stronie billingu).
+2. **Add Offering** → wybierz produkt z MRC (np. *GIX Access Port
+   Standard*), ustaw *Quantity* `1` i wypełnij konfigurację → **Add to
+   Quote**.
+3. Kliknij badge statusu quote'a i przeprowadź go przez: **Ready** →
+   **With Customer** → **Accepted**.
+4. **Convert to Order** → otworzy się strona orderu w statusie *draft*.
+5. **Activate Order** (zielony przycisk). Status orderu zmieni się na
+   *active* i pojawi się link **View Inventory →** — tu kończy się
+   część CPQ.
+
+W tym momencie konektor już wystrzelił `cpq.subscription.activated`,
+mimo że jeśli klikniesz **View Inventory →**, sama **subskrypcja** jest
+jeszcze w statusie **`pending`** (chip *Pending* przy nazwie). To jest OK
+— billing dostaje swoje rzeczy z activate-order, nie z transition
+subskrypcji. Subskrypcję możesz potem przełączyć na *active* z jej
+strony szczegółów, ale po stronie billingu nic się od tego nie zmieni.
+
+### 6b. Weryfikacja po stronie billingu
+
+1. **Billing → Billing Accounts** — na górze listy powinno pojawić się
+   nowe konto z nazwą wybranego customera (status *Active*, *Currency*
+   z quote'a, *Cycle* domyślnie `monthly · 1`, *Invoice email* placeholder
+   typu `billing+<uuid>@placeholder.invalid` — to znak, że to shell-konto).
+2. Kliknij wiersz → strona szczegółów konta → przewiń do sekcji **Items**.
+   Powinny tam być pozycje odpowiadające liniom orderu:
+   - line z MRC → **Billing Item** typu `recurring` z *Unit price per cycle*,
+   - line z NRC → **Billing Item** typu `one_time` z *Amount*,
+   - line z metered → **Billing Item** typu `usage` z *UoM*.
+3. Kliknij dowolny item → w nagłówku w polu *Source ref* zobaczysz
+   deterministyczny klucz idempotencji w formacie
+   `cpq-<subscriptionId>-<subscriptionItemId>-<chargeType>`. To jest
+   sygnatura zdarzenia z CPQ — po niej konektor rozpoznaje duplikaty.
+
+### 6c. Dokończ konfigurację konta i wyfakturuj
+
+> **Dlaczego nie wystarczy „odpalić Bill Run dzisiaj":** billing jest
+> w arrears (z dołu) — dla konta z `next_bill_date = dziś` engine
+> wylicza okres `[dziś − 1 cykl → wczoraj]` i szuka itemów, które się
+> w nim mieszczą. Twoje Billing Items utworzone przez konektor mają
+> `bill_start_date = dziś` — wypadają **poza** ten okres, więc run
+> przejdzie pomyślnie, ale **z zerową liczbą draftów**. Dopiero okres
+> obejmujący `dziś` zafakturuje nowe pozycje.
+
+Najprostsza ścieżka demo (rozliczamy pierwszy cykl „z góry"):
+
+1. (Opcjonalnie) Na stronie szczegółów konta kliknij **Edit** i popraw
+   *Invoice email* na realny — placeholder `billing+<uuid>@placeholder.invalid`
+   rzuca się w oczy. *Next bill date* zostaw — connector ustawił go na
+   `dziś + 1 miesiąc` i to jest właściwa wartość dla pierwszego cyklu.
+2. **Billing → Bill Runs** → **New run** (prawy górny róg). W dialogu:
+   - *Mode* = `Real`.
+   - *As-of date* = **`next_bill_date` konta** (czyli dziś + 1 miesiąc;
+     podejrzysz dokładną wartość w szczegółach konta).
+   - **Run now** (`Ctrl/Cmd + Enter`).
+
+   Konto zostanie wybrane (bo `next_bill_date ≤ as-of`), a wyliczony
+   okres `[dziś → dziś + 1 miesiąc − 1]` obejmie `bill_start_date`
+   itemów → engine wygeneruje draft.
+3. Strona szczegółów przebiegu: status **Completed**, w **Per-account
+   outcomes** twoje konto ze statusem **success** i klikalnym numerem
+   utworzonej faktury.
+4. **Billing Invoices** (lub klik w numer faktury z poprzedniego kroku)
+   → sekcja **Lines** zawiera linie wygenerowane z Billing Items
+   (recurring MRC za cały okres, NRC jednorazowo). Kliknij **Post
+   invoice** — status przechodzi z `draft` na `posted` i kończy ścieżkę.
+
+> **Wskazówka:** jeśli już raz odpaliłeś Bill Run dzisiaj z domyślnym
+> *As-of date*, twoje konto przeleciało jako *success* ale bez draftu,
+> a `next_bill_date` przeskoczył o cykl dalej. Po prostu odpal kolejny
+> run z poprawionym *As-of date* — to ten sam zabieg co wyżej, engine
+> nie zduplikuje niczego (idempotencja na poziomie okresu).
+
+### 6d. (Opcjonalnie) Ponowna aktywacja — sprawdzenie idempotencji
+
+Wróć do CPQ, otwórz ten sam quote i kliknij **Convert to Order** raz
+jeszcze (CPQ pozwala na wiele orderów z jednego quote'a — patrz Step 11
+w manualu CPQ), potem aktywuj go. **Billing Items** na koncie **nie**
+powinny się zduplikować — konektor rozpoznaje `source_ref` i pomija
+istniejące pozycje (`deduplicated: true` w odpowiedzi API).
 
 ---
 

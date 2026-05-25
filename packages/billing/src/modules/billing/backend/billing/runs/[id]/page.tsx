@@ -302,16 +302,14 @@ export default function BillRunDetailPage(props: { params?: { id?: string } }) {
           <Tag variant={runStatusVariant(run.status)}>{run.status}</Tag>
         }
         actionsContent={
-          <Button
-            variant={failedCount > 0 ? 'default' : 'outline'}
-            disabled={failedCount === 0 || retrying}
-            onClick={handleRetryFailed}
-          >
-            {retrying
-              ? t('billing.runs.retry.in_progress', 'Retrying…')
-              : t('billing.runs.retry.action', 'Retry failed accounts')}
-            {failedCount > 0 ? ` (${failedCount})` : null}
-          </Button>
+          failedCount > 0 ? (
+            <Button disabled={retrying} onClick={handleRetryFailed}>
+              {retrying
+                ? t('billing.runs.retry.in_progress', 'Retrying…')
+                : t('billing.runs.retry.action', 'Retry failed accounts')}
+              {` (${failedCount})`}
+            </Button>
+          ) : null
         }
       />
       <PageBody>

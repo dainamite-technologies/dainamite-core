@@ -59,9 +59,19 @@ export default function CreateBillingAccountPage() {
           router.push('/backend/billing/accounts')
         }
       } catch (err) {
-        const { message } = normalizeCrudServerError(err)
+        const { message, fieldErrors } = normalizeCrudServerError(err)
+        const fieldDetail =
+          fieldErrors && Object.keys(fieldErrors).length
+            ? Object.entries(fieldErrors)
+                .map(([field, msg]) => `${field}: ${msg}`)
+                .join('; ')
+            : null
+        const detailed =
+          fieldDetail && message
+            ? `${message} — ${fieldDetail}`
+            : fieldDetail || message
         flash(
-          message || t('billing.accounts.create.error', 'Failed to create account'),
+          detailed || t('billing.accounts.create.error', 'Failed to create account'),
           'error',
         )
       } finally {

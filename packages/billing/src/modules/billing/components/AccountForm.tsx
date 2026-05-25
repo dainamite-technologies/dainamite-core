@@ -11,6 +11,8 @@ import {
 } from '@open-mercato/ui/primitives/select'
 import { Switch } from '@open-mercato/ui/primitives/switch'
 import { Kbd, KbdShortcut } from '@open-mercato/ui/primitives/kbd'
+import { ComboboxInput, type ComboboxOption } from '@open-mercato/ui/backend/inputs'
+import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 
 /**
@@ -110,6 +112,49 @@ export function AccountForm({
   const [error, setError] = React.useState<string | null>(null)
   const isEdit = mode === 'edit'
 
+  // Label cache for the customer combobox — populated as the user searches,
+  // so the picker can render "Acme Telecom" after selection instead of the
+  // raw UUID we send to the API.
+  const customerLabelCacheRef = React.useRef<Map<string, ComboboxOption>>(new Map())
+
+  const loadCustomerOptions = React.useCallback(
+    async (query?: string): Promise<ComboboxOption[]> => {
+      const params = new URLSearchParams({ page: '1', pageSize: '20' })
+      const q = (query ?? '').trim()
+      if (q) params.set('search', q)
+      const call = await apiCall<unknown>(`/api/customers/companies?${params.toString()}`)
+      if (!call.ok || call.result == null) return []
+      const raw = call.result as { items?: unknown } | unknown[]
+      const items: Array<Record<string, unknown>> = Array.isArray(raw)
+        ? (raw as Array<Record<string, unknown>>)
+        : Array.isArray((raw as { items?: unknown }).items)
+          ? ((raw as { items: unknown[] }).items as Array<Record<string, unknown>>)
+          : []
+      const options: ComboboxOption[] = []
+      for (const c of items) {
+        const id = typeof c.id === 'string' ? c.id : c.id != null ? String(c.id) : ''
+        if (!id) continue
+        const label = String(c.display_name ?? c.displayName ?? c.name ?? id)
+        const emailRaw = c.primary_email ?? c.email
+        const description = typeof emailRaw === 'string' && emailRaw ? emailRaw : null
+        const opt: ComboboxOption = { value: id, label, description }
+        customerLabelCacheRef.current.set(id, opt)
+        options.push(opt)
+      }
+      return options
+    },
+    [],
+  )
+
+  const resolveCustomerLabel = React.useCallback(
+    (id: string) => customerLabelCacheRef.current.get(id)?.label ?? id,
+    [],
+  )
+  const resolveCustomerDescription = React.useCallback(
+    (id: string) => customerLabelCacheRef.current.get(id)?.description ?? null,
+    [],
+  )
+
   // Reset when the parent swaps `initial` (e.g. after loading the edit row).
   const initialKey = React.useMemo(
     () => JSON.stringify(initial ?? null),
@@ -141,7 +186,7 @@ export function AccountForm({
 
   const handleSubmit = React.useCallback(async () => {
     if (!isEdit && !values.customerId.trim()) {
-      setError(t('billing.accounts.form.error.customerId_required', 'Customer ID is required'))
+      setError(t('billing.accounts.form.error.customerId_required', 'Please select a customer'))
       return
     }
     if (!values.name.trim()) {
@@ -156,8 +201,27 @@ export function AccountForm({
       setError(t('billing.accounts.form.error.email_invalid', 'Invoice email looks invalid'))
       return
     }
-    if (!values.invoiceAddress.line1.trim() || !values.invoiceAddress.city.trim()) {
-      setError(t('billing.accounts.form.error.address_required', 'Invoice address (line 1 + city) is required'))
+    if (
+      !values.invoiceAddress.line1.trim() ||
+      !values.invoiceAddress.city.trim() ||
+      !values.invoiceAddress.postal_code.trim()
+    ) {
+      setError(
+        t(
+          'billing.accounts.form.error.address_required',
+          'Invoice address (line 1 + city + postal code) is required',
+        ),
+      )
+      return
+    }
+    const country = values.invoiceAddress.country.trim()
+    if (country.length < 2 || country.length > 3) {
+      setError(
+        t(
+          'billing.accounts.form.error.country_invalid',
+          'Country must be a 2- or 3-letter ISO 3166 code',
+        ),
+      )
       return
     }
     if (!values.nextBillDate) {
@@ -183,14 +247,41 @@ export function AccountForm({
       <div className="grid grid-cols-2 gap-4">
         <label className="flex flex-col gap-1 text-sm">
           <span className="text-muted-foreground">
-            {t('billing.accounts.form.customer_id', 'Customer ID')}
+            {isEdit
+              ? t('billing.accounts.form.customer_id', 'Customer ID')
+              : t('billing.accounts.form.customer', 'Customer')}
             {!isEdit ? <span className="text-destructive"> *</span> : null}
           </span>
-          <Input
-            value={values.customerId}
-            disabled={isEdit}
-            onChange={(event) => set('customerId', event.currentTarget.value)}
-          />
+          {isEdit ? (
+            <Input value={values.customerId} disabled />
+          ) : (
+            <ComboboxInput
+              value={values.customerId}
+              onChange={(next) => {
+                setValues((prev) => {
+                  const customerLabel = customerLabelCacheRef.current.get(next)?.label ?? ''
+                  // Auto-fill Name with the customer's display name on the first
+                  // pick. We leave it alone if the operator has already typed
+                  // something — one customer can have multiple billing accounts
+                  // (e.g. "Acme — production" / "Acme — staging").
+                  const shouldFillName = customerLabel && !prev.name.trim()
+                  return {
+                    ...prev,
+                    customerId: next,
+                    name: shouldFillName ? customerLabel : prev.name,
+                  }
+                })
+              }}
+              loadSuggestions={loadCustomerOptions}
+              resolveLabel={resolveCustomerLabel}
+              resolveDescription={resolveCustomerDescription}
+              placeholder={t(
+                'billing.accounts.form.customer.placeholder',
+                'Search customers by name or email…',
+              )}
+              allowCustomValues={false}
+            />
+          )}
           {isEdit ? (
             <span className="text-xs text-muted-foreground">
               {t('billing.accounts.form.customer_id.locked', 'Immutable — create a new account to re-link the customer.')}
@@ -205,6 +296,14 @@ export function AccountForm({
           </span>
           <Input
             value={values.name}
+            placeholder={
+              !isEdit
+                ? t(
+                    'billing.accounts.form.name.placeholder',
+                    'Auto-filled from customer — override e.g. "Acme — production"',
+                  )
+                : undefined
+            }
             onChange={(event) => set('name', event.currentTarget.value)}
           />
         </label>
@@ -350,6 +449,7 @@ export function AccountForm({
         <label className="flex flex-col gap-1 text-sm">
           <span className="text-muted-foreground">
             {t('billing.accounts.form.address.postal_code', 'Postal code')}
+            <span className="text-destructive"> *</span>
           </span>
           <Input
             value={values.invoiceAddress.postal_code}
@@ -359,6 +459,7 @@ export function AccountForm({
         <label className="flex flex-col gap-1 text-sm">
           <span className="text-muted-foreground">
             {t('billing.accounts.form.address.country', 'Country (ISO 3166)')}
+            <span className="text-destructive"> *</span>
           </span>
           <Input
             value={values.invoiceAddress.country}

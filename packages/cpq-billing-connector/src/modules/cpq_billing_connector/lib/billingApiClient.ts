@@ -1,6 +1,14 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
 import type { AwilixContainer } from 'awilix'
 import type { CommandBus } from '@open-mercato/shared/lib/commands/command-bus'
+// TODO(L2-boundary): direct entity-class import couples the connector to
+// billing's internal ORM shape — violates the dainamite-layering rule that
+// cross-package coupling should be FK strings or REST. Tolerable at v0.1.x
+// because reads are em-driven for performance (one round-trip vs serialise/
+// deserialise via REST), but a `BillingAccount` / `BillingItem` rename in
+// `@dainamite/billing` will manifest here as a silent runtime crash.
+// Migrate to billing REST list endpoints once the connector graduates to
+// stable v1 — track in the dainamite-cpq packaging plan.
 import { BillingAccount, BillingItem } from '@dainamite/billing/modules/billing/data/entities'
 
 /**

@@ -52,8 +52,15 @@ type ActivatedPayload = {
 }
 
 function isoDateAddMonths(months: number): string {
+  // Clamp the day to the last valid day of the target month so Jan 31 + 1
+  // month → Feb 28/29 (not Mar 3, which is what `setUTCMonth` alone would
+  // produce by overflowing into the next month).
   const d = new Date()
-  d.setUTCMonth(d.getUTCMonth() + months)
+  const targetYear = d.getUTCFullYear()
+  const targetMonth = d.getUTCMonth() + months
+  const lastDayOfTargetMonth = new Date(Date.UTC(targetYear, targetMonth + 1, 0)).getUTCDate()
+  d.setUTCDate(Math.min(d.getUTCDate(), lastDayOfTargetMonth))
+  d.setUTCMonth(targetMonth)
   return d.toISOString().slice(0, 10)
 }
 

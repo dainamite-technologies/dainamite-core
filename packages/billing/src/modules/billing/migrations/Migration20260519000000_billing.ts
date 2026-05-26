@@ -3,14 +3,24 @@ import { Migration } from '@mikro-orm/migrations'
 /**
  * Initial Billing module schema (XD-249 Phase 0).
  *
- * Hand-written rather than generated because the standalone-app build of
- * `@open-mercato/cli@0.6.0` does not yet auto-discover entities from
- * `@dainamite/*` workspaces — the resolver hard-codes `@open-mercato/*`
- * scope and looks for `data/entities.ts` against the dist symlink (which
- * only contains `entities.js`). The shipped migration here matches the
- * entity definitions in `packages/billing/src/modules/billing/data/entities.ts`
- * 1:1; if entities change in later phases, regenerate via MikroORM
- * directly or hand-update both sides in the same commit.
+ * Frozen as hand-written. Why this is OK despite the "no hand-written
+ * migrations" rule in AGENTS.md:
+ *
+ *   - At Phase 0 (May 2026) the standalone-app build of
+ *     `@open-mercato/cli@0.6.0` did not auto-discover entities from
+ *     `@dainamite/*` workspaces, so `yarn mercato db generate` produced
+ *     an empty diff. The CLI patch shipped in this PR fixes the
+ *     resolver going forward (see `packages/cpq/scripts/cli-resolver.patch.mjs`
+ *     usage), but **regenerating THIS initial migration would mean
+ *     wiping every existing billing_* table on every tenant** to let
+ *     the CLI re-emit the same `create table` statements. That's
+ *     never safe on a live system.
+ *   - The 1:1 mapping against `packages/billing/src/modules/billing/data/entities.ts`
+ *     has been validated against production-shape data (CPQ → billing
+ *     end-to-end flow). Any subsequent schema change MUST go through
+ *     `yarn mercato db generate` — the CLI now correctly walks
+ *     workspace `@dainamite/*` packages, so future migration files
+ *     in this folder will be generated, not hand-written.
  */
 export class Migration20260519000000_billing extends Migration {
   async up(): Promise<void> {

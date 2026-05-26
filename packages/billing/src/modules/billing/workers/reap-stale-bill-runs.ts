@@ -1,4 +1,5 @@
 import type { JobContext, QueuedJob, WorkerMeta } from '@open-mercato/queue'
+import type { FilterQuery } from '@mikro-orm/core'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { BillRun } from '../data/entities'
 
@@ -40,7 +41,7 @@ export default async function handle(_job: QueuedJob, ctx: HandlerContext): Prom
   const stale = await em.find(BillRun, {
     status: 'running',
     startedAt: { $lt: threshold },
-  } as any)
+  } satisfies FilterQuery<BillRun>)
   if (stale.length === 0) return
   const now = new Date()
   for (const run of stale) {

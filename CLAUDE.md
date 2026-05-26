@@ -2,9 +2,9 @@
 
 ## Project: dainamite-core
 
-This is the **first L3 customer demo** ("Demo Netia") in the Dainamite product
-line — a standalone Open Mercato application that consumes `@open-mercato/*`
-from `node_modules/` and currently hosts the in-tree CPQ module.
+This is the **first L3 customer demo** in the Dainamite product line — a
+standalone Open Mercato application that consumes `@open-mercato/*` from
+`node_modules/` and currently hosts the in-tree CPQ module.
 
 ## Open Mercato framework expertise — table stakes
 

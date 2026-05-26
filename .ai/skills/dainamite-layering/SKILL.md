@@ -33,14 +33,14 @@ For the **mechanical** how-to of extracting CPQ specifically to
                               ▲ npm install
 ┌─────────────────────────────┴───────────────────────────────┐
 │ L3: Customer apps (one repo per customer)                   │
-│     dainamite-core (Demo Netia), customer-acme-telco, …     │
+│     dainamite-core (first customer demo), customer-acme, …  │
 │     Standalone Next.js apps. Install needed @dainamite/*    │
 │     packages. Tenant-specific code lives in                 │
 │     src/modules/@app/<feature>/ — never published.          │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-`dainamite-core` is **L3** today (the first customer demo, "Demo Netia").
+`dainamite-core` is **L3** today (the first customer demo).
 The CPQ module physically lives at `src/modules/cpq/` here for now but is
 destined to graduate to L2 — see `packages/cpq/` (placeholder) and
 `packages/cpq/MIGRATION.md`.
@@ -48,7 +48,7 @@ destined to graduate to L2 — see `packages/cpq/` (placeholder) and
 ## Decision tree — where does new code go?
 
 ```
-                   ┌─ Is it customer-specific (Demo Netia only)?
+                   ┌─ Is it customer-specific (one customer only)?
                    │     YES → L3 / src/modules/@app/<feature>/
                    │     NO  ↓
                    │
@@ -94,7 +94,7 @@ When you decide the code goes to L2 (`@dainamite/*`):
 | **`peerDependencies`, NEVER `dependencies`** for sibling `@dainamite/*` and `@open-mercato/*` | Otherwise yarn duplicates instances in `node_modules` → two DI containers → silent data corruption |
 | **Cross-package data = FK string only** | Never `@ManyToOne` across package boundaries. Ever. Use Response Enrichers / Widget Injection / events for joining at the seams |
 | **Migrations ship with the package** | Customer apps run `yarn mercato db migrate` after upgrade and it just works |
-| **Customer-specific code NEVER lives here** | If it mentions "Acme" or "Netia" by name, it goes to L3 |
+| **Customer-specific code NEVER lives here** | If it mentions a specific customer by name, it goes to L3 |
 | **Versioned via changesets, semver enforced** | Patch = bugfix, Minor = additive, Major = breaking + upgrade notes in CHANGELOG |
 | **Coordinated bumps for cross-package breaking changes** | Major bump in CPQ that requires changes in `cpq-telco-addons` → one PR, both bumped, peer range updated |
 
@@ -107,7 +107,7 @@ For code that stays in `dainamite-core` (or any future customer repo):
 | **Custom code under `src/modules/@app/<feature>/`** | Distinct from L2 packages installed via npm; registered in `src/modules.ts` with `from: '@app'` |
 | **No customer name in module IDs going to L2** | If you write `acme-pricing-rules`, it's L3 forever. Generic name + config = candidate for L2 promotion later |
 | **`yarn mercato eject <core-module>` is last resort** | Freezes the customer on the current upstream version of that module. UMES (enrichers / interceptors / widgets / replacement) handles 90% of customisation needs without ejecting |
-| **Customer-specific test data and seeds in L3** | Demo Netia fixtures, test customers, demo offerings — never in `@dainamite/*` |
+| **Customer-specific test data and seeds in L3** | Customer-specific fixtures, test customers, demo offerings — never in `@dainamite/*` |
 | **L3 imports `@dainamite/*` like a third-party package** | Even today when `@dainamite/cpq` doesn't yet exist as a package, treat `src/modules/cpq/` as a black box: don't import it from `src/modules/@app/<x>/` directly. Use events / REST / response enrichers |
 
 ## Promotion: L3 → L2

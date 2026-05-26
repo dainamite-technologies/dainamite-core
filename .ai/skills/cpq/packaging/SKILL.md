@@ -31,8 +31,8 @@ description: Extracting CPQ from `src/modules/cpq/` to the `@dainamite/cpq` npm 
   but doubly important here — extraction will fail otherwise.
 - **Migrations stay with the package.** Customer apps run
   `yarn mercato db migrate` after upgrade and that's enough.
-- **No customer-specific code in `packages/cpq/`.** Demo Netia tweaks live
-  in `dainamite-core/src/modules/@app/<feature>/`, never in CPQ itself.
+- **No customer-specific code in `packages/cpq/`.** Customer-specific tweaks
+  live in `dainamite-core/src/modules/@app/<feature>/`, never in CPQ itself.
 
 ## Phase 1 — Stand up the package build
 

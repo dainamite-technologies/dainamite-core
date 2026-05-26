@@ -324,13 +324,15 @@ export default function BillRunDetailPage(props: { params?: { id?: string } }) {
             <DetailField label={t('billing.runs.detail.field.mode', 'Mode')}>
               <div className="flex flex-wrap gap-1">
                 {run.dry_run ? (
-                  <Tag variant="warning">Dry-run</Tag>
+                  <Tag variant="warning">{t('billing.runs.mode.dry_run', 'Dry-run')}</Tag>
                 ) : run.test_mode ? (
-                  <Tag variant="warning">Test</Tag>
+                  <Tag variant="warning">{t('billing.runs.mode.test', 'Test')}</Tag>
                 ) : (
-                  <Tag variant="default">Real</Tag>
+                  <Tag variant="default">{t('billing.runs.mode.real', 'Real')}</Tag>
                 )}
-                {run.catch_up ? <Tag variant="default">Catch-up</Tag> : null}
+                {run.catch_up ? (
+                  <Tag variant="default">{t('billing.runs.mode.catch_up', 'Catch-up')}</Tag>
+                ) : null}
               </div>
             </DetailField>
             <DetailField label={t('billing.runs.detail.field.as_of_date', 'As-of date')}>

@@ -7,15 +7,18 @@ import { Entity, Index, PrimaryKey, Property, Unique } from '@mikro-orm/decorato
 // engine does not enforce uniqueness — multi-account-per-customer is a
 // legitimate model for B2B with separate budgets / currencies / branches).
 //
-// The `(tenant_id, next_bill_date)` partial index is the Bill Run hot path —
-// every nightly run filters on it.
+// The `(organization_id, tenant_id, next_bill_date)` partial index is the
+// Bill Run hot path — every nightly run filters by tenant + org and orders
+// by next_bill_date. Multi-org tenants share `tenant_id` across orgs, so a
+// `(tenant_id, next_bill_date)`-only index would scan every other org's
+// rows for each tenant — fine at 1 org / tenant, painful at 50.
 
 @Entity({ tableName: 'billing_accounts' })
 @Index({
   name: 'billing_accounts_next_bill_date_idx',
-  properties: ['tenantId', 'nextBillDate'],
+  properties: ['organizationId', 'tenantId', 'nextBillDate'],
   expression:
-    'CREATE INDEX "billing_accounts_next_bill_date_idx" ON "billing_accounts" ("tenant_id", "next_bill_date") WHERE "deleted_at" IS NULL',
+    'CREATE INDEX "billing_accounts_next_bill_date_idx" ON "billing_accounts" ("organization_id", "tenant_id", "next_bill_date") WHERE "deleted_at" IS NULL',
 })
 @Index({
   name: 'billing_accounts_customer_idx',

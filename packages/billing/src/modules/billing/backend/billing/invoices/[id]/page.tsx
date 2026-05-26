@@ -137,6 +137,18 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
   const [posting, setPosting] = React.useState(false)
   const [wiping, setWiping] = React.useState(false)
 
+  // Client-side pagination for invoice lines. Caps the table at 100 rows
+  // per page (per the OM DataTable convention) — invoices typically have
+  // <20 lines, but bulk import or a long-running usage-rated subscription
+  // can exceed that.
+  const [linesPage, setLinesPage] = React.useState(1)
+  const linesPageSize = 100
+  const visibleLines = React.useMemo(
+    () => lines.slice((linesPage - 1) * linesPageSize, linesPage * linesPageSize),
+    [lines, linesPage],
+  )
+  const linesTotalPages = Math.max(1, Math.ceil(lines.length / linesPageSize))
+
   // Inline line-edit dialog state. `dialogMode === null` → closed.
   const [dialogMode, setDialogMode] = React.useState<'add' | 'edit' | null>(null)
   const [dialogTargetLine, setDialogTargetLine] = React.useState<InvoiceLine | null>(null)
@@ -568,7 +580,18 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
                 </Button>
               ) : null}
             </div>
-            <DataTable columns={lineColumns} data={lines} isLoading={false} />
+            <DataTable
+              columns={lineColumns}
+              data={visibleLines}
+              isLoading={false}
+              pagination={{
+                page: linesPage,
+                pageSize: linesPageSize,
+                total: lines.length,
+                totalPages: linesTotalPages,
+                onPageChange: setLinesPage,
+              }}
+            />
           </div>
         </div>
 

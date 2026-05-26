@@ -1,4 +1,12 @@
 import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
+// TODO(L2-boundary): `cycleContaining` is a runtime function imported from
+// `@dainamite/billing` internals (not a stable public surface). A breaking
+// rename or signature change in billing's `billPeriod` will manifest here
+// as a runtime crash on the first `cpq.subscription.amended` event. Same
+// trade-off as `billingApiClient.ts` — kept inline for now because the
+// proration math is non-trivial and we don't want to fork it. Promote
+// `cycleContaining` to a documented public export of @dainamite/billing
+// (or expose via a billing REST helper) before the connector hits v1.
 import { cycleContaining } from '@dainamite/billing/modules/billing/lib/billPeriod'
 import type { BillCycle } from '@dainamite/billing/modules/billing/data/validators'
 import { BillingApiClient, type Scope } from '../lib/billingApiClient'

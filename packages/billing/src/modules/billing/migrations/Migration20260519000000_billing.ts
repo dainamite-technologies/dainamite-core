@@ -46,7 +46,7 @@ export class Migration20260519000000_billing extends Migration {
       "deleted_at" timestamptz null,
       constraint "billing_accounts_pkey" primary key ("id")
     );`)
-    this.addSql(`create index "billing_accounts_next_bill_date_idx" on "billing_accounts" ("tenant_id", "next_bill_date") where "deleted_at" is null;`)
+    this.addSql(`create index "billing_accounts_next_bill_date_idx" on "billing_accounts" ("organization_id", "tenant_id", "next_bill_date") where "deleted_at" is null;`)
     this.addSql(`create index "billing_accounts_customer_idx" on "billing_accounts" ("organization_id", "tenant_id", "customer_id");`)
     this.addSql(`create index "billing_accounts_sort_idx" on "billing_accounts" ("organization_id", "tenant_id", "deleted_at", "created_at");`)
 

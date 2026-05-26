@@ -1,5 +1,6 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
 import type { ModuleSetupConfig } from '@open-mercato/shared/modules/setup'
+import { features as billingAclFeatures } from './acl'
 import {
   Dictionary,
   DictionaryEntry,
@@ -201,20 +202,10 @@ async function seedBillingConfigs(em: EntityManager): Promise<void> {
   })
 }
 
-const ALL_BILLING_FEATURES = [
-  'billing.account.manage',
-  'billing.account.view',
-  'billing.item.manage',
-  'billing.item.view',
-  'billing.usage.ingest',
-  'billing.usage.view',
-  'billing.run.trigger',
-  'billing.run.dry_run',
-  'billing.run.view',
-  'billing.invoice.post',
-  'billing.invoice.edit_draft',
-  'billing.invoice.view',
-] as const
+// Derived from `acl.ts` so a new feature added there automatically lands
+// in every role that should get "everything billing" — no parallel list
+// to keep in sync.
+const ALL_BILLING_FEATURES = billingAclFeatures.map((f) => f.id)
 
 export const setup: ModuleSetupConfig = {
   defaultRoleFeatures: {

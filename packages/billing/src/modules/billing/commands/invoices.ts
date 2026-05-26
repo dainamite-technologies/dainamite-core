@@ -1,6 +1,7 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
 import type { CommandHandler, CommandRuntimeContext } from '@open-mercato/shared/lib/commands/types'
 import { registerCommand } from '@open-mercato/shared/lib/commands'
+import { withAtomicFlush } from '@open-mercato/shared/lib/commands/flush'
 import {
   ensureOrganizationScope,
   ensureTenantScope,
@@ -96,10 +97,13 @@ const postInvoiceCommand: CommandHandler<BillingInvoicePostInput, PostResult> = 
       'posted',
     )
 
-    invoice.status = 'posted'
-    invoice.statusEntryId = postedStatusEntryId
-    invoice.updatedAt = new Date()
-    await em.flush()
+    await withAtomicFlush(em, [
+      () => {
+        invoice.status = 'posted'
+        invoice.statusEntryId = postedStatusEntryId
+        invoice.updatedAt = new Date()
+      },
+    ])
 
     const lines = await em.find(SalesInvoiceLine, {
       invoice,
@@ -275,53 +279,58 @@ const editDraftLineCommand: CommandHandler<
     }
 
     const before = snapshotLine(line)
+    let audit: DraftInvoiceEdit | null = null
 
-    if (parsed.changes.description !== undefined) {
-      line.description = parsed.changes.description
-    }
-    if (parsed.changes.quantity !== undefined) {
-      line.quantity = format4dp(parsed.changes.quantity)
-      line.normalizedQuantity = line.quantity
-    }
-    if (parsed.changes.unitPriceNet !== undefined) {
-      line.unitPriceNet = format4dp(parsed.changes.unitPriceNet)
-      line.unitPriceGross = line.unitPriceNet
-    }
+    await withAtomicFlush(em, [
+      () => {
+        if (parsed.changes.description !== undefined) {
+          line.description = parsed.changes.description
+        }
+        if (parsed.changes.quantity !== undefined) {
+          line.quantity = format4dp(parsed.changes.quantity)
+          line.normalizedQuantity = line.quantity
+        }
+        if (parsed.changes.unitPriceNet !== undefined) {
+          line.unitPriceNet = format4dp(parsed.changes.unitPriceNet)
+          line.unitPriceGross = line.unitPriceNet
+        }
 
-    // Recompute the line total. If the operator supplied an explicit
-    // `totalNetAmount` override, honour it; otherwise compute from
-    // unit_price × quantity.
-    if (parsed.changes.totalNetAmount !== undefined) {
-      const total = format4dp(parsed.changes.totalNetAmount)
-      line.totalNetAmount = total
-      line.totalGrossAmount = total
-    } else {
-      const total = format4dp(
-        Number.parseFloat(line.unitPriceNet) * Number.parseFloat(line.quantity),
-      )
-      line.totalNetAmount = total
-      line.totalGrossAmount = total
-    }
+        // Recompute the line total. If the operator supplied an explicit
+        // `totalNetAmount` override, honour it; otherwise compute from
+        // unit_price × quantity.
+        if (parsed.changes.totalNetAmount !== undefined) {
+          const total = format4dp(parsed.changes.totalNetAmount)
+          line.totalNetAmount = total
+          line.totalGrossAmount = total
+        } else {
+          const total = format4dp(
+            Number.parseFloat(line.unitPriceNet) * Number.parseFloat(line.quantity),
+          )
+          line.totalNetAmount = total
+          line.totalGrossAmount = total
+        }
+      },
+      async () => {
+        await recomputeInvoiceTotals(em, invoice)
+      },
+      () => {
+        const after = snapshotLine(line)
+        audit = em.create(DraftInvoiceEdit, {
+          tenantId: parsed.tenantId,
+          organizationId: parsed.organizationId,
+          invoiceId: invoice.id,
+          invoiceLineId: line.id,
+          userId: getUserIdFromCtx(ctx),
+          action: 'line_edited',
+          beforeJson: before as Record<string, unknown>,
+          afterJson: after as Record<string, unknown>,
+          createdAt: new Date(),
+        })
+        em.persist(audit)
+      },
+    ])
 
-    await em.flush()
-    await recomputeInvoiceTotals(em, invoice)
-
-    const after = snapshotLine(line)
-    const audit = em.create(DraftInvoiceEdit, {
-      tenantId: parsed.tenantId,
-      organizationId: parsed.organizationId,
-      invoiceId: invoice.id,
-      invoiceLineId: line.id,
-      userId: getUserIdFromCtx(ctx),
-      action: 'line_edited',
-      beforeJson: before as Record<string, unknown>,
-      afterJson: after as Record<string, unknown>,
-      createdAt: new Date(),
-    })
-    em.persist(audit)
-    await em.flush()
-
-    return { invoiceId: invoice.id, invoiceLineId: line.id, auditId: audit.id }
+    return { invoiceId: invoice.id, invoiceLineId: line.id, auditId: audit!.id }
   },
 }
 
@@ -375,26 +384,33 @@ const addDraftLineCommand: CommandHandler<
         operator_added: true,
       },
     })
-    em.persist(line)
-    await em.flush()
-    await recomputeInvoiceTotals(em, invoice)
+    let audit: DraftInvoiceEdit | null = null
 
-    const after = snapshotLine(line)
-    const audit = em.create(DraftInvoiceEdit, {
-      tenantId: parsed.tenantId,
-      organizationId: parsed.organizationId,
-      invoiceId: invoice.id,
-      invoiceLineId: line.id,
-      userId: getUserIdFromCtx(ctx),
-      action: 'line_added',
-      beforeJson: null,
-      afterJson: after as Record<string, unknown>,
-      createdAt: new Date(),
-    })
-    em.persist(audit)
-    await em.flush()
+    await withAtomicFlush(em, [
+      () => {
+        em.persist(line)
+      },
+      async () => {
+        await recomputeInvoiceTotals(em, invoice)
+      },
+      () => {
+        const after = snapshotLine(line)
+        audit = em.create(DraftInvoiceEdit, {
+          tenantId: parsed.tenantId,
+          organizationId: parsed.organizationId,
+          invoiceId: invoice.id,
+          invoiceLineId: line.id,
+          userId: getUserIdFromCtx(ctx),
+          action: 'line_added',
+          beforeJson: null,
+          afterJson: after as Record<string, unknown>,
+          createdAt: new Date(),
+        })
+        em.persist(audit)
+      },
+    ])
 
-    return { invoiceId: invoice.id, invoiceLineId: line.id, auditId: audit.id }
+    return { invoiceId: invoice.id, invoiceLineId: line.id, auditId: audit!.id }
   },
 }
 
@@ -426,25 +442,32 @@ const removeDraftLineCommand: CommandHandler<
     }
 
     const before = snapshotLine(line)
-    em.remove(line)
-    await em.flush()
-    await recomputeInvoiceTotals(em, invoice)
+    let audit: DraftInvoiceEdit | null = null
 
-    const audit = em.create(DraftInvoiceEdit, {
-      tenantId: parsed.tenantId,
-      organizationId: parsed.organizationId,
-      invoiceId: invoice.id,
-      invoiceLineId: null,
-      userId: getUserIdFromCtx(ctx),
-      action: 'line_removed',
-      beforeJson: before as Record<string, unknown>,
-      afterJson: null,
-      createdAt: new Date(),
-    })
-    em.persist(audit)
-    await em.flush()
+    await withAtomicFlush(em, [
+      () => {
+        em.remove(line)
+      },
+      async () => {
+        await recomputeInvoiceTotals(em, invoice)
+      },
+      () => {
+        audit = em.create(DraftInvoiceEdit, {
+          tenantId: parsed.tenantId,
+          organizationId: parsed.organizationId,
+          invoiceId: invoice.id,
+          invoiceLineId: null,
+          userId: getUserIdFromCtx(ctx),
+          action: 'line_removed',
+          beforeJson: before as Record<string, unknown>,
+          afterJson: null,
+          createdAt: new Date(),
+        })
+        em.persist(audit)
+      },
+    ])
 
-    return { invoiceId: invoice.id, invoiceLineId: parsed.invoiceLineId, auditId: audit.id }
+    return { invoiceId: invoice.id, invoiceLineId: parsed.invoiceLineId, auditId: audit!.id }
   },
 }
 

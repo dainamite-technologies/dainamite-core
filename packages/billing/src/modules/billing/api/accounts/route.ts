@@ -91,27 +91,7 @@ const crud = makeCrudRoute({
       updatedAt: 'updated_at',
       nextBillDate: 'next_bill_date',
     },
-    buildFilters: async (query, ctx) => {
-      // TEMP DEBUG (XD-254): print auth/scope to understand why CI returns
-      // empty list while local prod returns the row. Remove once root
-      // cause is fixed.
-      try {
-        // eslint-disable-next-line no-console
-        console.warn(
-          '[billing.accounts.buildFilters DEBUG]',
-          JSON.stringify({
-            query,
-            auth: {
-              tenantId: (ctx as { auth?: { tenantId?: unknown } } | undefined)?.auth?.tenantId,
-              orgId: (ctx as { auth?: { orgId?: unknown } } | undefined)?.auth?.orgId,
-              sub: (ctx as { auth?: { sub?: unknown } } | undefined)?.auth?.sub,
-            },
-            selectedOrganizationId: (ctx as { selectedOrganizationId?: unknown } | undefined)
-              ?.selectedOrganizationId,
-            organizationIds: (ctx as { organizationIds?: unknown } | undefined)?.organizationIds,
-          }),
-        )
-      } catch {}
+    buildFilters: async (query) => {
       const filters: Record<string, unknown> = {}
       // `?id=<uuid>` narrows the list to one row — the detail page
       // reads a single account through this filter.
@@ -135,100 +115,6 @@ const crud = makeCrudRoute({
         filters.name = { $ilike: pattern }
       }
       return filters
-    },
-  },
-  hooks: {
-    // TEMP DEBUG (XD-254): also probe the DB directly so we can see
-    // whether the row actually exists vs the QE is filtering it out.
-    afterList: async (payload: unknown, ctx: unknown) => {
-      try {
-        const items = (payload as { items?: unknown[]; total?: number } | null)?.items ?? []
-        const total = (payload as { total?: number } | null)?.total
-        const ctxAny = ctx as {
-          auth?: { tenantId?: unknown; orgId?: unknown }
-          selectedOrganizationId?: unknown
-          query?: { id?: unknown }
-          container: { resolve: (name: string) => unknown }
-        }
-        const queriedId = typeof ctxAny.query?.id === 'string' ? ctxAny.query.id : null
-        if (!queriedId) return
-
-        const em = ctxAny.container.resolve('em') as {
-          getConnection: () => { execute: (sql: string, params?: unknown[]) => Promise<unknown[]> }
-        }
-        const conn = em.getConnection()
-        const rows = (await conn.execute(
-          "SELECT id, tenant_id::text AS tenant_id, organization_id::text AS organization_id, deleted_at FROM billing_accounts WHERE id = ?",
-          [queriedId],
-        )) as Array<Record<string, unknown>>
-        const dbCount = rows.length
-        const scopedRows = (await conn.execute(
-          "SELECT id FROM billing_accounts WHERE id = ? AND tenant_id = ? AND organization_id = ? AND deleted_at IS NULL",
-          [queriedId, ctxAny.auth?.tenantId, ctxAny.auth?.orgId],
-        )) as Array<Record<string, unknown>>
-        const scopedDbCount = scopedRows.length
-
-        // Cross-check: ask the QE directly with the same params the
-        // route should be passing. If THIS also returns 0 with row
-        // present in DB, the bug is reproducible from any caller — not
-        // factory-specific.
-        let qeDirectCount: number | string = 'skip'
-        let qeDirectErr: string | null = null
-        try {
-          const qe = ctxAny.container.resolve('queryEngine') as {
-            query: (
-              entity: string,
-              opts: Record<string, unknown>,
-            ) => Promise<{ items: unknown[]; total: number }>
-          }
-          const direct = await qe.query('billing:billing_account', {
-            tenantId: ctxAny.auth?.tenantId,
-            organizationId: ctxAny.auth?.orgId,
-            organizationIds: ctxAny.auth?.orgId ? [ctxAny.auth.orgId] : undefined,
-            filters: { id: { $eq: queriedId } },
-            fields: ['id', 'tenant_id', 'organization_id', 'deleted_at'],
-            page: { page: 1, pageSize: 5 },
-          })
-          qeDirectCount = direct.items.length
-        } catch (err) {
-          qeDirectErr = err instanceof Error ? err.message : String(err)
-        }
-
-        // Also check what information_schema thinks about billing_accounts columns
-        // — the QE gates scope filters on columnExists() and might be reading
-        // a wrong table name.
-        let infoSchemaColumns: string[] = []
-        let infoSchemaTables: string[] = []
-        try {
-          const cols = (await conn.execute(
-            "SELECT column_name FROM information_schema.columns WHERE table_name = 'billing_accounts' ORDER BY column_name",
-          )) as Array<{ column_name: string }>
-          infoSchemaColumns = cols.map((c) => c.column_name)
-          const tables = (await conn.execute(
-            "SELECT table_name FROM information_schema.tables WHERE table_name LIKE 'billing%' ORDER BY table_name",
-          )) as Array<{ table_name: string }>
-          infoSchemaTables = tables.map((t) => t.table_name)
-        } catch {}
-
-        // eslint-disable-next-line no-console
-        console.warn('[billing.accounts.afterList DEBUG]', JSON.stringify({
-          queriedId,
-          qeItemsCount: items.length,
-          qeTotal: total,
-          qeDirectCount,
-          qeDirectErr,
-          dbCount,
-          scopedDbCount,
-          dbRows: rows,
-          ctxAuth: { tenantId: ctxAny.auth?.tenantId, orgId: ctxAny.auth?.orgId },
-          selectedOrganizationId: ctxAny.selectedOrganizationId,
-          infoSchemaColumns,
-          infoSchemaTables,
-        }))
-      } catch (err) {
-        // eslint-disable-next-line no-console
-        console.warn('[billing.accounts.afterList DEBUG] error', err instanceof Error ? err.message : err)
-      }
     },
   },
   actions: {

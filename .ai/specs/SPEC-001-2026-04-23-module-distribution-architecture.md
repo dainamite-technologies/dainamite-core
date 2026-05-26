@@ -26,7 +26,7 @@
 - **Q1**: Jaki namespace npm — `@yourco/*`, `@firmname/*`? Decyzja wpłynie na wszystkie future package names. : dainamite
 - **Q2**: Jaki prywatny registry — **GitHub Packages (darmowe dla private packages na każdym planie GH, quota 500MB/1GB transfer na free)**, Verdaccio (self-host ~$5/mies VPS), czy npm Teams ($7/user/mies)? Rekomendacja: GitHub Packages. Github Packages
 - **Q3**: Monorepo tooling — same yarn workspaces wystarczy, czy dokładamy Nx / Turborepo od dnia zero? 
-- **Q4**: Czy obecny `open-mercato-cpq-v0` staje się (a) prototypem z którego ekstraktujemy CPQ do nowego repo, (b) pierwszym customer repo, (c) wyrzucamy i zaczynamy od zera? : Demo netia , dainamite-core
+- **Q4**: Czy obecny `open-mercato-cpq-v0` staje się (a) prototypem z którego ekstraktujemy CPQ do nowego repo, (b) pierwszym customer repo, (c) wyrzucamy i zaczynamy od zera? : pierwszy customer demo, dainamite-core
 - **Q5**: Licencjonowanie/billing wobec klienta — per-package SKU czy per-seat / per-tenant? Wpływa na to jak strukturyzujemy meta-bundles. ; narazie nie
 - **Q6**: Kto ma commit access do customer repos — tylko my, czy klient też? Konsekwencje dla CI/CD i sekretów.
 

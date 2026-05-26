@@ -10,7 +10,7 @@ the `@dainamite/cpq` package, per
 - Registered as `{ id: 'cpq', from: '@app' }` in
   [`src/modules.ts`](../../src/modules.ts).
 - `packages/cpq/` is a structural placeholder only (this directory).
-- `dainamite-core` repo is the L3 customer demo (Demo Netia) per SPEC-001 Q4.
+- `dainamite-core` repo is the L3 customer demo per SPEC-001 Q4.
 - **Customer demo data does NOT live in `cpq/`** (since XD-276). GIX and
   Puffin Cloud catalog seeds live in `src/modules/demo_gix/` and
   `src/modules/demo_puffin/`, registered as use cases via

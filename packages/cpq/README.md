@@ -57,9 +57,9 @@ directly to source.
 - **L2** — Dainamite product modules (this package + sibling
   `@dainamite/*`), published to **GitHub Packages** under the
   `@dainamite` scope.
-- **L3** — `dainamite-core` is the first L3 customer app
-  ("Demo Netia"); other customer repos consume `@dainamite/cpq` via
-  `yarn add` and register it the same way.
+- **L3** — `dainamite-core` is the first L3 customer app; other customer
+  repos consume `@dainamite/cpq` via `yarn add` and register it the same
+  way.
 
 ## Hard rules (carried over from SPEC-001)
 

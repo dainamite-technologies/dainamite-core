@@ -374,12 +374,15 @@ export class DefaultCpqOrderService {
       : null
 
     const quoteType = sourceQuote?.quoteType ?? 'new'
-    const arcEvents: Array<() => Promise<void>> = []
+    const postCommitEvents: Array<() => Promise<void>> = []
 
     if (quoteType === 'new') {
-      await this.createInventoryFromOrder(orderConfig, orderLines, scope)
+      const inventory = await this.createInventoryFromOrder(orderConfig, orderLines, scope)
+      if (inventory) {
+        postCommitEvents.push(() => emitActivatedEvent(orderConfig, inventory, scope))
+      }
     } else {
-      arcEvents.push(
+      postCommitEvents.push(
         ...(await this.applyArcOrder(orderConfig, sourceQuote!, orderLines, scope)),
       )
     }
@@ -391,8 +394,8 @@ export class DefaultCpqOrderService {
 
     await em.flush()
 
-    // Emit ARC events AFTER the activation transaction commits.
-    for (const fire of arcEvents) {
+    // Emit lifecycle events AFTER the activation transaction commits.
+    for (const fire of postCommitEvents) {
       try {
         await fire()
       } catch (err) {
@@ -490,9 +493,7 @@ export class DefaultCpqOrderService {
           },
           scope,
         )
-        events.push(() =>
-          emitArcEvent('cpq.subscription.amended', result, eventBaseEnvelope),
-        )
+        events.push(() => emitAmendedEvent(result, eventBaseEnvelope))
       }
     } else if (quoteType === 'cancel') {
       for (const target of targets) {
@@ -509,15 +510,7 @@ export class DefaultCpqOrderService {
           },
           scope,
         )
-        events.push(() =>
-          emitArcEvent('cpq.subscription.cancelled', result, {
-            ...eventBaseEnvelope,
-            etfAmount: sourceQuote.arcEtfAmount ?? null,
-            etfCurrency: sourceQuote.arcEtfCurrency ?? null,
-            reasonCode: sourceQuote.arcReasonCode ?? null,
-            reasonText: sourceQuote.arcReasonText ?? null,
-          }),
-        )
+        events.push(() => emitCancelledEvent(result, eventBaseEnvelope))
       }
     } else if (quoteType === 'renew') {
       const standalone = targets.filter((t) => t.mergeAction === 'standalone')
@@ -547,15 +540,7 @@ export class DefaultCpqOrderService {
             },
             scope,
           )
-          events.push(() =>
-            emitArcEvent('cpq.subscription.renewed', result, {
-              ...eventBaseEnvelope,
-              term: {
-                newTermStart: target.newTermStart!.toISOString(),
-                newTermEnd: target.newTermEnd!.toISOString(),
-              },
-            }),
-          )
+          events.push(() => emitRenewedEvent(result, eventBaseEnvelope))
         }
       } else if (absorb.length >= 2 && standalone.length === 0) {
         if (!sourceQuote.arcMergeNewTermStart || !sourceQuote.arcMergeNewTermEnd) {
@@ -593,7 +578,11 @@ export class DefaultCpqOrderService {
         )
         for (const sourceLog of merge.sourceChangeLogs) {
           events.push(() =>
-            emitSupersededEvent(sourceLog, merge.mergedSubscription.id, eventBaseEnvelope),
+            emitSupersededEvent(
+              sourceLog,
+              iso10(merge.mergedSubscription.currentTermStart),
+              eventBaseEnvelope,
+            ),
           )
         }
       } else {
@@ -615,8 +604,8 @@ export class DefaultCpqOrderService {
     orderConfig: CpqOrderConfiguration,
     orderLines: CpqOrderLineConfiguration[],
     scope: TenantScope,
-  ): Promise<void> {
-    if (orderLines.length === 0) return
+  ): Promise<ActivatedInventory | null> {
+    if (orderLines.length === 0) return null
 
     const specIds = [...new Set(orderLines.map((l) => l.specId).filter(Boolean))] as string[]
     const specs = specIds.length > 0
@@ -641,7 +630,7 @@ export class DefaultCpqOrderService {
     const hasSubscriptionContent = subscriptionLines.some(
       (l) => Number(l.mrcTotal) > 0 || Number(l.nrcTotal) > 0,
     )
-    if (!hasSubscriptionContent && assetLines.length === 0) return
+    if (!hasSubscriptionContent && assetLines.length === 0) return null
 
     const subscriptionName = await this.buildSubscriptionName(orderConfig, orderLines, scope)
 
@@ -730,6 +719,22 @@ export class DefaultCpqOrderService {
         scope,
       )
     }
+
+    // Pair each subscription line with its created subscription item —
+    // input for the `cpq.subscription.activated` billing-onboarding event.
+    const eventItems = subscriptionLines
+      .slice(0, allSubItems.length)
+      .map((line, i) => ({
+        subscriptionItemId: allSubItems[i].id,
+        productName: this.getLineName(line),
+        mrcTotal: Number(line.mrcTotal),
+        nrcTotal: Number(line.nrcTotal),
+      }))
+      // Only lines with a billable charge — a zero-value line yields
+      // no Billing Item anyway; emitting it would just make the
+      // connector create a needless shell account.
+      .filter((it) => it.mrcTotal > 0 || it.nrcTotal > 0)
+    return { subscriptionId: subscription.id, items: eventItems }
   }
 
   // ─── Get / List ─────────────────────────────────────────────
@@ -1124,107 +1129,213 @@ interface ArcEventEnvelope {
   sourceOrderId: string
 }
 
-async function emitArcEvent(
-  eventId:
-    | 'cpq.subscription.amended'
-    | 'cpq.subscription.renewed'
-    | 'cpq.subscription.cancelled',
-  result: ApplyArcResult,
-  envelope: ArcEventEnvelope & {
-    term?: { newTermStart: string; newTermEnd: string }
-    etfAmount?: string | null
-    etfCurrency?: string | null
-    reasonCode?: string | null
-    reasonText?: string | null
-  },
+// ─── Subscription-activated event (new-sale billing onboarding) ──
+
+type ActivatedInventory = {
+  subscriptionId: string
+  items: Array<{
+    subscriptionItemId: string
+    productName: string
+    /** Line totals — CPQ pricing has already applied line quantity. */
+    mrcTotal: number
+    nrcTotal: number
+  }>
+}
+
+/**
+ * Emit `cpq.subscription.activated` after a new-sale order activation.
+ *
+ * Payload matches the `@dainamite/cpq-billing-connector`
+ * `cpq-subscription-activated` subscriber contract: one CPQ charge per
+ * non-zero MRC / NRC total on each subscription item. The connector
+ * get-or-creates the Billing Account (keyed on `customerId`) and turns
+ * each charge into a Billing Item.
+ */
+async function emitActivatedEvent(
+  orderConfig: CpqOrderConfiguration,
+  inventory: ActivatedInventory,
+  scope: TenantScope,
 ): Promise<void> {
-  const sub = result.subscription
-  await emitCpqEvent(eventId as never, {
-    subscriptionId: sub.id,
-    customerId: sub.customerId,
-    organizationId: envelope.organizationId,
-    tenantId: envelope.tenantId,
+  const items = inventory.items.map((it) => ({
+    subscriptionItemId: it.subscriptionItemId,
+    productName: it.productName,
+    // `mrcTotal` / `nrcTotal` are line totals — CPQ pricing already
+    // applied the line quantity. Quantity is therefore 1 here so
+    // `unitPrice × quantity` stays internally consistent no matter
+    // how the connector treats the multiplier.
+    quantity: 1,
+    charges: [
+      ...(it.mrcTotal > 0
+        ? [{ type: 'recurring', unitPrice: it.mrcTotal, description: 'Recurring charge' }]
+        : []),
+      ...(it.nrcTotal > 0
+        ? [{ type: 'one_time', amount: it.nrcTotal, description: 'One-time charge' }]
+        : []),
+    ],
+  }))
+  await emitCpqEvent('cpq.subscription.activated' as never, {
+    subscriptionId: inventory.subscriptionId,
+    customerId: orderConfig.customerId,
+    organizationId: scope.organizationId,
+    tenantId: scope.tenantId,
+    currencyCode: orderConfig.currencyCode,
     timestamp: new Date().toISOString(),
+    activationDate: new Date().toISOString().slice(0, 10),
+    sourceQuoteId: orderConfig.sourceQuoteId ?? null,
+    sourceOrderId: orderConfig.id,
+    items,
+  } as never)
+}
+
+/** Coerce a Date or `date`-column string to a `YYYY-MM-DD` string. */
+function iso10(value: Date | string | null | undefined): string | null {
+  if (!value) return null
+  if (value instanceof Date) return value.toISOString().slice(0, 10)
+  return String(value).slice(0, 10)
+}
+
+type ArcChargeItem = {
+  subscriptionItemId: string
+  productName: string
+  quantity: number
+  charges: Array<Record<string, unknown>>
+}
+
+/**
+ * Build the connector's `addedItems` from a change log's `add` line
+ * changes. `mrcAmount` / `nrcAmount` are line totals (CPQ pricing has
+ * already applied quantity) → emit `quantity: 1` with the totals as the
+ * charge rate, exactly as `emitActivatedEvent`.
+ */
+function buildArcAddedItems(changeLog: ApplyArcResult['changeLog']): ArcChargeItem[] {
+  const after = changeLog.afterSnapshot as
+    | { items?: Array<{ id?: string; name?: string }> }
+    | null
+  const nameById = new Map(
+    (after?.items ?? []).map((i) => [String(i.id), i.name ?? '']),
+  )
+  const summary = (changeLog.lineChanges ?? []) as Array<{
+    action?: string
+    itemId?: string
+    mrcAmount?: unknown
+    nrcAmount?: unknown
+  }>
+  const out: ArcChargeItem[] = []
+  for (const change of summary) {
+    if (change.action !== 'add' || typeof change.itemId !== 'string') continue
+    const mrc = Number(change.mrcAmount)
+    const nrc = Number(change.nrcAmount)
+    out.push({
+      subscriptionItemId: change.itemId,
+      productName: nameById.get(change.itemId) || 'Configured item',
+      quantity: 1,
+      charges: [
+        ...(mrc > 0
+          ? [{ type: 'recurring', unitPrice: mrc, description: 'Recurring charge' }]
+          : []),
+        ...(nrc > 0
+          ? [{ type: 'one_time', amount: nrc, description: 'One-time charge' }]
+          : []),
+      ],
+    })
+  }
+  return out
+}
+
+/** Subscription-item ids removed by a change log's `cancel` line changes. */
+function buildArcRemovedItemIds(changeLog: ApplyArcResult['changeLog']): string[] {
+  const summary = (changeLog.lineChanges ?? []) as Array<{
+    action?: string
+    itemId?: string
+  }>
+  return summary
+    .filter((c) => c.action === 'cancel' && typeof c.itemId === 'string')
+    .map((c) => c.itemId as string)
+}
+
+async function emitAmendedEvent(
+  result: ApplyArcResult,
+  envelope: ArcEventEnvelope,
+): Promise<void> {
+  await emitCpqEvent('cpq.subscription.amended' as never, {
+    tenantId: envelope.tenantId,
+    organizationId: envelope.organizationId,
+    subscriptionId: result.subscription.id,
+    customerId: result.subscription.customerId,
+    // No operator-chosen amend date today — the activation moment is
+    // the effective date. The billing connector computes the mid-cycle
+    // proration from this date + the account's billing cycle.
+    effectiveDate: iso10(result.changeLog.effectiveAt),
+    addedItems: buildArcAddedItems(result.changeLog),
+    removedSubscriptionItemIds: buildArcRemovedItemIds(result.changeLog),
     sourceQuoteId: envelope.sourceQuoteId,
     sourceOrderId: envelope.sourceOrderId,
-    performedByUserId: null,
-    changeLogId: result.changeLog.id,
-    proration: buildProrationPayload(sub, result.changeLog.beforeSnapshot ?? null),
-    ...(envelope.term ? { term: envelope.term } : {}),
-    ...(envelope.etfAmount !== undefined ? { etfAmount: envelope.etfAmount } : {}),
-    ...(envelope.etfCurrency !== undefined ? { etfCurrency: envelope.etfCurrency } : {}),
-    ...(envelope.reasonCode !== undefined ? { reasonCode: envelope.reasonCode } : {}),
-    ...(envelope.reasonText !== undefined ? { reasonText: envelope.reasonText } : {}),
+    timestamp: new Date().toISOString(),
+  } as never)
+}
+
+async function emitRenewedEvent(
+  result: ApplyArcResult,
+  envelope: ArcEventEnvelope,
+): Promise<void> {
+  await emitCpqEvent('cpq.subscription.renewed' as never, {
+    tenantId: envelope.tenantId,
+    organizationId: envelope.organizationId,
+    subscriptionId: result.subscription.id,
+    customerId: result.subscription.customerId,
+    newTermStart: iso10(result.subscription.currentTermStart),
+    newTermEnd: iso10(result.subscription.currentTermEnd),
+    addedItems: buildArcAddedItems(result.changeLog),
+    sourceQuoteId: envelope.sourceQuoteId,
+    sourceOrderId: envelope.sourceOrderId,
+    timestamp: new Date().toISOString(),
+  } as never)
+}
+
+async function emitCancelledEvent(
+  result: ApplyArcResult,
+  envelope: ArcEventEnvelope,
+): Promise<void> {
+  await emitCpqEvent('cpq.subscription.cancelled' as never, {
+    tenantId: envelope.tenantId,
+    organizationId: envelope.organizationId,
+    subscriptionId: result.subscription.id,
+    customerId: result.subscription.customerId,
+    effectiveDate: iso10(result.changeLog.effectiveAt),
+    sourceQuoteId: envelope.sourceQuoteId,
+    sourceOrderId: envelope.sourceOrderId,
+    timestamp: new Date().toISOString(),
   } as never)
 }
 
 async function emitMergedEvent(
   merge: ApplyMergeRenewalResult,
   envelope: ArcEventEnvelope,
-  mergedFromSubscriptionIds: string[],
+  sourceSubscriptionIds: string[],
 ): Promise<void> {
-  const m = merge.mergedSubscription
   await emitCpqEvent('cpq.subscription.merged' as never, {
-    subscriptionId: m.id,
-    customerId: m.customerId,
-    organizationId: envelope.organizationId,
     tenantId: envelope.tenantId,
-    timestamp: new Date().toISOString(),
+    organizationId: envelope.organizationId,
+    mergedSubscriptionId: merge.mergedSubscription.id,
+    sourceSubscriptionIds,
     sourceQuoteId: envelope.sourceQuoteId,
     sourceOrderId: envelope.sourceOrderId,
-    performedByUserId: null,
-    changeLogId: merge.mergeResultChangeLog.id,
-    mergedFromSubscriptionIds,
-    term: {
-      newTermStart: m.currentTermStart?.toISOString() ?? null,
-      newTermEnd: m.currentTermEnd?.toISOString() ?? null,
-      newTermMonths: m.termMonths ?? null,
-    },
-    proration: buildProrationPayload(m, null),
+    timestamp: new Date().toISOString(),
   } as never)
 }
 
 async function emitSupersededEvent(
   sourceLog: { id: string; subscriptionId: string },
-  newMergeSubId: string,
+  effectiveDate: string | null,
   envelope: ArcEventEnvelope,
 ): Promise<void> {
   await emitCpqEvent('cpq.subscription.superseded' as never, {
-    subscriptionId: sourceLog.subscriptionId,
-    organizationId: envelope.organizationId,
     tenantId: envelope.tenantId,
-    timestamp: new Date().toISOString(),
+    organizationId: envelope.organizationId,
+    subscriptionId: sourceLog.subscriptionId,
+    effectiveDate,
     sourceQuoteId: envelope.sourceQuoteId,
     sourceOrderId: envelope.sourceOrderId,
-    performedByUserId: null,
-    changeLogId: sourceLog.id,
-    mergedIntoSubscriptionId: newMergeSubId,
+    timestamp: new Date().toISOString(),
   } as never)
-}
-
-/**
- * Compute proration payload sent on every ARC subscription event.
- *
- * Currently a placeholder. Proration math against the live billing cycle
- * lives in the billing module — CPQ's contract is to surface the *inputs*
- * (old/new MRC, cycle bounds) on the event payload so billing can compute
- * the delta. Until billing integration exists, we expose the essentials and
- * leave precise cycle math to follow-up work.
- */
-function buildProrationPayload(
-  sub: CpqInventorySubscription,
-  beforeSnapshot: Record<string, unknown> | null,
-): Record<string, unknown> {
-  const oldMrc = beforeSnapshot
-    ? Number((beforeSnapshot.mrcAmount as string | undefined) ?? 0)
-    : 0
-  return {
-    oldMrcAmount: oldMrc,
-    newMrcAmount: Number(sub.mrcAmount),
-    currency: sub.currencyCode,
-    billingCycleStart: null,
-    billingCycleEnd: null,
-    daysElapsedInCycle: null,
-    daysRemainingInCycle: null,
-  }
 }

@@ -52,6 +52,13 @@ export const enabledModules: ModuleEntry[] = [
   { id: 'example', from: '@app' },
   // Dainamite product modules — extracted to @dainamite/* packages (see SPEC-001 + packages/cpq/MIGRATION.md)
   { id: 'cpq', from: '@dainamite/cpq' },
+  // XD-249 Billing — recurring-billing engine; Phase 0 ships schema + setup
+  // only, REST API and Bill Run engine land in later phases.
+  { id: 'billing', from: '@dainamite/billing' },
+  // XD-249 Phase 5 — wires CPQ subscription lifecycle events to billing
+  // API calls (activated / amended / renewed / cancelled / merged /
+  // superseded). Must be registered AFTER cpq + billing.
+  { id: 'cpq_billing_connector', from: '@dainamite/cpq-billing-connector' },
   // Demo / use-case bundles (XD-276) — register CPQ use cases that the demo_tenants
   // orchestrator iterates at init time. Each demo module ships zero customer-facing
   // pages or APIs, just seed code scoped to its own tenant.

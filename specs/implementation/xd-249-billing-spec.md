@@ -15,7 +15,7 @@ with CPQ, a separate **pre-built `@dainamite/cpq-billing-connector`**
 package wires CPQ subscription events to billing API calls.
 
 > **Date**: 2026-05-11
-> **Status**: Approved — ready for Phase 0
+> **Status**: Implemented — Phases 0–5 complete (see Implementation Status)
 > **Owner**: Kamil
 >
 > **Distribution**: Published as `@dainamite/billing` on public
@@ -1040,3 +1040,213 @@ weeks (end of Phase 2).
 - [node_modules/@open-mercato/core/src/modules/sales/AGENTS.md](../../node_modules/@open-mercato/core/src/modules/sales/AGENTS.md) — invoice + sequence number patterns
 - [node_modules/@open-mercato/core/AGENTS.md](../../node_modules/@open-mercato/core/AGENTS.md) — command pattern, `withAtomicFlush`, ACL
 - [node_modules/@open-mercato/queue/AGENTS.md](../../node_modules/@open-mercato/queue/AGENTS.md) — worker contract, idempotency, for the Bill Run scheduler
+
+---
+
+## Implementation Status
+
+| Phase | Status | Date | Notes |
+|-------|--------|------|-------|
+| Phase 0 — Scaffold | Done | 2026-05-19 | Workspace, 6 entities, 12 ACL features, setup.ts, reaper worker stub, initial migration, 76 unit tests passing |
+| Phase 1 — REST API | Done | 2026-05-19 | 3 CRUD routes via `makeCrudRoute`, lean command pattern (no undo yet), `source_ref` idempotency on items + usage, per-tenant advisory-lock primitive ready for Phase 2, 119 unit tests passing |
+| Phase 2 — Bill Run engine | Done | 2026-05-19 | Bill Run orchestrator (lock + savepoints + dry/test/real + catch-up + open-draft check + item-level guard); calendar-aware period math (month-end clamp); item selector; invoice writer (creates `core/sales` drafts with full metadata); trigger + retry-failed commands; 3 new API routes; 166 unit tests passing |
+| Phase 3 — Usage rating | Done | 2026-05-19 | All four rate shapes (simple flat + volume / graduated / flat tier); usage runner aggregates records per `uom_code`, rates, emits one line per matched item; `rated_in_bill_run_id` marking via bulk update; `unmatched_usage_uoms` warning; per-tier breakdown in invoice-line metadata; 193 unit tests passing. Per-record `line_description` itemization deferred to Phase 4. |
+| Phase 4a — Posting + payment subscriber | Done | 2026-05-19 | `billing.invoices.post` command + `POST /api/billing/invoices/post`; refuses non-draft + test-mode; fires `billing.invoice.posted` + per-line events. Payment-captured subscriber wires `paymentId == invoiceId` matches to `posted→paid`. Shared invoice-status resolver. 199 unit tests passing. Resolves Phase 0 deviation #2. |
+| Phase 4b — Draft edit + GDPR (backend) | Done | 2026-05-19 | `billing.invoices.{edit,add,remove}_draft_line` commands writing `DraftInvoiceEdit` audit rows (`before_json` / `after_json` per spec entity contract); recompute invoice totals on edit; non-draft refusal. `billing.invoices.wipe_test` for test-mode invoice cleanup. `GET /api/billing/export/account/[id]` GDPR portability dump. 214 unit tests. Backend pages (UI) deferred to Phase 4c. |
+| Phase 4c — Admin UI v1 | Done | 2026-05-19 | Three backend pages: `/backend/billing/runs` (list with status/mode tags + filters), `/backend/billing/runs/[id]` (detail with summary + outcomes table + Retry-failed button wired to `billing.runs.retry_failed`), `/backend/billing/accounts` (read-only list with search + filters). Sidebar group `Billing`. Draft-invoice review + inline line editing landed in 4c v2/v3; account/item editor pages in 4d/4e; locale files in 4h. |
+| Phase 4d — Account CRUD UI | Done | 2026-05-19 | `components/AccountForm.tsx` shared create/edit form (9 scalars + 5 `invoice_address` sub-fields + `is_active`; `customer_id` / `currency_code` immutable on edit). New pages `/backend/billing/accounts/{create,[id]}` — in-place PUT edit + soft-delete `ConfirmDialog`; **New account** CTA + per-row Open link on the list. Migrated the runs/invoices pages off the silent `<Page title>` tooltip bug to `PageHeader`. 797 repo tests, 0 regressions. |
+| Phase 4e — Item CRUD UI | Done | 2026-05-19 | `components/ItemForm.tsx` shared form with type-discriminated rate fields (`one_time` amount / `recurring` unit price / `usage` simple unit price + `uom_code` / `usage` tiered raw-JSON); type immutable on edit. New pages `/backend/billing/items/{create,[id]}`; create page honours `?billAccountId=` deep-link; detail surfaces read-only engine-managed badges (currency mismatch, billed-to-date, source ref). 797 repo tests, 0 regressions. |
+| Phase 4f — Scale audit + bulk refactor | Done | 2026-05-19 | Closes two OOM risks on the usage hot path (spec "Shape B": few accounts × millions of usage rows): usage runner load-all → `SUM/COUNT … GROUP BY uom_code`; engine rated-marking id-list → `uom_code $in` predicate `UPDATE`. GDPR export gains a 12-month default window (`?since`/`?until` override) + 50k hard cap with a `window` block. Account detail → items deep-link. 797 repo tests, 0 regressions. |
+| Phase 5 — `@dainamite/cpq-billing-connector` | Done | 2026-05-19 | New `packages/cpq-billing-connector/` workspace. 6 subscribers (`activated` / `amended` / `renewed` / `cancelled` / `merged` / `superseded`). `chargeMapper` (CPQ charge → billing item payload, one_time + recurring split, deterministic `source_ref`), `prorationHelper` (linear-days, half-up 2dp), `billingApiClient` (commandBus-backed wrapper). 23 unit tests. CPQ-side event wiring completed in Phase 5b. |
+| Phase 4g — Bulk item create | Done | 2026-05-20 | `billing.items.bulk_create` command + `POST /api/billing/items/bulk` — collapses the connector's per-item `createItem` loop into one batched write: single account `$in` validation, single idempotency query over all `source_ref`s, in-batch duplicate dedup, single `em.flush()`, per-entity side effects after commit. `activated` / `amended` / `renewed` subscribers switched to `bulkCreateItems`. 804 unit tests passing. |
+| Phase 4h — Live-UI hardening | Done | 2026-05-20 | First admin-UI run against a live DB surfaced ~9 latent bugs in typecheck-only code paths: snake_case list payloads vs camelCase pages, `[id]` delivered as a page prop (not `useParams`), DELETE `{body,query}` envelope unwrap, unimplemented `?id=` list filter, bulk-create ids captured before `em.flush()` assigns them, `cloneAtMidnight` assuming `Date` (MikroORM returns `date` columns as strings), raw `?` JSONB operator colliding with `em.execute`'s placeholder (→ `jsonb_exists`). Detail pages moved to `FormHeader` detail mode; the four list toolbars unified CPQ-style (search box on all). Plus en/pl i18n (263 keys), Playwright integration tests TC-BILL-001..003, demo seed script + Polish UI testing manual. 804 unit tests passing, 0 regressions. |
+| Phase 5b — CPQ→billing event wiring | Done | 2026-05-21 | Reconciled the CPQ ↔ connector event contract — until now CPQ never emitted `cpq.subscription.activated` and the 5 ARC events carried a payload too lean for the connector subscribers (which silently early-returned). `cpqOrderService` now emits all 6 events with the full payload each subscriber needs: `effectiveDate`, `addedItems` / `removedSubscriptionItemIds` (derived from the change-log `lineChanges` summary), top-level `newTermStart`/`newTermEnd`, corrected `mergedSubscriptionId` / `sourceSubscriptionIds` field names. Proration ownership moved to the connector — new `billPeriod.cycleContaining` helper; the `amended` subscriber derives the bill cycle from the account (CPQ does not own billing-cycle semantics). All 6 CPQ→billing flows functional end-to-end. 812 unit tests passing. |
+
+### Phase 2 — Detailed Progress
+
+- [x] `lib/billPeriod.ts` — calendar-aware cycle arithmetic.
+      `deriveBillPeriod(nextBillDate, cycle) → { periodStart, periodEnd }`,
+      `advanceNextBillDate(...)`, `isCycleDue(...)`. Hand-rolled
+      month-end clamp (JS `setUTCMonth` overflows, doesn't clamp), so
+      `Jan 31 + 1 month → Feb 29` (leap) and `Mar 31 - 1 month → Feb 28`
+      match Postgres `+ interval '1 month'` semantics.
+- [x] `lib/itemSelector.ts` — predicates the spec's
+      "Mid-cycle recurring items" rule and the per-item `billed_to_date`
+      guard. Skip reasons are surfaced for diagnostics. `usage` items
+      route to the Phase 3 rater (not yet implemented; selector returns
+      `reason: 'usage-handled-by-rater'`).
+- [x] `lib/invoiceWriter.ts` — direct create of `core/sales`
+      `SalesInvoice` + `SalesInvoiceLine` rows with the spec's
+      `metadata` shape. Resolves the draft `DictionaryEntry` once per
+      `(tenantId, organizationId)` and caches it. Builds invoice lines
+      from items per the spec's per-type pricing rules. Test mode uses
+      a `TEST-<uuid>` placeholder number so production sequences don't
+      advance.
+- [x] `lib/billRunEngine.ts` — full orchestrator:
+      - Wraps in `withTenantLock(...)` (Phase 1 primitive) for at-most-
+        one-run-per-tenant concurrency.
+      - Creates `BillRun` row with `status='running'`.
+      - Selects accounts where `next_bill_date <= as_of_date`,
+        scoped by `scopedAccountIds` when set.
+      - Each account runs inside an `em.transactional(...)` (PG
+        SAVEPOINT) so per-account failure rolls back only that
+        account's work.
+      - Modes: `real` (persist + advance), `test` (persist as test,
+        no advance), `dry` (compute only).
+      - Catch-up loop on manual + `catch_up=true` (max 60 cycles
+        safety cap).
+      - Open-draft anti-duplicate via direct SQL on
+        `sales_invoices.metadata->>'bill_account_id' / 'bill_period_*'`.
+      - Item-level `billed_to_date` set on real-mode success.
+      - Account `next_bill_date` + `last_bill_date` advance on
+        real-mode success.
+      - Aggregates outcomes into `BillRun.summary` with the spec's
+        `{ accounts_processed, drafts_created, drafts_skipped_existing,
+        accounts_failed, accounts_with_warnings, usage_records_rated }`
+        shape.
+      - Returns `partial_failure` when any outcome is `failed`, else
+        `completed`.
+- [x] Trigger + retry commands (`commands/runs.ts`):
+      - `billing.runs.trigger` — manual trigger; `triggeredBy='manual'`
+        injected by route layer (not client-controllable).
+      - `billing.runs.retry_failed` — re-runs failed accounts of a
+        parent run, inheriting `asOfDate` / `catch_up` and setting
+        `parent_run_id`. Throws 409 if there are no failed outcomes.
+      - Both map `TenantLockBusyError` to HTTP 409 with
+        `code: 'billing.run.lock_busy'`.
+- [x] REST routes:
+      - `GET / POST /api/billing/runs` (list + manual trigger)
+      - `POST /api/billing/runs/retry-failed`
+      - `GET /api/billing/run-outcomes`
+- [x] Unit tests: `billPeriod.test.ts` (16 cases — spec reference
+      table + leap-year + chained drift), `itemSelector.test.ts` (15
+      cases — every inclusion / skip path), `invoiceWriter.test.ts`
+      (8 cases — per-type pricing, rounding edge cases, usage
+      exclusion), `billRunEngine.test.ts` (8 cases — happy path,
+      zero-accounts, open-draft skip, dry-run, test-mode, currency
+      mismatch warnings, empty-items advance, multi-account summary).
+- [x] Full validation gate green: `yarn workspace @dainamite/billing
+      build`, `yarn generate` (routes auto-discovered in
+      `api-routes.generated.ts`), `yarn typecheck`, `yarn test` (35
+      suites, 726 total tests, 0 regressions).
+
+### Phase 2 — Deviations from spec
+
+1. **`SalesInvoice.invoice_number` is `NOT NULL` upstream** (vs the
+   spec's "sequence number assigned at Post"). Real-mode drafts get a
+   real number via `salesDocumentNumberGenerator.generate({ kind:
+   'invoice' })` at draft-create time. Gap-free atomic SQL upsert
+   semantics are preserved; only the timing differs from the spec
+   wording. Phase 4 (post + status transition) does NOT re-assign the
+   number — "Post" just transitions status `draft → posted`.
+
+2. **Test-mode invoice numbers use a `TEST-<uuid>` placeholder** rather
+   than the real sequence. Test runs stay idempotent and don't burn
+   production numbers. The wipe-out endpoint
+   (`DELETE /api/billing/test-invoices?bill_run_id=X` — Phase 4) can
+   filter both by `metadata.test_run=true` and by the prefix.
+
+3. **VAT not computed on drafts.** Per the spec, `core/sales` tax
+   service owns `tax_rate` / `tax_amount`. The engine ships zeroes in
+   those columns; gross == net for the draft. Phase 4 post operation
+   will run the tax service.
+
+### Phase 1 — Detailed Progress
+
+- [x] `data/validators.ts` extended with CRUD payload schemas (account /
+      item / usage create / update / list, all scoped via `scopedSchema`)
+- [x] `lib/tenantLock.ts` — `withTenantLock(...)` + `TenantLockBusyError`
+      + `buildLockKey(...)` helper exposed for tests. The Phase 2 Bill Run
+      engine consumes this directly.
+- [x] `lib/idempotency.ts` — shared `findBySourceRef(...)` helper
+      (single chokepoint for the source-ref pre-check)
+- [x] `commands/` directory with three files
+      (`accounts.ts` / `items.ts` / `usage.ts`) plus `index.ts` barrel
+      that side-effect-registers every command into the global
+      `commandBus`. Imported from `index.ts` so the registrations run at
+      module load.
+- [x] `api/openapi.ts` — billing CRUD OpenAPI factory
+- [x] `api/accounts/route.ts` — `/api/billing/accounts` GET/POST/PUT/DELETE
+- [x] `api/items/route.ts` — `/api/billing/items` GET/POST/PUT/DELETE;
+      POST returns `{ id, deduplicated }` with HTTP 200 always (idempotent
+      semantics per spec — duplicate POST returns the existing row, never
+      creates a duplicate)
+- [x] `api/usage/route.ts` — `/api/billing/usage` GET/POST (append-only,
+      idempotent on POST)
+- [x] CLI patch extended again — `@open-mercato/cli`'s
+      `parseExportedClassNamesFromFile` still doesn't recognize the
+      compiled `let X = class {}` shape, so `E.billing.*` stays empty.
+      Worked around with a local `data/entityIds.ts` const (single
+      source of truth until upstream lands the fix). Captured at
+      [`.yarn/patches/@open-mercato-cli-npm-0.6.0-ef9f262596.patch`](../../.yarn/patches/@open-mercato-cli-npm-0.6.0-ef9f262596.patch)
+      — current patch already covers the resolver (Phase 0); the
+      compiled-class detection is a deeper change deferred to the
+      framework team.
+- [x] Unit tests: `lib/tenantLock.test.ts` (6 cases), `lib/idempotency.test.ts`
+      (4 cases), extended `validators.test.ts` with 33 new CRUD-schema
+      cases — 43 new tests, 119 total for the package
+- [x] Full validation gate green: `yarn workspace @dainamite/billing
+      build`, `yarn generate`, `yarn typecheck`, `yarn test` (31 suites,
+      679 total tests, 0 regressions)
+
+### Phase 0 — Detailed Progress
+
+- [x] `packages/billing/` workspace scaffold (`package.json` with peer-only deps, tsconfig pair, `build.mjs` / `watch.mjs` mirroring cpq)
+- [x] Module skeleton at `packages/billing/src/modules/billing/` (`index.ts`, `acl.ts`, `events.ts`, `translations.ts`, `di.ts`, `ce.ts`)
+- [x] 6 billing-owned entities in `data/entities.ts` with the spec's required indexes (`(tenant_id, next_bill_date)` partial, `(bill_account_id, type, is_active)` partial, `(bill_account_id, uom_code, rated_in_bill_run_id, period_end)` for the Bill Run hot path)
+- [x] Zod validators in `data/validators.ts` covering all three `rate_json` shapes (one_time / recurring / usage simple) plus the discriminated tiered union (volume / graduated / flat) with progression + key-shape rules
+- [x] 12 ACL features in `acl.ts`; default role mappings in `setup.ts` for `admin` (wildcard) + `billing_admin` / `billing_finance_user` / `billing_usage_writer`
+- [x] `setup.ts` seeds: UoM dictionary (16 codes), `sales.invoice_status` dictionary (4 statuses — see deviation note), billing cron configs (`billing.cron_schedule`, `billing.cron_enabled`), billing invoice-number defaults (`billing.invoice_number.format`, `.reset_cycle`)
+- [x] Reaper worker stub at `workers/reap-stale-bill-runs.ts` (full advisory-lock check lands with the engine in Phase 2)
+- [x] Module registered in [`src/modules.ts`](../../src/modules.ts) as `{ id: 'billing', from: '@dainamite/billing' }`; `billing:watch` script added to root [`package.json`](../../package.json)
+- [x] Initial migration `Migration20260519000000_billing.ts` — see "Hand-written migration" deviation below
+- [x] Unit tests under `__tests__/`: rate_json shapes (44 cases), setup contract (15 cases), package isolation guard (6 cases including the no-`@ManyToOne`-across-packages rule)
+- [x] `yarn install`, `yarn workspace @dainamite/billing build`, `yarn generate`, `yarn typecheck`, `yarn test` — all green
+
+### Phase 0 — Deviations from spec (discovered during cross-check vs code)
+
+These should be picked up by the implementer of the relevant phase.
+
+1. **Invoice-line price split (Phase 2 impact).** The spec describes
+   `InvoiceLine.unit_price` as a single column. In real code,
+   `@open-mercato/core/sales` splits it into `unitPriceNet` +
+   `unitPriceGross`, with line totals as `totalNetAmount` /
+   `totalGrossAmount`. The Bill Run engine in Phase 2 must write both
+   when creating draft invoice lines and source the rounded amount from
+   `totalNetAmount`. Reflect this in `BillingItem → InvoiceLine` mapping
+   when the engine is implemented.
+
+2. **Payment-completed event (Phase 4 impact).** The spec's `paid`-status
+   wiring assumes a `payments.payment.completed` event. The actual events
+   exported by `@open-mercato/core/payment_gateways/events.ts` are
+   `.authorized`, `.captured`, `.failed`, `.refunded`, `.cancelled` —
+   no `.completed`. Phase 4 should either subscribe to `.captured` (and
+   verify its payload carries `invoice_id`) or land an upstream PR that
+   adds `payment.completed`. Either path is acceptable; pick whichever
+   matches the gateway provider's actual capture semantics.
+
+3. **Invoice-status dictionary seeding (handled in Phase 0).** The spec
+   assumes the `core/sales` `Invoice` entity has the four statuses
+   (`draft` / `posted` / `paid` / `void`) pre-seeded. Cross-check showed
+   `core/sales` ships dictionaries for `order_status`,
+   `order_line_status`, `shipment_status`, `payment_status`,
+   `deal_loss_reasons`, `adjustment_kind` — but **not**
+   `invoice_status`. Phase 0 seeds it under key `sales.invoice_status`
+   in `setup.ts`. If `core/sales` later seeds the same key, the helper
+   becomes a no-op (idempotent).
+
+4. **Hand-written initial migration (Phase 0).** `yarn mercato db
+   generate` does not currently discover entities for `@dainamite/*`
+   workspaces in standalone-app mode — the resolver hard-codes
+   `@open-mercato/*` scope and looks for `data/entities.ts` against the
+   `dist` symlink which only contains `entities.js`. Phase 0 extends the
+   existing `@open-mercato/cli` yarn patch
+   ([`.yarn/patches/@open-mercato-cli-npm-0.6.0-ef9f262596.patch`](../../.yarn/patches/@open-mercato-cli-npm-0.6.0-ef9f262596.patch))
+   to teach the resolver about `@dainamite/*` (regex
+   `/^(?:@open-mercato|@dainamite)\/(.+)$/`). The candidates-list /
+   `.js`-source quirk still requires a deeper fix; until that lands
+   upstream, billing migrations are hand-written following
+   [`Migration20260519000000_billing.ts`](../../packages/billing/src/modules/billing/migrations/Migration20260519000000_billing.ts).
+   No snapshot file is shipped — when CLI support lands, the first
+   generate run produces a clean snapshot from the entity state and
+   future runs use it normally.

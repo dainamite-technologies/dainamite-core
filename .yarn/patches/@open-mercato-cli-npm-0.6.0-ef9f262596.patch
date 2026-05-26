@@ -11,3 +11,25 @@ index af74e5ba16b9f0a6585861eddd8ec11c5a57c171..035fb48f4a6b56c760c38067e960d5bf
  const GENERATED_MODULE_SPECIFIER_SEGMENT = /^[A-Za-z0-9_.\-[\]()']+$/;
  function sanitizeGeneratedModuleSpecifierSegment(segment, importPath) {
    const match = GENERATED_MODULE_SPECIFIER_SEGMENT.exec(segment);
+diff --git a/dist/lib/resolver.js b/dist/lib/resolver.js
+index 498a749d27fb98188611d77fc9b9576c57ae708b..5a28e4cabc7157f2958d9a1a9bf79acaddbed95f 100644
+--- a/dist/lib/resolver.js
++++ b/dist/lib/resolver.js
+@@ -13,7 +13,7 @@ function pkgDirFor(rootDir, from, isMonorepo = true) {
+   if (!from || from === "@open-mercato/core") {
+     return path.resolve(rootDir, "packages/core/src/modules");
+   }
+-  const m = from.match(/^@open-mercato\/(.+)$/);
++  const m = from.match(/^(?:@open-mercato|@dainamite)\/(.+)$/);
+   if (m) {
+     return path.resolve(rootDir, `packages/${m[1]}/src/modules`);
+   }
+@@ -27,7 +27,7 @@ function pkgRootFor(rootDir, from, isMonorepo = true) {
+   if (!from || from === "@open-mercato/core") {
+     return path.resolve(rootDir, "packages/core");
+   }
+-  const m = from.match(/^@open-mercato\/(.+)$/);
++  const m = from.match(/^(?:@open-mercato|@dainamite)\/(.+)$/);
+   if (m) {
+     return path.resolve(rootDir, `packages/${m[1]}`);
+   }

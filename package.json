@@ -17,6 +17,8 @@
     "dev:classic": "node ./scripts/dev-with-cpq-watch.mjs --classic",
     "dev:verbose": "node ./scripts/dev-with-cpq-watch.mjs --verbose",
     "cpq:watch": "yarn workspace @dainamite/cpq watch",
+    "billing:watch": "yarn workspace @dainamite/billing watch",
+    "cpq-billing-connector:watch": "yarn workspace @dainamite/cpq-billing-connector watch",
     "build": "yarn generate && next build",
     "start": "mercato server start",
     "lint": "next lint",

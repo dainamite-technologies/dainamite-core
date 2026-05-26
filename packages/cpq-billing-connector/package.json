@@ -1,0 +1,120 @@
+{
+  "name": "@dainamite/cpq-billing-connector",
+  "version": "0.1.0",
+  "description": "Wires @dainamite/cpq subscription lifecycle events to @dainamite/billing API calls (activated / amended / renewed / cancelled / merged / superseded).",
+  "type": "module",
+  "main": "./dist/modules/cpq_billing_connector/index.js",
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "node build.mjs",
+    "watch": "node watch.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "chokidar": "^4.0.3"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/modules/cpq_billing_connector/index.ts",
+      "default": "./dist/modules/cpq_billing_connector/index.js"
+    },
+    "./modules/cpq_billing_connector": {
+      "types": "./src/modules/cpq_billing_connector/index.ts",
+      "default": "./dist/modules/cpq_billing_connector/index.js"
+    },
+    "./*.ts": {
+      "types": "./src/*.ts",
+      "default": "./dist/*.js"
+    },
+    "./*.tsx": {
+      "types": "./src/*.tsx",
+      "default": "./dist/*.js"
+    },
+    "./*.json": "./src/*.json",
+    "./*": {
+      "types": [
+        "./src/*.ts",
+        "./src/*.tsx"
+      ],
+      "default": "./dist/*.js"
+    },
+    "./*/*.json": "./src/*/*.json",
+    "./*/*": {
+      "types": [
+        "./src/*/*.ts",
+        "./src/*/*.tsx"
+      ],
+      "default": "./dist/*/*.js"
+    },
+    "./*/*/*.json": "./src/*/*/*.json",
+    "./*/*/*": {
+      "types": [
+        "./src/*/*/*.ts",
+        "./src/*/*/*.tsx"
+      ],
+      "default": "./dist/*/*/*.js"
+    },
+    "./*/*/*/*.json": "./src/*/*/*/*.json",
+    "./*/*/*/*": {
+      "types": [
+        "./src/*/*/*/*.ts",
+        "./src/*/*/*/*.tsx"
+      ],
+      "default": "./dist/*/*/*/*.js"
+    },
+    "./*/*/*/*/*.json": "./src/*/*/*/*/*.json",
+    "./*/*/*/*/*": {
+      "types": [
+        "./src/*/*/*/*/*.ts",
+        "./src/*/*/*/*/*.tsx"
+      ],
+      "default": "./dist/*/*/*/*/*.js"
+    },
+    "./*/*/*/*/*/*.json": "./src/*/*/*/*/*/*.json",
+    "./*/*/*/*/*/*": {
+      "types": [
+        "./src/*/*/*/*/*/*.ts",
+        "./src/*/*/*/*/*/*.tsx"
+      ],
+      "default": "./dist/*/*/*/*/*/*.js"
+    },
+    "./*/*/*/*/*/*/*.json": "./src/*/*/*/*/*/*/*.json",
+    "./*/*/*/*/*/*/*": {
+      "types": [
+        "./src/*/*/*/*/*/*/*.ts",
+        "./src/*/*/*/*/*/*/*.tsx"
+      ],
+      "default": "./dist/*/*/*/*/*/*/*.js"
+    }
+  },
+  "peerDependencies": {
+    "@dainamite/billing": "^0.13.0",
+    "@dainamite/cpq": "^0.2.0",
+    "@mikro-orm/core": "^7.0.0",
+    "@mikro-orm/decorators": "^7.0.0",
+    "@mikro-orm/postgresql": "^7.0.0",
+    "@open-mercato/core": "^0.6.0",
+    "@open-mercato/events": "^0.6.0",
+    "@open-mercato/shared": "^0.6.0",
+    "awilix": "^12.0.0",
+    "zod": "^4.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dainamite-technologies/dainamite-core.git",
+    "directory": "packages/cpq-billing-connector"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "private": true
+}

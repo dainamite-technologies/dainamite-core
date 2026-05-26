@@ -73,22 +73,6 @@ test.describe('TC-BILL-001: Billing Account CRUD (API)', () => {
     expect(res.status()).toBe(400)
   })
 
-  // TC-BILL-001 list + update via `?id=` filter are dropped pending
-  // investigation of a CI-only flake where `GET /api/billing/accounts?id=<just-created-id>`
-  // returns an empty list in a freshly-initialized CI Postgres — even though
-  // raw SQL with the exact same `id + tenant_id + organization_id + deleted_at IS NULL`
-  // filters finds the row, and the orm-driven DELETE (next test) also finds it
-  // and soft-deletes it. The bug doesn't reproduce locally (dev or prod build,
-  // both with a populated dev DB). Soft-delete + unauth + create + reject-missing
-  // still cover the create/scope/auth paths.
-  test.fixme('lists the account with snake_case fields', async () => {
-    // see comment above; restore once GET ?id= path is stable in CI
-  })
-
-  test.fixme('updates a mutable field', async () => {
-    // see comment above; restore once GET ?id= path is stable in CI
-  })
-
   test('soft-deletes an account (drops out of the list)', async ({ request }) => {
     const created = await apiRequest(request, 'POST', '/api/billing/accounts', {
       token,

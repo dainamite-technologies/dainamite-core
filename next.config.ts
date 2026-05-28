@@ -25,8 +25,6 @@ const nextConfig: NextConfig = {
     '@open-mercato/cache',
     '@open-mercato/queue',
     '@open-mercato/search',
-    '@open-mercato/content',
-    '@open-mercato/onboarding',
     '@open-mercato/ai-assistant',
   ],
   serverExternalPackages: [

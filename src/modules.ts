@@ -20,36 +20,22 @@ export const enabledModules: ModuleEntry[] = [
   { id: 'sales', from: '@open-mercato/core' },
   { id: 'api_keys', from: '@open-mercato/core' },
   { id: 'dictionaries', from: '@open-mercato/core' },
-  { id: 'content', from: '@open-mercato/content' },
-  { id: 'onboarding', from: '@open-mercato/onboarding' },
   { id: 'api_docs', from: '@open-mercato/core' },
   { id: 'business_rules', from: '@open-mercato/core' },
   { id: 'feature_toggles', from: '@open-mercato/core' },
   { id: 'workflows', from: '@open-mercato/core' },
   { id: 'search', from: '@open-mercato/search' },
   { id: 'currencies', from: '@open-mercato/core' },
-  { id: 'planner', from: '@open-mercato/core' },
-  { id: 'resources', from: '@open-mercato/core' },
-  { id: 'staff', from: '@open-mercato/core' },
   { id: 'events', from: '@open-mercato/events' },
   { id: 'notifications', from: '@open-mercato/core' },
   { id: 'progress', from: '@open-mercato/core' },
   { id: 'integrations', from: '@open-mercato/core' },
   { id: 'data_sync', from: '@open-mercato/core' },
-  { id: 'messages', from: '@open-mercato/core' },
   { id: 'ai_assistant', from: '@open-mercato/ai-assistant' },
   { id: 'translations', from: '@open-mercato/core' },
   { id: 'scheduler', from: '@open-mercato/scheduler' },
-  { id: 'inbox_ops', from: '@open-mercato/core' },
-  { id: 'payment_gateways', from: '@open-mercato/core' },
-  { id: 'checkout', from: '@open-mercato/checkout' },
-  { id: 'gateway_stripe', from: '@open-mercato/gateway-stripe' },
-  { id: 'sync_akeneo', from: '@open-mercato/sync-akeneo' },
-  { id: 'shipping_carriers', from: '@open-mercato/core' },
-  { id: 'webhooks', from: '@open-mercato/webhooks' },
   { id: 'customer_accounts', from: '@open-mercato/core' },
   { id: 'portal', from: '@open-mercato/core' },
-  { id: 'example', from: '@app' },
   // Dainamite product modules — extracted to @dainamite/* packages (see SPEC-001 + packages/cpq/MIGRATION.md)
   { id: 'cpq', from: '@dainamite/cpq' },
   // XD-249 Billing — recurring-billing engine; Phase 0 ships schema + setup
@@ -68,10 +54,6 @@ export const enabledModules: ModuleEntry[] = [
   // is fully populated by the time its seedExamples hook fires.
   { id: 'demo_tenants', from: '@app' },
 ]
-
-if (enabledModules.some((entry) => entry.id === 'example')) {
-  enabledModules.push({ id: 'example_customers_sync', from: '@app' })
-}
 
 const enterpriseModulesEnabled = parseBooleanWithDefault(process.env.OM_ENABLE_ENTERPRISE_MODULES, false)
 const enterpriseSsoEnabled = parseBooleanWithDefault(process.env.OM_ENABLE_ENTERPRISE_MODULES_SSO, false)

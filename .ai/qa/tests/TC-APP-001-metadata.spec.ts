@@ -28,14 +28,17 @@ test.describe('TC-APP-001: Template metadata', () => {
 
   test('backend pages resolve translated and direct titles', async ({ page }) => {
     await setGermanLocale(page)
-    await login(page, 'admin')
+    await login(page, 'superadmin')
 
     // Next.js dev mode compiles routes on-demand — first hit can take longer
-    // than default 5s expect-timeout, so we bump it for these gotos.
-    await page.goto('/backend/example', { waitUntil: 'domcontentloaded' })
-    await expect(page).toHaveTitle('Beispiel-Admin', { timeout: 30_000 })
+    // than the default 5s expect-timeout, so we bump it for these gotos.
+    // The core Users page ships a German title, exercising translated resolution...
+    await page.goto('/backend/users', { waitUntil: 'domcontentloaded' })
+    await expect(page).toHaveTitle('Benutzer', { timeout: 30_000 })
 
-    await page.goto('/backend/products', { waitUntil: 'domcontentloaded' })
-    await expect(page).toHaveTitle('Products', { timeout: 30_000 })
+    // ...while CPQ pages have no German translation and fall back to the
+    // literal English title under the `de` locale.
+    await page.goto('/backend/cpq/quotes', { waitUntil: 'domcontentloaded' })
+    await expect(page).toHaveTitle('CPQ Quotes', { timeout: 30_000 })
   })
 })

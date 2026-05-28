@@ -3,11 +3,12 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { discoverIntegrationSpecFiles } from '@open-mercato/cli/lib/testing/integration-discovery'
 
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = path.dirname(__filename)
-
 const captureScreenshots = process.env.PW_CAPTURE_SCREENSHOTS === '1'
 const isGitHubActions = process.env.GITHUB_ACTIONS === 'true'
+// Standalone apps generated from this template declare `"type": "module"`,
+// so the CommonJS `__dirname` is undefined when Playwright loads this config
+// under the Node ESM loader. Reconstruct it from `import.meta.url`.
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const projectRoot = path.resolve(__dirname, '..', '..', '..')
 const qaTestResultsRoot = path.join(projectRoot, '.ai', 'qa', 'test-results')
 const normalizePath = (value: string) => value.split(path.sep).join('/')

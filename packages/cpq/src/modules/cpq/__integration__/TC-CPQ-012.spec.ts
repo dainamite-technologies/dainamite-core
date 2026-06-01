@@ -52,7 +52,16 @@ test.describe('TC-CPQ-012: Inline expiring picker (UI)', () => {
     const trigger = page.locator(pickerLocator).first()
     await expect(trigger).toBeVisible({ timeout: 15_000 })
     await trigger.click()
-    await page.getByRole('option', { name: /Expiring in 30 days/i }).click()
+
+    // Radix Select renders options in a portal behind a positioning layer
+    // that Playwright's default actionability checks treat as obscuring the
+    // option — so a plain `.click()` retries forever and times out (the
+    // original CI failure, deterministic across retries). Wait for the
+    // option to mount, then force the click to bypass the obscured/stability
+    // checks; Radix's own onSelect still fires and closes the menu.
+    const option = page.getByRole('option', { name: /Expiring in 30 days/i })
+    await expect(option).toBeVisible({ timeout: 10_000 })
+    await option.click({ force: true })
 
     // Same URL — the picker writes into the in-page filter state, not a
     // route param. Picker now reflects the chosen window.

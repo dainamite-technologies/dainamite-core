@@ -67,6 +67,22 @@ The core selling engine.
 - **ARC** — Amend / Renew / Cancel flows against live subscriptions.
 - **Orders** — quote → order → activation pipeline.
 
+#### Feature matrix
+
+| Area | Capabilities |
+|------|--------------|
+| **Products** | Product specifications; sellable offerings (discrete & single-offering); product/offering lifecycle status |
+| **Attributes** | Design-time vs run-time attributes; select / text / number types; defaults, help text, required flags; reference attributes with filtered options; attribute dependencies (`dependsOn` — filter options / apply constraints) |
+| **Bundles** | Bundled offerings with slots (min/max per slot) and components; bundle-tree resolution |
+| **Relationships** | Cross-offering relationships & constraints; relationship validation on quote lines |
+| **Pricing** | Multi-charge model (recurring `MRC` / one-time `NRC` / `usage`); pricing tables (single & multi-dimensional); tiered / volume (range) pricing |
+| **Price rules** | `discount_percent`, `discount_absolute`, `surcharge_percent`, `surcharge_absolute`, `price_override`; priority-ordered, conditionally applicable |
+| **Pricing I/O** | XLSX import / export of pricing tables; calculate-price API (`/api/cpq/quotes/price`) |
+| **Quoting** | Quotes & line items; guided multi-step wizards + configurator; clone & recalculate; quote status state machine |
+| **Customer inventory** | Subscriptions & subscription items; assets + asset status; expiring-soon / renewal-watch picker; per-subscription change log |
+| **ARC** | Amend / Renew / Cancel live subscriptions via quote; merge-renewal (supersede sources); proration + audited change log |
+| **Orders** | Quote → order conversion; order activation (provisions inventory, emits lifecycle events); order status state machine |
+
 CPQ piggybacks on Open Mercato `sales` for quote/order **headers** — it never
 mutates `sales_*` rows directly; it goes through the sales service or emits
 domain events.
@@ -88,6 +104,18 @@ A lightweight billing engine that does **not** replace your accounting system
 - Usage rating for metered items; idempotent, tenant-locked runs.
 - Full admin UI: Billing Accounts, Items, Bill Runs, and Invoices (with a
   human-approval "post" step before an invoice leaves draft).
+
+#### Feature matrix
+
+| Area | Capabilities |
+|------|--------------|
+| **Accounts** | Billing Accounts per customer; account-scoped billing windows |
+| **Items** | Billing Items typed `one_time` / `recurring` / `usage`, each with a bill start/end window |
+| **Bill Runs** | Scheduled (worker) and on-demand runs; **dry-run** preview; idempotent & tenant-locked; stale-run reaping worker |
+| **Usage** | Usage ingestion API; usage rating at run time for metered items |
+| **Invoices** | Draft invoices written into `@open-mercato/core/sales`; draft edits; human-approval **post** step (guarded ACL action) |
+| **Admin UI** | List + detail pages for Accounts, Items, Bill Runs, Invoices under `/backend/billing/*` |
+| **ACL** | `billing.{account,item,invoice,run,usage}.*` — incl. `run.dry_run` / `run.trigger`, `invoice.edit_draft` / `invoice.post`, `usage.ingest` |
 
 **Required Open Mercato modules**: `sales`, plus `@open-mercato/queue` for the
 Bill Run worker and `@open-mercato/events` for lifecycle events.

@@ -925,6 +925,7 @@ __metadata:
   resolution: "@dainamite/cpq@workspace:packages/cpq"
   dependencies:
     chokidar: "npm:^4.0.3"
+    xlsx: "npm:^0.18.0"
   peerDependencies:
     "@mikro-orm/core": ^7.0.0
     "@mikro-orm/decorators": ^7.0.0
@@ -940,7 +941,6 @@ __metadata:
     next: ^16.0.0
     react: ^19.0.0
     react-dom: ^19.0.0
-    xlsx: ^0.18.0
     zod: ^4.0.0
   languageName: unknown
   linkType: soft

@@ -21,9 +21,14 @@ import { metadata } from '../index'
 
 const PACKAGE_ROOT = path.resolve(__dirname, '..')
 
-// Must mirror peerDependencies in packages/cpq/package.json (plus relatives + node builtins).
-// Adding a prefix here without adding it to peerDependencies = silent runtime failure for
-// consumers that don't happen to have the dep transitively.
+// Must mirror peerDependencies + dependencies in packages/cpq/package.json
+// (plus relative paths + node builtins). Adding a prefix here without adding
+// it to one of those two = silent runtime failure for consumers that don't
+// happen to have the dep transitively. Sibling framework packages
+// (@open-mercato/*, react, mikro-orm, etc.) MUST stay as peerDependencies so
+// yarn keeps a single shared instance; CPQ-internal leaf libs (xlsx) live in
+// dependencies so a fresh `yarn add @dainamite/cpq` scaffold pulls them in
+// without manual setup (XD-289).
 const ALLOWED_IMPORT_PREFIXES = [
   './',
   '../',

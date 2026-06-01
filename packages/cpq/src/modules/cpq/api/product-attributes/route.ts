@@ -11,6 +11,37 @@ export const metadata = {
   DELETE: { requireAuth: true, requireFeatures: ['cpq.products.manage'] },
 }
 
+/**
+ * Single source of truth for the attribute API shape. GET, POST and PUT MUST
+ * all return this exact projection so the client never sees a partial record.
+ * Omitting fields here (notably `resolutionTime`) caused XD-292: a freshly
+ * created design-time attribute rendered as "run" until a page refresh, since
+ * the create response lacked the field the table reads.
+ */
+export function serializeAttribute(item: CpqProductAttribute) {
+  return {
+    id: item.id,
+    productId: item.productId,
+    specId: item.specId,
+    code: item.code,
+    name: item.name,
+    attributeType: item.attributeType,
+    resolutionTime: item.resolutionTime,
+    options: item.options,
+    constraints: item.constraints,
+    referenceEntity: item.referenceEntity,
+    referenceFilter: item.referenceFilter,
+    dependsOn: item.dependsOn,
+    defaultValue: item.defaultValue,
+    helpText: item.helpText,
+    sortOrder: item.sortOrder,
+    isRequired: item.isRequired,
+    isActive: item.isActive,
+    createdAt: item.createdAt,
+    updatedAt: item.updatedAt,
+  }
+}
+
 export async function GET(req: Request) {
   try {
     const ctx = await resolveCpqRouteContext(req)
@@ -35,27 +66,7 @@ export async function GET(req: Request) {
     })
 
     return NextResponse.json({
-      items: items.map((item) => ({
-        id: item.id,
-        productId: item.productId,
-        specId: item.specId,
-        code: item.code,
-        name: item.name,
-        attributeType: item.attributeType,
-        resolutionTime: item.resolutionTime,
-        options: item.options,
-        constraints: item.constraints,
-        referenceEntity: item.referenceEntity,
-        referenceFilter: item.referenceFilter,
-        dependsOn: item.dependsOn,
-        defaultValue: item.defaultValue,
-        helpText: item.helpText,
-        sortOrder: item.sortOrder,
-        isRequired: item.isRequired,
-        isActive: item.isActive,
-        createdAt: item.createdAt,
-        updatedAt: item.updatedAt,
-      })),
+      items: items.map(serializeAttribute),
       total,
       page,
       pageSize,
@@ -88,23 +99,7 @@ export async function POST(req: Request) {
     const entity = ctx.em.create(CpqProductAttribute, { ...body, productId, ...scope })
     await ctx.em.flush()
 
-    return NextResponse.json(
-      {
-        id: entity.id,
-        productId: entity.productId,
-        code: entity.code,
-        name: entity.name,
-        attributeType: entity.attributeType,
-        options: entity.options,
-        constraints: entity.constraints,
-        sortOrder: entity.sortOrder,
-        isRequired: entity.isRequired,
-        isActive: entity.isActive,
-        createdAt: entity.createdAt,
-        updatedAt: entity.updatedAt,
-      },
-      { status: 201 },
-    )
+    return NextResponse.json(serializeAttribute(entity), { status: 201 })
   } catch (err) {
     if (err instanceof z.ZodError) {
       return NextResponse.json({ error: 'Validation error', details: err.issues }, { status: 400 })
@@ -129,20 +124,7 @@ export async function PUT(req: Request) {
     ctx.em.assign(entity, updates)
     await ctx.em.flush()
 
-    return NextResponse.json({
-      id: entity.id,
-      productId: entity.productId,
-      code: entity.code,
-      name: entity.name,
-      attributeType: entity.attributeType,
-      options: entity.options,
-      constraints: entity.constraints,
-      sortOrder: entity.sortOrder,
-      isRequired: entity.isRequired,
-      isActive: entity.isActive,
-      createdAt: entity.createdAt,
-      updatedAt: entity.updatedAt,
-    })
+    return NextResponse.json(serializeAttribute(entity))
   } catch (err) {
     if (err instanceof z.ZodError) {
       return NextResponse.json({ error: 'Validation error', details: err.issues }, { status: 400 })

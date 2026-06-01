@@ -3,15 +3,24 @@
 Pre-built integration that wires `@dainamite/cpq` subscription lifecycle
 events to `@dainamite/billing` API calls.
 
-Install it as a sibling module alongside `@dainamite/cpq` and
-`@dainamite/billing`:
+It depends on both `@dainamite/cpq` and `@dainamite/billing` (as peers) and
+**must be registered after both** so their services are resolvable when its
+subscribers fire:
 
 ```typescript
-// src/modules.ts
+// src/modules.ts — order matters
 { id: 'cpq', from: '@dainamite/cpq' }
 { id: 'billing', from: '@dainamite/billing' }
 { id: 'cpq_billing_connector', from: '@dainamite/cpq-billing-connector' }
 ```
+
+```bash
+yarn generate
+yarn mercato db migrate
+```
+
+There is no UI or schema of its own to configure — it is pure event glue.
+Engines: **Node ≥ 24**.
 
 The connector subscribes to six CPQ lifecycle events and translates each
 to the billing API contract:
@@ -27,6 +36,7 @@ to the billing API contract:
 
 ## Status
 
+**Built — publishing soon** (alongside `@dainamite/billing`; not yet on npm).
 All six subscribers are wired end-to-end — `@dainamite/cpq` emits the
 matching events (`cpq.subscription.activated` on new-sale activation,
 the ARC events on amend / renew / cancel / merge). Proration math lives

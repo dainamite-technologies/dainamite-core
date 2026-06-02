@@ -999,7 +999,10 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                 </div>
                 <div>
                   <label className="block text-xs font-medium mb-1">Type</label>
-                  <select value={editingAttr.attributeType} onChange={(e) => setEditingAttr({ ...editingAttr, attributeType: e.target.value })} className="w-full rounded-md border px-2 py-1.5 text-sm">
+                  {/* Reset the default when the type changes — a default kept from a
+                      different type (e.g. a numeric default on a now-boolean attr)
+                      would be invalid and confusing. */}
+                  <select value={editingAttr.attributeType} onChange={(e) => setEditingAttr({ ...editingAttr, attributeType: e.target.value, defaultValue: null })} className="w-full rounded-md border px-2 py-1.5 text-sm">
                     <option value="text">Text</option>
                     <option value="number">Number</option>
                     <option value="boolean">Boolean</option>
@@ -1026,6 +1029,63 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                 <div>
                   <label className="block text-xs font-medium mb-1">Help Text</label>
                   <input type="text" value={editingAttr.helpText ?? ''} onChange={(e) => setEditingAttr({ ...editingAttr, helpText: e.target.value || null })} className="w-full rounded-md border px-2 py-1.5 text-sm" />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium mb-1">Default Value</label>
+                  {editingAttr.attributeType === 'number' ? (
+                    <NumberInput
+                      value={typeof editingAttr.defaultValue === 'number' ? editingAttr.defaultValue : null}
+                      onChange={(n) => setEditingAttr({ ...editingAttr, defaultValue: n })}
+                      placeholder="No default"
+                    />
+                  ) : editingAttr.attributeType === 'boolean' ? (
+                    <select
+                      value={editingAttr.defaultValue === true ? 'true' : editingAttr.defaultValue === false ? 'false' : ''}
+                      onChange={(e) => setEditingAttr({ ...editingAttr, defaultValue: e.target.value === '' ? null : e.target.value === 'true' })}
+                      className="w-full rounded-md border px-2 py-1.5 text-sm"
+                    >
+                      <option value="">No default</option>
+                      <option value="true">True</option>
+                      <option value="false">False</option>
+                    </select>
+                  ) : (editingAttr.attributeType === 'select' || editingAttr.attributeType === 'multi-select') ? (
+                    <select
+                      multiple={editingAttr.attributeType === 'multi-select'}
+                      value={
+                        editingAttr.attributeType === 'multi-select'
+                          ? (Array.isArray(editingAttr.defaultValue) ? editingAttr.defaultValue.map(String) : [])
+                          : (editingAttr.defaultValue == null ? '' : String(editingAttr.defaultValue))
+                      }
+                      onChange={(e) => {
+                        if (editingAttr.attributeType === 'multi-select') {
+                          const vals = Array.from(e.target.selectedOptions).map((o) => o.value).filter((v) => v !== '')
+                          setEditingAttr({ ...editingAttr, defaultValue: vals.length ? vals : null })
+                        } else {
+                          setEditingAttr({ ...editingAttr, defaultValue: e.target.value === '' ? null : e.target.value })
+                        }
+                      }}
+                      className="w-full rounded-md border px-2 py-1.5 text-sm"
+                    >
+                      {/* `multiple` selects can't carry a placeholder row, so only the
+                          single-select variant gets an explicit "No default" option. */}
+                      {editingAttr.attributeType === 'select' && <option value="">No default</option>}
+                      {editingOptions
+                        .filter((o) => o.value.trim() !== '')
+                        .map((o) => (
+                          <option key={o.value} value={o.value}>
+                            {o.label || o.value}
+                          </option>
+                        ))}
+                    </select>
+                  ) : (
+                    <input
+                      type="text"
+                      value={editingAttr.defaultValue == null ? '' : String(editingAttr.defaultValue)}
+                      onChange={(e) => setEditingAttr({ ...editingAttr, defaultValue: e.target.value === '' ? null : e.target.value })}
+                      placeholder="No default"
+                      className="w-full rounded-md border px-2 py-1.5 text-sm"
+                    />
+                  )}
                 </div>
                 {editingAttr.attributeType === 'reference' && (
                   <>

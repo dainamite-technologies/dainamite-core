@@ -11,6 +11,10 @@ import { mkdir } from 'node:fs/promises'
 const BASE = process.env.BASE_URL || 'http://localhost:3000'
 const OUT = 'docs/screenshots'
 
+// Default to the seeded demo admins; override via env for a non-default seed.
+const GIX = { email: process.env.GIX_EMAIL || 'admin@gix.com', password: process.env.GIX_PASSWORD || 'secret' }
+const PUFFIN = { email: process.env.PUFFIN_EMAIL || 'admin@puffin.com', password: process.env.PUFFIN_PASSWORD || 'secret' }
+
 function decodeJwtClaims(token) {
   const parts = token.split('.')
   if (parts.length < 2) return null
@@ -67,11 +71,14 @@ const main = async () => {
   await mkdir(OUT, { recursive: true })
   const browser = await chromium.launch()
 
+  // Each shoot below maps 1:1 to an image committed under docs/screenshots/
+  // and referenced in the root README — keep them in sync so re-running the
+  // script never leaves orphan files.
+
   // GIX tenant — has CPQ catalog, subscriptions (inventory) AND billing data.
-  const gix = await loginContext(browser, 'admin@gix.com', 'secret')
+  const gix = await loginContext(browser, GIX.email, GIX.password)
   await shoot(gix, '/backend/cpq/offerings', 'cpq-offerings.png')
   await shoot(gix, '/backend/cpq/specifications', 'cpq-specifications.png')
-  await shoot(gix, '/backend/cpq/pricing', 'cpq-pricing.png')
   await shoot(gix, '/backend/cpq/quotes', 'cpq-quotes.png')
   await shoot(gix, '/backend/cpq/inventory', 'cpq-inventory.png')
   await shoot(gix, '/backend/billing/accounts', 'billing-accounts.png')
@@ -80,9 +87,9 @@ const main = async () => {
   await shoot(gix, '/backend/billing/invoices', 'billing-invoices.png')
   await gix.close()
 
-  // Puffin tenant — richer CPQ catalog (bundles, multi-dim pricing tables).
-  const puffin = await loginContext(browser, 'admin@puffin.com', 'secret')
-  await shoot(puffin, '/backend/cpq/offerings', 'cpq-offerings-puffin.png')
+  // Puffin tenant — richer CPQ catalog; the README uses its multi-dimensional
+  // pricing tables as the pricing illustration.
+  const puffin = await loginContext(browser, PUFFIN.email, PUFFIN.password)
   await shoot(puffin, '/backend/cpq/pricing', 'cpq-pricing-puffin.png')
   await puffin.close()
 

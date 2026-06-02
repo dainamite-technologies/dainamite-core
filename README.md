@@ -235,8 +235,10 @@ With all three enabled, activating a CPQ quote into a subscription
 automatically opens a Billing Account and seeds Billing Items; the scheduled
 Bill Run then drafts invoices for human approval.
 
-> **Tip:** `yarn mercato module add @dainamite/<pkg>` can install **and**
-> register a module in one step instead of editing `src/modules.ts` by hand.
+> **Tip:** once a package is published, `yarn mercato module add @dainamite/<pkg>`
+> can install **and** register it in one step instead of editing
+> `src/modules.ts` by hand. (It won't work for `billing` /
+> `cpq-billing-connector` until they land on npm.)
 
 ---
 

@@ -40,7 +40,7 @@ for the full implementation plan.
 your host app's `src/modules.ts`:
 
 ```bash
-yarn mercato module add @dainamite/billing   # installs + registers in one step
+yarn mercato module add @dainamite/billing   # installs + registers (once published to npm)
 # …or: yarn add @dainamite/billing  then add { id: 'billing', from: '@dainamite/billing' }
 ```
 

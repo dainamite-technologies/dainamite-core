@@ -7,24 +7,29 @@ quoting wizards, customer inventory & subscription tracking, ARC
 
 ## Install
 
-Requires access to the `@dainamite` GitHub Packages scope. Configure
-`.npmrc` to point `@dainamite` at `https://npm.pkg.github.com`, then:
+Published to the **public npm registry** — no scope auth or `.npmrc`
+changes needed:
 
 ```sh
 yarn add @dainamite/cpq
 ```
 
-Register the module in your host app's `src/modules.ts`:
+Register the module in your host app's `src/modules.ts` (after its
+required core modules — see below):
 
 ```ts
 { id: 'cpq', from: '@dainamite/cpq' }
 ```
 
-Run framework migrations to install CPQ's schema:
+Regenerate the module graph, then run framework migrations to install
+CPQ's schema:
 
 ```sh
+yarn generate
 yarn mercato db migrate
 ```
+
+CPQ admin pages appear under `/backend/cpq/*`.
 
 ## What's inside
 
@@ -55,8 +60,8 @@ directly to source.
 
 - **L1** — Open Mercato core consumed from `@open-mercato/*` (npm).
 - **L2** — Dainamite product modules (this package + sibling
-  `@dainamite/*`), published to **GitHub Packages** under the
-  `@dainamite` scope.
+  `@dainamite/*`), published to **public npm** under the `@dainamite`
+  scope.
 - **L3** — `dainamite-core` is the first L3 customer app; other customer
   repos consume `@dainamite/cpq` via `yarn add` and register it the same
   way.
@@ -100,9 +105,9 @@ Add a changeset alongside any change in `packages/cpq/`:
 yarn changeset
 ```
 
-Bumps and the GitHub Packages publish are handled by the release
-workflow on push to `main`.
+Bumps and the public-npm publish are handled by the release workflow on
+push to `main`.
 
 ## License
 
-Proprietary — internal Dainamite use only.
+MIT.

@@ -249,7 +249,7 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
           // the list renders their names instead of "missing". The charge editor
           // also lazy-loads them, but the read view needs them on mount/refresh.
           if ((data.charges ?? []).some((c) => c.pricingTableId)) {
-            const ptRes = await fetch('/api/cpq/pricing-tables?pageSize=200')
+            const ptRes = await fetch('/api/cpq/pricing-tables?pageSize=100')
             if (ptRes.ok) {
               const ptData = await ptRes.json()
               if (!cancelled) setPricingTables(ptData.items ?? [])
@@ -373,7 +373,7 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
 
   const loadPricingTables = async () => {
     if (pricingTables.length > 0) return
-    const res = await fetch('/api/cpq/pricing-tables?pageSize=200')
+    const res = await fetch('/api/cpq/pricing-tables?pageSize=100')
     if (res.ok) {
       const data = await res.json()
       setPricingTables(data.items ?? [])

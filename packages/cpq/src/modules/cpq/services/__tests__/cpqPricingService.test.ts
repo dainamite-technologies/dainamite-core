@@ -664,7 +664,8 @@ describe('DefaultCpqPricingService.calculateCharge — tiered pricing', () => {
     expect(result.quantity).toBe(200)
     expect(result.currencyCode).toBe('EUR')
     expect(result.breakdown?.tiers).toHaveLength(2)
-    expect(result.breakdown?.tiers.every((t) => t.pricePerUnit === 89 || t.pricePerUnit === 82)).toBe(true)
+    expect(result.breakdown?.tiers[0].pricePerUnit).toBe(89)
+    expect(result.breakdown?.tiers[1].pricePerUnit).toBe(82)
   })
 
   it('returns 0 when the configured dimension value matches no entry', async () => {

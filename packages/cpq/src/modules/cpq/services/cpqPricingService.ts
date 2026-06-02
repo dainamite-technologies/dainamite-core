@@ -382,10 +382,9 @@ export class DefaultCpqPricingService {
     // allocating across tier ranges. Without this, ranges that belong to other
     // dimension values (tier = starter / pro) leak into the allocation and the
     // lookup returns a wrong or zero price. flat / per_unit already filter via
-    // matchEntry; tiered must do the same.
-    const matched = dimensions.length
-      ? entries.filter((entry) => entryMatchesDimensions(entry, dimensions, configuration))
-      : entries
+    // matchEntry; tiered must do the same. With no dimensions every entry
+    // matches vacuously, so this is also correct for tier-only tables.
+    const matched = entries.filter((entry) => entryMatchesDimensions(entry, dimensions, configuration))
 
     const sorted = [...matched].sort((a, b) => (a.tierNumber ?? 0) - (b.tierNumber ?? 0))
 

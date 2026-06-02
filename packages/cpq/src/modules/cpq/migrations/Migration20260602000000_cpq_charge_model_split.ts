@@ -40,12 +40,14 @@ export class Migration20260602000000_cpq_charge_model_split extends Migration {
   }
 
   async down(): Promise<void> {
-    // Best-effort re-collapse to the legacy combined value. Combinations that
-    // only exist post-split (flat+table, per_unit+fixed) map to their nearest
-    // legacy model; `volume` has no legacy equivalent and falls back to per_unit.
+    // Best-effort re-collapse to the legacy combined value. `per_unit + fixed`
+    // reverts to `flat` (the old fixed-price path: 1 × fixedPrice) rather than
+    // `per_unit` (old table lookup) so it doesn't silently under-bill; only a
+    // genuine `per_unit + table` keeps the per_unit model. `volume` has no
+    // legacy equivalent and falls back to per_unit.
     this.addSql(`update "cpq_product_charges" set "pricing_method" = case
       when "charge_model" = 'tiered' then 'tiered'
-      when "charge_model" = 'per_unit' then 'per_unit'
+      when "charge_model" = 'per_unit' and "pricing_method" = 'table' then 'per_unit'
       when "charge_model" = 'volume' then 'per_unit'
       else 'flat'
     end;`)

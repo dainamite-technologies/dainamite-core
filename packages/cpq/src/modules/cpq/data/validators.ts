@@ -254,9 +254,12 @@ export const cpqProductChargeCreateSchema = cpqProductChargeBase.superRefine((da
 export const cpqProductChargeUpdateSchema = cpqProductChargeBase.partial().extend({
   id: z.string().uuid(),
 }).superRefine((data, ctx) => {
-  // On update, only enforce shape if pricingMethod is present in payload
-  // (PATCH semantics — service merges with the persisted row).
-  if (data.pricingMethod !== undefined) refineChargePricingShape(ctx, data)
+  // Enforce shape whenever either pricing axis is being changed — a
+  // chargeModel-only PATCH (e.g. flat → per_unit) still alters the required
+  // fields, so it must validate rather than silently persist a broken charge.
+  if (data.pricingMethod !== undefined || data.chargeModel !== undefined) {
+    refineChargePricingShape(ctx, data)
+  }
 })
 
 // ─── Price Rule ──────────────────────────────────────────────────

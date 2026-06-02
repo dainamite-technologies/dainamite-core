@@ -828,7 +828,10 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                     onChange={(e) => {
                       const source = e.target.value
                       if (source === 'fixed') {
-                        setEditingCharge({ ...editingCharge, pricingMethod: source, pricingTableId: null, priceColumnKey: null })
+                        // Only per_unit keeps the quantity attribute under a fixed
+                        // price; flat must drop it (V-CHG-1 forbids it).
+                        const keepQty = editingCharge.chargeModel === 'per_unit'
+                        setEditingCharge({ ...editingCharge, pricingMethod: source, pricingTableId: null, priceColumnKey: null, ...(keepQty ? {} : { quantityAttributeCode: null }) })
                       } else {
                         setEditingCharge({ ...editingCharge, pricingMethod: source, fixedPrice: null })
                       }

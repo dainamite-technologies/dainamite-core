@@ -1030,63 +1030,75 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                   <label className="block text-xs font-medium mb-1">Help Text</label>
                   <input type="text" value={editingAttr.helpText ?? ''} onChange={(e) => setEditingAttr({ ...editingAttr, helpText: e.target.value || null })} className="w-full rounded-md border px-2 py-1.5 text-sm" />
                 </div>
-                <div>
-                  <label className="block text-xs font-medium mb-1">Default Value</label>
-                  {editingAttr.attributeType === 'number' ? (
-                    <NumberInput
-                      value={typeof editingAttr.defaultValue === 'number' ? editingAttr.defaultValue : null}
-                      onChange={(n) => setEditingAttr({ ...editingAttr, defaultValue: n })}
-                      placeholder="No default"
-                    />
-                  ) : editingAttr.attributeType === 'boolean' ? (
-                    <select
-                      value={editingAttr.defaultValue === true ? 'true' : editingAttr.defaultValue === false ? 'false' : ''}
-                      onChange={(e) => setEditingAttr({ ...editingAttr, defaultValue: e.target.value === '' ? null : e.target.value === 'true' })}
-                      className="w-full rounded-md border px-2 py-1.5 text-sm"
-                    >
-                      <option value="">No default</option>
-                      <option value="true">True</option>
-                      <option value="false">False</option>
-                    </select>
-                  ) : (editingAttr.attributeType === 'select' || editingAttr.attributeType === 'multi-select') ? (
-                    <select
-                      multiple={editingAttr.attributeType === 'multi-select'}
-                      value={
-                        editingAttr.attributeType === 'multi-select'
-                          ? (Array.isArray(editingAttr.defaultValue) ? editingAttr.defaultValue.map(String) : [])
-                          : (editingAttr.defaultValue == null ? '' : String(editingAttr.defaultValue))
-                      }
-                      onChange={(e) => {
-                        if (editingAttr.attributeType === 'multi-select') {
-                          const vals = Array.from(e.target.selectedOptions).map((o) => o.value).filter((v) => v !== '')
-                          setEditingAttr({ ...editingAttr, defaultValue: vals.length ? vals : null })
-                        } else {
-                          setEditingAttr({ ...editingAttr, defaultValue: e.target.value === '' ? null : e.target.value })
-                        }
-                      }}
-                      className="w-full rounded-md border px-2 py-1.5 text-sm"
-                    >
-                      {/* `multiple` selects can't carry a placeholder row, so only the
-                          single-select variant gets an explicit "No default" option. */}
-                      {editingAttr.attributeType === 'select' && <option value="">No default</option>}
-                      {editingOptions
-                        .filter((o) => o.value.trim() !== '')
-                        .map((o) => (
-                          <option key={o.value} value={o.value}>
-                            {o.label || o.value}
-                          </option>
-                        ))}
-                    </select>
-                  ) : (
-                    <input
-                      type="text"
-                      value={editingAttr.defaultValue == null ? '' : String(editingAttr.defaultValue)}
-                      onChange={(e) => setEditingAttr({ ...editingAttr, defaultValue: e.target.value === '' ? null : e.target.value })}
-                      placeholder="No default"
-                      className="w-full rounded-md border px-2 py-1.5 text-sm"
-                    />
-                  )}
-                </div>
+                {/* Reference attributes resolve to an FK UUID at run-time, so a
+                    free-text scalar default has no sensible meaning — omit the
+                    field entirely for them. */}
+                {editingAttr.attributeType !== 'reference' && (
+                  <div>
+                    <label className="block text-xs font-medium mb-1">{t('cpq.specifications.defaultValue', 'Default Value')}</label>
+                    {editingAttr.attributeType === 'number' ? (
+                      <NumberInput
+                        value={typeof editingAttr.defaultValue === 'number' ? editingAttr.defaultValue : null}
+                        onChange={(n) => setEditingAttr({ ...editingAttr, defaultValue: n })}
+                        placeholder={t('cpq.specifications.noDefault', 'No default')}
+                      />
+                    ) : editingAttr.attributeType === 'boolean' ? (
+                      <select
+                        value={editingAttr.defaultValue === true ? 'true' : editingAttr.defaultValue === false ? 'false' : ''}
+                        onChange={(e) => setEditingAttr({ ...editingAttr, defaultValue: e.target.value === '' ? null : e.target.value === 'true' })}
+                        className="w-full rounded-md border px-2 py-1.5 text-sm"
+                      >
+                        <option value="">{t('cpq.specifications.noDefault', 'No default')}</option>
+                        <option value="true">{t('cpq.specifications.booleanTrue', 'True')}</option>
+                        <option value="false">{t('cpq.specifications.booleanFalse', 'False')}</option>
+                      </select>
+                    ) : (editingAttr.attributeType === 'select' || editingAttr.attributeType === 'multi-select') ? (
+                      <>
+                        <select
+                          multiple={editingAttr.attributeType === 'multi-select'}
+                          value={
+                            editingAttr.attributeType === 'multi-select'
+                              ? (Array.isArray(editingAttr.defaultValue) ? editingAttr.defaultValue.map(String) : [])
+                              : (editingAttr.defaultValue == null ? '' : String(editingAttr.defaultValue))
+                          }
+                          onChange={(e) => {
+                            if (editingAttr.attributeType === 'multi-select') {
+                              const vals = Array.from(e.target.selectedOptions).map((o) => o.value).filter((v) => v !== '')
+                              setEditingAttr({ ...editingAttr, defaultValue: vals.length ? vals : null })
+                            } else {
+                              setEditingAttr({ ...editingAttr, defaultValue: e.target.value === '' ? null : e.target.value })
+                            }
+                          }}
+                          className="w-full rounded-md border px-2 py-1.5 text-sm"
+                        >
+                          {/* `multiple` selects can't carry a placeholder row, so only the
+                              single-select variant gets an explicit "No default" option. */}
+                          {editingAttr.attributeType === 'select' && <option value="">{t('cpq.specifications.noDefault', 'No default')}</option>}
+                          {editingOptions
+                            .filter((o) => o.value.trim() !== '')
+                            .map((o) => (
+                              <option key={o.value} value={o.value}>
+                                {o.label || o.value}
+                              </option>
+                            ))}
+                        </select>
+                        {editingAttr.attributeType === 'multi-select' && (
+                          <p className="text-xs text-muted-foreground mt-1">
+                            {t('cpq.specifications.multiSelectDefaultHint', 'Ctrl/Cmd-click to select several, or deselect all to clear the default.')}
+                          </p>
+                        )}
+                      </>
+                    ) : (
+                      <input
+                        type="text"
+                        value={editingAttr.defaultValue == null ? '' : String(editingAttr.defaultValue)}
+                        onChange={(e) => setEditingAttr({ ...editingAttr, defaultValue: e.target.value === '' ? null : e.target.value })}
+                        placeholder={t('cpq.specifications.noDefault', 'No default')}
+                        className="w-full rounded-md border px-2 py-1.5 text-sm"
+                      />
+                    )}
+                  </div>
+                )}
                 {editingAttr.attributeType === 'reference' && (
                   <>
                     <div>

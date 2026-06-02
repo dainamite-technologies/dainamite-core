@@ -5,6 +5,7 @@ import { useParams, useRouter } from 'next/navigation'
 import { Alert } from '@open-mercato/ui/primitives/alert'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { Tag } from '@open-mercato/ui/primitives/tag'
+import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import { NumberInput } from '../../../../components/NumberInput'
 import {
   chargeTypeMap,
@@ -98,20 +99,16 @@ type Specification = {
 
 type PricingTableRef = { id: string; code: string; name: string; dimensions: Array<{ key: string; label: string }>; priceColumns: Array<{ key: string; label: string }> }
 
-// Single source for fetching the pricing-table list — used both eagerly (so the
-// charges list can resolve table names on load) and lazily (charge editor
-// dropdown). `pageSize` stays at the documented ≤ 100 cap. A failed fetch logs
-// and returns [] rather than throwing, so a transient error doesn't blank the
-// whole page — affected charges just fall back to "missing".
+// Shared by the eager mount-load and the lazy editor dropdown. Returns [] on
+// failure so a transient error degrades gracefully instead of blanking the page.
 async function fetchPricingTables(): Promise<PricingTableRef[]> {
   try {
-    const res = await fetch('/api/cpq/pricing-tables?pageSize=100')
-    if (!res.ok) {
-      console.warn('[cpq] Failed to load pricing tables for the charges list:', res.status)
+    const { ok, result } = await apiCall<{ items?: PricingTableRef[] }>('/api/cpq/pricing-tables?pageSize=100')
+    if (!ok) {
+      console.warn('[cpq] Failed to load pricing tables for the charges list')
       return []
     }
-    const data = await res.json()
-    return data.items ?? []
+    return result?.items ?? []
   } catch (err) {
     console.warn('[cpq] Failed to load pricing tables for the charges list:', err)
     return []

@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { normalizeChargePricing } from '../services/types'
+import { normalizeChargePricing } from './charge-pricing'
 
 // ─── Product Specification ───────────────────────────────────────
 

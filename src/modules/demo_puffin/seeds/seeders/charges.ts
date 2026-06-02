@@ -43,7 +43,7 @@ async function ensureCharge(
   data: ChargeInput,
 ): Promise<void> {
   const { CpqProductCharge } = await import('@dainamite/cpq/modules/cpq/data/entities')
-  const { normalizeChargePricing } = await import('@dainamite/cpq/modules/cpq/services/types')
+  const { normalizeChargePricing } = await import('@dainamite/cpq/modules/cpq/data/charge-pricing')
   const exists = await em.findOne(CpqProductCharge, {
     ...scope,
     productId: pid,

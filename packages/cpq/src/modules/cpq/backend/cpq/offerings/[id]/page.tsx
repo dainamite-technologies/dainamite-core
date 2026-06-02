@@ -7,7 +7,7 @@ import { Button } from '@open-mercato/ui/primitives/button'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import { NumberInput } from '../../../../components/NumberInput'
-import { normalizeChargePricing } from '../../../../services/types'
+import { normalizeChargePricing } from '../../../../data/charge-pricing'
 import {
   chargeTypeMap,
   formatStatusLabel,

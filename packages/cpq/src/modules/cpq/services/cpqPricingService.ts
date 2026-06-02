@@ -1,7 +1,8 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { CpqProductCharge, CpqPricingTable, CpqPricingTableEntry, CpqPriceRule } from '../data/entities'
 import type { ResolvedCharge, RuleAdjustment, TierBreakdown } from './types'
-import { getBaseCurrencyCode, normalizeChargePricing } from './types'
+import { getBaseCurrencyCode } from './types'
+import { normalizeChargePricing } from '../data/charge-pricing'
 
 export type { ResolvedCharge, RuleAdjustment, TierBreakdown }
 

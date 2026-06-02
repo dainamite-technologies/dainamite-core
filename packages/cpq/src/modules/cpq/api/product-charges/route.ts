@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { resolveCpqRouteContext } from '../context'
 import { CpqProductCharge, CpqProductOffering, CpqProductSpecification } from '../../data/entities'
 import { cpqProductChargeCreateSchema, cpqProductChargeUpdateSchema } from '../../data/validators'
-import { normalizeChargePricing } from '../../services/types'
+import { normalizeChargePricing } from '../../data/charge-pricing'
 
 export const metadata = {
   GET: { requireAuth: true, requireFeatures: ['cpq.products.view'] },

@@ -311,7 +311,7 @@ export async function seedGixPricingTables(em: EntityManager, scope: SeedScope):
 
 export async function seedGixProductCharges(em: EntityManager, scope: SeedScope): Promise<void> {
   const { CpqProductCharge, CpqPricingTable } = await import('@dainamite/cpq/modules/cpq/data/entities')
-  const { normalizeChargePricing } = await import('@dainamite/cpq/modules/cpq/services/types')
+  const { normalizeChargePricing } = await import('@dainamite/cpq/modules/cpq/data/charge-pricing')
   const { CatalogProduct } = await import('@open-mercato/core/modules/catalog/data/entities')
 
   const tableId = async (code: string) => {

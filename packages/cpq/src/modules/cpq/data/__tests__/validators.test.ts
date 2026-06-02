@@ -356,6 +356,13 @@ describe('cpqProductChargeCreateSchema', () => {
     expect(result.error.issues.some((i) => i.path[0] === 'pricingMethod')).toBe(true)
   })
 
+  it('rejects tiered + fixed (tiered requires table lookup)', () => {
+    const result = cpqProductChargeCreateSchema.safeParse({ ...flatBase, chargeModel: 'tiered', pricingMethod: 'fixed' })
+    expect(result.success).toBe(false)
+    if (result.success) return
+    expect(result.error.issues.some((i) => i.path[0] === 'pricingMethod')).toBe(true)
+  })
+
   it('accepts per_unit + fixed with a quantity attribute', () => {
     const result = cpqProductChargeCreateSchema.safeParse({
       code: 'seat', name: 'Seat', chargeType: 'mrc',

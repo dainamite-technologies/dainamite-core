@@ -245,6 +245,17 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
           setSpecDetail(data.specification ?? null)
           setComponents(data.components ?? [])
 
+          // Charges reference pricing tables by id; load the tables up front so
+          // the list renders their names instead of "missing". The charge editor
+          // also lazy-loads them, but the read view needs them on mount/refresh.
+          if ((data.charges ?? []).some((c) => c.pricingTableId)) {
+            const ptRes = await fetch('/api/cpq/pricing-tables?pageSize=200')
+            if (ptRes.ok) {
+              const ptData = await ptRes.json()
+              if (!cancelled) setPricingTables(ptData.items ?? [])
+            }
+          }
+
           // Load attributes for the spec
           if (data.specId) {
             const attrRes = await fetch(`/api/cpq/product-attributes?specId=${encodeURIComponent(data.specId)}&pageSize=200`)

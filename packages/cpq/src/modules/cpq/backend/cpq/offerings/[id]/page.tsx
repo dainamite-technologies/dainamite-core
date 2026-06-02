@@ -98,6 +98,26 @@ type Specification = {
 
 type PricingTableRef = { id: string; code: string; name: string; dimensions: Array<{ key: string; label: string }>; priceColumns: Array<{ key: string; label: string }> }
 
+// Single source for fetching the pricing-table list — used both eagerly (so the
+// charges list can resolve table names on load) and lazily (charge editor
+// dropdown). `pageSize` stays at the documented ≤ 100 cap. A failed fetch logs
+// and returns [] rather than throwing, so a transient error doesn't blank the
+// whole page — affected charges just fall back to "missing".
+async function fetchPricingTables(): Promise<PricingTableRef[]> {
+  try {
+    const res = await fetch('/api/cpq/pricing-tables?pageSize=100')
+    if (!res.ok) {
+      console.warn('[cpq] Failed to load pricing tables for the charges list:', res.status)
+      return []
+    }
+    const data = await res.json()
+    return data.items ?? []
+  } catch (err) {
+    console.warn('[cpq] Failed to load pricing tables for the charges list:', err)
+    return []
+  }
+}
+
 type EditingCharge = Omit<Charge, 'id'> & { id?: string }
 
 // ─── Defaults ───────────────────────────────────────────────────
@@ -249,11 +269,8 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
           // the list renders their names instead of "missing". The charge editor
           // also lazy-loads them, but the read view needs them on mount/refresh.
           if ((data.charges ?? []).some((c) => c.pricingTableId)) {
-            const ptRes = await fetch('/api/cpq/pricing-tables?pageSize=100')
-            if (ptRes.ok) {
-              const ptData = await ptRes.json()
-              if (!cancelled) setPricingTables(ptData.items ?? [])
-            }
+            const tables = await fetchPricingTables()
+            if (!cancelled) setPricingTables(tables)
           }
 
           // Load attributes for the spec
@@ -373,11 +390,7 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
 
   const loadPricingTables = async () => {
     if (pricingTables.length > 0) return
-    const res = await fetch('/api/cpq/pricing-tables?pageSize=100')
-    if (res.ok) {
-      const data = await res.json()
-      setPricingTables(data.items ?? [])
-    }
+    setPricingTables(await fetchPricingTables())
   }
 
   const startEditCharge = (charge?: Charge) => {

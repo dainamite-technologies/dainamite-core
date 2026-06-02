@@ -378,13 +378,11 @@ export class DefaultCpqPricingService {
     const quantity = Number(configuration[charge.quantityAttributeCode ?? ''] ?? 0)
     if (quantity <= 0) return { ...base, quantity: 0, totalPrice: 0 }
 
-    // Restrict to the dimension-matched slice (e.g. tier = enterprise) before
-    // allocating across tier ranges. Without this, ranges that belong to other
-    // dimension values (tier = starter / pro) leak into the allocation and the
-    // lookup returns a wrong or zero price. flat / per_unit already filter via
-    // matchEntry; tiered must do the same. With no dimensions every entry
-    // matches vacuously, so this is also correct for tier-only tables.
+    // tiered must filter to the dimension-matched slice first; flat/per_unit do this via matchEntry.
     const matched = entries.filter((entry) => entryMatchesDimensions(entry, dimensions, configuration))
+    // No row matches the configured dimensions → unpriced; fall back to base
+    // (quantity 1, total 0), consistent with flat/per_unit's null-match path.
+    if (matched.length === 0) return base
 
     const sorted = [...matched].sort((a, b) => (a.tierNumber ?? 0) - (b.tierNumber ?? 0))
 

@@ -690,7 +690,43 @@ describe('DefaultCpqPricingService.calculateCharge — tiered pricing', () => {
     })
 
     expect(result.totalPrice).toBe(0)
+    // No dimension row matched → unpriced, falls back to the base shape
+    // (quantity 1, no tier breakdown), consistent with flat / per_unit.
+    expect(result.quantity).toBe(1)
     expect(result.breakdown?.tiers ?? []).toHaveLength(0)
+  })
+
+  it('requires every dimension to match (multi-dimension tiered lookup)', async () => {
+    em.findOne.mockResolvedValueOnce({ id: 'table-1', dimensions: [{ key: 'tier' }, { key: 'region' }] })
+    em.find.mockResolvedValueOnce([
+      // right tier, wrong region — must be excluded
+      { tierNumber: 1, rangeFrom: 0, rangeTo: null, prices: { monthly: 99 }, currencyCode: 'EUR', dimensionValues: { tier: 'enterprise', region: 'us' } },
+      // both dimensions match — used
+      { tierNumber: 1, rangeFrom: 0, rangeTo: 100, prices: { monthly: 80 }, currencyCode: 'EUR', dimensionValues: { tier: 'enterprise', region: 'eu' } },
+      { tierNumber: 2, rangeFrom: 100, rangeTo: null, prices: { monthly: 70 }, currencyCode: 'EUR', dimensionValues: { tier: 'enterprise', region: 'eu' } },
+    ])
+
+    const result = await service.calculateCharge({
+      charge: makeCharge({
+        code: 'mrc',
+        name: 'Subscription Fee',
+        chargeType: 'mrc',
+        pricingMethod: 'tiered',
+        pricingTableId: 'table-1',
+        priceColumnKey: 'monthly',
+        quantityAttributeCode: 'seats',
+      }) as unknown as never,
+      configuration: { tier: 'enterprise', region: 'eu', seats: 150 },
+      tenantId: SCOPE.tenantId,
+      organizationId: SCOPE.organizationId,
+    })
+
+    // eu slice only: 100 @ 80 + 50 @ 70 = 11500. The tier-matching-but-region-
+    // mismatching row (@99) must not leak in.
+    expect(result.totalPrice).toBe(11500)
+    expect(result.breakdown?.tiers).toHaveLength(2)
+    expect(result.breakdown?.tiers[0].pricePerUnit).toBe(80)
+    expect(result.breakdown?.tiers[1].pricePerUnit).toBe(70)
   })
 })
 

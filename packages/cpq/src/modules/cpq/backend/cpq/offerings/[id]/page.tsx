@@ -5,6 +5,7 @@ import { useParams, useRouter } from 'next/navigation'
 import { Alert } from '@open-mercato/ui/primitives/alert'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { Tag } from '@open-mercato/ui/primitives/tag'
+import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import { NumberInput } from '../../../../components/NumberInput'
 import {
   chargeTypeMap,
@@ -97,6 +98,22 @@ type Specification = {
 }
 
 type PricingTableRef = { id: string; code: string; name: string; dimensions: Array<{ key: string; label: string }>; priceColumns: Array<{ key: string; label: string }> }
+
+// Shared by the eager mount-load and the lazy editor dropdown. Returns [] on
+// failure so a transient error degrades gracefully instead of blanking the page.
+async function fetchPricingTables(): Promise<PricingTableRef[]> {
+  try {
+    const { ok, result } = await apiCall<{ items?: PricingTableRef[] }>('/api/cpq/pricing-tables?pageSize=100')
+    if (!ok) {
+      console.warn('[cpq] Failed to load pricing tables for the charges list')
+      return []
+    }
+    return result?.items ?? []
+  } catch (err) {
+    console.warn('[cpq] Failed to load pricing tables for the charges list:', err)
+    return []
+  }
+}
 
 type EditingCharge = Omit<Charge, 'id'> & { id?: string }
 
@@ -245,6 +262,14 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
           setSpecDetail(data.specification ?? null)
           setComponents(data.components ?? [])
 
+          // Charges reference pricing tables by id; load the tables up front so
+          // the list renders their names instead of "missing". The charge editor
+          // also lazy-loads them, but the read view needs them on mount/refresh.
+          if ((data.charges ?? []).some((c) => c.pricingTableId)) {
+            const tables = await fetchPricingTables()
+            if (!cancelled) setPricingTables(tables)
+          }
+
           // Load attributes for the spec
           if (data.specId) {
             const attrRes = await fetch(`/api/cpq/product-attributes?specId=${encodeURIComponent(data.specId)}&pageSize=200`)
@@ -362,11 +387,7 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
 
   const loadPricingTables = async () => {
     if (pricingTables.length > 0) return
-    const res = await fetch('/api/cpq/pricing-tables?pageSize=200')
-    if (res.ok) {
-      const data = await res.json()
-      setPricingTables(data.items ?? [])
-    }
+    setPricingTables(await fetchPricingTables())
   }
 
   const startEditCharge = (charge?: Charge) => {

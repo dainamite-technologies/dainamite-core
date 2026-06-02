@@ -630,6 +630,67 @@ describe('DefaultCpqPricingService.calculateCharge — tiered pricing', () => {
     expect(result.breakdown?.tiers).toHaveLength(2)
     expect(result.breakdown?.tiers[1].quantity).toBe(15)
   })
+
+  it('restricts tier allocation to the dimension-matched slice (tier lookup)', async () => {
+    em.findOne.mockResolvedValueOnce({ id: 'table-1', dimensions: [{ key: 'tier' }] })
+    em.find.mockResolvedValueOnce([
+      // starter tiers — must be ignored when tier = enterprise
+      { tierNumber: 1, rangeFrom: 0, rangeTo: 10, prices: { monthly: 19 }, currencyCode: 'EUR', dimensionValues: { tier: 'starter' } },
+      { tierNumber: 2, rangeFrom: 10, rangeTo: null, prices: { monthly: 17 }, currencyCode: 'EUR', dimensionValues: { tier: 'starter' } },
+      // enterprise tiers
+      { tierNumber: 1, rangeFrom: 0, rangeTo: 100, prices: { monthly: 89 }, currencyCode: 'EUR', dimensionValues: { tier: 'enterprise' } },
+      { tierNumber: 2, rangeFrom: 100, rangeTo: 500, prices: { monthly: 82 }, currencyCode: 'EUR', dimensionValues: { tier: 'enterprise' } },
+      { tierNumber: 3, rangeFrom: 500, rangeTo: null, prices: { monthly: 76 }, currencyCode: 'EUR', dimensionValues: { tier: 'enterprise' } },
+    ])
+
+    const result = await service.calculateCharge({
+      charge: makeCharge({
+        code: 'mrc',
+        name: 'Subscription Fee',
+        chargeType: 'mrc',
+        pricingMethod: 'tiered',
+        pricingTableId: 'table-1',
+        priceColumnKey: 'monthly',
+        quantityAttributeCode: 'seats',
+      }) as unknown as never,
+      configuration: { tier: 'enterprise', seats: 200 },
+      tenantId: SCOPE.tenantId,
+      organizationId: SCOPE.organizationId,
+    })
+
+    // enterprise slice only: 100 @ 89 + 100 @ 82 = 8900 + 8200 = 17100.
+    // Without dimension filtering the starter rows would pollute the allocation.
+    expect(result.totalPrice).toBe(17100)
+    expect(result.quantity).toBe(200)
+    expect(result.currencyCode).toBe('EUR')
+    expect(result.breakdown?.tiers).toHaveLength(2)
+    expect(result.breakdown?.tiers.every((t) => t.pricePerUnit === 89 || t.pricePerUnit === 82)).toBe(true)
+  })
+
+  it('returns 0 when the configured dimension value matches no entry', async () => {
+    em.findOne.mockResolvedValueOnce({ id: 'table-1', dimensions: [{ key: 'tier' }] })
+    em.find.mockResolvedValueOnce([
+      { tierNumber: 1, rangeFrom: 0, rangeTo: 100, prices: { monthly: 89 }, currencyCode: 'EUR', dimensionValues: { tier: 'enterprise' } },
+    ])
+
+    const result = await service.calculateCharge({
+      charge: makeCharge({
+        code: 'mrc',
+        name: 'Subscription Fee',
+        chargeType: 'mrc',
+        pricingMethod: 'tiered',
+        pricingTableId: 'table-1',
+        priceColumnKey: 'monthly',
+        quantityAttributeCode: 'seats',
+      }) as unknown as never,
+      configuration: { tier: 'pro', seats: 50 },
+      tenantId: SCOPE.tenantId,
+      organizationId: SCOPE.organizationId,
+    })
+
+    expect(result.totalPrice).toBe(0)
+    expect(result.breakdown?.tiers ?? []).toHaveLength(0)
+  })
 })
 
 describe('DefaultCpqPricingService — price rules application', () => {

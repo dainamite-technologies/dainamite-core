@@ -39,20 +39,24 @@ function evaluateApplicability(
   return true
 }
 
+function entryMatchesDimensions(
+  entry: CpqPricingTableEntry,
+  dimensions: Array<{ key: string }>,
+  configuration: Record<string, unknown>,
+): boolean {
+  return dimensions.every((dim) => {
+    const configVal = String(configuration[dim.key] ?? '')
+    const entryVal = String(entry.dimensionValues[dim.key] ?? '')
+    return configVal.toLowerCase() === entryVal.toLowerCase()
+  })
+}
+
 function matchEntry(
   entries: CpqPricingTableEntry[],
   dimensions: Array<{ key: string }>,
   configuration: Record<string, unknown>,
 ): CpqPricingTableEntry | null {
-  return (
-    entries.find((entry) =>
-      dimensions.every((dim) => {
-        const configVal = String(configuration[dim.key] ?? '')
-        const entryVal = String(entry.dimensionValues[dim.key] ?? '')
-        return configVal.toLowerCase() === entryVal.toLowerCase()
-      }),
-    ) ?? null
-  )
+  return entries.find((entry) => entryMatchesDimensions(entry, dimensions, configuration)) ?? null
 }
 
 export class DefaultCpqPricingService {
@@ -303,7 +307,7 @@ export class DefaultCpqPricingService {
       return this.calculatePerUnit(base, charge, entries, table.dimensions, configuration, priceKey)
     }
     if (method === 'tiered') {
-      return this.calculateTiered(base, charge, entries, configuration, priceKey)
+      return this.calculateTiered(base, charge, entries, table.dimensions, configuration, priceKey)
     }
 
     return base
@@ -367,13 +371,20 @@ export class DefaultCpqPricingService {
     base: ResolvedCharge,
     charge: CpqProductCharge,
     entries: CpqPricingTableEntry[],
+    dimensions: Array<{ key: string }>,
     configuration: Record<string, unknown>,
     priceKey: string,
   ): ResolvedCharge {
     const quantity = Number(configuration[charge.quantityAttributeCode ?? ''] ?? 0)
     if (quantity <= 0) return { ...base, quantity: 0, totalPrice: 0 }
 
-    const sorted = [...entries].sort((a, b) => (a.tierNumber ?? 0) - (b.tierNumber ?? 0))
+    // tiered must filter to the dimension-matched slice first; flat/per_unit do this via matchEntry.
+    const matched = entries.filter((entry) => entryMatchesDimensions(entry, dimensions, configuration))
+    // No row matches the configured dimensions → unpriced; fall back to base
+    // (quantity 1, total 0), consistent with flat/per_unit's null-match path.
+    if (matched.length === 0) return base
+
+    const sorted = [...matched].sort((a, b) => (a.tierNumber ?? 0) - (b.tierNumber ?? 0))
 
     let allocated = 0
     let total = 0

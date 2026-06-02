@@ -253,7 +253,7 @@ export function EntriesEditor({
                   </th>
                 ))}
                 {/* Tier / range columns sit between the dimension lookups and the
-                    prices they qualify, so the row reads "what → how much" (XD-294). */}
+                    prices they qualify, so the row reads "what → how much". */}
                 {hasTieredEntries && (
                   <>
                     <th className="px-3 py-3 text-left font-medium whitespace-nowrap">Tier #</th>
@@ -333,8 +333,6 @@ function EntryRow({
           )}
         </td>
       ))}
-      {/* Tier / range cells follow the dimensions and precede the prices —
-          column order kept in lockstep with the header (XD-294). */}
       {hasTieredEntries && (
         <>
           <td className="px-3 py-2">

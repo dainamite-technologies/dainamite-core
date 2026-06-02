@@ -136,12 +136,18 @@ export async function PUT(req: Request) {
     const entity = await ctx.em.findOne(CpqProductCharge, { id, ...scope })
     if (!entity) return NextResponse.json({ error: 'Not found' }, { status: 404 })
 
-    // Re-derive the canonical split shape when pricing fields are being changed.
+    // Re-derive the canonical split shape when pricing fields are being changed,
+    // and clear the opposite axis' fields so a partial PATCH can't leave a
+    // stale pricingTableId on a fixed charge (or a stale fixedPrice on a table
+    // charge) that the patch-only validator never sees.
     const normalizedUpdates =
       updates.pricingMethod !== undefined || updates.chargeModel !== undefined
         ? (() => {
             const { model, source } = normalizeChargePricing({ ...entity, ...updates })
-            return { ...updates, chargeModel: model, pricingMethod: source }
+            const sideCleared = source === 'fixed'
+              ? { pricingTableId: null, priceColumnKey: null }
+              : { fixedPrice: null }
+            return { ...updates, chargeModel: model, pricingMethod: source, ...sideCleared }
           })()
         : updates
     ctx.em.assign(entity, normalizedUpdates)

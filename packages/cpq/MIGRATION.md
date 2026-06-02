@@ -188,7 +188,7 @@ of the tier containing the total) and `per_unit + fixed` (quantity × a fixed
 unit price). Valid combinations: `fixed` → `flat | per_unit`; `table` → all four.
 
 **Backwards compatibility**: `normalizeChargePricing()` (exported from
-`services/types`) resolves the `{model, source}` from either shape, so rows that
+`data/charge-pricing`) resolves the `{model, source}` from either shape, so rows that
 predate the migration — and any client still sending the legacy `pricingMethod`
 — price and render correctly without a migration. `ResolvedCharge.pricingMethod`
 now carries the charge **model** (adds `'volume'`) for display.

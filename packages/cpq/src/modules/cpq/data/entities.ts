@@ -515,6 +515,16 @@ export class CpqProductCharge {
   @Property({ name: 'charge_type', type: 'text' })
   chargeType!: string
 
+  // XD-297: charge "shape" split into two orthogonal axes.
+  //   chargeModel  — how quantity drives the charge: flat | per_unit | volume | tiered
+  //   pricingMethod — where the unit price comes from: fixed | table
+  // Legacy rows (pre-split) carry the old combined pricingMethod values
+  // (flat | per_unit | tiered); the migration backfills both columns and the
+  // pricing service normalises any that slip through. chargeModel is nullable
+  // so the additive migration is default-safe.
+  @Property({ name: 'charge_model', type: 'text', nullable: true })
+  chargeModel?: string | null
+
   @Property({ name: 'pricing_method', type: 'text' })
   pricingMethod!: string
 

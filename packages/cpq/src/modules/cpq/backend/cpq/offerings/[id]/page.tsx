@@ -7,6 +7,7 @@ import { Button } from '@open-mercato/ui/primitives/button'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import { NumberInput } from '../../../../components/NumberInput'
+import { normalizeChargePricing } from '../../../../services/types'
 import {
   chargeTypeMap,
   formatStatusLabel,
@@ -64,6 +65,7 @@ type Charge = {
   name: string
   description: string | null
   chargeType: string
+  chargeModel: string | null
   pricingMethod: string
   pricingTableId: string | null
   priceColumnKey: string | null
@@ -136,7 +138,8 @@ const EMPTY_CHARGE: EditingCharge = {
   name: '',
   description: null,
   chargeType: 'mrc',
-  pricingMethod: 'flat',
+  chargeModel: 'flat',
+  pricingMethod: 'fixed',
   pricingTableId: null,
   priceColumnKey: null,
   fixedPrice: null,
@@ -148,17 +151,24 @@ const EMPTY_CHARGE: EditingCharge = {
 }
 
 
-const PRICING_METHOD_LABELS: Record<string, string> = {
-  flat: 'flat price',
-  fixed: 'flat price', // legacy alias — see validators.ts
-  per_unit: 'per unit',
-  tiered: 'tiered',
+// XD-297: the charge "shape" is two axes — Charge Model (how quantity drives
+// the charge) and Pricing Method (where the unit price comes from).
+const CHARGE_MODEL_LABELS: Record<string, string> = {
+  flat: 'Flat Fee',
+  per_unit: 'Per Unit',
+  volume: 'Volume-based',
+  tiered: 'Tiered',
 }
 
-// V-CHG-1 in `validators.ts`: per_unit/tiered need table + column + qty
-// attribute; flat needs fixedPrice + currencyCode. Mirror it in the UI so
-// users see what's missing without round-tripping to the server.
+const PRICING_SOURCE_LABELS: Record<string, string> = {
+  fixed: 'Fixed Price',
+  table: 'Table Lookup',
+}
+
+// V-CHG-1 in `validators.ts`: mirror the (chargeModel × pricingMethod) rules in
+// the UI so users see what's missing without round-tripping to the server.
 type ChargeShape = {
+  chargeModel: string | null
   pricingMethod: string
   pricingTableId: string | null
   priceColumnKey: string | null
@@ -172,15 +182,16 @@ function isChargeComplete(charge: ChargeShape): boolean {
 }
 
 function chargeMissingFields(charge: ChargeShape): string[] {
-  const method = charge.pricingMethod === 'fixed' ? 'flat' : charge.pricingMethod
+  const { model, source } = normalizeChargePricing(charge)
   const missing: string[] = []
-  if (method === 'flat') {
+  if (source === 'fixed') {
     if (!charge.fixedPrice) missing.push('Fixed Price')
     if (!charge.currencyCode) missing.push('Currency')
-  } else if (method === 'per_unit' || method === 'tiered') {
+    if (model === 'per_unit' && !charge.quantityAttributeCode) missing.push('Quantity Attribute')
+  } else {
     if (!charge.pricingTableId) missing.push('Pricing Table')
     if (!charge.priceColumnKey) missing.push('Price Column')
-    if (!charge.quantityAttributeCode) missing.push('Quantity Attribute')
+    if (model !== 'flat' && !charge.quantityAttributeCode) missing.push('Quantity Attribute')
   }
   return missing
 }
@@ -391,8 +402,14 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
   }
 
   const startEditCharge = (charge?: Charge) => {
-    const editing = charge ? { ...charge } : { ...EMPTY_CHARGE }
-    setEditingCharge(editing)
+    if (charge) {
+      // Normalise legacy rows (chargeModel null, combined pricingMethod) into
+      // the split shape the form's two dropdowns expect.
+      const { model, source } = normalizeChargePricing(charge)
+      setEditingCharge({ ...charge, chargeModel: model, pricingMethod: source })
+    } else {
+      setEditingCharge({ ...EMPTY_CHARGE })
+    }
     loadPricingTables()
   }
 
@@ -781,21 +798,51 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-medium mb-1">Pricing Method</label>
-                  <select value={editingCharge.pricingMethod} onChange={(e) => {
-                    const method = e.target.value
-                    if (method === 'flat') {
-                      setEditingCharge({ ...editingCharge, pricingMethod: method, pricingTableId: null, priceColumnKey: null, quantityAttributeCode: null })
-                    } else {
-                      setEditingCharge({ ...editingCharge, pricingMethod: method, fixedPrice: null })
-                    }
-                  }} className="w-full rounded-md border px-2 py-1.5 text-sm">
-                    <option value="flat">Flat Price</option>
-                    <option value="per_unit">Per Unit (table lookup)</option>
-                    <option value="tiered">Tiered (table lookup)</option>
+                  <label className="block text-xs font-medium mb-1">Charge Model</label>
+                  <select
+                    value={editingCharge.chargeModel ?? 'flat'}
+                    onChange={(e) => {
+                      const model = e.target.value
+                      const next = { ...editingCharge, chargeModel: model }
+                      // Volume / tiered are graduated over table ranges — they can't use a fixed price.
+                      if ((model === 'volume' || model === 'tiered') && editingCharge.pricingMethod !== 'table') {
+                        next.pricingMethod = 'table'
+                        next.fixedPrice = null
+                      }
+                      // Flat never takes a quantity attribute.
+                      if (model === 'flat') next.quantityAttributeCode = null
+                      setEditingCharge(next)
+                    }}
+                    className="w-full rounded-md border px-2 py-1.5 text-sm"
+                  >
+                    <option value="flat">Flat Fee</option>
+                    <option value="per_unit">Per Unit</option>
+                    <option value="volume">Volume-based</option>
+                    <option value="tiered">Tiered</option>
                   </select>
                 </div>
-                {(editingCharge.pricingMethod === 'flat' || editingCharge.pricingMethod === 'fixed') ? (
+                <div>
+                  <label className="block text-xs font-medium mb-1">Pricing Method</label>
+                  <select
+                    value={editingCharge.pricingMethod}
+                    onChange={(e) => {
+                      const source = e.target.value
+                      if (source === 'fixed') {
+                        setEditingCharge({ ...editingCharge, pricingMethod: source, pricingTableId: null, priceColumnKey: null })
+                      } else {
+                        setEditingCharge({ ...editingCharge, pricingMethod: source, fixedPrice: null })
+                      }
+                    }}
+                    className="w-full rounded-md border px-2 py-1.5 text-sm"
+                  >
+                    {/* Volume / tiered are graduated over table ranges — a fixed price isn't applicable. */}
+                    {editingCharge.chargeModel !== 'volume' && editingCharge.chargeModel !== 'tiered' && (
+                      <option value="fixed">Fixed Price</option>
+                    )}
+                    <option value="table">Table Lookup</option>
+                  </select>
+                </div>
+                {editingCharge.pricingMethod === 'fixed' ? (
                   <>
                     <div>
                       <label className="block text-xs font-medium mb-1">Fixed Price <span className="text-destructive">*</span></label>
@@ -820,7 +867,7 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                         <p className="text-xs text-warning mt-0.5">
                           No pricing tables yet —{' '}
                           <a href="/backend/cpq/pricing-tables" className="text-primary hover:underline">create one</a>{' '}
-                          before using {editingCharge.pricingMethod} pricing.
+                          before using Table Lookup pricing.
                         </p>
                       )}
                     </div>
@@ -833,26 +880,31 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                         ))}
                       </select>
                     </div>
-                    <div>
-                      <label className="block text-xs font-medium mb-1">Quantity Attribute <span className="text-destructive">*</span></label>
-                      <select value={editingCharge.quantityAttributeCode ?? ''} onChange={(e) => setEditingCharge({ ...editingCharge, quantityAttributeCode: e.target.value || null })} className="w-full rounded-md border px-2 py-1.5 text-sm">
-                        <option value="">Select attribute...</option>
-                        {attributes.filter((a) => a.attributeType === 'number').map((a) => (
-                          <option key={a.code} value={a.code}>{a.name} ({a.code})</option>
-                        ))}
-                      </select>
-                      <p className="text-xs text-muted-foreground mt-0.5">Attribute whose value drives the quantity for pricing</p>
-                      {attributes.filter((a) => a.attributeType === 'number').length === 0 && form.specId && (
-                        <p className="text-xs text-warning mt-0.5">
-                          Spec has no number attributes —{' '}
-                          <a href={`/backend/cpq/specifications/${form.specId}`} className="text-primary hover:underline">
-                            add one to the spec
-                          </a>{' '}
-                          first.
-                        </p>
-                      )}
-                    </div>
                   </>
+                )}
+                {/* Quantity attribute drives the unit count — needed for per-unit
+                    (any source) and for volume / tiered table lookups. */}
+                {((editingCharge.pricingMethod === 'table' && editingCharge.chargeModel !== 'flat') ||
+                  (editingCharge.pricingMethod === 'fixed' && editingCharge.chargeModel === 'per_unit')) && (
+                  <div>
+                    <label className="block text-xs font-medium mb-1">Quantity Attribute <span className="text-destructive">*</span></label>
+                    <select value={editingCharge.quantityAttributeCode ?? ''} onChange={(e) => setEditingCharge({ ...editingCharge, quantityAttributeCode: e.target.value || null })} className="w-full rounded-md border px-2 py-1.5 text-sm">
+                      <option value="">Select attribute...</option>
+                      {attributes.filter((a) => a.attributeType === 'number').map((a) => (
+                        <option key={a.code} value={a.code}>{a.name} ({a.code})</option>
+                      ))}
+                    </select>
+                    <p className="text-xs text-muted-foreground mt-0.5">Attribute whose value drives the quantity for pricing</p>
+                    {attributes.filter((a) => a.attributeType === 'number').length === 0 && form.specId && (
+                      <p className="text-xs text-warning mt-0.5">
+                        Spec has no number attributes —{' '}
+                        <a href={`/backend/cpq/specifications/${form.specId}`} className="text-primary hover:underline">
+                          add one to the spec
+                        </a>{' '}
+                        first.
+                      </p>
+                    )}
+                  </div>
                 )}
                 <div>
                   <label className="block text-xs font-medium mb-1">Sort Order</label>
@@ -923,7 +975,7 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                     const qtyAttr = charge.quantityAttributeCode
                       ? attributes.find((a) => a.code === charge.quantityAttributeCode)
                       : null
-                    const isFlat = charge.pricingMethod === 'flat' || charge.pricingMethod === 'fixed'
+                    const { model, source } = normalizeChargePricing(charge)
                     return (
                       <tr key={charge.id} className="border-b">
                         <td className="px-4 py-3 font-mono text-xs">{charge.code}</td>
@@ -938,22 +990,35 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                             {charge.chargeType.toUpperCase()}
                           </Tag>
                         </td>
-                        <td className="px-4 py-3 text-xs">{PRICING_METHOD_LABELS[charge.pricingMethod] ?? charge.pricingMethod}</td>
                         <td className="px-4 py-3 text-xs">
-                          {isFlat ? (
-                            charge.fixedPrice != null
-                              ? `${charge.currencyCode ?? 'USD'} ${charge.fixedPrice}`
-                              : <span className="text-muted-foreground">—</span>
+                          {CHARGE_MODEL_LABELS[model] ?? model}
+                          <span className="text-muted-foreground"> · {PRICING_SOURCE_LABELS[source] ?? source}</span>
+                        </td>
+                        <td className="px-4 py-3 text-xs">
+                          {source === 'fixed' ? (
+                            <div className="flex flex-col gap-0.5">
+                              {charge.fixedPrice != null
+                                ? <span>{`${charge.currencyCode ?? 'USD'} ${charge.fixedPrice}`}</span>
+                                : <span className="text-muted-foreground">—</span>}
+                              {model === 'per_unit' && (
+                                <span>
+                                  <span className="text-muted-foreground">× Qty:</span>{' '}
+                                  {qtyAttr ? `${qtyAttr.name} (${qtyAttr.code})` : <span className="text-destructive">missing</span>}
+                                </span>
+                              )}
+                            </div>
                           ) : (
                             <div className="flex flex-col gap-0.5">
                               <span>
                                 <span className="text-muted-foreground">Table:</span>{' '}
                                 {tableRef ? `${tableRef.name} → ${charge.priceColumnKey ?? '?'}` : <span className="text-destructive">missing</span>}
                               </span>
-                              <span>
-                                <span className="text-muted-foreground">× Qty:</span>{' '}
-                                {qtyAttr ? `${qtyAttr.name} (${qtyAttr.code})` : <span className="text-destructive">missing</span>}
-                              </span>
+                              {model !== 'flat' && (
+                                <span>
+                                  <span className="text-muted-foreground">× Qty:</span>{' '}
+                                  {qtyAttr ? `${qtyAttr.name} (${qtyAttr.code})` : <span className="text-destructive">missing</span>}
+                                </span>
+                              )}
                             </div>
                           )}
                         </td>

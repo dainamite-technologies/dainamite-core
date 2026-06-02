@@ -42,7 +42,7 @@ interface ChargeStub {
   name: string
   description?: string | null
   chargeType: 'nrc' | 'mrc' | 'usage'
-  pricingMethod: 'flat' | 'fixed' | 'tiered' | 'per_unit'
+  pricingMethod: 'flat' | 'fixed' | 'tiered' | 'per_unit' | 'table'
   pricingTableId?: string | null
   priceColumnKey?: string | null
   fixedPrice?: string | null
@@ -727,6 +727,79 @@ describe('DefaultCpqPricingService.calculateCharge — tiered pricing', () => {
     expect(result.breakdown?.tiers).toHaveLength(2)
     expect(result.breakdown?.tiers[0].pricePerUnit).toBe(80)
     expect(result.breakdown?.tiers[1].pricePerUnit).toBe(70)
+  })
+})
+
+describe('DefaultCpqPricingService.calculateCharge — charge model × pricing source (XD-297)', () => {
+  let em: MockEm
+  let service: DefaultCpqPricingService
+
+  beforeEach(() => {
+    em = createMockEm()
+    service = new DefaultCpqPricingService(em as unknown as never)
+  })
+
+  it('per_unit + fixed price → quantity × fixedPrice (no table)', async () => {
+    const result = await service.calculateCharge({
+      charge: {
+        ...makeCharge({ code: 'seat', name: 'Seat', chargeType: 'mrc', pricingMethod: 'fixed', fixedPrice: '5', quantityAttributeCode: 'seats' }),
+        chargeModel: 'per_unit',
+      } as unknown as never,
+      configuration: { seats: 20 },
+      tenantId: SCOPE.tenantId,
+      organizationId: SCOPE.organizationId,
+    })
+
+    expect(em.findOne).not.toHaveBeenCalled()
+    expect(result.unitPrice).toBe(5)
+    expect(result.quantity).toBe(20)
+    expect(result.totalPrice).toBe(100)
+  })
+
+  it('volume + table → whole quantity at the rate of the tier containing it', async () => {
+    em.findOne.mockResolvedValueOnce({ id: 'table-1', dimensions: [] })
+    em.find.mockResolvedValueOnce([
+      { tierNumber: 1, rangeFrom: 1, rangeTo: 100, prices: { rate: 10 }, currencyCode: 'USD', dimensionValues: {} },
+      { tierNumber: 2, rangeFrom: 101, rangeTo: 500, prices: { rate: 8 }, currencyCode: 'USD', dimensionValues: {} },
+      { tierNumber: 3, rangeFrom: 501, rangeTo: null, prices: { rate: 6 }, currencyCode: 'USD', dimensionValues: {} },
+    ])
+
+    const result = await service.calculateCharge({
+      charge: {
+        ...makeCharge({ code: 'vol', name: 'Vol', chargeType: 'mrc', pricingMethod: 'table', pricingTableId: 'table-1', priceColumnKey: 'rate', quantityAttributeCode: 'units' }),
+        chargeModel: 'volume',
+      } as unknown as never,
+      configuration: { units: 150 },
+      tenantId: SCOPE.tenantId,
+      organizationId: SCOPE.organizationId,
+    })
+
+    // 150 falls in tier 2 (101–500) @ 8 → ALL 150 units billed at 8 = 1200
+    // (tiered would be 100@10 + 50@8 = 1400 — confirms volume ≠ tiered).
+    expect(result.unitPrice).toBe(8)
+    expect(result.quantity).toBe(150)
+    expect(result.totalPrice).toBe(1200)
+  })
+
+  it('flat + table (new split shape) reads the single matched price', async () => {
+    em.findOne.mockResolvedValueOnce({ id: 'table-1', dimensions: [{ key: 'region' }] })
+    em.find.mockResolvedValueOnce([
+      { dimensionValues: { region: 'eu' }, prices: { list: 42 }, currencyCode: 'EUR', rangeFrom: null, rangeTo: null, tierNumber: null },
+    ])
+
+    const result = await service.calculateCharge({
+      charge: {
+        ...makeCharge({ code: 'plat', name: 'Platform', chargeType: 'mrc', pricingMethod: 'table', pricingTableId: 'table-1', priceColumnKey: 'list' }),
+        chargeModel: 'flat',
+      } as unknown as never,
+      configuration: { region: 'eu' },
+      tenantId: SCOPE.tenantId,
+      organizationId: SCOPE.organizationId,
+    })
+
+    expect(result.unitPrice).toBe(42)
+    expect(result.quantity).toBe(1)
+    expect(result.totalPrice).toBe(42)
   })
 })
 

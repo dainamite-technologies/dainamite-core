@@ -290,8 +290,10 @@ describe('cpqProductChargeCreateSchema', () => {
     expect(result.error.issues.some((i) => i.path[0] === 'currencyCode')).toBe(true)
   })
 
-  it('V-CHG-1: rejects flat with stray pricingTableId', () => {
-    const result = cpqProductChargeCreateSchema.safeParse({ ...flatBase, pricingTableId: VALID_UUID })
+  it('V-CHG-1: rejects a fixed price with a stray pricingTableId', () => {
+    // Explicit fixed source — a pricing table is forbidden. (Legacy `flat` is
+    // now inferred as a flat *table* lookup when a table is present.)
+    const result = cpqProductChargeCreateSchema.safeParse({ ...flatBase, pricingMethod: 'fixed', pricingTableId: VALID_UUID })
     expect(result.success).toBe(false)
     if (result.success) return
     expect(result.error.issues.some((i) => i.path[0] === 'pricingTableId')).toBe(true)
@@ -335,17 +337,63 @@ describe('cpqProductChargeCreateSchema', () => {
   })
 
   // ─── Legacy `fixed` alias ──────────────────────────────────
-  it('normalises legacy `fixed` to `flat` on input', () => {
+  it('accepts the legacy `fixed` pricing method (route normalises to the split shape)', () => {
     const result = cpqProductChargeCreateSchema.safeParse({ ...flatBase, pricingMethod: 'fixed' })
     expect(result.success).toBe(true)
-    if (!result.success) return
-    expect(result.data.pricingMethod).toBe('flat')
   })
 
   it('legacy `fixed` still requires fixedPrice + currencyCode', () => {
     const { fixedPrice: _, currencyCode: __, ...partial } = flatBase
     const result = cpqProductChargeCreateSchema.safeParse({ ...partial, pricingMethod: 'fixed' })
     expect(result.success).toBe(false)
+  })
+
+  // ─── XD-297: charge model × pricing method combinations ──────
+  it('rejects volume + fixed (volume requires table lookup)', () => {
+    const result = cpqProductChargeCreateSchema.safeParse({ ...flatBase, chargeModel: 'volume', pricingMethod: 'fixed' })
+    expect(result.success).toBe(false)
+    if (result.success) return
+    expect(result.error.issues.some((i) => i.path[0] === 'pricingMethod')).toBe(true)
+  })
+
+  it('accepts per_unit + fixed with a quantity attribute', () => {
+    const result = cpqProductChargeCreateSchema.safeParse({
+      code: 'seat', name: 'Seat', chargeType: 'mrc',
+      chargeModel: 'per_unit', pricingMethod: 'fixed',
+      fixedPrice: '5', currencyCode: 'USD', quantityAttributeCode: 'seats',
+    })
+    expect(result.success).toBe(true)
+  })
+
+  it('rejects per_unit + fixed without a quantity attribute', () => {
+    const result = cpqProductChargeCreateSchema.safeParse({
+      code: 'seat', name: 'Seat', chargeType: 'mrc',
+      chargeModel: 'per_unit', pricingMethod: 'fixed',
+      fixedPrice: '5', currencyCode: 'USD',
+    })
+    expect(result.success).toBe(false)
+    if (result.success) return
+    expect(result.error.issues.some((i) => i.path[0] === 'quantityAttributeCode')).toBe(true)
+  })
+
+  it('accepts flat + table without a quantity attribute', () => {
+    const result = cpqProductChargeCreateSchema.safeParse({
+      code: 'plat', name: 'Platform', chargeType: 'mrc',
+      chargeModel: 'flat', pricingMethod: 'table',
+      pricingTableId: VALID_UUID, priceColumnKey: 'list',
+    })
+    expect(result.success).toBe(true)
+  })
+
+  it('rejects flat + table with a stray quantity attribute', () => {
+    const result = cpqProductChargeCreateSchema.safeParse({
+      code: 'plat', name: 'Platform', chargeType: 'mrc',
+      chargeModel: 'flat', pricingMethod: 'table',
+      pricingTableId: VALID_UUID, priceColumnKey: 'list', quantityAttributeCode: 'seats',
+    })
+    expect(result.success).toBe(false)
+    if (result.success) return
+    expect(result.error.issues.some((i) => i.path[0] === 'quantityAttributeCode')).toBe(true)
   })
 })
 

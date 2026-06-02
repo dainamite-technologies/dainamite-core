@@ -311,6 +311,7 @@ export async function seedGixPricingTables(em: EntityManager, scope: SeedScope):
 
 export async function seedGixProductCharges(em: EntityManager, scope: SeedScope): Promise<void> {
   const { CpqProductCharge, CpqPricingTable } = await import('@dainamite/cpq/modules/cpq/data/entities')
+  const { normalizeChargePricing } = await import('@dainamite/cpq/modules/cpq/services/types')
   const { CatalogProduct } = await import('@open-mercato/core/modules/catalog/data/entities')
 
   const tableId = async (code: string) => {
@@ -347,7 +348,10 @@ export async function seedGixProductCharges(em: EntityManager, scope: SeedScope)
   ) => {
     const exists = await em.findOne(CpqProductCharge, { ...scope, productId: pid, code: charge.code })
     if (!exists) {
-      em.persist(em.create(CpqProductCharge, { ...scope, productId: pid, ...charge }))
+      // Persist the XD-297 split shape; the legacy `pricingMethod` in the seed
+      // data still drives it via normalizeChargePricing.
+      const { model, source } = normalizeChargePricing(charge)
+      em.persist(em.create(CpqProductCharge, { ...scope, productId: pid, ...charge, chargeModel: model, pricingMethod: source }))
     }
   }
 

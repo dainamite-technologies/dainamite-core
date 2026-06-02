@@ -247,6 +247,13 @@ export function EntriesEditor({
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b bg-muted/50">
+                {table.dimensions.map((dim) => (
+                  <th key={dim.key} className="px-3 py-3 text-left font-medium whitespace-nowrap">
+                    {dim.label}
+                  </th>
+                ))}
+                {/* Tier / range columns sit between the dimension lookups and the
+                    prices they qualify, so the row reads "what → how much". */}
                 {hasTieredEntries && (
                   <>
                     <th className="px-3 py-3 text-left font-medium whitespace-nowrap">Tier #</th>
@@ -254,11 +261,6 @@ export function EntriesEditor({
                     <th className="px-3 py-3 text-left font-medium whitespace-nowrap">Range To</th>
                   </>
                 )}
-                {table.dimensions.map((dim) => (
-                  <th key={dim.key} className="px-3 py-3 text-left font-medium whitespace-nowrap">
-                    {dim.label}
-                  </th>
-                ))}
                 {table.priceColumns.map((col) => (
                   <th key={col.key} className="px-3 py-3 text-right font-medium whitespace-nowrap">
                     {col.label}
@@ -314,6 +316,23 @@ function EntryRow({
 
   return (
     <tr className={`border-b hover:bg-muted/30 ${rowBg}`}>
+      {table.dimensions.map((dim) => (
+        <td key={dim.key} className="px-3 py-2">
+          {readOnly ? (
+            entry.dimensionValues?.[dim.key] ?? '—'
+          ) : (
+            <Input
+              value={entry.dimensionValues?.[dim.key] ?? ''}
+              onChange={(e) =>
+                onChange({
+                  dimensionValues: { ...entry.dimensionValues, [dim.key]: e.target.value },
+                })
+              }
+              className="w-28 h-8"
+            />
+          )}
+        </td>
+      ))}
       {hasTieredEntries && (
         <>
           <td className="px-3 py-2">
@@ -355,23 +374,6 @@ function EntryRow({
           </td>
         </>
       )}
-      {table.dimensions.map((dim) => (
-        <td key={dim.key} className="px-3 py-2">
-          {readOnly ? (
-            entry.dimensionValues?.[dim.key] ?? '—'
-          ) : (
-            <Input
-              value={entry.dimensionValues?.[dim.key] ?? ''}
-              onChange={(e) =>
-                onChange({
-                  dimensionValues: { ...entry.dimensionValues, [dim.key]: e.target.value },
-                })
-              }
-              className="w-28 h-8"
-            />
-          )}
-        </td>
-      ))}
       {table.priceColumns.map((col) => (
         <td key={col.key} className="px-3 py-2 text-right font-mono">
           {readOnly ? (

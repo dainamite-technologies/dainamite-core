@@ -163,6 +163,36 @@ the `@dainamite/cpq` package, per
 
 ## Schema / API changelog (track breaking changes here)
 
+### 2026-06-02 — XD-297 Charge model / pricing method split
+
+Splits the conflated `cpq_product_charges.pricing_method` into two orthogonal
+axes. **Additive + backfilled; back-compat preserved at runtime.**
+
+**New column** (additive, migration `Migration20260602000000_cpq_charge_model_split`):
+- `cpq_product_charges.charge_model` (nullable text) — `flat | per_unit | volume | tiered`.
+
+**Repurposed column** (values migrated):
+- `cpq_product_charges.pricing_method` now holds the **pricing source**
+  `fixed | table`. The migration backfills existing rows:
+  `flat → (flat, fixed)`, `per_unit → (per_unit, table)`,
+  `tiered → (tiered, table)`.
+
+**API shape** (`/api/cpq/product-charges`, offering GET): charges now carry a
+`chargeModel` field alongside `pricingMethod`. POST/PUT accept **either** the
+new split (`chargeModel` + `pricingMethod ∈ {fixed, table}`) **or** a legacy
+combined `pricingMethod` (`flat | per_unit | tiered`) and persist the canonical
+split shape.
+
+**New capabilities**: `volume` charge model (whole quantity billed at the rate
+of the tier containing the total) and `per_unit + fixed` (quantity × a fixed
+unit price). Valid combinations: `fixed` → `flat | per_unit`; `table` → all four.
+
+**Backwards compatibility**: `normalizeChargePricing()` (exported from
+`data/charge-pricing`) resolves the `{model, source}` from either shape, so rows that
+predate the migration — and any client still sending the legacy `pricingMethod`
+— price and render correctly without a migration. `ResolvedCharge.pricingMethod`
+now carries the charge **model** (adds `'volume'`) for display.
+
 ### 2026-05-04 — XD-250 ARC (Amend / Renew / Cancel)
 
 Additive only. Every existing CPQ contract is preserved.

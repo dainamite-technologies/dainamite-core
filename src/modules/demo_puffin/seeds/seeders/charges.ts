@@ -43,6 +43,7 @@ async function ensureCharge(
   data: ChargeInput,
 ): Promise<void> {
   const { CpqProductCharge } = await import('@dainamite/cpq/modules/cpq/data/entities')
+  const { normalizeChargePricing } = await import('@dainamite/cpq/modules/cpq/data/charge-pricing')
   const exists = await em.findOne(CpqProductCharge, {
     ...scope,
     productId: pid,
@@ -50,7 +51,10 @@ async function ensureCharge(
     ...(oid ? { offeringId: oid } : {}),
   })
   if (!exists) {
-    em.persist(em.create(CpqProductCharge, { ...scope, productId: pid, offeringId: oid, currencyCode: 'USD', ...data } as any))
+    // Persist the XD-297 split shape; the legacy `pricingMethod` in the seed
+    // data still drives it via normalizeChargePricing.
+    const { model, source } = normalizeChargePricing(data)
+    em.persist(em.create(CpqProductCharge, { ...scope, productId: pid, offeringId: oid, currencyCode: 'USD', ...data, chargeModel: model, pricingMethod: source } as any))
   }
 }
 

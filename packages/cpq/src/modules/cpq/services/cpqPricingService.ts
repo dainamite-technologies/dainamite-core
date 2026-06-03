@@ -2,6 +2,7 @@ import type { EntityManager } from '@mikro-orm/postgresql'
 import { CpqProductCharge, CpqPricingTable, CpqPricingTableEntry, CpqPriceRule } from '../data/entities'
 import type { ResolvedCharge, RuleAdjustment, TierBreakdown } from './types'
 import { getBaseCurrencyCode } from './types'
+import { normalizeChargePricing } from '../data/charge-pricing'
 
 export type { ResolvedCharge, RuleAdjustment, TierBreakdown }
 
@@ -245,39 +246,35 @@ export class DefaultCpqPricingService {
   }): Promise<ResolvedCharge> {
     const { charge, configuration, tenantId, organizationId, currencyCode } = params
 
-    // `fixed` is a legacy alias for `flat` — older seeds emit it directly
-    // and ~30+ rows in prod still carry it. Treat them identically.
-    const method = charge.pricingMethod === 'fixed' ? 'flat' : charge.pricingMethod
-
-    // If charge has a fixed price and no pricing table, use fixed price directly
-    if (charge.fixedPrice && !charge.pricingTableId) {
-      const unitPrice = Number(charge.fixedPrice)
-      return {
-        chargeCode: charge.code,
-        chargeName: charge.name,
-        chargeType: charge.chargeType as ResolvedCharge['chargeType'],
-        pricingMethod: method as ResolvedCharge['pricingMethod'],
-        unitPrice,
-        quantity: 1,
-        totalPrice: unitPrice,
-        currencyCode: charge.currencyCode ?? await getBaseCurrencyCode(this.em, { tenantId, organizationId }),
-      }
-    }
+    // Resolve the two axes (chargeModel × pricingSource), tolerating legacy
+    // rows that still carry a combined pricingMethod (flat | per_unit | tiered).
+    const { model, source } = normalizeChargePricing(charge)
 
     const fallbackCurrency = currencyCode ?? charge.currencyCode ?? await getBaseCurrencyCode(this.em, { tenantId, organizationId })
     const base: ResolvedCharge = {
       chargeCode: charge.code,
       chargeName: charge.name,
       chargeType: charge.chargeType as ResolvedCharge['chargeType'],
-      pricingMethod: method as ResolvedCharge['pricingMethod'],
+      pricingMethod: model,
       unitPrice: 0,
       quantity: 1,
       totalPrice: 0,
       currencyCode: fallbackCurrency,
     }
 
-    if (!charge.pricingTableId) return base
+    // ── Fixed price: unit price is the charge's own fixedPrice. Also the
+    // fallback when a table-sourced charge has no table configured yet. ──
+    if (source === 'fixed' || !charge.pricingTableId) {
+      const unitPrice = Number(charge.fixedPrice ?? 0)
+      if (model === 'per_unit') {
+        const quantity = Number(configuration[charge.quantityAttributeCode ?? ''] ?? 0)
+        return { ...base, unitPrice, quantity, totalPrice: unitPrice * quantity }
+      }
+      // flat (volume/tiered without a table degrade to a single flat price).
+      return { ...base, unitPrice, quantity: 1, totalPrice: unitPrice }
+    }
 
+    // ── Table lookup ──
     const table = await this.em.findOne(CpqPricingTable, {
       id: charge.pricingTableId,
       tenantId,
@@ -300,13 +297,16 @@ export class DefaultCpqPricingService {
 
     const priceKey = charge.priceColumnKey ?? ''
 
-    if (method === 'flat') {
+    if (model === 'flat') {
       return this.calculateFlat(base, charge, entries, table.dimensions, configuration, priceKey)
     }
-    if (method === 'per_unit') {
+    if (model === 'per_unit') {
       return this.calculatePerUnit(base, charge, entries, table.dimensions, configuration, priceKey)
     }
-    if (method === 'tiered') {
+    if (model === 'volume') {
+      return this.calculateVolume(base, charge, entries, table.dimensions, configuration, priceKey)
+    }
+    if (model === 'tiered') {
       return this.calculateTiered(base, charge, entries, table.dimensions, configuration, priceKey)
     }
 
@@ -418,6 +418,43 @@ export class DefaultCpqPricingService {
       totalPrice: total,
       breakdown: { tiers },
       currencyCode: entryCurrency,
+    }
+  }
+
+  // Volume pricing: the WHOLE quantity is billed at the single rate of the tier
+  // whose range contains the total quantity — unlike tiered, which bills each
+  // slice at its own rate. Dimension-filtered first, like tiered.
+  private calculateVolume(
+    base: ResolvedCharge,
+    charge: CpqProductCharge,
+    entries: CpqPricingTableEntry[],
+    dimensions: Array<{ key: string }>,
+    configuration: Record<string, unknown>,
+    priceKey: string,
+  ): ResolvedCharge {
+    const quantity = Number(configuration[charge.quantityAttributeCode ?? ''] ?? 0)
+    if (quantity <= 0) return { ...base, quantity: 0, totalPrice: 0 }
+
+    const matched = entries.filter((entry) => entryMatchesDimensions(entry, dimensions, configuration))
+    if (matched.length === 0) return base
+
+    // Ranges are [rangeFrom, rangeTo]; rangeTo null = ∞. Fall back to the top
+    // tier if the quantity overflows every defined range.
+    const sorted = [...matched].sort((a, b) => (a.tierNumber ?? 0) - (b.tierNumber ?? 0))
+    const entry =
+      sorted.find((e) => {
+        const from = e.rangeFrom != null ? Number(e.rangeFrom) : 0
+        const to = e.rangeTo != null ? Number(e.rangeTo) : Infinity
+        return quantity >= from && quantity <= to
+      }) ?? sorted[sorted.length - 1]
+
+    const unitPrice = entry.prices[priceKey] ?? 0
+    return {
+      ...base,
+      unitPrice,
+      quantity,
+      totalPrice: unitPrice * quantity,
+      currencyCode: entry.currencyCode,
     }
   }
 }

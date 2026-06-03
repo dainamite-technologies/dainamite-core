@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { resolveCpqRouteContext } from '../context'
 import { CpqProductCharge, CpqProductOffering, CpqProductSpecification } from '../../data/entities'
 import { cpqProductChargeCreateSchema, cpqProductChargeUpdateSchema } from '../../data/validators'
+import { normalizeChargePricing } from '../../data/charge-pricing'
 
 export const metadata = {
   GET: { requireAuth: true, requireFeatures: ['cpq.products.view'] },
@@ -43,6 +44,7 @@ export async function GET(req: Request) {
         name: item.name,
         description: item.description,
         chargeType: item.chargeType,
+        chargeModel: item.chargeModel,
         pricingMethod: item.pricingMethod,
         pricingTableId: item.pricingTableId,
         priceColumnKey: item.priceColumnKey,
@@ -87,7 +89,10 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'productId or offeringId with valid offering required' }, { status: 400 })
     }
 
-    const entity = ctx.em.create(CpqProductCharge, { ...body, productId, ...scope })
+    // Persist the canonical split shape regardless of whether the client sent
+    // the new fields or a legacy combined pricingMethod.
+    const { model, source } = normalizeChargePricing(body)
+    const entity = ctx.em.create(CpqProductCharge, { ...body, chargeModel: model, pricingMethod: source, productId, ...scope })
     await ctx.em.flush()
 
     return NextResponse.json(
@@ -97,6 +102,7 @@ export async function POST(req: Request) {
         code: entity.code,
         name: entity.name,
         chargeType: entity.chargeType,
+        chargeModel: entity.chargeModel,
         pricingMethod: entity.pricingMethod,
         pricingTableId: entity.pricingTableId,
         priceColumnKey: entity.priceColumnKey,
@@ -130,7 +136,21 @@ export async function PUT(req: Request) {
     const entity = await ctx.em.findOne(CpqProductCharge, { id, ...scope })
     if (!entity) return NextResponse.json({ error: 'Not found' }, { status: 404 })
 
-    ctx.em.assign(entity, updates)
+    // Re-derive the canonical split shape when pricing fields are being changed,
+    // and clear the opposite axis' fields so a partial PATCH can't leave a
+    // stale pricingTableId on a fixed charge (or a stale fixedPrice on a table
+    // charge) that the patch-only validator never sees.
+    const normalizedUpdates =
+      updates.pricingMethod !== undefined || updates.chargeModel !== undefined
+        ? (() => {
+            const { model, source } = normalizeChargePricing({ ...entity, ...updates })
+            const sideCleared = source === 'fixed'
+              ? { pricingTableId: null, priceColumnKey: null }
+              : { fixedPrice: null }
+            return { ...updates, chargeModel: model, pricingMethod: source, ...sideCleared }
+          })()
+        : updates
+    ctx.em.assign(entity, normalizedUpdates)
     await ctx.em.flush()
 
     return NextResponse.json({
@@ -139,6 +159,7 @@ export async function PUT(req: Request) {
       code: entity.code,
       name: entity.name,
       chargeType: entity.chargeType,
+      chargeModel: entity.chargeModel,
       pricingMethod: entity.pricingMethod,
       pricingTableId: entity.pricingTableId,
       priceColumnKey: entity.priceColumnKey,

@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { normalizeChargePricing } from './charge-pricing'
 
 // ─── Product Specification ───────────────────────────────────────
 
@@ -140,9 +141,14 @@ export const cpqProductAttributeUpdateSchema = cpqProductAttributeCreateSchema.p
 // `fixed` is a legacy alias for `flat` — older seeds (`demo_puffin`,
 // `demo_gix`) emit it directly and ~30+ rows in prod use it. The pricing
 // service treats them identically (fixedPrice + currencyCode, no table
-// lookup). We accept it on input and normalise to `flat` so storage
-// stays canonical.
-const cpqChargePricingMethodEnum = z.enum(['flat', 'fixed', 'tiered', 'per_unit'])
+// lookup). XD-297 splits the charge "shape" into two axes — chargeModel
+// (flat | per_unit | volume | tiered) and pricingMethod (fixed | table).
+// Input accepts either the new split OR a legacy combined pricingMethod
+// (flat | per_unit | tiered); normalizeChargePricing() collapses both to a
+// canonical {model, source} that the route persists.
+const cpqChargeModelEnum = z.enum(['flat', 'per_unit', 'volume', 'tiered'])
+// New sources (fixed | table) plus the legacy combined values for back-compat.
+const cpqChargePricingMethodEnum = z.enum(['fixed', 'table', 'flat', 'tiered', 'per_unit'])
 
 const requireField = (
   ctx: z.RefinementCtx,
@@ -176,7 +182,8 @@ const cpqProductChargeBase = z.object({
   name: z.string().min(1),
   description: z.string().nullish(),
   chargeType: z.enum(['nrc', 'mrc', 'usage']),
-  pricingMethod: cpqChargePricingMethodEnum.transform((v) => (v === 'fixed' ? 'flat' : v)),
+  chargeModel: cpqChargeModelEnum.optional(),
+  pricingMethod: cpqChargePricingMethodEnum,
   pricingTableId: z.string().uuid().nullish(),
   priceColumnKey: z.string().nullish(),
   fixedPrice: z.union([z.string(), z.number().transform(String)]).nullish(),
@@ -187,15 +194,17 @@ const cpqProductChargeBase = z.object({
   isActive: z.boolean().optional().default(true),
 })
 
-// V-CHG-1: pricing method must match the configured fields.
-//  - flat     → fixedPrice + currencyCode required; table fields forbidden
-//  - per_unit → pricingTableId + priceColumnKey + quantityAttributeCode
-//               required; fixedPrice forbidden
-//  - tiered   → same as per_unit (rangeFrom/rangeTo come from the table)
+// V-CHG-1: the (chargeModel × pricingMethod) combination must match the fields.
+//  fixed  → fixedPrice + currencyCode required; table fields forbidden.
+//           flat: no quantity attr; per_unit: quantity attr required.
+//           volume / tiered + fixed is not a valid combination.
+//  table  → pricingTableId + priceColumnKey required; fixedPrice forbidden.
+//           flat: no quantity attr; per_unit / volume / tiered: quantity attr required.
 const refineChargePricingShape = (
   ctx: z.RefinementCtx,
   charge: {
-    pricingMethod?: 'flat' | 'tiered' | 'per_unit'
+    chargeModel?: 'flat' | 'per_unit' | 'volume' | 'tiered'
+    pricingMethod?: 'fixed' | 'table' | 'flat' | 'tiered' | 'per_unit'
     pricingTableId?: string | null
     priceColumnKey?: string | null
     fixedPrice?: string | null
@@ -203,21 +212,39 @@ const refineChargePricingShape = (
     quantityAttributeCode?: string | null
   },
 ) => {
-  const method = charge.pricingMethod
-  if (!method) return
-  if (method === 'flat') {
-    requireField(ctx, charge.fixedPrice, 'fixedPrice', 'V-CHG-1: fixedPrice is required for flat pricing')
-    requireField(ctx, charge.currencyCode, 'currencyCode', 'V-CHG-1: currencyCode is required for flat pricing')
-    forbidField(ctx, charge.pricingTableId, 'pricingTableId', 'V-CHG-1: pricingTableId must be empty for flat pricing')
-    forbidField(ctx, charge.priceColumnKey, 'priceColumnKey', 'V-CHG-1: priceColumnKey must be empty for flat pricing')
-    forbidField(ctx, charge.quantityAttributeCode, 'quantityAttributeCode', 'V-CHG-1: quantityAttributeCode must be empty for flat pricing')
+  if (charge.pricingMethod === undefined && charge.chargeModel === undefined) return
+  const { model, source } = normalizeChargePricing(charge)
+
+  if (source === 'fixed') {
+    if (model === 'volume' || model === 'tiered') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['pricingMethod'],
+        message: `V-CHG-1: ${model} pricing requires Table Lookup, not a fixed price`,
+      })
+      return
+    }
+    requireField(ctx, charge.fixedPrice, 'fixedPrice', 'V-CHG-1: fixedPrice is required for a fixed price')
+    requireField(ctx, charge.currencyCode, 'currencyCode', 'V-CHG-1: currencyCode is required for a fixed price')
+    forbidField(ctx, charge.pricingTableId, 'pricingTableId', 'V-CHG-1: pricingTableId must be empty for a fixed price')
+    forbidField(ctx, charge.priceColumnKey, 'priceColumnKey', 'V-CHG-1: priceColumnKey must be empty for a fixed price')
+    if (model === 'per_unit') {
+      requireField(ctx, charge.quantityAttributeCode, 'quantityAttributeCode', 'V-CHG-1: quantityAttributeCode is required for per-unit pricing')
+    } else {
+      forbidField(ctx, charge.quantityAttributeCode, 'quantityAttributeCode', 'V-CHG-1: quantityAttributeCode must be empty for a flat fixed price')
+    }
     return
   }
-  // per_unit | tiered
-  requireField(ctx, charge.pricingTableId, 'pricingTableId', `V-CHG-1: pricingTableId is required for ${method} pricing`)
-  requireField(ctx, charge.priceColumnKey, 'priceColumnKey', `V-CHG-1: priceColumnKey is required for ${method} pricing`)
-  requireField(ctx, charge.quantityAttributeCode, 'quantityAttributeCode', `V-CHG-1: quantityAttributeCode is required for ${method} pricing`)
-  forbidField(ctx, charge.fixedPrice, 'fixedPrice', `V-CHG-1: fixedPrice must be empty for ${method} pricing — price comes from the pricing table`)
+
+  // source === 'table'
+  requireField(ctx, charge.pricingTableId, 'pricingTableId', 'V-CHG-1: pricingTableId is required for table lookup')
+  requireField(ctx, charge.priceColumnKey, 'priceColumnKey', 'V-CHG-1: priceColumnKey is required for table lookup')
+  forbidField(ctx, charge.fixedPrice, 'fixedPrice', 'V-CHG-1: fixedPrice must be empty for table lookup — price comes from the table')
+  if (model === 'flat') {
+    forbidField(ctx, charge.quantityAttributeCode, 'quantityAttributeCode', 'V-CHG-1: quantityAttributeCode must be empty for a flat table price')
+  } else {
+    requireField(ctx, charge.quantityAttributeCode, 'quantityAttributeCode', `V-CHG-1: quantityAttributeCode is required for ${model} pricing`)
+  }
 }
 
 export const cpqProductChargeCreateSchema = cpqProductChargeBase.superRefine((data, ctx) => {
@@ -227,9 +254,12 @@ export const cpqProductChargeCreateSchema = cpqProductChargeBase.superRefine((da
 export const cpqProductChargeUpdateSchema = cpqProductChargeBase.partial().extend({
   id: z.string().uuid(),
 }).superRefine((data, ctx) => {
-  // On update, only enforce shape if pricingMethod is present in payload
-  // (PATCH semantics — service merges with the persisted row).
-  if (data.pricingMethod !== undefined) refineChargePricingShape(ctx, data)
+  // Enforce shape whenever either pricing axis is being changed — a
+  // chargeModel-only PATCH (e.g. flat → per_unit) still alters the required
+  // fields, so it must validate rather than silently persist a broken charge.
+  if (data.pricingMethod !== undefined || data.chargeModel !== undefined) {
+    refineChargePricingShape(ctx, data)
+  }
 })
 
 // ─── Price Rule ──────────────────────────────────────────────────

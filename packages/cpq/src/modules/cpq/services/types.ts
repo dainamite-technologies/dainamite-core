@@ -1,4 +1,6 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
+// Charge model / pricing source live in the data layer (no ORM/DI coupling).
+import type { ChargeModel } from '../data/charge-pricing'
 
 // ─── Shared types for CPQ Quoting v2 ─────────────────────────────
 
@@ -202,7 +204,8 @@ export interface ResolvedCharge {
   chargeCode: string
   chargeName: string
   chargeType: 'nrc' | 'mrc' | 'usage'
-  pricingMethod: 'flat' | 'tiered' | 'per_unit'
+  // Display axis — the charge model (flat | per_unit | volume | tiered).
+  pricingMethod: ChargeModel
   unitPrice: number
   quantity: number | null
   totalPrice: number | null

@@ -83,7 +83,7 @@ export default async function BackendLayout({
   const initialCollapsed = collapsedCookie === '1'
   const demoModeEnabled = parseBooleanWithDefault(process.env.DEMO_MODE, true)
   const deployEnv = process.env.DEPLOY_ENV
-  const baseProductName = translate('appShell.productName', 'Open Mercato')
+  const baseProductName = translate('appShell.productName', 'Dainamite')
   const productName = deployEnv && deployEnv !== 'local'
     ? `${baseProductName} (${deployEnv.charAt(0).toUpperCase() + deployEnv.slice(1)})`
     : baseProductName
@@ -100,6 +100,7 @@ export default async function BackendLayout({
       <AppShell
         key={path}
         productName={productName}
+        logo={{ src: '/dainamite-favicon.png', alt: 'Dainamite' }}
         email={auth?.email}
         groups={[]}
         currentTitle={currentTitle}

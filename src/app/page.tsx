@@ -78,10 +78,10 @@ export default async function Home() {
     <main className="min-h-svh w-full p-8 flex flex-col gap-8">
       <header className="flex flex-col md:flex-row md:items-center gap-4 md:gap-6">
         <Image
-          src="/open-mercato.svg"
-          alt={t('app.page.logoAlt', 'Open Mercato')}
-          width={40}
-          height={40}
+          src="/dainamite-logo.svg"
+          alt={t('app.page.logoAlt', 'Dainamite')}
+          width={220}
+          height={36}
           priority
         />
         <div className="flex-1">

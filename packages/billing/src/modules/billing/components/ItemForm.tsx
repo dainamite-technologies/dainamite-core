@@ -54,11 +54,14 @@ export type ItemFormValues = {
   isActive: boolean
 }
 
+// The accounts list API (`/api/billing/accounts`) returns snake_case
+// rows — mirror that here so the picker reads real values. (camelCase
+// resolved to `undefined`, rendering "Name · undefined · undefined".)
 export type AccountOption = {
   id: string
   name: string
-  customerId: string
-  currencyCode: string
+  customer_id: string
+  currency_code: string
 }
 
 export type ItemFormProps = {
@@ -288,7 +291,7 @@ export function ItemForm({
               <SelectContent>
                 {(accountOptions ?? []).map((opt) => (
                   <SelectItem key={opt.id} value={opt.id}>
-                    {opt.name} · {opt.customerId} · {opt.currencyCode}
+                    {opt.name} · {opt.customer_id} · {opt.currency_code}
                   </SelectItem>
                 ))}
               </SelectContent>

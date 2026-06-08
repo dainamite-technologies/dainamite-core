@@ -15,6 +15,12 @@ TODO: Fix that latter to have reference by the package names
 @source "../../node_modules/@open-mercato/onboarding/src/**/*.{ts,tsx}";
 @source "../../node_modules/@open-mercato/content/src/**/*.{ts,tsx}";
 @source "../../node_modules/@open-mercato/ai-assistant/src/**/*.{ts,tsx}";
+/* Dainamite product packages — without these, utility classes used only inside
+   the package (e.g. px-12 in the CPQ quote charge breakdown) are purged from the
+   production build and render as no padding. XD-298. */
+@source "../../node_modules/@dainamite/cpq/src/**/*.{ts,tsx}";
+@source "../../node_modules/@dainamite/billing/src/**/*.{ts,tsx}";
+@source "../../node_modules/@dainamite/cpq-billing-connector/src/**/*.{ts,tsx}";
 
 @custom-variant dark (&:is(.dark *));
 

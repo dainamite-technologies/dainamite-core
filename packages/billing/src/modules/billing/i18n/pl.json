@@ -27,6 +27,8 @@
   "billing.accounts.detail.save.error": "Zapis nie powiódł się",
   "billing.accounts.detail.save.success": "Zaktualizowano konto",
   "billing.accounts.detail.title": "Konto rozliczeniowe",
+  "billing.accounts.detail.usage.empty": "Brak rekordów zużycia dla tego konta.",
+  "billing.accounts.detail.usage.title": "Zużycie",
   "billing.accounts.detail.view_items": "Zobacz pozycje",
   "billing.accounts.filters.active": "Aktywne",
   "billing.accounts.filters.currency": "Waluta",
@@ -295,5 +297,12 @@
   "billing.runs.trigger.error": "Nie udało się uruchomić przebiegu",
   "billing.runs.trigger.manual": "Ręcznie",
   "billing.runs.trigger.schedule": "Harmonogram",
-  "billing.runs.trigger.success": "Przebieg rozliczeniowy uruchomiony"
+  "billing.runs.trigger.success": "Przebieg rozliczeniowy uruchomiony",
+  "billing.usage.columns.description": "Opis",
+  "billing.usage.columns.period": "Okres",
+  "billing.usage.columns.quantity": "Ilość",
+  "billing.usage.columns.rated": "Rozliczone",
+  "billing.usage.columns.uom": "Jednostka",
+  "billing.usage.rated.no": "Nierozliczone",
+  "billing.usage.rated.yes": "Rozliczone"
 }

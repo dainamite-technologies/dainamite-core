@@ -70,6 +70,19 @@ type AccountItemRow = {
   is_active: boolean
 }
 
+// Minimal usage shape for the embedded "Usage" table. Mirrors the
+// snake_case `fields` projection in `api/usage/route.ts`. Usage is
+// append-only — `rated_in_bill_run_id` is null until a Bill Run rates it.
+type AccountUsageRow = {
+  id: string
+  uom_code: string
+  quantity: string
+  period_start: string
+  period_end: string
+  line_description: string | null
+  rated_in_bill_run_id: string | null
+}
+
 function formatDate(value: string | null | undefined): string {
   if (!value) return '—'
   const parsed = new Date(value)
@@ -236,6 +249,105 @@ function AccountItemsSection({ accountId }: { accountId: string }) {
         emptyState={
           <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
             {t('billing.accounts.detail.items.empty', 'No items for this account yet.')}
+          </div>
+        }
+      />
+    </div>
+  )
+}
+
+// ─── Embedded usage table ────────────────────────────────────────
+
+function AccountUsageSection({ accountId }: { accountId: string }) {
+  const t = useT()
+  const router = useRouter()
+  const [rows, setRows] = React.useState<AccountUsageRow[]>([])
+  const [page, setPage] = React.useState(1)
+  const [total, setTotal] = React.useState(0)
+  const [totalPages, setTotalPages] = React.useState(1)
+  const [loading, setLoading] = React.useState(true)
+  const pageSize = 25
+
+  const load = React.useCallback(async () => {
+    setLoading(true)
+    try {
+      const result = await readApiResultOrThrow<{
+        items: AccountUsageRow[]
+        total: number
+        totalPages: number
+      }>(
+        `/api/billing/usage?billAccountId=${accountId}&page=${page}` +
+          `&pageSize=${pageSize}&sortField=periodStart&sortDir=desc`,
+      )
+      setRows(result.items ?? [])
+      setTotal(result.total ?? 0)
+      setTotalPages(result.totalPages ?? 1)
+    } finally {
+      setLoading(false)
+    }
+  }, [accountId, page])
+
+  React.useEffect(() => {
+    void load()
+  }, [load])
+
+  const columns = React.useMemo<ColumnDef<AccountUsageRow>[]>(
+    () => [
+      {
+        accessorKey: 'uom_code',
+        header: t('billing.usage.columns.uom', 'Unit'),
+        cell: ({ row }) => (
+          <span className="font-mono text-xs">{row.original.uom_code}</span>
+        ),
+      },
+      {
+        accessorKey: 'quantity',
+        header: t('billing.usage.columns.quantity', 'Quantity'),
+        cell: ({ row }) => (
+          <span className="font-mono tabular-nums">{row.original.quantity}</span>
+        ),
+      },
+      {
+        accessorKey: 'period_start',
+        header: t('billing.usage.columns.period', 'Period'),
+        cell: ({ row }) =>
+          `${formatDate(row.original.period_start)} – ${formatDate(row.original.period_end)}`,
+      },
+      {
+        accessorKey: 'line_description',
+        header: t('billing.usage.columns.description', 'Description'),
+        cell: ({ row }) => row.original.line_description || '—',
+      },
+      {
+        accessorKey: 'rated_in_bill_run_id',
+        header: t('billing.usage.columns.rated', 'Rated'),
+        cell: ({ row }) =>
+          row.original.rated_in_bill_run_id ? (
+            <Tag variant="success">{t('billing.usage.rated.yes', 'Rated')}</Tag>
+          ) : (
+            <Tag variant="default">{t('billing.usage.rated.no', 'Unrated')}</Tag>
+          ),
+      },
+    ],
+    [t],
+  )
+
+  return (
+    <div className="mt-6">
+      <DataTable
+        title={t('billing.accounts.detail.usage.title', 'Usage')}
+        columns={columns}
+        data={rows}
+        isLoading={loading}
+        onRowClick={(row) =>
+          row.rated_in_bill_run_id
+            ? router.push(`/backend/billing/runs/${row.rated_in_bill_run_id}`)
+            : undefined
+        }
+        pagination={{ page, pageSize, total, totalPages, onPageChange: setPage }}
+        emptyState={
+          <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
+            {t('billing.accounts.detail.usage.empty', 'No usage records for this account yet.')}
           </div>
         }
       />
@@ -446,6 +558,7 @@ export default function BillingAccountDetailPage(props: { params?: { id?: string
           <AccountView row={row} />
         )}
         <AccountItemsSection accountId={row.id} />
+        <AccountUsageSection accountId={row.id} />
         {ConfirmDialogElement}
       </PageBody>
     </Page>

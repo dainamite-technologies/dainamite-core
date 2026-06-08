@@ -27,6 +27,8 @@
   "billing.accounts.detail.save.error": "Save failed",
   "billing.accounts.detail.save.success": "Account updated",
   "billing.accounts.detail.title": "Billing Account",
+  "billing.accounts.detail.usage.empty": "No usage records for this account yet.",
+  "billing.accounts.detail.usage.title": "Usage",
   "billing.accounts.detail.view_items": "View items",
   "billing.accounts.filters.active": "Active",
   "billing.accounts.filters.currency": "Currency",
@@ -295,5 +297,12 @@
   "billing.runs.trigger.error": "Failed to trigger run",
   "billing.runs.trigger.manual": "Manual",
   "billing.runs.trigger.schedule": "Schedule",
-  "billing.runs.trigger.success": "Bill Run triggered"
+  "billing.runs.trigger.success": "Bill Run triggered",
+  "billing.usage.columns.description": "Description",
+  "billing.usage.columns.period": "Period",
+  "billing.usage.columns.quantity": "Quantity",
+  "billing.usage.columns.rated": "Rated",
+  "billing.usage.columns.uom": "Unit",
+  "billing.usage.rated.no": "Unrated",
+  "billing.usage.rated.yes": "Rated"
 }

@@ -260,7 +260,6 @@ function AccountItemsSection({ accountId }: { accountId: string }) {
 
 function AccountUsageSection({ accountId }: { accountId: string }) {
   const t = useT()
-  const router = useRouter()
   const [rows, setRows] = React.useState<AccountUsageRow[]>([])
   const [page, setPage] = React.useState(1)
   const [total, setTotal] = React.useState(0)
@@ -323,7 +322,15 @@ function AccountUsageSection({ accountId }: { accountId: string }) {
         header: t('billing.usage.columns.rated', 'Rated'),
         cell: ({ row }) =>
           row.original.rated_in_bill_run_id ? (
-            <Tag variant="success">{t('billing.usage.rated.yes', 'Rated')}</Tag>
+            // Rated records carry the Bill Run that priced them — link to it.
+            // Unrated records have no destination, so they stay non-interactive
+            // (no misleading row-level click affordance).
+            <Link
+              href={`/backend/billing/runs/${row.original.rated_in_bill_run_id}`}
+              className="rounded-sm hover:underline"
+            >
+              <Tag variant="success">{t('billing.usage.rated.yes', 'Rated')}</Tag>
+            </Link>
           ) : (
             <Tag variant="default">{t('billing.usage.rated.no', 'Unrated')}</Tag>
           ),
@@ -339,11 +346,6 @@ function AccountUsageSection({ accountId }: { accountId: string }) {
         columns={columns}
         data={rows}
         isLoading={loading}
-        onRowClick={(row) =>
-          row.rated_in_bill_run_id
-            ? router.push(`/backend/billing/runs/${row.rated_in_bill_run_id}`)
-            : undefined
-        }
         pagination={{ page, pageSize, total, totalPages, onPageChange: setPage }}
         emptyState={
           <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">

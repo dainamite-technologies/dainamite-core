@@ -528,6 +528,12 @@ export default function BillingAccountDetailPage(props: { params?: { id?: string
                 {t('billing.accounts.detail.add_item', 'Add item')}
               </Link>
             </Button>
+            <Button asChild variant="outline">
+              <Link href={`/backend/billing/usage/create?billAccountId=${row.id}`}>
+                <Plus size={16} />
+                {t('billing.accounts.detail.add_usage', 'Add usage')}
+              </Link>
+            </Button>
             {!editing ? (
               <Button type="button" onClick={() => setEditing(true)}>
                 <Pencil size={16} />

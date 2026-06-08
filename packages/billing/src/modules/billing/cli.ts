@@ -1,17 +1,15 @@
 import type { ModuleCli } from '@open-mercato/shared/modules/registry'
 import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import type { EntityManager } from '@mikro-orm/postgresql'
-import { seedCpqDemo } from './lib/seeds/demo'
+import { seedBillingDemo } from './lib/seeds/demo'
 
 /**
- * `mercato cpq seed [--reset] [--tenant <id>] [--org <id>]`
+ * `mercato billing seed [--reset] [--tenant <id>] [--org <id>]`
  *
- * Loads a minimal, neutral CPQ test catalog (product + specification +
- * offering + charge) into a single tenant. With no `--tenant`/`--org` it
- * resolves the first (primary) organization created by `mercato init`.
- * `--reset` clears the seed's own rows first.
- *
- * For rich, vertical demo catalogs use `mercato demo_tenants seed --all`.
+ * Loads self-contained billing test data (demo accounts + recurring/usage
+ * items + an unrated usage record) into a single tenant. With no `--tenant`/
+ * `--org`, it resolves the first (primary) organization created by
+ * `mercato init`. `--reset` clears the seed's own rows first.
  */
 
 function parseArgs(rest: string[]): Record<string, string | boolean> {
@@ -54,7 +52,7 @@ async function resolveScope(
   const org = orgs[0]
   if (orgs.length > 1) {
     console.warn(
-      `[cpq seed] Multiple organizations found — defaulting to "${org.name}" (${org.id}). ` +
+      `[billing seed] Multiple organizations found — defaulting to "${org.name}" (${org.id}). ` +
         `Pass --org <id> to target another.`,
     )
   }
@@ -72,16 +70,18 @@ const seed: ModuleCli = {
 
     const scope = await resolveScope(em, args)
     if (!scope) {
-      console.error('[cpq seed] No organization found. Run "yarn initialize" first, or pass --org <id>.')
+      console.error(
+        '[billing seed] No organization found. Run "yarn initialize" first, or pass --org <id>.',
+      )
       return
     }
 
-    const res = await seedCpqDemo(em, scope, { reset })
+    const res = await seedBillingDemo(em, scope, { reset })
     console.log(
-      `[cpq seed] tenant=${scope.tenantId} org=${scope.organizationId}${reset ? ' (reset)' : ''}\n` +
-        `  ✓ products +${res.productsCreated}, specs +${res.specsCreated}, ` +
-        `offerings +${res.offeringsCreated}, charges +${res.chargesCreated} (existing rows left untouched)\n` +
-        `  → Backend · CPQ · Product Specifications / Product Offerings.`,
+      `[billing seed] tenant=${scope.tenantId} org=${scope.organizationId}${reset ? ' (reset)' : ''}\n` +
+        `  ✓ accounts +${res.accountsCreated}, items +${res.itemsCreated}, usage +${res.usageCreated} ` +
+        `(existing rows left untouched)\n` +
+        `  → Bill Runs · New run · As-of = today · Real → invoice for the previous month.`,
     )
   },
 }

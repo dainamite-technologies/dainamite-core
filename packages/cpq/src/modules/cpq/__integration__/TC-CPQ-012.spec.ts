@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect, type Locator } from '@playwright/test'
 import { login } from '@open-mercato/core/helpers/integration/auth'
 
 /**
@@ -24,7 +24,31 @@ import { login } from '@open-mercato/core/helpers/integration/auth'
 // is unambiguous *and* doesn't depend on accessibility-name timing.
 const pickerLocator = '[role="combobox"]'
 
+/**
+ * Open the Radix Select and wait until its options have mounted.
+ *
+ * The single `trigger.click()` was the flake source in CI: Radix can
+ * swallow the first click (the trigger isn't interactive yet on a slow
+ * cold render) or open-then-close the menu under load, so the option list
+ * never mounts and the following `toBeVisible` times out. Retrying the open
+ * until a known option is visible makes the step deterministic.
+ */
+async function openExpiringPicker(trigger: Locator, probe: Locator): Promise<void> {
+  // The inner timeout (4s) is comfortably longer than a normal option mount,
+  // so a menu that's merely slow to paint isn't mistaken for "didn't open"
+  // and re-clicked shut — the only re-click happens when the prior click was
+  // swallowed and the menu is actually closed. The 12s budget stays well
+  // under the 20s global test timeout so a genuine failure surfaces here
+  // (with a useful message) rather than as an opaque test timeout. No
+  // per-test timeout override (integration-tests SKILL.md).
+  await expect(async () => {
+    await trigger.click()
+    await expect(probe).toBeVisible({ timeout: 4_000 })
+  }).toPass({ timeout: 12_000 })
+}
+
 test.describe('TC-CPQ-012: Inline expiring picker (UI)', () => {
+
   test('picker renders in title row with the 5 preset windows', async ({ page }) => {
     await login(page, 'admin')
     await page.goto('/backend/cpq/inventory', { waitUntil: 'domcontentloaded' })
@@ -37,7 +61,7 @@ test.describe('TC-CPQ-012: Inline expiring picker (UI)', () => {
 
     // Open the dropdown and verify the 5 canonical preset windows are
     // listed in the same order the operator's renewal-watch UX expects.
-    await picker.click()
+    await openExpiringPicker(picker, page.getByRole('option', { name: /Expiring in 30 days/i }))
     for (const days of [7, 14, 30, 60, 90]) {
       await expect(
         page.getByRole('option', { name: new RegExp(`Expiring in ${days} days`, 'i') }),
@@ -51,16 +75,13 @@ test.describe('TC-CPQ-012: Inline expiring picker (UI)', () => {
 
     const trigger = page.locator(pickerLocator).first()
     await expect(trigger).toBeVisible({ timeout: 15_000 })
-    await trigger.click()
 
-    // Radix Select renders options in a portal behind a positioning layer
-    // that Playwright's default actionability checks treat as obscuring the
-    // option — so a plain `.click()` retries forever and times out (the
-    // original CI failure, deterministic across retries). Wait for the
-    // option to mount, then force the click to bypass the obscured/stability
-    // checks; Radix's own onSelect still fires and closes the menu.
+    // Open the menu deterministically (retries the click until the option
+    // mounts — see `openExpiringPicker`), then force the click to bypass
+    // Radix's portal positioning layer that the default actionability check
+    // treats as obscuring the option; Radix's own onSelect still fires.
     const option = page.getByRole('option', { name: /Expiring in 30 days/i })
-    await expect(option).toBeVisible({ timeout: 10_000 })
+    await openExpiringPicker(trigger, option)
     await option.click({ force: true })
 
     // Same URL — the picker writes into the in-page filter state, not a

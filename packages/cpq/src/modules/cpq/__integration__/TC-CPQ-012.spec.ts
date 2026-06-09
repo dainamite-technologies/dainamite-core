@@ -34,17 +34,20 @@ const pickerLocator = '[role="combobox"]'
  * until a known option is visible makes the step deterministic.
  */
 async function openExpiringPicker(trigger: Locator, probe: Locator): Promise<void> {
+  // The inner timeout (4s) is comfortably longer than a normal option mount,
+  // so a menu that's merely slow to paint isn't mistaken for "didn't open"
+  // and re-clicked shut — the only re-click happens when the prior click was
+  // swallowed and the menu is actually closed. The 12s budget stays well
+  // under the 20s global test timeout so a genuine failure surfaces here
+  // (with a useful message) rather than as an opaque test timeout. No
+  // per-test timeout override (integration-tests SKILL.md).
   await expect(async () => {
     await trigger.click()
-    await expect(probe).toBeVisible({ timeout: 2_000 })
-  }).toPass({ timeout: 15_000 })
+    await expect(probe).toBeVisible({ timeout: 4_000 })
+  }).toPass({ timeout: 12_000 })
 }
 
 test.describe('TC-CPQ-012: Inline expiring picker (UI)', () => {
-  // Cold renders (login + goto + Radix mount) plus the open-retry budget can
-  // exceed the 20s default; give these UI smokes explicit headroom so the
-  // retry actually runs instead of being cut short by the test timeout.
-  test.describe.configure({ timeout: 45_000 })
 
   test('picker renders in title row with the 5 preset windows', async ({ page }) => {
     await login(page, 'admin')

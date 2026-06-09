@@ -112,8 +112,12 @@ export function UsageForm({
 
   const initialKey = React.useMemo(() => JSON.stringify(initial ?? null), [initial])
   React.useEffect(() => {
+    // Depend on the serialized key only — `initial` is a fresh object ref on
+    // every parent render, so including it would re-run this effect (and wipe
+    // in-progress edits) whenever the parent re-renders for an unrelated reason.
     setValues(mergeInitial(initial))
-  }, [initialKey, initial])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialKey])
 
   const set = React.useCallback(
     <K extends keyof UsageFormValues>(key: K, value: UsageFormValues[K]) => {
@@ -209,7 +213,7 @@ export function UsageForm({
           </span>
           <Input
             value={values.uomCode}
-            placeholder="api_request, gb, seat, …"
+            placeholder={t('billing.usage.form.uom_code.placeholder', 'api_request, gb, seat, …')}
             onChange={(event) => set('uomCode', event.currentTarget.value)}
           />
           <span className="text-xs text-muted-foreground">

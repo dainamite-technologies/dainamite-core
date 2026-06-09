@@ -330,6 +330,7 @@
   "billing.usage.form.submit_hint": "to save,",
   "billing.usage.form.uom_code": "UoM code",
   "billing.usage.form.uom_code.help": "Must exactly match the UoM on a usage Billing Item for this account — no conversion.",
+  "billing.usage.form.uom_code.placeholder": "api_request, gb, seat, …",
   "billing.usage.rated.no": "Unrated",
   "billing.usage.rated.yes": "Rated"
 }

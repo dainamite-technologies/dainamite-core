@@ -330,6 +330,7 @@
   "billing.usage.form.submit_hint": "aby zapisać,",
   "billing.usage.form.uom_code": "Kod jednostki (UoM)",
   "billing.usage.form.uom_code.help": "Musi dokładnie odpowiadać jednostce na pozycji billingowej typu usage dla tego konta — bez konwersji.",
+  "billing.usage.form.uom_code.placeholder": "api_request, gb, seat, …",
   "billing.usage.rated.no": "Nierozliczone",
   "billing.usage.rated.yes": "Rozliczone"
 }

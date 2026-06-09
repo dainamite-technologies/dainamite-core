@@ -111,8 +111,14 @@ export async function seedCpqDemo(
     result.offeringsCreated += 1
   }
 
-  // ── Charge (idempotent by code) — fixed monthly recurring fee ──
-  const charge = await em.findOne(CpqProductCharge, { ...scope, code: CHARGE_CODE, deletedAt: null } as never)
+  // ── Charge (idempotent by offering + code, matching the DB unique
+  //    constraint `(org, tenant, offering_id, code)`) — fixed monthly fee ──
+  const charge = await em.findOne(CpqProductCharge, {
+    ...scope,
+    offeringId: offering.id,
+    code: CHARGE_CODE,
+    deletedAt: null,
+  } as never)
   if (!charge) {
     em.persist(
       em.create(CpqProductCharge, {

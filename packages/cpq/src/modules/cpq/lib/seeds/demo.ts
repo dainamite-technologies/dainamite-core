@@ -131,7 +131,8 @@ export async function seedCpqDemo(
         chargeModel: 'flat',
         pricingMethod: 'fixed',
         fixedPrice: '99.0000',
-        currencyCode: 'PLN',
+        // Neutral default — this seed ships generically with @dainamite/cpq.
+        currencyCode: 'USD',
         sortOrder: 0,
         isActive: true,
       }),

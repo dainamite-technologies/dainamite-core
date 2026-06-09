@@ -29,10 +29,6 @@ export type BillingDemoResult = {
 const SRC = 'demo-billing'
 const ACCOUNT_NAME_PREFIX = 'Demo — '
 
-function isoDate(d: Date): string {
-  return d.toISOString().slice(0, 10)
-}
-
 type DemoAccountSpec = {
   name: string
   customerId: string

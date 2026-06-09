@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect, type Locator } from '@playwright/test'
 import { login } from '@open-mercato/core/helpers/integration/auth'
 
 /**
@@ -33,17 +33,19 @@ const pickerLocator = '[role="combobox"]'
  * never mounts and the following `toBeVisible` times out. Retrying the open
  * until a known option is visible makes the step deterministic.
  */
-async function openExpiringPicker(
-  trigger: import('@playwright/test').Locator,
-  probe: import('@playwright/test').Locator,
-): Promise<void> {
+async function openExpiringPicker(trigger: Locator, probe: Locator): Promise<void> {
   await expect(async () => {
     await trigger.click()
     await expect(probe).toBeVisible({ timeout: 2_000 })
-  }).toPass({ timeout: 20_000 })
+  }).toPass({ timeout: 15_000 })
 }
 
 test.describe('TC-CPQ-012: Inline expiring picker (UI)', () => {
+  // Cold renders (login + goto + Radix mount) plus the open-retry budget can
+  // exceed the 20s default; give these UI smokes explicit headroom so the
+  // retry actually runs instead of being cut short by the test timeout.
+  test.describe.configure({ timeout: 45_000 })
+
   test('picker renders in title row with the 5 preset windows', async ({ page }) => {
     await login(page, 'admin')
     await page.goto('/backend/cpq/inventory', { waitUntil: 'domcontentloaded' })

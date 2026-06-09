@@ -31,6 +31,9 @@
     "db:migrate": "mercato db migrate",
     "db:greenfield": "mercato db greenfield",
     "initialize": "mercato init",
+    "dainamite-cpq-test": "mercato cpq seed",
+    "dainamite-billing-test": "mercato billing seed",
+    "dainamite-test": "mercato cpq seed && mercato billing seed",
     "reinstall": "mercato init --reinstall",
     "preinstall": "node -e \"const v = process.versions.node.split('.').map(Number); if (v[0] < 24) { console.error('Node >= 24 required'); process.exit(1); }\""
   },

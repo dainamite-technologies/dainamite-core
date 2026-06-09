@@ -44,10 +44,14 @@ jobs:
       - name: Install dependencies
         run: yarn install --immutable
 
-      - name: Build all workspace packages
-        # Each @dainamite/* package gets built before publish so dist/ exists.
-        # If we add more packages later, switch to `yarn workspaces foreach -A run build`.
-        run: yarn workspace @dainamite/cpq build
+      - name: Build all @dainamite/* packages
+        # Each @dainamite/* package gets built before publish so dist/ exists
+        # in the fresh CI checkout (dist is gitignored). cpq + billing first,
+        # then the connector that peer-depends on both.
+        run: |
+          yarn workspace @dainamite/cpq build
+          yarn workspace @dainamite/billing build
+          yarn workspace @dainamite/cpq-billing-connector build
 
       - name: Create release PR or publish
         uses: changesets/action@v1

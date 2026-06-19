@@ -5,8 +5,13 @@ import {
   computeBalanceStatus,
   resolveLowBalanceThreshold,
 } from './balanceStatus'
-import { computeCreditSnapshot, type CreditSnapshot } from './creditStatus'
-import { formatMoney } from './money'
+import {
+  computeCreditSnapshot,
+  detectCreditCrossing,
+  type CreditSnapshot,
+} from './creditStatus'
+import type { DomainEvent } from './balanceEvents'
+import { formatMoney, subMoney, toUnits } from './money'
 import {
   getLowBalanceThresholdDefault,
   getNearLimitBufferDefault,
@@ -103,4 +108,48 @@ export async function getCreditSnapshot(
     outstanding,
   })
   return { ...snapshot, currencyCode: account.currencyCode }
+}
+
+/**
+ * Credit-crossing events for a postpaid account when a draft invoice is posted
+ * (SPEC-002 P6). `billing.credit.over_limit` fires once on the upward crossing
+ * of `credit_used` (Σ posted-unpaid outstanding) past `credit_limit`. The
+ * just-posted invoice's `outstanding` is already included in the current total,
+ * so the prior total is `current − justPostedOutstanding`.
+ */
+export async function buildPostpaidCreditCrossingEvents(
+  em: EntityManager,
+  account: BillingAccount,
+  justPostedOutstanding: string,
+): Promise<DomainEvent[]> {
+  if ((account.billingMode as BillingMode) !== 'postpaid') return []
+  const creditLimit = account.creditLimit ?? '0'
+  if (toUnits(creditLimit) <= 0) return []
+
+  const nearLimitBuffer = await getNearLimitBufferDefault(em)
+  const usedAfter = await getPostpaidOutstanding(em, account)
+  const usedBefore = subMoney(usedAfter, justPostedOutstanding)
+  const crossing = detectCreditCrossing({
+    creditLimit,
+    nearLimitBuffer,
+    usedBefore,
+    usedAfter,
+  })
+
+  const events: DomainEvent[] = []
+  const base = {
+    billAccountId: account.id,
+    tenantId: account.tenantId,
+    organizationId: account.organizationId,
+    currencyCode: account.currencyCode,
+    creditLimit,
+    creditUsed: usedAfter,
+  }
+  if (crossing.overLimitCrossedUp) {
+    events.push({ id: 'billing.credit.over_limit', payload: { ...base } })
+  }
+  if (crossing.nearLimitCrossedUp) {
+    events.push({ id: 'billing.credit.near_limit', payload: { ...base } })
+  }
+  return events
 }

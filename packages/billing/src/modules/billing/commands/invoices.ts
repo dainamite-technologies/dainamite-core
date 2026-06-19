@@ -8,8 +8,9 @@ import {
 } from '@open-mercato/shared/lib/commands/scope'
 import { CrudHttpError } from '@open-mercato/shared/lib/crud/errors'
 import { SalesInvoice, SalesInvoiceLine } from '@open-mercato/core/modules/sales/data/entities'
-import { DraftInvoiceEdit } from '../data/entities'
-import { emitBillingEvent } from '../events'
+import { BillingAccount, DraftInvoiceEdit } from '../data/entities'
+import { emitBillingEvent, type BillingEventId } from '../events'
+import { buildPostpaidCreditCrossingEvents } from '../lib/accountStatus'
 import {
   billingInvoiceAddLineSchema,
   billingInvoiceEditLineSchema,
@@ -142,6 +143,29 @@ const postInvoiceCommand: CommandHandler<BillingInvoicePostInput, PostResult> = 
         tenantId: invoice.tenantId,
         organizationId: invoice.organizationId,
       })
+    }
+
+    // SPEC-002 P6: a newly-posted invoice raises the account's outstanding
+    // exposure — emit billing.credit.over_limit on the upward crossing. Billing
+    // never blocks; the consuming flow decides what to do.
+    const billAccountId = (meta as { bill_account_id?: string }).bill_account_id
+    if (billAccountId) {
+      const account = await em.findOne(BillingAccount, {
+        id: billAccountId,
+        tenantId: parsed.tenantId,
+        organizationId: parsed.organizationId,
+        deletedAt: null,
+      })
+      if (account) {
+        const creditEvents = await buildPostpaidCreditCrossingEvents(
+          em,
+          account,
+          invoice.outstandingAmount,
+        )
+        for (const ev of creditEvents) {
+          await emitBillingEvent(ev.id as BillingEventId, ev.payload, { persistent: true })
+        }
+      }
     }
 
     return {

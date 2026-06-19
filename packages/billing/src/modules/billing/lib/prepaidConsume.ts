@@ -13,15 +13,14 @@ import {
 } from './balanceLedger'
 import {
   computeBalanceStatus,
-  detectBalanceCrossing,
   resolveLowBalanceThreshold,
 } from './balanceStatus'
 import {
   computeCreditStatus,
   computeAvailableCredit,
-  detectCreditCrossing,
   prepaidCreditUsed,
 } from './creditStatus'
+import { buildBalanceCrossingEvents, type DomainEvent } from './balanceEvents'
 import { absMoney, negateMoney } from './money'
 import {
   getLowBalanceThresholdDefault,
@@ -67,8 +66,6 @@ export type PrepaidConsumeResult = {
   tierBreakdown: TierBreakdownEntry[]
   warning: string | null
 }
-
-export type DomainEvent = { id: string; payload: Record<string, unknown> }
 
 export type PrepaidConsumeOutcome = {
   result: PrepaidConsumeResult
@@ -216,52 +213,27 @@ export async function consumePrepaidUsage(
 
   // ─── 8. Status + crossing events ──────────────────────────────
   const balanceStatus = computeBalanceStatus(balanceAfter, threshold)
-  const events: DomainEvent[] = []
-
-  const crossing = detectBalanceCrossing(balanceBefore, balanceAfter, threshold)
-  const baseEventPayload = {
+  const scope = {
     billAccountId: input.billAccountId,
     tenantId: input.tenantId,
     organizationId: input.organizationId,
     currencyCode,
-    balance: balanceAfter,
   }
-  if (crossing.exhaustedCrossedDown) {
-    events.push({ id: 'billing.balance.exhausted', payload: { ...baseEventPayload } })
-  }
-  if (crossing.lowCrossedDown) {
-    events.push({
-      id: 'billing.balance.low',
-      payload: { ...baseEventPayload, lowBalanceThreshold: threshold },
-    })
-  }
-
-  const usedBefore = prepaidCreditUsed(balanceBefore)
-  const usedAfter = prepaidCreditUsed(balanceAfter)
-  const creditCrossing = detectCreditCrossing({
+  const events: DomainEvent[] = buildBalanceCrossingEvents({
+    scope,
+    balanceBefore,
+    balanceAfter,
+    threshold,
     creditLimit,
     nearLimitBuffer,
-    usedBefore,
-    usedAfter,
   })
-  if (creditCrossing.overLimitCrossedUp) {
-    events.push({
-      id: 'billing.credit.over_limit',
-      payload: { ...baseEventPayload, creditLimit, creditUsed: usedAfter },
-    })
-  }
-  if (creditCrossing.nearLimitCrossedUp) {
-    events.push({
-      id: 'billing.credit.near_limit',
-      payload: { ...baseEventPayload, creditLimit, creditUsed: usedAfter },
-    })
-  }
 
   // Optional per-debit signal (excluded from workflow triggers).
   events.push({
     id: 'billing.usage.rated',
     payload: {
-      ...baseEventPayload,
+      ...scope,
+      balance: balanceAfter,
       usageId: usage.id,
       transactionId: movement.transaction.id,
       ratedAmount,
@@ -269,6 +241,7 @@ export async function consumePrepaidUsage(
     },
   })
 
+  const usedAfter = prepaidCreditUsed(balanceAfter)
   const creditStatus = computeCreditStatus(
     computeAvailableCredit(creditLimit, usedAfter),
     nearLimitBuffer,

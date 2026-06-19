@@ -23,6 +23,8 @@ export type MockEmOptions = {
   usageItem?: Row | null
   /** An existing usage record returned for a matching sourceRef (dedup tests). */
   existingUsage?: Row | null
+  /** A BillingTopup returned by findOne (capture tests). */
+  topup?: Row | null
   /** Module config values keyed by name (e.g. { 'prepaid.topup_tax_rate': 23 }). */
   configs?: Record<string, unknown>
   /** Postpaid outstanding total returned by the SUM(outstanding_amount) query. */
@@ -127,6 +129,10 @@ export function createPrepaidMockEm(options: MockEmOptions = {}): MockEm {
       if (where.uomCode !== undefined && item.uomCode !== where.uomCode) return null
       return item
     }
+    if (ctor === 'BillingTopup') return options.topup ?? null
+    // resolveInvoiceStatusEntryId looks up Dictionary then DictionaryEntry.
+    if (ctor === 'Dictionary') return { id: 'dict-invoice-status' }
+    if (ctor === 'DictionaryEntry') return { id: `status-${(where.value as string) ?? 'x'}` }
     if (ctor === 'ModuleConfig') {
       const name = where.name as string
       const configs = options.configs ?? {}

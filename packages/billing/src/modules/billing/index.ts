@@ -15,7 +15,7 @@ export const metadata: ModuleInfo = {
     'Lightweight recurring-billing engine — collects one-time / recurring / usage items, runs Bill Runs, produces draft invoices in core/sales.',
   author: 'Dainamite',
   license: 'MIT',
-  requires: ['auth', 'directory', 'dictionaries', 'configs', 'sales'],
+  requires: ['auth', 'directory', 'dictionaries', 'configs', 'sales', 'payment_gateways'],
   ejectable: false,
 }
 

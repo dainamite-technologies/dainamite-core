@@ -43,6 +43,8 @@ const billingAccountListItemSchema = z.object({
   invoice_address: z.record(z.string(), z.unknown()),
   next_bill_date: z.string(),
   last_bill_date: z.string().nullable(),
+  billing_mode: z.string(),
+  credit_limit: z.string(),
   is_active: z.boolean(),
   organization_id: z.string().uuid(),
   tenant_id: z.string().uuid(),
@@ -79,6 +81,8 @@ const crud = makeCrudRoute({
       'invoice_address',
       'next_bill_date',
       'last_bill_date',
+      'billing_mode',
+      'credit_limit',
       'is_active',
       'organization_id',
       'tenant_id',
@@ -106,6 +110,9 @@ const crud = makeCrudRoute({
       }
       if (typeof query.billCycle === 'string' && query.billCycle) {
         filters.bill_cycle = { $eq: query.billCycle }
+      }
+      if (typeof query.billingMode === 'string' && query.billingMode) {
+        filters.billing_mode = { $eq: query.billingMode }
       }
       if (typeof query.isActive === 'boolean') {
         filters.is_active = { $eq: query.isActive }

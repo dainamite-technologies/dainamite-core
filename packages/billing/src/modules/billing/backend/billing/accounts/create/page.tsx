@@ -43,8 +43,15 @@ export default function CreateBillingAccountPage() {
             country: values.invoiceAddress.country.trim().toUpperCase(),
           },
           nextBillDate: values.nextBillDate,
+          billingMode: values.billingMode,
         }
         if (values.taxId.trim()) payload.taxId = values.taxId.trim()
+        const creditLimit = Number.parseFloat(values.creditLimit)
+        if (Number.isFinite(creditLimit) && creditLimit >= 0) payload.creditLimit = creditLimit
+        if (values.billingMode === 'prepaid' && values.lowBalanceThreshold.trim()) {
+          const threshold = Number.parseFloat(values.lowBalanceThreshold)
+          if (Number.isFinite(threshold) && threshold >= 0) payload.lowBalanceThreshold = threshold
+        }
 
         const call = await apiCallOrThrow<{ id: string }>('/api/billing/accounts', {
           method: 'POST',

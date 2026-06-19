@@ -53,6 +53,11 @@ export type AccountFormValues = {
   }
   nextBillDate: string
   isActive: boolean
+  // SPEC-002 — immutable after create (like currencyCode).
+  billingMode: 'postpaid' | 'prepaid'
+  creditLimit: string
+  // Prepaid-only initial low-balance threshold for the balance row.
+  lowBalanceThreshold: string
 }
 
 export type AccountFormProps = {
@@ -81,6 +86,9 @@ const EMPTY_VALUES: AccountFormValues = {
   },
   nextBillDate: '',
   isActive: true,
+  billingMode: 'postpaid',
+  creditLimit: '0',
+  lowBalanceThreshold: '',
 }
 
 function todayIso(): string {
@@ -469,6 +477,64 @@ export function AccountForm({
             }
           />
         </label>
+      </div>
+
+      <h3 className="text-sm font-semibold mt-6 mb-2">
+        {t('billing.accounts.form.mode.title', 'Billing mode & credit')}
+      </h3>
+      <div className="grid grid-cols-2 gap-4">
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="text-muted-foreground">
+            {t('billing.accounts.columns.mode', 'Mode')}
+          </span>
+          <Select
+            value={values.billingMode}
+            disabled={isEdit}
+            onValueChange={(next) => set('billingMode', next as AccountFormValues['billingMode'])}
+          >
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="postpaid">{t('billing.mode.postpaid', 'Postpaid')}</SelectItem>
+              <SelectItem value="prepaid">{t('billing.mode.prepaid', 'Prepaid')}</SelectItem>
+            </SelectContent>
+          </Select>
+          {isEdit ? (
+            <span className="text-xs text-muted-foreground">
+              {t('billing.accounts.form.mode.locked', 'Immutable — frozen at account create time.')}
+            </span>
+          ) : null}
+        </label>
+
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="text-muted-foreground">
+            {t('billing.accounts.columns.credit_limit', 'Credit limit')}
+          </span>
+          <Input
+            type="number"
+            min="0"
+            step="0.01"
+            value={values.creditLimit}
+            onChange={(event) => set('creditLimit', event.currentTarget.value)}
+          />
+        </label>
+
+        {values.billingMode === 'prepaid' ? (
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="text-muted-foreground">
+              {t('billing.prepaid.panel.threshold', 'Low threshold')}
+            </span>
+            <Input
+              type="number"
+              min="0"
+              step="0.01"
+              value={values.lowBalanceThreshold}
+              placeholder={t('billing.accounts.form.threshold.hint', 'Blank = tenant default')}
+              onChange={(event) => set('lowBalanceThreshold', event.currentTarget.value)}
+            />
+          </label>
+        ) : null}
       </div>
 
       {isEdit ? (

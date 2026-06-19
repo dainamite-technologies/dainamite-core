@@ -107,6 +107,7 @@ export class Migration20260619000000_billing_prepaid extends Migration {
       "total_topups" numeric(18, 4) not null,
       "total_usage" numeric(18, 4) not null,
       "total_recurring" numeric(18, 4) not null,
+      "total_adjustments" numeric(18, 4) not null default 0,
       "closing_balance" numeric(18, 4) not null,
       "debit_breakdown" jsonb not null,
       "status" text not null,

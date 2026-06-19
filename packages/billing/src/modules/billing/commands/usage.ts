@@ -1,4 +1,5 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
+import { UniqueConstraintViolationException } from '@mikro-orm/core'
 import type { CommandHandler, CommandRuntimeContext } from '@open-mercato/shared/lib/commands/types'
 import { registerCommand } from '@open-mercato/shared/lib/commands'
 import {
@@ -143,19 +144,36 @@ async function executePrepaidConsume(
   account: BillingAccount,
   parsed: BillingUsageCreateInput,
 ): Promise<CreateUsageResult> {
-  const outcome = await em.transactional(async (tem) =>
-    consumePrepaidUsage(tem as EntityManager, account, {
-      organizationId: parsed.organizationId,
-      tenantId: parsed.tenantId,
-      billAccountId: parsed.billAccountId,
-      uomCode: parsed.uomCode,
-      quantity: parsed.quantity,
-      periodStart: parsed.periodStart,
-      periodEnd: parsed.periodEnd,
-      lineDescription: parsed.lineDescription ?? null,
-      sourceRef: parsed.sourceRef ?? null,
-    }),
-  )
+  const input = {
+    organizationId: parsed.organizationId,
+    tenantId: parsed.tenantId,
+    billAccountId: parsed.billAccountId,
+    uomCode: parsed.uomCode,
+    quantity: parsed.quantity,
+    periodStart: parsed.periodStart,
+    periodEnd: parsed.periodEnd,
+    lineDescription: parsed.lineDescription ?? null,
+    sourceRef: parsed.sourceRef ?? null,
+  }
+
+  let outcome
+  try {
+    outcome = await em.transactional(async (tem) =>
+      consumePrepaidUsage(tem as EntityManager, account, input),
+    )
+  } catch (err) {
+    // Concurrency: a simultaneous upload with the same sourceRef won the
+    // unique-constraint race and committed first, so our tx rolled back (no
+    // double-debit). Retry once on a fresh em — the dedup pre-check now finds
+    // the winner's record and returns its balance_after (idempotent 200).
+    if (parsed.sourceRef && err instanceof UniqueConstraintViolationException) {
+      outcome = await em.fork().transactional(async (tem) =>
+        consumePrepaidUsage(tem as EntityManager, account, input),
+      )
+    } else {
+      throw err
+    }
+  }
 
   // Index the new usage record (parity with the postpaid path) — only when a
   // fresh record was actually written (a dedup hit re-reads the prior one).
@@ -182,8 +200,13 @@ async function executePrepaidConsume(
   }
 
   // Domain events fire AFTER the DB commit (consistent with the post command).
+  // `billing.usage.rated` fires on EVERY upload — emit it ephemerally (a live
+  // signal, excluded from triggers) so the high-throughput consume path does
+  // not write a queue row per call. The meaningful crossing events
+  // (low/exhausted/credit) stay persistent so async consumers never miss them.
   for (const ev of outcome.events) {
-    await emitBillingEvent(ev.id as BillingEventId, ev.payload, { persistent: true })
+    const persistent = ev.id !== 'billing.usage.rated'
+    await emitBillingEvent(ev.id as BillingEventId, ev.payload, { persistent })
   }
 
   const r = outcome.result

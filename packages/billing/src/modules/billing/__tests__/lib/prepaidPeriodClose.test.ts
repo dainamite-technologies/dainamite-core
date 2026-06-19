@@ -123,6 +123,75 @@ describe('processPrepaidAccount — period close (spec story step 6)', () => {
     expect(statement.closingBalance).toBe('-3.0000') // 0 + 100 − 103 − 0
   })
 
+  it('chains the opening balance from the prior statement closing', async () => {
+    // Prior month closed at −23. This month: +50 top-ups, −40 usage, −20 recurring
+    // → opening −23, closing −23 + 50 − 40 − 20 = −33. (A created_at sum would
+    // wrongly drop the prior recurring and overstate the opening.)
+    const account = prepaidAccount()
+    const em = createPrepaidMockEm({
+      account,
+      balance: { tenantId: TENANT, billAccountId: ACCT, balance: '-13.0000' },
+      items: [recurringItem()],
+      existingStatement: null,
+      priorStatement: { id: 'stmt-may', closingBalance: '-23.0000' },
+    })
+    em.transactions.push(
+      { id: 't-top2', type: 'topup', amount: '50.0000', billAccountId: ACCT, createdAt: new Date('2026-05-10') },
+      { id: 't-use2', type: 'usage', amount: '-40.0000', billAccountId: ACCT, createdAt: new Date('2026-05-20') },
+    )
+
+    const result = await processPrepaidAccount(em as never, account as never, billRun as never, realParams)
+    if (result.status === 'failed') throw new Error('unexpected failure')
+    const statement = em.persisted.find(
+      (e) => (e as { status?: string }).status === 'generated',
+    ) as Record<string, unknown>
+    expect(statement.openingBalance).toBe('-23.0000')
+    expect(statement.totalTopups).toBe('50.0000')
+    expect(statement.totalUsage).toBe('40.0000')
+    expect(statement.totalRecurring).toBe('20.0000')
+    expect(statement.closingBalance).toBe('-33.0000')
+  })
+
+  it('fires a balance.low crossing when the recurring charge drops into the low band', async () => {
+    // Balance 25 with threshold 10; the €20 recurring fee drops it to 5 → low.
+    const account = prepaidAccount()
+    const em = createPrepaidMockEm({
+      account,
+      balance: { tenantId: TENANT, billAccountId: ACCT, balance: '25.0000', lowBalanceThreshold: '10.0000' },
+      items: [recurringItem()],
+    })
+    const result = await processPrepaidAccount(em as never, account as never, billRun as never, realParams)
+    if (result.status === 'failed') throw new Error('unexpected failure')
+    expect(result.statementEvents.map((e) => e.id)).toContain('billing.balance.low')
+    expect(result.statementEvents.map((e) => e.id)).toContain('billing.statement.generated')
+  })
+
+  it('includes manual adjustments in the statement math (closing stays consistent)', async () => {
+    // Window has a +10 adjustment. opening 0, topups 100, usage 103, adj +10,
+    // recurring 20 → closing 0 + 100 + 10 − 103 − 20 = −13.
+    const account = prepaidAccount()
+    const em = createPrepaidMockEm({
+      account,
+      balance: { tenantId: TENANT, billAccountId: ACCT, balance: '7.0000' },
+      items: [recurringItem()],
+    })
+    seedWindowActivity(em)
+    em.transactions.push({
+      id: 't-adj',
+      type: 'adjustment',
+      amount: '10.0000',
+      billAccountId: ACCT,
+      createdAt: new Date('2026-05-12'),
+    })
+    const result = await processPrepaidAccount(em as never, account as never, billRun as never, realParams)
+    if (result.status === 'failed') throw new Error('unexpected failure')
+    const statement = em.persisted.find(
+      (e) => (e as { status?: string }).status === 'generated',
+    ) as Record<string, unknown>
+    expect(statement.totalAdjustments).toBe('10.0000')
+    expect(statement.closingBalance).toBe('-13.0000')
+  })
+
   it('skips when a statement already exists for the period (anti-duplicate)', async () => {
     const account = prepaidAccount()
     const em = createPrepaidMockEm({

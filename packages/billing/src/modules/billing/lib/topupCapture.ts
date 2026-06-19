@@ -73,6 +73,20 @@ export async function captureTopup(
       },
     })
 
+    // A deduplicated credit means a PRIOR capture already committed (the
+    // gateway delivers `payment.captured` at-least-once, and the stale
+    // `status` check above can race a concurrent capture). Do NOT issue a
+    // second fiscal receipt — return the existing capture's links.
+    if (movement.deduplicated) {
+      const prior = await tem.findOne(BillingTopup, { id: topup.id })
+      return {
+        status: 'already_captured' as const,
+        balanceAfter: movement.balanceAfter,
+        transactionId: prior?.transactionId ?? movement.transaction.id,
+        receiptInvoiceId: prior?.receiptInvoiceId ?? undefined,
+      }
+    }
+
     // 2. Fiscal VAT receipt (posted+paid).
     const receipt = await createTopupReceipt(tem as EntityManager, deps, {
       account,

@@ -90,13 +90,14 @@ describe('captureTopup', () => {
     expect(em.transactions).toHaveLength(0) // no second credit
   })
 
-  it('does not double-credit if the topup source_ref already exists', async () => {
-    const topup = makeTopup()
+  it('does not double-credit OR issue a second receipt when the source_ref exists', async () => {
+    // Simulates an at-least-once / concurrent re-fire that raced past the stale
+    // status check: the credit dedups AND no second fiscal receipt is minted.
+    const topup = makeTopup({ transactionId: 'txn-prior', receiptInvoiceId: 'inv-prior' })
     const em = createPrepaidMockEm({
       topup,
       balance: { tenantId: 'ten-1', billAccountId: 'acct-1', balance: '100.0000' },
     })
-    // Seed the credit transaction a prior capture already wrote.
     em.transactions.push({
       id: 'txn-prior',
       type: 'topup',
@@ -106,13 +107,17 @@ describe('captureTopup', () => {
       billAccountId: 'acct-1',
       createdAt: new Date('2026-06-10'),
     })
-    const result = await captureTopup(em as never, makeDeps(), {
+    const deps = makeDeps()
+    const result = await captureTopup(em as never, deps, {
       topup: topup as never,
       account: ACCOUNT,
       taxRate: 0,
     })
-    expect(result.status).toBe('captured')
+    expect(result.status).toBe('already_captured')
     expect(result.balanceAfter).toBe('100.0000') // unchanged — dedup hit
+    expect(result.receiptInvoiceId).toBe('inv-prior') // returns the existing receipt
     expect(em.transactions).toHaveLength(1) // no new credit transaction
+    // No second fiscal document: the number generator was never called.
+    expect(deps.numberGenerator.generate).not.toHaveBeenCalled()
   })
 })

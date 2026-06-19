@@ -42,7 +42,11 @@ export async function getTopupProvider(em: EntityManager): Promise<string> {
 /** `prepaid.statement_enabled` — master switch (default true). */
 export async function getStatementEnabled(em: EntityManager): Promise<boolean> {
   const value = await readConfig(em, 'prepaid.statement_enabled')
-  return value === undefined ? true : Boolean(value)
+  if (value === undefined || value === null) return true
+  if (typeof value === 'boolean') return value
+  // A stored string "false" must read as false (Boolean("false") === true).
+  if (typeof value === 'string') return value.trim().toLowerCase() !== 'false'
+  return Boolean(value)
 }
 
 /** `prepaid.topup_tax_rate` — VAT percent on top-up receipts (default 0). */

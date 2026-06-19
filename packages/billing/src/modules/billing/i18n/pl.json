@@ -330,6 +330,7 @@
   "billing.statements.breakdown.item": "Pozycja",
   "billing.statements.breakdown.quantity": "Ilość",
   "billing.statements.breakdown.type": "Typ",
+  "billing.statements.columns.adjustments": "Korekty",
   "billing.statements.columns.closing": "Zamknięcie",
   "billing.statements.columns.opening": "Otwarcie",
   "billing.statements.columns.period": "Okres",

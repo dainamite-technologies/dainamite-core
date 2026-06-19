@@ -33,6 +33,7 @@ type StatementRow = {
   total_topups: string
   total_usage: string
   total_recurring: string
+  total_adjustments: string
   closing_balance: string
   debit_breakdown: { items?: BreakdownEntry[] } | null
   status: string
@@ -157,6 +158,9 @@ export default function BillingStatementDetailPage(props: { params?: { id?: stri
           </DetailField>
           <DetailField label={t('billing.statements.columns.recurring', 'Recurring')}>
             <span className="font-mono tabular-nums">{row.total_recurring}</span>
+          </DetailField>
+          <DetailField label={t('billing.statements.columns.adjustments', 'Adjustments')}>
+            <span className="font-mono tabular-nums">{row.total_adjustments}</span>
           </DetailField>
           <DetailField label={t('billing.statements.columns.closing', 'Closing')}>
             <span className="font-mono tabular-nums">

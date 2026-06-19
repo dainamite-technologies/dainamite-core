@@ -27,8 +27,10 @@ export type MockEmOptions = {
   topup?: Row | null
   /** Billing items returned by find(BillingItem) (period-close tests). */
   items?: Row[]
-  /** An existing BillingStatement returned by findOne (anti-dup tests). */
+  /** An existing BillingStatement for the SAME period returned by findOne (anti-dup tests). */
   existingStatement?: Row | null
+  /** A PRIOR BillingStatement (periodEnd < periodStart) for opening-chaining tests. */
+  priorStatement?: Row | null
   /** Module config values keyed by name (e.g. { 'prepaid.topup_tax_rate': 23 }). */
   configs?: Record<string, unknown>
   /** Postpaid outstanding total returned by the SUM(outstanding_amount) query. */
@@ -135,7 +137,15 @@ export function createPrepaidMockEm(options: MockEmOptions = {}): MockEm {
       return item
     }
     if (ctor === 'BillingTopup') return options.topup ?? null
-    if (ctor === 'BillingStatement') return options.existingStatement ?? null
+    if (ctor === 'BillingStatement') {
+      // A `periodEnd: { $lt }` range query is the prior-statement (opening
+      // chaining) lookup; an exact period match is the anti-duplicate check.
+      const pe = where.periodEnd as { $lt?: unknown } | undefined
+      if (pe && typeof pe === 'object' && '$lt' in pe) {
+        return options.priorStatement ?? null
+      }
+      return options.existingStatement ?? null
+    }
     // resolveInvoiceStatusEntryId looks up Dictionary then DictionaryEntry.
     if (ctor === 'Dictionary') return { id: 'dict-invoice-status' }
     if (ctor === 'DictionaryEntry') return { id: `status-${(where.value as string) ?? 'x'}` }

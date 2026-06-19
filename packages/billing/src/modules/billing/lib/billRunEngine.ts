@@ -76,6 +76,11 @@ export type RunBillRunResult = {
   outcomes: BillRunOutcome[]
 }
 
+type RunOutput = RunBillRunResult & {
+  /** Prepaid statement / crossing events to emit AFTER the outer tx commits. */
+  pendingEvents: DomainEvent[]
+}
+
 type AccountWarnings = {
   currency_mismatch_items?: string[]
   unmatched_usage_uoms?: string[]
@@ -111,18 +116,25 @@ export async function runBillRun(
   container: AwilixContainer,
   params: RunBillRunParams,
 ): Promise<RunBillRunResult> {
-  return withTenantLock(
+  const output = await withTenantLock(
     em,
     { tenantId: params.tenantId, lockName: 'billing-run' },
     async (tem) => executeRunWithinLock(tem, container, params),
   )
+  // Emit prepaid statement / crossing events ONLY after the outer transaction
+  // (held by withTenantLock) has committed — emitting inside the lock would let
+  // a consumer observe an uncommitted statement or a phantom event on rollback.
+  for (const ev of output.pendingEvents) {
+    await emitBillingEvent(ev.id as BillingEventId, ev.payload, { persistent: true })
+  }
+  return { billRun: output.billRun, outcomes: output.outcomes }
 }
 
 async function executeRunWithinLock(
   em: EntityManager,
   container: AwilixContainer,
   params: RunBillRunParams,
-): Promise<RunBillRunResult> {
+): Promise<RunOutput> {
   const now = new Date()
   const billRun = em.create(BillRun, {
     organizationId: params.organizationId,
@@ -146,6 +158,7 @@ async function executeRunWithinLock(
 
   const accounts = await selectTargetAccounts(em, params)
   const outcomes: BillRunOutcome[] = []
+  const pendingEvents: DomainEvent[] = []
   let totalUsageRecordsRated = 0
 
   for (const account of accounts) {
@@ -174,11 +187,10 @@ async function executeRunWithinLock(
     await em.flush()
     outcomes.push(outcome)
 
-    // Emit statement.generated AFTER the per-account work commits.
+    // Collect statement / crossing events — runBillRun emits them AFTER the
+    // outer tx commits (see runBillRun), never from inside the lock.
     if (processResult.status !== 'failed' && processResult.statementEvents) {
-      for (const ev of processResult.statementEvents) {
-        await emitBillingEvent(ev.id as BillingEventId, ev.payload, { persistent: true })
-      }
+      pendingEvents.push(...processResult.statementEvents)
     }
   }
 
@@ -188,7 +200,7 @@ async function executeRunWithinLock(
   billRun.summary = buildRunSummary(outcomes, accounts.length, totalUsageRecordsRated)
   await em.flush()
 
-  return { billRun, outcomes }
+  return { billRun, outcomes, pendingEvents }
 }
 
 async function selectTargetAccounts(

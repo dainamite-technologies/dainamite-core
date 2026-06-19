@@ -844,6 +844,7 @@ export class BillingTopup {
 export class BillingStatement {
   [OptionalProps]?:
     | 'billRunId'
+    | 'totalAdjustments'
     | 'createdAt'
     | 'updatedAt'
 
@@ -889,7 +890,13 @@ export class BillingStatement {
   @Property({ name: 'total_recurring', type: 'numeric', columnType: 'numeric(18, 4)' })
   totalRecurring!: string
 
-  // opening + topups − usage − recurring (= balance after this run's debits).
+  // Signed sum of manual adjustment + reversal movements in the window. Kept as
+  // its own term so the statement stays self-consistent (closing reproduces
+  // from the shown components) and the opening→closing chain never drifts.
+  @Property({ name: 'total_adjustments', type: 'numeric', columnType: 'numeric(18, 4)', default: '0' })
+  totalAdjustments: string = '0'
+
+  // opening + topups + adjustments − usage − recurring (= the period's net).
   @Property({ name: 'closing_balance', type: 'numeric', columnType: 'numeric(18, 4)' })
   closingBalance!: string
 

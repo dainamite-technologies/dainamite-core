@@ -1,6 +1,7 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
 import {
   BillingAccount,
+  BillingAccountBalance,
   BillingAccountTransaction,
   BillingItem,
   BillingStatement,
@@ -9,11 +10,16 @@ import {
 import type { BillCycle } from '../data/validators'
 import { advanceNextBillDate, addDays, deriveBillPeriod, isCycleDue, type BillPeriod } from './billPeriod'
 import { applyBalanceMovement } from './balanceLedger'
+import { resolveLowBalanceThreshold } from './balanceStatus'
 import { buildInvoiceLinesFromItems } from './invoiceWriter'
 import { selectItemsForPeriod, type SelectableItem } from './itemSelector'
 import { absMoney, addMoney, fromUnits, subMoney, toUnits } from './money'
-import { getStatementEnabled } from './prepaidConfig'
-import type { DomainEvent } from './balanceEvents'
+import {
+  getLowBalanceThresholdDefault,
+  getNearLimitBufferDefault,
+  getStatementEnabled,
+} from './prepaidConfig'
+import { buildBalanceCrossingEvents, type DomainEvent } from './balanceEvents'
 
 /**
  * Prepaid period close (SPEC-002 P3).
@@ -78,9 +84,24 @@ export async function processPrepaidAccount(
       : CATCH_UP_HARD_CAP
 
   const statementEnabled = await getStatementEnabled(em)
+  // Resolve the crossing thresholds once — they don't change during the run.
+  const balanceRow = await em.findOne(BillingAccountBalance, {
+    tenantId: account.tenantId,
+    billAccountId: account.id,
+  })
+  const threshold = resolveLowBalanceThreshold(
+    balanceRow?.lowBalanceThreshold ?? null,
+    await getLowBalanceThresholdDefault(em),
+  )
+  const nearLimitBuffer = await getNearLimitBufferDefault(em)
+  const creditLimit = account.creditLimit ?? '0'
+
   let cyclesEmitted = 0
   let lastStatementId: string | null = null
   const statementEvents: DomainEvent[] = []
+  // Chain opening → closing across cycles in a catch-up run. Null on the first
+  // cycle → closePrepaidPeriod resolves it from the prior statement / ledger.
+  let previousClosing: string | null = null
 
   while (cyclesEmitted < maxCycles && isCycleDue(account.nextBillDate, params.asOfDate)) {
     const period = deriveBillPeriod(account.nextBillDate, account.billCycle as BillCycle)
@@ -107,7 +128,16 @@ export async function processPrepaidAccount(
     const cycle = await closePrepaidPeriod(em, account, period, billRun, {
       mode: params.mode,
       statementEnabled,
+      previousClosing,
+      threshold,
+      nearLimitBuffer,
+      creditLimit,
     })
+    previousClosing = cycle.closingBalance
+    // Recurring charges move the balance too, so they can trip the same
+    // low/exhausted/over_limit crossings as a usage debit (SPEC-002). These
+    // are accumulated and emitted by the engine AFTER the run commits.
+    statementEvents.push(...cycle.crossingEvents)
 
     // A negative closing balance is NORMAL for prepaid (the customer overspent;
     // it's cleared by the next top-up), so it is not flagged as a warning.
@@ -129,6 +159,7 @@ export async function processPrepaidAccount(
           totalTopups: cycle.totalTopups,
           totalUsage: cycle.totalUsage,
           totalRecurring: cycle.totalRecurring,
+          totalAdjustments: cycle.totalAdjustments,
         },
       })
     }
@@ -164,8 +195,9 @@ type ClosePeriodResult = {
   totalTopups: string
   totalUsage: string
   totalRecurring: string
+  totalAdjustments: string
   closingBalance: string
-  closedNegative: boolean
+  crossingEvents: DomainEvent[]
 }
 
 type DebitBreakdownEntry = {
@@ -181,7 +213,14 @@ async function closePrepaidPeriod(
   account: BillingAccount,
   period: BillPeriod,
   billRun: BillRun,
-  opts: { mode: PrepaidCloseMode; statementEnabled: boolean },
+  opts: {
+    mode: PrepaidCloseMode
+    statementEnabled: boolean
+    previousClosing: string | null
+    threshold: string
+    nearLimitBuffer: string
+    creditLimit: string
+  },
 ): Promise<ClosePeriodResult> {
   const periodEndISO = period.periodEnd.toISOString().slice(0, 10)
 
@@ -201,15 +240,32 @@ async function closePrepaidPeriod(
   const windowStart = period.periodStart
   const windowEnd = addDays(period.periodEnd, 1) // exclusive upper bound
 
-  const openingBalance = await sumAmountsBefore(em, account, windowStart)
+  // Opening chains from the prior statement's closing — NOT a created_at sum.
+  // Recurring debits are stamped at run time (after period_end), so a
+  // `SUM(amount WHERE created_at < period_start)` would drop the prior period's
+  // recurring charge and break the chain. Resolution order:
+  //   1. previous cycle's closing (catch-up, in this run),
+  //   2. the prior persisted statement's closing (month-over-month),
+  //   3. the ledger balance before the first-ever statement window.
+  const openingBalance = await resolveOpeningBalance(em, account, period, opts.previousClosing)
   const totalTopups = await sumByTypeInWindow(em, account, 'topup', windowStart, windowEnd)
   const totalUsage = absMoney(
     await sumByTypeInWindow(em, account, 'usage', windowStart, windowEnd),
+  )
+  // Manual adjustments / reversals that landed in the window — SIGNED (a credit
+  // is +, a debit −). Kept as a first-class term so the statement is
+  // self-consistent and the opening→closing chain never drifts.
+  const totalAdjustments = addMoney(
+    await sumByTypeInWindow(em, account, 'adjustment', windowStart, windowEnd),
+    await sumByTypeInWindow(em, account, 'reversal', windowStart, windowEnd),
   )
 
   let totalRecurring = '0.0000'
   const breakdown: DebitBreakdownEntry[] = []
   const chargeTransactionIds: string[] = []
+  // The balance just before / after the recurring batch — for crossing events.
+  let recurringBalanceBefore: string | null = null
+  let recurringBalanceAfter: string | null = null
 
   if (opts.mode === 'real') {
     const now = new Date()
@@ -230,6 +286,8 @@ async function closePrepaidPeriod(
           bill_run_id: billRun.id,
         },
       })
+      if (recurringBalanceBefore === null) recurringBalanceBefore = movement.balanceBefore
+      recurringBalanceAfter = movement.balanceAfter
       totalRecurring = addMoney(totalRecurring, line.totalNetAmount)
       if (!movement.deduplicated) chargeTransactionIds.push(movement.transaction.id)
       breakdown.push({
@@ -258,12 +316,30 @@ async function closePrepaidPeriod(
     }
   }
 
-  // closing = opening + topups − usage − recurring (spec formula).
+  // closing = opening + topups + adjustments − usage − recurring.
   const closingBalance = subMoney(
-    subMoney(addMoney(openingBalance, totalTopups), totalUsage),
+    subMoney(addMoney(addMoney(openingBalance, totalTopups), totalAdjustments), totalUsage),
     totalRecurring,
   )
-  const closedNegative = toUnits(closingBalance) < 0
+
+  // The recurring batch can push the balance low / exhausted / over-limit —
+  // emit those crossings (real mode only; dry/test never move the balance).
+  const crossingEvents =
+    recurringBalanceBefore !== null && recurringBalanceAfter !== null
+      ? buildBalanceCrossingEvents({
+          scope: {
+            billAccountId: account.id,
+            tenantId: account.tenantId,
+            organizationId: account.organizationId,
+            currencyCode: account.currencyCode,
+          },
+          balanceBefore: recurringBalanceBefore,
+          balanceAfter: recurringBalanceAfter,
+          threshold: opts.threshold,
+          creditLimit: opts.creditLimit,
+          nearLimitBuffer: opts.nearLimitBuffer,
+        })
+      : []
 
   let statementId: string | null = null
   if (opts.mode === 'real' && opts.statementEnabled) {
@@ -280,6 +356,7 @@ async function closePrepaidPeriod(
       totalTopups,
       totalUsage,
       totalRecurring,
+      totalAdjustments,
       closingBalance,
       debitBreakdown: { items: breakdown },
       status: 'generated',
@@ -306,9 +383,38 @@ async function closePrepaidPeriod(
     totalTopups,
     totalUsage,
     totalRecurring,
+    totalAdjustments,
     closingBalance,
-    closedNegative,
+    crossingEvents,
   }
+}
+
+/**
+ * Resolve a period's opening balance by chaining from the prior statement's
+ * closing (the spec's "chains cleanly"), with a ledger fallback for the very
+ * first statement. See the call site for why a created_at sum alone is wrong.
+ */
+async function resolveOpeningBalance(
+  em: EntityManager,
+  account: BillingAccount,
+  period: BillPeriod,
+  previousClosing: string | null,
+): Promise<string> {
+  if (previousClosing !== null) return previousClosing
+  const prior = await em.findOne(
+    BillingStatement,
+    {
+      tenantId: account.tenantId,
+      organizationId: account.organizationId,
+      billAccountId: account.id,
+      periodEnd: { $lt: period.periodStart },
+    } as never,
+    { orderBy: { periodEnd: 'DESC' } },
+  )
+  if (prior) return fromUnits(toUnits(prior.closingBalance))
+  // First-ever statement: the ledger balance just before the period window
+  // (only top-ups/usage exist before the first close, so created_at is safe).
+  return sumAmountsBefore(em, account, period.periodStart)
 }
 
 /** Balance at `before` = SUM(amount) of transactions created strictly before it. */

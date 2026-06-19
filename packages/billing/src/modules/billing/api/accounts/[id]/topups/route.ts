@@ -19,9 +19,14 @@ export async function POST(
   const { id } = await params
   const body = (await req.json().catch(() => ({}))) as Record<string, unknown>
   const merged = { ...body, billAccountId: id }
+  // Rebuild headers WITHOUT the stale content-length (the body changed); keep
+  // auth (cookies / Authorization) intact and force JSON content-type.
+  const headers = new Headers(req.headers)
+  headers.delete('content-length')
+  headers.set('content-type', 'application/json')
   const forwarded = new Request(req.url, {
     method: 'POST',
-    headers: req.headers,
+    headers,
     body: JSON.stringify(merged),
   })
   return topupsPost(forwarded)

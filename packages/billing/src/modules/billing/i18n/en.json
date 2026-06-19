@@ -330,6 +330,7 @@
   "billing.statements.breakdown.item": "Item",
   "billing.statements.breakdown.quantity": "Qty",
   "billing.statements.breakdown.type": "Type",
+  "billing.statements.columns.adjustments": "Adjustments",
   "billing.statements.columns.closing": "Closing",
   "billing.statements.columns.opening": "Opening",
   "billing.statements.columns.period": "Period",

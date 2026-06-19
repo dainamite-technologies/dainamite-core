@@ -18,6 +18,9 @@ export const BILL_RUN_OUTCOME_STATUSES = [
   'success',
   'success_with_warnings',
   'skipped_existing_draft',
+  // SPEC-002: prepaid period close was skipped because a statement already
+  // exists for the window.
+  'skipped_existing_statement',
   'failed',
 ] as const
 export type BillRunOutcomeStatus = (typeof BILL_RUN_OUTCOME_STATUSES)[number]

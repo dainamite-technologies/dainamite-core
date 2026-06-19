@@ -20,6 +20,9 @@ import {
 } from './invoiceWriter'
 import { withTenantLock } from './tenantLock'
 import { processUsageForAccount } from './usageRunner'
+import { processPrepaidAccount } from './prepaidPeriodClose'
+import type { DomainEvent } from './balanceEvents'
+import { emitBillingEvent, type BillingEventId } from '../events'
 import type { BillCycle } from '../data/validators'
 
 /**
@@ -79,9 +82,16 @@ type AccountWarnings = {
 }
 
 type AccountProcessSuccess = {
-  status: 'success' | 'success_with_warnings' | 'skipped_existing_draft'
-  warnings: AccountWarnings | null
+  status:
+    | 'success'
+    | 'success_with_warnings'
+    | 'skipped_existing_draft'
+    | 'skipped_existing_statement'
+  warnings: AccountWarnings | Record<string, unknown> | null
   draftInvoiceId: string | null
+  // SPEC-002: prepaid accounts produce a statement instead of a draft invoice.
+  statementId?: string | null
+  statementEvents?: DomainEvent[]
   cyclesEmitted: number
   usageRecordsRated: number
 }
@@ -155,6 +165,7 @@ async function executeRunWithinLock(
           ? null
           : (processResult.warnings as Record<string, unknown> | null),
       draftInvoiceId: processResult.status === 'failed' ? null : processResult.draftInvoiceId,
+      statementId: processResult.status === 'failed' ? null : (processResult.statementId ?? null),
       isActive: true,
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -162,6 +173,13 @@ async function executeRunWithinLock(
     em.persist(outcome)
     await em.flush()
     outcomes.push(outcome)
+
+    // Emit statement.generated AFTER the per-account work commits.
+    if (processResult.status !== 'failed' && processResult.statementEvents) {
+      for (const ev of processResult.statementEvents) {
+        await emitBillingEvent(ev.id as BillingEventId, ev.payload, { persistent: true })
+      }
+    }
   }
 
   billRun.status = computeFinalRunStatus(outcomes)
@@ -215,6 +233,30 @@ async function processAccount(
   account: BillingAccount,
   params: RunBillRunParams,
 ): Promise<AccountProcessResult> {
+  // SPEC-002: a prepaid account never gets a payable draft invoice. It still
+  // runs in the Bill Run, but charges recurring / one_time items to the
+  // balance and produces a non-fiscal consumption statement.
+  if (account.billingMode === 'prepaid') {
+    const result = await processPrepaidAccount(em, account, billRun, {
+      asOfDate: params.asOfDate,
+      mode: params.mode,
+      triggeredBy: params.triggeredBy,
+      catchUp: params.catchUp,
+    })
+    if (result.status === 'failed') {
+      return { status: 'failed', errorMessage: result.errorMessage }
+    }
+    return {
+      status: result.status,
+      warnings: result.warnings,
+      draftInvoiceId: null,
+      statementId: result.statementId,
+      statementEvents: result.statementEvents,
+      cyclesEmitted: result.cyclesEmitted,
+      usageRecordsRated: 0,
+    }
+  }
+
   const maxCycles =
     params.triggeredBy === 'schedule' || !params.catchUp
       ? SCHEDULED_CYCLE_LIMIT
@@ -408,6 +450,13 @@ function buildRunSummary(
     ).length,
     drafts_skipped_existing: outcomes.filter((o) => o.status === 'skipped_existing_draft')
       .length,
+    // SPEC-002 prepaid period close.
+    statements_created: outcomes.filter(
+      (o) => o.statementId !== null && o.status !== 'skipped_existing_statement',
+    ).length,
+    statements_skipped_existing: outcomes.filter(
+      (o) => o.status === 'skipped_existing_statement',
+    ).length,
     accounts_failed: outcomes.filter((o) => o.status === 'failed').length,
     accounts_with_warnings: outcomes.filter((o) => o.status === 'success_with_warnings')
       .length,

@@ -25,6 +25,10 @@ export type MockEmOptions = {
   existingUsage?: Row | null
   /** A BillingTopup returned by findOne (capture tests). */
   topup?: Row | null
+  /** Billing items returned by find(BillingItem) (period-close tests). */
+  items?: Row[]
+  /** An existing BillingStatement returned by findOne (anti-dup tests). */
+  existingStatement?: Row | null
   /** Module config values keyed by name (e.g. { 'prepaid.topup_tax_rate': 23 }). */
   configs?: Record<string, unknown>
   /** Postpaid outstanding total returned by the SUM(outstanding_amount) query. */
@@ -44,6 +48,7 @@ export type MockEm = {
   persist: jest.Mock
   flush: jest.Mock
   execute: jest.Mock
+  nativeUpdate: jest.Mock
   transactional: jest.Mock
   fork: () => MockEm
 }
@@ -130,6 +135,7 @@ export function createPrepaidMockEm(options: MockEmOptions = {}): MockEm {
       return item
     }
     if (ctor === 'BillingTopup') return options.topup ?? null
+    if (ctor === 'BillingStatement') return options.existingStatement ?? null
     // resolveInvoiceStatusEntryId looks up Dictionary then DictionaryEntry.
     if (ctor === 'Dictionary') return { id: 'dict-invoice-status' }
     if (ctor === 'DictionaryEntry') return { id: `status-${(where.value as string) ?? 'x'}` }
@@ -142,7 +148,11 @@ export function createPrepaidMockEm(options: MockEmOptions = {}): MockEm {
     return null
   }) as never
 
-  em.find = jest.fn(async () => []) as never
+  em.find = jest.fn(async (entity: unknown) => {
+    const ctor = (entity as { name?: string }).name ?? ''
+    if (ctor === 'BillingItem') return options.items ?? []
+    return []
+  }) as never
 
   em.execute = jest.fn(async (sql: string, params: unknown[] = []) => {
     if (sql.includes('INSERT INTO billing_account_balances')) {
@@ -175,6 +185,29 @@ export function createPrepaidMockEm(options: MockEmOptions = {}): MockEm {
       return [{ balance: row.balance }]
     }
     if (sql.includes('SUM(amount)') && sql.includes('billing_account_transactions')) {
+      // sumByTypeInWindow: params [tenant, org, acct, type, from, to]
+      if (sql.includes('type = ?') && sql.includes('created_at >= ?')) {
+        const type = params[3] as string
+        const from = new Date(params[4] as string).getTime()
+        const to = new Date(params[5] as string).getTime()
+        const total = transactions
+          .filter((t) => {
+            if (t.type !== type || !t.createdAt) return false
+            const ts = new Date(t.createdAt as Date).getTime()
+            return ts >= from && ts < to
+          })
+          .reduce((acc, t) => addMoney(acc, (t.amount as string) ?? '0'), '0')
+        return [{ total }]
+      }
+      // sumAmountsBefore: params [tenant, org, acct, before]
+      if (sql.includes('created_at < ?')) {
+        const before = new Date(params[3] as string).getTime()
+        const total = transactions
+          .filter((t) => t.createdAt && new Date(t.createdAt as Date).getTime() < before)
+          .reduce((acc, t) => addMoney(acc, (t.amount as string) ?? '0'), '0')
+        return [{ total }]
+      }
+      // reconcile (whole ledger)
       const sum = transactions.reduce((acc, t) => addMoney(acc, (t.amount as string) ?? '0'), '0')
       return [{ sum_amount: sum }]
     }
@@ -184,6 +217,7 @@ export function createPrepaidMockEm(options: MockEmOptions = {}): MockEm {
     return []
   }) as never
 
+  em.nativeUpdate = jest.fn(async () => 0) as never
   em.transactional = jest.fn(async (cb: (tem: MockEm) => unknown) => cb(em)) as never
   em.fork = () => em
 

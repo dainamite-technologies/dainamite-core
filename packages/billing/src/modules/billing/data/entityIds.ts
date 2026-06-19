@@ -20,6 +20,11 @@ export const billingEntityIds = {
   run: 'billing:billing_run',
   runOutcome: 'billing:billing_run_outcome',
   draftInvoiceEdit: 'billing:billing_draft_invoice_edit',
+  // SPEC-002 (prepaid balance billing)
+  balance: 'billing:billing_account_balance',
+  transaction: 'billing:billing_account_transaction',
+  topup: 'billing:billing_topup',
+  statement: 'billing:billing_statement',
 } as const
 
 export type BillingEntityId = (typeof billingEntityIds)[keyof typeof billingEntityIds]

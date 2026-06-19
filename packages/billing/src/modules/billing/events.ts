@@ -34,6 +34,58 @@ const events = [
     category: 'lifecycle',
     clientBroadcast: true,
   },
+  // ─── Prepaid balance billing (SPEC-002) ──────────────────────
+  {
+    id: 'billing.balance.topped_up',
+    label: 'Balance Topped Up',
+    entity: 'balance',
+    category: 'lifecycle',
+    clientBroadcast: true,
+  },
+  {
+    id: 'billing.balance.low',
+    label: 'Balance Low',
+    entity: 'balance',
+    category: 'lifecycle',
+    clientBroadcast: true,
+  },
+  {
+    id: 'billing.balance.exhausted',
+    label: 'Balance Exhausted',
+    entity: 'balance',
+    category: 'lifecycle',
+    clientBroadcast: true,
+  },
+  {
+    // Per-debit signal — useful for a live balance UI but potentially
+    // high-volume, so excluded from workflow triggers (see Open Question #2).
+    id: 'billing.usage.rated',
+    label: 'Usage Rated',
+    entity: 'transaction',
+    category: 'lifecycle',
+    excludeFromTriggers: true,
+  },
+  {
+    id: 'billing.statement.generated',
+    label: 'Consumption Statement Generated',
+    entity: 'statement',
+    category: 'lifecycle',
+    clientBroadcast: true,
+  },
+  {
+    id: 'billing.credit.over_limit',
+    label: 'Credit Over Limit',
+    entity: 'credit',
+    category: 'lifecycle',
+    clientBroadcast: true,
+  },
+  {
+    id: 'billing.credit.near_limit',
+    label: 'Credit Near Limit',
+    entity: 'credit',
+    category: 'lifecycle',
+    clientBroadcast: true,
+  },
 ] as const
 
 export const eventsConfig = createModuleEvents({

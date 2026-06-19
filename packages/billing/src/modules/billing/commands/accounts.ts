@@ -11,7 +11,7 @@ import {
 } from '@open-mercato/shared/lib/commands/helpers'
 import { CrudHttpError } from '@open-mercato/shared/lib/crud/errors'
 import type { DataEngine } from '@open-mercato/shared/lib/data/engine'
-import { BillingAccount } from '../data/entities'
+import { BillingAccount, BillingAccountBalance } from '../data/entities'
 import { billingEntityIds } from '../data/entityIds'
 import {
   billingAccountCreateSchema,
@@ -21,6 +21,8 @@ import {
   type BillingAccountDeleteInput,
   type BillingAccountUpdateInput,
 } from '../data/validators'
+import { ensureBalanceRow } from '../lib/balanceLedger'
+import { formatMoney } from '../lib/money'
 
 /**
  * BillingAccount writes — create / update / soft-delete.
@@ -59,6 +61,7 @@ const createAccountCommand: CommandHandler<BillingAccountCreateInput, { id: stri
 
     const em = getEm(ctx)
     const now = new Date()
+    const billingMode = parsed.billingMode ?? 'postpaid'
     const entity = em.create(BillingAccount, {
       organizationId: parsed.organizationId,
       tenantId: parsed.tenantId,
@@ -73,12 +76,30 @@ const createAccountCommand: CommandHandler<BillingAccountCreateInput, { id: stri
       invoiceAddress: parsed.invoiceAddress as Record<string, unknown>,
       nextBillDate: parsed.nextBillDate,
       lastBillDate: parsed.lastBillDate ?? null,
+      billingMode,
+      creditLimit:
+        parsed.creditLimit !== undefined ? formatMoney(parsed.creditLimit) : '0',
       isActive: parsed.isActive ?? true,
       createdAt: now,
       updatedAt: now,
     })
     em.persist(entity)
     await em.flush()
+
+    // SPEC-002: a prepaid account gets its 1:1 balance row (starting at 0)
+    // at create time, so the consume path never races a missing row.
+    if (billingMode === 'prepaid') {
+      await ensureBalanceRow(em, {
+        organizationId: entity.organizationId,
+        tenantId: entity.tenantId,
+        billAccountId: entity.id,
+        currencyCode: entity.currencyCode,
+        lowBalanceThreshold:
+          parsed.lowBalanceThreshold !== undefined && parsed.lowBalanceThreshold !== null
+            ? formatMoney(parsed.lowBalanceThreshold)
+            : null,
+      })
+    }
 
     await emitCrudSideEffects({
       dataEngine: getDataEngine(ctx),
@@ -130,8 +151,28 @@ const updateAccountCommand: CommandHandler<BillingAccountUpdateInput, { id: stri
     if (parsed.nextBillDate !== undefined) record.nextBillDate = parsed.nextBillDate
     if (parsed.lastBillDate !== undefined) record.lastBillDate = parsed.lastBillDate
     if (parsed.isActive !== undefined) record.isActive = parsed.isActive
+    // SPEC-002: credit_limit is editable in both modes (billing_mode is not).
+    if (parsed.creditLimit !== undefined) record.creditLimit = formatMoney(parsed.creditLimit)
 
     record.updatedAt = new Date()
+
+    // SPEC-002: edit the prepaid balance row's low-balance threshold when
+    // supplied (null clears it back to the tenant config default). No-op for
+    // postpaid accounts (they have no balance row).
+    if (parsed.lowBalanceThreshold !== undefined && record.billingMode === 'prepaid') {
+      const balanceRow = await em.findOne(BillingAccountBalance, {
+        tenantId: parsed.tenantId,
+        billAccountId: record.id,
+      })
+      if (balanceRow) {
+        balanceRow.lowBalanceThreshold =
+          parsed.lowBalanceThreshold === null
+            ? null
+            : formatMoney(parsed.lowBalanceThreshold)
+        balanceRow.updatedAt = new Date()
+      }
+    }
+
     await em.flush()
 
     await emitCrudSideEffects({

@@ -47,13 +47,25 @@ export function computeAvailableCredit(
  * |---------------|--------------------------------------------|
  * | within_limit  | available_credit > near_limit_buffer       |
  * | near_limit    | 0 < available_credit <= near_limit_buffer  |
- * | over_limit    | available_credit <= 0                      |
+ * | over_limit    | available_credit <= 0 (and credit is drawn)|
+ *
+ * `creditUsed` disambiguates the default "no credit line" case: with
+ * `credit_limit = 0` and nothing drawn (`credit_used = 0`) the available
+ * credit is exactly 0 — that is NOT over-limit (the account simply has no
+ * credit line), so it reports `within_limit`. Once any credit is actually
+ * drawn (prepaid balance negative, or postpaid outstanding > 0) the formula
+ * applies. When `creditUsed` is omitted, a draw is assumed (pure spec
+ * formula) — callers that have the figure should pass it.
  */
 export function computeCreditStatus(
   availableCredit: string | number,
   nearLimitBuffer: string | number,
+  creditUsed?: string | number,
 ): CreditStatus {
-  if (compareMoney(availableCredit, 0) <= 0) return 'over_limit'
+  const hasDraw = creditUsed === undefined ? true : compareMoney(creditUsed, 0) > 0
+  if (compareMoney(availableCredit, 0) <= 0) {
+    return hasDraw ? 'over_limit' : 'within_limit'
+  }
   if (compareMoney(availableCredit, nearLimitBuffer) <= 0) return 'near_limit'
   return 'within_limit'
 }
@@ -92,7 +104,7 @@ export function computeCreditSnapshot(params: {
     creditLimit,
     creditUsed,
     availableCredit,
-    creditStatus: computeCreditStatus(availableCredit, params.nearLimitBuffer),
+    creditStatus: computeCreditStatus(availableCredit, params.nearLimitBuffer, creditUsed),
   }
 }
 

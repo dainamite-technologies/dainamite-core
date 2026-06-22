@@ -1,7 +1,7 @@
 "use client"
 import * as React from 'react'
 import { useRouter } from 'next/navigation'
-import { Plus } from 'lucide-react'
+import { Plus, SlidersHorizontal } from 'lucide-react'
 import type { ColumnDef } from '@tanstack/react-table'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { DataTable } from '@open-mercato/ui/backend/DataTable'
@@ -85,6 +85,10 @@ export function PrepaidPanel({
   const [topupOpen, setTopupOpen] = React.useState(false)
   const [amount, setAmount] = React.useState('')
   const [submitting, setSubmitting] = React.useState(false)
+  const [adjustOpen, setAdjustOpen] = React.useState(false)
+  const [adjAmount, setAdjAmount] = React.useState('')
+  const [adjReason, setAdjReason] = React.useState('')
+  const [adjSubmitting, setAdjSubmitting] = React.useState(false)
   const pageSize = 10
 
   const loadStatus = React.useCallback(async () => {
@@ -159,6 +163,41 @@ export function PrepaidPanel({
       setSubmitting(false)
     }
   }, [accountId, amount, loadStatus, loadTransactions, t])
+
+  const handleAdjust = React.useCallback(async () => {
+    const value = Number.parseFloat(adjAmount)
+    if (!Number.isFinite(value) || value === 0) {
+      flash(t('billing.prepaid.adjust.invalid_amount', 'Enter a non-zero amount'), 'error')
+      return
+    }
+    if (!adjReason.trim()) {
+      flash(t('billing.prepaid.adjust.invalid_description', 'Enter a reason'), 'error')
+      return
+    }
+    setAdjSubmitting(true)
+    try {
+      await apiCallOrThrow('/api/billing/transactions/adjust', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          billAccountId: accountId,
+          amount: value,
+          description: adjReason.trim(),
+        }),
+      })
+      flash(t('billing.prepaid.adjust.success', 'Balance adjusted'), 'success')
+      setAdjustOpen(false)
+      setAdjAmount('')
+      setAdjReason('')
+      void loadStatus().catch(() => undefined)
+      void loadTransactions()
+    } catch (err) {
+      const { message } = normalizeCrudServerError(err)
+      flash(message || t('billing.prepaid.adjust.error', 'Adjustment failed'), 'error')
+    } finally {
+      setAdjSubmitting(false)
+    }
+  }, [accountId, adjAmount, adjReason, loadStatus, loadTransactions, t])
 
   const columns = React.useMemo<ColumnDef<TransactionRow>[]>(
     () => [
@@ -244,13 +283,21 @@ export function PrepaidPanel({
         />
       </StatCard>
 
-      <div className="flex items-center gap-2">
-        {!topupOpen ? (
-          <Button type="button" onClick={() => setTopupOpen(true)}>
-            <Plus size={16} />
-            {t('billing.prepaid.topup.action', 'Top up')}
-          </Button>
-        ) : (
+      <div className="flex flex-wrap items-center gap-2">
+        {!topupOpen && !adjustOpen ? (
+          <>
+            <Button type="button" onClick={() => setTopupOpen(true)}>
+              <Plus size={16} />
+              {t('billing.prepaid.topup.action', 'Top up')}
+            </Button>
+            <Button type="button" variant="outline" onClick={() => setAdjustOpen(true)}>
+              <SlidersHorizontal size={16} />
+              {t('billing.prepaid.adjust.action', 'Adjust')}
+            </Button>
+          </>
+        ) : null}
+
+        {topupOpen ? (
           <div className="flex items-center gap-2">
             <input
               type="number"
@@ -275,7 +322,44 @@ export function PrepaidPanel({
               {t('billing.common.cancel', 'Cancel')}
             </Button>
           </div>
-        )}
+        ) : null}
+
+        {adjustOpen ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              type="number"
+              step="0.01"
+              autoFocus
+              value={adjAmount}
+              onChange={(e) => setAdjAmount(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void handleAdjust()
+                if (e.key === 'Escape') setAdjustOpen(false)
+              }}
+              placeholder={t('billing.prepaid.adjust.amount', 'Amount (+credit / −debit)')}
+              className="h-9 w-48 rounded-md border border-border bg-background px-3 text-sm"
+            />
+            <input
+              type="text"
+              value={adjReason}
+              onChange={(e) => setAdjReason(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void handleAdjust()
+                if (e.key === 'Escape') setAdjustOpen(false)
+              }}
+              placeholder={t('billing.prepaid.adjust.description', 'Reason')}
+              className="h-9 w-64 rounded-md border border-border bg-background px-3 text-sm"
+            />
+            <Button type="button" onClick={handleAdjust} disabled={adjSubmitting}>
+              {adjSubmitting
+                ? t('billing.prepaid.adjust.submitting', 'Applying…')
+                : t('billing.prepaid.adjust.confirm', 'Apply adjustment')}
+            </Button>
+            <Button type="button" variant="outline" onClick={() => setAdjustOpen(false)}>
+              {t('billing.common.cancel', 'Cancel')}
+            </Button>
+          </div>
+        ) : null}
       </div>
 
       <DataTable
@@ -283,7 +367,7 @@ export function PrepaidPanel({
         columns={columns}
         data={rows}
         isLoading={loading}
-        onRowClick={(row) => router.push(`/backend/billing/transactions?id=${row.id}`)}
+        onRowClick={(row) => router.push(`/backend/billing/transactions/${row.id}`)}
         pagination={{ page, pageSize, total, totalPages, onPageChange: setPage }}
         emptyState={
           <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">

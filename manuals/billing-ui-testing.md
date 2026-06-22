@@ -295,6 +295,133 @@ istniejące pozycje (`deduplicated: true` w odpowiedzi API).
 
 ---
 
+## 7. Prepaid — rozliczenie z salda (SPEC-002 / XD-304)
+
+Tryb **prepaid** to alternatywa dla domyślnego **postpaid**: klient
+**doładowuje saldo** (top-up), a zużycie jest **odejmowane z salda** w
+czasie rzeczywistym. Konto prepaid dostaje na stronie szczegółów dodatkowy
+panel **„Prepaid balance"**, a w grupie **Billing** pojawiają się trzy nowe
+pozycje menu: **Transactions**, **Top-ups**, **Statements**.
+
+> **Zanim zaczniesz (prepaid):**
+> - Wymagana jest migracja prepaid — jeśli to świeża baza, uruchom raz
+>   `yarn mercato db migrate` (dodaje kolumny `billing_mode` / `credit_limit`
+>   i tabele salda/transakcji/doładowań/zestawień). Bez niej panel prepaid
+>   się nie pojawi.
+> - Operator musi mieć uprawnienia prepaid. Rola **admin** ma `billing.*`,
+>   więc `admin@acme.com` widzi wszystko. Po dodaniu nowych ACL na istniejącą
+>   bazę uruchom `yarn mercato auth sync-role-acls`.
+> - **Uwaga praktyczna:** na dole strony bywa pasek **„Demo Environment"** /
+>   baner cookies, który potrafi przykryć dolne przyciski formularzy. Jeśli
+>   przycisk „nie klika się", odrzuć baner (**Dismiss** / **Accept cookies**)
+>   i spróbuj ponownie.
+
+### 7a. Utworzenie konta prepaid
+1. **Billing → Billing Accounts**. Zwróć uwagę na kolumnę **Mode** —
+   istniejące konta mają tag **Postpaid**.
+2. Kliknij **New account**.
+3. Wypełnij pola jak przy zwykłym koncie (Customer, Name, Currency `PLN`,
+   Cycle anchor, Next bill date, Invoice email, Invoice language, adres).
+4. Zjedź do sekcji **Billing mode & credit** → **Mode** → wybierz
+   **Prepaid**.
+5. Sprawdź, że **pojawia się dodatkowe pole „Low threshold"** — jest
+   widoczne **tylko** dla trybu prepaid. Ustaw **Credit limit** = `100`,
+   **Low threshold** = `20`.
+6. Kliknij **Create account**.
+
+✅ Flash „Billing account created", przekierowanie na szczegóły konta;
+**Mode** pokazany jako tag **Prepaid**.
+
+### 7b. Panel „Prepaid balance"
+1. Otwórz szczegóły konta prepaid.
+2. Pod kartą danych konta znajdź sekcję **„Prepaid balance"**.
+
+✅ Widzisz: **Balance** (kwota + tag statusu **OK / Low / Exhausted**),
+**Low threshold**, **Credit** (`użyte / limit` + tag `Within limit`),
+**Last movement**, przyciski **Top up** i **Adjust**, oraz tabelę
+**„Balance transactions"**.
+
+> Świeże konto ma saldo `0.0000` ze statusem **Exhausted** (0 jest poniżej
+> progu) i komunikat „No balance movements yet.".
+
+### 7c. Manualna korekta salda (Adjust)
+1. W panelu kliknij **Adjust**.
+2. Pojawiają się dwa pola: **kwota** (ze znakiem) i **powód**.
+3. Wpisz kwotę **`50`** (uznanie), powód „Korekta testowa", kliknij
+   **Apply adjustment**.
+
+   ✅ Flash „Balance adjusted"; **Balance** rośnie o 50, status zmienia się
+   (np. `Exhausted` → `OK`); w tabeli **Balance transactions** pojawia się
+   wiersz typu **Adjustment** z opisem, kwotą i nowym saldem.
+4. Powtórz z kwotą **`-10`** (obciążenie) i powodem „Test obciążenia".
+
+   ✅ Saldo maleje o 10; kolejny wiersz Adjustment z kwotą `-10.0000`.
+5. **Walidacja:** Adjust z kwotą `0` → **Apply** → błąd „Enter a non-zero
+   amount"; kwota bez powodu → błąd „Enter a reason".
+
+### 7d. Transakcja → szczegóły + lista Transactions
+1. W tabeli **Balance transactions** **kliknij dowolny wiersz**.
+
+   ✅ Otwiera się strona **Transaction** (nie 404). Widzisz kwotę, tag typu,
+   **Balance after**, **Description**, **Source ref**, linki **Top-up /
+   Statement / Billing item**, **Usage record**, **User** (kto wykonał),
+   **ID** oraz przycisk **View account** (wraca na konto).
+2. **Billing → Transactions** (nowa pozycja menu) — globalna lista ruchów
+   salda. Kolumny: **When / Type / Description / Amount / Balance /
+   Account**.
+3. Kliknij **Filters → Type → Adjustment → Apply** — lista zawęża się do
+   korekt. Kliknięcie wiersza otwiera ten sam szczegół co w kroku 1.
+
+### 7e. Doładowanie (Top up)
+1. W panelu kliknij **Top up** → pojawia się pole **Amount** + **Start
+   checkout** + **Cancel**.
+2. Wpisz np. `30`, kliknij **Start checkout**.
+
+⚠️ W środowisku **bez skonfigurowanej bramki płatności** (domyślny dev)
+pojawi się **błąd** — to poprawne: afordancja działa, ale faktyczna sesja
+płatności wymaga providera (np. Stripe). Realne doładowanie kredytuje saldo
+dopiero po przechwyceniu płatności (capture), które tworzy wpis na liście
+**Top-ups** i transakcję typu **topup** na saldzie.
+
+### 7f. Edycja konta — tryb jest niezmienny
+1. Na szczegółach konta prepaid kliknij **Edit**, zjedź do **Billing mode &
+   credit**.
+
+✅ **Mode** jest **zablokowany** z adnotacją „Immutable — frozen at account
+create time."; **Credit limit** i **Low threshold** pozostają edytowalne.
+2. Zmień **Credit limit** na `200` → **Save changes**. Po odświeżeniu panel
+   Credit pokazuje `… / 200`.
+
+### 7g. Test negatywny — postpaid nie ma panelu prepaid
+1. Otwórz dowolne konto **postpaid** (Mode = Postpaid).
+
+✅ **Brak** sekcji „Prepaid balance" i przycisków Top up / Adjust — logika
+prepaid nie dotyka kont postpaid.
+
+### 7h. Top-ups i Statements (listy + szczegóły)
+1. **Billing → Top-ups** — lista doładowań; kolumny **Created / Amount /
+   Provider / Status / Account**, z filtrem po statusie. Kliknięcie wiersza
+   otwiera szczegół: Amount, Provider, Payment ID, Gateway transaction,
+   Balance transaction, **VAT receipt**, ID + **View account**.
+2. **Billing → Statements** — zestawienia okresowe; kolumny **Period /
+   Opening / Top-ups / Usage / Recurring / Closing / Status**. Szczegół
+   pokazuje rozbicie Opening → Top-ups / Usage / Recurring / Adjustments →
+   **Closing** oraz tabelę „Period-close charges".
+
+> Top-upy i zestawienia powstają w pełnym cyklu (przechwycenie płatności /
+> zamknięcie okresu przez Bill Run). Bez bramki / przebiegu listy bywają
+> puste — to oczekiwane.
+
+### 7i. Szybki scenariusz prepaid end-to-end (~3 minuty)
+1. Utwórz konto prepaid z limitem `100` i progiem `20` (**7a**).
+2. **Adjust** +`50` → saldo `50`, status **OK**, transakcja na liście (**7c**).
+3. Kliknij transakcję → otwiera się szczegół (**7d**).
+4. **Adjust** -`40` → saldo `10`, status **Low** (dodatnie, ale poniżej
+   progu `20`).
+5. Wejdź na **Billing → Transactions** → obie korekty na globalnej liście.
+
+---
+
 ## Reset danych testowych *(operacja techniczna — opcjonalna)*
 
 Jeśli chcesz wyczyścić billing i wgrać dane od nowa, w terminalu:

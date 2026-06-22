@@ -48,7 +48,7 @@ describe('createTopupCommand', () => {
   it('registers a pending top-up and opens an automatic-capture session', async () => {
     const em = createPrepaidMockEm({ account: prepaidAccount(), topup: null })
     const gateway = {
-      createPaymentSession: jest.fn(async () => ({
+      createPaymentSession: jest.fn(async (_input: unknown) => ({
         transaction: { id: 'gw-txn-1' },
         session: { sessionId: 'sess-1', redirectUrl: 'https://pay.example/x', clientSecret: null },
       })),

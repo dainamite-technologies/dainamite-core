@@ -85,7 +85,7 @@ export function createPrepaidMockEm(options: MockEmOptions = {}): MockEm {
   em.create = jest.fn((entity: unknown, data: Row) => {
     const ctor = (entity as { name?: string }).name ?? ''
     idCounter += 1
-    const created = { ...data, id: (data.id as string) ?? `gen-${ctor}-${idCounter}` }
+    const created: Row = { ...data, id: (data.id as string) ?? `gen-${ctor}-${idCounter}` }
     if (ctor === 'BillingAccountTransaction') transactions.push(created)
     else if (ctor === 'BillingAccountUsage') usages.push(created)
     else if (ctor === 'BillingAccountBalance') {

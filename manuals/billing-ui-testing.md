@@ -420,6 +420,50 @@ prepaid nie dotyka kont postpaid.
    progu `20`).
 5. Wejdź na **Billing → Transactions** → obie korekty na globalnej liście.
 
+### 7j. Przykład z realnymi danymi: „Brightside Solar" (od zera)
+Pełny przebieg z konkretnymi wartościami — firma *Brightside Solar* przechodzi
+na prepaid.
+
+**Krok 1 — utwórz konto.** **Billing → Billing Accounts → New account**:
+- **Customer:** wybierz z listy **Brightside Solar**
+- **Name:** `Brightside Solar — Subskrypcja SaaS`
+- **Currency:** `PLN`, **Cycle anchor:** `1`, **Next bill date:** `2026-07-01`
+- **Invoice email:** `faktury@brightsidesolar.pl`, **Invoice language:** `pl`
+- **Address:** `ul. Słoneczna 12`, `Warszawa`, `00-950`, `PL`
+- **Mode → Prepaid**, **Credit limit:** `500`, **Low threshold:** `100`
+- **Create account**
+
+✅ Konto prepaid, saldo `0,0000 PLN`, status **Exhausted**.
+
+**Krok 2 — wpłata startowa 1 500 zł.** W panelu **Adjust** → kwota `1500`,
+powód `Wpłata startowa — przelew 06/2026` → **Apply adjustment**.
+
+✅ Saldo `1 500,0000 PLN`, status **OK**, wiersz **Adjustment +1500**.
+
+**Krok 3 — miesięczne zużycie −1 420 zł.** **Adjust** → kwota `-1420`, powód
+`Zużycie API — czerwiec 2026` → **Apply adjustment**.
+
+✅ Saldo `80,0000 PLN`, status **Low** (poniżej progu `100`).
+
+**Krok 4 — prześledź ruch.** Kliknij wiersz `Zużycie API — czerwiec 2026` w
+tabeli → szczegół transakcji (kwota, Balance after `80`, User, powód) →
+**View account** wraca na konto.
+
+**Krok 5 — globalna lista.** **Billing → Transactions** → **Filters → Type →
+Adjustment → Apply**. W kolumnie **Account** widzisz `Brightside Solar —
+Subskrypcja SaaS` (nazwa, nie UUID).
+
+**Krok 6 — doładowanie kartą.** Na koncie **Top up** → `500` → **Start
+checkout**. Tworzy się doładowanie ze statusem **Pending** (widoczne na
+**Billing → Top-ups**); pełne zaksięgowanie na saldzie następuje po opłaceniu
+w bramce płatności.
+
+**Krok 7 — tryb zabetonowany.** **Edit** → **Mode** zablokowany; zmień
+**Credit limit** na `1000` → **Save changes**.
+
+**Efekt:** konto Brightside Solar prepaid, saldo 80 zł (Low), 2 transakcje w
+historii, 1 doładowanie Pending, limit kredytu 1000.
+
 ---
 
 ## Reset danych testowych *(operacja techniczna — opcjonalna)*

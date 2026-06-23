@@ -8,6 +8,7 @@ import { Page, PageBody } from '@open-mercato/ui/backend/Page'
 import { DataTable } from '@open-mercato/ui/backend/DataTable'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
+import { fetchAccountNames } from '../../../components/accountNames'
 
 /**
  * Balance transactions admin list (SPEC-002). Read-only — the append-only
@@ -52,6 +53,7 @@ export default function BillingTransactionsListPage() {
   const [total, setTotal] = React.useState(0)
   const [totalPages, setTotalPages] = React.useState(1)
   const [loading, setLoading] = React.useState(true)
+  const [accountNames, setAccountNames] = React.useState<Record<string, string>>({})
 
   const filterDefs = React.useMemo<FilterDef[]>(
     () => [
@@ -85,9 +87,16 @@ export default function BillingTransactionsListPage() {
       const result = await readApiResultOrThrow<ListResponse>(
         `/api/billing/transactions?${params.toString()}`,
       )
-      setRows(result.items ?? [])
+      const items = result.items ?? []
+      setRows(items)
       setTotal(result.total ?? 0)
       setTotalPages(result.totalPages ?? 1)
+      try {
+        const names = await fetchAccountNames(items.map((r) => r.bill_account_id))
+        setAccountNames((prev) => ({ ...prev, ...names }))
+      } catch {
+        // Name resolution is best-effort — fall back to the id in the cell.
+      }
     } finally {
       setLoading(false)
     }
@@ -137,12 +146,17 @@ export default function BillingTransactionsListPage() {
       {
         accessorKey: 'bill_account_id',
         header: t('billing.transactions.columns.account', 'Account'),
-        cell: ({ row }) => (
-          <span className="font-mono text-xs">{row.original.bill_account_id}</span>
-        ),
+        cell: ({ row }) => {
+          const name = accountNames[row.original.bill_account_id]
+          return name ? (
+            <span className="text-sm">{name}</span>
+          ) : (
+            <span className="font-mono text-xs">{row.original.bill_account_id}</span>
+          )
+        },
       },
     ],
-    [t],
+    [t, accountNames],
   )
 
   return (

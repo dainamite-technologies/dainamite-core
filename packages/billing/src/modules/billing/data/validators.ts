@@ -18,6 +18,9 @@ export const BILL_RUN_OUTCOME_STATUSES = [
   'success',
   'success_with_warnings',
   'skipped_existing_draft',
+  // SPEC-002: prepaid period close was skipped because a statement already
+  // exists for the window.
+  'skipped_existing_statement',
   'failed',
 ] as const
 export type BillRunOutcomeStatus = (typeof BILL_RUN_OUTCOME_STATUSES)[number]
@@ -27,6 +30,41 @@ export type DraftInvoiceEditAction = (typeof DRAFT_INVOICE_EDIT_ACTIONS)[number]
 
 export const INVOICE_STATUSES = ['draft', 'posted', 'paid', 'void'] as const
 export type InvoiceStatus = (typeof INVOICE_STATUSES)[number]
+
+// ─── Prepaid (SPEC-002) enums ────────────────────────────────────
+
+export const BILLING_MODES = ['postpaid', 'prepaid'] as const
+export type BillingMode = (typeof BILLING_MODES)[number]
+
+export const TRANSACTION_TYPES = [
+  'topup',
+  'usage',
+  'recurring',
+  'one_time',
+  'adjustment',
+  'reversal',
+] as const
+export type TransactionType = (typeof TRANSACTION_TYPES)[number]
+
+export const TOPUP_STATUSES = [
+  'pending',
+  'captured',
+  'failed',
+  'expired',
+  'cancelled',
+] as const
+export type TopupStatus = (typeof TOPUP_STATUSES)[number]
+
+export const STATEMENT_STATUSES = ['generated', 'sent'] as const
+export type StatementStatus = (typeof STATEMENT_STATUSES)[number]
+
+// Prepaid funds status (the account's own money).
+export const BALANCE_STATUSES = ['ok', 'low', 'exhausted'] as const
+export type BalanceStatus = (typeof BALANCE_STATUSES)[number]
+
+// Credit-line status (extended overdraft / AR exposure — both modes).
+export const CREDIT_STATUSES = ['within_limit', 'near_limit', 'over_limit'] as const
+export type CreditStatus = (typeof CREDIT_STATUSES)[number]
 
 // `mon`–`sun` for weekly cycles; 1–28 (as text) for the others.
 // Why text for numeric anchors: the column type stays uniform across cycles
@@ -213,6 +251,10 @@ const listPaginationBase = {
 
 // ─── BillingAccount payloads ─────────────────────────────────────
 
+// numeric(18,4) money inputs arrive as numbers; the command coerces to a
+// 4dp string at persist time.
+const moneyNonNegative = z.number().finite().nonnegative()
+
 export const billingAccountCreateSchema = scopedSchema.extend({
   customerId: z.string().min(1).max(255),
   name: z.string().trim().min(1).max(255),
@@ -229,6 +271,14 @@ export const billingAccountCreateSchema = scopedSchema.extend({
   nextBillDate: z.coerce.date(),
   lastBillDate: z.coerce.date().optional(),
   isActive: z.boolean().optional(),
+  // SPEC-002: mode is immutable after create (like currencyCode). Default
+  // 'postpaid' so existing callers are unaffected.
+  billingMode: z.enum(BILLING_MODES).optional(),
+  // Credit line (both modes). 0 = no credit.
+  creditLimit: moneyNonNegative.optional(),
+  // Initial low-balance threshold for a prepaid account's balance row.
+  // Null = resolve the tenant config default at read time.
+  lowBalanceThreshold: moneyNonNegative.nullable().optional(),
 })
 
 export type BillingAccountCreateInput = z.infer<typeof billingAccountCreateSchema>
@@ -245,6 +295,13 @@ export const billingAccountUpdateSchema = scopedSchema.extend({
   nextBillDate: z.coerce.date().optional(),
   lastBillDate: z.coerce.date().nullable().optional(),
   isActive: z.boolean().optional(),
+  // SPEC-002: credit_limit is editable (it's an AR/overdraft policy knob);
+  // `billingMode` is intentionally NOT updatable — mode is frozen at create
+  // (like currencyCode), no live postpaid↔prepaid switch in v1.
+  creditLimit: moneyNonNegative.optional(),
+  // Editing the prepaid balance row's low-balance threshold. Null clears it
+  // back to the tenant config default.
+  lowBalanceThreshold: moneyNonNegative.nullable().optional(),
   // `currencyCode` is intentionally NOT updatable — currency is frozen at
   // account create time so historical invoices keep their currency context.
   // `customerId` is also immutable; create a new account if the customer
@@ -266,6 +323,7 @@ export const billingAccountListQuerySchema = z
     customerId: z.string().optional(),
     currencyCode: z.string().optional(),
     billCycle: z.enum(BILL_CYCLES).optional(),
+    billingMode: z.enum(BILLING_MODES).optional(),
     isActive: z.coerce.boolean().optional(),
     search: z.string().optional(),
   })
@@ -558,5 +616,91 @@ export const billingWipeTestInvoicesSchema = scopedSchema.extend({
 })
 
 export type BillingWipeTestInvoicesInput = z.infer<typeof billingWipeTestInvoicesSchema>
+
+// ─── Prepaid: top-ups (SPEC-002 P2) ──────────────────────────────
+
+export const billingTopupCreateSchema = scopedSchema.extend({
+  // The route maps the `/accounts/{id}/topups` path param into billAccountId.
+  billAccountId: z.string().uuid(),
+  amount: z.number().finite().positive(),
+  // Optional — defaults to the tenant config `prepaid.topup_provider`.
+  providerKey: z.string().trim().min(1).max(64).optional(),
+  successUrl: z.string().trim().url().max(2048).optional(),
+  cancelUrl: z.string().trim().url().max(2048).optional(),
+  // Optional idempotency for the initiating request.
+  sourceRef: z.string().trim().min(1).max(255).optional(),
+})
+
+export type BillingTopupCreateInput = z.infer<typeof billingTopupCreateSchema>
+
+export const billingTopupListQuerySchema = z
+  .object({
+    ...listPaginationBase,
+    id: z.string().uuid().optional(),
+    billAccountId: z.string().uuid().optional(),
+    status: z.enum(TOPUP_STATUSES).optional(),
+    search: z.string().optional(),
+  })
+  .passthrough()
+
+export type BillingTopupListQuery = z.infer<typeof billingTopupListQuerySchema>
+
+// ─── Prepaid: transactions / manual adjustments (SPEC-002 P1/P5) ──
+
+export const billingTransactionAdjustSchema = scopedSchema
+  .extend({
+    billAccountId: z.string().uuid(),
+    // SIGNED: > 0 credit, < 0 debit. Zero is rejected.
+    amount: z.number().finite(),
+    description: z.string().trim().min(1).max(500),
+    sourceRef: z.string().trim().min(1).max(255).optional(),
+  })
+  .superRefine((val, ctx) => {
+    if (val.amount === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['amount'],
+        message: 'amount must be non-zero (positive credit or negative debit)',
+      })
+    }
+  })
+
+export type BillingTransactionAdjustInput = z.infer<typeof billingTransactionAdjustSchema>
+
+export const billingTransactionListQuerySchema = z
+  .object({
+    ...listPaginationBase,
+    id: z.string().uuid().optional(),
+    billAccountId: z.string().uuid().optional(),
+    type: z.enum(TRANSACTION_TYPES).optional(),
+    createdFrom: z.coerce.date().optional(),
+    createdTo: z.coerce.date().optional(),
+  })
+  .passthrough()
+
+export type BillingTransactionListQuery = z.infer<typeof billingTransactionListQuerySchema>
+
+// ─── Prepaid: statements (SPEC-002 P3) ───────────────────────────
+
+export const billingStatementGenerateSchema = scopedSchema.extend({
+  billAccountId: z.string().uuid(),
+  // "today" the close evaluates the due period against. Defaults to now.
+  asOfDate: z.coerce.date().optional(),
+})
+
+export type BillingStatementGenerateInput = z.infer<typeof billingStatementGenerateSchema>
+
+export const billingStatementListQuerySchema = z
+  .object({
+    ...listPaginationBase,
+    id: z.string().uuid().optional(),
+    billAccountId: z.string().uuid().optional(),
+    status: z.enum(STATEMENT_STATUSES).optional(),
+    periodEndFrom: z.coerce.date().optional(),
+    periodEndTo: z.coerce.date().optional(),
+  })
+  .passthrough()
+
+export type BillingStatementListQuery = z.infer<typeof billingStatementListQuerySchema>
 
 

@@ -20,6 +20,9 @@ import {
 } from './invoiceWriter'
 import { withTenantLock } from './tenantLock'
 import { processUsageForAccount } from './usageRunner'
+import { processPrepaidAccount } from './prepaidPeriodClose'
+import type { DomainEvent } from './balanceEvents'
+import { emitBillingEvent, type BillingEventId } from '../events'
 import type { BillCycle } from '../data/validators'
 
 /**
@@ -73,15 +76,27 @@ export type RunBillRunResult = {
   outcomes: BillRunOutcome[]
 }
 
+type RunOutput = RunBillRunResult & {
+  /** Prepaid statement / crossing events to emit AFTER the outer tx commits. */
+  pendingEvents: DomainEvent[]
+}
+
 type AccountWarnings = {
   currency_mismatch_items?: string[]
   unmatched_usage_uoms?: string[]
 }
 
 type AccountProcessSuccess = {
-  status: 'success' | 'success_with_warnings' | 'skipped_existing_draft'
-  warnings: AccountWarnings | null
+  status:
+    | 'success'
+    | 'success_with_warnings'
+    | 'skipped_existing_draft'
+    | 'skipped_existing_statement'
+  warnings: AccountWarnings | Record<string, unknown> | null
   draftInvoiceId: string | null
+  // SPEC-002: prepaid accounts produce a statement instead of a draft invoice.
+  statementId?: string | null
+  statementEvents?: DomainEvent[]
   cyclesEmitted: number
   usageRecordsRated: number
 }
@@ -101,18 +116,25 @@ export async function runBillRun(
   container: AwilixContainer,
   params: RunBillRunParams,
 ): Promise<RunBillRunResult> {
-  return withTenantLock(
+  const output = await withTenantLock(
     em,
     { tenantId: params.tenantId, lockName: 'billing-run' },
     async (tem) => executeRunWithinLock(tem, container, params),
   )
+  // Emit prepaid statement / crossing events ONLY after the outer transaction
+  // (held by withTenantLock) has committed — emitting inside the lock would let
+  // a consumer observe an uncommitted statement or a phantom event on rollback.
+  for (const ev of output.pendingEvents) {
+    await emitBillingEvent(ev.id as BillingEventId, ev.payload, { persistent: true })
+  }
+  return { billRun: output.billRun, outcomes: output.outcomes }
 }
 
 async function executeRunWithinLock(
   em: EntityManager,
   container: AwilixContainer,
   params: RunBillRunParams,
-): Promise<RunBillRunResult> {
+): Promise<RunOutput> {
   const now = new Date()
   const billRun = em.create(BillRun, {
     organizationId: params.organizationId,
@@ -136,6 +158,7 @@ async function executeRunWithinLock(
 
   const accounts = await selectTargetAccounts(em, params)
   const outcomes: BillRunOutcome[] = []
+  const pendingEvents: DomainEvent[] = []
   let totalUsageRecordsRated = 0
 
   for (const account of accounts) {
@@ -155,6 +178,7 @@ async function executeRunWithinLock(
           ? null
           : (processResult.warnings as Record<string, unknown> | null),
       draftInvoiceId: processResult.status === 'failed' ? null : processResult.draftInvoiceId,
+      statementId: processResult.status === 'failed' ? null : (processResult.statementId ?? null),
       isActive: true,
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -162,6 +186,12 @@ async function executeRunWithinLock(
     em.persist(outcome)
     await em.flush()
     outcomes.push(outcome)
+
+    // Collect statement / crossing events — runBillRun emits them AFTER the
+    // outer tx commits (see runBillRun), never from inside the lock.
+    if (processResult.status !== 'failed' && processResult.statementEvents) {
+      pendingEvents.push(...processResult.statementEvents)
+    }
   }
 
   billRun.status = computeFinalRunStatus(outcomes)
@@ -170,7 +200,7 @@ async function executeRunWithinLock(
   billRun.summary = buildRunSummary(outcomes, accounts.length, totalUsageRecordsRated)
   await em.flush()
 
-  return { billRun, outcomes }
+  return { billRun, outcomes, pendingEvents }
 }
 
 async function selectTargetAccounts(
@@ -215,6 +245,30 @@ async function processAccount(
   account: BillingAccount,
   params: RunBillRunParams,
 ): Promise<AccountProcessResult> {
+  // SPEC-002: a prepaid account never gets a payable draft invoice. It still
+  // runs in the Bill Run, but charges recurring / one_time items to the
+  // balance and produces a non-fiscal consumption statement.
+  if (account.billingMode === 'prepaid') {
+    const result = await processPrepaidAccount(em, account, billRun, {
+      asOfDate: params.asOfDate,
+      mode: params.mode,
+      triggeredBy: params.triggeredBy,
+      catchUp: params.catchUp,
+    })
+    if (result.status === 'failed') {
+      return { status: 'failed', errorMessage: result.errorMessage }
+    }
+    return {
+      status: result.status,
+      warnings: result.warnings,
+      draftInvoiceId: null,
+      statementId: result.statementId,
+      statementEvents: result.statementEvents,
+      cyclesEmitted: result.cyclesEmitted,
+      usageRecordsRated: 0,
+    }
+  }
+
   const maxCycles =
     params.triggeredBy === 'schedule' || !params.catchUp
       ? SCHEDULED_CYCLE_LIMIT
@@ -408,6 +462,13 @@ function buildRunSummary(
     ).length,
     drafts_skipped_existing: outcomes.filter((o) => o.status === 'skipped_existing_draft')
       .length,
+    // SPEC-002 prepaid period close.
+    statements_created: outcomes.filter(
+      (o) => o.statementId !== null && o.status !== 'skipped_existing_statement',
+    ).length,
+    statements_skipped_existing: outcomes.filter(
+      (o) => o.status === 'skipped_existing_statement',
+    ).length,
     accounts_failed: outcomes.filter((o) => o.status === 'failed').length,
     accounts_with_warnings: outcomes.filter((o) => o.status === 'success_with_warnings')
       .length,

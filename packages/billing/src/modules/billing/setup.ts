@@ -200,6 +200,45 @@ async function seedBillingConfigs(em: EntityManager): Promise<void> {
     name: 'invoice_number.reset_cycle',
     value: 'yearly',
   })
+
+  // ─── Prepaid balance billing (SPEC-002) ──────────────────────
+  // Fallback low-balance threshold when a prepaid account leaves its own
+  // `low_balance_threshold` null. 0 = off (status never flips to `low`
+  // until an operator sets a per-account threshold).
+  await ensureModuleConfig(em, {
+    moduleId: 'billing',
+    name: 'prepaid.low_balance_threshold_default',
+    value: 0,
+  })
+  // Default gateway provider key for top-up sessions.
+  await ensureModuleConfig(em, {
+    moduleId: 'billing',
+    name: 'prepaid.topup_provider',
+    value: 'stripe',
+  })
+  // Master switch for period statements.
+  await ensureModuleConfig(em, {
+    moduleId: 'billing',
+    name: 'prepaid.statement_enabled',
+    value: true,
+  })
+  // VAT rate (percent) applied to top-up receipts. The top-up `amount` is
+  // treated as GROSS (what the customer pays = what the balance is credited);
+  // the core tax service computes net + VAT from this rate. 0 = no VAT until
+  // an operator sets the jurisdiction's rate. (Deviation from xd-249, which
+  // never resolves a rate — see CHANGELOG.)
+  await ensureModuleConfig(em, {
+    moduleId: 'billing',
+    name: 'prepaid.topup_tax_rate',
+    value: 0,
+  })
+  // Fallback buffer for the `near_limit` credit status. 0 = warn only at the
+  // limit itself.
+  await ensureModuleConfig(em, {
+    moduleId: 'billing',
+    name: 'credit.near_limit_buffer_default',
+    value: 0,
+  })
 }
 
 // Derived from `acl.ts` so a new feature added there automatically lands
@@ -224,6 +263,12 @@ export const setup: ModuleSetupConfig = {
       'billing.run.view',
       'billing.run.dry_run',
       'billing.invoice.view',
+      // Prepaid read-only (SPEC-002): balances, transactions, top-ups,
+      // statements, credit status — no adjust / no top-up initiation.
+      'billing.balance.view',
+      'billing.credit.view',
+      'billing.topup.view',
+      'billing.statement.view',
     ],
 
     // Narrow scope for external usage-ingestion API keys.

@@ -32,6 +32,8 @@ export class BillingAccount {
   [OptionalProps]?:
     | 'taxId'
     | 'lastBillDate'
+    | 'billingMode'
+    | 'creditLimit'
     | 'isActive'
     | 'createdAt'
     | 'updatedAt'
@@ -93,6 +95,19 @@ export class BillingAccount {
   // Anchor of the most recently billed period; null for fresh accounts.
   @Property({ name: 'last_bill_date', type: 'date', columnType: 'date', nullable: true })
   lastBillDate?: Date | null
+
+  // Billing mode — 'postpaid' (default; the shipped Bill Run → draft →
+  // post flow) or 'prepaid' (top up a balance, draw it down in real time;
+  // SPEC-002). Immutable after create (like currency_code); validated at
+  // API ingress. Existing rows default to postpaid — zero behavior change.
+  @Property({ name: 'billing_mode', type: 'text', default: 'postpaid' })
+  billingMode: string = 'postpaid'
+
+  // Credit line extended to this customer (both modes). Prepaid: permitted
+  // overdraft below zero. Postpaid: max outstanding AR exposure. `0` = no
+  // credit. Reported, never enforced by billing (SPEC-002 assumption #11).
+  @Property({ name: 'credit_limit', type: 'numeric', columnType: 'numeric(18, 4)', default: '0' })
+  creditLimit: string = '0'
 
   @Property({ name: 'is_active', type: 'boolean', default: true })
   isActive: boolean = true
@@ -422,6 +437,7 @@ export class BillRunOutcome {
     | 'errorMessage'
     | 'warnings'
     | 'draftInvoiceId'
+    | 'statementId'
     | 'isActive'
     | 'createdAt'
     | 'updatedAt'
@@ -457,6 +473,12 @@ export class BillRunOutcome {
   // the run skipped (status='skipped_existing_draft' or 'failed').
   @Property({ name: 'draft_invoice_id', type: 'uuid', nullable: true })
   draftInvoiceId?: string | null
+
+  // FK (string) to the BillingStatement produced for a PREPAID account
+  // (SPEC-002). Prepaid accounts get a statement instead of a draft invoice
+  // at period close, so this is the prepaid analogue of `draft_invoice_id`.
+  @Property({ name: 'statement_id', type: 'uuid', nullable: true })
+  statementId?: string | null
 
   @Property({ name: 'is_active', type: 'boolean', default: true })
   isActive: boolean = true
@@ -530,4 +552,365 @@ export class DraftInvoiceEdit {
   // through normal flows.
   @Property({ name: 'deleted_at', type: Date, nullable: true })
   deletedAt?: Date | null
+}
+
+// ─── BillingAccountBalance (SPEC-002) ────────────────────────────
+//
+// The denormalized running balance for a prepaid account — exactly one
+// row per prepaid account. It is the O(1) read AND the row the atomic
+// `UPDATE … RETURNING` debit/credit locks, which is why the balance is
+// NOT a column on `billing_accounts`: the high-write balance update never
+// touches the account row that the Bill Run hot-path index sits on.
+//
+// `balance` is the cache; the source of truth is
+// `SUM(billing_account_transactions.amount)`. The reconciliation invariant
+// `balance == SUM(amount) == latest.balance_after` is unit-tested.
+
+@Entity({ tableName: 'billing_account_balances' })
+@Unique({
+  name: 'billing_account_balances_account_unique',
+  properties: ['tenantId', 'billAccountId'],
+})
+@Index({
+  name: 'billing_account_balances_balance_idx',
+  properties: ['organizationId', 'tenantId', 'balance'],
+})
+export class BillingAccountBalance {
+  [OptionalProps]?:
+    | 'lowBalanceThreshold'
+    | 'lastMovementAt'
+    | 'createdAt'
+    | 'updatedAt'
+
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @Property({ name: 'organization_id', type: 'uuid' })
+  organizationId!: string
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  // Unique FK (string) to BillingAccount.id — one balance per account.
+  @Property({ name: 'bill_account_id', type: 'uuid' })
+  billAccountId!: string
+
+  // Denormalized from the account so the balance row is self-contained.
+  @Property({ name: 'currency_code', type: 'text' })
+  currencyCode!: string
+
+  // Running balance. May be NEGATIVE (usage is never rejected). Maintained
+  // exclusively by the atomic `UPDATE … RETURNING` in lib/balanceLedger.ts.
+  @Property({ name: 'balance', type: 'numeric', columnType: 'numeric(18, 4)', default: '0' })
+  balance: string = '0'
+
+  // When `balance <= threshold` → status `low` + `billing.balance.low`.
+  // Null = use the tenant config default
+  // (`billing.prepaid.low_balance_threshold_default`).
+  @Property({
+    name: 'low_balance_threshold',
+    type: 'numeric',
+    columnType: 'numeric(18, 4)',
+    nullable: true,
+  })
+  lowBalanceThreshold?: string | null
+
+  // Timestamp of the most recent transaction — a cheap "is this account
+  // active?" signal.
+  @Property({ name: 'last_movement_at', type: Date, nullable: true })
+  lastMovementAt?: Date | null
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+
+  @Property({ name: 'updated_at', type: Date, onUpdate: () => new Date() })
+  updatedAt: Date = new Date()
+}
+
+// ─── BillingAccountTransaction (SPEC-002, append-only) ───────────
+//
+// The source of truth for every balance movement. Append-only — pattern
+// mirrors DraftInvoiceEdit (no `updated_at` / `is_active`; `deleted_at`
+// reserved for compliance erasure only). `balance = SUM(amount)`.
+//
+// The unique `(tenant_id, bill_account_id, source_ref)` is the idempotency
+// gate: a deduplicated usage upload or a retried recurring charge can never
+// double-debit (Postgres treats NULL source_ref as distinct — manual
+// adjustments without a key always insert).
+
+@Entity({ tableName: 'billing_account_transactions' })
+@Unique({
+  name: 'billing_account_transactions_source_ref_unique',
+  properties: ['tenantId', 'billAccountId', 'sourceRef'],
+})
+@Index({
+  name: 'billing_account_transactions_history_idx',
+  properties: ['organizationId', 'tenantId', 'billAccountId', 'createdAt'],
+})
+@Index({
+  name: 'billing_account_transactions_account_type_idx',
+  properties: ['billAccountId', 'type', 'createdAt'],
+})
+export class BillingAccountTransaction {
+  [OptionalProps]?:
+    | 'usageId'
+    | 'billingItemId'
+    | 'topupId'
+    | 'statementId'
+    | 'sourceRef'
+    | 'metadata'
+    | 'userId'
+    | 'createdAt'
+    | 'deletedAt'
+
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @Property({ name: 'organization_id', type: 'uuid' })
+  organizationId!: string
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  @Property({ name: 'bill_account_id', type: 'uuid' })
+  billAccountId!: string
+
+  // 'topup' | 'usage' | 'recurring' | 'one_time' | 'adjustment' | 'reversal'.
+  @Property({ type: 'text' })
+  type!: string
+
+  // SIGNED: `> 0` credit, `< 0` debit. Balance = SUM(amount).
+  @Property({ type: 'numeric', columnType: 'numeric(18, 4)' })
+  amount!: string
+
+  @Property({ name: 'currency_code', type: 'text' })
+  currencyCode!: string
+
+  // Running balance AFTER this transaction — snapshotted from the atomic
+  // `UPDATE … RETURNING`. Enables audit + fast statement math without
+  // re-summing the whole ledger.
+  @Property({ name: 'balance_after', type: 'numeric', columnType: 'numeric(18, 4)' })
+  balanceAfter!: string
+
+  // FK (string) to BillingAccountUsage for type='usage'.
+  @Property({ name: 'usage_id', type: 'uuid', nullable: true })
+  usageId?: string | null
+
+  // FK (string) to the Billing Item that priced this debit.
+  @Property({ name: 'billing_item_id', type: 'uuid', nullable: true })
+  billingItemId?: string | null
+
+  // FK (string) to BillingTopup for type='topup'.
+  @Property({ name: 'topup_id', type: 'uuid', nullable: true })
+  topupId?: string | null
+
+  // FK (string) to the BillingStatement a period-close charge was rolled into.
+  @Property({ name: 'statement_id', type: 'uuid', nullable: true })
+  statementId?: string | null
+
+  @Property({ type: 'text' })
+  description!: string
+
+  // Idempotency key, unique per (tenant_id, bill_account_id, source_ref).
+  // usage debits = the usage record's source_ref; recurring =
+  // `recurring-{itemId}-{periodEndISO}`; topup = `topup-{paymentId}`.
+  @Property({ name: 'source_ref', type: 'text', nullable: true })
+  sourceRef?: string | null
+
+  // e.g. usage_tier_breakdown, uom_code, bill_period_start/end, gateway ids.
+  @Property({ type: 'jsonb', nullable: true })
+  metadata?: Record<string, unknown> | null
+
+  // Operator for manual `adjustment` / `reversal`.
+  @Property({ name: 'user_id', type: 'uuid', nullable: true })
+  userId?: string | null
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+
+  // Compliance erasure only.
+  @Property({ name: 'deleted_at', type: Date, nullable: true })
+  deletedAt?: Date | null
+}
+
+// ─── BillingTopup (SPEC-002 — the "registered top-up") ───────────
+//
+// One row per top-up attempt with a lifecycle (pending → captured | failed
+// | expired | cancelled), linked to its GatewayTransaction, its balance
+// credit transaction, and its VAT receipt invoice. "The balance went up"
+// is always explainable.
+
+@Entity({ tableName: 'billing_topups' })
+@Unique({
+  name: 'billing_topups_payment_id_unique',
+  properties: ['tenantId', 'paymentId'],
+})
+@Index({
+  name: 'billing_topups_account_history_idx',
+  properties: ['organizationId', 'tenantId', 'billAccountId', 'createdAt'],
+})
+@Index({
+  name: 'billing_topups_status_idx',
+  properties: ['tenantId', 'status'],
+})
+export class BillingTopup {
+  [OptionalProps]?:
+    | 'gatewayTransactionId'
+    | 'transactionId'
+    | 'receiptInvoiceId'
+    | 'sourceRef'
+    | 'metadata'
+    | 'createdAt'
+    | 'updatedAt'
+    | 'deletedAt'
+
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @Property({ name: 'organization_id', type: 'uuid' })
+  organizationId!: string
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  @Property({ name: 'bill_account_id', type: 'uuid' })
+  billAccountId!: string
+
+  // 'pending' | 'captured' | 'failed' | 'expired' | 'cancelled'.
+  @Property({ type: 'text' })
+  status!: string
+
+  @Property({ type: 'numeric', columnType: 'numeric(18, 4)' })
+  amount!: string
+
+  @Property({ name: 'currency_code', type: 'text' })
+  currencyCode!: string
+
+  @Property({ name: 'provider_key', type: 'text' })
+  providerKey!: string
+
+  // The UUID we pass to createPaymentSession and match the captured event
+  // on. Unique per tenant.
+  @Property({ name: 'payment_id', type: 'uuid' })
+  paymentId!: string
+
+  // FK (string) to payment_gateways.GatewayTransaction once the session is
+  // created.
+  @Property({ name: 'gateway_transaction_id', type: 'uuid', nullable: true })
+  gatewayTransactionId?: string | null
+
+  // FK (string) to the credit BillingAccountTransaction written on capture.
+  @Property({ name: 'transaction_id', type: 'uuid', nullable: true })
+  transactionId?: string | null
+
+  // FK (string) to the core/sales VAT receipt invoice.
+  @Property({ name: 'receipt_invoice_id', type: 'uuid', nullable: true })
+  receiptInvoiceId?: string | null
+
+  // Optional idempotency for the initiating request.
+  @Property({ name: 'source_ref', type: 'text', nullable: true })
+  sourceRef?: string | null
+
+  // success_url / cancel_url, provider payload echoes.
+  @Property({ type: 'jsonb', nullable: true })
+  metadata?: Record<string, unknown> | null
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+
+  @Property({ name: 'updated_at', type: Date, onUpdate: () => new Date() })
+  updatedAt: Date = new Date()
+
+  @Property({ name: 'deleted_at', type: Date, nullable: true })
+  deletedAt?: Date | null
+}
+
+// ─── BillingStatement (SPEC-002 — period close) ──────────────────
+//
+// A non-fiscal consumption summary for a prepaid account's bill period.
+// Chains cleanly: each statement's `opening_balance` equals the prior
+// statement's `closing_balance`. Anti-duplicate via the unique
+// (tenant_id, bill_account_id, period_start, period_end).
+
+@Entity({ tableName: 'billing_statements' })
+@Unique({
+  name: 'billing_statements_period_unique',
+  properties: ['tenantId', 'billAccountId', 'periodStart', 'periodEnd'],
+})
+@Index({
+  name: 'billing_statements_account_period_idx',
+  properties: ['organizationId', 'tenantId', 'billAccountId', 'periodEnd'],
+})
+export class BillingStatement {
+  [OptionalProps]?:
+    | 'billRunId'
+    | 'totalAdjustments'
+    | 'createdAt'
+    | 'updatedAt'
+
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @Property({ name: 'organization_id', type: 'uuid' })
+  organizationId!: string
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  @Property({ name: 'bill_account_id', type: 'uuid' })
+  billAccountId!: string
+
+  // FK (string) to the BillRun that generated it (period close reuses the
+  // run engine). Null for a manually-generated statement.
+  @Property({ name: 'bill_run_id', type: 'uuid', nullable: true })
+  billRunId?: string | null
+
+  @Property({ name: 'period_start', type: 'date', columnType: 'date' })
+  periodStart!: Date
+
+  @Property({ name: 'period_end', type: 'date', columnType: 'date' })
+  periodEnd!: Date
+
+  @Property({ name: 'currency_code', type: 'text' })
+  currencyCode!: string
+
+  // Balance at period_start (= the prior statement's closing_balance).
+  @Property({ name: 'opening_balance', type: 'numeric', columnType: 'numeric(18, 4)' })
+  openingBalance!: string
+
+  // Sum of credits in window.
+  @Property({ name: 'total_topups', type: 'numeric', columnType: 'numeric(18, 4)' })
+  totalTopups!: string
+
+  // Sum of metered (real-time) usage debits in window (absolute).
+  @Property({ name: 'total_usage', type: 'numeric', columnType: 'numeric(18, 4)' })
+  totalUsage!: string
+
+  // Sum of recurring + one_time charges debited at this close (absolute).
+  @Property({ name: 'total_recurring', type: 'numeric', columnType: 'numeric(18, 4)' })
+  totalRecurring!: string
+
+  // Signed sum of manual adjustment + reversal movements in the window. Kept as
+  // its own term so the statement stays self-consistent (closing reproduces
+  // from the shown components) and the opening→closing chain never drifts.
+  @Property({ name: 'total_adjustments', type: 'numeric', columnType: 'numeric(18, 4)', default: '0' })
+  totalAdjustments: string = '0'
+
+  // opening + topups + adjustments − usage − recurring (= the period's net).
+  @Property({ name: 'closing_balance', type: 'numeric', columnType: 'numeric(18, 4)' })
+  closingBalance!: string
+
+  // Per billing_item_id: { billing_type, uom_code?, quantity, amount }.
+  @Property({ name: 'debit_breakdown', type: 'jsonb' })
+  debitBreakdown!: Record<string, unknown>
+
+  // 'generated' | 'sent'.
+  @Property({ type: 'text' })
+  status!: string
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+
+  @Property({ name: 'updated_at', type: Date, onUpdate: () => new Date() })
+  updatedAt: Date = new Date()
 }

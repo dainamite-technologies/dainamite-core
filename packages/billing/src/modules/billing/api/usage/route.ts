@@ -46,6 +46,15 @@ const billingUsageListItemSchema = z.object({
 const usageCreateResponseSchema = z.object({
   id: z.string().uuid().nullable(),
   deduplicated: z.boolean(),
+  // Prepaid accounts (SPEC-002) get the real-time balance body. Absent for
+  // postpaid accounts (the legacy append-only response is unchanged).
+  ratedAmount: z.string().optional(),
+  currencyCode: z.string().optional(),
+  balance: z.string().optional(),
+  balanceStatus: z.enum(['ok', 'low', 'exhausted']).optional(),
+  creditStatus: z.enum(['within_limit', 'near_limit', 'over_limit']).optional(),
+  tierBreakdown: z.array(z.record(z.string(), z.unknown())).optional(),
+  warning: z.string().nullable().optional(),
 })
 
 const rawBodySchema = z.object({}).passthrough()
@@ -118,10 +127,27 @@ const crud = makeCrudRoute({
         const scoped = withScopedPayload(raw ?? {}, ctx, translate)
         return billingUsageCreateSchema.parse(scoped)
       },
-      response: ({ result }) => ({
-        id: result?.id ?? null,
-        deduplicated: Boolean(result?.deduplicated),
-      }),
+      response: ({ result }) => {
+        const base = {
+          id: result?.id ?? null,
+          deduplicated: Boolean(result?.deduplicated),
+        }
+        // Pass through the prepaid balance body when present (prepaid
+        // accounts only); postpaid responses keep the legacy 2-field shape.
+        if (result && 'balance' in result && result.balance !== undefined) {
+          return {
+            ...base,
+            ratedAmount: result.ratedAmount,
+            currencyCode: result.currencyCode,
+            balance: result.balance,
+            balanceStatus: result.balanceStatus,
+            creditStatus: result.creditStatus,
+            tierBreakdown: result.tierBreakdown ?? [],
+            warning: result.warning ?? null,
+          }
+        }
+        return base
+      },
       status: 200,
     },
     // Usage has no update or delete by design — see file header.
@@ -143,6 +169,11 @@ export const openApi = createBillingCrudOpenApi({
     description:
       'Ingests a pre-aggregated usage record. Idempotent via `sourceRef`. ' +
       'Usage records are immutable once persisted — to correct a mis-aggregation, ' +
-      "post a `one_time` Billing Item credit (the spec's refund model).",
+      "post a `one_time` Billing Item credit (the spec's refund model). " +
+      'For a PREPAID account (SPEC-002) the upload is rated synchronously, ' +
+      'debited from the balance, and the response carries `ratedAmount`, the ' +
+      'remaining `balance`, `balanceStatus` (ok/low/exhausted), `creditStatus`, ' +
+      'and the `tierBreakdown`. Usage is never rejected — the balance may go ' +
+      'negative and the client is expected to throttle itself.',
   },
 })

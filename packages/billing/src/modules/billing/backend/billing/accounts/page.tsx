@@ -32,6 +32,7 @@ type BillingAccountRow = {
   invoice_email: string
   next_bill_date: string
   last_bill_date: string | null
+  billing_mode: 'postpaid' | 'prepaid'
   is_active: boolean
   created_at: string
 }
@@ -79,6 +80,15 @@ export default function BillingAccountsListPage() {
         type: 'text',
       },
       {
+        id: 'billingMode',
+        label: t('billing.accounts.columns.mode', 'Mode'),
+        type: 'select',
+        options: [
+          { value: 'postpaid', label: t('billing.mode.postpaid', 'Postpaid') },
+          { value: 'prepaid', label: t('billing.mode.prepaid', 'Prepaid') },
+        ],
+      },
+      {
         id: 'isActive',
         label: t('billing.accounts.filters.active', 'Active'),
         type: 'select',
@@ -107,6 +117,9 @@ export default function BillingAccountsListPage() {
       if (typeof filters.currencyCode === 'string' && filters.currencyCode.trim()) {
         params.set('currencyCode', filters.currencyCode.trim().toUpperCase())
       }
+      if (typeof filters.billingMode === 'string' && filters.billingMode) {
+        params.set('billingMode', filters.billingMode)
+      }
       if (filters.isActive === 'true') params.set('isActive', 'true')
       if (filters.isActive === 'false') params.set('isActive', 'false')
       const result = await readApiResultOrThrow<ListResponse>(
@@ -118,7 +131,15 @@ export default function BillingAccountsListPage() {
     } finally {
       setLoading(false)
     }
-  }, [filters.billCycle, filters.currencyCode, filters.isActive, page, pageSize, search])
+  }, [
+    filters.billCycle,
+    filters.currencyCode,
+    filters.billingMode,
+    filters.isActive,
+    page,
+    pageSize,
+    search,
+  ])
 
   React.useEffect(() => {
     void loadRows()
@@ -153,6 +174,16 @@ export default function BillingAccountsListPage() {
             <span className="text-muted-foreground"> · {row.original.bill_cycle_anchor}</span>
           </span>
         ),
+      },
+      {
+        accessorKey: 'billing_mode',
+        header: t('billing.accounts.columns.mode', 'Mode'),
+        cell: ({ row }) =>
+          row.original.billing_mode === 'prepaid' ? (
+            <Tag variant="brand">{t('billing.mode.prepaid', 'Prepaid')}</Tag>
+          ) : (
+            <Tag variant="neutral">{t('billing.mode.postpaid', 'Postpaid')}</Tag>
+          ),
       },
       {
         accessorKey: 'next_bill_date',

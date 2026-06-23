@@ -20,6 +20,7 @@ import {
 import { normalizeCrudServerError } from '@open-mercato/ui/backend/utils/serverErrors'
 import { AccountForm, type AccountFormValues } from '../../../../components/AccountForm'
 import { DetailCard, DetailField } from '../../../../components/DetailFields'
+import { PrepaidPanel } from '../../../../components/PrepaidPanel'
 
 /**
  * `/backend/billing/accounts/[id]` — Billing Account detail.
@@ -54,6 +55,8 @@ type AccountRow = {
   } | null
   next_bill_date: string
   last_bill_date: string | null
+  billing_mode: 'postpaid' | 'prepaid'
+  credit_limit: string
   is_active: boolean
   created_at: string
   updated_at: string
@@ -108,6 +111,11 @@ function toFormValues(row: AccountRow): AccountFormValues {
     },
     nextBillDate: row.next_bill_date?.slice(0, 10) ?? '',
     isActive: row.is_active,
+    billingMode: row.billing_mode,
+    creditLimit: row.credit_limit ?? '0',
+    // The threshold lives on the balance row, not the account row — blank
+    // means "leave unchanged" on save.
+    lowBalanceThreshold: '',
   }
 }
 
@@ -134,6 +142,16 @@ function AccountView({ row }: { row: AccountRow }) {
       </DetailField>
       <DetailField label={t('billing.accounts.columns.currency', 'Currency')}>
         {row.currency_code}
+      </DetailField>
+      <DetailField label={t('billing.accounts.columns.mode', 'Mode')}>
+        {row.billing_mode === 'prepaid' ? (
+          <Tag variant="brand">{t('billing.mode.prepaid', 'Prepaid')}</Tag>
+        ) : (
+          <Tag variant="neutral">{t('billing.mode.postpaid', 'Postpaid')}</Tag>
+        )}
+      </DetailField>
+      <DetailField label={t('billing.accounts.columns.credit_limit', 'Credit limit')}>
+        <span className="font-mono tabular-nums">{row.credit_limit}</span>
       </DetailField>
       <DetailField label={t('billing.common.id', 'ID')}>
         <span className="font-mono text-xs">{row.id}</span>
@@ -425,6 +443,13 @@ export default function BillingAccountDetailPage(props: { params?: { id?: string
           isActive: values.isActive,
         }
         payload.taxId = values.taxId.trim() === '' ? null : values.taxId.trim()
+        // billingMode is immutable on update; creditLimit + threshold are editable.
+        const creditLimit = Number.parseFloat(values.creditLimit)
+        if (Number.isFinite(creditLimit) && creditLimit >= 0) payload.creditLimit = creditLimit
+        if (row.billing_mode === 'prepaid' && values.lowBalanceThreshold.trim()) {
+          const threshold = Number.parseFloat(values.lowBalanceThreshold)
+          if (Number.isFinite(threshold) && threshold >= 0) payload.lowBalanceThreshold = threshold
+        }
 
         await apiCallOrThrow('/api/billing/accounts', {
           method: 'PUT',
@@ -565,6 +590,9 @@ export default function BillingAccountDetailPage(props: { params?: { id?: string
         ) : (
           <AccountView row={row} />
         )}
+        {row.billing_mode === 'prepaid' ? (
+          <PrepaidPanel accountId={row.id} currencyCode={row.currency_code} />
+        ) : null}
         <AccountItemsSection accountId={row.id} />
         <AccountUsageSection accountId={row.id} />
         {ConfirmDialogElement}

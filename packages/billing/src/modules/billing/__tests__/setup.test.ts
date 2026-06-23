@@ -77,8 +77,8 @@ describe('billing setup — contract', () => {
 })
 
 describe('billing acl — surface', () => {
-  it('exports exactly 12 features per Phase 0 spec', () => {
-    expect(features).toHaveLength(12)
+  it('exports exactly 19 features (12 Phase 0 + 7 SPEC-002 prepaid)', () => {
+    expect(features).toHaveLength(19)
   })
 
   it('all feature IDs are prefixed `billing.` (no leaking module boundary)', () => {
@@ -101,7 +101,33 @@ describe('billing acl — surface', () => {
     'billing.invoice.post',
     'billing.invoice.edit_draft',
     'billing.invoice.view',
+    // SPEC-002 prepaid
+    'billing.balance.view',
+    'billing.balance.adjust',
+    'billing.topup.create',
+    'billing.topup.view',
+    'billing.statement.view',
+    'billing.statement.generate',
+    'billing.credit.view',
   ])('declares feature %s', (id) => {
     expect(featureIds.has(id)).toBe(true)
+  })
+})
+
+describe('billing setup — prepaid read grants (SPEC-002)', () => {
+  it('billing_finance_user can read prepaid balances, top-ups, statements, credit', () => {
+    const grants = setup.defaultRoleFeatures?.billing_finance_user ?? []
+    expect(grants).toEqual(
+      expect.arrayContaining([
+        'billing.balance.view',
+        'billing.credit.view',
+        'billing.topup.view',
+        'billing.statement.view',
+      ]),
+    )
+    // …but cannot adjust balances or initiate top-ups (read-only persona)
+    expect(grants).not.toContain('billing.balance.adjust')
+    expect(grants).not.toContain('billing.topup.create')
+    expect(grants).not.toContain('billing.statement.generate')
   })
 })

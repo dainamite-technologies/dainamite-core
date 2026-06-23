@@ -1,5 +1,46 @@
 # @dainamite/billing
 
+## 0.18.0 — Prepaid balance billing (SPEC-002, XD-304, unreleased)
+
+Adds a second billing **mode** to the package: `prepaid`. A customer tops up
+a monetary **balance**, then consumes a metered product; each usage upload is
+rated in real time, debited from the balance, and the API returns the
+remaining balance. Usage is **never rejected** — low/exhausted is reported and
+the client throttles itself. Postpaid accounts are completely unaffected.
+
+- **Schema (additive).** `billing_accounts.billing_mode` (`postpaid`|`prepaid`,
+  immutable) + `credit_limit`. New tables: `billing_account_balances` (1:1
+  running-balance cache), `billing_account_transactions` (append-only ledger,
+  `balance = SUM(amount)`), `billing_topups` (registered top-up lifecycle),
+  `billing_statements` (period close). `billing_run_outcomes.statement_id`.
+- **Real-time consume.** `POST /api/billing/usage` on a prepaid account rates
+  synchronously (reusing `lib/usageRater`), debits atomically
+  (`UPDATE … RETURNING` + paired transaction), and returns `ratedAmount`,
+  `balance`, `balanceStatus`, `creditStatus`, `tierBreakdown`. Idempotent on
+  `sourceRef` (no double-debit). `GET …/balance`, `GET /transactions`.
+- **Top-ups.** `POST /api/billing/accounts/{id}/topups` registers a
+  `BillingTopup` (pending) and opens a `core/payment_gateways` session; the
+  `payment.captured` subscriber idempotently credits the balance, issues a
+  **posted+paid VAT receipt** in `core/sales` (VAT at top-up), and flips the
+  top-up to captured. Sibling subscribers handle failed/cancelled/expired.
+- **Period close.** The Bill Run still runs for prepaid accounts, charging
+  `recurring`/`one_time` items to the **balance** (deterministic `source_ref`,
+  `billed_to_date` guard) and rolling them into a non-fiscal
+  **`BillingStatement`** instead of a payable invoice.
+- **Credit limit (both modes).** Report-only `creditStatus` + `GET …/credit-status`
+  (prepaid `max(0,−balance)`; postpaid Σ posted-unpaid outstanding) +
+  `billing.credit.over_limit`. Billing **never blocks**.
+- **Admin UI.** Account Prepaid panel (balance, status, credit, top-up,
+  transactions), top-ups + statements list/detail pages, account create/edit
+  mode + credit fields; en/pl i18n.
+- **Hardening.** GDPR export extended (balance/transactions/top-ups/statements);
+  optional reconciliation worker; manual balance adjustments
+  (`POST /transactions/adjust`, audited).
+- **Deviation.** The top-up receipt is created **posted+paid** (not draft) —
+  money already received has nothing to review (mirrors the xd-249 deviation
+  convention). VAT rate resolves from `prepaid.topup_tax_rate` config (the
+  postpaid path resolves no rate today).
+
 ## 0.17.0 — Bill Run + invoices live fixes, CPQ-style list views (unreleased)
 
 Continued live-database shakedown — running an actual Bill Run and

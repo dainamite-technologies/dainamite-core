@@ -4,8 +4,12 @@ import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
 import {
   BillingAccount,
+  BillingAccountBalance,
+  BillingAccountTransaction,
   BillingAccountUsage,
   BillingItem,
+  BillingStatement,
+  BillingTopup,
   BillRunOutcome,
   DraftInvoiceEdit,
 } from '../../../../data/entities'
@@ -83,7 +87,7 @@ export async function GET(
       ?? defaultSince()
     const until = parseDate(url.searchParams.get('until')) ?? new Date()
 
-    const [items, usage, outcomes] = await Promise.all([
+    const [items, usage, outcomes, balance, transactions, topups, statements] = await Promise.all([
       // Items are bounded by integration volume (typically <100 per
       // account); no time-window needed — they often outlive a single
       // export window and the operator needs to see active items
@@ -112,6 +116,41 @@ export async function GET(
           createdAt: { $gte: since, $lte: until },
         } as never,
         { limit: EXPORT_HARD_LIMIT, orderBy: { createdAt: 'DESC' } },
+      ),
+      // SPEC-002 prepaid data — the balance row + the windowed money trail.
+      em.findOne(BillingAccountBalance, {
+        tenantId,
+        billAccountId: account.id,
+      } as never),
+      em.find(
+        BillingAccountTransaction,
+        {
+          tenantId,
+          organizationId,
+          billAccountId: account.id,
+          createdAt: { $gte: since, $lte: until },
+        } as never,
+        { limit: EXPORT_HARD_LIMIT, orderBy: { createdAt: 'DESC' } },
+      ),
+      em.find(
+        BillingTopup,
+        {
+          tenantId,
+          organizationId,
+          billAccountId: account.id,
+          createdAt: { $gte: since, $lte: until },
+        } as never,
+        { limit: EXPORT_HARD_LIMIT, orderBy: { createdAt: 'DESC' } },
+      ),
+      em.find(
+        BillingStatement,
+        {
+          tenantId,
+          organizationId,
+          billAccountId: account.id,
+          periodEnd: { $gte: since, $lte: until },
+        } as never,
+        { limit: EXPORT_HARD_LIMIT, orderBy: { periodEnd: 'DESC' } },
       ),
     ])
 
@@ -150,7 +189,8 @@ export async function GET(
 
     return NextResponse.json({
       exportedAt: new Date().toISOString(),
-      schemaVersion: 1,
+      // v2 adds prepaid balance / transactions / top-ups / statements (SPEC-002).
+      schemaVersion: 2,
       tenantId,
       organizationId,
       window: {
@@ -164,6 +204,11 @@ export async function GET(
       runOutcomes: outcomes,
       invoices: invoiceRows,
       draftInvoiceEdits: draftEdits,
+      // SPEC-002 prepaid section.
+      balance,
+      transactions,
+      topups,
+      statements,
     })
   } catch (err) {
     console.error('[billing/export/account.GET]', err)

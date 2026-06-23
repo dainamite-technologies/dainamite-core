@@ -1,4 +1,5 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
+import { UniqueConstraintViolationException } from '@mikro-orm/core'
 import type { CommandHandler, CommandRuntimeContext } from '@open-mercato/shared/lib/commands/types'
 import { registerCommand } from '@open-mercato/shared/lib/commands'
 import {
@@ -15,6 +16,11 @@ import {
   billingUsageCreateSchema,
   type BillingUsageCreateInput,
 } from '../data/validators'
+import {
+  consumePrepaidUsage,
+  type PrepaidConsumeResult,
+} from '../lib/prepaidConsume'
+import { emitBillingEvent, type BillingEventId } from '../events'
 
 /**
  * Usage ingest — append-only.
@@ -41,10 +47,20 @@ function getDataEngine(ctx: CommandRuntimeContext): DataEngine {
   return ctx.container.resolve('dataEngine') as DataEngine
 }
 
-const createUsageCommand: CommandHandler<
-  BillingUsageCreateInput,
-  { id: string; deduplicated: boolean }
-> = {
+export type CreateUsageResult = {
+  id: string
+  deduplicated: boolean
+  // Prepaid-only extras (SPEC-002) — present only for prepaid accounts.
+  ratedAmount?: string
+  currencyCode?: string
+  balance?: string
+  balanceStatus?: PrepaidConsumeResult['balanceStatus']
+  creditStatus?: PrepaidConsumeResult['creditStatus']
+  tierBreakdown?: PrepaidConsumeResult['tierBreakdown']
+  warning?: string | null
+}
+
+const createUsageCommand: CommandHandler<BillingUsageCreateInput, CreateUsageResult> = {
   id: 'billing.usage.create',
 
   async execute(rawInput, ctx) {
@@ -61,6 +77,11 @@ const createUsageCommand: CommandHandler<
     })
     if (!account) {
       throw new CrudHttpError(404, { error: 'Billing account not found' })
+    }
+
+    // ─── Prepaid: rate + atomic debit + balance, all in one tx ────
+    if (account.billingMode === 'prepaid') {
+      return executePrepaidConsume(ctx, em, account, parsed)
     }
 
     if (parsed.sourceRef) {
@@ -111,6 +132,95 @@ const createUsageCommand: CommandHandler<
 
     return { id: entity.id, deduplicated: false }
   },
+}
+
+/**
+ * Prepaid consume: rate + atomic debit + balance + transaction in one DB
+ * transaction, then index + emit domain events AFTER the commit.
+ */
+async function executePrepaidConsume(
+  ctx: CommandRuntimeContext,
+  em: EntityManager,
+  account: BillingAccount,
+  parsed: BillingUsageCreateInput,
+): Promise<CreateUsageResult> {
+  const input = {
+    organizationId: parsed.organizationId,
+    tenantId: parsed.tenantId,
+    billAccountId: parsed.billAccountId,
+    uomCode: parsed.uomCode,
+    quantity: parsed.quantity,
+    periodStart: parsed.periodStart,
+    periodEnd: parsed.periodEnd,
+    lineDescription: parsed.lineDescription ?? null,
+    sourceRef: parsed.sourceRef ?? null,
+  }
+
+  let outcome
+  try {
+    outcome = await em.transactional(async (tem) =>
+      consumePrepaidUsage(tem as EntityManager, account, input),
+    )
+  } catch (err) {
+    // Concurrency: a simultaneous upload with the same sourceRef won the
+    // unique-constraint race and committed first, so our tx rolled back (no
+    // double-debit). Retry once on a fresh em — the dedup pre-check now finds
+    // the winner's record and returns its balance_after (idempotent 200).
+    if (parsed.sourceRef && err instanceof UniqueConstraintViolationException) {
+      outcome = await em.fork().transactional(async (tem) =>
+        consumePrepaidUsage(tem as EntityManager, account, input),
+      )
+    } else {
+      throw err
+    }
+  }
+
+  // Index the new usage record (parity with the postpaid path) — only when a
+  // fresh record was actually written (a dedup hit re-reads the prior one).
+  if (!outcome.result.deduplicated) {
+    const usage = await em.findOne(BillingAccountUsage, {
+      id: outcome.result.id,
+      tenantId: parsed.tenantId,
+      organizationId: parsed.organizationId,
+    })
+    if (usage) {
+      await emitCrudSideEffects({
+        dataEngine: getDataEngine(ctx),
+        action: 'created',
+        entity: usage,
+        identifiers: {
+          id: usage.id,
+          tenantId: usage.tenantId,
+          organizationId: usage.organizationId,
+        },
+        indexer: usageIndexer,
+        events: usageEvents,
+      })
+    }
+  }
+
+  // Domain events fire AFTER the DB commit (consistent with the post command).
+  // `billing.usage.rated` fires on EVERY upload — emit it ephemerally (a live
+  // signal, excluded from triggers) so the high-throughput consume path does
+  // not write a queue row per call. The meaningful crossing events
+  // (low/exhausted/credit) stay persistent so async consumers never miss them.
+  for (const ev of outcome.events) {
+    const persistent = ev.id !== 'billing.usage.rated'
+    await emitBillingEvent(ev.id as BillingEventId, ev.payload, { persistent })
+  }
+
+  const r = outcome.result
+  return {
+    id: r.id,
+    deduplicated: r.deduplicated,
+    ratedAmount: r.ratedAmount,
+    currencyCode: r.currencyCode,
+    balance: r.balance,
+    balanceStatus: r.balanceStatus,
+    creditStatus: r.creditStatus,
+    tierBreakdown: r.tierBreakdown,
+    warning: r.warning,
+  }
 }
 
 registerCommand(createUsageCommand)

@@ -3,10 +3,12 @@ import * as React from 'react'
 import { useRouter } from 'next/navigation'
 import type { ColumnDef } from '@tanstack/react-table'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
+import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
 import { DataTable } from '@open-mercato/ui/backend/DataTable'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
+import { fetchAccountNames } from '../../../components/accountNames'
 
 /**
  * Consumption statements admin list (SPEC-002 P3). Non-fiscal period summaries
@@ -48,6 +50,23 @@ export default function BillingStatementsListPage() {
   const [total, setTotal] = React.useState(0)
   const [totalPages, setTotalPages] = React.useState(1)
   const [loading, setLoading] = React.useState(true)
+  const [filters, setFilters] = React.useState<FilterValues>({})
+  const [accountNames, setAccountNames] = React.useState<Record<string, string>>({})
+
+  const filterDefs = React.useMemo<FilterDef[]>(
+    () => [
+      {
+        id: 'status',
+        label: t('billing.statements.filters.status', 'Status'),
+        type: 'select',
+        options: [
+          { value: 'generated', label: t('billing.statements.status.generated', 'Generated') },
+          { value: 'sent', label: t('billing.statements.status.sent', 'Sent') },
+        ],
+      },
+    ],
+    [t],
+  )
 
   const loadRows = React.useCallback(async () => {
     setLoading(true)
@@ -58,16 +77,24 @@ export default function BillingStatementsListPage() {
         sortField: 'periodEnd',
         sortDir: 'desc',
       })
+      if (typeof filters.status === 'string' && filters.status) params.set('status', filters.status)
       const result = await readApiResultOrThrow<ListResponse>(
         `/api/billing/statements?${params.toString()}`,
       )
-      setRows(result.items ?? [])
+      const items = result.items ?? []
+      setRows(items)
       setTotal(result.total ?? 0)
       setTotalPages(result.totalPages ?? 1)
+      try {
+        const names = await fetchAccountNames(items.map((r) => r.bill_account_id))
+        setAccountNames((prev) => ({ ...prev, ...names }))
+      } catch {
+        // Name resolution is best-effort — fall back to the id in the cell.
+      }
     } finally {
       setLoading(false)
     }
-  }, [page, pageSize])
+  }, [filters.status, page, pageSize])
 
   React.useEffect(() => {
     void loadRows()
@@ -80,6 +107,18 @@ export default function BillingStatementsListPage() {
         header: t('billing.statements.columns.period', 'Period'),
         cell: ({ row }) =>
           `${formatDate(row.original.period_start)} – ${formatDate(row.original.period_end)}`,
+      },
+      {
+        accessorKey: 'bill_account_id',
+        header: t('billing.statements.columns.account', 'Account'),
+        cell: ({ row }) => {
+          const name = accountNames[row.original.bill_account_id]
+          return name ? (
+            <span className="text-sm">{name}</span>
+          ) : (
+            <span className="font-mono text-xs">{row.original.bill_account_id}</span>
+          )
+        },
       },
       {
         accessorKey: 'opening_balance',
@@ -120,7 +159,7 @@ export default function BillingStatementsListPage() {
         ),
       },
     ],
-    [t],
+    [t, accountNames],
   )
 
   return (
@@ -140,6 +179,10 @@ export default function BillingStatementsListPage() {
           onRowClick={(row) => router.push(`/backend/billing/statements/${row.id}`)}
           isLoading={loading}
           pagination={{ page, pageSize, total, totalPages, onPageChange: setPage }}
+          filters={filterDefs}
+          filterValues={filters}
+          onFiltersApply={setFilters}
+          onFiltersClear={() => setFilters({})}
         />
       </PageBody>
     </Page>

@@ -1,5 +1,16 @@
 # @dainamite/billing
 
+## 0.18.0
+
+### Minor Changes
+
+- f8210ac: Prepaid billing mode (SPEC-002 / XD-304). Adds an additive `prepaid` billing
+  mode alongside the existing postpaid recurring engine: top-up balance,
+  real-time atomic usage debit (never rejects usage), append-only transaction
+  ledger, prepaid period-close statements, manual balance adjustments, and the
+  prepaid admin UI (balance panel, Transactions / Top-ups / Statements lists +
+  detail pages). Postpaid behaviour is unchanged.
+
 ## 0.18.0 — Prepaid balance billing (SPEC-002, XD-304, unreleased)
 
 Adds a second billing **mode** to the package: `prepaid`. A customer tops up
@@ -100,7 +111,7 @@ and fixed; covered by new Playwright integration tests.
   `mapInput` read `raw.id` directly, never found it, and threw
   "id is required". `mapInput` now unwraps the envelope.
 - **`?id=` list filter was a no-op.** `GET /api/billing/{accounts,
-  items,runs}?id=<uuid>` is how the detail pages fetch one record,
+items,runs}?id=<uuid>` is how the detail pages fetch one record,
   but `buildFilters` never handled `id`, so the endpoint returned an
   unrelated row. `id` is now an indexed filter on all three list
   routes (and added to the list query schemas).
@@ -177,14 +188,14 @@ write path.
   - runs **one** idempotency query over all `source_ref`s in the batch
     (`sourceRef: { $in }` + `billAccountId: { $in }`) instead of one
     per item;
-  - dedups `source_ref`s repeated *within* the same payload (first
+  - dedups `source_ref`s repeated _within_ the same payload (first
     wins — the unique index would reject the rest on flush anyway);
   - `em.create` + `persist`s every new row, then issues a **single**
     `em.flush()` for the whole batch;
   - emits per-entity CRUD side effects (`markOrmEntityChange` +
     events) only after the flush commits.
   - Returns `{ created, deduplicated, items: [{ sourceRef, id,
-    deduplicated }] }` so callers can map results back to inputs.
+deduplicated }] }` so callers can map results back to inputs.
 - **`POST /api/billing/items/bulk`** — REST surface for the command,
   gated by `billing.item.manage`, `openApi` documented.
 - **Validators.** `billingItemBulkEntrySchema` (per-item, no scope,
@@ -217,16 +228,16 @@ on the way through.
   no limit, materialising every row in JS memory before summing. For
   a telco account with 1M usage records per cycle this OOMs. New
   implementation does a single `SELECT uom_code, SUM(quantity),
-  COUNT(*) FROM billing_account_usage WHERE … GROUP BY uom_code` —
+COUNT(*) FROM billing_account_usage WHERE … GROUP BY uom_code` —
   result set is `O(distinct uom_codes)` (typically 1-20) regardless
   of record count. Index `(bill_account_id, uom_code,
-  rated_in_bill_run_id, period_end)` already exists from Phase 0.
+rated_in_bill_run_id, period_end)` already exists from Phase 0.
 - **Engine rated-marking: id list → predicate update.** The
   follow-up "mark consumed records" step used to take a `consumedUsageIds`
   array and issue `UPDATE … WHERE id IN (millions of UUIDs)`. New
   shape: the runner returns `matchedUoms` (small) and the engine does
   `UPDATE … WHERE uom_code IN (matchedUoms) AND <account scope>
-  AND rated_in_bill_run_id IS NULL AND period_end <= ?` — no ID list
+AND rated_in_bill_run_id IS NULL AND period_end <= ?` — no ID list
   ever leaves Postgres. Memory-bounded regardless of how many records
   the predicate touches.
 - **GDPR export: time window + hard cap.** The
@@ -271,9 +282,9 @@ connector created — without dropping to `curl`.
   - `usage` (tiered): raw-JSON textarea for the advanced shape.
     Server validators (Phase 0 Zod) reject malformed structures;
     the textarea includes the canonical example as placeholder.
-  Plus optional `subscriptionId` / `subscriptionItemId` external
-  references. UX matches `AccountForm` (Cmd/Ctrl+Enter submit, Kbd
-  footer hint, no raw HTML buttons).
+    Plus optional `subscriptionId` / `subscriptionItemId` external
+    references. UX matches `AccountForm` (Cmd/Ctrl+Enter submit, Kbd
+    footer hint, no raw HTML buttons).
 - `/backend/billing/items` — list with filters (type, account,
   subscription, active) + per-row "Open" link. **New item** CTA in
   the page header.
@@ -292,6 +303,7 @@ Validation: yarn build + generate + typecheck + test all green;
 auto-discovered (3 accounts + 3 items + 2 runs + 2 invoices).
 
 Deferred to follow-up:
+
 - Locale files (en, pl) — UI ships with inline English fallbacks.
 - "Add item" button on the account detail page (uses the deep-link
   parameter the create page already supports).
@@ -323,6 +335,7 @@ Validation: yarn build + generate + typecheck + test all green; 797
 repo tests, 0 regressions; all 7 backend pages auto-discovered.
 
 Deferred to follow-up:
+
 - Item create / edit pages (items are typically integration-driven —
   the REST API at `/api/billing/items` covers operator-side needs).
 - Locale files (en, pl).
@@ -349,7 +362,7 @@ edits no longer require `curl`.
   test-invoices flow and the line-remove flow, satisfying the
   UI AGENTS.md MUST rule.
 - All writes go through the existing `billing.invoices.{edit,add,
-  remove}_draft_line` commands — every line mutation is still
+remove}_draft_line` commands — every line mutation is still
   audited via `DraftInvoiceEdit` with before/after snapshots, and
   invoice totals are recomputed by the engine on each write.
 
@@ -358,6 +371,7 @@ Validation: yarn build + generate + typecheck + test all green;
 pages + 1 shared component.
 
 Deferred to follow-up:
+
 - Account / item editor pages
 - Locale files (en, pl)
 
@@ -389,7 +403,7 @@ to review or post.
   - **Wipe test invoices for this run** — visible only for
     `metadata.test_run=true`. Hard-deletes every test invoice from
     the same `bill_run_id` via `billing.invoices.wipe_test`. `window
-    .confirm` gate (will move to `ConfirmDialog` in a follow-up to
+.confirm` gate (will move to `ConfirmDialog` in a follow-up to
     match the OM UX convention).
 
 Sidebar entry under the `Billing` group at order 30.
@@ -400,6 +414,7 @@ add-line, edit-line, remove-line, invoices list, invoices detail);
 5 backend pages.
 
 Deferred to follow-up:
+
 - Inline line edit / add / remove dialogs on the detail page (REST
   endpoints already exist from Phase 4b).
 - ConfirmDialog instead of `window.confirm` for the wipe action.
@@ -440,6 +455,7 @@ Validation: yarn build + generate + typecheck + test all green;
 `.mercato/generated/backend-routes.generated.ts`.
 
 Deferred to a follow-up:
+
 - Account / item / usage / draft-invoice editor pages
 - Triggers (manual Bill Run / dry-run preview) as buttons in the
   list page
@@ -464,7 +480,7 @@ fully usable from the REST surface today.
     pre-removal snapshot preserved in `before_json`. `after_json`
     and `invoice_line_id` are `null`.
 - All three refuse non-draft invoices with `HTTP 409 +
-  billing.invoice.not_draft` and require the
+billing.invoice.not_draft` and require the
   `billing.invoice.edit_draft` feature.
 - **Test-invoice wipe command** `billing.invoices.wipe_test`:
   hard-deletes invoices flagged `metadata.test_run=true`, optionally
@@ -490,6 +506,7 @@ fully usable from the REST surface today.
   `billRunId`).
 
 Deferred to **Phase 4c** (UI dedicated effort):
+
 - Backend pages (DataTable + CrudForm) for accounts / items / usage /
   bill runs / draft invoice review.
 - Sidebar navigation + page metadata.
@@ -532,6 +549,7 @@ Deferred to **Phase 4c** (UI dedicated effort):
 - 6 new unit tests for the resolver (199 total for billing).
 
 Deferred to **Phase 4b**:
+
 - Draft-edit endpoint + `DraftInvoiceEdit` audit row writing.
 - GDPR-portability `GET /api/billing/export/account/{id}`.
 - Admin UI (backend pages for accounts / items / runs / draft review).
@@ -540,6 +558,7 @@ Deferred to **Phase 4b**:
 
 - **Usage rater** in `lib/usageRater.ts` — pure functions for all four
   spec-mandated rate shapes:
+
   - Simple flat (`{ unit_price }`): `quantity × unit_price`.
   - Volume tier (`{ model: 'volume', tiers }`): entire quantity at the
     `unit_price` of the tier its total falls into.
@@ -550,12 +569,13 @@ Deferred to **Phase 4b**:
 
   Returns `{ amount, breakdown }` where `breakdown` is the per-tier
   audit trail persisted into `SalesInvoiceLine.metadata
-  .usage_tier_breakdown`. Half-up rounding to 2dp on the amount;
+.usage_tier_breakdown`. Half-up rounding to 2dp on the amount;
   unit prices preserve sub-cent precision via the dedicated
   `formatUnitPrice` helper (e.g. `0.001 → "0.0010"` instead of being
   rounded to zero).
 
 - **Usage runner** in `lib/usageRunner.ts` — per-account processor:
+
   - Selects unrated usage records (`rated_in_bill_run_id IS NULL`,
     `period_end <= bill_period_end`).
   - Groups by `uom_code`, matches against the account's `type=usage`
@@ -567,9 +587,10 @@ Deferred to **Phase 4b**:
     signal to add the missing item then trigger retry-failed.
 
 - **Engine integration** in `lib/billRunEngine.ts`:
+
   - Per-cycle loop now combines `buildInvoiceLinesFromItems` (one_time
-    + recurring) with `processUsageForAccount` (usage) into a single
-    `SalesInvoice` write.
+    - recurring) with `processUsageForAccount` (usage) into a single
+      `SalesInvoice` write.
   - Real-mode commits mark consumed usage records'
     `rated_in_bill_run_id` via a single `nativeUpdate` (scales to
     accounts with thousands of records per cycle).
@@ -589,9 +610,9 @@ Deferred to **Phase 4b**:
 
 - 27 new unit tests (193 total for the package):
   - `usageRater` covers every spec example end-to-end (`25k vs
-    [10k=0, ∞=0.001]` graduated → 15 EUR, `25k vs [10k=0,
-    50k=0.001, ∞=0.0005]` volume → 25 EUR, `25k vs
-    [10k=50, 50k=200, ∞=1000]` flat → 200 EUR) plus boundary
+[10k=0, ∞=0.001]` graduated → 15 EUR, `25k vs [10k=0,
+50k=0.001, ∞=0.0005]` volume → 25 EUR, `25k vs
+[10k=50, 50k=200, ∞=1000]` flat → 200 EUR) plus boundary
     conditions and the `1.005 → 1.01` half-up edge case.
   - Engine integration: graduated 25k → 15 EUR end-to-end, unmatched
     UoM warning + un-rated guard, simple-flat unit_price emission,
@@ -665,7 +686,7 @@ Phase 2 deviations):
   - `GET / POST / PUT / DELETE /api/billing/accounts` (Billing Accounts CRUD)
   - `GET / POST / PUT / DELETE /api/billing/items` (Billing Items CRUD with
     `source_ref` idempotency on POST — duplicate `(tenant, account,
-    sourceRef)` returns the existing row with `deduplicated: true`)
+sourceRef)` returns the existing row with `deduplicated: true`)
   - `GET / POST /api/billing/usage` (append-only usage ingest; idempotent
     by `source_ref`; no update / delete by design)
 - Lean command pattern (no undo / snapshot yet — Phase 4 adds those):

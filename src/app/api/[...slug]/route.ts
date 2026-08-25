@@ -294,26 +294,13 @@ async function extractBodyTenantCandidate(req: NextRequest): Promise<unknown> {
   return undefined
 }
 
-/**
- * @deprecated Not used by the authorization gate and unsafe for it: this returns
- * only the LAST `tenantId` occurrence, which is exactly the single-value
- * semantics #2665 fixed — a handler reading the FIRST occurrence would act on a
- * candidate this never checked. Use `extractTenantCandidates` (plural) for any
- * enforcement path. Kept because it is part of the upstream template's exported
- * surface; nothing in this repo calls it.
- */
-export async function extractTenantCandidate(req: NextRequest): Promise<unknown> {
-  const tenantParams = req.nextUrl?.searchParams?.getAll?.('tenantId') ?? []
-  if (tenantParams.length > 0) {
-    return tenantParams[tenantParams.length - 1]
-  }
-
-  if (!bodyCarriesTenantId(req)) {
-    return undefined
-  }
-
-  return extractBodyTenantCandidate(req)
-}
+// NOTE: the upstream 0.6.7 template also exports a singular
+// `extractTenantCandidate`, which returns only the LAST `tenantId` occurrence —
+// precisely the single-value semantics #2665 fixed. It is deliberately dropped
+// here: this is a Next.js route file, not a published package, so there is no
+// external surface to preserve, and keeping it would leave a footgun that a
+// future handler could reach for and silently get the pre-fix behaviour back.
+// Use `extractTenantCandidates` for anything that authorizes.
 
 // Returns every `tenantId` candidate the request carries — each repeated `?tenantId=`
 // query param plus any body-level value. The dispatcher enforces tenant selection

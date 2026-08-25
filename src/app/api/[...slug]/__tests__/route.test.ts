@@ -197,7 +197,11 @@ describe('dispatch — transient auth failure', () => {
     handler.mockClear()
     mockRouteMatch.value = {
       route: {
-        kind: 'module',
+        // `moduleId` is non-nullable on ApiRouteManifestEntry and is what
+        // withModuleResourceUsage attributes telemetry to — the mock has to
+        // carry it or it stops resembling a real manifest entry.
+        moduleId: 'test_module',
+        kind: 'route-file',
         path: '/api/thing',
         methods: ['GET'],
         load: async () => ({ GET: handler, metadata: { GET: { requireAuth: true } } }),

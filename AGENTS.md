@@ -218,6 +218,16 @@ import type { ApiInterceptor } from '@open-mercato/shared/lib/crud/api-intercept
 - Every dialog: `Cmd/Ctrl+Enter` submit, `Escape` cancel
 - Keep `pageSize` at or below 100
 - Every API route MUST export `openApi`
+- **API routes: authorize with `requireFeatures`, never `requireRoles`.** Since
+  Open Mercato 0.6.7 the API dispatcher (`src/app/api/[...slug]/route.ts`)
+  **ignores** `requireRoles` — it only logs a warning. Role names are
+  tenant-mutable, so a tenant admin could create or rename a role to satisfy the
+  guard; only immutable `acl.ts` feature IDs actually authorize. A route that
+  declares `requireRoles` and nothing else is effectively **unguarded**, and
+  fails open with no error. No route in this repo relies on it today — keep it
+  that way. Note the backend/frontend *page* dispatchers still enforce
+  `requireRoles`, so the two surfaces differ; do not infer API behaviour from
+  page behaviour.
 
 ## Stack
 

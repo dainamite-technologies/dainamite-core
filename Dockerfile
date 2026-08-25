@@ -7,10 +7,9 @@ ARG OPEN_MERCATO_DOCKER_REGISTRY_HOST=host.docker.internal
 WORKDIR /app
 
 RUN apk add --no-cache python3 make g++ ca-certificates openssl
-RUN corepack enable && corepack prepare yarn@4.12.0 --activate
+RUN corepack enable && corepack prepare yarn@4.17.1 --activate
 
 COPY package.json yarn.lock .yarnrc.yml ./
-COPY .yarn/patches ./.yarn/patches
 COPY packages/cpq/package.json ./packages/cpq/package.json
 COPY packages/billing/package.json ./packages/billing/package.json
 COPY packages/cpq-billing-connector/package.json ./packages/cpq-billing-connector/package.json
@@ -43,10 +42,9 @@ ARG OPEN_MERCATO_DOCKER_REGISTRY_HOST=host.docker.internal
 WORKDIR /app
 
 RUN apk add --no-cache python3 make g++ ca-certificates openssl
-RUN corepack enable && corepack prepare yarn@4.12.0 --activate
+RUN corepack enable && corepack prepare yarn@4.17.1 --activate
 
 COPY package.json yarn.lock .yarnrc.yml ./
-COPY .yarn/patches ./.yarn/patches
 COPY packages/cpq/package.json ./packages/cpq/package.json
 COPY packages/billing/package.json ./packages/billing/package.json
 COPY packages/cpq-billing-connector/package.json ./packages/cpq-billing-connector/package.json
@@ -85,10 +83,9 @@ ENV NODE_ENV=production \
 WORKDIR /app
 
 RUN apk add --no-cache ca-certificates openssl
-RUN corepack enable && corepack prepare yarn@4.12.0 --activate
+RUN corepack enable && corepack prepare yarn@4.17.1 --activate
 
 COPY package.json yarn.lock .yarnrc.yml ./
-COPY .yarn/patches ./.yarn/patches
 COPY packages/cpq/package.json ./packages/cpq/package.json
 COPY packages/billing/package.json ./packages/billing/package.json
 COPY packages/cpq-billing-connector/package.json ./packages/cpq-billing-connector/package.json

@@ -96,3 +96,6 @@ package-lock.json
 .claude/settings.local.json
 .playwright-mcp
 .agents/
+
+# Lokalne zrzuty bazy (pre-upgrade backupy) — nigdy nie commitujemy
+backups/

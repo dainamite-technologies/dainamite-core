@@ -23,7 +23,7 @@ function makeCtx(em: MockEm) {
     flushOrmEntityChanges: jest.fn(async () => undefined),
   }
   return {
-    auth: { sub: '99999999-9999-4999-8999-999999999999' },
+    auth: { sub: '99999999-9999-4999-8999-999999999999', tenantId: TENANT, orgId: ORG },
     container: {
       resolve: jest.fn((name: string) => {
         if (name === 'em') return em

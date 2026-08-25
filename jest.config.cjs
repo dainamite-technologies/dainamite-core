@@ -33,5 +33,13 @@ module.exports = {
     '<rootDir>/packages/*/src/**/__tests__/**/*.test.(ts|tsx)',
   ],
   passWithNoTests: true,
-  transformIgnorePatterns: ['/node_modules/(?!(@open-mercato|@mikro-orm)/)'],
+  // ESM-only packages that CJS callers pull in, so Jest has to transform them:
+  //  - kysely: MikroORM 7.1 split the SQL layer into @mikro-orm/sql, which uses it
+  //  - htmlparser2 & co: reached via sanitize-html from @open-mercato/shared
+  transformIgnorePatterns: [
+    // sanitize-html is CJS but nests the whole ESM htmlparser2 cluster, and the
+    // pattern is tested at every /node_modules/ segment — so the outer
+    // sanitize-html/ segment has to pass as well, not just the inner ones.
+    '/node_modules/(?!(@open-mercato|@mikro-orm)/|kysely/|sanitize-html/|htmlparser2/|domhandler/|domutils/|domelementtype/|dom-serializer/|entities/)',
+  ],
 }

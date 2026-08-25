@@ -106,7 +106,7 @@ function makeLine(invoice: FakeInvoice, overrides: Partial<FakeLine> = {}): Fake
 }
 
 type Env = {
-  ctx: { container: { resolve: jest.MockedFunction<(name: string) => unknown> }; auth: { sub?: string } | null }
+  ctx: { container: { resolve: jest.MockedFunction<(name: string) => unknown> }; auth: { sub?: string; tenantId?: string; orgId?: string } | null }
   em: {
     findOne: jest.MockedFunction<(entity: unknown, where: unknown) => Promise<unknown>>
     find: jest.MockedFunction<(entity: unknown, where: unknown) => Promise<unknown[]>>
@@ -131,7 +131,7 @@ function createEnv(
     statusEntryPosted?: string | null
     initialLines?: FakeLine[]
     invoiceFinalLines?: FakeLine[]
-    auth?: { sub?: string } | null
+    auth?: { sub?: string; tenantId?: string; orgId?: string } | null
     testInvoiceRows?: Array<{ id: string }>
   } = {},
 ): Env {
@@ -199,7 +199,7 @@ function createEnv(
   return {
     ctx: {
       container,
-      auth: options.auth ?? { sub: '99999999-9999-4999-8999-999999999999' },
+      auth: options.auth ?? { sub: '99999999-9999-4999-8999-999999999999', tenantId: TENANT, orgId: ORG },
     },
     em,
     persistedEntities,

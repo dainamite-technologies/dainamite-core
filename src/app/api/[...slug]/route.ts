@@ -22,6 +22,12 @@ import { withModuleResourceUsage } from '@open-mercato/shared/lib/modules/resour
 bootstrap()
 registerApiRouteManifests(apiRoutes)
 
+// Dedup key is `${method} ${pathname}` and the Set is module-level, so it lives
+// for the process — deliberately, since the point is to warn once per route
+// rather than on every request. Consequence for tests: within a Jest worker the
+// module is imported once, so a test asserting the warning fires for a
+// path+method that an earlier test already tripped gets a false negative. Reset
+// the module (`jest.resetModules()`) or use a path unique to that test.
 const warnedDeprecatedRequireRoles = new Set<string>()
 
 function warnDeprecatedRequireRoles(pathname: string, method: HttpMethod): void {

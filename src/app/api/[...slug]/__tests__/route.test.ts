@@ -59,8 +59,16 @@ jest.mock('@open-mercato/shared/modules/events', () => ({
     },
   }),
 }))
+// Captured so the per-route tracking opt-out can be asserted as an actual
+// bypass, not just "the handler still ran".
+const mockWithModuleResourceUsage = jest.fn(
+  async (..._args: unknown[]): Promise<unknown> => {
+    const fn = _args[_args.length - 1] as () => unknown
+    return fn()
+  },
+)
 jest.mock('@open-mercato/shared/lib/modules/resource-usage', () => ({
-  withModuleResourceUsage: async (_m: unknown, fn: () => unknown) => fn(),
+  withModuleResourceUsage: (...args: unknown[]) => mockWithModuleResourceUsage(...args),
 }))
 jest.mock('@open-mercato/shared/lib/auth/server', () => ({ resolveAuthFromRequestDetailed: jest.fn() }))
 jest.mock('@open-mercato/core/modules/auth/services/rbacService', () => ({ RbacService: class {} }))
@@ -441,5 +449,54 @@ describe('dispatch — authorization invariants', () => {
     const res = await dispatch()
     expect(res.status).toBe(401)
     expect(handler).not.toHaveBeenCalled()
+  })
+})
+
+describe('dispatch — module resource-usage tracking opt-out', () => {
+  const handler = jest.fn(async () => new Response('ok'))
+
+  function standUp(metadata: Record<string, unknown>) {
+    mockRouteMatch.value = {
+      route: {
+        moduleId: 'test_module',
+        kind: 'route-file',
+        path: '/api/thing',
+        methods: ['GET'],
+        load: async () => ({ GET: handler, metadata: { GET: metadata } }),
+      },
+      params: {},
+    }
+  }
+
+  function dispatch() {
+    const req = new NextRequest('https://x.test/api/thing', { method: 'GET' })
+    return GET(req, { params: Promise.resolve({ slug: ['thing'] }) })
+  }
+
+  beforeEach(() => {
+    handler.mockClear()
+    mockWithModuleResourceUsage.mockClear()
+    mockResolveAuth.mockResolvedValue({ status: 'anonymous', auth: null } as never)
+  })
+
+  afterEach(() => {
+    mockRouteMatch.value = undefined
+  })
+
+  it('tracks by default', async () => {
+    standUp({ requireAuth: false })
+    const res = await dispatch()
+    expect(res.status).toBe(200)
+    expect(mockWithModuleResourceUsage).toHaveBeenCalledTimes(1)
+    expect(handler).toHaveBeenCalled()
+  })
+
+  it('bypasses tracking when the route opts out, and still runs the handler', async () => {
+    standUp({ requireAuth: false, skipModuleResourceUsageTracking: true })
+    const res = await dispatch()
+    expect(res.status).toBe(200)
+    expect(mockWithModuleResourceUsage).not.toHaveBeenCalled()
+    // The opt-out must skip the wrapper, not the work.
+    expect(handler).toHaveBeenCalled()
   })
 })

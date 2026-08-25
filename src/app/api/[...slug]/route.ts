@@ -294,6 +294,14 @@ async function extractBodyTenantCandidate(req: NextRequest): Promise<unknown> {
   return undefined
 }
 
+/**
+ * @deprecated Not used by the authorization gate and unsafe for it: this returns
+ * only the LAST `tenantId` occurrence, which is exactly the single-value
+ * semantics #2665 fixed — a handler reading the FIRST occurrence would act on a
+ * candidate this never checked. Use `extractTenantCandidates` (plural) for any
+ * enforcement path. Kept because it is part of the upstream template's exported
+ * surface; nothing in this repo calls it.
+ */
 export async function extractTenantCandidate(req: NextRequest): Promise<unknown> {
   const tenantParams = req.nextUrl?.searchParams?.getAll?.('tenantId') ?? []
   if (tenantParams.length > 0) {
@@ -387,7 +395,14 @@ async function handleRequest(
         { error: t('api.errors.serviceUnavailable', 'Service temporarily unavailable') },
         { status: 503, headers: { 'retry-after': '2' } },
       )
-      await emitLifecycleEvent(applicationLifecycleEvents.requestAuthorizationDenied, {
+      // Deliberate deviation from the upstream template, which emits
+      // `requestAuthorizationDenied` here. Nothing was denied — authorization
+      // could not be evaluated — so reporting it under that name makes a DB
+      // outage look like a spike in authorization failures to any dashboard or
+      // alert branching on the event. `requestFailed` is the honest signal.
+      // Worth pushing upstream; until then, expect this line to show up when
+      // diffing against a future create-mercato-app template.
+      await emitLifecycleEvent(applicationLifecycleEvents.requestFailed, {
         ...receivedPayload,
         status: response.status,
         userId: auth?.sub ?? null,
@@ -413,6 +428,14 @@ async function handleRequest(
     const rateLimiterService = getCachedRateLimiterService()
     if (rateLimiterService) {
       const clientIp = getClientIp(req, rateLimiterService.trustProxyDepth)
+      // When the IP cannot be resolved we rate-limit against a shared fallback
+      // key rather than skipping the limit. Skipping would make the limiter
+      // trivially bypassable by stripping/forging the forwarded-for chain. The
+      // trade-off is that every unresolvable-IP caller shares one bucket, so a
+      // misconfigured ingress shows up as unexplained 429s for anonymous
+      // traffic. Production invariant: every ingress must forward a real client
+      // IP (and `trustProxyDepth` must match the hop count) for per-client
+      // limiting to work.
       const rateLimitError = await checkRateLimit(
         rateLimiterService,
         methodMetadata.rateLimit,

@@ -17,17 +17,29 @@
 // pulls in most of the framework. Stub everything that is not under test.
 jest.mock('@/bootstrap', () => ({ bootstrap: jest.fn(), isBootstrapped: () => true }))
 jest.mock('@/.mercato/generated/api-routes.generated', () => ({ apiRoutes: [] }))
+// Mutable so individual tests can stand up a route to dispatch against. Jest
+// only lets factory closures reach out-of-scope names prefixed with `mock`.
+const mockRouteMatch: { value: unknown } = { value: undefined }
 jest.mock('@open-mercato/shared/modules/registry', () => ({
   registerApiRouteManifests: jest.fn(),
   getApiRouteManifests: () => [],
-  findApiRouteManifestMatch: () => undefined,
+  findApiRouteManifestMatch: () => mockRouteMatch.value,
 }))
 jest.mock('@open-mercato/shared/lib/i18n/server', () => ({
   resolveTranslations: async () => ({ t: (_key: string, fallback: string) => fallback }),
 }))
 jest.mock('@open-mercato/cache', () => ({ runWithCacheTenant: (_t: unknown, fn: () => unknown) => fn() }))
 jest.mock('@open-mercato/core/bootstrap', () => ({ getCachedRateLimiterService: () => null }))
-jest.mock('@open-mercato/shared/modules/events', () => ({ getGlobalEventBus: () => null }))
+// Capture lifecycle events so the transient-auth path can be asserted on the
+// event it emits, not just the status code.
+const mockEmitted: Array<{ id: string; payload: Record<string, unknown> }> = []
+jest.mock('@open-mercato/shared/modules/events', () => ({
+  getGlobalEventBus: () => ({
+    emitEvent: async (id: string, payload: Record<string, unknown>) => {
+      mockEmitted.push({ id, payload })
+    },
+  }),
+}))
 jest.mock('@open-mercato/shared/lib/modules/resource-usage', () => ({
   withModuleResourceUsage: async (_m: unknown, fn: () => unknown) => fn(),
 }))
@@ -50,7 +62,12 @@ jest.mock('@open-mercato/shared/lib/di/container', () => ({
 
 import { NextRequest } from 'next/server'
 import { CrudHttpError } from '@open-mercato/shared/lib/crud/errors'
-import { checkAuthorization, extractTenantCandidates } from '../route'
+import { resolveAuthFromRequestDetailed } from '@open-mercato/shared/lib/auth/server'
+import { checkAuthorization, extractTenantCandidates, GET } from '../route'
+
+const mockResolveAuth = resolveAuthFromRequestDetailed as jest.MockedFunction<
+  typeof resolveAuthFromRequestDetailed
+>
 
 const OWN = '11111111-1111-4111-8111-111111111111'
 const FOREIGN = '22222222-2222-4222-8222-222222222222'
@@ -163,5 +180,65 @@ describe('checkAuthorization — tenant enforcement', () => {
     const req = jsonRequest(`https://x.test/api/thing?tenantId=${FOREIGN}`)
     await expect(checkAuthorization({ requireAuth: false } as never, null as never, req)).resolves.toBeNull()
     expect(enforceTenantSelection).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * Transient-auth handling (upstream #4176). When auth cannot be *evaluated* —
+ * DB down, pool exhausted, timeout — the dispatcher must not return 401 and
+ * must not clear session cookies, or a shared infrastructure blip force-logs-out
+ * every active user at once. It returns a retryable 503 instead.
+ */
+describe('dispatch — transient auth failure', () => {
+  const handler = jest.fn(async () => new Response('ok'))
+
+  beforeEach(() => {
+    mockEmitted.length = 0
+    handler.mockClear()
+    mockRouteMatch.value = {
+      route: {
+        kind: 'module',
+        path: '/api/thing',
+        methods: ['GET'],
+        load: async () => ({ GET: handler, metadata: { GET: { requireAuth: true } } }),
+      },
+      params: {},
+    }
+  })
+
+  afterEach(() => {
+    mockRouteMatch.value = undefined
+  })
+
+  function dispatch() {
+    const req = new NextRequest('https://x.test/api/thing', { method: 'GET' })
+    return GET(req, { params: Promise.resolve({ slug: ['thing'] }) })
+  }
+
+  it('returns a retryable 503 instead of 401 when auth could not be evaluated', async () => {
+    mockResolveAuth.mockResolvedValue({ status: 'error', auth: null } as never)
+    const res = await dispatch()
+    expect(res.status).toBe(503)
+    expect(res.headers.get('retry-after')).toBe('2')
+    // The session must survive the blip.
+    expect(res.headers.get('set-cookie')).toBeNull()
+    expect(handler).not.toHaveBeenCalled()
+  })
+
+  it('reports the 503 as requestFailed, not as an authorization denial', async () => {
+    mockResolveAuth.mockResolvedValue({ status: 'error', auth: null } as never)
+    await dispatch()
+    const ids = mockEmitted.map((e) => e.id)
+    expect(ids).toContain('application.request.failed')
+    expect(ids).not.toContain('application.request.authorization_denied')
+  })
+
+  it('still returns a cookie-clearing 401 when the session is genuinely invalid', async () => {
+    mockResolveAuth.mockResolvedValue({ status: 'invalid', auth: null } as never)
+    const res = await dispatch()
+    expect(res.status).toBe(401)
+    const ids = mockEmitted.map((e) => e.id)
+    expect(ids).toContain('application.request.authorization_denied')
+    expect(handler).not.toHaveBeenCalled()
   })
 })

@@ -29,7 +29,26 @@ jest.mock('@open-mercato/shared/lib/i18n/server', () => ({
   resolveTranslations: async () => ({ t: (_key: string, fallback: string) => fallback }),
 }))
 jest.mock('@open-mercato/cache', () => ({ runWithCacheTenant: (_t: unknown, fn: () => unknown) => fn() }))
-jest.mock('@open-mercato/core/bootstrap', () => ({ getCachedRateLimiterService: () => null }))
+// Mutable so the rate-limit branch can be exercised; null in every other test
+// keeps that branch out of the way.
+const mockRateLimiter: { value: unknown } = { value: null }
+jest.mock('@open-mercato/core/bootstrap', () => ({
+  getCachedRateLimiterService: () => mockRateLimiter.value,
+}))
+
+// Real constants, captured calls — the point is to assert WHICH key the limiter
+// is bucketed under when the client IP cannot be resolved.
+const mockCheckRateLimit = jest.fn(
+  async (..._args: unknown[]): Promise<Response | null> => null,
+)
+const mockClientIp: { value: string | null } = { value: null }
+jest.mock('@open-mercato/shared/lib/ratelimit/helpers', () => ({
+  RATE_LIMIT_ERROR_KEY: 'api.errors.rateLimit',
+  RATE_LIMIT_ERROR_FALLBACK: 'Too many requests. Please try again later.',
+  RATE_LIMIT_FALLBACK_KEY: 'global',
+  checkRateLimit: (...args: unknown[]) => mockCheckRateLimit(...args),
+  getClientIp: () => mockClientIp.value,
+}))
 // Capture lifecycle events so the transient-auth path can be asserted on the
 // event it emits, not just the status code.
 const mockEmitted: Array<{ id: string; payload: Record<string, unknown> }> = []
@@ -241,8 +260,79 @@ describe('dispatch — transient auth failure', () => {
     mockResolveAuth.mockResolvedValue({ status: 'invalid', auth: null } as never)
     const res = await dispatch()
     expect(res.status).toBe(401)
+    // The symmetric half of the 503 assertion above: a genuinely invalid
+    // session MUST have its cookies cleared. Without this, a regression in
+    // clearStaffAuthCookies would still produce the right status and events
+    // while leaving a stale session cookie in place.
+    expect(res.headers.get('set-cookie')).not.toBeNull()
     const ids = mockEmitted.map((e) => e.id)
     expect(ids).toContain('application.request.authorization_denied')
     expect(handler).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * Rate limiting buckets on the client IP. When it cannot be resolved the
+ * limiter must still run, against a shared fallback key — skipping it would let
+ * anyone bypass the limit by stripping or forging the forwarded-for chain.
+ */
+describe('dispatch — rate limiting with an unresolvable client IP', () => {
+  const handler = jest.fn(async () => new Response('ok'))
+
+  beforeEach(() => {
+    mockEmitted.length = 0
+    handler.mockClear()
+    mockCheckRateLimit.mockClear()
+    mockCheckRateLimit.mockResolvedValue(null)
+    mockRateLimiter.value = { trustProxyDepth: 0 }
+    mockResolveAuth.mockResolvedValue({ status: 'anonymous', auth: null } as never)
+    mockRouteMatch.value = {
+      route: {
+        moduleId: 'test_module',
+        kind: 'route-file',
+        path: '/api/thing',
+        methods: ['GET'],
+        load: async () => ({
+          GET: handler,
+          metadata: { GET: { requireAuth: false, rateLimit: { points: 5, duration: 60 } } },
+        }),
+      },
+      params: {},
+    }
+  })
+
+  afterEach(() => {
+    mockRateLimiter.value = null
+    mockRouteMatch.value = undefined
+    mockClientIp.value = null
+  })
+
+  function dispatch() {
+    const req = new NextRequest('https://x.test/api/thing', { method: 'GET' })
+    return GET(req, { params: Promise.resolve({ slug: ['thing'] }) })
+  }
+
+  it('falls back to the shared key instead of skipping the limit', async () => {
+    mockClientIp.value = null
+    await dispatch()
+    expect(mockCheckRateLimit).toHaveBeenCalledTimes(1)
+    expect(mockCheckRateLimit.mock.calls[0][2]).toBe('global')
+  })
+
+  it('buckets on the client IP when one is resolvable', async () => {
+    mockClientIp.value = '203.0.113.7'
+    await dispatch()
+    expect(mockCheckRateLimit.mock.calls[0][2]).toBe('203.0.113.7')
+  })
+
+  it('returns the limiter response and never reaches the handler when throttled', async () => {
+    mockClientIp.value = null
+    mockCheckRateLimit.mockResolvedValue(
+      Response.json({ error: 'Too many requests' }, { status: 429 }),
+    )
+    const res = await dispatch()
+    expect(res.status).toBe(429)
+    expect(handler).not.toHaveBeenCalled()
+    expect(mockEmitted.map((e) => e.id)).toContain('application.request.rate_limited')
   })
 })

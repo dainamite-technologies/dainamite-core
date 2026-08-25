@@ -65,8 +65,19 @@ jest.mock('@open-mercato/shared/lib/modules/resource-usage', () => ({
 jest.mock('@open-mercato/shared/lib/auth/server', () => ({ resolveAuthFromRequestDetailed: jest.fn() }))
 jest.mock('@open-mercato/core/modules/auth/services/rbacService', () => ({ RbacService: class {} }))
 jest.mock('@open-mercato/core/modules/directory/utils/organizationScope', () => ({
-  resolveFeatureCheckContext: async () => ({ organizationId: null }),
+  // Shape matters: the dispatcher reads `scope.tenantId` and `scope.selectedId`
+  // when building the feature check and its forbidden-path logging.
+  resolveFeatureCheckContext: async () => ({
+    organizationId: 'org-1',
+    scope: { tenantId: null, selectedId: null },
+  }),
 }))
+
+// The primary authorization mechanism. Mutable so a test can grant or deny.
+// Declare the rest parameter explicitly — a jest.fn() with no declared args is
+// typed as taking none, and spreading into it fails typecheck while the tests
+// still pass, because jest strips types.
+const mockUserHasAllFeatures = jest.fn(async (..._args: unknown[]): Promise<boolean> => true)
 
 const enforceTenantSelection = jest.fn()
 jest.mock('@open-mercato/core/modules/auth/lib/tenantAccess', () => ({
@@ -74,7 +85,15 @@ jest.mock('@open-mercato/core/modules/auth/lib/tenantAccess', () => ({
   normalizeTenantId: (value: unknown) => (typeof value === 'string' && value.trim() ? value.trim() : null),
 }))
 
-const createRequestContainer = jest.fn(async () => ({ resolve: jest.fn() }))
+const createRequestContainer = jest.fn(async () => ({
+  resolve: (name: string) =>
+    name === 'rbacService'
+      ? {
+          userHasAllFeatures: (...args: unknown[]) => mockUserHasAllFeatures(...args),
+          loadAcl: async () => ({ features: [], isSuperAdmin: false, organizations: [] }),
+        }
+      : undefined,
+}))
 jest.mock('@open-mercato/shared/lib/di/container', () => ({
   createRequestContainer: () => createRequestContainer(),
 }))
@@ -334,5 +353,93 @@ describe('dispatch — rate limiting with an unresolvable client IP', () => {
     expect(res.status).toBe(429)
     expect(handler).not.toHaveBeenCalled()
     expect(mockEmitted.map((e) => e.id)).toContain('application.request.rate_limited')
+  })
+})
+
+/**
+ * The two authorization invariants the dispatcher now rests on.
+ *
+ * `requireFeatures` is the only mechanism that actually authorizes.
+ * `requireRoles` deliberately does not — role names are tenant-mutable, so a
+ * tenant admin could rename a role to satisfy the guard. The fail-open half is
+ * asserted here on purpose: it is a security-relevant decision, and pinning it
+ * means re-enabling the check has to be a deliberate act that breaks a named
+ * test rather than a quiet change nobody notices.
+ */
+describe('dispatch — authorization invariants', () => {
+  const handler = jest.fn(async () => new Response('ok'))
+  const validAuth = { sub: 'user-1', tenantId: OWN, orgId: 'org-1', roles: ['viewer'] }
+
+  function standUpRoute(metadata: Record<string, unknown>) {
+    mockRouteMatch.value = {
+      route: {
+        moduleId: 'test_module',
+        kind: 'route-file',
+        path: '/api/thing',
+        methods: ['GET'],
+        load: async () => ({ GET: handler, metadata: { GET: metadata } }),
+      },
+      params: {},
+    }
+  }
+
+  function dispatch() {
+    const req = new NextRequest('https://x.test/api/thing', { method: 'GET' })
+    return GET(req, { params: Promise.resolve({ slug: ['thing'] }) })
+  }
+
+  beforeEach(() => {
+    mockEmitted.length = 0
+    handler.mockClear()
+    mockUserHasAllFeatures.mockClear()
+    mockUserHasAllFeatures.mockResolvedValue(true)
+    mockResolveAuth.mockResolvedValue({ status: 'valid', auth: validAuth } as never)
+  })
+
+  afterEach(() => {
+    mockRouteMatch.value = undefined
+  })
+
+  it('lets a requireRoles-only route through even for a user without the role — it is unguarded', async () => {
+    standUpRoute({ requireAuth: true, requireRoles: ['admin'] })
+    const res = await dispatch()
+    expect(res.status).toBe(200)
+    expect(handler).toHaveBeenCalled()
+    // Nothing consulted RBAC, because nothing asked it to.
+    expect(mockUserHasAllFeatures).not.toHaveBeenCalled()
+  })
+
+  it('denies with 403 when requireFeatures is not satisfied', async () => {
+    standUpRoute({ requireAuth: true, requireFeatures: ['cpq.view'] })
+    mockUserHasAllFeatures.mockResolvedValue(false)
+    const res = await dispatch()
+    expect(res.status).toBe(403)
+    expect(handler).not.toHaveBeenCalled()
+  })
+
+  it('runs the handler when requireFeatures is satisfied', async () => {
+    standUpRoute({ requireAuth: true, requireFeatures: ['cpq.view'] })
+    mockUserHasAllFeatures.mockResolvedValue(true)
+    const res = await dispatch()
+    expect(res.status).toBe(200)
+    expect(handler).toHaveBeenCalled()
+  })
+
+  it('checks the features against the acting user and the resolved organization', async () => {
+    standUpRoute({ requireAuth: true, requireFeatures: ['cpq.view', 'cpq.edit'] })
+    await dispatch()
+    expect(mockUserHasAllFeatures).toHaveBeenCalledWith(
+      'user-1',
+      ['cpq.view', 'cpq.edit'],
+      expect.objectContaining({ organizationId: 'org-1' }),
+    )
+  })
+
+  it('still denies an unauthenticated caller on a requireFeatures route', async () => {
+    standUpRoute({ requireAuth: true, requireFeatures: ['cpq.view'] })
+    mockResolveAuth.mockResolvedValue({ status: 'anonymous', auth: null } as never)
+    const res = await dispatch()
+    expect(res.status).toBe(401)
+    expect(handler).not.toHaveBeenCalled()
   })
 })

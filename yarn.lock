@@ -1265,8 +1265,8 @@ __metadata:
   dependencies:
     chokidar: "npm:^4.0.3"
   peerDependencies:
-    "@dainamite/billing": ^0.18.0
-    "@dainamite/cpq": ^0.3.0
+    "@dainamite/billing": ^0.19.0
+    "@dainamite/cpq": ^0.4.0
     "@mikro-orm/core": ^7.1.5
     "@mikro-orm/decorators": ^7.1.5
     "@mikro-orm/postgresql": ^7.1.5

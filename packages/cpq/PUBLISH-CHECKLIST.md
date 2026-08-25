@@ -140,6 +140,12 @@ public package is consumable by anyone.
   comments on every PR ("Changeset detected" / "No changesets found").
   Optionally enforce it as a Required check in Branch Protection
   once the publish flow is proven (currently it's advisory only).
-- Claude PR Review action hits `max_turns` (30) on large PRs and fails
+- ~~Claude PR Review action hits `max_turns` (30) on large PRs and fails
   the check. Not required for merge today; can be bumped in
-  `.github/workflows/claude-review.yml` if it starts being annoying.
+  `.github/workflows/claude-review.yml` if it starts being annoying.~~
+  **Raised to 60 on 2026-08-25.** It had stopped being merely annoying: the
+  review kept *succeeding* (`"subtype": "success"`, comments posted) and the
+  action then failed the check anyway with "reported a successful result after
+  N turns" — 38 and 53 observed, plus one genuine abort. A check that is red
+  on every substantive PR while the work behind it is fine trains people to
+  ignore it, which is worse than having no check.

@@ -6,6 +6,11 @@ module.exports = {
   rootDir: '.',
   moduleFileExtensions: ['ts', 'tsx', 'js', 'jsx', 'json'],
   moduleNameMapper: {
+    // Mirrors the tsconfig `@/.mercato/*` path. Must come first — the generic
+    // `@/` rule below would otherwise resolve it to src/.mercato/, which does
+    // not exist, and any test importing a module that reads generated files
+    // fails to run.
+    '^@/\\.mercato/(.*)$': '<rootDir>/.mercato/$1',
     '^@/(.*)$': '<rootDir>/src/$1',
   },
   transform: {

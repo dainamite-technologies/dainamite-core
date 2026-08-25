@@ -92,6 +92,16 @@ jobs:
           # inline-comments → write-summary → post-via-gh. The flag is
           # `--allowedTools` (camelCase) — kebab-case is silently ignored.
           #
+          # Raised 30 → 60 (2026-08-25). At 30 the action failed the check on
+          # every non-trivial PR while the review itself SUCCEEDED — the run
+          # reports `"subtype": "success"` and then errors with "reported a
+          # successful result after N turns, exceeding the configured maximum".
+          # Observed 38, 53 and an outright max_turns abort on one PR. The
+          # review comment and inline comments were posted every time, so the
+          # red check was pure noise that trained readers to ignore it. The
+          # prompt walks ~8 files before it even reaches the diff, so 30 was
+          # simply under-sized for this repo's context-loading contract.
+          #
           # Two-channel review:
           #   - Inline comments via mcp__github_inline_comment__create…
           #     for specific file:line issues. The action buffers them
@@ -104,7 +114,7 @@ jobs:
           # to GITHUB_TOKEN (comment would appear as github-actions[bot]).
           # Both paths publish the same content.
           claude_args: |
-            --max-turns 30
+            --max-turns 60
             --model claude-sonnet-4-6
             --allowedTools "Read,Glob,Grep,Write,Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr comment:*),Bash(cat:*),mcp__github_inline_comment__create_inline_comment"
           prompt: |

@@ -56,6 +56,17 @@ jobs:
       - name: Create release PR or publish
         uses: changesets/action@v1
         with:
+          # `changeset version` rewrites workspace peerDependency ranges in
+          # package.json (e.g. the connector's @dainamite/billing ^0.18.0 →
+          # ^0.19.0) but never runs an install, so yarn.lock keeps the old
+          # ranges. The Version Packages PR then lands that drift on main, and
+          # the NEXT run's `yarn install --immutable` above dies with YN0028
+          # before it ever reaches publish — silently shipping nothing.
+          # Refreshing the lockfile here means the version PR carries it, so
+          # main is never out of sync. `--mode=update-lockfile` touches only
+          # yarn.lock (no linking), which is all we need.
+          # Bit us on 2026-07-01 and again on 2026-08-25.
+          version: yarn changeset version && yarn install --mode=update-lockfile
           # When PR with version bumps is merged → this command publishes.
           # When changesets exist but PR isn't merged → updates the PR.
           publish: yarn changeset publish

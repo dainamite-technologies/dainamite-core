@@ -17,13 +17,15 @@ function prepaidAccount(overrides: Record<string, unknown> = {}) {
   }
 }
 
-function makeCtx(em: MockEm) {
+type CtxAuth = { sub?: string; tenantId?: string; orgId?: string } | null
+
+function makeCtx(em: MockEm, auth: CtxAuth = { sub: '99999999-9999-4999-8999-999999999999', tenantId: TENANT, orgId: ORG }) {
   const dataEngine = {
     markOrmEntityChange: jest.fn(),
     flushOrmEntityChanges: jest.fn(async () => undefined),
   }
   return {
-    auth: { sub: '99999999-9999-4999-8999-999999999999', tenantId: TENANT, orgId: ORG },
+    auth,
     container: {
       resolve: jest.fn((name: string) => {
         if (name === 'em') return em
@@ -52,6 +54,27 @@ describe('adjustTransactionCommand', () => {
     expect(em.transactions[0].type).toBe('adjustment')
     expect(em.transactions[0].amount).toBe('-30.0000')
     expect(em.transactions[0].userId).toBe('99999999-9999-4999-8999-999999999999')
+  })
+
+  // The CPQ↔billing connector runs as a system identity, not a user: it calls
+  // the command bus with `auth: null` and carries tenant/organization in the
+  // payload instead. Open Mercato 0.6.7 hardened ensureTenantScope from
+  // fail-open to fail-closed, but kept `auth: null` a no-op — this test pins
+  // that, because the connector has no other guarantee than prose. If a future
+  // release closes this branch too, the connector breaks and this fails first.
+  it('accepts a system-identity call (auth: null) without a scope error', async () => {
+    const em = createPrepaidMockEm({
+      account: prepaidAccount(),
+      balance: { tenantId: TENANT, billAccountId: ACCT, balance: '100.0000' },
+    })
+    const ctx = makeCtx(em, null)
+    const result = await adjustTransactionCommand.execute(
+      { tenantId: TENANT, organizationId: ORG, billAccountId: ACCT, amount: -10, description: 'Connector debit' } as never,
+      ctx as never,
+    )
+    expect(result.balance).toBe('90.0000')
+    expect(em.transactions).toHaveLength(1)
+    expect(em.transactions[0].userId).toBeFalsy()
   })
 
   it('credits the balance', async () => {

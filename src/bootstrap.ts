@@ -28,8 +28,24 @@ registerAppDictionaryLoader(async (locale: Locale): Promise<Record<string, unkno
   }
 })
 
+// App-level DI registrations (Awilix). Passed to createBootstrap as
+// `appDiRegistrar` — without it src/di.ts never runs.
+import { register as registerAppDi } from '@/di'
+
+// modules.ts inline overrides (replace/disable any contract a module presents
+// through the unified modules.ts override surface). Importing
+// @open-mercato/ai-assistant here also runs the side-effect that registers the
+// AI domain applier with the umbrella dispatcher.
+import { enabledModules } from '@/modules'
+import { applyModuleOverridesFromEnabledModules } from '@open-mercato/shared/modules/overrides'
+import '@open-mercato/ai-assistant'
+
+applyModuleOverridesFromEnabledModules(enabledModules)
+
 // Generated imports (static - works with bundlers)
-import { modules } from '@/.mercato/generated/modules.app.generated'
+// NOTE: the *bootstrap* registry, not the *app* one — the app version pulls
+// React `createElement` (page components) into the server bootstrap.
+import { modules } from '@/.mercato/generated/modules.bootstrap.generated'
 import { entities } from '@/.mercato/generated/entities.generated'
 import { diRegistrars } from '@/.mercato/generated/di.generated'
 import { E } from '@/.mercato/generated/entities.ids.generated'
@@ -48,40 +64,50 @@ import { interceptorEntries } from '@/.mercato/generated/interceptors.generated'
 import { componentOverrideEntries } from '@/.mercato/generated/component-overrides.generated'
 import { guardEntries } from '@/.mercato/generated/guards.generated'
 import { commandInterceptorEntries } from '@/.mercato/generated/command-interceptors.generated'
+// Lazy command handler loaders (0.6.7). Without these every command resolved
+// through a generated loader throws "Command handler not registered".
+import { commandLoaderEntries } from '@/.mercato/generated/command-loaders.generated'
 import { notificationHandlerEntries } from '@/.mercato/generated/notification-handlers.generated'
 import { messageTypes } from '@/.mercato/generated/message-types.generated'
 import { messageObjectTypes } from '@/.mercato/generated/message-objects.generated'
 import { registerMessageTypes } from '@open-mercato/core/modules/messages/lib/message-types-registry'
 import { registerMessageObjectTypes } from '@open-mercato/core/modules/messages/lib/message-objects-registry'
 import { runBootstrapRegistrations } from '@/.mercato/generated/bootstrap-registrations.generated'
+import { allCodeWorkflows } from '@/.mercato/generated/workflows.generated'
+import { registerCodeWorkflows } from '@open-mercato/core/modules/workflows/lib/code-registry'
 
 // Register event configs globally (similar to search)
 registerEventModuleConfigs(eventModuleConfigs)
 registerMessageTypes(messageTypes, { replace: true })
 registerMessageObjectTypes(messageObjectTypes, { replace: true })
+registerCodeWorkflows(allCodeWorkflows)
 runBootstrapRegistrations()
 
 // Bootstrap factory from shared package
 import { createBootstrap, isBootstrapped } from '@open-mercato/shared/lib/bootstrap'
 
 // Create bootstrap function with app's generated data
-export const bootstrap = createBootstrap({
-  modules,
-  entities,
-  diRegistrars,
-  entityIds: E,
-  entityFieldsRegistry,
-  dashboardWidgetEntries,
-  injectionWidgetEntries,
-  injectionTables,
-  searchModuleConfigs,
-  analyticsModuleConfigs,
-  enricherEntries,
-  interceptorEntries,
-  componentOverrideEntries,
-  guardEntries,
-  commandInterceptorEntries,
-  notificationHandlerEntries,
-})
+export const bootstrap = createBootstrap(
+  {
+    modules,
+    entities,
+    diRegistrars,
+    entityIds: E,
+    entityFieldsRegistry,
+    dashboardWidgetEntries,
+    injectionWidgetEntries,
+    injectionTables,
+    searchModuleConfigs,
+    analyticsModuleConfigs,
+    enricherEntries,
+    interceptorEntries,
+    componentOverrideEntries,
+    guardEntries,
+    commandInterceptorEntries,
+    commandLoaderEntries,
+    notificationHandlerEntries,
+  },
+  { appDiRegistrar: registerAppDi },
+)
 
 export { isBootstrapped }

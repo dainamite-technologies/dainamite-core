@@ -195,6 +195,15 @@ jobs:
       # and would otherwise hit "Too many requests".
       OM_TEST_MODE: "1"
       OM_TEST_AUTH_RATE_LIMIT_MODE: opt-in
+      # Open Mercato 0.6.7 randomizes the derived admin/employee passwords
+      # whenever NODE_ENV=production and no override is set (see
+      # @open-mercato/cli lib/init-secrets.ts). This job runs in production
+      # mode, so without these the seeded admin gets a random password while
+      # DEFAULT_CREDENTIALS in @open-mercato/core's integration helper still
+      # logs in as admin@acme.com / "secret" — every auth'd spec 401s.
+      # Throwaway: the DB is ephemeral per-run and never leaves the runner.
+      OM_INIT_ADMIN_PASSWORD: secret
+      OM_INIT_EMPLOYEE_PASSWORD: secret
 
     steps:
       - uses: actions/checkout@v4

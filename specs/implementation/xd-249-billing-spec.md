@@ -1250,3 +1250,14 @@ These should be picked up by the implementer of the relevant phase.
    No snapshot file is shipped — when CLI support lands, the first
    generate run produces a clean snapshot from the entity state and
    future runs use it normally.
+
+   > **Update (Open Mercato 0.6.7, 2026-08-25).** The yarn patch referenced
+   > above has been **removed** — both halves are obsolete. `@open-mercato/cli`
+   > 0.6.7 replaced the hard-coded `GENERATED_MODULE_SPECIFIER_PREFIXES`
+   > allow-list with `sanitizeGeneratedModuleSpecifier()`, which accepts any
+   > valid npm scope, so `@dainamite/*` needs no special case. The
+   > `resolver.ts` half only ever applied on the monorepo branch
+   > (`isMonorepo === true`, i.e. `node_modules/@open-mercato/core` is a
+   > symlink), which is never the case in this standalone app. `yarn generate`
+   > resolves all three `@dainamite/*` packages unpatched. The links above are
+   > kept for historical context and no longer resolve.

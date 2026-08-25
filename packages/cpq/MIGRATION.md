@@ -56,6 +56,9 @@ the `@dainamite/cpq` package, per
       `.yarn/patches/@open-mercato-cli-npm-0.5.0-*.patch`. **Will be
       fixed upstream in the next framework release** — patch can be
       removed at that point.
+      **Update (0.6.7, 2026-08-25): done.** Upstream now sanitizes any
+      npm scope generically, so the patch was deleted along with the
+      whole `.yarn/patches/` directory.
 - [x] Rewrite cross-module imports in `demo_gix`, `demo_puffin`,
       `demo_tenants`: `'../../cpq/...'` → `'@dainamite/cpq/modules/cpq/...'`
       (26 files). Demo modules now consume CPQ via the public package

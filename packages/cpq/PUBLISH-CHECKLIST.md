@@ -127,11 +127,15 @@ public package is consumable by anyone.
 
 ## Other rough edges noted along the way
 
-- `@open-mercato/cli@0.5.0` is still patched locally in
+- ~~`@open-mercato/cli@0.5.0` is still patched locally in
   `.yarn/patches/` to allow the `@dainamite/` prefix in
   `GENERATED_MODULE_SPECIFIER_PREFIXES`. Should be fixed upstream in
   the next framework release — remove the patch + bump
-  `@open-mercato/cli` when it lands.
+  `@open-mercato/cli` when it lands.~~ **Resolved on 0.6.7
+  (2026-08-25).** Upstream replaced the hard-coded prefix allow-list
+  with `sanitizeGeneratedModuleSpecifier()`, which accepts any valid
+  npm scope. The patch has been deleted and `.yarn/patches/` no longer
+  exists — do not re-create it.
 - `changeset-bot` GitHub App is already installed on the repo. It
   comments on every PR ("Changeset detected" / "No changesets found").
   Optionally enforce it as a Required check in Branch Protection

@@ -110,9 +110,16 @@ COPY --from=builder /app/next.config.ts ./next.config.ts
 COPY --from=builder /app/postcss.config.mjs ./postcss.config.mjs
 COPY --from=builder /app/components.json ./components.json
 COPY --from=builder /app/tsconfig.json ./tsconfig.json
+# Ship src alongside dist, mirroring the published npm layout (`files: [dist, src]`).
+# The package export maps resolve `./*.json` to `./src/*.json`, and `mercato server start`
+# bundles .mercato/generated/modules.cli.generated.ts at startup, which imports
+# @dainamite/billing/modules/billing/i18n/*.json — without src the container crashes.
 COPY --from=builder /app/packages/cpq/dist ./packages/cpq/dist
+COPY --from=builder /app/packages/cpq/src ./packages/cpq/src
 COPY --from=builder /app/packages/billing/dist ./packages/billing/dist
+COPY --from=builder /app/packages/billing/src ./packages/billing/src
 COPY --from=builder /app/packages/cpq-billing-connector/dist ./packages/cpq-billing-connector/dist
+COPY --from=builder /app/packages/cpq-billing-connector/src ./packages/cpq-billing-connector/src
 COPY docker/scripts/init-or-migrate.sh /app/docker/scripts/init-or-migrate.sh
 RUN chmod +x /app/docker/scripts/init-or-migrate.sh
 

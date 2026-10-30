@@ -30,7 +30,7 @@ RUN yarn workspace @dainamite/cpq build
 RUN yarn workspace @dainamite/billing build
 RUN yarn workspace @dainamite/cpq-billing-connector build
 RUN yarn generate
-RUN NODE_ENV=production yarn build
+RUN NODE_OPTIONS="--max-old-space-size=4096" NODE_ENV=production yarn build
 
 FROM node:24-alpine AS dev
 

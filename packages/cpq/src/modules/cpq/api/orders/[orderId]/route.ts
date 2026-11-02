@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { resolveCpqRouteContext } from '../../context'
-import { OrderError } from '../../../services/cpqOrderService'
+import { isOrderError } from '../../../services/cpqOrderService'
 import type { DefaultCpqOrderService } from '../../../services/cpqOrderService'
 
 export const metadata = {
@@ -19,7 +19,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ orderId:
     const result = await service.getOrder(orderId, scope)
     return NextResponse.json(result)
   } catch (err) {
-    if (err instanceof OrderError) {
+    if (isOrderError(err)) {
       return NextResponse.json({ error: err.message }, { status: err.status })
     }
     console.error('[cpq/orders/[orderId].GET]', err)

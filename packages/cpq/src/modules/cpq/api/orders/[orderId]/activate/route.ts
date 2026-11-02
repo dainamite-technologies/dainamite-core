@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { OptimisticLockError } from '@mikro-orm/core'
 import { resolveCpqRouteContext } from '../../../context'
-import { OrderError } from '../../../../services/cpqOrderService'
+import { isOrderError } from '../../../../services/cpqOrderService'
 import type { DefaultCpqOrderService } from '../../../../services/cpqOrderService'
 
 export const metadata = {
@@ -20,7 +20,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ orderId
     const result = await service.activateOrder(orderId, scope)
     return NextResponse.json(result)
   } catch (err) {
-    if (err instanceof OrderError) {
+    if (isOrderError(err)) {
       return NextResponse.json({ error: err.message }, { status: err.status })
     }
     // XD-250 ARC: optimistic-lock collision on subscription.version when two

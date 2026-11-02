@@ -1,18 +1,19 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { OptimisticLockError } from '@mikro-orm/core'
-import { QuotingError } from '../../services/cpqQuotingService'
+import { isQuotingError } from '../../services/cpqQuotingService'
 
 /**
  * Shared error → JSON-response converter for ARC routes (XD-250).
  *
  * Handles three families:
  *   1. Zod validation errors → 400 with `details` array.
- *   2. Service-layer `QuotingError` (matched both via `instanceof` AND via
- *      duck-typing on `name === 'QuotingError'`) → propagates `err.status`.
- *      The duck-typing fallback exists because Turbopack hot-reload can
- *      produce two distinct class instances for the same source file
- *      across module boundaries, breaking `instanceof` checks at runtime.
+ *   2. Service-layer `QuotingError` (matched via its cross-realm brand,
+ *      `isQuotingError`, with a duck-typed fallback below) → propagates
+ *      `err.status`. `instanceof` is unreliable here: Next bundles this
+ *      package once per server layer, so the route and the DI-resolved
+ *      service can hold two distinct copies of the class — in production
+ *      too, not only under hot-reload.
  *   3. cpqInventoryService throws plain `{ status, error }` objects →
  *      propagate the embedded status.
  *   4. Anything else → 500 + console.error with the route context.
@@ -28,7 +29,7 @@ export function handleArcError(err: unknown, ctx: string): NextResponse {
     )
   }
 
-  if (err instanceof QuotingError) {
+  if (isQuotingError(err)) {
     const body: Record<string, unknown> = { error: err.message }
     if (err.cpqStatus) body.cpqStatus = err.cpqStatus
     if (err.details) Object.assign(body, err.details)

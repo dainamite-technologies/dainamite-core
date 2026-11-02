@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { resolveCpqRouteContext } from '../context'
 import { cpqCreateQuoteSchema } from '../../data/validators'
-import { QuotingError } from '../../services/cpqQuotingService'
+import { isQuotingError } from '../../services/cpqQuotingService'
 import { resolveQuotingService } from '../resolveQuotingService'
 import { CpqQuoteConfiguration } from '../../data/entities'
 import { SalesQuote } from '@open-mercato/core/modules/sales/data/entities'
@@ -104,7 +104,7 @@ function handleError(err: unknown, context: string) {
   if (err instanceof z.ZodError) {
     return NextResponse.json({ error: 'Validation error', details: err.issues }, { status: 400 })
   }
-  if (err instanceof QuotingError) {
+  if (isQuotingError(err)) {
     const body: Record<string, unknown> = { error: err.message }
     if (err.cpqStatus) body.cpqStatus = err.cpqStatus
     return NextResponse.json(body, { status: err.status })

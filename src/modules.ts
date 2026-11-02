@@ -31,6 +31,13 @@ export const enabledModules: ModuleEntry[] = [
   { id: 'progress', from: '@open-mercato/core' },
   { id: 'integrations', from: '@open-mercato/core' },
   { id: 'data_sync', from: '@open-mercato/core' },
+  // Outbound system email (password reset, invitations, notifications). Since
+  // Open Mercato 0.8 `sendEmail` no longer calls Resend itself: it throws
+  // EMAIL_TRANSPORT_NOT_CONFIGURED unless the communications hub is enabled
+  // with a provider module. channel_resend provisions itself from
+  // RESEND_API_KEY + EMAIL_FROM, i.e. the same env the app already used.
+  { id: 'communication_channels', from: '@open-mercato/core' },
+  { id: 'channel_resend', from: '@open-mercato/channel-resend' },
   { id: 'ai_assistant', from: '@open-mercato/ai-assistant' },
   { id: 'translations', from: '@open-mercato/core' },
   { id: 'scheduler', from: '@open-mercato/scheduler' },

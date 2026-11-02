@@ -1045,7 +1045,13 @@ function pickArcSourceFromConfig(
 
 // ─── Error class ──────────────────────────────────────────────────
 
+// Cross-realm brand — see QUOTING_ERROR_BRAND in cpqQuotingService.ts for why
+// route handlers must not rely on `instanceof`. Use `isOrderError`.
+const ORDER_ERROR_BRAND = Symbol.for('@dainamite/cpq/OrderError')
+
 export class OrderError extends Error {
+  readonly [ORDER_ERROR_BRAND] = true
+
   constructor(
     public status: number,
     message: string,
@@ -1053,6 +1059,10 @@ export class OrderError extends Error {
     super(message)
     this.name = 'OrderError'
   }
+}
+
+export function isOrderError(err: unknown): err is OrderError {
+  return !!err && typeof err === 'object' && (err as Record<symbol, unknown>)[ORDER_ERROR_BRAND] === true
 }
 
 // ─── ARC helpers (XD-250) ─────────────────────────────────────────

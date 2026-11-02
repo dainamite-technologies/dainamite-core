@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { resolveCpqRouteContext } from '../context'
 import { cpqConvertQuoteToOrderSchema } from '../../data/validators'
-import { OrderError } from '../../services/cpqOrderService'
+import { isOrderError } from '../../services/cpqOrderService'
 import type { DefaultCpqOrderService } from '../../services/cpqOrderService'
 
 export const metadata = {
@@ -65,7 +65,7 @@ function handleError(err: unknown, context: string) {
   if (err instanceof z.ZodError) {
     return NextResponse.json({ error: 'Validation error', details: err.issues }, { status: 400 })
   }
-  if (err instanceof OrderError) {
+  if (isOrderError(err)) {
     return NextResponse.json({ error: err.message }, { status: err.status })
   }
   const errObj = err as Record<string, unknown>

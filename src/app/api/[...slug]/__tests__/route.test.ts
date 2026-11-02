@@ -15,8 +15,8 @@
 
 // The module registers manifests and boots the container at import time, and
 // pulls in most of the framework. Stub everything that is not under test.
-jest.mock('@/bootstrap', () => ({ bootstrap: jest.fn(), isBootstrapped: () => true }))
-jest.mock('@/.mercato/generated/api-routes.generated', () => ({ apiRoutes: [] }))
+jest.mock('@/bootstrap-api', () => ({ bootstrap: jest.fn(), isBootstrapped: () => true }))
+jest.mock('@/.mercato/generated/api-route-shards.generated', () => ({ apiRouteFacades: [] }))
 // Mutable so individual tests can stand up a route to dispatch against. Jest
 // only lets factory closures reach out-of-scope names prefixed with `mock`.
 const mockRouteMatch: { value: unknown } = { value: undefined }
@@ -498,5 +498,59 @@ describe('dispatch — module resource-usage tracking opt-out', () => {
     expect(mockWithModuleResourceUsage).not.toHaveBeenCalled()
     // The opt-out must skip the wrapper, not the work.
     expect(handler).toHaveBeenCalled()
+  })
+})
+
+/**
+ * Since 0.9.0 a handler may `throw forbidden()` / `notFound()` / `conflict()`
+ * instead of returning a response, and core modules rely on it (e.g. the
+ * empty-organization-scope deny). The dispatcher must answer with the error's
+ * own status and body — before 0.9 it escaped to Next as a 500.
+ */
+describe('dispatch — CrudHttpError thrown by a handler', () => {
+  const handler = jest.fn(async (): Promise<Response> => new Response('ok'))
+
+  function dispatch() {
+    const req = new NextRequest('https://x.test/api/thing', { method: 'GET' })
+    return GET(req, { params: Promise.resolve({ slug: ['thing'] }) })
+  }
+
+  beforeEach(() => {
+    mockEmitted.length = 0
+    handler.mockReset()
+    mockResolveAuth.mockResolvedValue({ status: 'anonymous', auth: null } as never)
+    mockRouteMatch.value = {
+      route: {
+        moduleId: 'test_module',
+        kind: 'route-file',
+        path: '/api/thing',
+        methods: ['GET'],
+        load: async () => ({ GET: handler, metadata: { GET: { requireAuth: false } } }),
+      },
+      params: {},
+    }
+  })
+
+  afterEach(() => {
+    mockRouteMatch.value = undefined
+  })
+
+  it.each([403, 404, 409])('answers a thrown %i with that status and body', async (status) => {
+    handler.mockRejectedValue(new CrudHttpError(status, { error: `status-${status}` }))
+    const res = await dispatch()
+    expect(res.status).toBe(status)
+    await expect(res.json()).resolves.toEqual({ error: `status-${status}` })
+  })
+
+  it('reports the typed outcome as a completed request, not a failure', async () => {
+    handler.mockRejectedValue(new CrudHttpError(404, { error: 'missing' }))
+    await dispatch()
+    const completed = mockEmitted.find((e) => e.payload.status === 404)
+    expect(completed).toBeDefined()
+  })
+
+  it('still re-throws an untyped error so it surfaces as a 500', async () => {
+    handler.mockRejectedValue(new Error('boom'))
+    await expect(dispatch()).rejects.toThrow('boom')
   })
 })

@@ -1387,7 +1387,17 @@ function emptyPricingSummary(currencyCode: string): Record<string, unknown> {
 
 // ─── Error class ──────────────────────────────────────────────────
 
+// Cross-realm brand. Next bundles this package once per server layer (page
+// SSR vs route handler), and the DI container is shared through globalThis,
+// so a route handler can catch a QuotingError built from the *other* copy of
+// this class — `instanceof` is then false and a typed 404/409 turns into a
+// 500. `Symbol.for` resolves to the same symbol in every copy. Same approach
+// as `isCrudHttpError` in @open-mercato/shared. Use `isQuotingError`.
+const QUOTING_ERROR_BRAND = Symbol.for('@dainamite/cpq/QuotingError')
+
 export class QuotingError extends Error {
+  readonly [QUOTING_ERROR_BRAND] = true
+
   constructor(
     public status: number,
     message: string,
@@ -1404,6 +1414,10 @@ export class QuotingError extends Error {
     super(message)
     this.name = 'QuotingError'
   }
+}
+
+export function isQuotingError(err: unknown): err is QuotingError {
+  return !!err && typeof err === 'object' && (err as Record<symbol, unknown>)[QUOTING_ERROR_BRAND] === true
 }
 
 // ─── ARC orchestration (XD-250) ────────────────────────────────────

@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { resolveCpqRouteContext } from '../../context'
 import { cpqUpdateQuoteSchema } from '../../../data/validators'
-import { QuotingError } from '../../../services/cpqQuotingService'
+import { isQuotingError } from '../../../services/cpqQuotingService'
 import { resolveQuotingService } from '../../resolveQuotingService'
 import { CpqQuoteConfiguration, CpqQuoteLineConfiguration } from '../../../data/entities'
 import { SalesQuote, SalesQuoteLine } from '@open-mercato/core/modules/sales/data/entities'
@@ -25,7 +25,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ quoteId:
     const result = await service.getQuote(quoteId, scope)
     return NextResponse.json(result)
   } catch (err) {
-    if (err instanceof QuotingError) {
+    if (isQuotingError(err)) {
       return NextResponse.json({ error: err.message }, { status: err.status })
     }
     console.error('[cpq/quotes/[quoteId].GET]', err)

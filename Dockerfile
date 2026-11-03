@@ -129,4 +129,9 @@ RUN adduser -D -u 1001 omuser \
 USER omuser
 
 EXPOSE ${CONTAINER_PORT}
-CMD ["sh", "-c", "yarn db:migrate && exec yarn start"]
+# Migrate (fatal), then grant existing tenants' roles the features of any newly
+# enabled module (idempotent, non-fatal — same as the 0.9 template's
+# init-or-migrate.sh), then start. Without the sync, modules added after a
+# tenant was seeded answer 403 for its existing users. Runs before `yarn start`
+# because RBAC caches ACLs in-process.
+CMD ["sh", "-c", "yarn db:migrate && { yarn mercato auth sync-role-acls || echo 'WARNING: role ACL sync failed; newly enabled modules may be inaccessible until it is run manually.'; } && exec yarn start"]

@@ -250,7 +250,7 @@ To run `dainamite-core` itself (the demo app + the packages in
 ### Prerequisites
 
 - Node ≥ 24 — enforced by the preinstall hook and `engines` field
-- Yarn 4.12 — via Corepack (`corepack enable`)
+- Yarn 4.17 — via Corepack (`corepack enable`; the version is pinned in `packageManager`)
 - Docker — for Postgres, Redis, Meilisearch
 
 ### Setup
@@ -258,15 +258,26 @@ To run `dainamite-core` itself (the demo app + the packages in
 ```bash
 docker compose up -d        # start Postgres / Redis / Meilisearch
 yarn install                # install workspace deps
-yarn build                  # build @dainamite/* packages → dist/ + generate module graph
-yarn setup                  # or: yarn setup --reinstall — migrate DB + seed demo data
-yarn dev                    # start the dev server (http://localhost:3000)
+yarn build:packages         # build the @dainamite/* packages → packages/*/dist
+yarn setup                  # generate + migrate DB + seed demo data, then starts the dev server
 ```
+
+`yarn setup` (or `yarn setup --reinstall` to wipe and re-seed) ends by
+starting the dev server on http://localhost:3000. Afterwards, `yarn dev` is all
+you need to start it again.
+
+`yarn build:packages` must run before `yarn setup`: generation and
+initialisation resolve the `@dainamite/*` modules from their `dist/`. Without
+it, the module registry and OpenAPI generation can't resolve the CPQ entities.
 
 The seed provisions demo tenants (Acme, GIX, Puffin Cloud) with full CPQ
 catalogs so you can explore quoting, pricing, inventory, and — once Billing is
 wired — the Bill Run flow end-to-end. Default admin logins are printed in the
 `yarn setup` banner.
+
+`yarn build` is **not** part of local development. It produces a production
+Next.js build (what the Dockerfile runs), and its type-check step needs a large
+heap; the script sets `--max-old-space-size=8192` itself.
 
 When you change package source under `packages/<pkg>/src`, rebuild that
 package so the running app picks up the new `dist/`:

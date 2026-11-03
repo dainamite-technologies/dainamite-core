@@ -30,7 +30,9 @@ RUN yarn workspace @dainamite/cpq build
 RUN yarn workspace @dainamite/billing build
 RUN yarn workspace @dainamite/cpq-billing-connector build
 RUN yarn generate
-RUN NODE_OPTIONS="--max-old-space-size=4096" NODE_ENV=production yarn build
+# Heap headroom lives in the `build` script (8192, as in the 0.9 template); a
+# NODE_OPTIONS set here would be overridden by it.
+RUN NODE_ENV=production yarn build
 
 FROM node:24-alpine AS dev
 

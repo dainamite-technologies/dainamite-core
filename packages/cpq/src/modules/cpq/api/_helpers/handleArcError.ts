@@ -53,11 +53,10 @@ export function handleArcError(err: unknown, ctx: string): NextResponse {
     )
   }
 
-  // Duck-typed QuotingError (Turbopack instanceof drift) and inventory-service
-  // plain throw shape `{ status, error }`. Both surface a numeric `status`.
-  // Also propagates `details` (object) into response body — preserves the
-  // structured payload (e.g. `existingQuoteId`) that the typed branch above
-  // would have surfaced if instanceof had matched.
+  // cpqInventoryService's plain throw shape `{ status, error }` (QuotingError
+  // from any bundle copy is already handled by `isQuotingError` above).
+  // Propagates `details` (object) into the response body so structured
+  // payloads survive here too.
   if (
     err &&
     typeof err === 'object' &&

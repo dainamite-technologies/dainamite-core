@@ -22,6 +22,9 @@ const nodeProtocolResolveAlias = Object.fromEntries(
     .map((name) => [`node:${name}`, name]),
 )
 
+// Values are the create-mercato-app 0.9.0 template's. TODO(XD-275): the
+// iframe-embeddable Puffin calculator will need `frame-ancestors` (and the
+// matching X-Frame-Options) relaxed for its route only.
 const contentSecurityPolicy = [
   "default-src 'self'",
   "base-uri 'self'",

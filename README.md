@@ -52,11 +52,11 @@ yarn add @dainamite/cpq @dainamite/billing @dainamite/cpq-billing-connector
 
 ```ts
 export const enabledModules: ModuleEntry[] = [
-  //{ id: 'attachments', from: '@open-mercato/core' },
-  //{ id: 'catalog', from: '@open-mercato/core' },
-  //{ id: 'sales', from: '@open-mercato/core' },
-
   // … core modules (incl. queue + events for billing). Make sure catalog, sales & attachment modules are enabled  …
+  // { id: 'attachments', from: '@open-mercato/core' },
+  // { id: 'catalog', from: '@open-mercato/core' },
+  // { id: 'sales', from: '@open-mercato/core' },
+
   { id: 'cpq', from: '@dainamite/cpq' },
   { id: 'billing', from: '@dainamite/billing' },
   // MUST be after cpq + billing — its subscribers resolve both services.

@@ -108,16 +108,19 @@ test.describe('TC-CPQ-002: Quote golden path (API)', () => {
     expect(res.status()).toBe(400)
   })
 
-  test('rejects fetching an unknown quote (404 expected; prod build observed 500 — accept 4xx/5xx)', async ({ request }) => {
+  test('rejects fetching an unknown quote with 404, also after a page has rendered', async ({ request }) => {
+    // Render a page first. Pages and API routes bundle @dainamite/cpq
+    // separately while sharing one DI container, so once the page bootstrap
+    // has run the route catches a QuotingError from the other copy of the
+    // class. With `instanceof` that surfaced as a 500; the brand-based
+    // isQuotingError guard must keep it a 404.
+    await request.get('/login')
     const res = await apiRequest(
       request,
       'GET',
       '/api/cpq/quotes/00000000-0000-4000-8000-000000000000',
       { token, data: undefined },
     )
-    // Semantically: request must be rejected. Dev mode returns 404 cleanly; prod
-    // build can surface 500 from MikroORM-not-found exceptions. Both prove "rejected".
-    expect(res.ok()).toBeFalsy()
-    expect(res.status()).toBeGreaterThanOrEqual(400)
+    expect(res.status()).toBe(404)
   })
 })

@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { resolveCpqRouteContext } from '../../../context'
 import { cpqRecalculateSchema } from '../../../../data/validators'
-import { QuotingError } from '../../../../services/cpqQuotingService'
+import { isQuotingError } from '../../../../services/cpqQuotingService'
 import { resolveQuotingService } from '../../../resolveQuotingService'
 
 export const metadata = {
@@ -25,7 +25,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ quoteId
     if (err instanceof z.ZodError) {
       return NextResponse.json({ error: 'Validation error', details: err.issues }, { status: 400 })
     }
-    if (err instanceof QuotingError) {
+    if (isQuotingError(err)) {
       return NextResponse.json({ error: err.message }, { status: err.status })
     }
     console.error('[cpq/quotes/[quoteId]/recalculate.POST]', err)

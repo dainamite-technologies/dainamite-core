@@ -166,6 +166,33 @@ the `@dainamite/cpq` package, per
 
 ## Schema / API changelog (track breaking changes here)
 
+### 2026-11-03 — Open Mercato 0.9.0 peers; `isQuotingError` / `isOrderError`
+
+**Peer ranges (breaking for consumers).** `@open-mercato/*` `^0.9.0`,
+MikroORM `^7.1.14`, `@tanstack/react-table` `^9.0.0` (list pages import
+`LegacyColumnDef` from `@tanstack/react-table/legacy`, absent in v8). See
+`.changeset/open-mercato-090-peers.md`.
+
+**Do not use `instanceof QuotingError` / `instanceof OrderError` across the
+DI boundary.** Next bundles this package once per server layer (page SSR vs
+route handler) while the DI container is shared through `globalThis`, so a
+route can catch an error built from the other copy of the class and
+`instanceof` is `false` — a typed 404/409 becomes a 500. This was already
+true before this release; it was just undetected. Both classes now carry a
+`Symbol.for` brand, and two guards are exported next to them:
+
+```ts
+import { isQuotingError } from '@dainamite/cpq/modules/cpq/services/cpqQuotingService'
+import { isOrderError } from '@dainamite/cpq/modules/cpq/services/cpqOrderService'
+
+} catch (err) {
+  if (isQuotingError(err)) return NextResponse.json({ error: err.message }, { status: err.status })
+```
+
+Consumer code that copied CPQ's old route catch blocks should switch to the
+guards. `instanceof` remains fine inside the service layer itself, where the
+thrower and the catcher are the same module copy.
+
 ### 2026-06-02 — XD-297 Charge model / pricing method split
 
 Splits the conflated `cpq_product_charges.pricing_method` into two orthogonal

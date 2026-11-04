@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { resolveCpqRouteContext } from '../../../../context'
 import { cpqUpdateQuoteItemSchema } from '../../../../../data/validators'
-import { QuotingError } from '../../../../../services/cpqQuotingService'
+import { isQuotingError } from '../../../../../services/cpqQuotingService'
 import { resolveQuotingService } from '../../../../resolveQuotingService'
 
 export const metadata = {
@@ -26,7 +26,7 @@ export async function PUT(req: Request, { params }: { params: Promise<{ quoteId:
     if (err instanceof z.ZodError) {
       return NextResponse.json({ error: 'Validation error', details: err.issues }, { status: 400 })
     }
-    if (err instanceof QuotingError) {
+    if (isQuotingError(err)) {
       return NextResponse.json({ error: err.message }, { status: err.status })
     }
     console.error('[cpq/quotes/[quoteId]/items/[lineId].PUT]', err)
@@ -46,7 +46,7 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ quote
     const result = await service.removeQuoteItem(quoteId, lineId, scope)
     return NextResponse.json(result)
   } catch (err) {
-    if (err instanceof QuotingError) {
+    if (isQuotingError(err)) {
       return NextResponse.json({ error: err.message }, { status: err.status })
     }
     console.error('[cpq/quotes/[quoteId]/items/[lineId].DELETE]', err)

@@ -30,7 +30,9 @@ RUN yarn workspace @dainamite/cpq build
 RUN yarn workspace @dainamite/billing build
 RUN yarn workspace @dainamite/cpq-billing-connector build
 RUN yarn generate
-RUN NODE_OPTIONS="--max-old-space-size=4096" NODE_ENV=production yarn build
+# Heap headroom lives in the `build` script (8192, as in the 0.9 template); a
+# NODE_OPTIONS set here would be overridden by it.
+RUN NODE_ENV=production yarn build
 
 FROM node:24-alpine AS dev
 
@@ -129,4 +131,9 @@ RUN adduser -D -u 1001 omuser \
 USER omuser
 
 EXPOSE ${CONTAINER_PORT}
-CMD ["sh", "-c", "yarn db:migrate && exec yarn start"]
+# Migrate (fatal), then grant existing tenants' roles the features of any newly
+# enabled module (idempotent, non-fatal — same as the 0.9 template's
+# init-or-migrate.sh), then start. Without the sync, modules added after a
+# tenant was seeded answer 403 for its existing users. Runs before `yarn start`
+# because RBAC caches ACLs in-process.
+CMD ["sh", "-c", "yarn db:migrate && { yarn mercato auth sync-role-acls || echo 'WARNING: role ACL sync failed; newly enabled modules may be inaccessible until it is run manually.'; } && exec yarn start"]

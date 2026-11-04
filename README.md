@@ -2,7 +2,7 @@
 
 Dainamite is an open-source **revenue management** framework for subscription businesses.
 
-Start with a proven open-source foundation and build revenue management that fits your business. 
+Start with a proven open-source foundation and build a revenue management stack that fits your business. 
 For you to own, with no per-seat tax.
 
 - Website: [dainamite.com](https://dainamite.com)
@@ -12,21 +12,21 @@ For you to own, with no per-seat tax.
 
 ## Key Features
 
-1. **Product catalog** - Products, SKUs, attributes and lifecycle, modelled the way your business actually thinks about its offering.
+1. **Product catalog** - Products & Offerings, modelled the way your business sells.
 
-2. **CPQ - Configure-Price-Quote** - Configure complex offers, model real pricing, automate approvals, without acrobatic feats to fit a vendor’s data model.
+2. **CPQ - Configure-Price-Quote** - Configure bespoke offers, model real pricing, automate approvals, without acrobatic feats to fit a vendor’s data model.
 
-3. **Order management** - Capture, fulfil, amend, without losing the audit trail or stitching three systems together.
+3. **Order management** - Capture, fulfill, amend, without losing the audit trail or stitching three systems together.
 
 4. **Subscription management** - Lifecycle, renewals, amendments and ARR tracking, for any commercial model your business can dream up.
 
-5. **Billing** - Invoices, dunning, usage-based charges and revenue recognition, built into the same data model, not bolted onto it.
+5. **Billing** - Invoices, dunning, usage-based charges and revenue recognition, all seamlessly integrated.
 
 ---
 
 ## How to start?
 
-Follow [setup guide](https://dainamite.com/demo#how-to-start)
+For interactive tutorial follow: [setup guide](https://dainamite.com/demo#how-to-start).
 
 ### Prerequisites
 
@@ -132,23 +132,18 @@ yarn workspace @dainamite/<pkg> build
 
 ## How is this Repository structured?
 
-`dainamite-core` is the **Dainamite product monorepo** *and* the first
-reference application built on it. It plays two roles at once:
+There are two things in this repo.
 
-1. **A publishable package workspace** under [`packages/`](packages/) — the
-   `@dainamite/*` product modules that any Open Mercato app can install from
-   npm.
-2. **A runnable demo app** that consumes those packages exactly the way a
-   customer app would, with seeded demo tenants (GIX network services, Puffin
-   Cloud) to showcase the flows.
+[`packages/`](packages/) holds the three `@dainamite/*` modules: CPQ, Billing,
+and the connector that links them. All three are on public npm, so any Open
+Mercato app can install them with `yarn add`.
 
-The relationship to Open Mercato follows a three-layer model:
+Besides packages there is a demo app that uses those packages the same way a customer
+app would, seeded with data for two sample tenants (GIX and Puffin Cloud). This is to illustrate how we
+develop the packages, and how you can try them without setting up a project first.
 
-| Layer | What | Where it lives |
-|-------|------|----------------|
-| **L1** | Open Mercato core framework (modules, DI, events, UI, ORM glue) | `@open-mercato/*` on npm — a peer dependency |
-| **L2** | Dainamite product modules (CPQ, Billing, connector) | `@dainamite/*`, published from [`packages/`](packages/) |
-| **L3** | Customer applications | `dainamite-core` is the first; new customer repos `yarn add` the L2 packages |
+Dainamite builds on Open Mercato. Open Mercato is the framework underneath (modules, UI, events, database), and the
+`@dainamite/*` packages add the revenue management side on top.
 
 ---
 
@@ -156,9 +151,9 @@ The relationship to Open Mercato follows a three-layer model:
 
 | Package | Version | Status | What it adds |
 |---------|---------|--------|--------------|
-| [`@dainamite/cpq`](packages/cpq) | `0.2.x` | ✅ Published (public npm) | Configure-Price-Quote engine |
-| [`@dainamite/billing`](packages/billing) | `0.17.x` | 🔜 Publishing soon | Recurring-billing engine (Bill Runs → draft invoices) |
-| [`@dainamite/cpq-billing-connector`](packages/cpq-billing-connector) | `0.1.x` | 🔜 Publishing soon | Event bridge: CPQ subscription lifecycle → Billing |
+| [`@dainamite/cpq`](packages/cpq) | `0.4.x` | ✅ Published (public npm) | Configure-Price-Quote engine |
+| [`@dainamite/billing`](packages/billing) | `0.19.x` | ✅ Published (public npm) | Recurring-billing engine (Bill Runs → draft invoices) |
+| [`@dainamite/cpq-billing-connector`](packages/cpq-billing-connector) | `1.0.x` | ✅ Published (public npm) | Event bridge: CPQ subscription lifecycle → Billing |
 
 All three are **Open Mercato modules**: self-contained folders that the
 framework auto-discovers by filename convention (`index.ts` metadata, `di.ts`,
@@ -291,5 +286,5 @@ tenants).
 
 ## License
 
-The `@dainamite/*` packages are released under the **MIT** license. See each
-package's `package.json` and `LICENSE`.
+MIT. See [`LICENSE`](LICENSE) for the full text; each `@dainamite/*` package
+ships the same license alongside it.

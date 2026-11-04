@@ -48,7 +48,7 @@ cp .env.example .env
 yarn add @dainamite/cpq @dainamite/billing @dainamite/cpq-billing-connector
 ```
 
-2. EDIT `src.modules.ts` and register dainamite modules
+2. EDIT `src/modules.ts` and register dainamite modules
 
 ```ts
 export const enabledModules: ModuleEntry[] = [

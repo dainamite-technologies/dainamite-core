@@ -1,36 +1,149 @@
 # Dainamite
 
-Open-source **revenue management** framework for subscription businesses —
-Product Catalog, **CPQ** (Configure-Price-Quote), Order Management &
-**Subscription Billing**.
+Dainamite is an open-source **revenue management** framework for subscription businesses.
 
-Tailored to fit your business. Built on open-source foundations for you to
-own, with no per-seat tax.
+Start with a proven open-source foundation and build a revenue management stack that fits your business. 
+For you to own, with no per-seat tax.
 
 - Website: [dainamite.com](https://dainamite.com)
 - Powered by [Open Mercato](https://www.npmjs.com/org/open-mercato)
 
 ---
 
-## What this repository is
+## Key Features
 
-`dainamite-core` is the **Dainamite product monorepo** *and* the first
-reference application built on it. It plays two roles at once:
+1. **Product catalog** - Products & Offerings, modelled the way your business sells.
 
-1. **A publishable package workspace** under [`packages/`](packages/) — the
-   `@dainamite/*` product modules that any Open Mercato app can install from
-   npm.
-2. **A runnable demo app** that consumes those packages exactly the way a
-   customer app would, with seeded demo tenants (GIX network services, Puffin
-   Cloud) to showcase the flows.
+2. **CPQ - Configure-Price-Quote** - Configure bespoke offers, model real pricing, automate approvals, without acrobatic feats to fit a vendor’s data model.
 
-The relationship to Open Mercato follows a three-layer model:
+3. **Order management** - Capture, fulfill, amend, without losing the audit trail or stitching three systems together.
 
-| Layer | What | Where it lives |
-|-------|------|----------------|
-| **L1** | Open Mercato core framework (modules, DI, events, UI, ORM glue) | `@open-mercato/*` on npm — a peer dependency |
-| **L2** | Dainamite product modules (CPQ, Billing, connector) | `@dainamite/*`, published from [`packages/`](packages/) |
-| **L3** | Customer applications | `dainamite-core` is the first; new customer repos `yarn add` the L2 packages |
+4. **Subscription management** - Lifecycle, renewals, amendments and ARR tracking, for any commercial model your business can dream up.
+
+5. **Billing** - Invoices, dunning, usage-based charges and revenue recognition, all seamlessly integrated.
+
+---
+
+## How to start?
+
+For interactive tutorial follow: [setup guide](https://dainamite.com/demo#how-to-start).
+
+### Prerequisites
+
+- Node ≥ 24 — enforced by the preinstall hook and `engines` field
+- Yarn 4.17 — via Corepack (`corepack enable`; the version is pinned in `packageManager`)
+- Docker — for Postgres, Redis, Meilisearch
+
+### Setup
+
+1. Bootstrap Open Mercato app and install dainamite packages
+
+```bash
+npx create-mercato-app your-revenue-mgmt-app
+cd your-revenue-mgmt-app
+
+docker compose up -d
+cp .env.example .env
+
+yarn add @dainamite/cpq @dainamite/billing @dainamite/cpq-billing-connector
+```
+
+2. EDIT `src/modules.ts` and register dainamite modules
+
+```ts
+export const enabledModules: ModuleEntry[] = [
+  // … core modules (incl. queue + events for billing). Make sure catalog, sales & attachment modules are enabled  …
+  // { id: 'attachments', from: '@open-mercato/core' },
+  // { id: 'catalog', from: '@open-mercato/core' },
+  // { id: 'sales', from: '@open-mercato/core' },
+
+  { id: 'cpq', from: '@dainamite/cpq' },
+  { id: 'billing', from: '@dainamite/billing' },
+  // MUST be after cpq + billing — its subscribers resolve both services.
+  { id: 'cpq_billing_connector', from: '@dainamite/cpq-billing-connector' },
+]
+```
+
+3. Finalize setup
+
+```bash
+yarn generate
+yarn db:migrate
+yarn initialize
+yarn dev
+```
+
+4. The app will run locally on localhost:3000
+
+---
+
+## What is Open Mercato
+
+[Open Mercato](https://www.openmercato.com/) is an open-source framework for CRM/ERP development following AI-assisted engineering approach. Open Mercato is built using Next.JS and can be deployed anywhere you want (Public/Private Cloud, On-Premise).
+
+Dainamite leverages Open Mercato core modules and extends them with additional, domain specific packages: CPQ & Billing.
+
+---
+
+## Local development & contribution to Dainamite Core
+
+You can run this monorepo locally & contribute to Dainamite Core. Fork repository and follow setup guide
+
+### Prerequisites
+
+- Node ≥ 24 — enforced by the preinstall hook and `engines` field
+- Yarn 4.17 — via Corepack (`corepack enable`; the version is pinned in `packageManager`)
+- Docker — for Postgres, Redis, Meilisearch
+
+### Setup
+
+```bash
+docker compose up -d        # start Postgres / Redis / Meilisearch
+yarn install                # install workspace deps
+yarn build:packages         # build the @dainamite/* packages → packages/*/dist
+yarn setup                  # generate + migrate DB + seed demo data, then starts the dev server
+```
+
+`yarn setup` (or `yarn setup --reinstall` to wipe and re-seed) ends by
+starting the dev server on http://localhost:3000. Afterwards, `yarn dev` is all
+you need to start it again.
+
+`yarn build:packages` must run before `yarn setup`: generation and
+initialisation resolve the `@dainamite/*` modules from their `dist/`. Without
+it, the module registry and OpenAPI generation can't resolve the CPQ entities.
+
+The seed provisions demo tenants (Acme, GIX, Puffin Cloud) with full CPQ
+catalogs so you can explore quoting, pricing, inventory, and — once Billing is
+wired — the Bill Run flow end-to-end. Default admin logins are printed in the
+`yarn setup` banner.
+
+`yarn build` is **not** part of local development. It produces a production
+Next.js build (what the Dockerfile runs), and its type-check step needs a large
+heap; the script sets `--max-old-space-size=8192` itself.
+
+When you change package source under `packages/<pkg>/src`, rebuild that
+package so the running app picks up the new `dist/`:
+
+```bash
+yarn workspace @dainamite/<pkg> build
+```
+
+---
+
+## How is this Repository structured?
+
+There are two things in this repo.
+
+[`packages/`](packages/) holds the three `@dainamite/*` modules: CPQ, Billing,
+and the connector that links them. All three are on public npm, so any Open
+Mercato app can install them with `yarn add`.
+
+Besides packages there is a demo app that uses those packages the same way a customer
+app would, seeded with data for two sample tenants (GIX and Puffin Cloud). This is to illustrate how we
+develop the packages, and how you can try them without setting up a project first.
+
+Dainamite builds on Open Mercato. Open Mercato is the framework underneath (modules, UI, events, database), and the
+`@dainamite/*` packages add the revenue management side on top.
 
 ---
 
@@ -38,9 +151,9 @@ The relationship to Open Mercato follows a three-layer model:
 
 | Package | Version | Status | What it adds |
 |---------|---------|--------|--------------|
-| [`@dainamite/cpq`](packages/cpq) | `0.2.x` | ✅ Published (public npm) | Configure-Price-Quote engine |
-| [`@dainamite/billing`](packages/billing) | `0.17.x` | 🔜 Publishing soon | Recurring-billing engine (Bill Runs → draft invoices) |
-| [`@dainamite/cpq-billing-connector`](packages/cpq-billing-connector) | `0.1.x` | 🔜 Publishing soon | Event bridge: CPQ subscription lifecycle → Billing |
+| [`@dainamite/cpq`](packages/cpq) | `0.4.x` | ✅ Published (public npm) | Configure-Price-Quote engine |
+| [`@dainamite/billing`](packages/billing) | `0.19.x` | ✅ Published (public npm) | Recurring-billing engine (Bill Runs → draft invoices) |
+| [`@dainamite/cpq-billing-connector`](packages/cpq-billing-connector) | `1.0.x` | ✅ Published (public npm) | Event bridge: CPQ subscription lifecycle → Billing |
 
 All three are **Open Mercato modules**: self-contained folders that the
 framework auto-discovers by filename convention (`index.ts` metadata, `di.ts`,
@@ -141,153 +254,6 @@ subscribers fire.
 
 ---
 
-## How the packages connect to Open Mercato
-
-These are normal Open Mercato modules — there is no custom plugin runtime.
-Concretely:
-
-- **Consumed via `peerDependencies`, never `dependencies`.** `@open-mercato/*`
-  and sibling `@dainamite/*` are peers so the whole app shares a *single*
-  instance of the framework and ORM in `node_modules`. Your app provides them.
-- **Cross-module references are FK strings + framework primitives** — never
-  ORM relations across package boundaries. A CPQ quote references a customer
-  by `customerId: string`, resolved at runtime; cross-module reactions go
-  through the **event bus** (`@open-mercato/events`) and **response
-  enrichers**, not direct imports.
-- **Each package ships its own migrations.** After installing/upgrading a
-  package, `yarn mercato db migrate` applies its schema.
-- **Each package ships `src/` (types) and `dist/` (runtime JS).** Following the
-  `@open-mercato/core` convention, no `.d.ts` is emitted — `exports.types`
-  resolves directly to source. Engines: **Node ≥ 24**.
-
----
-
-## Installing the packages into an Open Mercato app
-
-> These steps are for adding Dainamite to **your own** Open Mercato
-> application. To run *this* repo locally instead, see
-> [Local development](#local-development-of-this-monorepo).
-
-### Prerequisites
-
-- An Open Mercato app on **`@open-mercato/* ^0.6.0`** (e.g. created with
-  `npx create-mercato-app <name>`).
-- **Node ≥ 24**, **Yarn 4.12** (via `corepack enable`), and **Docker** for
-  Postgres / Redis / Meilisearch.
-
-### 1 — Install CPQ (available now)
-
-`@dainamite/cpq` is on the **public npm registry** — no scope auth or
-`.npmrc` changes needed:
-
-```bash
-yarn add @dainamite/cpq
-```
-
-Register it in your app's `src/modules.ts` (make sure its required core
-modules are already enabled):
-
-```ts
-export const enabledModules: ModuleEntry[] = [
-  // … core modules: auth, directory, catalog, sales, customers, dictionaries …
-  { id: 'cpq', from: '@dainamite/cpq' },
-]
-```
-
-Regenerate the module graph, then apply migrations:
-
-```bash
-yarn generate          # rebuild .mercato/generated/* after editing src/modules.ts
-yarn mercato db migrate
-```
-
-CPQ admin pages now appear under `/backend/cpq/*`.
-
-### 2 — Add Billing + the connector (publishing soon)
-
-> ⚠️ `@dainamite/billing` and `@dainamite/cpq-billing-connector` are not yet
-> on npm. The steps below are the intended install flow once they publish —
-> until then they are available only inside this monorepo.
-
-```bash
-yarn add @dainamite/billing @dainamite/cpq-billing-connector
-```
-
-Register all three modules — **order matters**: the connector must come after
-both `cpq` and `billing`:
-
-```ts
-export const enabledModules: ModuleEntry[] = [
-  // … core modules (incl. queue + events for billing) …
-  { id: 'cpq', from: '@dainamite/cpq' },
-  { id: 'billing', from: '@dainamite/billing' },
-  // MUST be after cpq + billing — its subscribers resolve both services.
-  { id: 'cpq_billing_connector', from: '@dainamite/cpq-billing-connector' },
-]
-```
-
-```bash
-yarn generate
-yarn mercato db migrate
-```
-
-With all three enabled, activating a CPQ quote into a subscription
-automatically opens a Billing Account and seeds Billing Items; the scheduled
-Bill Run then drafts invoices for human approval.
-
-> **Tip:** once a package is published, `yarn mercato module add @dainamite/<pkg>`
-> can install **and** register it in one step instead of editing
-> `src/modules.ts` by hand. (It won't work for `billing` /
-> `cpq-billing-connector` until they land on npm.)
-
----
-
-## Local development of this monorepo
-
-To run `dainamite-core` itself (the demo app + the packages in
-[`packages/`](packages/)):
-
-### Prerequisites
-
-- Node ≥ 24 — enforced by the preinstall hook and `engines` field
-- Yarn 4.17 — via Corepack (`corepack enable`; the version is pinned in `packageManager`)
-- Docker — for Postgres, Redis, Meilisearch
-
-### Setup
-
-```bash
-docker compose up -d        # start Postgres / Redis / Meilisearch
-yarn install                # install workspace deps
-yarn build:packages         # build the @dainamite/* packages → packages/*/dist
-yarn setup                  # generate + migrate DB + seed demo data, then starts the dev server
-```
-
-`yarn setup` (or `yarn setup --reinstall` to wipe and re-seed) ends by
-starting the dev server on http://localhost:3000. Afterwards, `yarn dev` is all
-you need to start it again.
-
-`yarn build:packages` must run before `yarn setup`: generation and
-initialisation resolve the `@dainamite/*` modules from their `dist/`. Without
-it, the module registry and OpenAPI generation can't resolve the CPQ entities.
-
-The seed provisions demo tenants (Acme, GIX, Puffin Cloud) with full CPQ
-catalogs so you can explore quoting, pricing, inventory, and — once Billing is
-wired — the Bill Run flow end-to-end. Default admin logins are printed in the
-`yarn setup` banner.
-
-`yarn build` is **not** part of local development. It produces a production
-Next.js build (what the Dockerfile runs), and its type-check step needs a large
-heap; the script sets `--max-old-space-size=8192` itself.
-
-When you change package source under `packages/<pkg>/src`, rebuild that
-package so the running app picks up the new `dist/`:
-
-```bash
-yarn workspace @dainamite/<pkg> build
-```
-
----
-
 ## Screenshots
 
 Captured from the seeded demo app (GIX network-services and Puffin Cloud
@@ -320,5 +286,5 @@ tenants).
 
 ## License
 
-The `@dainamite/*` packages are released under the **MIT** license. See each
-package's `package.json` and `LICENSE`.
+MIT. See [`LICENSE`](LICENSE) for the full text; each `@dainamite/*` package
+ships the same license alongside it.

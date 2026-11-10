@@ -60,5 +60,7 @@ it('propagates a write failure out of transactional so the database rolls back',
   const failure = new Error('Failed during reprice')
   await expect(withQuotePricingWrite(em, 'quote', scope, async () => { throw failure }, error)).rejects.toBe(failure)
   expect(isolated.transactional).toHaveBeenCalledTimes(1)
-  expect(transaction.flush).not.toHaveBeenCalled()
+  // The revision is flushed before a dependent query can reset its change set;
+  // the thrown error still rolls this SQL back in the real transaction.
+  expect(transaction.flush).toHaveBeenCalledTimes(1)
 })

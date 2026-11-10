@@ -21,8 +21,8 @@ Engine: om-auto-create-pr-loop (steps: 22, --loop: no)
 | 2 | 2.1 | Undoable commands | inline | done | dda90af |
 | 2 | 2.2 | Adjustment CRUD routes | inline | done | c6baba1 |
 | 2 | 2.3 | Draft preview | inline | done | 0130d53 |
-| 2 | 2.4 | ACL and reason dictionary | inline | done | this commit |
-| 2 | 2.5 | Clone and removal | inline | todo | — |
+| 2 | 2.4 | ACL and reason dictionary | inline | done | 52f8921 |
+| 2 | 2.5 | Clone and removal | inline | done | this commit |
 | 2 | 2.6 | Conversion validation | inline | todo | — |
 | 2 | 2.7 | Calculate-price waterfall opt-in | inline | todo | — |
 | 3 | 3.1 | Quote pricing and status events | inline | todo | — |
@@ -112,3 +112,5 @@ CRUD routes: view/list with bounded pagination; create/PATCH/delete run guarded 
 Preview service/route: prices a synthetic draft on an isolated EM, with no persist/flush/revision/events; supports immutable-target replacement and inactive existing reason preservation. 716 CPQ tests pass. Root typecheck in progress (post-preview).
 
 ACL/defaults: admin and employee adjustment feature; visible editable tenant reason dictionary with seven defaults; idempotent global boolean rollout toggle with tenant overrides. Existing labels, inactive dictionaries and disabled/deleted toggles are preserved. 718 CPQ tests pass. Root typecheck identified missing input in three command undo test calls; fixed fixtures; recheck running.
+
+Clone/removal: cloned adjustments get new ids/remapped line ids and retain inactive reasons; missing targets stay invalid with fresh orphan ids. Complete nested bundle removal soft-deletes adjustments before recalculation. New quotes with descriptive ARC markers remain adjustable. Added full clone-flow regressions (including marker stripping) and helper subtree tests. Revision flush boundary now precedes dependent ORM queries, with preflight terminal-recalc validation before any flush. 724 CPQ tests pass. Dictionary timestamp type requirement fixed; package typecheck re-running.

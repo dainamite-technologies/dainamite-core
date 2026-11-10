@@ -1,3 +1,4 @@
+import { withAtomicFlush } from '@open-mercato/shared/lib/commands/flush'
 import { LockMode } from '@mikro-orm/core'
 import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import type { EntityManager } from '@mikro-orm/postgresql'
@@ -12,6 +13,7 @@ export async function withQuotePricingWrite<T>(
   execute: (transaction: EntityManager, quote: CpqQuoteConfiguration) => Promise<T>,
   makeError: (status: number, message: string) => Error,
   expectedRevision?: number,
+  validate?: (quote: CpqQuoteConfiguration) => void,
 ): Promise<T> {
   // Do not inherit managed objects/pending writes or propagate committed state
   // back into the caller's identity map. The returned DTO is authoritative;
@@ -25,10 +27,13 @@ export async function withQuotePricingWrite<T>(
     if (!quote) throw makeError(404, 'Quote not found')
     const revision = quote.pricingRevision ?? 0
     if (expectedRevision !== undefined && expectedRevision !== revision) throw makeError(409, 'STALE_REVISION')
+    validate?.(quote)
     // This scalar update and every later flush are inside the same DB transaction.
-    quote.pricingRevision = revision + 1
-    const result = await execute(transaction, quote)
-    await transaction.flush()
+    let result!: T
+    await withAtomicFlush(transaction, [
+      () => { quote.pricingRevision = revision + 1 },
+      async () => { result = await execute(transaction, quote) },
+    ])
     return result
   }, { clear: true })
 }

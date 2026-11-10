@@ -15,7 +15,7 @@ export async function seedPriceAdjustmentDefaults(em: EntityManager, scope: Tena
   let dictionary = await findOneWithDecryption(em, Dictionary, { ...scope, key: REASON_DICTIONARY }, undefined, scope)
   if (!dictionary) {
     dictionary = em.create(Dictionary, { ...scope, key: REASON_DICTIONARY, name: 'Price adjustment reasons',
-      description: 'Reasons for negotiated prices on quotes.', managerVisibility: 'default', isSystem: false, isActive: true })
+      description: 'Reasons for negotiated prices on quotes.', managerVisibility: 'default', isSystem: false, isActive: true, createdAt: new Date(), updatedAt: new Date() })
     em.persist(dictionary)
     await em.flush()
   }

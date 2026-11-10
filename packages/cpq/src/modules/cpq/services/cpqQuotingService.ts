@@ -1,3 +1,4 @@
+import { cloneQuoteAdjustments, removeQuoteLineTree } from './priceAdjustments/quoteAdjustmentLifecycle'
 import type { PriceAdjustment } from '../data/price-adjustments'
 import { withAtomicFlush } from '@open-mercato/shared/lib/commands/flush'
 import { loadQuoteAdjustments } from './priceAdjustments/loadQuoteAdjustments'
@@ -49,6 +50,7 @@ import {
   arcPricingInputsChanged,
   buildArcMirrorConfiguration,
   isFrozenAmendMirrorLine,
+  isArcMirrorLine,
   stripArcMarkers,
   stripQuoteOnlyArcMarkers,
 } from './arcPriceFreeze'
@@ -537,37 +539,7 @@ export class DefaultCpqQuotingService {
     })
     if (!lineConfig) throw new QuotingError(404, 'Quote line not found')
 
-    const now = new Date()
-    lineConfig.deletedAt = now
-
-    // Soft-delete children
-    const children = await em.find(CpqQuoteLineConfiguration, {
-      parentLineId: lineId,
-      quoteConfigurationId: cpqConfig.id,
-      organizationId: scope.organizationId,
-      tenantId: scope.tenantId,
-      deletedAt: null,
-    })
-    for (const child of children) {
-      child.deletedAt = now
-      // Also soft-delete the SalesQuoteLine
-      const childSalesLine = await em.findOne(SalesQuoteLine, {
-        id: child.quoteLineId,
-        organizationId: scope.organizationId,
-        tenantId: scope.tenantId,
-      })
-      if (childSalesLine) childSalesLine.deletedAt = now
-    }
-
-    // Soft-delete the SalesQuoteLine
-    const salesLine = await em.findOne(SalesQuoteLine, {
-      id: lineId,
-      organizationId: scope.organizationId,
-      tenantId: scope.tenantId,
-    })
-    if (salesLine) salesLine.deletedAt = now
-
-    await em.flush()
+    await removeQuoteLineTree(em, cpqConfig.id, lineConfig, scope)
 
     return this.recalculateInternal(em, cpqConfig, salesQuote, scope, true)
   }
@@ -594,7 +566,10 @@ export class DefaultCpqQuotingService {
 
   async recalculate(quoteId: string, options: { save: boolean }, scope: TenantScope): Promise<QuoteResult> {
     if (options.save) {
-      return this.writeQuote(quoteId, scope, (em, quote) => this.recalculateFromConfig(em, quote, scope, true))
+      return this.writeQuote(quoteId, scope, (em, quote) => this.recalculateFromConfig(em, quote, scope, true), undefined,
+        (quote) => {
+          if (TERMINAL_STATUSES.includes(quote.cpqStatus as CpqStatus)) throw new QuotingError(409, `Cannot recalculate quote in '${quote.cpqStatus}' status`)
+        })
     }
     const cpqConfig = await this.loadCpqConfig(this.em, quoteId, scope)
     return this.recalculateFromConfig(this.em, { ...cpqConfig } as CpqQuoteConfiguration, scope, false)
@@ -654,6 +629,7 @@ export class DefaultCpqQuotingService {
 
     // Create new CpqQuoteConfiguration
     const newCpqConfig = em.create(CpqQuoteConfiguration, {
+      id: crypto.randomUUID(),
       organizationId: scope.organizationId,
       tenantId: scope.tenantId,
       quoteId: newSalesQuoteId,
@@ -668,6 +644,7 @@ export class DefaultCpqQuotingService {
       pricingSummary: emptyPricingSummary(original.currencyCode),
     })
     em.persist(newCpqConfig)
+    await em.flush()
 
     // Copy all lines
     const originalLines = await em.find(CpqQuoteLineConfiguration, {
@@ -762,6 +739,9 @@ export class DefaultCpqQuotingService {
     await em.flush()
 
     // Recalculate the new quote at current rates
+    await cloneQuoteAdjustments(em, original.id, newCpqConfig, lineIdMap, scope)
+    await em.flush()
+
     return this.recalculateInternal(em, newCpqConfig, newSalesQuote, scope, true)
   }
 
@@ -821,9 +801,10 @@ export class DefaultCpqQuotingService {
     scope: TenantScope,
     execute: (em: EntityManager, quote: CpqQuoteConfiguration) => Promise<QuoteResult>,
     expectedRevision?: number,
+    validate?: (quote: CpqQuoteConfiguration) => void,
   ): Promise<QuoteResult> {
     return withQuotePricingWrite(this.em, quoteId, scope, execute,
-      (status, message) => new QuotingError(status, message), expectedRevision)
+      (status, message) => new QuotingError(status, message), expectedRevision, validate)
   }
 
   /** Called by adjustment commands that already own the quote lock/revision. */
@@ -943,7 +924,7 @@ export class DefaultCpqQuotingService {
     const adjusted = resolveManualAdjustments(computedLines.map(({ lineConfig, charges }) => ({
       lineId: lineConfig.quoteLineId, parentLineId: lineConfig.parentLineId ?? null,
       enginePriced: !!(lineConfig.offeringId || lineConfig.productId),
-      mirrored: !!lineConfig.configuration?._arcMirroredFromItemId, charges,
+      mirrored: isArcMirrorLine(lineConfig.configuration, cpqConfig.quoteType), charges,
     })), adjustments, cpqConfig.currencyCode)
     const adjustedById = new Map(adjusted.lines.map((line) => [line.lineId, line]))
     const computedIds = new Set(computedLines.map((line) => line.lineConfig.quoteLineId))
@@ -1034,7 +1015,7 @@ export class DefaultCpqQuotingService {
     const pricingSummary = computePricingSummaryFromComputed(computedLines, cpqConfig.currencyCode)
     Object.assign(pricingSummary, computeWaterfallSummary(computedLines.map(({ lineConfig, charges }) => ({
       lineId: lineConfig.quoteLineId, quantity: lineConfig.quantity, termMonths: lineConfig.termMonths,
-      includeInDeal: !lineConfig.configuration?._arcMirroredFromItemId, charges,
+      includeInDeal: !isArcMirrorLine(lineConfig.configuration, cpqConfig.quoteType), charges,
     })), adjustments, cpqConfig.currencyCode))
 
     const validationResult = { valid: allValid, errors: allErrors }
@@ -1188,7 +1169,7 @@ export class DefaultCpqQuotingService {
       const adjustments = await loadQuoteAdjustments(em, cpqConfig.id, { organizationId: cpqConfig.organizationId, tenantId: cpqConfig.tenantId })
       Object.assign(finalPricing, computeWaterfallSummary(lines.map((line) => ({
         lineId: line.lineId, quantity: line.quantity, termMonths: line.termMonths,
-        includeInDeal: !line.configuration._arcMirroredFromItemId, charges: line.charges,
+        includeInDeal: !isArcMirrorLine(line.configuration, cpqConfig.quoteType), charges: line.charges,
       })), adjustments, cpqConfig.currencyCode))
     }
 

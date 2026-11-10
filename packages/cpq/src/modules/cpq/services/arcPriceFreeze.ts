@@ -40,6 +40,10 @@ export function isArcPriceFrozen(configuration: Record<string, unknown> | null |
  * (client input is stripped of `_arc*` keys, and a clone of an Amend quote
  * is a new quote).
  */
+export function isArcMirrorLine(configuration: Record<string, unknown> | null | undefined, quoteType: string | null | undefined): boolean {
+  return (quoteType === 'amend' || quoteType === 'renew' || quoteType === 'cancel') && typeof configuration?._arcMirroredFromItemId === 'string'
+}
+
 export function isFrozenAmendMirrorLine(
   configuration: Record<string, unknown> | null | undefined,
   quoteType: string | null | undefined,

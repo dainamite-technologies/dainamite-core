@@ -8,7 +8,7 @@ const scope = { tenantId: '11111111-1111-4111-8111-111111111111', organizationId
 const quoteId = '33333333-3333-4333-8333-333333333333', lineId = '44444444-4444-4444-8444-444444444444', actor = '55555555-5555-4555-8555-555555555555'
 const input: PriceAdjustmentInput = { level: 'charge', quoteLineId: lineId, chargeCode: 'fee', adjustmentType: 'price_override', value: 80, currencyCode: 'USD', reasonCode: 'competitive_match' }
 function setup() {
-  const quote = { id: quoteId, quoteId, ...scope, cpqStatus: 'ready', pricingRevision: 0 }
+  const quote = { id: quoteId, quoteId, ...scope, cpqStatus: 'ready', pricingRevision: 0, quoteType: 'new' }
   const rows: CpqQuotePriceAdjustment[] = []
   const state = { enabled: true, order: false, reason: true, target: true, mirrored: false }
   const em = {
@@ -109,7 +109,8 @@ it('refuses undo if the row changed afterward or the stored tenant is wrong', as
   await expect(service.undo(quoteId, created.adjustment.id, null, { ...created.adjustment, tenantId: actor }, actor, scope)).rejects.toMatchObject({ status: 403 })
 })
 it('rejects missing/out-of-scope and ARC mirror targets before persisting', async () => {
-  const { service, state, em } = setup()
+  const { service, state, quote, em } = setup()
+  quote.quoteType = 'amend'
   state.target = false
   await expect(service.create(quoteId, input, actor, scope)).rejects.toMatchObject({ status: 404 })
   state.target = true; state.mirrored = true
@@ -141,4 +142,10 @@ it('returns invalid draft errors without saving and refuses a nonexistent replac
   expect(preview.errors).toEqual([expect.objectContaining({ code: 'ABOVE_STANDARD' })])
   await expect(service.preview(quoteId, input, actor, scope)).rejects.toMatchObject({ status: 404 })
   expect(em.flush).not.toHaveBeenCalled()
+})
+it('allows a new quote cloned from an ARC mirror to negotiate its engine price', async () => {
+  const { service, state } = setup()
+  state.mirrored = true
+  const result = await service.create(quoteId, input, actor, scope)
+  expect(result.adjustment.value).toBe(80)
 })

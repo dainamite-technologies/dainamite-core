@@ -1,3 +1,4 @@
+import { isArcMirrorLine } from '../arcPriceFreeze'
 import { ADJUSTMENT_TOGGLE, REASON_DICTIONARY } from '../../data/price-adjustments'
 export { ADJUSTMENT_TOGGLE, REASON_DICTIONARY } from '../../data/price-adjustments'
 import { loadQuoteAdjustments } from './loadQuoteAdjustments'
@@ -71,7 +72,7 @@ export class CpqAdjustmentService {
     if (!quote) throw new QuotingError(404, 'Quote not found')
     if (parsed.expectedRevision !== undefined && parsed.expectedRevision !== (quote.pricingRevision ?? 0)) throw new QuotingError(409, 'STALE_REVISION')
     await this.assertMutable(em, quote, scope)
-    await this.requireTarget(em, quote.id, parsed.quoteLineId, scope)
+    await this.requireTarget(em, quote, parsed.quoteLineId, scope)
     const stored = await loadQuoteAdjustments(em, quote.id, scope)
     const replaced = stored.find((row) => row.id === replaceAdjustmentId)
     if (replaceAdjustmentId && !replaced) throw new QuotingError(404, 'Adjustment not found')
@@ -89,7 +90,7 @@ export class CpqAdjustmentService {
     return this.write(quoteId, scope, parsed.expectedRevision, async (em, quote) => {
       await this.assertMutable(em, quote, scope)
       await this.requireReason(em, parsed.reasonCode, scope)
-      await this.requireTarget(em, quote.id, parsed.quoteLineId, scope)
+      await this.requireTarget(em, quote, parsed.quoteLineId, scope)
       const row = em.create(CpqQuotePriceAdjustment, { ...scope, id: randomUUID(), quoteConfigurationId: quote.id,
         quoteId: quote.quoteId, ...this.values(parsed), createdByUserId: actor })
       return this.save(em, quote, row, null, scope, true)
@@ -103,7 +104,7 @@ export class CpqAdjustmentService {
       await this.assertMutable(em, quote, scope)
       const row = await this.loadRow(em, quote.id, id, scope)
       const before = adjustmentSnapshot(row)
-      await this.requireTarget(em, quote.id, row.quoteLineId, scope)
+      await this.requireTarget(em, quote, row.quoteLineId, scope)
       const merged = cpqPriceAdjustmentInputSchema.parse({ ...adjustmentInput(row), ...parsed })
       if (merged.reasonCode !== row.reasonCode) await this.requireReason(em, merged.reasonCode, scope)
       em.assign(row, { ...this.values(merged), updatedByUserId: actor, updatedAt: new Date() })
@@ -174,10 +175,10 @@ export class CpqAdjustmentService {
     if (!(await this.enabled(scope.tenantId))) throw new QuotingError(403, 'Manual price adjustments are disabled')
   }
 
-  private async requireTarget(em: EntityManager, quoteConfigurationId: string, quoteLineId: string, scope: TenantScope) {
-    const line = await findOneWithDecryption(em, CpqQuoteLineConfiguration, { quoteConfigurationId, quoteLineId, ...scope, deletedAt: null }, undefined, scope)
+  private async requireTarget(em: EntityManager, quote: CpqQuoteConfiguration, quoteLineId: string, scope: TenantScope) {
+    const line = await findOneWithDecryption(em, CpqQuoteLineConfiguration, { quoteConfigurationId: quote.id, quoteLineId, ...scope, deletedAt: null }, undefined, scope)
     if (!line) throw new QuotingError(404, 'Quote line not found')
-    if (!(line.offeringId || line.productId) || line.configuration?._arcMirroredFromItemId) throw new QuotingError(422, 'LINE_NOT_ELIGIBLE')
+    if (!(line.offeringId || line.productId) || isArcMirrorLine(line.configuration, quote.quoteType)) throw new QuotingError(422, 'LINE_NOT_ELIGIBLE')
   }
 
   private async requireReason(em: EntityManager, code: string, scope: TenantScope) {

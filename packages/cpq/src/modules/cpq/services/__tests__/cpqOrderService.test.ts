@@ -1,3 +1,4 @@
+import { CpqOrderLineConfiguration } from '../../data/entities'
 import { DefaultCpqOrderService, OrderError } from '../cpqOrderService'
 import type { TenantScope } from '../types'
 
@@ -606,5 +607,25 @@ describe('DefaultCpqOrderService.getOrder', () => {
     const result = await service.getOrder('oc1', SCOPE)
     expect(result.lines[0].offeringName).toBe('Configured Item')
     expect(result.lines[0].offeringType).toBeNull()
+  })
+})
+
+
+describe('conversion stored-adjustment baseline', () => {
+  it.each([false, true])('copies the stored offer and strips quote-only pricing markers (invalid=%s)', async (invalid) => {
+    const { em, service } = createService()
+    const charges = [{ chargeCode: 'fee', chargeType: 'mrc', pricingMethod: 'flat', quantity: 1, unitPrice: 80, totalPrice: 80,
+      listUnitPrice: 120, listTotalPrice: 120, standardUnitPrice: 100, standardTotalPrice: 100, currencyCode: 'USD',
+      adjustmentErrors: invalid ? [{ adjustmentId: 'a', quoteLineId: 'line', code: 'ABOVE_STANDARD' }] : [] }]
+    em.findOne.mockResolvedValueOnce({ id: 'quote', quoteId: 'sales', cpqStatus: 'accepted', currencyCode: 'USD', customerId: 'customer', pricingSummary: { nrcTotal: 0, mrcTotal: 80 } })
+      .mockResolvedValueOnce(null) // no existing order
+    em.find.mockResolvedValueOnce([{ quoteLineId: 'line', quantity: 1, action: 'add', nrcTotal: '0', mrcTotal: '80', charges,
+      configuration: { _arcPriceFrozen: true, _arcRepriced: true }, offeringId: null }]).mockResolvedValueOnce([])
+    em.create.mockImplementation((_entity, values: Record<string, unknown>) => ({ createdAt: new Date(), ...values }))
+    await service.convertQuoteToOrder('quote', SCOPE)
+    expect(em.create).toHaveBeenCalledWith(CpqOrderLineConfiguration, expect.objectContaining({ charges, mrcTotal: '80' }))
+    const orderLine = em.create.mock.calls.find(([entity]) => entity === CpqOrderLineConfiguration)?.[1]
+    expect(orderLine?.configuration).not.toHaveProperty('_arcPriceFrozen')
+    expect(orderLine?.configuration).not.toHaveProperty('_arcRepriced')
   })
 })

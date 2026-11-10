@@ -1,3 +1,4 @@
+import { storedAdjustmentFailure } from './priceAdjustments/storedAdjustmentFailure'
 import { withQuotePricingWrite } from './priceAdjustments/quotePricingWrite'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { SalesOrder, SalesOrderLine } from '@open-mercato/core/modules/sales/data/entities'
@@ -170,6 +171,9 @@ export class DefaultCpqOrderService {
     if (quoteLines.length === 0) {
       throw new OrderError(422, 'Cannot convert a quote with no line items')
     }
+
+    const invalidAdjustment = storedAdjustmentFailure(cpqConfig, quoteLines)
+    if (invalidAdjustment) throw new OrderError(422, 'ADJUSTMENT_INVALID', invalidAdjustment)
 
     const { number: orderNumber } = await this.numberGenerator.generate({
       kind: 'order',
@@ -1041,6 +1045,7 @@ export class OrderError extends Error {
   constructor(
     public status: number,
     message: string,
+    public details?: Record<string, unknown>,
   ) {
     super(message)
     this.name = 'OrderError'

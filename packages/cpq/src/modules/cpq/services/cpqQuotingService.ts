@@ -936,7 +936,7 @@ export class DefaultCpqQuotingService {
       if (adjustmentErrors.length) {
         computed.isConfigured = false
         allValid = false
-        const errors = adjustmentErrors.map((error) => ({ message: error.code, attribute: error.chargeCode }))
+        const errors = adjustmentErrors.map((error) => ({ message: error.code, attribute: error.chargeCode, lineId: error.quoteLineId, adjustmentId: error.adjustmentId }))
         computed.validationErrors.push(...errors)
         allErrors.push(...errors)
       }
@@ -983,7 +983,7 @@ export class DefaultCpqQuotingService {
     // soft-deletes its adjustments in the same aggregate transaction).
     for (const error of adjusted.errors.filter((entry) => !computedIds.has(entry.quoteLineId))) {
       allValid = false
-      allErrors.push({ message: error.code, attribute: error.chargeCode })
+      allErrors.push({ message: error.code, attribute: error.chargeCode, lineId: error.quoteLineId, adjustmentId: error.adjustmentId })
     }
 
     const relationshipErrors = await this.validationService.validateRelationships({

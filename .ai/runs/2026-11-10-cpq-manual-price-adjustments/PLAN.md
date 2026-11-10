@@ -23,8 +23,8 @@ Engine: om-auto-create-pr-loop (steps: 22, --loop: no)
 | 2 | 2.3 | Draft preview | inline | done | 0130d53 |
 | 2 | 2.4 | ACL and reason dictionary | inline | done | 52f8921 |
 | 2 | 2.5 | Clone and removal | inline | done | a991619 |
-| 2 | 2.6-characterize | Characterize stored adjustment conversion | inline | done | this commit |
-| 2 | 2.6 | Conversion validation | inline | todo | — |
+| 2 | 2.6-characterize | Characterize stored adjustment conversion | inline | done | 3d10ca6 |
+| 2 | 2.6 | Conversion validation | inline | done | this commit |
 | 2 | 2.7 | Calculate-price waterfall opt-in | inline | todo | — |
 | 3 | 3.1 | Quote pricing and status events | inline | todo | — |
 | 4 | 4.1 | Waterfall and price columns | inline | todo | — |
@@ -117,3 +117,5 @@ ACL/defaults: admin and employee adjustment feature; visible editable tenant rea
 Clone/removal: cloned adjustments get new ids/remapped line ids and retain inactive reasons; missing targets stay invalid with fresh orphan ids. Complete nested bundle removal soft-deletes adjustments before recalculation. New quotes with descriptive ARC markers remain adjustable. Added full clone-flow regressions (including marker stripping) and helper subtree tests. Revision flush boundary now precedes dependent ORM queries, with preflight terminal-recalc validation before any flush. 724 CPQ tests pass. Dictionary timestamp type requirement fixed; package typecheck re-running.
 
 2.6-characterize. **Characterize stored adjustment conversion** — baseline confirms valid and invalid stored offers both convert today, copying charge snapshots unchanged and stripping quote-only pricing markers. 34 order-service tests pass before guard change.
+
+Conversion guard: inspects stored charge/line/quote adjustment errors without repricing and refuses422 ADJUSTMENT_INVALID with line/code before any order is created. Valid offer snapshots still copy unchanged and quote-only markers stay out of order lines. 728 CPQ tests pass before final route-error assertion; focused order/route test running.

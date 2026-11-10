@@ -92,6 +92,8 @@ export interface QuoteItemInput {
 }
 
 export interface ValidationError {
+  lineId?: string
+  adjustmentId?: string
   type?: 'attribute' | 'relationship'
   attribute?: string
   relationshipType?: string

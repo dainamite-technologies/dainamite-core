@@ -4,8 +4,8 @@ import {
   BillingAccount,
   BillingAccountUsage,
   BillingItem,
-  BillRun,
-  BillRunOutcome,
+  BillingRun,
+  BillingRunOutcome,
 } from '../data/entities'
 import { advanceNextBillDate, deriveBillPeriod, isCycleDue } from './billPeriod'
 import {
@@ -72,8 +72,8 @@ export type RunBillRunParams = {
 }
 
 export type RunBillRunResult = {
-  billRun: BillRun
-  outcomes: BillRunOutcome[]
+  billRun: BillingRun
+  outcomes: BillingRunOutcome[]
 }
 
 type RunOutput = RunBillRunResult & {
@@ -136,7 +136,7 @@ async function executeRunWithinLock(
   params: RunBillRunParams,
 ): Promise<RunOutput> {
   const now = new Date()
-  const billRun = em.create(BillRun, {
+  const billRun = em.create(BillingRun, {
     organizationId: params.organizationId,
     tenantId: params.tenantId,
     triggeredBy: params.triggeredBy,
@@ -157,7 +157,7 @@ async function executeRunWithinLock(
   await em.flush()
 
   const accounts = await selectTargetAccounts(em, params)
-  const outcomes: BillRunOutcome[] = []
+  const outcomes: BillingRunOutcome[] = []
   const pendingEvents: DomainEvent[] = []
   let totalUsageRecordsRated = 0
 
@@ -166,7 +166,7 @@ async function executeRunWithinLock(
     if (processResult.status !== 'failed') {
       totalUsageRecordsRated += processResult.usageRecordsRated
     }
-    const outcome = em.create(BillRunOutcome, {
+    const outcome = em.create(BillingRunOutcome, {
       organizationId: params.organizationId,
       tenantId: params.tenantId,
       billRunId: billRun.id,
@@ -222,7 +222,7 @@ async function selectTargetAccounts(
 async function processAccountSafely(
   em: EntityManager,
   container: AwilixContainer,
-  billRun: BillRun,
+  billRun: BillingRun,
   account: BillingAccount,
   params: RunBillRunParams,
 ): Promise<AccountProcessResult> {
@@ -241,7 +241,7 @@ async function processAccountSafely(
 async function processAccount(
   em: EntityManager,
   container: AwilixContainer,
-  billRun: BillRun,
+  billRun: BillingRun,
   account: BillingAccount,
   params: RunBillRunParams,
 ): Promise<AccountProcessResult> {
@@ -438,8 +438,8 @@ async function findExistingDraftForPeriod(
 }
 
 function computeFinalRunStatus(
-  outcomes: readonly BillRunOutcome[],
-): BillRun['status'] {
+  outcomes: readonly BillingRunOutcome[],
+): BillingRun['status'] {
   if (outcomes.length === 0) return 'completed'
   const anyFailed = outcomes.some((o) => o.status === 'failed')
   const anySuccess = outcomes.some(
@@ -451,7 +451,7 @@ function computeFinalRunStatus(
 }
 
 function buildRunSummary(
-  outcomes: readonly BillRunOutcome[],
+  outcomes: readonly BillingRunOutcome[],
   totalAccounts: number,
   usageRecordsRated: number,
 ): Record<string, unknown> {

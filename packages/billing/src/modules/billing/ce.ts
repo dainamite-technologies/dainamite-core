@@ -1,14 +1,15 @@
 import type { CustomEntitySpec } from '@open-mercato/shared/modules/entities'
 
 /**
- * Billing module entity registry.
+ * Billing module custom-entity specs (labels / custom-field surfaces).
  *
- * Listing our MikroORM entities here gets them into the framework's
- * `E.billing.<entity>` generated registry (`entities.ids.generated.ts`),
- * which the CRUD factory, query engine, and indexers reference. Phase 0
- * shipped with no entries because the standalone CLI didn't traverse
- * `@dainamite/*` packages — adding them in Phase 1 once the resolver
- * patch lands.
+ * These ids are real MikroORM tables, not virtual custom entities. The
+ * framework only knows that while each id is also in the app's generated
+ * `E.billing` registry (fed by the package's shipped
+ * `generated/entities.ids.generated.ts`). For an id missing there,
+ * `mercato entities install` writes an active `custom_entities` row, and the
+ * query engine then reads the id from custom-entity storage instead of its
+ * table — every billing list comes back empty.
  *
  * `fields: []` means billing does NOT expose custom-field surfaces on
  * these entities today (no EAV). Adding fields here is reserved for

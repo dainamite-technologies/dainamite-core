@@ -68,7 +68,7 @@ export const openApi = createBillingCrudOpenApi({
     description:
       'Removes one line from a draft invoice (hard delete — the line ' +
       'never existed as far as future readers are concerned). Writes ' +
-      'a `DraftInvoiceEdit` audit row (action=`line_removed`, ' +
+      'a `BillingDraftInvoiceEdit` audit row (action=`line_removed`, ' +
       '`after_json=null`) carrying the before-snapshot for forensics. ' +
       'Recomputes invoice totals. Refuses non-draft invoices.',
   },

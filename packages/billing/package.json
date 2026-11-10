@@ -6,6 +6,7 @@
   "main": "./dist/modules/billing/index.js",
   "files": [
     "dist",
+    "generated",
     "src",
     "README.md",
     "CHANGELOG.md"

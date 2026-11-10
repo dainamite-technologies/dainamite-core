@@ -11,11 +11,28 @@ import {
 } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { generateEntityRegistry } from './scripts/generate-entity-registry.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const outdir = join(__dirname, 'dist')
 
 mkdirSync(outdir, { recursive: true })
+
+// generated/ is derived from these two files (scripts/generate-entity-registry.mjs).
+const ENTITY_REGISTRY_INPUTS = [join('data', 'entityIds.ts'), join('data', 'entities.ts')]
+
+async function refreshEntityRegistry(reason) {
+  try {
+    const { changed } = await generateEntityRegistry({ packageRoot: __dirname })
+    if (changed.length > 0) {
+      console.log(`[billing:watch] Entity registry updated (${reason}) — run \`yarn generate\` in the app to pick it up`)
+    }
+  } catch (error) {
+    console.error('[billing:watch] Entity registry generation failed:', error instanceof Error ? error.message : error)
+  }
+}
+
+await refreshEntityRegistry('startup')
 
 const SRC_GLOB_PATTERN = 'src/**/*.{ts,tsx}'
 const SRC_IGNORE_PATTERNS = [
@@ -181,6 +198,12 @@ function scheduleReboot(reason) {
 
 fsWatcher.on('add', (path) => {
   scheduleReboot(`New file detected: ${path}`)
+})
+
+fsWatcher.on('change', (path) => {
+  if (ENTITY_REGISTRY_INPUTS.some((input) => path.endsWith(input))) {
+    void refreshEntityRegistry(`${relative(__dirname, path)} changed`)
+  }
 })
 
 fsWatcher.on('unlink', (path) => {

@@ -1,7 +1,7 @@
 /**
  * Human-readable label for a Bill Run.
  *
- * The BillRun entity has no `name` column — the engine keys runs by id.
+ * The BillingRun entity has no `name` column — the engine keys runs by id.
  * The admin UI derives a stable, scannable label from the run's as-of
  * date so operators see `BILL_RUN_2026-05-20` instead of a raw UUID.
  */

@@ -1,8 +1,8 @@
 import { runBillRun, type RunBillRunParams } from '../../lib/billRunEngine'
 import { __resetInvoiceWriterCacheForTests } from '../../lib/invoiceWriter'
 import {
-  BillRun,
-  BillRunOutcome,
+  BillingRun,
+  BillingRunOutcome,
   BillingAccount,
   BillingAccountUsage,
   BillingItem,
@@ -269,7 +269,7 @@ describe('runBillRun — orchestration', () => {
     // Real-mode advances next_bill_date
     expect(account.nextBillDate.toISOString().slice(0, 10)).toBe('2026-07-01')
     expect(item.billedToDate?.toISOString().slice(0, 10)).toBe('2026-05-31')
-    // Persisted entities: BillRun + SalesInvoice + 1 line + BillingAccountUsage advance + BillRunOutcome
+    // Persisted entities: BillingRun + SalesInvoice + 1 line + BillingAccountUsage advance + BillingRunOutcome
     expect(captured.persisted.length).toBeGreaterThan(0)
   })
 

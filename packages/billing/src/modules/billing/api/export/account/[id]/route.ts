@@ -10,8 +10,8 @@ import {
   BillingItem,
   BillingStatement,
   BillingTopup,
-  BillRunOutcome,
-  DraftInvoiceEdit,
+  BillingRunOutcome,
+  BillingDraftInvoiceEdit,
 } from '../../../../data/entities'
 
 /**
@@ -22,10 +22,10 @@ import {
  *   - The account row itself.
  *   - Every active + soft-deleted `BillingItem` for the account.
  *   - Every `BillingAccountUsage` record.
- *   - Every `BillRunOutcome` row referencing the account.
+ *   - Every `BillingRunOutcome` row referencing the account.
  *   - Every `core/sales` invoice the engine emitted for the account
  *     (matched via `metadata->>'bill_account_id'`).
- *   - Every `DraftInvoiceEdit` audit row for those invoices.
+ *   - Every `BillingDraftInvoiceEdit` audit row for those invoices.
  *
  * Scope: the caller's auth tenant/organization is the authority — a
  * 404 is returned even for valid UUIDs that belong to a different
@@ -108,7 +108,7 @@ export async function GET(
         { limit: EXPORT_HARD_LIMIT, orderBy: { periodEnd: 'DESC' } },
       ),
       em.find(
-        BillRunOutcome,
+        BillingRunOutcome,
         {
           tenantId,
           organizationId,
@@ -177,7 +177,7 @@ export async function GET(
     const draftEdits =
       invoiceIds.length > 0
         ? await em.find(
-            DraftInvoiceEdit,
+            BillingDraftInvoiceEdit,
             {
               tenantId,
               organizationId,
@@ -272,7 +272,7 @@ export const openApi = {
         },
       ],
       description:
-        "Returns a JSON dump of a single Billing Account: the account itself, every Billing Item (no time cap — items often outlive a single export window), and the Usage records / BillRunOutcomes / emitted core/sales invoices / DraftInvoiceEdit rows whose timestamps fall in the [since, until] window (defaults to the last 12 months). Each collection is independently capped by EXPORT_HARD_LIMIT = 50,000 rows. Lifetime dumps for outlier accounts need a follow-up chunked background-job approach — out of scope for this v1 endpoint.",
+        "Returns a JSON dump of a single Billing Account: the account itself, every Billing Item (no time cap — items often outlive a single export window), and the Usage records / BillRunOutcomes / emitted core/sales invoices / BillingDraftInvoiceEdit rows whose timestamps fall in the [since, until] window (defaults to the last 12 months). Each collection is independently capped by EXPORT_HARD_LIMIT = 50,000 rows. Lifetime dumps for outlier accounts need a follow-up chunked background-job approach — out of scope for this v1 endpoint.",
     },
   },
 }

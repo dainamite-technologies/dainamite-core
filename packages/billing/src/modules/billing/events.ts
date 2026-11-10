@@ -12,8 +12,34 @@ import { createModuleEvents } from '@open-mercato/shared/modules/events'
  *   - `billing.run.completed` fires once per Bill Run after all per-account
  *     transactions finished (status is one of `completed` / `partial_failure`
  *     / `failed`). Useful for "did the nightly run go OK?" alerts.
+ *
+ * CRUD events (`billing.<entity>.<action>`) are emitted by the data engine
+ * from the commands' `emitCrudSideEffects({ events: { module: 'billing',
+ * entity } })`. Only the (entity, action) pairs a command actually emits are
+ * declared — `__tests__/events.test.ts` fails when a command emits one that
+ * is missing here (the data engine would log "Emitting undeclared event").
  */
 const events = [
+  // ─── CRUD (commands/*.ts) ────────────────────────────────────
+  { id: 'billing.account.created', label: 'Billing Account Created', entity: 'account', category: 'crud' },
+  { id: 'billing.account.updated', label: 'Billing Account Updated', entity: 'account', category: 'crud' },
+  { id: 'billing.account.deleted', label: 'Billing Account Deleted', entity: 'account', category: 'crud' },
+  { id: 'billing.item.created', label: 'Billing Item Created', entity: 'item', category: 'crud' },
+  { id: 'billing.item.updated', label: 'Billing Item Updated', entity: 'item', category: 'crud' },
+  { id: 'billing.item.deleted', label: 'Billing Item Deleted', entity: 'item', category: 'crud' },
+  {
+    // One per usage upload, on the same high-throughput path as
+    // `billing.usage.rated` — excluded from workflow triggers for the same
+    // reason (see Open Question #2).
+    id: 'billing.usage.created',
+    label: 'Billing Usage Record Created',
+    entity: 'usage',
+    category: 'crud',
+    excludeFromTriggers: true,
+  },
+  { id: 'billing.transaction.created', label: 'Billing Balance Transaction Created', entity: 'transaction', category: 'crud' },
+  { id: 'billing.topup.created', label: 'Billing Top-up Created', entity: 'topup', category: 'crud' },
+  // ─── Lifecycle ───────────────────────────────────────────────
   {
     id: 'billing.invoice.posted',
     label: 'Billing Invoice Posted',

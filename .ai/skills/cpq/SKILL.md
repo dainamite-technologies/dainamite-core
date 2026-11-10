@@ -95,8 +95,10 @@ CPQ adds these non-obvious invariants you must know before touching code:
 3. Contracts are **versioned and stable**. Any breaking change to a CPQ API
    shape is a major bump in `packages/cpq/MIGRATION.md` + an entry in
    `CHANGELOG.md`. Even before extraction, treat them like that.
-4. Custom (non-CRUD) write routes MUST call `validateCrudMutationGuard`
-   before mutation and `runCrudMutationGuardAfterSuccess` after success.
+4. Custom (non-CRUD) write routes MUST call `runRouteMutationGuards`
+   from `@open-mercato/shared/lib/crud/route-mutation-guard` before mutation
+   and the returned `runAfterSuccess()` after success. The older
+   `validateCrudMutationGuard` / `runCrudMutationGuardAfterSuccess` pair is deprecated.
 5. Every route file MUST `export const openApi`. No exceptions; the OpenAPI
    bundle generation will fail otherwise.
 

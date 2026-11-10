@@ -53,7 +53,8 @@ describe('POST /api/cpq/quotes/{quoteId}/recalculate', () => {
   })
 
   it('documents the route in openApi', () => {
-    expect(openApi['/api/cpq/quotes/{quoteId}/recalculate'].post.responses['409']).toBeDefined()
+    expect(openApi.methods?.POST?.errors).toEqual(expect.arrayContaining([expect.objectContaining({ status: 409 })]))
+    expect(openApi.methods?.POST?.requestBody).toBeDefined()
   })
 
   it('runs the mutation guards before a saved recalculation and their after-success hooks after it', async () => {

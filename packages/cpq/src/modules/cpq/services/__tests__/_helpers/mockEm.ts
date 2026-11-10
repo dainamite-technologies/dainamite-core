@@ -15,6 +15,7 @@ import type { TenantScope } from '../../types'
  * pre-existing tests that only inspect `em.create.mock.calls` are unaffected.
  */
 export interface MockEm {
+  fork: jest.MockedFunction<() => MockEm>
   transactional: jest.MockedFunction<(callback: (em: MockEm) => Promise<unknown>) => Promise<unknown>>
   findOne: jest.MockedFunction<(entity: unknown, where: Record<string, unknown>) => Promise<unknown>>
   find: jest.MockedFunction<
@@ -41,6 +42,7 @@ let __syntheticIdSequence = 0
 
 export function createMockEm(): MockEm {
   const em: MockEm = {
+    fork: jest.fn(),
     transactional: jest.fn(),
     findOne: jest.fn(),
     find: jest.fn().mockResolvedValue([]),
@@ -53,6 +55,7 @@ export function createMockEm(): MockEm {
     persist: jest.fn(),
     flush: jest.fn().mockResolvedValue(undefined),
   }
+  em.fork.mockReturnValue(em)
   em.transactional.mockImplementation((callback) => callback(em))
   return em
 }

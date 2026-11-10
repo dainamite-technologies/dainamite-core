@@ -16,7 +16,8 @@ Engine: om-auto-create-pr-loop (steps: 22, --loop: no)
 | 1 | 1.5 | Summary math | inline | done | 9a07adb |
 | 1 | 1.5-review-fix | Fix foundation review findings | inline | done | 55f7cd8 |
 | 1 | 1.6 | Quote transaction boundary | inline | done | be4cb81 |
-| 1 | 1.7 | Integrate adjustment pricing | inline | done | this commit |
+| 1 | 1.7 | Integrate adjustment pricing | inline | done | db4808a |
+| 1 | 1.7-review-fix | Isolate quote transaction identity maps | inline | done | this commit |
 | 2 | 2.1 | Undoable commands | inline | todo | — |
 | 2 | 2.2 | Adjustment CRUD routes | inline | todo | — |
 | 2 | 2.3 | Draft preview | inline | todo | — |
@@ -101,3 +102,5 @@ Migration generation: `yarn mercato db generate` scans only local app modules; u
 1.5-review-fix. **Fix foundation review findings** — reversible generated rollback, deal eligibility hash, valid same-level fallback and regression tests. CPQ tests 672/672 pass.
 
 Transaction boundary: explicit transaction EM flows through quote item writes, saved recalculation, clone, status and conversion. Scoped pessimistic row lock/refresh and revision increment share one helper. 677 CPQ tests pass. DB-backed two-writer tests remain unexercised because no database is available; do not claim concurrency verified until integration QA runs.
+
+1.7-review-fix. **Isolate quote transaction identity maps** — fresh clear fork with context resolution disabled; transactional clear:true; no propagation into caller identity map. Real-ORM no-DB success/failure regression and683 CPQ tests pass. DB concurrency remains unverified.

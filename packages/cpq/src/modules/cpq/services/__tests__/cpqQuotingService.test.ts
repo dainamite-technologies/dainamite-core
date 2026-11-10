@@ -609,7 +609,7 @@ describe('DefaultCpqQuotingService.recalculate', () => {
     await service.recalculate('cpq-1', { save: true }, SCOPE)
 
     expect(em.transactional).toHaveBeenCalledTimes(1)
-    expect(em.fork).not.toHaveBeenCalled()
+    expect(em.fork).toHaveBeenCalledWith({ clear: true, useContext: false })
     expect(em.findOne.mock.calls[0][2]).toMatchObject({ lockMode: LockMode.PESSIMISTIC_WRITE })
   })
 

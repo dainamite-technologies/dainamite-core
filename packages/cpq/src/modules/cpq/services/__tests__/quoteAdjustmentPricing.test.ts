@@ -12,7 +12,8 @@ function setup() {
   const findOne = jest.fn(async (entity: unknown) => entity === CpqQuoteConfiguration ? quote : entity === SalesQuote ? sales : entity === CpqProductOffering ? { id: 'offer', name: 'Offering', offeringType: 'simple' } : entity === SalesQuoteLine ? salesLine : null)
   const find = jest.fn(async (entity: unknown) => entity === CpqQuoteLineConfiguration ? [line] : entity === CpqQuotePriceAdjustment ? [row] : [])
   const tx = { findOne, find, assign: jest.fn((entity: object, updates: object) => Object.assign(entity, updates)), flush: jest.fn().mockResolvedValue(undefined) }
-  const em = { ...tx, transactional: jest.fn(async (execute: (manager: typeof tx) => Promise<unknown>) => execute(tx)) }
+  const em = { ...tx, fork: jest.fn(), transactional: jest.fn(async (execute: (manager: typeof tx) => Promise<unknown>) => execute(tx)) }
+  em.fork.mockReturnValue(em)
   const pricing = { resolveProductCharges: jest.fn().mockResolvedValue([{ chargeCode: 'fee', chargeName: 'Fee', chargeType: 'mrc', pricingMethod: 'flat', unitPrice: 100, totalPrice: 100, quantity: 1, currencyCode: 'USD', adjustments: [] }]) }
   const service = new DefaultCpqQuotingService({ em: em as never, cpqPricingService: pricing as never, cpqValidationService: { validateOfferingConfiguration: async () => ({ errors: [] }), validateRelationships: async () => [] } as never, cpqProductService: {} as never, salesDocumentNumberGenerator: {} as never })
   return { service, quote, line, row, salesLine, em, tx }

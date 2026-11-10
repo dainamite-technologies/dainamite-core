@@ -13,7 +13,11 @@ export async function withQuotePricingWrite<T>(
   makeError: (status: number, message: string) => Error,
   expectedRevision?: number,
 ): Promise<T> {
-  return em.transactional(async (transaction) => {
+  // Do not inherit managed objects/pending writes or propagate committed state
+  // back into the caller's identity map. The returned DTO is authoritative;
+  // callers that need fresh entities must reload them in their own context.
+  const isolated = em.fork({ clear: true, useContext: false })
+  return isolated.transactional(async (transaction) => {
     const scoped = { organizationId: scope.organizationId, tenantId: scope.tenantId, deletedAt: null }
     const options = { lockMode: LockMode.PESSIMISTIC_WRITE, refresh: true }
     const quote = await findOneWithDecryption(transaction, CpqQuoteConfiguration, { ...scoped, id: quoteId }, options, scope)
@@ -26,5 +30,5 @@ export async function withQuotePricingWrite<T>(
     const result = await execute(transaction, quote)
     await transaction.flush()
     return result
-  })
+  }, { clear: true })
 }

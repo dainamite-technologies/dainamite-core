@@ -2,6 +2,7 @@ import { DefaultCpqOrderService, OrderError } from '../cpqOrderService'
 import type { TenantScope } from '../types'
 
 interface MockEm {
+  fork: jest.MockedFunction<() => MockEm>
   transactional: jest.MockedFunction<(callback: (em: MockEm) => Promise<unknown>) => Promise<unknown>>
   findOne: jest.MockedFunction<(entity: unknown, where: Record<string, unknown>) => Promise<unknown>>
   find: jest.MockedFunction<
@@ -26,6 +27,7 @@ interface MockNumberGenerator {
 
 function createMockEm(): MockEm {
   const em: MockEm = {
+    fork: jest.fn(),
     transactional: jest.fn(),
     findOne: jest.fn(),
     find: jest.fn().mockResolvedValue([]),
@@ -34,6 +36,7 @@ function createMockEm(): MockEm {
     persist: jest.fn(),
     flush: jest.fn().mockResolvedValue(undefined),
   }
+  em.fork.mockReturnValue(em)
   em.transactional.mockImplementation((callback) => callback(em))
   return em
 }

@@ -8,11 +8,12 @@ const error = (status: number, message: string) => new QuotingError(status, mess
 function setup() {
   const quote = { id: 'quote', quoteId: 'sales', pricingRevision: 4 }
   const transaction = { findOne: jest.fn().mockResolvedValue(quote), flush: jest.fn().mockResolvedValue(undefined) }
-  const root = { transactional: jest.fn().mockImplementation(async (fn: (em: typeof transaction) => Promise<unknown>) => fn(transaction)), findOne: jest.fn(), flush: jest.fn() }
-  return { quote, transaction, root, em: root as unknown as EntityManager }
+  const isolated = { transactional: jest.fn().mockImplementation(async (fn: (em: typeof transaction) => Promise<unknown>) => fn(transaction)) }
+  const root = { fork: jest.fn().mockReturnValue(isolated), transactional: jest.fn(), findOne: jest.fn(), flush: jest.fn() }
+  return { quote, transaction, root, isolated, em: root as unknown as EntityManager }
 }
 it('locks and refreshes the tenant-scoped root and passes only the transaction EM to the write', async () => {
-  const { quote, transaction, root, em } = setup()
+  const { quote, transaction, root, isolated, em } = setup()
   const result = await withQuotePricingWrite(em, 'quote', scope, async (tx, locked) => {
     expect(tx).toBe(transaction)
     expect(locked).toBe(quote)
@@ -21,6 +22,9 @@ it('locks and refreshes the tenant-scoped root and passes only the transaction E
     return 'saved'
   }, error, 4)
   expect(result).toBe('saved')
+  expect(root.fork).toHaveBeenCalledWith({ clear: true, useContext: false })
+  expect(root.transactional).not.toHaveBeenCalled()
+  expect(isolated.transactional).toHaveBeenCalledWith(expect.any(Function), { clear: true })
   expect(transaction.findOne).toHaveBeenCalledWith(CpqQuoteConfiguration,
     { id: 'quote', tenantId: 'tenant', organizationId: 'org', deletedAt: null },
     { lockMode: LockMode.PESSIMISTIC_WRITE, refresh: true })
@@ -52,9 +56,9 @@ it('does not execute an out-of-scope or missing quote', async () => {
   expect(write).not.toHaveBeenCalled()
 })
 it('propagates a write failure out of transactional so the database rolls back', async () => {
-  const { transaction, root, em } = setup()
+  const { transaction, isolated, em } = setup()
   const failure = new Error('Failed during reprice')
   await expect(withQuotePricingWrite(em, 'quote', scope, async () => { throw failure }, error)).rejects.toBe(failure)
-  expect(root.transactional).toHaveBeenCalledTimes(1)
+  expect(isolated.transactional).toHaveBeenCalledTimes(1)
   expect(transaction.flush).not.toHaveBeenCalled()
 })

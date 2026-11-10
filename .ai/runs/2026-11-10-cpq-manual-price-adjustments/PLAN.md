@@ -9,7 +9,7 @@ Engine: om-auto-create-pr-loop (steps: 22, --loop: no)
 
 | Phase | Step | Title | Exec | Status | Commit |
 |-------|------|-------|------|--------|--------|
-| 1 | 1.1 | Characterize pricing | inline | todo | — |
+| 1 | 1.1 | Characterize pricing | inline | done | this commit |
 | 1 | 1.2 | Capture list and standard prices | inline | todo | — |
 | 1 | 1.3 | Entity and migration | inline | todo | — |
 | 1 | 1.4 | Manual adjustment resolver | inline | todo | — |

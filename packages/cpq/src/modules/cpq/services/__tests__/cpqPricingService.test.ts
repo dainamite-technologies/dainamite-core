@@ -1181,3 +1181,55 @@ describe('DefaultCpqPricingService — price rules application', () => {
     expect(result.totalPrice).toBeNull()
   })
 })
+
+/** Pin legacy money calculations before adding the list/standard waterfall. */
+describe('negotiated-pricing baseline — all rule types across charge models', () => {
+  const models = ['flat', 'per_unit', 'volume', 'tiered'] as const
+  const rules = [
+    { type: 'discount_percent', value: 10, total: 90 },
+    { type: 'discount_absolute', value: 20, total: 80 },
+    { type: 'surcharge_percent', value: 10, total: 110 },
+    { type: 'surcharge_absolute', value: 20, total: 120 },
+    { type: 'price_override', value: 20, total: 80 },
+    { type: 'discount_absolute', value: 200, total: 0 },
+    { type: 'discount_percent', value: 100, total: 0 },
+  ]
+  it.each(models.flatMap((model) => rules.map((rule) => ({ model, ...rule }))))(
+    '$model with $type $value preserves existing money and adjustment arithmetic',
+    async ({ model, type, value, total }) => {
+      const em = createMockEm()
+      const charge = {
+        ...makeCharge({ code: 'fee', name: 'Fee', chargeType: 'mrc', pricingMethod: 'fixed' }),
+        chargeModel: model,
+        fixedPrice: model === 'flat' ? '100' : '25',
+        quantityAttributeCode: 'units',
+        ...(model === 'volume' || model === 'tiered'
+          ? { pricingMethod: 'table', pricingTableId: 'prices', priceColumnKey: 'rate' } : {}),
+      }
+      em.findOne.mockResolvedValue({ id: 'prices', dimensions: [] })
+      em.find.mockImplementation(async (entity) => {
+        if (entity === CpqProductCharge) return [charge]
+        if (entity === CpqPricingTableEntry) return [
+          { tierNumber: 0, rangeFrom: '1', rangeTo: '2', prices: { rate: 30 }, dimensionValues: {}, currencyCode: 'USD' },
+          { tierNumber: 1, rangeFrom: '3', rangeTo: null, prices: { rate: model === 'tiered' ? 20 : 25 }, dimensionValues: {}, currencyCode: 'USD' },
+        ]
+        return [{ code: 'rule', name: 'Rule', ruleType: type, value: String(value) }]
+      })
+      const service = new DefaultCpqPricingService(em as unknown as never)
+      const [result] = await service.resolveProductCharges({ offeringId: 'offer', configuration: { units: 4 }, currencyCode: 'USD', ...SCOPE })
+      const quantity = model === 'flat' ? 1 : 4
+      const expectedTotal = type === 'price_override' && model === 'flat' ? 20 : total
+      expect(Math.round((result.totalPrice ?? 0) * 100)).toBe(expectedTotal * 100)
+      expect(Math.round(result.unitPrice * quantity * 100)).toBe(expectedTotal * 100)
+      expect(result.quantity).toBe(quantity)
+      expect(result.currencyCode).toBe('USD')
+      expect(result.adjustments).toHaveLength(1)
+      expect(result.adjustments?.[0]).toMatchObject({ ruleCode: 'rule', ruleName: 'Rule', ruleType: type, value })
+      expect(Math.round((result.adjustments?.[0].unitPriceBefore ?? 0) * quantity * 100)).toBe(10000)
+      expect(Math.round((result.adjustments?.[0].delta ?? 0) * quantity * 100)).toBe((expectedTotal - 100) * 100)
+      if (model === 'tiered') {
+        expect(result.breakdown?.tiers.map((tier) => Math.round(tier.subtotal * 100))).toEqual([6000, 4000])
+      }
+    },
+  )
+})

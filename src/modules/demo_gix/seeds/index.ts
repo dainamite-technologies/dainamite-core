@@ -1,5 +1,6 @@
 import type { CpqUseCaseSeedContext } from '@dainamite/cpq/modules/cpq/lib/seeds/api'
 import { seedGixExamples as seedGixExamplesImpl } from './examples'
+import { seedGixPriceAdjustmentExample } from './price-adjustment-examples'
 import { seedCpqArcExamples } from './arc-examples'
 import {
   seedGixBundleData,
@@ -40,6 +41,8 @@ export async function seedGixExamples(ctx: CpqUseCaseSeedContext): Promise<void>
   if (!ctx.withExamples) return
   const scope = { tenantId: ctx.tenantId, organizationId: ctx.organizationId }
   await seedGixExamplesImpl(ctx.em, ctx.container, scope)
+  // Negotiated-price demo quote (manual price adjustments); idempotent on its own marker.
+  await seedGixPriceAdjustmentExample(ctx.em, ctx.container, scope)
   // XD-250 ARC: extra demo customer ("Meridian Connectivity Sp. z o.o.") with
   // a portfolio of subscriptions covering every ARC operator scenario
   // (amend / renew / cancel / multi-target / merge / suspended).

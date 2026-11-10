@@ -38,9 +38,12 @@ import {
 } from './types'
 import {
   ARC_PRICE_FROZEN_KEY,
+  ARC_REPRICED_KEY,
   arcPricingInputsChanged,
   buildArcMirrorConfiguration,
-  isArcPriceFrozen,
+  isFrozenAmendMirrorLine,
+  stripArcMarkers,
+  stripQuoteOnlyArcMarkers,
 } from './arcPriceFreeze'
 
 interface QuotingServiceDeps {
@@ -176,6 +179,8 @@ export class DefaultCpqQuotingService {
 
   async addQuoteItem(quoteId: string, item: QuoteItemInput, scope: TenantScope): Promise<QuoteResult> {
     const em = this.em
+    // ARC markers (`_arc*`) are server-owned — never accept them from callers.
+    item = { ...item, configuration: stripArcMarkers(item.configuration) }
 
     const cpqConfig = await this.loadCpqConfig(em, quoteId, scope)
     const salesQuote = await this.loadSalesQuote(em, cpqConfig.quoteId, scope)
@@ -335,6 +340,10 @@ export class DefaultCpqQuotingService {
     scope: TenantScope,
   ): Promise<QuoteResult> {
     const em = this.em
+    // ARC markers (`_arc*`) are server-owned: the quote page echoes the line's
+    // stored configuration (markers included) back, so drop them here and
+    // re-apply the server's own markers below.
+    update = { ...update, configuration: stripArcMarkers(update.configuration) }
 
     const cpqConfig = await this.loadCpqConfig(em, quoteId, scope)
     const salesQuote = await this.loadSalesQuote(em, cpqConfig.quoteId, scope)
@@ -392,10 +401,11 @@ export class DefaultCpqQuotingService {
       validationErrors = validation.errors
     }
 
-    // Preserve XD-250 ARC markers across edits — the UI doesn't echo them
-    // back in `update.configuration`, so we'd lose `_arcMirroredFromItemId` /
-    // `_arcMirroredName` (and downstream "Mirrored from existing subscription
-    // item" rendering, plus the recalc / validate paths that key off them).
+    // Preserve XD-250 ARC markers across edits — client-sent markers were
+    // stripped above, so carry `_arcMirroredFromItemId` / `_arcMirroredName`
+    // over from the stored configuration (downstream "Mirrored from existing
+    // subscription item" rendering plus the recalc / validate paths key off
+    // them).
     const existingCfg = lineConfig.configuration as Record<string, unknown> | null
     const arcMarkers: Record<string, unknown> = {}
     if (existingCfg?._arcMirroredFromItemId !== undefined) {
@@ -405,10 +415,12 @@ export class DefaultCpqQuotingService {
       arcMarkers._arcMirroredName = existingCfg._arcMirroredName
     }
     // A frozen Amend mirror line keeps the subscription's stored price until
-    // a pricing input changes; then it is unfrozen and re-priced as usual.
-    const staysFrozen =
-      isArcPriceFrozen(existingCfg) &&
-      !arcPricingInputsChanged(
+    // a pricing input changes; then it is unfrozen, marked re-priced and
+    // priced as usual.
+    const wasFrozen = isFrozenAmendMirrorLine(existingCfg, cpqConfig.quoteType)
+    const pricingInputsChanged =
+      wasFrozen &&
+      arcPricingInputsChanged(
         {
           configuration: existingCfg,
           quantity: lineConfig.quantity,
@@ -419,7 +431,9 @@ export class DefaultCpqQuotingService {
         },
         update,
       )
+    const staysFrozen = wasFrozen && !pricingInputsChanged
     if (staysFrozen) arcMarkers[ARC_PRICE_FROZEN_KEY] = true
+    if (pricingInputsChanged || existingCfg?.[ARC_REPRICED_KEY] === true) arcMarkers[ARC_REPRICED_KEY] = true
     update.configuration = { ...update.configuration, ...arcMarkers }
     mergedConfig._arcMirroredFromItemId = arcMarkers._arcMirroredFromItemId
     mergedConfig._arcMirroredName = arcMarkers._arcMirroredName
@@ -692,7 +706,8 @@ export class DefaultCpqQuotingService {
         startDate: origLine.startDate,
         termMonths: origLine.termMonths,
         endDate: origLine.endDate,
-        configuration: { ...origLine.configuration },
+        // A clone is a new quote: quote-only ARC pricing markers don't apply.
+        configuration: { ...stripQuoteOnlyArcMarkers(origLine.configuration) },
         quantity: origLine.quantity,
         charges: origLine.charges ? [...origLine.charges] : null,
         nrcTotal: origLine.nrcTotal,
@@ -849,7 +864,7 @@ export class DefaultCpqQuotingService {
       // Frozen Amend mirror lines keep the subscription item's stored charges
       // (see arcPriceFreeze.ts) — re-pricing them would silently move the
       // contracted price of items the amendment does not touch.
-      const isFrozen = isArcPriceFrozen(cfgRecord)
+      const isFrozen = isFrozenAmendMirrorLine(cfgRecord, cpqConfig.quoteType)
       let charges: ResolvedCharge[]
       if ((lineConfig.offeringId || lineConfig.productId) && !isFrozen) {
         charges = await this.pricingService.resolveProductCharges({

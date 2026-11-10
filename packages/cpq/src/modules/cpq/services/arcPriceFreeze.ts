@@ -15,12 +15,40 @@
 
 export const ARC_PRICE_FROZEN_KEY = '_arcPriceFrozen'
 
+/**
+ * Set when the server unfreezes an Amend mirror line because a pricing input
+ * changed — drives the "re-priced at the current catalog price" notice (an
+ * explicit marker, so Amend quotes created before freezing existed don't
+ * show it).
+ */
+export const ARC_REPRICED_KEY = '_arcRepriced'
+
+/** Markers that describe quote-time pricing state and never leave the quote. */
+const QUOTE_ONLY_ARC_KEYS = [ARC_PRICE_FROZEN_KEY, ARC_REPRICED_KEY] as const
+
 const ARC_MARKER_PREFIX = '_arc'
 
 export type ArcMirrorQuoteType = 'amend' | 'cancel' | 'renew'
 
 export function isArcPriceFrozen(configuration: Record<string, unknown> | null | undefined): boolean {
   return configuration?.[ARC_PRICE_FROZEN_KEY] === true
+}
+
+/**
+ * Whether recalculation must keep a line's stored charges. Only server-made
+ * mirror lines on Amend quotes qualify — the flag alone is never trusted
+ * (client input is stripped of `_arc*` keys, and a clone of an Amend quote
+ * is a new quote).
+ */
+export function isFrozenAmendMirrorLine(
+  configuration: Record<string, unknown> | null | undefined,
+  quoteType: string | null | undefined,
+): boolean {
+  return (
+    quoteType === 'amend' &&
+    typeof configuration?._arcMirroredFromItemId === 'string' &&
+    isArcPriceFrozen(configuration)
+  )
 }
 
 /**
@@ -36,7 +64,7 @@ export function buildArcMirrorConfiguration(
   return {
     // An item's configuration can carry markers from an earlier ARC quote
     // (activation copies line configuration onto the item); never inherit them.
-    ...withoutArcMarkers(itemConfiguration),
+    ...stripArcMarkers(itemConfiguration),
     _arcMirroredFromItemId: item.id,
     _arcMirroredName: item.name,
     ...(quoteType === 'amend' ? { [ARC_PRICE_FROZEN_KEY]: true } : {}),
@@ -44,18 +72,26 @@ export function buildArcMirrorConfiguration(
 }
 
 /**
- * Line configuration as it may be written onto a subscription item: the
- * freeze flag is quote-only state and must not leak into inventory.
+ * Line configuration as it may leave the quote (order lines, subscription
+ * items, clones): quote-only pricing markers are dropped; the descriptive
+ * `_arcMirrored*` markers stay.
  */
-export function stripArcPriceFreeze(
+export function stripQuoteOnlyArcMarkers(
   configuration: Record<string, unknown> | null | undefined,
 ): Record<string, unknown> | null | undefined {
-  if (!configuration || !(ARC_PRICE_FROZEN_KEY in configuration)) return configuration
-  const { [ARC_PRICE_FROZEN_KEY]: _frozen, ...rest } = configuration
-  return rest
+  if (!configuration || !QUOTE_ONLY_ARC_KEYS.some((key) => key in configuration)) return configuration
+  const out: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(configuration)) {
+    if (!(QUOTE_ONLY_ARC_KEYS as readonly string[]).includes(key)) out[key] = value
+  }
+  return out
 }
 
-function withoutArcMarkers(configuration: Record<string, unknown> | null | undefined): Record<string, unknown> {
+/**
+ * Configuration without any `_arc*` marker. ARC markers are server-owned:
+ * client-supplied configuration goes through this before it is stored.
+ */
+export function stripArcMarkers(configuration: Record<string, unknown> | null | undefined): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(configuration ?? {})) {
     if (!key.startsWith(ARC_MARKER_PREFIX)) out[key] = value
@@ -105,7 +141,7 @@ export type ArcLinePricingUpdate = {
  * Fields the update omits keep their stored value.
  */
 export function arcPricingInputsChanged(before: ArcLinePricingState, update: ArcLinePricingUpdate): boolean {
-  if (canonical(withoutArcMarkers(before.configuration)) !== canonical(withoutArcMarkers(update.configuration))) {
+  if (canonical(stripArcMarkers(before.configuration)) !== canonical(stripArcMarkers(update.configuration))) {
     return true
   }
   if (update.quantity !== undefined && update.quantity !== before.quantity) return true

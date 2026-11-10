@@ -4,7 +4,8 @@ import { cpqTransitionStatusSchema } from '../../../../data/validators'
 import { resolveQuotingService } from '../../../resolveQuotingService'
 import { handleArcError } from '../../../_helpers/handleArcError'
 import { CPQ_QUOTE_RESOURCE_KIND, runCpqMutationGuards } from '../../../_helpers/quoteMutationGuard'
-import { CPQ_STATUSES } from '../../../../services/types'
+import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
+import { cpqErrorDoc, cpqQuoteIdPathParams } from '../../../_helpers/quoteRouteOpenApi'
 
 export const metadata = {
   POST: { requireAuth: true, requireFeatures: ['cpq.quotes.manage'] },
@@ -38,35 +39,23 @@ export async function POST(req: Request, { params }: { params: Promise<{ quoteId
   }
 }
 
-export const openApi = {
-  '/api/cpq/quotes/{quoteId}/status': {
-    parameters: [
-      { name: 'quoteId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
-    ],
-    post: {
-      tags: ['CPQ Quotes'],
+export const openApi: OpenApiRouteDoc = {
+  tag: 'CPQ Quotes',
+  summary: 'CPQ quote status',
+  pathParams: cpqQuoteIdPathParams,
+  methods: {
+    POST: {
       summary: 'Transition a CPQ quote to another status',
       description:
-        'Operator-driven status change. Registered mutation guards (resource kind `cpq.quote`, action `transition_status`) can block it — projects use this to enforce approvals.',
-      requestBody: {
-        required: true,
-        content: {
-          'application/json': {
-            schema: {
-              type: 'object',
-              required: ['targetStatus'],
-              properties: { targetStatus: { type: 'string', enum: [...CPQ_STATUSES] } },
-            },
-          },
-        },
-      },
-      responses: {
-        '200': { description: 'Quote with its new status' },
-        '400': { description: 'Validation error' },
-        '404': { description: 'Quote not found' },
-        '409': { description: 'Transition not allowed' },
-        '422': { description: 'ARC validation failed or blocked by a mutation guard' },
-      },
+        'Operator-driven status change. Registered mutation guards (resource kind `cpq.quote`, action `transition_status`) run first — projects use them to enforce approvals.',
+      requestBody: { schema: cpqTransitionStatusSchema },
+      responses: [{ status: 200, description: 'Quote with its new status' }],
+      errors: [
+        cpqErrorDoc(400, 'Validation error'),
+        cpqErrorDoc(404, 'Quote not found'),
+        cpqErrorDoc(409, 'Transition not allowed'),
+        cpqErrorDoc(422, 'ARC validation failed or blocked by a mutation guard'),
+      ],
     },
   },
 }

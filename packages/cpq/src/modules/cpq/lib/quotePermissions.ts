@@ -1,4 +1,4 @@
-import { hasAllFeatures } from '@open-mercato/shared/lib/auth/featureMatch'
+import { hasAllFeatures } from '@open-mercato/shared/security/features'
 
 /** Feature required to write a quote's prices (recalculate, line edits). */
 export const QUOTE_MANAGE_FEATURE = 'cpq.quotes.manage'
@@ -18,5 +18,5 @@ export const TERMINAL_QUOTE_STATUSES: readonly string[] = ['accepted', 'rejected
  */
 export function canRecalculateQuote(grantedFeatures: readonly string[], cpqStatus: string): boolean {
   if (TERMINAL_QUOTE_STATUSES.includes(cpqStatus)) return false
-  return hasAllFeatures([QUOTE_MANAGE_FEATURE], [...grantedFeatures])
+  return hasAllFeatures(grantedFeatures, [QUOTE_MANAGE_FEATURE])
 }

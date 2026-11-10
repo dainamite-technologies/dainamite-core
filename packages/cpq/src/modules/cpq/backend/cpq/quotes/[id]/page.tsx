@@ -1,5 +1,6 @@
 "use client"
 import * as React from 'react'
+import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { useRouter, useParams, useSearchParams } from 'next/navigation'
 import ArcQuoteConfigurator, {
   type AttachedTarget,
@@ -279,6 +280,7 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
   const cpqConfigId = (props.params?.id ?? urlParams?.id) as string
   const isNew = cpqConfigId === 'new'
 
+  const t = useT()
   const [cpqQuote, setCpqQuote] = React.useState<QuoteResult | null>(null)
   const grantedFeatures = useGrantedFeatures([QUOTE_MANAGE_FEATURE])
   const [loading, setLoading] = React.useState(true)
@@ -873,19 +875,21 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
           )}
 
           {/* Amend lines the rep reconfigured are re-priced at today's catalog
-              price; negotiated prices are not carried over yet (later release). */}
-          {arcQuoteType === 'amend' &&
-            cpqQuote.lines.some(
-              (l) => l.configuration?._arcMirroredFromItemId && l.configuration?._arcPriceFrozen !== true,
-            ) && (
-              <Alert variant="info">
-                <AlertTitle>Some existing items use the current catalog price</AlertTitle>
-                <AlertDescription>
-                  Reconfigured lines were re-priced at today&apos;s catalog price. Negotiated prices from the
-                  subscription are not carried over to reconfigured lines yet.
-                </AlertDescription>
-              </Alert>
-            )}
+              price (server marks them `_arcRepriced`); negotiated prices are
+              not carried over yet (later release). */}
+          {arcQuoteType === 'amend' && cpqQuote.lines.some((l) => l.configuration?._arcRepriced === true) && (
+            <Alert variant="info">
+              <AlertTitle>
+                {t('cpq.quotes.arc.repricedTitle', 'Some existing items use the current catalog price')}
+              </AlertTitle>
+              <AlertDescription>
+                {t(
+                  'cpq.quotes.arc.repricedDescription',
+                  "Reconfigured lines were re-priced at today's catalog price. Negotiated prices from the subscription are not carried over to reconfigured lines yet.",
+                )}
+              </AlertDescription>
+            </Alert>
+          )}
 
           {/* Quote Lines */}
           <QuoteLineTree
@@ -1239,6 +1243,7 @@ function QuoteLineRow({ line, lineIdx, currency, isExpanded, pricingDetail, isBu
   onAddComponent?: () => void
   onTogglePricingDetail: (lineIdx: number, chargeIdx: number) => void
 }) {
+  const t = useT()
   const paddingLeft = indent > 0 ? `${indent * 2 + 1}rem` : undefined
 
   return (
@@ -1267,9 +1272,12 @@ function QuoteLineRow({ line, lineIdx, currency, isExpanded, pricingDetail, isBu
               <Tag
                 variant="neutral"
                 className="px-1.5 text-xs"
-                title="Price kept from the subscription — it changes only if you reconfigure this line"
+                title={t(
+                  'cpq.quotes.arc.priceKeptHint',
+                  'Price kept from the subscription — it changes only if you reconfigure this line',
+                )}
               >
-                price kept
+                {t('cpq.quotes.arc.priceKept', 'price kept')}
               </Tag>
             )}
             {targetCodes.size >= 2 && line.targetSubscriptionId && targetCodes.get(line.targetSubscriptionId) && (

@@ -4,7 +4,8 @@ import { cpqAddQuoteItemSchema } from '../../../../data/validators'
 import { resolveQuotingService } from '../../../resolveQuotingService'
 import { handleArcError } from '../../../_helpers/handleArcError'
 import { CPQ_QUOTE_LINE_RESOURCE_KIND, runCpqMutationGuards } from '../../../_helpers/quoteMutationGuard'
-import { QUOTE_ITEM_REQUEST_SCHEMA } from '../../../_helpers/quoteItemOpenApi'
+import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
+import { CPQ_GUARDED_WRITE_ERRORS, cpqQuoteIdPathParams } from '../../../_helpers/quoteRouteOpenApi'
 
 export const metadata = {
   POST: { requireAuth: true, requireFeatures: ['cpq.quotes.manage'] },
@@ -38,26 +39,18 @@ export async function POST(req: Request, { params }: { params: Promise<{ quoteId
   }
 }
 
-export const openApi = {
-  '/api/cpq/quotes/{quoteId}/items': {
-    parameters: [
-      { name: 'quoteId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
-    ],
-    post: {
-      tags: ['CPQ Quotes'],
+export const openApi: OpenApiRouteDoc = {
+  tag: 'CPQ Quotes',
+  summary: 'CPQ quote lines',
+  pathParams: cpqQuoteIdPathParams,
+  methods: {
+    POST: {
       summary: 'Add a configured line to a CPQ quote',
-      description: 'Prices the line and recalculates the quote. Guarded as resource kind `cpq.quote_line` (create).',
-      requestBody: {
-        required: true,
-        content: { 'application/json': { schema: QUOTE_ITEM_REQUEST_SCHEMA } },
-      },
-      responses: {
-        '201': { description: 'Quote after the line was added' },
-        '400': { description: 'Validation error' },
-        '404': { description: 'Quote or offering not found' },
-        '409': { description: 'Quote is in a terminal status' },
-        '422': { description: 'Blocked by a mutation guard' },
-      },
+      description:
+        'Prices the line and recalculates the quote. Mutation guards run first (resource kind `cpq.quote_line`, create). `_arc*` configuration keys are server-owned and ignored.',
+      requestBody: { schema: cpqAddQuoteItemSchema },
+      responses: [{ status: 201, description: 'Quote after the line was added' }],
+      errors: CPQ_GUARDED_WRITE_ERRORS,
     },
   },
 }

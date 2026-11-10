@@ -5,7 +5,8 @@ import { cpqUpdateQuoteItemSchema } from '../../../../../data/validators'
 import { isQuotingError } from '../../../../../services/cpqQuotingService'
 import { resolveQuotingService } from '../../../../resolveQuotingService'
 import { CPQ_QUOTE_LINE_RESOURCE_KIND, runCpqMutationGuards } from '../../../../_helpers/quoteMutationGuard'
-import { QUOTE_ITEM_UPDATE_SCHEMA } from '../../../../_helpers/quoteItemOpenApi'
+import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
+import { CPQ_GUARDED_WRITE_ERRORS } from '../../../../_helpers/quoteRouteOpenApi'
 
 export const metadata = {
   PUT: { requireAuth: true, requireFeatures: ['cpq.quotes.manage'] },
@@ -77,41 +78,24 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ quote
   }
 }
 
-const PATH_PARAMETERS = [
-  { name: 'quoteId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
-  { name: 'lineId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
-]
-
-export const openApi = {
-  '/api/cpq/quotes/{quoteId}/items/{lineId}': {
-    parameters: PATH_PARAMETERS,
-    put: {
-      tags: ['CPQ Quotes'],
+export const openApi: OpenApiRouteDoc = {
+  tag: 'CPQ Quotes',
+  summary: 'CPQ quote line',
+  pathParams: z.object({ quoteId: z.string().uuid(), lineId: z.string().uuid() }),
+  methods: {
+    PUT: {
       summary: 'Update a quote line (configuration, quantity, term)',
       description:
-        'Re-prices the line unless it is a frozen Amend mirror line whose pricing inputs are unchanged. Guarded as resource kind `cpq.quote_line` (update).',
-      requestBody: {
-        required: true,
-        content: { 'application/json': { schema: QUOTE_ITEM_UPDATE_SCHEMA } },
-      },
-      responses: {
-        '200': { description: 'Quote after the update' },
-        '400': { description: 'Validation error' },
-        '404': { description: 'Quote or line not found' },
-        '409': { description: 'Quote is in a terminal status' },
-        '422': { description: 'Blocked by a mutation guard' },
-      },
+        'Re-prices the line unless it is a frozen Amend mirror line whose pricing inputs are unchanged. Mutation guards run first (resource kind `cpq.quote_line`, update). `_arc*` configuration keys are server-owned and ignored.',
+      requestBody: { schema: cpqUpdateQuoteItemSchema },
+      responses: [{ status: 200, description: 'Quote after the update' }],
+      errors: CPQ_GUARDED_WRITE_ERRORS,
     },
-    delete: {
-      tags: ['CPQ Quotes'],
+    DELETE: {
       summary: 'Remove a quote line',
-      description: 'Guarded as resource kind `cpq.quote_line` (delete).',
-      responses: {
-        '200': { description: 'Quote after the removal' },
-        '404': { description: 'Quote or line not found' },
-        '409': { description: 'Quote is in a terminal status' },
-        '422': { description: 'Blocked by a mutation guard' },
-      },
+      description: 'Mutation guards run first (resource kind `cpq.quote_line`, delete).',
+      responses: [{ status: 200, description: 'Quote after the removal' }],
+      errors: CPQ_GUARDED_WRITE_ERRORS.filter((doc) => doc.status !== 400),
     },
   },
 }

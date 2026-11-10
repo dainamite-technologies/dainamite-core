@@ -2,8 +2,11 @@ import {
   ARC_PRICE_FROZEN_KEY,
   arcPricingInputsChanged,
   buildArcMirrorConfiguration,
+  ARC_REPRICED_KEY,
   isArcPriceFrozen,
-  stripArcPriceFreeze,
+  isFrozenAmendMirrorLine,
+  stripArcMarkers,
+  stripQuoteOnlyArcMarkers,
 } from '../arcPriceFreeze'
 
 const ITEM = { id: 'item-1', name: 'GIX Access Port' }
@@ -93,17 +96,46 @@ describe('arcPricingInputsChanged', () => {
   })
 })
 
-describe('stripArcPriceFreeze', () => {
-  it('removes only the freeze flag', () => {
-    expect(stripArcPriceFreeze({ port_size: '1G', _arcMirroredFromItemId: 'item-1', [ARC_PRICE_FROZEN_KEY]: true })).toEqual({
-      port_size: '1G',
-      _arcMirroredFromItemId: 'item-1',
-    })
+describe('isFrozenAmendMirrorLine', () => {
+  const mirrored = { port_size: '1G', _arcMirroredFromItemId: 'item-1', [ARC_PRICE_FROZEN_KEY]: true }
+
+  it('is true only for a flagged mirror line on an Amend quote', () => {
+    expect(isFrozenAmendMirrorLine(mirrored, 'amend')).toBe(true)
   })
 
-  it('returns the input untouched when there is no flag', () => {
+  it.each(['new', 'renew', 'cancel', null, undefined])('ignores the flag on a %s quote', (quoteType) => {
+    expect(isFrozenAmendMirrorLine(mirrored, quoteType)).toBe(false)
+  })
+
+  it('ignores the flag on a line that is not a mirror line', () => {
+    expect(isFrozenAmendMirrorLine({ port_size: '1G', [ARC_PRICE_FROZEN_KEY]: true }, 'amend')).toBe(false)
+  })
+})
+
+describe('stripArcMarkers', () => {
+  it('removes every _arc* key and keeps the rest', () => {
+    expect(
+      stripArcMarkers({ port_size: '1G', _arcMirroredFromItemId: 'item-1', [ARC_PRICE_FROZEN_KEY]: true, [ARC_REPRICED_KEY]: true }),
+    ).toEqual({ port_size: '1G' })
+    expect(stripArcMarkers(null)).toEqual({})
+  })
+})
+
+describe('stripQuoteOnlyArcMarkers', () => {
+  it('removes the freeze and re-priced flags and keeps the descriptive markers', () => {
+    expect(
+      stripQuoteOnlyArcMarkers({
+        port_size: '1G',
+        _arcMirroredFromItemId: 'item-1',
+        [ARC_PRICE_FROZEN_KEY]: true,
+        [ARC_REPRICED_KEY]: true,
+      }),
+    ).toEqual({ port_size: '1G', _arcMirroredFromItemId: 'item-1' })
+  })
+
+  it('returns the input untouched when there is no quote-only marker', () => {
     const cfg = { port_size: '1G' }
-    expect(stripArcPriceFreeze(cfg)).toBe(cfg)
-    expect(stripArcPriceFreeze(null)).toBeNull()
+    expect(stripQuoteOnlyArcMarkers(cfg)).toBe(cfg)
+    expect(stripQuoteOnlyArcMarkers(null)).toBeNull()
   })
 })

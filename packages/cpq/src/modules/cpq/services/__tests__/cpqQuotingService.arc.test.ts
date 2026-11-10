@@ -318,4 +318,63 @@ describe('updateQuoteItem → frozen Amend mirror lines', () => {
     expect(pricingService.resolveProductCharges).toHaveBeenCalled()
     expect(lineConfig.mrcTotal).toBe('220')
   })
+
+  it('unfreezes and marks the line re-priced when the UI echoes the stored markers with a changed attribute', async () => {
+    const { em, pricingService, service } = makePricedService()
+    const { cpqConfig, lineConfig } = amendFixture({ ...FROZEN_CFG })
+    routeEm(em, cpqConfig, lineConfig)
+    pricingService.resolveProductCharges.mockResolvedValue([mrcCharge(150)])
+
+    // The quote page sends back the configuration it loaded — markers included.
+    await service.updateQuoteItem('cpq-1', 'ql-1', { configuration: { ...FROZEN_CFG, port_size: '10G' }, quantity: 1 }, SCOPE)
+
+    const stored = lineConfig.configuration as Record<string, unknown>
+    expect(pricingService.resolveProductCharges).toHaveBeenCalled()
+    expect(stored._arcPriceFrozen).toBeUndefined()
+    expect(stored._arcRepriced).toBe(true)
+    expect(stored._arcMirroredFromItemId).toBe('item-1')
+    expect(lineConfig.mrcTotal).toBe('150')
+  })
+
+  it('stays frozen when the UI echoes the stored markers unchanged', async () => {
+    const { em, pricingService, service } = makePricedService()
+    const { cpqConfig, lineConfig } = amendFixture({ ...FROZEN_CFG })
+    routeEm(em, cpqConfig, lineConfig)
+
+    await service.updateQuoteItem('cpq-1', 'ql-1', { configuration: { ...FROZEN_CFG }, quantity: 1 }, SCOPE)
+
+    expect(pricingService.resolveProductCharges).not.toHaveBeenCalled()
+    expect((lineConfig.configuration as Record<string, unknown>)._arcRepriced).toBeUndefined()
+  })
+
+  it('never lets a client set the freeze marker', async () => {
+    const { em, pricingService, service } = makePricedService()
+    const { cpqConfig, lineConfig } = amendFixture({ port_size: '1G', _arcMirroredFromItemId: 'item-1', _arcMirroredName: 'GIX Access Port' })
+    routeEm(em, cpqConfig, lineConfig)
+    pricingService.resolveProductCharges.mockResolvedValue([mrcCharge(120)])
+
+    await service.updateQuoteItem('cpq-1', 'ql-1', { configuration: { port_size: '1G', _arcPriceFrozen: true } }, SCOPE)
+
+    expect(pricingService.resolveProductCharges).toHaveBeenCalled()
+    expect((lineConfig.configuration as Record<string, unknown>)._arcPriceFrozen).toBeUndefined()
+  })
+})
+
+describe('recalculate → freeze marker outside Amend mirror lines', () => {
+  it('ignores the freeze marker on a line of a new (non-ARC) quote', async () => {
+    const { em, pricingService, service } = makePricedService()
+    const { cpqConfig, lineConfig } = amendFixture({
+      port_size: '1G',
+      _arcMirroredFromItemId: 'item-1',
+      _arcPriceFrozen: true,
+    })
+    cpqConfig.quoteType = 'new'
+    routeEm(em, cpqConfig, lineConfig)
+    pricingService.resolveProductCharges.mockResolvedValue([mrcCharge(120)])
+
+    await service.recalculate('cpq-1', { save: true }, SCOPE)
+
+    expect(pricingService.resolveProductCharges).toHaveBeenCalledTimes(1)
+    expect(lineConfig.mrcTotal).toBe('120')
+  })
 })

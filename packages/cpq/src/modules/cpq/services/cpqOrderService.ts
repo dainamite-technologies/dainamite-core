@@ -25,7 +25,7 @@ import {
   type TenantScope,
 } from './types'
 import { emitCpqEvent } from '../events'
-import { stripArcPriceFreeze } from './arcPriceFreeze'
+import { stripQuoteOnlyArcMarkers } from './arcPriceFreeze'
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -310,7 +310,8 @@ export class DefaultCpqOrderService {
         startDate: ql.startDate,
         termMonths: ql.termMonths ?? null,
         endDate: ql.endDate,
-        configuration: { ...ql.configuration, offeringName },
+        // Quote-only ARC pricing markers stay on the quote.
+        configuration: { ...stripQuoteOnlyArcMarkers(ql.configuration), offeringName },
         quantity: ql.quantity,
         charges: ql.charges ? [...ql.charges] : null,
         nrcTotal: ql.nrcTotal,
@@ -642,7 +643,7 @@ export class DefaultCpqOrderService {
       offeringId: line.offeringId ?? undefined,
       specId: line.specId ?? undefined,
       name: this.getLineName(line),
-      configuration: line.configuration ?? {},
+      configuration: stripQuoteOnlyArcMarkers(line.configuration) ?? {},
       charges: (line.charges ?? []) as Array<Record<string, unknown>>,
       mrcAmount: Number(line.mrcTotal),
       nrcAmount: Number(line.nrcTotal),
@@ -712,7 +713,7 @@ export class DefaultCpqOrderService {
           purchasePrice: Number(line.nrcTotal),
           quantity: line.quantity,
           purchaseDate: new Date().toISOString().split('T')[0],
-          configuration: line.configuration ?? {},
+          configuration: stripQuoteOnlyArcMarkers(line.configuration) ?? {},
           charges: (line.charges ?? []) as Array<Record<string, unknown>>,
           sourceOrderId: orderConfig.id,
           sourceQuoteLineId: line.sourceQuoteLineId ?? undefined,
@@ -977,7 +978,7 @@ export class DefaultCpqOrderService {
         action: lc.action,
         parentLineId: lc.parentLineId ?? null,
         quantity: lc.quantity,
-        configuration: lc.configuration ?? {},
+        configuration: stripQuoteOnlyArcMarkers(lc.configuration) ?? {},
         startDate: lc.startDate?.toISOString() ?? null,
         termMonths: lc.termMonths ?? null,
         endDate: lc.endDate?.toISOString() ?? null,
@@ -1083,7 +1084,7 @@ function buildArcLineChange(
       offeringId: line.offeringId ?? undefined,
       specId: line.specId ?? undefined,
       name: resolveLineName(line, specMap),
-      configuration: stripArcPriceFreeze(line.configuration) ?? {},
+      configuration: stripQuoteOnlyArcMarkers(line.configuration) ?? {},
       charges: (line.charges ?? null) as Array<Record<string, unknown>> | undefined,
       mrcAmount: Number(line.mrcTotal),
       nrcAmount: Number(line.nrcTotal),
@@ -1110,7 +1111,7 @@ function buildArcLineChange(
     action,
     sourceSubscriptionItemId: line.sourceSubscriptionItemId ?? null,
     modifyPatch: {
-      configuration: stripArcPriceFreeze(line.configuration) ?? undefined,
+      configuration: stripQuoteOnlyArcMarkers(line.configuration) ?? undefined,
       charges: (line.charges ?? undefined) as Array<Record<string, unknown>> | undefined,
       mrcAmount: Number(line.mrcTotal),
       nrcAmount: Number(line.nrcTotal),

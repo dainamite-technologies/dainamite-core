@@ -1,3 +1,4 @@
+import { seedPriceAdjustmentDefaults } from './lib/priceAdjustmentDefaults'
 import type { ModuleSetupConfig } from '@open-mercato/shared/modules/setup'
 
 /**
@@ -9,7 +10,7 @@ import type { ModuleSetupConfig } from '@open-mercato/shared/modules/setup'
  *
  * What still lives here:
  *   - `defaultRoleFeatures` — required for any tenant that has cpq enabled
- *   - structural defaults (currently none beyond role features)
+ *   - structural defaults (price adjustment reasons and rollout toggle)
  *
  * What used to live here and moved out:
  *   - GIX product/pricing/charge/rule/bundle/wizard seed → `src/modules/demo_gix/`
@@ -17,10 +18,14 @@ import type { ModuleSetupConfig } from '@open-mercato/shared/modules/setup'
  *   - GIX wizard definition → `src/modules/demo_gix/seeds/wizards.ts`
  */
 export const setup: ModuleSetupConfig = {
+  async seedDefaults({ em, tenantId, organizationId }) {
+    if (tenantId && organizationId) await seedPriceAdjustmentDefaults(em, { tenantId, organizationId })
+  },
   defaultRoleFeatures: {
     admin: [
       'cpq.quotes.view',
       'cpq.quotes.manage',
+      'cpq.quotes.adjust_price',
       'cpq.pricing.view',
       'cpq.pricing.manage',
       'cpq.products.view',
@@ -44,6 +49,7 @@ export const setup: ModuleSetupConfig = {
     employee: [
       'cpq.quotes.view',
       'cpq.quotes.manage',
+      'cpq.quotes.adjust_price',
       'cpq.pricing.view',
       'cpq.products.view',
       'cpq.specifications.view',

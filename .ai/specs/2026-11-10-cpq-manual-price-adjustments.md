@@ -19,7 +19,7 @@ Sales reps need to set negotiated prices on CPQ quotes; today the engine's price
 | Q4 | Adjustments on ARC mirror lines (Amend / Renew)? | Not allowed until `arc-continuity` (`LINE_NOT_ELIGIBLE`); new `add` lines on ARC quotes are adjustable | `modify` price changes reach CPQ inventory but not billing (amend / renew events carry only added and removed items, `cpqOrderService.ts:1220-1302`); `add` lines reach billing as added items. |
 | Q5 | `discountTotal` | Unchanged (deprecated); new `ruleDiscountTotal` / `manualDiscountTotal` both include line quantity | Today's formula omits the line quantity (`cpqQuotingService.ts:1269-1283`); summing a corrected and an uncorrected figure would be wrong. |
 | Q6 | Calculate-price waterfall fields | Opt-in `includeWaterfall: true` | The public Puffin calculator proxies charges to anonymous visitors (`demo_puffin/api/cloud-pricing-calculator/price/route.ts`); nothing new leaks by default. |
-| Q7 | Rollback lever | Feature toggle `cpq.manual_price_adjustments` gates writes and UI; the resolver keeps applying stored adjustments | Turning writes off must not reset negotiated prices. ⚠ NEEDS HUMAN CONFIRMATION that the `feature_toggles` module supports per-tenant flags (docs-only). |
+| Q7 | Rollback lever | Feature toggle `cpq.manual_price_adjustments` gates writes and UI; the resolver keeps applying stored adjustments | Turning writes off must not reset negotiated prices. Verified in installed Open Mercato 0.9.0: `featureTogglesService.getBoolConfig` resolves tenant overrides; writes fail closed when missing or disabled. |
 
 ## 📝 Problem Statement
 

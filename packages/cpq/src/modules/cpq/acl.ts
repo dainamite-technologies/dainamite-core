@@ -1,4 +1,5 @@
 export const features = [
+  { id: 'cpq.quotes.adjust_price', title: 'Adjust CPQ quote prices', module: 'cpq' },
   { id: 'cpq.quotes.view', title: 'View CPQ Quotes', module: 'cpq' },
   { id: 'cpq.quotes.manage', title: 'Manage CPQ Quotes', module: 'cpq' },
   { id: 'cpq.pricing.view', title: 'View Pricing', module: 'cpq' },

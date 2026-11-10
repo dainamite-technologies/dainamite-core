@@ -52,3 +52,15 @@ export const cpqPriceAdjustmentPreviewSchema = z.object({
   draft: cpqPriceAdjustmentInputSchema,
   replaceAdjustmentId: z.string().uuid().optional(),
 }).strict()
+
+export const ADJUSTMENT_TOGGLE = 'cpq.manual_price_adjustments'
+export const REASON_DICTIONARY = 'cpq.price_adjustment_reason'
+export const DEFAULT_ADJUSTMENT_REASONS = [
+  { value: 'competitive_match', label: 'Competitive match' },
+  { value: 'volume_commitment', label: 'Volume commitment' },
+  { value: 'loyalty', label: 'Loyalty' },
+  { value: 'promotion', label: 'Promotion' },
+  { value: 'strategic_deal', label: 'Strategic deal' },
+  { value: 'price_correction', label: 'Price correction' },
+  { value: 'other', label: 'Other' },
+] as const

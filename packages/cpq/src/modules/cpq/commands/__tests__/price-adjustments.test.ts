@@ -32,13 +32,13 @@ it('reads undo data from the command bus redo envelope and rechecks authorizatio
   const { ctx, service, userHasAllFeatures } = setup()
   const after = { id: adjustmentId, ...adjustment, quoteConfigurationId: quoteId, quoteId, tenantId, organizationId,
     createdByUserId: actor, createdAt: '2026-11-10T00:00:00.000Z', updatedAt: '2026-11-10T00:00:00.000Z', deletedAt: null, isActive: true }
-  await createAdjustmentCommand.undo!({ ctx, logEntry: { commandPayload: { value: { undo: { quoteId, before: null, after } } } } })
+  await createAdjustmentCommand.undo!({ input: { quoteId, adjustment }, ctx, logEntry: { commandPayload: { value: { undo: { quoteId, before: null, after } } } } })
   expect(service.undo).toHaveBeenCalledWith(quoteId, adjustmentId, null, after, actor, { tenantId, organizationId })
   userHasAllFeatures.mockResolvedValue(false)
-  await expect(createAdjustmentCommand.undo!({ ctx, logEntry: { commandPayload: { undo: { quoteId, before: null, after } } } })).rejects.toMatchObject({ status: 403 })
+  await expect(createAdjustmentCommand.undo!({ input: { quoteId, adjustment }, ctx, logEntry: { commandPayload: { undo: { quoteId, before: null, after } } } })).rejects.toMatchObject({ status: 403 })
 })
 it('rejects malformed undo data instead of silently succeeding', async () => {
   const { ctx, service } = setup()
-  await expect(deleteAdjustmentCommand.undo!({ ctx, logEntry: { commandPayload: {} } })).rejects.toMatchObject({ status: 422 })
+  await expect(deleteAdjustmentCommand.undo!({ input: { quoteId, adjustmentId }, ctx, logEntry: { commandPayload: {} } })).rejects.toMatchObject({ status: 422 })
   expect(service.undo).not.toHaveBeenCalled()
 })

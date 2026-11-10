@@ -8,7 +8,7 @@ it('allows a zero override and percentage discounts with no currency', () => {
   expect(cpqPriceAdjustmentInputSchema.parse({ ...valid, adjustmentType: 'discount_percent', value: 100, currencyCode: undefined }).value).toBe(100)
 })
 it.each([
-  { level: 'quote' }, { quoteLineId: 'bad' }, { chargeCode: null }, { value: -1 }, { value: Infinity },
+  { level: 'quote' }, { quoteLineId: 'bad' }, { chargeCode: null }, { value: -1 }, { value: Infinity }, { value: 1.23456 }, { value: 100_000_000_000_000 },
   { adjustmentType: 'discount_percent', value: 101 }, { adjustmentType: 'discount_percent', value: 0 },
   { adjustmentType: 'discount_absolute', value: 0 }, { currencyCode: null }, { currencyCode: 'usd' },
   { reasonCode: 'other', reasonNote: '' }, { reasonNote: 'x'.repeat(501) },

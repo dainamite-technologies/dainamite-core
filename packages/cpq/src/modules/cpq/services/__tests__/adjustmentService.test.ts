@@ -1,5 +1,5 @@
 import { CpqAdjustmentService } from '../priceAdjustments/adjustmentService'
-import { CpqOrderConfiguration, CpqQuoteConfiguration, CpqQuotePriceAdjustment } from '../../data/entities'
+import { CpqOrderConfiguration, CpqQuoteConfiguration, CpqQuoteLineConfiguration, CpqQuotePriceAdjustment } from '../../data/entities'
 import { Dictionary, DictionaryEntry } from '@open-mercato/core/modules/dictionaries/data/entities'
 import { adjustmentInput } from '../priceAdjustments/adjustmentService'
 import { resolveManualAdjustments } from '../priceAdjustments/resolveManualAdjustments'
@@ -10,15 +10,18 @@ const input: PriceAdjustmentInput = { level: 'charge', quoteLineId: lineId, char
 function setup() {
   const quote = { id: quoteId, quoteId, ...scope, cpqStatus: 'ready', pricingRevision: 0 }
   const rows: CpqQuotePriceAdjustment[] = []
-  const state = { enabled: true, order: false, reason: true }
+  const state = { enabled: true, order: false, reason: true, target: true, mirrored: false }
   const em = {
     fork: jest.fn(), transactional: jest.fn(), flush: jest.fn().mockResolvedValue(undefined),
     assign: jest.fn((entity: object, values: object) => Object.assign(entity, values)),
     create: jest.fn((_entity: unknown, values: object) => ({ fromMonth: 1, toMonth: null, windowKind: 'relative', isActive: true, deletedAt: null, createdAt: new Date(), updatedAt: new Date(), ...values })),
     persist: jest.fn((row: CpqQuotePriceAdjustment) => { if (!rows.includes(row)) rows.push(row) }),
+    find: jest.fn(async () => rows.filter((row) => !row.deletedAt)),
+    count: jest.fn(async () => rows.filter((row) => !row.deletedAt).length),
     findOne: jest.fn(async (entity: unknown, where: Record<string, unknown>) => {
       if (entity === CpqQuoteConfiguration) return quote
       if (entity === CpqOrderConfiguration) return state.order ? { id: 'order' } : null
+      if (entity === CpqQuoteLineConfiguration) return state.target ? { offeringId: 'offer', configuration: state.mirrored ? { _arcMirroredFromItemId: 'item' } : {} } : null
       if (entity === Dictionary) return { id: 'dictionary' }
       if (entity === DictionaryEntry) return state.reason ? { value: where.value } : null
       if (entity === CpqQuotePriceAdjustment) return rows.find((row) => row.id === where.id && (where.deletedAt === undefined || row.deletedAt === null)) ?? null
@@ -104,4 +107,19 @@ it('refuses undo if the row changed afterward or the stored tenant is wrong', as
   rows[0].value = '70'
   await expect(service.undo(quoteId, created.adjustment.id, null, created.adjustment, actor, scope)).rejects.toMatchObject({ status: 409 })
   await expect(service.undo(quoteId, created.adjustment.id, null, { ...created.adjustment, tenantId: actor }, actor, scope)).rejects.toMatchObject({ status: 403 })
+})
+it('rejects missing/out-of-scope and ARC mirror targets before persisting', async () => {
+  const { service, state, em } = setup()
+  state.target = false
+  await expect(service.create(quoteId, input, actor, scope)).rejects.toMatchObject({ status: 404 })
+  state.target = true; state.mirrored = true
+  await expect(service.create(quoteId, input, actor, scope)).rejects.toMatchObject({ status: 422, message: 'LINE_NOT_ELIGIBLE' })
+  expect(em.persist).not.toHaveBeenCalled()
+})
+it('scopes and paginates reads while reporting the revision and toggle state', async () => {
+  const { service, em } = setup()
+  await service.create(quoteId, input, actor, scope)
+  const listed = await service.list(quoteId, scope, 1, 25)
+  expect(listed).toMatchObject({ total: 1, page: 1, pageSize: 25, pricingRevision: 1, enabled: true })
+  expect(em.find).toHaveBeenCalledWith(CpqQuotePriceAdjustment, expect.objectContaining({ quoteConfigurationId: quoteId, ...scope, deletedAt: null, isActive: true }), { limit: 25, offset: 0, orderBy: { createdAt: 'asc', id: 'asc' } })
 })

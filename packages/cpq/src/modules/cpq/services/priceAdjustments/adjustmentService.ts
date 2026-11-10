@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto'
 import type { EntityManager } from '@mikro-orm/postgresql'
-import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
+import { findWithDecryption, findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import { withAtomicFlush } from '@open-mercato/shared/lib/commands/flush'
 import type { FeatureTogglesService } from '@open-mercato/core/modules/feature_toggles/lib/feature-flag-check'
 import { Dictionary, DictionaryEntry } from '@open-mercato/core/modules/dictionaries/data/entities'
-import { CpqOrderConfiguration, CpqQuoteConfiguration, CpqQuotePriceAdjustment } from '../../data/entities'
+import { CpqOrderConfiguration, CpqQuoteConfiguration, CpqQuoteLineConfiguration, CpqQuotePriceAdjustment } from '../../data/entities'
 import { cpqPriceAdjustmentInputSchema, cpqPriceAdjustmentPatchSchema, type PriceAdjustmentInput, type PriceAdjustmentPatch } from '../../data/price-adjustments'
 import { QuotingError, type DefaultCpqQuotingService } from '../cpqQuotingService'
 import type { QuoteResult, TenantScope } from '../types'
@@ -45,12 +45,28 @@ export class CpqAdjustmentService {
     return flag.ok && flag.value === true
   }
 
+  async list(quoteId: string, scope: TenantScope, page: number, pageSize: number) {
+    const em = this.deps.em.fork({ clear: true, useContext: false })
+    const scoped = { ...scope, deletedAt: null }
+    const quote = await findOneWithDecryption(em, CpqQuoteConfiguration, { ...scoped, id: quoteId }, undefined, scope)
+      ?? await findOneWithDecryption(em, CpqQuoteConfiguration, { ...scoped, quoteId }, undefined, scope)
+    if (!quote) throw new QuotingError(404, 'Quote not found')
+    const filter = { ...scoped, quoteConfigurationId: quote.id, isActive: true }
+    const [rows, total, enabled] = await Promise.all([
+      findWithDecryption(em, CpqQuotePriceAdjustment, filter, { limit: pageSize, offset: (page - 1) * pageSize, orderBy: { createdAt: 'asc', id: 'asc' } }, scope),
+      em.count(CpqQuotePriceAdjustment, filter),
+      this.enabled(scope.tenantId),
+    ])
+    return { items: rows.map(adjustmentSnapshot), total, page, pageSize, totalPages: Math.ceil(total / pageSize), pricingRevision: quote.pricingRevision ?? 0, enabled }
+  }
+
   async create(quoteId: string, input: PriceAdjustmentInput, actor: string, scope: TenantScope): Promise<AdjustmentWriteResult> {
     const parsed = cpqPriceAdjustmentInputSchema.parse(input)
     await this.requireEnabled(scope)
     return this.write(quoteId, scope, parsed.expectedRevision, async (em, quote) => {
       await this.assertMutable(em, quote, scope)
       await this.requireReason(em, parsed.reasonCode, scope)
+      await this.requireTarget(em, quote.id, parsed.quoteLineId, scope)
       const row = em.create(CpqQuotePriceAdjustment, { ...scope, id: randomUUID(), quoteConfigurationId: quote.id,
         quoteId: quote.quoteId, ...this.values(parsed), createdByUserId: actor })
       return this.save(em, quote, row, null, scope, true)
@@ -64,6 +80,7 @@ export class CpqAdjustmentService {
       await this.assertMutable(em, quote, scope)
       const row = await this.loadRow(em, quote.id, id, scope)
       const before = adjustmentSnapshot(row)
+      await this.requireTarget(em, quote.id, row.quoteLineId, scope)
       const merged = cpqPriceAdjustmentInputSchema.parse({ ...adjustmentInput(row), ...parsed })
       if (merged.reasonCode !== row.reasonCode) await this.requireReason(em, merged.reasonCode, scope)
       em.assign(row, { ...this.values(merged), updatedByUserId: actor, updatedAt: new Date() })
@@ -132,6 +149,12 @@ export class CpqAdjustmentService {
 
   private async requireEnabled(scope: TenantScope) {
     if (!(await this.enabled(scope.tenantId))) throw new QuotingError(403, 'Manual price adjustments are disabled')
+  }
+
+  private async requireTarget(em: EntityManager, quoteConfigurationId: string, quoteLineId: string, scope: TenantScope) {
+    const line = await findOneWithDecryption(em, CpqQuoteLineConfiguration, { quoteConfigurationId, quoteLineId, ...scope, deletedAt: null }, undefined, scope)
+    if (!line) throw new QuotingError(404, 'Quote line not found')
+    if (!(line.offeringId || line.productId) || line.configuration?._arcMirroredFromItemId) throw new QuotingError(422, 'LINE_NOT_ELIGIBLE')
   }
 
   private async requireReason(em: EntityManager, code: string, scope: TenantScope) {

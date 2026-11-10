@@ -25,7 +25,7 @@ const undoSchema = z.object({ quoteId: id, before: snapshotSchema.nullable(), af
 
 async function context(ctx: CommandRuntimeContext) {
   const actor = ctx.auth?.sub
-  const tenantId = ctx.auth?.tenantId
+  const tenantId = ctx.organizationScope?.tenantId ?? ctx.auth?.tenantId
   const organizationId = ctx.selectedOrganizationId
   if (!actor || !tenantId || !organizationId) throw new QuotingError(403, 'An authenticated tenant and organization are required')
   const scope = { tenantId, organizationId }

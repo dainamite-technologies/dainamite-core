@@ -3,7 +3,8 @@ import { z } from 'zod'
 export const adjustmentTypeSchema = z.enum(['discount_percent', 'discount_absolute', 'price_override'])
 const adjustmentFields = {
   adjustmentType: adjustmentTypeSchema,
-  value: z.number().finite().min(0),
+  // Match numeric(18,4), so saving never silently rounds the previewed input.
+  value: z.number().finite().min(0).max(99_999_999_999_999).multipleOf(0.0001),
   currencyCode: z.string().regex(/^[A-Z]{3}$/).nullish(),
   chargeTypeFilter: z.enum(['nrc', 'mrc']).nullish(),
   reasonCode: z.string().trim().min(1).max(100),

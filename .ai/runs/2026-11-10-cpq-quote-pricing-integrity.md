@@ -49,8 +49,8 @@ Stop CPQ from changing quote prices behind the rep's back before manual price ad
 
 ### Phase 1: Recalculation hardening
 
-- [ ] 1.1 Characterize today's recalculate route (view access, terminal-status saves).
-- [ ] 1.2 Require `cpq.quotes.manage`; refuse `save:true` on terminal statuses; update tests.
+- [x] 1.1 Characterize today's recalculate route (view access, terminal-status saves). — fc822a4
+- [x] 1.2 Require `cpq.quotes.manage`; refuse `save:true` on terminal statuses; update tests. — 48ed810
 
 ### Phase 2: Frozen Amend mirror lines
 

@@ -2070,8 +2070,6 @@ DefaultCpqQuotingService.prototype.detachTargetSubscription = async function (
   // prices), so it takes the same aggregate lock and revision bump as any
   // other pricing write and re-prices the remaining lines.
   await withQuotePricingWrite(em, quoteId, scope, async (tx, cpqConfig) => {
-    ensureEditable(cpqConfig)
-
     const target = await tx.findOne(CpqQuoteTargetSubscription, {
       id: targetId,
       quoteId: cpqConfig.id,
@@ -2095,25 +2093,24 @@ DefaultCpqQuotingService.prototype.detachTargetSubscription = async function (
       await removeQuoteLineTree(tx, cpqConfig.id, line, scope)
     }
 
-    target.deletedAt = new Date()
-
-    // Auto-revert merge mode if only one renew target remains.
-    if (target.quoteType === 'renew') {
-      const remaining = await tx.find(CpqQuoteTargetSubscription, {
+    // Read the remaining renew targets before mutating, so no query runs
+    // between a scalar change and its flush.
+    const remaining = target.quoteType === 'renew'
+      ? await tx.find(CpqQuoteTargetSubscription, {
         quoteId: cpqConfig.id,
         organizationId: scope.organizationId,
         tenantId: scope.tenantId,
         deletedAt: null,
         id: { $ne: target.id },
       })
-      if (remaining.length === 1) {
-        remaining[0].mergeAction = 'standalone'
-      }
-    }
-
-    await tx.flush()
+      : []
+    await withAtomicFlush(tx, [() => {
+      target.deletedAt = new Date()
+      // Auto-revert merge mode if only one renew target remains.
+      if (remaining.length === 1) remaining[0].mergeAction = 'standalone'
+    }])
     await this.recalculateLockedQuote(tx, cpqConfig, scope, true)
-  }, (status, message) => new QuotingError(status, message), undefined, undefined, { pricingCause: 'line' })
+  }, (status, message) => new QuotingError(status, message), undefined, ensureEditable, { pricingCause: 'line' })
   return { ok: true }
 }
 

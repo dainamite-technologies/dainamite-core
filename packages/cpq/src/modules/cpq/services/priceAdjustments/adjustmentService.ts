@@ -161,7 +161,10 @@ export class CpqAdjustmentService {
       }
       const row = await this.loadRow(em, quote.id, id, scope, true)
       if (snapshotKey(adjustmentSnapshot(row)) !== snapshotKey(after)) throw new QuotingError(409, 'Adjustment changed since this action')
-      if (before) em.assign(row, { ...this.values(cpqPriceAdjustmentInputSchema.parse(this.inputFromSnapshot(before))),
+      const restored = before ? cpqPriceAdjustmentInputSchema.parse(this.inputFromSnapshot(before)) : null
+      // Restoring an active row must not create an overlap a rep added since.
+      if (restored && before?.isActive && !before.deletedAt) await this.rejectOverlap(em, quote, { id, ...restored }, scope)
+      if (before && restored) em.assign(row, { ...this.values(restored),
         deletedAt: before.deletedAt ? new Date(before.deletedAt) : null, isActive: before.isActive, updatedByUserId: actor, updatedAt: new Date() })
       else { row.deletedAt = new Date(); row.isActive = false; row.updatedByUserId = actor; row.updatedAt = new Date() }
       await this.save(em, quote, row, adjustmentSnapshot(row), scope, false)

@@ -170,3 +170,14 @@ it('allows a recurring and a one-time line discount side by side, but not two co
   expect(adjustmentsOverlap({ id: 'a', level: 'charge', quoteLineId: 'l1', chargeCode: 'fee' }, { id: 'b', level: 'charge', quoteLineId: 'l1', chargeCode: 'setup' })).toBe(false)
   expect(adjustmentsOverlap({ id: 'a', level: 'charge', quoteLineId: 'l1', chargeCode: 'fee' }, { id: 'b', level: 'line', quoteLineId: 'l1' })).toBe(false)
 })
+it('refuses to undo a delete when a rep has since added an overlapping adjustment', async () => {
+  const { service, rows } = setup()
+  const first = await service.create(quoteId, input, actor, scope)
+  await service.remove(quoteId, first.adjustment.id, actor, scope)
+  expect(rows[0].isActive).toBe(false)
+  await service.create(quoteId, { ...input, value: 70 }, actor, scope)
+  const deletedSnapshot = { ...first.adjustment, deletedAt: rows[0].deletedAt!.toISOString(), isActive: false, updatedAt: rows[0].updatedAt.toISOString() }
+  await expect(service.undo(quoteId, first.adjustment.id, first.adjustment, deletedSnapshot, actor, scope))
+    .rejects.toMatchObject({ status: 422, message: 'ADJUSTMENT_OVERLAP' })
+  expect(rows.filter((row) => row.isActive)).toHaveLength(1)
+})

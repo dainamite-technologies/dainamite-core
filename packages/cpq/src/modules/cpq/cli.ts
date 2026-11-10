@@ -107,10 +107,17 @@ const seedPriceAdjustments: ModuleCli = {
       console.error('[cpq seed-price-adjustments] No matching organization found.')
       return
     }
+    let failed = 0
     for (const scope of scopes) {
-      await seedPriceAdjustmentDefaults(em.fork(), scope)
-      console.log(`[cpq seed-price-adjustments] tenant=${scope.tenantId} org=${scope.organizationId} ✓`)
+      try {
+        await seedPriceAdjustmentDefaults(em.fork(), scope)
+        console.log(`[cpq seed-price-adjustments] tenant=${scope.tenantId} org=${scope.organizationId} ✓`)
+      } catch (error) {
+        failed++
+        console.error(`[cpq seed-price-adjustments] tenant=${scope.tenantId} org=${scope.organizationId} failed`, error)
+      }
     }
+    if (failed) process.exitCode = 1
   },
 }
 

@@ -545,6 +545,13 @@ export class DefaultCpqQuotingService {
     const em = options.save ? this.em.fork() : this.em
 
     const cpqConfig = await this.loadCpqConfig(em, quoteId, scope)
+
+    // A terminal quote's stored prices are final (accepted quotes are the
+    // basis for order conversion) — a saved recalculation must not move them.
+    if (options.save && TERMINAL_STATUSES.includes(cpqConfig.cpqStatus as CpqStatus)) {
+      throw new QuotingError(409, `Cannot recalculate quote in '${cpqConfig.cpqStatus}' status`)
+    }
+
     const salesQuote = await this.loadSalesQuote(em, cpqConfig.quoteId, scope)
 
     return this.recalculateInternal(em, cpqConfig, salesQuote, scope, options.save)

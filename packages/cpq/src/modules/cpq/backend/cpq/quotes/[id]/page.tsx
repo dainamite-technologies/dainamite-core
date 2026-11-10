@@ -12,6 +12,8 @@ import { Tag } from '@open-mercato/ui/primitives/tag'
 import { FormHeader } from '@open-mercato/ui/backend/forms'
 import type { ActionItem } from '@open-mercato/ui/backend/forms/ActionsDropdown'
 import { NumberInput } from '../../../../components/NumberInput'
+import { useGrantedFeatures } from '../../../../components/useGrantedFeatures'
+import { canRecalculateQuote, QUOTE_MANAGE_FEATURE } from '../../../../lib/quotePermissions'
 import {
   formatStatusLabel,
   quoteCpqStatusMap,
@@ -231,26 +233,31 @@ function MoreActionsDropdown({ items }: { items: ActionItem[] }) {
 
 function buildMoreActions({
   recalculate,
+  canRecalculate,
   submitting,
   deletable,
   onDelete,
   deleting,
 }: {
   recalculate: () => void
+  canRecalculate: boolean
   submitting: boolean
   deletable: boolean
   onDelete: () => void
   deleting: boolean
 }): ActionItem[] {
-  const items: ActionItem[] = [
-    {
+  const items: ActionItem[] = []
+  // Recalculate persists prices: offered only to users with cpq.quotes.manage
+  // and only on non-terminal quotes (the API refuses both otherwise).
+  if (canRecalculate) {
+    items.push({
       id: 'recalculate',
       label: 'Recalculate',
       onSelect: recalculate,
       loading: submitting,
       disabled: submitting,
-    },
-  ]
+    })
+  }
   if (deletable) {
     items.push({
       id: 'delete',
@@ -273,6 +280,7 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
   const isNew = cpqConfigId === 'new'
 
   const [cpqQuote, setCpqQuote] = React.useState<QuoteResult | null>(null)
+  const grantedFeatures = useGrantedFeatures([QUOTE_MANAGE_FEATURE])
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState<string | null>(null)
   const [submitting, setSubmitting] = React.useState(false)
@@ -693,6 +701,7 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
                 <MoreActionsDropdown
                   items={buildMoreActions({
                     recalculate,
+                    canRecalculate: canRecalculateQuote(grantedFeatures, cpqQuote.cpqStatus),
                     submitting,
                     deletable: !['accepted', 'rejected', 'cancelled'].includes(cpqQuote.cpqStatus),
                     onDelete: () => setShowDeleteConfirm(true),

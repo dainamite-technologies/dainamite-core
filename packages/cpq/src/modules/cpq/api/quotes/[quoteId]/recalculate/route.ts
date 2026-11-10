@@ -5,8 +5,11 @@ import { cpqRecalculateSchema } from '../../../../data/validators'
 import { isQuotingError } from '../../../../services/cpqQuotingService'
 import { resolveQuotingService } from '../../../resolveQuotingService'
 
+// Recalculation re-resolves and (with `save: true`) persists prices, so it
+// needs the same feature as any other quote write. The quote page always
+// saves; viewers read stored prices through GET /api/cpq/quotes/{quoteId}.
 export const metadata = {
-  POST: { requireAuth: true, requireFeatures: ['cpq.quotes.view'] },
+  POST: { requireAuth: true, requireFeatures: ['cpq.quotes.manage'] },
 }
 
 export async function POST(req: Request, { params }: { params: Promise<{ quoteId: string }> }) {

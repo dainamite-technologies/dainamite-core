@@ -36,8 +36,8 @@ describe('POST /api/cpq/quotes/{quoteId}/recalculate', () => {
     recalculate.mockResolvedValue({ id: 'cpq-1' })
   })
 
-  it('requires an authenticated user with cpq.quotes.view', () => {
-    expect(metadata.POST).toEqual({ requireAuth: true, requireFeatures: ['cpq.quotes.view'] })
+  it('requires an authenticated user with cpq.quotes.manage (view-only users get 403 from the dispatcher)', () => {
+    expect(metadata.POST).toEqual({ requireAuth: true, requireFeatures: ['cpq.quotes.manage'] })
   })
 
   it('passes the save flag and tenant scope to the quoting service', async () => {

@@ -656,7 +656,32 @@ describe('DefaultCpqQuotingService.recalculate', () => {
     expect(cpqConfig.cpqStatus).toBe('with_customer') // unchanged
   })
 
-  it('persists a saved recalculation on an accepted (terminal) quote', async () => {
+  it.each(['accepted', 'rejected', 'cancelled'])(
+    'rejects a saved recalculation on a %s (terminal) quote with 409 and persists nothing',
+    async (cpqStatus) => {
+      const { em, service } = makeService()
+      em.findOne.mockResolvedValueOnce({
+        id: 'cpq-1',
+        quoteId: 'sq-1',
+        cpqStatus,
+        customerId: 'cust',
+        currencyCode: 'USD',
+        version: 1,
+        parentQuoteId: null,
+        validationResult: null,
+        pricingSummary: null,
+        quoteContext: null,
+      })
+
+      await expect(service.recalculate('cpq-1', { save: true }, SCOPE)).rejects.toMatchObject({
+        status: 409,
+        message: `Cannot recalculate quote in '${cpqStatus}' status`,
+      })
+      expect(em.flush).not.toHaveBeenCalled()
+    },
+  )
+
+  it('still allows a read-only (save=false) recalculation on an accepted quote', async () => {
     const { em, service } = makeService()
     em.findOne
       .mockResolvedValueOnce({
@@ -674,8 +699,9 @@ describe('DefaultCpqQuotingService.recalculate', () => {
       .mockResolvedValueOnce({ id: 'sq-1', currencyCode: 'USD', quoteNumber: 'Q-0001' })
     em.find.mockResolvedValueOnce([])
 
-    await service.recalculate('cpq-1', { save: true }, SCOPE)
+    const result = await service.recalculate('cpq-1', { save: false }, SCOPE)
 
-    expect(em.flush).toHaveBeenCalled()
+    expect(result.cpqStatus).toBe('accepted')
+    expect(em.flush).not.toHaveBeenCalled()
   })
 })

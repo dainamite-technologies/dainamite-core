@@ -62,3 +62,12 @@ Stop CPQ from changing quote prices behind the rep's back before manual price ad
 - [x] 3.1 Mutation guards + `openApi` on status, items, recalculate, convert routes. — 7fef579
 - [x] 3.2 Docs: `MIGRATION.md`, ARC manual. — 8d57b1b
 - [x] 3.3 Archive the Delta into `.ai/specs/capabilities/`. — 728cb05
+
+## Review follow-up (Codex continuation)
+
+- Autosave `90671e9` contains the implementation fixes from the first review: server-owned ARC markers, freeze restricted to Amend mirrors, explicit re-priced marker, stripping on clone/conversion, translated UI, browser-safe feature helper and valid framework OpenAPI docs.
+- `416e1cb` repairs the OpenAPI contract assertion and adds guard coverage for add/update/remove/conversion, including rejection, modified payload validation and after-success ordering.
+- Fresh read-only reviewer task `1c70c583-b901-49c5-861f-38c60419282f`: approve, no blocking findings. Independently ran 590 CPQ tests and package typecheck. No child source changes to merge; its worktree branch is not the implementation branch.
+- Local validation: 590/590 CPQ tests; 1077/1077 full tests (67 suites); root `yarn typecheck` passed; package builds passed; generation passed. Generated OpenAPI verified for all six guarded handlers (request schemas and 422 responses present).
+- Production `yarn build` passed (exit 0), including compile, TypeScript and static generation. UI/database-backed QA remains unverified: no configured browser/test environment in this worktree.
+- No new push during this continuation: the user-provided Cezar Guard requires confirmation before pushing to a shared branch.

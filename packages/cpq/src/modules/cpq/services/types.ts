@@ -166,6 +166,7 @@ export interface PricingSummary extends Partial<PricingWaterfallSummary> {
 }
 
 export interface QuoteResult {
+  pricingRevision?: number
   id: string
   quoteId: string
   quoteNumber: string

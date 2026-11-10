@@ -14,8 +14,8 @@ Engine: om-auto-create-pr-loop (steps: 22, --loop: no)
 | 1 | 1.3 | Entity and migration | inline | done | 4bb5bc0 |
 | 1 | 1.4 | Manual adjustment resolver | inline | done | cfbfa2f |
 | 1 | 1.5 | Summary math | inline | done | 9a07adb |
-| 1 | 1.5-review-fix | Fix foundation review findings | inline | done | this commit |
-| 1 | 1.6 | Quote transaction boundary | inline | todo | — |
+| 1 | 1.5-review-fix | Fix foundation review findings | inline | done | 55f7cd8 |
+| 1 | 1.6 | Quote transaction boundary | inline | done | this commit |
 | 1 | 1.7 | Integrate adjustment pricing | inline | todo | — |
 | 2 | 2.1 | Undoable commands | inline | todo | — |
 | 2 | 2.2 | Adjustment CRUD routes | inline | todo | — |
@@ -99,3 +99,5 @@ Steps run inline because they share the pricing model and quote aggregate refact
 Migration generation: `yarn mercato db generate` scans only local app modules; used installed MikroORM migrator in offline snapshot mode for packaged CPQ. Generated SQL adds only the adjustment table/indexes and pricing_revision. Snapshot serialization changes reflect the installed ORM version. No migration applied. CPQ tests: 642/642 pass; generation pass.
 
 1.5-review-fix. **Fix foundation review findings** — reversible generated rollback, deal eligibility hash, valid same-level fallback and regression tests. CPQ tests 672/672 pass.
+
+Transaction boundary: explicit transaction EM flows through quote item writes, saved recalculation, clone, status and conversion. Scoped pessimistic row lock/refresh and revision increment share one helper. 677 CPQ tests pass. DB-backed two-writer tests remain unexercised because no database is available; do not claim concurrency verified until integration QA runs.

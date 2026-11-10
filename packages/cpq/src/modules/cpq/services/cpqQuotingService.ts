@@ -1,3 +1,4 @@
+import { withQuotePricingWrite } from './priceAdjustments/quotePricingWrite'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { SalesQuote, SalesQuoteLine } from '@open-mercato/core/modules/sales/data/entities'
 import { CustomerEntity } from '@open-mercato/core/modules/customers/data/entities'
@@ -178,11 +179,13 @@ export class DefaultCpqQuotingService {
   // ─── Add Quote Item ────────────────────────────────────────────
 
   async addQuoteItem(quoteId: string, item: QuoteItemInput, scope: TenantScope): Promise<QuoteResult> {
-    const em = this.em
+    return this.writeQuote(quoteId, scope, (em, quote) => this.addQuoteItemInTransaction(quoteId, item, scope, em, quote))
+  }
+
+  private async addQuoteItemInTransaction(quoteId: string, item: QuoteItemInput, scope: TenantScope, em: EntityManager, cpqConfig: CpqQuoteConfiguration): Promise<QuoteResult> {
     // ARC markers (`_arc*`) are server-owned — never accept them from callers.
     item = { ...item, configuration: stripArcMarkers(item.configuration) }
 
-    const cpqConfig = await this.loadCpqConfig(em, quoteId, scope)
     const salesQuote = await this.loadSalesQuote(em, cpqConfig.quoteId, scope)
 
     if (TERMINAL_STATUSES.includes(cpqConfig.cpqStatus as CpqStatus)) {
@@ -333,19 +336,23 @@ export class DefaultCpqQuotingService {
 
   // ─── Update Quote Item ─────────────────────────────────────────
 
-  async updateQuoteItem(
+  async updateQuoteItem(quoteId: string,
+    lineId: string,
+    update: { configuration: Record<string, unknown>; quantity?: number; usageEstimates?: Array<{ chargeCode: string; estimatedQuantity: number }>; startDate?: string; termMonths?: number; endDate?: string },
+    scope: TenantScope): Promise<QuoteResult> {
+    return this.writeQuote(quoteId, scope, (em, quote) => this.updateQuoteItemInTransaction(quoteId, lineId, update, scope, em, quote))
+  }
+
+  private async updateQuoteItemInTransaction(
     quoteId: string,
     lineId: string,
     update: { configuration: Record<string, unknown>; quantity?: number; usageEstimates?: Array<{ chargeCode: string; estimatedQuantity: number }>; startDate?: string; termMonths?: number; endDate?: string },
-    scope: TenantScope,
-  ): Promise<QuoteResult> {
-    const em = this.em
+    scope: TenantScope, em: EntityManager, cpqConfig: CpqQuoteConfiguration): Promise<QuoteResult> {
     // ARC markers (`_arc*`) are server-owned: the quote page echoes the line's
     // stored configuration (markers included) back, so drop them here and
     // re-apply the server's own markers below.
     update = { ...update, configuration: stripArcMarkers(update.configuration) }
 
-    const cpqConfig = await this.loadCpqConfig(em, quoteId, scope)
     const salesQuote = await this.loadSalesQuote(em, cpqConfig.quoteId, scope)
 
     if (TERMINAL_STATUSES.includes(cpqConfig.cpqStatus as CpqStatus)) {
@@ -503,9 +510,11 @@ export class DefaultCpqQuotingService {
   // ─── Remove Quote Item ─────────────────────────────────────────
 
   async removeQuoteItem(quoteId: string, lineId: string, scope: TenantScope): Promise<QuoteResult> {
-    const em = this.em
+    return this.writeQuote(quoteId, scope, (em, quote) => this.removeQuoteItemInTransaction(quoteId, lineId, scope, em, quote))
+  }
 
-    const cpqConfig = await this.loadCpqConfig(em, quoteId, scope)
+  private async removeQuoteItemInTransaction(quoteId: string, lineId: string, scope: TenantScope, em: EntityManager, cpqConfig: CpqQuoteConfiguration): Promise<QuoteResult> {
+
     const salesQuote = await this.loadSalesQuote(em, cpqConfig.quoteId, scope)
 
     if (TERMINAL_STATUSES.includes(cpqConfig.cpqStatus as CpqStatus)) {
@@ -578,27 +587,34 @@ export class DefaultCpqQuotingService {
   // ─── Recalculate ───────────────────────────────────────────────
 
   async recalculate(quoteId: string, options: { save: boolean }, scope: TenantScope): Promise<QuoteResult> {
-    const em = options.save ? this.em.fork() : this.em
+    if (options.save) {
+      return this.writeQuote(quoteId, scope, (em, quote) => this.recalculateFromConfig(em, quote, scope, true))
+    }
+    const cpqConfig = await this.loadCpqConfig(this.em, quoteId, scope)
+    return this.recalculateFromConfig(this.em, cpqConfig, scope, false)
+  }
 
-    const cpqConfig = await this.loadCpqConfig(em, quoteId, scope)
+  private async recalculateFromConfig(em: EntityManager, cpqConfig: CpqQuoteConfiguration, scope: TenantScope, save: boolean): Promise<QuoteResult> {
 
     // A terminal quote's stored prices are final (accepted quotes are the
     // basis for order conversion) — a saved recalculation must not move them.
-    if (options.save && TERMINAL_STATUSES.includes(cpqConfig.cpqStatus as CpqStatus)) {
+    if (save && TERMINAL_STATUSES.includes(cpqConfig.cpqStatus as CpqStatus)) {
       throw new QuotingError(409, `Cannot recalculate quote in '${cpqConfig.cpqStatus}' status`)
     }
 
     const salesQuote = await this.loadSalesQuote(em, cpqConfig.quoteId, scope)
 
-    return this.recalculateInternal(em, cpqConfig, salesQuote, scope, options.save)
+    return this.recalculateInternal(em, cpqConfig, salesQuote, scope, save)
   }
 
   // ─── Clone Quote ───────────────────────────────────────────────
 
   async cloneQuote(quoteId: string, scope: TenantScope): Promise<QuoteResult> {
-    const em = this.em
+    return this.writeQuote(quoteId, scope, (em, quote) => this.cloneQuoteInTransaction(quoteId, scope, em, quote))
+  }
 
-    const original = await this.loadCpqConfig(em, quoteId, scope)
+  private async cloneQuoteInTransaction(quoteId: string, scope: TenantScope, em: EntityManager, original: CpqQuoteConfiguration): Promise<QuoteResult> {
+
     const originalQuote = await this.loadSalesQuote(em, original.quoteId, scope)
 
     // Generate new quote number
@@ -637,6 +653,7 @@ export class DefaultCpqQuotingService {
       quoteId: newSalesQuoteId,
       customerId: original.customerId,
       cpqStatus: 'new',
+      pricingRevision: 1,
       version: original.version + 1,
       parentQuoteId: original.id,
       currencyCode: original.currencyCode,
@@ -745,9 +762,11 @@ export class DefaultCpqQuotingService {
   // ─── Transition Status ─────────────────────────────────────────
 
   async transitionStatus(quoteId: string, targetStatus: string, scope: TenantScope): Promise<QuoteResult> {
-    const em = this.em
+    return this.writeQuote(quoteId, scope, (em, quote) => this.transitionStatusInTransaction(quoteId, targetStatus, scope, em, quote))
+  }
 
-    const cpqConfig = await this.loadCpqConfig(em, quoteId, scope)
+  private async transitionStatusInTransaction(quoteId: string, targetStatus: string, scope: TenantScope, em: EntityManager, cpqConfig: CpqQuoteConfiguration): Promise<QuoteResult> {
+
     const salesQuote = await this.loadSalesQuote(em, cpqConfig.quoteId, scope)
 
     const currentStatus = cpqConfig.cpqStatus as CpqStatus
@@ -769,7 +788,7 @@ export class DefaultCpqQuotingService {
       targetStatus === 'with_customer'
     const quoteType = cpqConfig.quoteType ?? 'new'
     if (isSubmitForApproval && quoteType !== 'new') {
-      const validation = await this.validateArcQuote(quoteId, scope)
+      const validation = await this.validateArcQuote(quoteId, scope, em)
       if (!validation.ok) {
         throw new QuotingError(
           422,
@@ -789,6 +808,16 @@ export class DefaultCpqQuotingService {
 
     const lines = await this.loadLineConfigs(em, cpqConfig.id, scope)
     return this.buildQuoteResult(em, cpqConfig, salesQuote, lines)
+  }
+
+  private async writeQuote(
+    quoteId: string,
+    scope: TenantScope,
+    execute: (em: EntityManager, quote: CpqQuoteConfiguration) => Promise<QuoteResult>,
+    expectedRevision?: number,
+  ): Promise<QuoteResult> {
+    return withQuotePricingWrite(this.em, quoteId, scope, execute,
+      (status, message) => new QuotingError(status, message), expectedRevision)
   }
 
   // ─── Internal: Recalculate ─────────────────────────────────────
@@ -1108,6 +1137,7 @@ export class DefaultCpqQuotingService {
       customerName,
       cpqStatus: cpqConfig.cpqStatus,
       version: cpqConfig.version,
+      pricingRevision: cpqConfig.pricingRevision ?? 0,
       parentQuoteId: cpqConfig.parentQuoteId ?? null,
       currencyCode: cpqConfig.currencyCode,
       convertedOrderId,
@@ -1202,6 +1232,7 @@ export class DefaultCpqQuotingService {
       customerName,
       cpqStatus: cpqConfig.cpqStatus,
       version: cpqConfig.version,
+      pricingRevision: cpqConfig.pricingRevision ?? 0,
       parentQuoteId: cpqConfig.parentQuoteId ?? null,
       currencyCode: cpqConfig.currencyCode,
       convertedOrderId,
@@ -1606,7 +1637,7 @@ declare module './cpqQuotingService' {
     ): Promise<TargetSubscriptionView>
     setCancelMeta(quoteId: string, meta: CancelMetaInput, scope: TenantScope): Promise<QuoteResult>
     setMergeMeta(quoteId: string, meta: MergeMetaInput, scope: TenantScope): Promise<QuoteResult>
-    validateArcQuote(quoteId: string, scope: TenantScope): Promise<ArcQuoteValidationResult>
+    validateArcQuote(quoteId: string, scope: TenantScope, transactionEm?: EntityManager): Promise<ArcQuoteValidationResult>
   }
 }
 
@@ -2110,8 +2141,9 @@ DefaultCpqQuotingService.prototype.validateArcQuote = async function (
   this: DefaultCpqQuotingService,
   quoteId: string,
   scope: TenantScope,
+  transactionEm?: EntityManager,
 ): Promise<ArcQuoteValidationResult> {
-  const em = (this as unknown as { em: EntityManager }).em
+  const em = transactionEm ?? (this as unknown as { em: EntityManager }).em
   const cpqConfig = await loadCpqConfigStrict(em, quoteId, scope)
   const errors: string[] = []
 

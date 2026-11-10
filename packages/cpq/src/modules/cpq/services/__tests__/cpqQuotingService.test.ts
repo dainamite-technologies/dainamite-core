@@ -1,7 +1,9 @@
+import { LockMode } from '@mikro-orm/core'
 import { DefaultCpqQuotingService, QuotingError } from '../cpqQuotingService'
 import type { TenantScope } from '../types'
 
 interface MockEm {
+  transactional: jest.MockedFunction<(callback: (em: MockEm) => Promise<unknown>) => Promise<unknown>>
   findOne: jest.MockedFunction<(entity: unknown, where: Record<string, unknown>, options?: Record<string, unknown>) => Promise<unknown>>
   find: jest.MockedFunction<
     (entity: unknown, where: Record<string, unknown>, options?: Record<string, unknown>) => Promise<unknown[]>
@@ -32,6 +34,7 @@ interface MockNumberGenerator {
 
 function createMockEm(): MockEm {
   const em: MockEm = {
+    transactional: jest.fn(),
     findOne: jest.fn(),
     find: jest.fn(),
     create: jest.fn().mockImplementation((_e, data: Record<string, unknown>) => ({ ...data, id: data.id ?? 'gen-id' })),
@@ -43,6 +46,7 @@ function createMockEm(): MockEm {
     flush: jest.fn().mockResolvedValue(undefined),
     fork: jest.fn(),
   }
+  em.transactional.mockImplementation((callback) => callback(em))
   em.fork.mockReturnValue(em)
   return em
 }
@@ -584,7 +588,7 @@ describe('DefaultCpqQuotingService.recalculate', () => {
     expect(em.flush).not.toHaveBeenCalled()
   })
 
-  it('forks the EM when save=true (write path uses isolated UoW)', async () => {
+  it('locks the quote in a transaction when save=true', async () => {
     const { em, service } = makeService()
     em.findOne
       .mockResolvedValueOnce({
@@ -604,7 +608,9 @@ describe('DefaultCpqQuotingService.recalculate', () => {
 
     await service.recalculate('cpq-1', { save: true }, SCOPE)
 
-    expect(em.fork).toHaveBeenCalledTimes(1)
+    expect(em.transactional).toHaveBeenCalledTimes(1)
+    expect(em.fork).not.toHaveBeenCalled()
+    expect(em.findOne.mock.calls[0][2]).toMatchObject({ lockMode: LockMode.PESSIMISTIC_WRITE })
   })
 
   it('marks status "new" when no lines exist (auto-managed status)', async () => {

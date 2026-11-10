@@ -1,3 +1,4 @@
+import { withQuotePricingWrite } from './priceAdjustments/quotePricingWrite'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { SalesOrder, SalesOrderLine } from '@open-mercato/core/modules/sales/data/entities'
 import type { SalesDocumentNumberGenerator } from '@open-mercato/core/modules/sales/services/salesDocumentNumberGenerator'
@@ -130,29 +131,12 @@ export class DefaultCpqOrderService {
   // ─── Convert Quote to Order ─────────────────────────────────
 
   async convertQuoteToOrder(quoteId: string, scope: TenantScope): Promise<OrderResult> {
-    const em = this.em
-
-    const cpqConfig = await em.findOne(CpqQuoteConfiguration, {
-      id: quoteId,
-      organizationId: scope.organizationId,
-      tenantId: scope.tenantId,
-      deletedAt: null,
-    })
-    if (!cpqConfig) {
-      const byQuoteId = await em.findOne(CpqQuoteConfiguration, {
-        quoteId,
-        organizationId: scope.organizationId,
-        tenantId: scope.tenantId,
-        deletedAt: null,
-      })
-      if (!byQuoteId) throw new OrderError(404, 'Quote not found')
-      return this.convertFromConfig(byQuoteId, scope)
-    }
-    return this.convertFromConfig(cpqConfig, scope)
+    return withQuotePricingWrite(this.em, quoteId, scope,
+      (em, quote) => this.convertFromConfig(quote, scope, em),
+      (status, message) => new OrderError(status, message))
   }
 
-  private async convertFromConfig(cpqConfig: CpqQuoteConfiguration, scope: TenantScope): Promise<OrderResult> {
-    const em = this.em
+  private async convertFromConfig(cpqConfig: CpqQuoteConfiguration, scope: TenantScope, em: EntityManager): Promise<OrderResult> {
 
     const blockedStatuses = ['cancelled', 'rejected']
     if (blockedStatuses.includes(cpqConfig.cpqStatus)) {

@@ -66,7 +66,12 @@ jobs:
           # main is never out of sync. `--mode=update-lockfile` touches only
           # yarn.lock (no linking), which is all we need.
           # Bit us on 2026-07-01 and again on 2026-08-25.
-          version: yarn changeset version && yarn install --mode=update-lockfile
+          #
+          # Must be a single package.json script: changesets/action does NOT
+          # run `version` through a shell, it splits on spaces and execs. An
+          # inline `a && b` passes "&&", "yarn", "install"… as arguments to
+          # `changeset`, which dies with "Too many arguments" (2026-11-04/10).
+          version: yarn version-packages
           # When PR with version bumps is merged → this command publishes.
           # When changesets exist but PR isn't merged → updates the PR.
           publish: yarn changeset publish

@@ -21,6 +21,7 @@
     "billing:watch": "yarn workspace @dainamite/billing watch",
     "cpq-billing-connector:watch": "yarn workspace @dainamite/cpq-billing-connector watch",
     "build": "yarn generate && cross-env NODE_ENV=production NODE_OPTIONS=--max-old-space-size=8192 next build",
+    "version-packages": "changeset version && yarn install --mode=update-lockfile",
     "build:packages": "yarn workspace @dainamite/cpq build && yarn workspace @dainamite/billing build && yarn workspace @dainamite/cpq-billing-connector build",
     "start": "mercato server start",
     "lint": "next lint",

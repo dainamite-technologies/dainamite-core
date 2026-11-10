@@ -54,8 +54,8 @@ Stop CPQ from changing quote prices behind the rep's back before manual price ad
 
 ### Phase 2: Frozen Amend mirror lines
 
-- [ ] 2.1 Characterize Amend mirror-line re-pricing in recalculation.
-- [ ] 2.2 Freeze engine-priced Amend mirror lines (`_arcPriceFrozen`), unfreeze on any pricing-input change; badge + banner in the quote UI.
+- [x] 2.1 Characterize Amend mirror-line re-pricing in recalculation. — b2c16e9
+- [x] 2.2 Freeze engine-priced Amend mirror lines (`_arcPriceFrozen`), unfreeze on any pricing-input change; badge + banner in the quote UI. — 7cb034e
 
 ### Phase 3: Guards, openApi, docs
 

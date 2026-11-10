@@ -1,4 +1,26 @@
 import { createModuleEvents } from '@open-mercato/shared/modules/events'
+import type { EventPayloadSchemaField } from '@open-mercato/shared/modules/events'
+
+/** Fields shared by both quote pricing signals (see `quotePricingEvents.ts`). */
+const quotePricingSnapshotFields: EventPayloadSchemaField[] = [
+  { path: 'tenantId', type: 'text' },
+  { path: 'organizationId', type: 'text' },
+  { path: 'quoteId', type: 'text', label: 'CPQ quote id' },
+  { path: 'quoteType', type: 'select', label: 'Quote type' },
+  { path: 'cpqStatus', type: 'text', label: 'Status' },
+  { path: 'currencyCode', type: 'text' },
+  { path: 'pricingRevision', type: 'number' },
+  { path: 'snapshotHash', type: 'text' },
+  { path: 'dealValue.list', type: 'number', label: 'Deal value (list)' },
+  { path: 'dealValue.standard', type: 'number', label: 'Deal value (standard)' },
+  { path: 'dealValue.offer', type: 'number', label: 'Deal value (offer)' },
+  { path: 'discountDepth.rule', type: 'number', label: 'Rule discount depth', optional: true },
+  { path: 'discountDepth.manual', type: 'number', label: 'Manual discount depth', optional: true },
+  { path: 'discountDepth.total', type: 'number', label: 'Total discount depth', optional: true },
+  { path: 'discountDepth.maxLineManual', type: 'number', label: 'Max line manual discount depth', optional: true },
+  { path: 'hasTimeBasedAdjustments', type: 'boolean' },
+  { path: 'occurredAt', type: 'date' },
+]
 
 /**
  * CPQ Module Events.
@@ -8,8 +30,9 @@ import { createModuleEvents } from '@open-mercato/shared/modules/events'
  * modules (billing, notifications) subscribe to these to react to
  * subscription mutations driven by CPQ orders.
  *
- * Emission rule: events fire AFTER the activation transaction commits.
- * `cpqOrderService.activateOrder` is the sole emitter site.
+ * Emission rule: events fire AFTER their transaction commits.
+ * Subscription events: `cpqOrderService.activateOrder` is the sole emitter.
+ * Quote events: `withQuotePricingWrite` (plus `cloneQuote` for the copy).
  */
 const events = [
   {
@@ -53,6 +76,34 @@ const events = [
     entity: 'subscription',
     category: 'lifecycle',
     clientBroadcast: true,
+  },
+  // Quote pricing signals (manual price adjustments). Emitted after the quote
+  // write commits by `withQuotePricingWrite`; payload carries the pricing
+  // snapshot (deal value, discount depth, snapshot hash) so project workflows
+  // can route approvals without CPQ code.
+  {
+    id: 'cpq.quote.pricing_changed',
+    label: 'Quote Pricing Changed',
+    entity: 'quote',
+    category: 'custom',
+    clientBroadcast: true,
+    payloadSchema: { fields: [...quotePricingSnapshotFields, { path: 'cause', type: 'select' }] },
+  },
+  {
+    id: 'cpq.quote.status_changed',
+    label: 'Quote Status Changed',
+    entity: 'quote',
+    category: 'lifecycle',
+    clientBroadcast: true,
+    payloadSchema: {
+      fields: [
+        ...quotePricingSnapshotFields,
+        { path: 'fromStatus', type: 'text' },
+        { path: 'toStatus', type: 'text' },
+        { path: 'cause', type: 'select' },
+        { path: 'actorUserId', type: 'text', optional: true },
+      ],
+    },
   },
 ] as const
 

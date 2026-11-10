@@ -25,8 +25,8 @@ Engine: om-auto-create-pr-loop (steps: 22, --loop: no)
 | 2 | 2.5 | Clone and removal | inline | done | a991619 |
 | 2 | 2.6-characterize | Characterize stored adjustment conversion | inline | done | 3d10ca6 |
 | 2 | 2.6 | Conversion validation | inline | done | b5f4f39 |
-| 2 | 2.7 | Calculate-price waterfall opt-in | inline | done | this commit |
-| 3 | 3.1 | Quote pricing and status events | inline | todo | — |
+| 2 | 2.7 | Calculate-price waterfall opt-in | inline | done | f40e2be |
+| 3 | 3.1 | Quote pricing and status events | inline | done | this commit |
 | 4 | 4.1 | Waterfall and price columns | inline | todo | — |
 | 4 | 4.2 | Adjustment dialog and preview | inline | todo | — |
 | 4 | 4.3 | Adjustment management panel | inline | todo | — |

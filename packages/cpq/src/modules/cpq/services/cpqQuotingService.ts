@@ -3,9 +3,10 @@ import type { PriceAdjustment } from '../data/price-adjustments'
 import { withAtomicFlush } from '@open-mercato/shared/lib/commands/flush'
 import { loadQuoteAdjustments } from './priceAdjustments/loadQuoteAdjustments'
 import { resolveManualAdjustments } from './priceAdjustments/resolveManualAdjustments'
-import { computeWaterfallSummary } from './priceAdjustments/pricingSnapshot'
 import { withChargeWaterfall } from './priceAdjustments/chargeWaterfall'
 import { withQuotePricingWrite } from './priceAdjustments/quotePricingWrite'
+import { emitQuoteWriteEvents, type QuoteWriteEvents } from './priceAdjustments/quotePricingEvents'
+import { computeWaterfallSummary } from './priceAdjustments/pricingSnapshot'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { SalesQuote, SalesQuoteLine } from '@open-mercato/core/modules/sales/data/entities'
 import { CustomerEntity } from '@open-mercato/core/modules/customers/data/entities'
@@ -187,7 +188,7 @@ export class DefaultCpqQuotingService {
   // ─── Add Quote Item ────────────────────────────────────────────
 
   async addQuoteItem(quoteId: string, item: QuoteItemInput, scope: TenantScope): Promise<QuoteResult> {
-    return this.writeQuote(quoteId, scope, (em, quote) => this.addQuoteItemInTransaction(quoteId, item, scope, em, quote))
+    return this.writeQuote(quoteId, scope, (em, quote) => this.addQuoteItemInTransaction(quoteId, item, scope, em, quote), undefined, undefined, LINE_EVENTS)
   }
 
   private async addQuoteItemInTransaction(quoteId: string, item: QuoteItemInput, scope: TenantScope, em: EntityManager, cpqConfig: CpqQuoteConfiguration): Promise<QuoteResult> {
@@ -348,7 +349,7 @@ export class DefaultCpqQuotingService {
     lineId: string,
     update: { configuration: Record<string, unknown>; quantity?: number; usageEstimates?: Array<{ chargeCode: string; estimatedQuantity: number }>; startDate?: string; termMonths?: number; endDate?: string },
     scope: TenantScope): Promise<QuoteResult> {
-    return this.writeQuote(quoteId, scope, (em, quote) => this.updateQuoteItemInTransaction(quoteId, lineId, update, scope, em, quote))
+    return this.writeQuote(quoteId, scope, (em, quote) => this.updateQuoteItemInTransaction(quoteId, lineId, update, scope, em, quote), undefined, undefined, LINE_EVENTS)
   }
 
   private async updateQuoteItemInTransaction(
@@ -518,7 +519,7 @@ export class DefaultCpqQuotingService {
   // ─── Remove Quote Item ─────────────────────────────────────────
 
   async removeQuoteItem(quoteId: string, lineId: string, scope: TenantScope): Promise<QuoteResult> {
-    return this.writeQuote(quoteId, scope, (em, quote) => this.removeQuoteItemInTransaction(quoteId, lineId, scope, em, quote))
+    return this.writeQuote(quoteId, scope, (em, quote) => this.removeQuoteItemInTransaction(quoteId, lineId, scope, em, quote), undefined, undefined, LINE_EVENTS)
   }
 
   private async removeQuoteItemInTransaction(quoteId: string, lineId: string, scope: TenantScope, em: EntityManager, cpqConfig: CpqQuoteConfiguration): Promise<QuoteResult> {
@@ -591,10 +592,19 @@ export class DefaultCpqQuotingService {
   // ─── Clone Quote ───────────────────────────────────────────────
 
   async cloneQuote(quoteId: string, scope: TenantScope): Promise<QuoteResult> {
-    return this.writeQuote(quoteId, scope, (em, quote) => this.cloneQuoteInTransaction(quoteId, scope, em, quote))
+    const created: { quote?: CpqQuoteConfiguration } = {}
+    const result = await this.writeQuote(quoteId, scope,
+      (em, quote) => this.cloneQuoteInTransaction(quoteId, scope, em, quote, created),
+      undefined, undefined, { pricingCause: 'clone' })
+    // The copy is a new aggregate: its first committed snapshot is a pricing signal.
+    if (created.quote) await emitQuoteWriteEvents(null, created.quote, { pricingCause: 'clone' })
+    return result
   }
 
-  private async cloneQuoteInTransaction(quoteId: string, scope: TenantScope, em: EntityManager, original: CpqQuoteConfiguration): Promise<QuoteResult> {
+  private async cloneQuoteInTransaction(
+    quoteId: string, scope: TenantScope, em: EntityManager, original: CpqQuoteConfiguration,
+    created: { quote?: CpqQuoteConfiguration } = {},
+  ): Promise<QuoteResult> {
 
     const originalQuote = await this.loadSalesQuote(em, original.quoteId, scope)
 
@@ -644,6 +654,7 @@ export class DefaultCpqQuotingService {
       pricingSummary: emptyPricingSummary(original.currencyCode),
     })
     em.persist(newCpqConfig)
+    created.quote = newCpqConfig
     await em.flush()
 
     // Copy all lines
@@ -747,8 +758,9 @@ export class DefaultCpqQuotingService {
 
   // ─── Transition Status ─────────────────────────────────────────
 
-  async transitionStatus(quoteId: string, targetStatus: string, scope: TenantScope): Promise<QuoteResult> {
-    return this.writeQuote(quoteId, scope, (em, quote) => this.transitionStatusInTransaction(quoteId, targetStatus, scope, em, quote))
+  async transitionStatus(quoteId: string, targetStatus: string, scope: TenantScope, actorUserId: string | null = null): Promise<QuoteResult> {
+    return this.writeQuote(quoteId, scope, (em, quote) => this.transitionStatusInTransaction(quoteId, targetStatus, scope, em, quote),
+      undefined, undefined, { pricingCause: 'recalculate', statusCause: 'manual', actorUserId })
   }
 
   private async transitionStatusInTransaction(quoteId: string, targetStatus: string, scope: TenantScope, em: EntityManager, cpqConfig: CpqQuoteConfiguration): Promise<QuoteResult> {
@@ -802,9 +814,10 @@ export class DefaultCpqQuotingService {
     execute: (em: EntityManager, quote: CpqQuoteConfiguration) => Promise<QuoteResult>,
     expectedRevision?: number,
     validate?: (quote: CpqQuoteConfiguration) => void,
+    events: QuoteWriteEvents = { pricingCause: 'recalculate' },
   ): Promise<QuoteResult> {
     return withQuotePricingWrite(this.em, quoteId, scope, execute,
-      (status, message) => new QuotingError(status, message), expectedRevision, validate)
+      (status, message) => new QuotingError(status, message), expectedRevision, validate, events)
   }
 
   /** Called by adjustment commands that already own the quote lock/revision. */
@@ -1499,8 +1512,13 @@ function computePricingSummaryFromComputed(
   }
 }
 
+const LINE_EVENTS: QuoteWriteEvents = { pricingCause: 'line' }
+
 function emptyPricingSummary(currencyCode: string): Record<string, unknown> {
   return {
+    // A new quote starts with a real baseline hash, so its first priced line is
+    // a pricing change; only pre-feature quotes have no stored hash.
+    snapshotHash: computeWaterfallSummary([], [], currencyCode).snapshotHash,
     nrcTotal: 0,
     mrcTotal: 0,
     usageCharges: [],
@@ -2493,6 +2511,7 @@ async function mapTargetView(
 
 function emptyArcPricingSummary(currencyCode: string): Record<string, unknown> {
   return {
+    snapshotHash: computeWaterfallSummary([], [], currencyCode).snapshotHash,
     nrcTotal: 0,
     mrcTotal: 0,
     usageCharges: [],

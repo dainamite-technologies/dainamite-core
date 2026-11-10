@@ -31,7 +31,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ quoteId
     if (!guard.ok) return guard.response
 
     const service = resolveQuotingService(ctx)
-    const result = await service.transitionStatus(quoteId, body.targetStatus, scope)
+    const result = await service.transitionStatus(quoteId, body.targetStatus, scope, ctx.auth.sub ?? null)
     await guard.runAfterSuccess()
     return NextResponse.json(result)
   } catch (err) {

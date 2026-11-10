@@ -55,7 +55,7 @@ describe('POST /api/cpq/quotes/{quoteId}/status — mutation guards', () => {
         mutationPayload: { action: 'transition_status', targetStatus: 'with_customer' },
       },
     )
-    expect(transitionStatus).toHaveBeenCalledWith('cpq-1', 'with_customer', { organizationId: 'org-1', tenantId: 't-1' })
+    expect(transitionStatus).toHaveBeenCalledWith('cpq-1', 'with_customer', { organizationId: 'org-1', tenantId: 't-1' }, 'user-1')
     expect(runAfterSuccess).toHaveBeenCalledTimes(1)
   })
 

@@ -156,7 +156,7 @@ export class CpqAdjustmentService {
   }
 
   private write<T>(quoteId: string, scope: TenantScope, revision: number | undefined, execute: (em: EntityManager, quote: CpqQuoteConfiguration) => Promise<T>) {
-    return withQuotePricingWrite(this.deps.em, quoteId, scope, execute, (status, message) => new QuotingError(status, message), revision)
+    return withQuotePricingWrite(this.deps.em, quoteId, scope, execute, (status, message) => new QuotingError(status, message), revision, undefined, { pricingCause: 'adjustment' })
   }
 
   private async save(em: EntityManager, quote: CpqQuoteConfiguration, row: CpqQuotePriceAdjustment, before: AdjustmentSnapshot | null, scope: TenantScope, rejectInvalid: boolean): Promise<AdjustmentWriteResult> {

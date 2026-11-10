@@ -227,6 +227,7 @@ function routeEm(
     if (entity === SalesQuote) return { id: 'sq-1', currencyCode: 'USD', quoteNumber: 'Q-001' }
     if (entity === SalesQuoteLine) return { id: 'ql-1' }
     if (entity === CpqProductOffering) return { id: 'off-1', name: 'GIX Access Port', offeringType: 'simple' }
+    if (entity === CpqQuoteLineConfiguration) return lineConfig
     return null
   })
   em.find.mockImplementation(async (entity: unknown) => {
@@ -236,7 +237,7 @@ function routeEm(
 }
 
 describe('recalculate → Amend mirror lines', () => {
-  it('re-prices an engine-priced Amend mirror line at the current standard price', async () => {
+  it('re-prices a legacy Amend mirror line (created before the frozen marker) at the current standard price', async () => {
     const { em, pricingService, service } = makePricedService()
     const { cpqConfig, lineConfig } = amendFixture({
       port_size: '1G',
@@ -250,5 +251,71 @@ describe('recalculate → Amend mirror lines', () => {
 
     expect(pricingService.resolveProductCharges).toHaveBeenCalledTimes(1)
     expect(lineConfig.mrcTotal).toBe('120')
+  })
+
+  it('keeps a frozen Amend mirror line at its stored price without calling the pricing engine', async () => {
+    const { em, pricingService, service } = makePricedService()
+    const { cpqConfig, lineConfig } = amendFixture({
+      port_size: '1G',
+      _arcMirroredFromItemId: 'item-1',
+      _arcMirroredName: 'GIX Access Port',
+      _arcPriceFrozen: true,
+    })
+    routeEm(em, cpqConfig, lineConfig)
+    pricingService.resolveProductCharges.mockResolvedValue([mrcCharge(120)])
+
+    const result = await service.recalculate('cpq-1', { save: true }, SCOPE)
+
+    expect(pricingService.resolveProductCharges).not.toHaveBeenCalled()
+    expect(lineConfig.mrcTotal).toBe('100')
+    expect(result.lines[0].mrcTotal).toBe(100)
+  })
+})
+
+describe('updateQuoteItem → frozen Amend mirror lines', () => {
+  const FROZEN_CFG = {
+    port_size: '1G',
+    _arcMirroredFromItemId: 'item-1',
+    _arcMirroredName: 'GIX Access Port',
+    _arcPriceFrozen: true,
+  }
+
+  it('stays frozen when the UI resubmits an unchanged configuration', async () => {
+    const { em, pricingService, service } = makePricedService()
+    const { cpqConfig, lineConfig } = amendFixture({ ...FROZEN_CFG })
+    routeEm(em, cpqConfig, lineConfig)
+    pricingService.resolveProductCharges.mockResolvedValue([mrcCharge(120)])
+
+    await service.updateQuoteItem('cpq-1', 'ql-1', { configuration: { port_size: '1G' }, quantity: 1 }, SCOPE)
+
+    expect(pricingService.resolveProductCharges).not.toHaveBeenCalled()
+    expect(lineConfig.configuration).toMatchObject({ _arcPriceFrozen: true, _arcMirroredFromItemId: 'item-1' })
+    expect(lineConfig.mrcTotal).toBe('100')
+  })
+
+  it('unfreezes and re-prices when the configuration changes', async () => {
+    const { em, pricingService, service } = makePricedService()
+    const { cpqConfig, lineConfig } = amendFixture({ ...FROZEN_CFG })
+    routeEm(em, cpqConfig, lineConfig)
+    pricingService.resolveProductCharges.mockResolvedValue([mrcCharge(150)])
+
+    await service.updateQuoteItem('cpq-1', 'ql-1', { configuration: { port_size: '10G' } }, SCOPE)
+
+    expect(pricingService.resolveProductCharges).toHaveBeenCalled()
+    expect((lineConfig.configuration as Record<string, unknown>)._arcPriceFrozen).toBeUndefined()
+    expect(lineConfig.configuration).toMatchObject({ port_size: '10G', _arcMirroredFromItemId: 'item-1' })
+    expect(lineConfig.mrcTotal).toBe('150')
+  })
+
+  it('unfreezes and re-prices when the quantity changes', async () => {
+    const { em, pricingService, service } = makePricedService()
+    const { cpqConfig, lineConfig } = amendFixture({ ...FROZEN_CFG })
+    routeEm(em, cpqConfig, lineConfig)
+    pricingService.resolveProductCharges.mockResolvedValue([mrcCharge(110)])
+
+    await service.updateQuoteItem('cpq-1', 'ql-1', { configuration: { port_size: '1G' }, quantity: 2 }, SCOPE)
+
+    expect(pricingService.resolveProductCharges).toHaveBeenCalled()
+    expect(lineConfig.mrcTotal).toBe('220')
   })
 })

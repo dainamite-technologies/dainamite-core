@@ -25,6 +25,7 @@ import {
   type TenantScope,
 } from './types'
 import { emitCpqEvent } from '../events'
+import { stripArcPriceFreeze } from './arcPriceFreeze'
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -1082,7 +1083,7 @@ function buildArcLineChange(
       offeringId: line.offeringId ?? undefined,
       specId: line.specId ?? undefined,
       name: resolveLineName(line, specMap),
-      configuration: line.configuration ?? {},
+      configuration: stripArcPriceFreeze(line.configuration) ?? {},
       charges: (line.charges ?? null) as Array<Record<string, unknown>> | undefined,
       mrcAmount: Number(line.mrcTotal),
       nrcAmount: Number(line.nrcTotal),
@@ -1109,7 +1110,7 @@ function buildArcLineChange(
     action,
     sourceSubscriptionItemId: line.sourceSubscriptionItemId ?? null,
     modifyPatch: {
-      configuration: line.configuration ?? undefined,
+      configuration: stripArcPriceFreeze(line.configuration) ?? undefined,
       charges: (line.charges ?? undefined) as Array<Record<string, unknown>> | undefined,
       mrcAmount: Number(line.mrcTotal),
       nrcAmount: Number(line.nrcTotal),

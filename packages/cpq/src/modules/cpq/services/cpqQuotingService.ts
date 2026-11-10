@@ -36,6 +36,12 @@ import {
   ARC_QUOTE_TYPES,
   getBaseCurrencyCode,
 } from './types'
+import {
+  ARC_PRICE_FROZEN_KEY,
+  arcPricingInputsChanged,
+  buildArcMirrorConfiguration,
+  isArcPriceFrozen,
+} from './arcPriceFreeze'
 
 interface QuotingServiceDeps {
   em: EntityManager
@@ -398,6 +404,22 @@ export class DefaultCpqQuotingService {
     if (existingCfg?._arcMirroredName !== undefined) {
       arcMarkers._arcMirroredName = existingCfg._arcMirroredName
     }
+    // A frozen Amend mirror line keeps the subscription's stored price until
+    // a pricing input changes; then it is unfrozen and re-priced as usual.
+    const staysFrozen =
+      isArcPriceFrozen(existingCfg) &&
+      !arcPricingInputsChanged(
+        {
+          configuration: existingCfg,
+          quantity: lineConfig.quantity,
+          termMonths: lineConfig.termMonths,
+          startDate: lineConfig.startDate,
+          endDate: lineConfig.endDate,
+          usageEstimates: lineConfig.usageEstimates,
+        },
+        update,
+      )
+    if (staysFrozen) arcMarkers[ARC_PRICE_FROZEN_KEY] = true
     update.configuration = { ...update.configuration, ...arcMarkers }
     mergedConfig._arcMirroredFromItemId = arcMarkers._arcMirroredFromItemId
     mergedConfig._arcMirroredName = arcMarkers._arcMirroredName
@@ -409,7 +431,7 @@ export class DefaultCpqQuotingService {
     // to "incomplete" with mrcTotal=0.
     const isArcMirrored = !!(arcMarkers._arcMirroredFromItemId)
     let charges: ResolvedCharge[]
-    if (lineConfig.offeringId || lineConfig.productId) {
+    if ((lineConfig.offeringId || lineConfig.productId) && !staysFrozen) {
       charges = await this.pricingService.resolveProductCharges({
         offeringId: lineConfig.offeringId ?? undefined,
         productId: lineConfig.productId ?? undefined,
@@ -824,8 +846,12 @@ export class DefaultCpqQuotingService {
       // line to "incomplete".
       const cfgRecord = lineConfig.configuration as Record<string, unknown> | null
       const isArcMirrored = !!(cfgRecord?._arcMirroredFromItemId)
+      // Frozen Amend mirror lines keep the subscription item's stored charges
+      // (see arcPriceFreeze.ts) — re-pricing them would silently move the
+      // contracted price of items the amendment does not touch.
+      const isFrozen = isArcPriceFrozen(cfgRecord)
       let charges: ResolvedCharge[]
-      if (lineConfig.offeringId || lineConfig.productId) {
+      if ((lineConfig.offeringId || lineConfig.productId) && !isFrozen) {
         charges = await this.pricingService.resolveProductCharges({
           offeringId: lineConfig.offeringId ?? undefined,
           productId: lineConfig.productId ?? undefined,
@@ -2543,11 +2569,7 @@ async function mirrorTargetSubscriptionItems(
       startDate: null,
       termMonths: null,
       endDate: null,
-      configuration: {
-        ...item.configuration,
-        _arcMirroredFromItemId: item.id,
-        _arcMirroredName: item.name,
-      },
+      configuration: buildArcMirrorConfiguration(item.configuration, item, quoteType),
       quantity: item.quantity,
       charges: pickArcMirrorCharges(item, sub.currencyCode),
       nrcTotal: String(item.nrcAmount ?? 0),

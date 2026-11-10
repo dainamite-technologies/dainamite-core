@@ -872,6 +872,21 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
             </Alert>
           )}
 
+          {/* Amend lines the rep reconfigured are re-priced at today's catalog
+              price; negotiated prices are not carried over yet (later release). */}
+          {arcQuoteType === 'amend' &&
+            cpqQuote.lines.some(
+              (l) => l.configuration?._arcMirroredFromItemId && l.configuration?._arcPriceFrozen !== true,
+            ) && (
+              <Alert variant="info">
+                <AlertTitle>Some existing items use the current catalog price</AlertTitle>
+                <AlertDescription>
+                  Reconfigured lines were re-priced at today&apos;s catalog price. Negotiated prices from the
+                  subscription are not carried over to reconfigured lines yet.
+                </AlertDescription>
+              </Alert>
+            )}
+
           {/* Quote Lines */}
           <QuoteLineTree
             lines={cpqQuote.lines}
@@ -1248,6 +1263,15 @@ function QuoteLineRow({ line, lineIdx, currency, isExpanded, pricingDetail, isBu
             <span className="font-medium text-sm">{line.offeringName}</span>
             {line.quantity > 1 && <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-medium">×{line.quantity}</span>}
             <ActionBadge action={line.action} />
+            {line.configuration?._arcPriceFrozen === true && (
+              <Tag
+                variant="neutral"
+                className="px-1.5 text-xs"
+                title="Price kept from the subscription — it changes only if you reconfigure this line"
+              >
+                price kept
+              </Tag>
+            )}
             {targetCodes.size >= 2 && line.targetSubscriptionId && targetCodes.get(line.targetSubscriptionId) && (
               <Tag
                 variant="brand"

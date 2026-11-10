@@ -596,7 +596,7 @@ function OrderLineRow({ line, lineIdx, currency, isExpanded, isBundle, childCoun
       </div>
 
       {isExpanded && (() => {
-        const internalKeys = new Set(['_arcMirroredName', '_arcMirroredFromItemId', 'offeringName'])
+        const internalKeys = new Set(['_arcMirroredName', '_arcMirroredFromItemId', '_arcPriceFrozen', 'offeringName'])
         const visibleConfigEntries = Object.entries(line.configuration).filter(
           ([key]) => !internalKeys.has(key),
         )

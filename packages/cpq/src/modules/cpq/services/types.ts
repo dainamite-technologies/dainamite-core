@@ -137,7 +137,20 @@ export interface QuoteLineResult {
   targetSubscriptionId: string | null
 }
 
-export interface PricingSummary {
+export interface PricingWaterfallSummary {
+  listNrcTotal: number
+  listMrcTotal: number
+  standardNrcTotal: number
+  standardMrcTotal: number
+  ruleDiscountTotal: number
+  manualDiscountTotal: number
+  dealValue: { list: number; standard: number; offer: number }
+  discountDepth: { rule: number | null; manual: number | null; total: number | null; maxLineManual: number | null }
+  hasTimeBasedAdjustments: boolean
+  snapshotHash: string
+}
+
+export interface PricingSummary extends Partial<PricingWaterfallSummary> {
   nrcTotal: number
   mrcTotal: number
   usageCharges: Array<{

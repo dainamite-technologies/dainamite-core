@@ -14,7 +14,10 @@ import { FormHeader } from '@open-mercato/ui/backend/forms'
 import type { ActionItem } from '@open-mercato/ui/backend/forms/ActionsDropdown'
 import { NumberInput } from '../../../../components/NumberInput'
 import { DepthBadge, PriceWaterfall } from '../../../../components/PriceWaterfall'
-import { ADJUSTMENT_ERROR_FALLBACKS, formatDepth, lineWaterfallTotals } from '../../../../lib/priceAdjustmentView'
+import { ADJUST_PRICE_FEATURE, ADJUSTMENT_ERROR_FALLBACKS, formatDepth, lineWaterfallTotals } from '../../../../lib/priceAdjustmentView'
+import { usePriceAdjustments } from './_components/usePriceAdjustments'
+import { PriceAdjustmentsPanel } from './_components/PriceAdjustmentsPanel'
+import { AdjustChargeAction, DiscountLineAction, ManualAdjustmentActions, PriceAdjustmentProvider, usePriceAdjustmentUi } from './_components/priceAdjustmentContext'
 import { useGrantedFeatures } from '../../../../components/useGrantedFeatures'
 import { canRecalculateQuote, QUOTE_MANAGE_FEATURE } from '../../../../lib/quotePermissions'
 import {
@@ -286,7 +289,7 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
 
   const t = useT()
   const [cpqQuote, setCpqQuote] = React.useState<QuoteResult | null>(null)
-  const grantedFeatures = useGrantedFeatures([QUOTE_MANAGE_FEATURE])
+  const grantedFeatures = useGrantedFeatures([QUOTE_MANAGE_FEATURE, ADJUST_PRICE_FEATURE])
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState<string | null>(null)
   const [submitting, setSubmitting] = React.useState(false)
@@ -340,6 +343,22 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
     if (!cpqConfigId || isNew) return
     void loadArcTargets()
   }, [cpqConfigId, isNew, loadArcTargets])
+
+  // ─── Negotiated prices ─────────────────────────────────────────
+  const reloadQuote = React.useCallback(async () => {
+    try {
+      setCpqQuote(await apiJson<QuoteResult>(`/api/cpq/quotes/${cpqConfigId}`))
+    } catch (err) {
+      setError((err as Error).message)
+    }
+  }, [cpqConfigId])
+  const priceAdjustments = usePriceAdjustments<QuoteResult>({
+    quote: isNew ? null : cpqQuote,
+    quoteType: arcQuoteType,
+    canAdjust: grantedFeatures.includes(QUOTE_MANAGE_FEATURE) && grantedFeatures.includes(ADJUST_PRICE_FEATURE),
+    onQuote: setCpqQuote,
+    reloadQuote,
+  })
 
   // ─── Load or create ──────────────────────────────────────────
 
@@ -615,7 +634,9 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
   }
 
   return (
+    <PriceAdjustmentProvider value={priceAdjustments.ui}>
     <div className="space-y-6">
+      {priceAdjustments.elements}
       {arcDrawerOpen && (
         <ArcQuoteConfigurator
           quoteId={cpqQuote.id}
@@ -941,6 +962,15 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
               )
             }
           />
+
+          <PriceAdjustmentsPanel
+            quoteId={cpqQuote.id}
+            items={priceAdjustments.items}
+            total={priceAdjustments.total}
+            lines={cpqQuote.lines}
+            currency={currency}
+            errorsById={priceAdjustments.errorsById}
+          />
         </>
       )}
 
@@ -1019,6 +1049,7 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
         />
       )}
     </div>
+    </PriceAdjustmentProvider>
   )
 }
 
@@ -1275,7 +1306,13 @@ function QuoteLineRow({ line, lineIdx, currency, isExpanded, pricingDetail, isBu
   onTogglePricingDetail: (lineIdx: number, chargeIdx: number) => void
 }) {
   const t = useT()
+  const adjustmentUi = usePriceAdjustmentUi()
   const paddingLeft = indent > 0 ? `${indent * 2 + 1}rem` : undefined
+  const chargeActions = {
+    reasonLabels: adjustmentUi?.reasonLabels,
+    renderChargeActions: (charge: ResolvedCharge) => <AdjustChargeAction line={line} charge={charge} />,
+    renderManualActions: (adjustmentId: string) => <ManualAdjustmentActions adjustmentId={adjustmentId} />,
+  }
 
   return (
     <div>
@@ -1343,6 +1380,7 @@ function QuoteLineRow({ line, lineIdx, currency, isExpanded, pricingDetail, isBu
 
         {/* Actions */}
         <div className="flex items-center gap-1 shrink-0">
+          <DiscountLineAction line={line} />
           {onAddComponent && (
             <button onClick={onAddComponent} className="rounded p-1.5 text-muted-foreground hover:text-primary hover:bg-primary/5 transition-colors" title="Add Component">
               <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor">
@@ -1369,11 +1407,11 @@ function QuoteLineRow({ line, lineIdx, currency, isExpanded, pricingDetail, isBu
       )}
       {/* Charge breakdown (non-bundle or any expanded line) */}
       {isExpanded && !isBundle && line.charges.length > 0 && (
-        <ChargeBreakdown line={line} lineIdx={lineIdx} currency={currency} pricingDetail={pricingDetail} onTogglePricingDetail={onTogglePricingDetail} />
+        <ChargeBreakdown line={line} lineIdx={lineIdx} currency={currency} pricingDetail={pricingDetail} onTogglePricingDetail={onTogglePricingDetail} {...chargeActions} />
       )}
       {/* For bundles: show own charges first, then children are rendered by parent */}
       {isExpanded && isBundle && line.charges.length > 0 && (
-        <ChargeBreakdown line={line} lineIdx={lineIdx} currency={currency} pricingDetail={pricingDetail} onTogglePricingDetail={onTogglePricingDetail} />
+        <ChargeBreakdown line={line} lineIdx={lineIdx} currency={currency} pricingDetail={pricingDetail} onTogglePricingDetail={onTogglePricingDetail} {...chargeActions} />
       )}
       {/* Fallback: line has no per-charge breakdown and no ARC diff (truly empty) */}
       {isExpanded && line.charges.length === 0 && !line.arcSource && (

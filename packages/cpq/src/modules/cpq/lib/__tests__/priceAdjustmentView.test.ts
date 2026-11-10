@@ -1,5 +1,5 @@
 import {
-  adjustmentAccess, allowedAdjustmentTypes, canDeleteInvalidAdjustment, discountDepth, formatDepth,
+  adjustmentAccess, adjustmentErrorCode, allowedAdjustmentTypes, buildAdjustmentDraft, canDeleteInvalidAdjustment, discountDepth, formatDepth, toAdjustmentPatch,
   lineAdjustmentBlock, lineWaterfallTotals, waterfallRows,
 } from '../priceAdjustmentView'
 import { TERMINAL_STATUSES } from '../../services/types'
@@ -89,5 +89,36 @@ describe('eligibility and access', () => {
     expect(canDeleteInvalidAdjustment({ ...base, cpqStatus: 'in_approval' })).toBe(true)
     for (const status of TERMINAL_STATUSES) expect(canDeleteInvalidAdjustment({ ...base, cpqStatus: status })).toBe(false)
     expect(canDeleteInvalidAdjustment({ ...base, convertedOrderId: 'x' })).toBe(false)
+  })
+})
+
+describe('request bodies', () => {
+  const form = { adjustmentType: 'price_override' as const, value: '80', reasonCode: 'competitive_match', reasonNote: '', chargeTypeFilter: '' as const }
+  it('builds a charge override with currency and revision', () => {
+    expect(buildAdjustmentDraft(form, { level: 'charge', quoteLineId: 'l1', chargeCode: 'fee' }, 'USD', 3)).toEqual({
+      level: 'charge', quoteLineId: 'l1', chargeCode: 'fee', adjustmentType: 'price_override', value: 80, currencyCode: 'USD', reasonCode: 'competitive_match', expectedRevision: 3,
+    })
+  })
+  it('builds a line percentage without currency, with filter and note; accepts a decimal comma', () => {
+    expect(buildAdjustmentDraft({ ...form, adjustmentType: 'discount_percent', value: '12,5', chargeTypeFilter: 'mrc', reasonCode: 'other', reasonNote: ' match ' }, { level: 'line', quoteLineId: 'l1' }, 'USD')).toEqual({
+      level: 'line', quoteLineId: 'l1', chargeTypeFilter: 'mrc', adjustmentType: 'discount_percent', value: 12.5, reasonCode: 'other', reasonNote: 'match',
+    })
+  })
+  it('returns null for empty or non-numeric values', () => {
+    expect(buildAdjustmentDraft({ ...form, value: ' ' }, { level: 'line', quoteLineId: 'l1' }, 'USD')).toBeNull()
+    expect(buildAdjustmentDraft({ ...form, value: 'abc' }, { level: 'line', quoteLineId: 'l1' }, 'USD')).toBeNull()
+  })
+  it('drops immutable target fields from a patch and clears removed notes', () => {
+    const draft = buildAdjustmentDraft(form, { level: 'charge', quoteLineId: 'l1', chargeCode: 'fee' }, 'USD', 2)!
+    expect(toAdjustmentPatch(draft)).toEqual({ adjustmentType: 'price_override', value: 80, currencyCode: 'USD', reasonCode: 'competitive_match', reasonNote: null, expectedRevision: 2 })
+  })
+  it.each([
+    [409, { error: 'STALE_REVISION' }, 'STALE_REVISION'],
+    [400, { error: 'Validation error', details: [{ message: 'Invalid' }, { message: 'INVALID_PERCENT' }] }, 'INVALID_PERCENT'],
+    [422, { error: 'ABOVE_STANDARD' }, 'ABOVE_STANDARD'],
+    [403, { error: 'Manual price adjustments are disabled' }, 'FORBIDDEN'],
+    [500, null, 'UNKNOWN'],
+  ])('maps %s %j → %s', (status, body, code) => {
+    expect(adjustmentErrorCode(status, body)).toBe(code)
   })
 })

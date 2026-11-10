@@ -150,3 +150,52 @@ export const ADJUSTMENT_ERROR_FALLBACKS: Record<string, string> = {
   INVALID_PERCENT: 'Enter a percentage above 0 and up to 100',
   INVALID_AMOUNT: 'Enter an amount above 0',
 }
+
+export type AdjustmentForm = {
+  adjustmentType: AdjustmentType
+  /** Raw text from the input; parsed on submit/preview. */
+  value: string
+  reasonCode: string
+  reasonNote: string
+  /** Line level only: '' = all billable charges. */
+  chargeTypeFilter: '' | 'nrc' | 'mrc'
+}
+
+export type AdjustmentTarget =
+  | { level: 'charge'; quoteLineId: string; chargeCode: string }
+  | { level: 'line'; quoteLineId: string }
+
+/** Shape accepted by POST /price-adjustments and the preview `draft`. */
+export function buildAdjustmentDraft(form: AdjustmentForm, target: AdjustmentTarget, currencyCode: string, expectedRevision?: number) {
+  const value = Number(form.value.trim().replace(',', '.'))
+  if (!form.value.trim() || !Number.isFinite(value)) return null
+  const note = form.reasonNote.trim()
+  return {
+    level: target.level,
+    quoteLineId: target.quoteLineId,
+    ...(target.level === 'charge' ? { chargeCode: target.chargeCode } : { chargeTypeFilter: form.chargeTypeFilter || null }),
+    adjustmentType: form.adjustmentType,
+    value,
+    ...(form.adjustmentType === 'discount_percent' ? {} : { currencyCode }),
+    reasonCode: form.reasonCode,
+    ...(note ? { reasonNote: note } : {}),
+    ...(expectedRevision !== undefined ? { expectedRevision } : {}),
+  }
+}
+
+/** PATCH body: target fields are immutable server-side, so they are dropped. */
+export function toAdjustmentPatch(draft: NonNullable<ReturnType<typeof buildAdjustmentDraft>>) {
+  const { level: _level, quoteLineId: _line, chargeCode: _charge, ...patch } = draft as typeof draft & { chargeCode?: string }
+  return { ...patch, reasonNote: patch.reasonNote ?? null, currencyCode: patch.currencyCode ?? null }
+}
+
+/** Server error body → a stable code for messages (`STALE_REVISION`, `INVALID_PERCENT`, …). */
+export function adjustmentErrorCode(status: number, body: unknown): string {
+  const record = (body ?? {}) as { error?: unknown; details?: Array<{ message?: unknown }> }
+  const detail = Array.isArray(record.details) ? record.details.find((issue) => typeof issue?.message === 'string' && /^[A-Z_]+$/.test(issue.message as string)) : undefined
+  if (detail) return detail.message as string
+  if (typeof record.error === 'string' && /^[A-Z_]+$/.test(record.error)) return record.error
+  if (status === 403) return 'FORBIDDEN'
+  if (status === 409) return 'ADJUSTMENT_LOCKED'
+  return typeof record.error === 'string' ? record.error : 'UNKNOWN'
+}

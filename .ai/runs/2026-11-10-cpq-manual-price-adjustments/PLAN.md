@@ -24,8 +24,8 @@ Engine: om-auto-create-pr-loop (steps: 22, --loop: no)
 | 2 | 2.4 | ACL and reason dictionary | inline | done | 52f8921 |
 | 2 | 2.5 | Clone and removal | inline | done | a991619 |
 | 2 | 2.6-characterize | Characterize stored adjustment conversion | inline | done | 3d10ca6 |
-| 2 | 2.6 | Conversion validation | inline | done | this commit |
-| 2 | 2.7 | Calculate-price waterfall opt-in | inline | todo | — |
+| 2 | 2.6 | Conversion validation | inline | done | b5f4f39 |
+| 2 | 2.7 | Calculate-price waterfall opt-in | inline | done | this commit |
 | 3 | 3.1 | Quote pricing and status events | inline | todo | — |
 | 4 | 4.1 | Waterfall and price columns | inline | todo | — |
 | 4 | 4.2 | Adjustment dialog and preview | inline | todo | — |
@@ -119,3 +119,5 @@ Clone/removal: cloned adjustments get new ids/remapped line ids and retain inact
 2.6-characterize. **Characterize stored adjustment conversion** — baseline confirms valid and invalid stored offers both convert today, copying charge snapshots unchanged and stripping quote-only pricing markers. 34 order-service tests pass before guard change.
 
 Conversion guard: inspects stored charge/line/quote adjustment errors without repricing and refuses422 ADJUSTMENT_INVALID with line/code before any order is created. Valid offer snapshots still copy unchanged and quote-only markers stay out of order lines. 728 CPQ tests pass before final route-error assertion; focused order/route test running.
+
+Calculator opt-in: includeWaterfall exposes list/standard values only explicitly; default primary/child payloads retain legacy fields plus rule origin; manual inputs are never forwarded. Added valid framework OpenAPI docs. 733 CPQ tests/43 suites pass, focused conversion route/service51 tests pass.

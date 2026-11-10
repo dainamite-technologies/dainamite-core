@@ -378,6 +378,7 @@ const cpqPricePreviewItemSchema = z.object({
 )
 
 export const cpqPricePreviewSchema = z.object({
+  includeWaterfall: z.boolean().optional().default(false),
   primaryItem: cpqPricePreviewItemSchema.nullish(),
   childItems: z.array(cpqPricePreviewItemSchema),
   currencyCode: z.string().min(1).optional(),

@@ -1,4 +1,5 @@
 import { LockMode } from '@mikro-orm/core'
+import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { CpqQuoteConfiguration } from '../../data/entities'
 import type { TenantScope } from '../types'
@@ -15,8 +16,8 @@ export async function withQuotePricingWrite<T>(
   return em.transactional(async (transaction) => {
     const scoped = { organizationId: scope.organizationId, tenantId: scope.tenantId, deletedAt: null }
     const options = { lockMode: LockMode.PESSIMISTIC_WRITE, refresh: true }
-    const quote = await transaction.findOne(CpqQuoteConfiguration, { ...scoped, id: quoteId }, options)
-      ?? await transaction.findOne(CpqQuoteConfiguration, { ...scoped, quoteId }, options)
+    const quote = await findOneWithDecryption(transaction, CpqQuoteConfiguration, { ...scoped, id: quoteId }, options, scope)
+      ?? await findOneWithDecryption(transaction, CpqQuoteConfiguration, { ...scoped, quoteId }, options, scope)
     if (!quote) throw makeError(404, 'Quote not found')
     const revision = quote.pricingRevision ?? 0
     if (expectedRevision !== undefined && expectedRevision !== revision) throw makeError(409, 'STALE_REVISION')

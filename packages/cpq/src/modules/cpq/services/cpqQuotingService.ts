@@ -1,3 +1,8 @@
+import { withAtomicFlush } from '@open-mercato/shared/lib/commands/flush'
+import { loadQuoteAdjustments } from './priceAdjustments/loadQuoteAdjustments'
+import { resolveManualAdjustments } from './priceAdjustments/resolveManualAdjustments'
+import { computeWaterfallSummary } from './priceAdjustments/pricingSnapshot'
+import { withChargeWaterfall } from './priceAdjustments/chargeWaterfall'
 import { withQuotePricingWrite } from './priceAdjustments/quotePricingWrite'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { SalesQuote, SalesQuoteLine } from '@open-mercato/core/modules/sales/data/entities'
@@ -591,7 +596,7 @@ export class DefaultCpqQuotingService {
       return this.writeQuote(quoteId, scope, (em, quote) => this.recalculateFromConfig(em, quote, scope, true))
     }
     const cpqConfig = await this.loadCpqConfig(this.em, quoteId, scope)
-    return this.recalculateFromConfig(this.em, cpqConfig, scope, false)
+    return this.recalculateFromConfig(this.em, { ...cpqConfig } as CpqQuoteConfiguration, scope, false)
   }
 
   private async recalculateFromConfig(em: EntityManager, cpqConfig: CpqQuoteConfiguration, scope: TenantScope, save: boolean): Promise<QuoteResult> {
@@ -921,36 +926,71 @@ export class DefaultCpqQuotingService {
 
       computedLines.push({ lineConfig, charges, nrcTotal, mrcTotal, usageEstimates, usageTotalEstimated, validationErrors, isConfigured })
 
-      if (save) {
-        em.assign(lineConfig, {
-          charges: charges as unknown as Array<Record<string, unknown>>,
-          nrcTotal: String(nrcTotal),
-          mrcTotal: String(mrcTotal),
-          usageEstimates: usageEstimates ?? null,
-          usageTotalEstimated: usageTotalEstimated != null ? String(usageTotalEstimated) : null,
-          validationErrors: validationErrors.length > 0 ? validationErrors as unknown as Array<Record<string, unknown>> : null,
-          isConfigured,
-        })
-
-        const salesLine = await em.findOne(SalesQuoteLine, {
-          id: lineConfig.quoteLineId,
-          organizationId: scope.organizationId,
-          tenantId: scope.tenantId,
-        })
-        if (salesLine) {
-          const perInstanceNrc = charges.filter((c) => c.chargeType === 'nrc').reduce((s, c) => s + (c.totalPrice ?? 0), 0)
-          const perInstanceMrc = charges.filter((c) => c.chargeType === 'mrc').reduce((s, c) => s + (c.totalPrice ?? 0), 0)
-          const unitPriceNet = perInstanceNrc + perInstanceMrc
-          em.assign(salesLine, {
-            quantity: String(lineConfig.quantity),
-            unitPriceNet: String(unitPriceNet),
-            unitPriceGross: String(unitPriceNet),
-            totalNetAmount: String(unitPriceNet * lineConfig.quantity),
-            totalGrossAmount: String(unitPriceNet * lineConfig.quantity),
-            updatedAt: new Date(),
-          })
-        }
+    }
+    const adjustments = await loadQuoteAdjustments(em, cpqConfig.id, scope)
+    const adjusted = resolveManualAdjustments(computedLines.map(({ lineConfig, charges }) => ({
+      lineId: lineConfig.quoteLineId, parentLineId: lineConfig.parentLineId ?? null,
+      enginePriced: !!(lineConfig.offeringId || lineConfig.productId),
+      mirrored: !!lineConfig.configuration?._arcMirroredFromItemId, charges,
+    })), adjustments, cpqConfig.currencyCode)
+    const adjustedById = new Map(adjusted.lines.map((line) => [line.lineId, line]))
+    const computedIds = new Set(computedLines.map((line) => line.lineConfig.quoteLineId))
+    for (const computed of computedLines) {
+      const { lineConfig } = computed
+      // No adjustments: preserve legacy/frozen snapshots byte-for-byte on disk.
+      if (adjustments.length) computed.charges = adjustedById.get(lineConfig.quoteLineId)!.charges
+      const adjustmentErrors = adjusted.errors.filter((error) => error.quoteLineId === lineConfig.quoteLineId)
+      if (adjustmentErrors.length) {
+        computed.isConfigured = false
+        allValid = false
+        const errors = adjustmentErrors.map((error) => ({ message: error.code, attribute: error.chargeCode }))
+        computed.validationErrors.push(...errors)
+        allErrors.push(...errors)
       }
+      Object.assign(computed, computeLineTotals(computed.charges, lineConfig.quantity,
+        lineConfig.usageEstimates?.map((entry) => ({ chargeCode: entry.chargeCode, estimatedQuantity: entry.estimatedQuantity }))))
+      const { charges, nrcTotal, mrcTotal, usageEstimates, usageTotalEstimated, validationErrors, isConfigured } = computed
+      if (save) {
+        await withAtomicFlush(em, [
+          () => {
+            em.assign(lineConfig, {
+              charges: charges as unknown as Array<Record<string, unknown>>,
+              nrcTotal: String(nrcTotal),
+              mrcTotal: String(mrcTotal),
+              usageEstimates: usageEstimates ?? null,
+              usageTotalEstimated: usageTotalEstimated != null ? String(usageTotalEstimated) : null,
+              validationErrors: validationErrors.length > 0 ? validationErrors as unknown as Array<Record<string, unknown>> : null,
+              isConfigured,
+            })
+          },
+          async () => {
+            const salesLine = await em.findOne(SalesQuoteLine, {
+              id: lineConfig.quoteLineId,
+              organizationId: scope.organizationId,
+              tenantId: scope.tenantId,
+            })
+            if (salesLine) {
+              const perInstanceNrc = charges.filter((charge) => charge.chargeType === 'nrc').reduce((sum, charge) => sum + (charge.totalPrice ?? 0), 0)
+              const perInstanceMrc = charges.filter((charge) => charge.chargeType === 'mrc').reduce((sum, charge) => sum + (charge.totalPrice ?? 0), 0)
+              const unitPriceNet = perInstanceNrc + perInstanceMrc
+              em.assign(salesLine, {
+                quantity: String(lineConfig.quantity),
+                unitPriceNet: String(unitPriceNet),
+                unitPriceGross: String(unitPriceNet),
+                totalNetAmount: String(unitPriceNet * lineConfig.quantity),
+                totalGrossAmount: String(unitPriceNet * lineConfig.quantity),
+                updatedAt: new Date(),
+              })
+            }
+          },
+        ])
+      }
+    }
+    // A missing line target must still invalidate the quote (normally removal
+    // soft-deletes its adjustments in the same aggregate transaction).
+    for (const error of adjusted.errors.filter((entry) => !computedIds.has(entry.quoteLineId))) {
+      allValid = false
+      allErrors.push({ message: error.code, attribute: error.chargeCode })
     }
 
     const relationshipErrors = await this.validationService.validateRelationships({
@@ -980,6 +1020,10 @@ export class DefaultCpqQuotingService {
 
     // Build pricing summary from freshly computed data (not from stale entity fields)
     const pricingSummary = computePricingSummaryFromComputed(computedLines, cpqConfig.currencyCode)
+    Object.assign(pricingSummary, computeWaterfallSummary(computedLines.map(({ lineConfig, charges }) => ({
+      lineId: lineConfig.quoteLineId, quantity: lineConfig.quantity, termMonths: lineConfig.termMonths,
+      includeInDeal: !lineConfig.configuration?._arcMirroredFromItemId, charges,
+    })), adjustments, cpqConfig.currencyCode))
 
     const validationResult = { valid: allValid, errors: allErrors }
 
@@ -1116,7 +1160,7 @@ export class DefaultCpqQuotingService {
         mrcTotal: Number(lc.mrcTotal),
         usageEstimates: lc.usageEstimates ?? null,
         usageTotalEstimated: lc.usageTotalEstimated != null ? Number(lc.usageTotalEstimated) : null,
-        charges: (lc.charges ?? []) as unknown as ResolvedCharge[],
+        charges: ((lc.charges ?? []) as unknown as ResolvedCharge[]).map(withChargeWaterfall),
         isConfigured: lc.isConfigured,
         validationErrors: lc.validationErrors as unknown as ValidationError[] ?? null,
         arcSource: pickArcSource(lc, arcSourceMap),
@@ -1126,6 +1170,13 @@ export class DefaultCpqQuotingService {
 
     const finalValidation = validationResult ?? (cpqConfig.validationResult as { valid: boolean; errors: ValidationError[] }) ?? { valid: true, errors: [] }
     const finalPricing = pricingSummary ?? computePricingSummary(lineConfigs, cpqConfig.currencyCode)
+    if (!pricingSummary) {
+      const adjustments = await loadQuoteAdjustments(em, cpqConfig.id, { organizationId: cpqConfig.organizationId, tenantId: cpqConfig.tenantId })
+      Object.assign(finalPricing, computeWaterfallSummary(lines.map((line) => ({
+        lineId: line.lineId, quantity: line.quantity, termMonths: line.termMonths,
+        includeInDeal: !line.configuration._arcMirroredFromItemId, charges: line.charges,
+      })), adjustments, cpqConfig.currencyCode))
+    }
 
     const { customerName, convertedOrderId } = await resolveQuoteSideData(em, cpqConfig)
 
@@ -1214,7 +1265,7 @@ export class DefaultCpqQuotingService {
         mrcTotal,
         usageEstimates,
         usageTotalEstimated,
-        charges,
+        charges: charges.map(withChargeWaterfall),
         isConfigured,
         validationErrors: validationErrors.length > 0 ? validationErrors : null,
         arcSource: pickArcSource(lc, arcSourceMap),
@@ -1351,6 +1402,7 @@ function aggregateAdjustmentTotals(allCharges: ResolvedCharge[]): { discountTota
   for (const charge of allCharges) {
     if (!charge.adjustments) continue
     for (const adj of charge.adjustments) {
+      if (adj.origin === 'manual') continue
       if (adj.delta < 0) {
         discountTotal += Math.abs(adj.delta) * (charge.quantity ?? 1)
       } else if (adj.delta > 0) {

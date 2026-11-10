@@ -28,7 +28,7 @@ function createMockEm(): MockEm {
   const em: MockEm = {
     transactional: jest.fn(),
     findOne: jest.fn(),
-    find: jest.fn(),
+    find: jest.fn().mockResolvedValue([]),
     findAndCount: jest.fn(),
     create: jest.fn().mockImplementation((_e, data: Record<string, unknown>) => ({ ...data })),
     persist: jest.fn(),

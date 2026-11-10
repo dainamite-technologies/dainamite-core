@@ -43,7 +43,7 @@ export function createMockEm(): MockEm {
   const em: MockEm = {
     transactional: jest.fn(),
     findOne: jest.fn(),
-    find: jest.fn(),
+    find: jest.fn().mockResolvedValue([]),
     findAndCount: jest.fn(),
     count: jest.fn().mockResolvedValue(0),
     create: jest.fn().mockImplementation((_e, data: Record<string, unknown>) => ({

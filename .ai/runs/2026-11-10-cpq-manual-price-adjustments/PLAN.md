@@ -15,8 +15,8 @@ Engine: om-auto-create-pr-loop (steps: 22, --loop: no)
 | 1 | 1.4 | Manual adjustment resolver | inline | done | cfbfa2f |
 | 1 | 1.5 | Summary math | inline | done | 9a07adb |
 | 1 | 1.5-review-fix | Fix foundation review findings | inline | done | 55f7cd8 |
-| 1 | 1.6 | Quote transaction boundary | inline | done | this commit |
-| 1 | 1.7 | Integrate adjustment pricing | inline | todo | — |
+| 1 | 1.6 | Quote transaction boundary | inline | done | be4cb81 |
+| 1 | 1.7 | Integrate adjustment pricing | inline | done | this commit |
 | 2 | 2.1 | Undoable commands | inline | todo | — |
 | 2 | 2.2 | Adjustment CRUD routes | inline | todo | — |
 | 2 | 2.3 | Draft preview | inline | todo | — |

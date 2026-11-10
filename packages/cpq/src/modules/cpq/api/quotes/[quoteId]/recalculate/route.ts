@@ -4,6 +4,7 @@ import { resolveCpqRouteContext } from '../../../context'
 import { cpqRecalculateSchema } from '../../../../data/validators'
 import { isQuotingError } from '../../../../services/cpqQuotingService'
 import { resolveQuotingService } from '../../../resolveQuotingService'
+import { CPQ_QUOTE_RESOURCE_KIND, runCpqMutationGuards } from '../../../_helpers/quoteMutationGuard'
 
 // Recalculation re-resolves and (with `save: true`) persists prices, so it
 // needs the same feature as any other quote write. The quote page always
@@ -21,8 +22,20 @@ export async function POST(req: Request, { params }: { params: Promise<{ quoteId
     const body = cpqRecalculateSchema.parse(await req.json())
     const scope = { organizationId: ctx.organizationId, tenantId: ctx.tenantId }
 
+    // Only a saved recalculation writes; a dry run needs no guard.
+    const guard = body.save
+      ? await runCpqMutationGuards(ctx, req, {
+          resourceKind: CPQ_QUOTE_RESOURCE_KIND,
+          resourceId: quoteId,
+          operation: 'custom',
+          mutationPayload: { action: 'recalculate' },
+        })
+      : null
+    if (guard && !guard.ok) return guard.response
+
     const service = resolveQuotingService(ctx)
     const result = await service.recalculate(quoteId, body, scope)
+    if (guard) await guard.runAfterSuccess()
     return NextResponse.json(result)
   } catch (err) {
     if (err instanceof z.ZodError) {
@@ -34,4 +47,34 @@ export async function POST(req: Request, { params }: { params: Promise<{ quoteId
     console.error('[cpq/quotes/[quoteId]/recalculate.POST]', err)
     return NextResponse.json({ error: 'Internal error' }, { status: 500 })
   }
+}
+
+export const openApi = {
+  '/api/cpq/quotes/{quoteId}/recalculate': {
+    parameters: [
+      { name: 'quoteId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
+    ],
+    post: {
+      tags: ['CPQ Quotes'],
+      summary: 'Re-price every line of a CPQ quote',
+      description:
+        'Re-resolves charges and price rules. With `save: true` the result is persisted (refused on accepted, rejected and cancelled quotes) and mutation guards (resource kind `cpq.quote`, action `recalculate`) run first. Frozen Amend mirror lines keep their stored price.',
+      requestBody: {
+        required: true,
+        content: {
+          'application/json': {
+            schema: { type: 'object', required: ['save'], properties: { save: { type: 'boolean' } } },
+          },
+        },
+      },
+      responses: {
+        '200': { description: 'Recalculated quote' },
+        '400': { description: 'Validation error' },
+        '403': { description: 'Missing cpq.quotes.manage' },
+        '404': { description: 'Quote not found' },
+        '409': { description: 'Saved recalculation on a terminal quote' },
+        '422': { description: 'Blocked by a mutation guard' },
+      },
+    },
+  },
 }

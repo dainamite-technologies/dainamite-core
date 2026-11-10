@@ -180,6 +180,8 @@ export interface QuoteResult {
 // ─── Resolved charge (extended for v2) ───────────────────────────
 
 export interface RuleAdjustment {
+  /** Missing on legacy snapshots. */
+  origin?: 'rule' | 'manual'
   ruleCode: string
   ruleName: string
   ruleType: string
@@ -210,6 +212,11 @@ export interface ResolvedCharge {
   quantity: number | null
   totalPrice: number | null
   currencyCode: string
+  /** Additive waterfall fields; absent on snapshots saved before negotiated pricing. */
+  listUnitPrice?: number
+  listTotalPrice?: number | null
+  standardUnitPrice?: number
+  standardTotalPrice?: number | null
   breakdown?: TierBreakdown | null
   note?: string | null
   adjustments?: RuleAdjustment[] | null

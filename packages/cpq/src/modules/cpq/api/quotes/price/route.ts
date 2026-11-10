@@ -5,6 +5,7 @@ import { cpqPricePreviewSchema } from '../../../data/validators'
 import type { DefaultCpqPricingService } from '../../../services/cpqPricingService'
 import type { ResolvedCharge } from '../../../services/types'
 import { getBaseCurrencyCode } from '../../../services/types'
+import { withoutChargeWaterfall } from '../../../services/priceAdjustments/chargeWaterfall'
 
 export const metadata = {
   POST: { requireAuth: true, requireFeatures: ['cpq.quotes.view'] },
@@ -66,8 +67,8 @@ export async function POST(req: Request) {
       }))
 
     return NextResponse.json({
-      primaryCharges,
-      childItems,
+      primaryCharges: primaryCharges.map(withoutChargeWaterfall),
+      childItems: childItems.map((item) => ({ ...item, charges: item.charges.map(withoutChargeWaterfall) })),
       totals: { nrcTotal, mrcTotal, usageCharges },
       currencyCode,
     })

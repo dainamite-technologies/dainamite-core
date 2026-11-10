@@ -119,6 +119,8 @@ export class DefaultCpqPricingService {
       if (currencyCode) {
         resolved.currencyCode = currencyCode
       }
+      resolved.listUnitPrice = resolved.unitPrice
+      resolved.listTotalPrice = resolved.totalPrice
       resolved.adjustments = []
       results.push(resolved)
     }
@@ -131,6 +133,11 @@ export class DefaultCpqPricingService {
 
     if (rules.length > 0) {
       this.applyPriceRules(results, rules, configuration)
+    }
+
+    for (const resolved of results) {
+      resolved.standardUnitPrice = resolved.unitPrice
+      resolved.standardTotalPrice = resolved.totalPrice
     }
 
     return results
@@ -219,6 +226,7 @@ export class DefaultCpqPricingService {
         }
 
         const adjustment: RuleAdjustment = {
+          origin: 'rule',
           ruleCode: rule.code,
           ruleName: rule.name,
           ruleType: rule.ruleType,

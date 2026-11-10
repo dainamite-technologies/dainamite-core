@@ -1,0 +1,152 @@
+/**
+ * Pure view helpers for negotiated quote prices. Client-safe: no service or
+ * ORM imports. Rules mirror the server resolver
+ * (`services/priceAdjustments/resolveManualAdjustments.ts`) so the UI only
+ * offers what the API would accept; the API stays the authority.
+ */
+
+export const ADJUST_PRICE_FEATURE = 'cpq.quotes.adjust_price'
+/** Matches `assertMutable` in the adjustment service. */
+export const ADJUSTMENT_EDITABLE_STATUSES = ['new', 'incomplete', 'ready'] as const
+/** Statuses where even an invalid adjustment can no longer be deleted. */
+const INVALID_DELETE_BLOCKED = ['accepted', 'rejected', 'cancelled']
+
+export type AdjustmentType = 'discount_percent' | 'discount_absolute' | 'price_override'
+export type AdjustmentLevel = 'charge' | 'line'
+
+export type WaterfallChargeInput = {
+  chargeType: 'nrc' | 'mrc' | 'usage'
+  pricingMethod?: string | null
+  unitPrice: number
+  totalPrice: number | null
+  listUnitPrice?: number
+  listTotalPrice?: number | null
+  standardUnitPrice?: number
+  standardTotalPrice?: number | null
+  adjustments?: Array<{
+    origin?: 'rule' | 'manual'
+    adjustmentId?: string
+    ruleCode: string
+    ruleName: string
+    ruleType: string
+    value: number
+    unitPriceBefore: number
+    unitPriceAfter: number
+    delta: number
+    reasonCode?: string
+    createdByUserId?: string
+  }> | null
+}
+
+export type WaterfallRow =
+  | { kind: 'list'; unitPrice: number }
+  | { kind: 'rule' | 'manual'; label: string; ruleType: string; value: number; delta: number; unitPriceAfter: number; reasonCode?: string; adjustmentId?: string }
+  | { kind: 'standard'; unitPrice: number }
+  | { kind: 'offer'; unitPrice: number }
+
+/**
+ * List → rule rows → standard → manual rows → offer. Legacy snapshots without
+ * waterfall fields fall back to the stored unit price for list and standard.
+ */
+export function waterfallRows(charge: WaterfallChargeInput): WaterfallRow[] {
+  const entries = charge.adjustments ?? []
+  const rules = entries.filter((entry) => entry.origin !== 'manual')
+  const manual = entries.filter((entry) => entry.origin === 'manual')
+  const standard = charge.standardUnitPrice ?? (manual.length ? manual[0].unitPriceBefore : charge.unitPrice)
+  const list = charge.listUnitPrice ?? (rules.length ? rules[0].unitPriceBefore : standard)
+  const step = (kind: 'rule' | 'manual') => (entry: (typeof entries)[number]): WaterfallRow => ({
+    kind, label: entry.ruleName || entry.ruleCode, ruleType: entry.ruleType, value: entry.value,
+    delta: entry.delta, unitPriceAfter: entry.unitPriceAfter, reasonCode: entry.reasonCode, adjustmentId: entry.adjustmentId,
+  })
+  const rows: WaterfallRow[] = [{ kind: 'list', unitPrice: list }, ...rules.map(step('rule'))]
+  if (rules.length || manual.length) rows.push({ kind: 'standard', unitPrice: standard })
+  rows.push(...manual.map(step('manual')), { kind: 'offer', unitPrice: charge.unitPrice })
+  return rows
+}
+
+/** Signed fraction: positive = discount, negative = surcharge, null when undefined. */
+export function discountDepth(before: number | null | undefined, after: number | null | undefined): number | null {
+  if (before == null || after == null || before === 0) return null
+  return 1 - after / before
+}
+
+export function formatDepth(depth: number | null): string | null {
+  if (depth === null || Math.abs(depth) < 0.00005) return null
+  const percent = Math.round(depth * 1000) / 10
+  return depth > 0 ? `−${percent}%` : `+${Math.abs(percent)}%`
+}
+
+/** Line-level list / standard / offer totals (per line quantity), ignoring usage. */
+export function lineWaterfallTotals(line: { quantity: number; charges: WaterfallChargeInput[] }) {
+  let list = 0, standard = 0, offer = 0
+  for (const charge of line.charges) {
+    if (charge.chargeType === 'usage' || charge.totalPrice == null) continue
+    const offerTotal = charge.totalPrice
+    const standardTotal = charge.standardTotalPrice ?? offerTotal
+    list += (charge.listTotalPrice ?? standardTotal) * line.quantity
+    standard += standardTotal * line.quantity
+    offer += offerTotal * line.quantity
+  }
+  return { list, standard, offer }
+}
+
+/** Adjustment types the server accepts for a target. */
+export function allowedAdjustmentTypes(level: AdjustmentLevel, charge?: Pick<WaterfallChargeInput, 'chargeType' | 'pricingMethod'>): AdjustmentType[] {
+  if (level === 'line') return ['discount_percent']
+  if (!charge || charge.chargeType === 'usage') return []
+  const overridable = charge.pricingMethod == null || charge.pricingMethod === 'flat' || charge.pricingMethod === 'per_unit'
+  return overridable ? ['price_override', 'discount_percent', 'discount_absolute'] : ['discount_percent', 'discount_absolute']
+}
+
+export type LineEligibilityInput = {
+  offeringId: string | null
+  configuration?: Record<string, unknown> | null
+}
+
+/** ARC mirror lines and free-form lines take no manual adjustments yet. */
+export function lineAdjustmentBlock(line: LineEligibilityInput, quoteType: string): 'mirror' | 'free_form' | null {
+  const mirrored = quoteType !== 'new' && typeof line.configuration?._arcMirroredFromItemId === 'string'
+  if (mirrored) return 'mirror'
+  if (!line.offeringId) return 'free_form'
+  return null
+}
+
+export type AdjustmentAccess =
+  | { editable: true; reason: null }
+  | { editable: false; reason: 'loading' | 'disabled' | 'no_permission' | 'converted' | 'locked' }
+
+export function adjustmentAccess(input: {
+  enabled: boolean | null
+  canAdjust: boolean
+  cpqStatus: string
+  convertedOrderId: string | null
+}): AdjustmentAccess {
+  if (input.enabled === null) return { editable: false, reason: 'loading' }
+  if (!input.enabled) return { editable: false, reason: 'disabled' }
+  if (!input.canAdjust) return { editable: false, reason: 'no_permission' }
+  if (input.convertedOrderId) return { editable: false, reason: 'converted' }
+  if (!(ADJUSTMENT_EDITABLE_STATUSES as readonly string[]).includes(input.cpqStatus)) return { editable: false, reason: 'locked' }
+  return { editable: true, reason: null }
+}
+
+/** An invalid adjustment can still be deleted after submission, unless the quote is final or converted. */
+export function canDeleteInvalidAdjustment(input: { enabled: boolean | null; canAdjust: boolean; cpqStatus: string; convertedOrderId: string | null }): boolean {
+  return input.enabled === true && input.canAdjust && !input.convertedOrderId && !INVALID_DELETE_BLOCKED.includes(input.cpqStatus)
+}
+
+/** English fallbacks for server error codes; keys live under `cpq.priceAdjustments.errors.*`. */
+export const ADJUSTMENT_ERROR_FALLBACKS: Record<string, string> = {
+  ADJUSTMENT_TARGET_MISSING: 'The adjusted charge no longer exists on this line',
+  TARGET_AMBIGUOUS: 'The adjusted charge appears more than once on this line',
+  ABOVE_STANDARD: 'The price is above the standard price',
+  CURRENCY_MISMATCH: 'The currency does not match the quote',
+  TYPE_NOT_ALLOWED: 'This kind of adjustment is not allowed for this charge',
+  LINE_NOT_ELIGIBLE: 'This line cannot be adjusted',
+  ADJUSTMENT_OVERLAP: 'Another adjustment already targets this charge at the same level',
+  ADJUSTMENT_LOCKED: 'Adjustments are locked for this quote',
+  STALE_REVISION: 'Prices changed since you opened this — reload and try again',
+  REASON_NOT_FOUND: 'Pick a reason from the list',
+  REASON_NOTE_REQUIRED: 'Add a note when the reason is “Other”',
+  INVALID_PERCENT: 'Enter a percentage above 0 and up to 100',
+  INVALID_AMOUNT: 'Enter an amount above 0',
+}

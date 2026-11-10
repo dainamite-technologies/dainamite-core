@@ -6,13 +6,15 @@ import ArcQuoteConfigurator, {
   type AttachedTarget,
 } from './_components/ArcQuoteConfigurator'
 import { StatusPath } from '../../../../components/StatusPath'
-import { ArrowRight, ExternalLink, Plus } from 'lucide-react'
+import { ArrowRight, ExternalLink, Info, Plus } from 'lucide-react'
 import { Alert, AlertTitle, AlertDescription } from '@open-mercato/ui/primitives/alert'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { FormHeader } from '@open-mercato/ui/backend/forms'
 import type { ActionItem } from '@open-mercato/ui/backend/forms/ActionsDropdown'
 import { NumberInput } from '../../../../components/NumberInput'
+import { DepthBadge, PriceWaterfall } from '../../../../components/PriceWaterfall'
+import { ADJUSTMENT_ERROR_FALLBACKS, formatDepth, lineWaterfallTotals } from '../../../../lib/priceAdjustmentView'
 import { useGrantedFeatures } from '../../../../components/useGrantedFeatures'
 import { canRecalculateQuote, QUOTE_MANAGE_FEATURE } from '../../../../lib/quotePermissions'
 import {
@@ -35,7 +37,12 @@ type ConstrainedAttribute = {
 }
 
 type TierBreakdownEntry = { tier: number; from: number; to: number; pricePerUnit: number; quantity: number; subtotal: number }
-type RuleAdjustment = { ruleCode: string; ruleName: string; ruleType: string; value: number; unitPriceBefore: number; unitPriceAfter: number; delta: number }
+type RuleAdjustment = {
+  ruleCode: string; ruleName: string; ruleType: string; value: number; unitPriceBefore: number; unitPriceAfter: number; delta: number
+  /** Negotiated-pricing fields; absent on legacy snapshots (treated as rules). */
+  origin?: 'rule' | 'manual'; adjustmentId?: string; reasonCode?: string; createdByUserId?: string
+}
+type AdjustmentErrorEntry = { adjustmentId: string; quoteLineId: string; chargeCode?: string; code: string }
 
 type ResolvedCharge = {
   chargeCode: string
@@ -49,6 +56,11 @@ type ResolvedCharge = {
   breakdown?: { tiers: TierBreakdownEntry[] } | null
   note?: string | null
   adjustments?: RuleAdjustment[] | null
+  listUnitPrice?: number
+  listTotalPrice?: number | null
+  standardUnitPrice?: number
+  standardTotalPrice?: number | null
+  adjustmentErrors?: AdjustmentErrorEntry[]
 }
 
 type QuoteLineAction = 'add' | 'modify' | 'cancel'
@@ -87,15 +99,21 @@ type QuoteResult = {
   customerName: string | null
   cpqStatus: string
   version: number
+  pricingRevision?: number
   currencyCode: string
   convertedOrderId: string | null
   validationResult: { valid: boolean; errors: Array<{ message: string }> }
+  adjustmentErrors?: AdjustmentErrorEntry[]
   pricingSummary: {
     nrcTotal: number
     mrcTotal: number
     usageCharges: Array<{ chargeCode: string; chargeName: string; unitPrice: number; note: string | null }>
     usageTotalEstimated: number | null
     currencyCode: string
+    dealValue?: { list: number; standard: number; offer: number }
+    discountDepth?: { rule: number | null; manual: number | null; total: number | null; maxLineManual: number | null }
+    ruleDiscountTotal?: number
+    manualDiscountTotal?: number
   }
   lines: QuoteLine[]
 }
@@ -139,20 +157,6 @@ type BundleTree = {
 
 function fmt(amount: number, currency: string): string {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(amount)
-}
-
-const RULE_TYPE_LABELS: Record<string, string> = {
-  discount_percent: '% discount',
-  discount_absolute: 'fixed discount',
-  surcharge_percent: '% surcharge',
-  surcharge_absolute: 'fixed surcharge',
-  price_override: 'override',
-}
-
-function fmtRuleValue(adj: RuleAdjustment, currency?: string): string {
-  if (adj.ruleType === 'discount_percent' || adj.ruleType === 'surcharge_percent') return `${adj.value}%`
-  if (currency) return fmt(adj.value, currency)
-  return String(adj.value)
 }
 
 async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -854,6 +858,33 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
                 </div>
               )}
             </div>
+            {summary.dealValue && (
+              <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-4 border-t pt-3" data-testid="cpq-deal-value">
+                <div>
+                  <p className="text-xs text-muted-foreground">{t('cpq.priceAdjustments.summary.list', 'Deal value (list)')}</p>
+                  <p className="text-sm font-semibold font-mono">{fmt(summary.dealValue.list, currency)}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">{t('cpq.priceAdjustments.summary.standard', 'Deal value (standard)')}</p>
+                  <p className="text-sm font-semibold font-mono">{fmt(summary.dealValue.standard, currency)}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">{t('cpq.priceAdjustments.summary.offer', 'Deal value (offer)')}</p>
+                  <p className="text-sm font-semibold font-mono">{fmt(summary.dealValue.offer, currency)}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">{t('cpq.priceAdjustments.summary.depth', 'Discount depth')}</p>
+                  <p className="text-xs mt-0.5 space-x-2">
+                    <span>{t('cpq.priceAdjustments.summary.rule', 'Rules')} {formatDepth(summary.discountDepth?.rule ?? null) ?? '—'}</span>
+                    <span>{t('cpq.priceAdjustments.summary.manual', 'Negotiated')} {formatDepth(summary.discountDepth?.manual ?? null) ?? '—'}</span>
+                    <span className="font-medium">{t('cpq.priceAdjustments.summary.total', 'Total')} {formatDepth(summary.discountDepth?.total ?? null) ?? '—'}</span>
+                  </p>
+                </div>
+                <p className="col-span-full text-xs text-muted-foreground">
+                  {t('cpq.priceAdjustments.summary.hint', 'Deal value counts recurring charges over the term plus one-time charges; existing subscription items on change quotes are excluded.')}
+                </p>
+              </div>
+            )}
           </div>
 
           {/* Validation errors */}
@@ -1307,6 +1338,7 @@ function QuoteLineRow({ line, lineIdx, currency, isExpanded, pricingDetail, isBu
         <div className="shrink-0 text-right text-xs space-y-0.5">
           {line.nrcTotal > 0 && <div><span className="text-muted-foreground">NRC </span><span className="font-mono font-medium">{fmt(line.nrcTotal, currency)}</span></div>}
           {line.mrcTotal > 0 && <div><span className="text-muted-foreground">MRC </span><span className="font-mono font-medium">{fmt(line.mrcTotal, currency)}</span></div>}
+          <LinePriceDelta line={line} currency={currency} />
         </div>
 
         {/* Actions */}
@@ -1445,11 +1477,29 @@ function LineSummaryFallback({ line, currency }: { line: QuoteLine; currency: st
   )
 }
 
-function ChargeBreakdown({ line, lineIdx, currency, pricingDetail, onTogglePricingDetail }: {
+/** List total struck through plus signed depth when a line's offer differs from list. */
+function LinePriceDelta({ line, currency }: { line: QuoteLine; currency: string }) {
+  const t = useT()
+  const totals = lineWaterfallTotals(line)
+  if (Math.abs(totals.list - totals.offer) < 0.005) return null
+  return (
+    <div className="flex items-center justify-end gap-1" data-testid="cpq-line-price-delta">
+      <span className="text-muted-foreground">{t('cpq.priceAdjustments.list', 'List')}</span>
+      <span className="font-mono line-through text-muted-foreground">{fmt(totals.list, currency)}</span>
+      <DepthBadge before={totals.list} after={totals.offer} title={t('cpq.priceAdjustments.depthHint', 'Offer vs list, all billable charges on this line')} />
+    </div>
+  )
+}
+
+function ChargeBreakdown({ line, lineIdx, currency, pricingDetail, onTogglePricingDetail, reasonLabels, renderChargeActions, renderManualActions }: {
   line: QuoteLine; lineIdx: number; currency: string
   pricingDetail: { lineIdx: number; chargeIdx: number } | null
   onTogglePricingDetail: (lineIdx: number, chargeIdx: number) => void
+  reasonLabels?: Record<string, string>
+  renderChargeActions?: (charge: ResolvedCharge) => React.ReactNode
+  renderManualActions?: (adjustmentId: string) => React.ReactNode
 }) {
+  const t = useT()
   return (
     <div className="border-t bg-muted/10 px-12 py-2">
       <table className="w-full text-xs">
@@ -1457,41 +1507,56 @@ function ChargeBreakdown({ line, lineIdx, currency, pricingDetail, onTogglePrici
           <tr className="text-muted-foreground">
             <th className="text-left py-1 font-medium">Charge</th>
             <th className="text-left py-1 font-medium">Type</th>
-            <th className="text-right py-1 font-medium">Unit Price</th>
+            <th className="text-right py-1 font-medium">{t('cpq.priceAdjustments.listUnit', 'List')}</th>
+            <th className="text-right py-1 font-medium">{t('cpq.priceAdjustments.offerUnit', 'Offer')}</th>
             <th className="text-right py-1 font-medium">Qty</th>
             <th className="text-right py-1 font-medium">Total</th>
-            <th className="w-8" />
+            <th className="w-16" />
           </tr>
         </thead>
         <tbody>
           {line.charges.map((c, i) => {
             const hasDetail = !!(c.breakdown?.tiers?.length || c.adjustments?.length)
             const isDetailOpen = pricingDetail?.lineIdx === lineIdx && pricingDetail?.chargeIdx === i
+            const listUnit = c.listUnitPrice ?? c.unitPrice
+            const errors = c.adjustmentErrors ?? []
             return (
               <React.Fragment key={i}>
                 <tr className="border-t border-dashed border-border/50">
-                  <td className="py-1">{c.chargeName}</td>
+                  <td className="py-1">
+                    <span>{c.chargeName}</span>
+                    {errors.length > 0 && (
+                      <Tag variant="warning" className="ml-1.5 px-1.5 text-xs" data-testid="cpq-adjustment-invalid">
+                        {t('cpq.priceAdjustments.invalid', 'Invalid')}: {t(`cpq.priceAdjustments.errors.${errors[0].code}`, ADJUSTMENT_ERROR_FALLBACKS[errors[0].code] ?? errors[0].code)}
+                      </Tag>
+                    )}
+                  </td>
                   <td className="py-1 uppercase">{c.chargeType}</td>
-                  <td className="py-1 text-right font-mono">{fmt(c.unitPrice, currency)}</td>
+                  <td className="py-1 text-right font-mono text-muted-foreground">{fmt(listUnit, currency)}</td>
+                  <td className="py-1 text-right font-mono">
+                    <span className="inline-flex items-center gap-1">
+                      <DepthBadge before={listUnit} after={c.unitPrice} />
+                      {fmt(c.unitPrice, currency)}
+                    </span>
+                  </td>
                   <td className="py-1 text-right font-mono">{c.quantity ?? '—'}</td>
                   <td className="py-1 text-right font-mono">{c.totalPrice != null ? fmt(c.totalPrice, currency) : c.note ?? '—'}</td>
-                  <td className="py-1 text-center">
+                  <td className="py-1 text-right whitespace-nowrap">
+                    {renderChargeActions?.(c)}
                     {hasDetail && (
                       <button
                         onClick={() => onTogglePricingDetail(lineIdx, i)}
                         className="inline-flex items-center justify-center rounded p-0.5 hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
-                        title="Show pricing breakdown"
+                        title={t('cpq.priceAdjustments.showBreakdown', 'Show price breakdown')}
                       >
-                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3.5 h-3.5">
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
-                        </svg>
+                        <Info className="h-3.5 w-3.5" />
                       </button>
                     )}
                   </td>
                 </tr>
                 {isDetailOpen && (
                   <tr>
-                    <td colSpan={6} className="pb-3 pt-1">
+                    <td colSpan={7} className="pb-3 pt-1">
                       <div className="rounded border bg-background p-3 space-y-3 text-xs">
                         <div className="flex items-center justify-between">
                           <span className="font-semibold text-sm">Pricing Details — {c.chargeName}</span>
@@ -1512,19 +1577,19 @@ function ChargeBreakdown({ line, lineIdx, currency, pricingDetail, onTogglePrici
                                 </tr>
                               </thead>
                               <tbody>
-                                {c.breakdown.tiers.map((t) => (
-                                  <tr key={t.tier} className="border-t border-border/30">
-                                    <td className="py-0.5">{t.tier}</td>
-                                    <td className="py-0.5 text-right font-mono">{t.from}–{t.to}</td>
-                                    <td className="py-0.5 text-right font-mono">{fmt(t.pricePerUnit, currency)}</td>
-                                    <td className="py-0.5 text-right font-mono">{t.quantity}</td>
-                                    <td className="py-0.5 text-right font-mono">{fmt(t.subtotal, currency)}</td>
+                                {c.breakdown.tiers.map((tier) => (
+                                  <tr key={tier.tier} className="border-t border-border/30">
+                                    <td className="py-0.5">{tier.tier}</td>
+                                    <td className="py-0.5 text-right font-mono">{tier.from}–{tier.to}</td>
+                                    <td className="py-0.5 text-right font-mono">{fmt(tier.pricePerUnit, currency)}</td>
+                                    <td className="py-0.5 text-right font-mono">{tier.quantity}</td>
+                                    <td className="py-0.5 text-right font-mono">{fmt(tier.subtotal, currency)}</td>
                                   </tr>
                                 ))}
                                 <tr className="border-t font-medium">
                                   <td colSpan={4} className="py-0.5 text-right">Tiered Total</td>
                                   <td className="py-0.5 text-right font-mono">
-                                    {fmt(c.breakdown.tiers.reduce((s, t) => s + t.subtotal, 0), currency)}
+                                    {fmt(c.breakdown.tiers.reduce((sum, tier) => sum + tier.subtotal, 0), currency)}
                                   </td>
                                 </tr>
                               </tbody>
@@ -1532,37 +1597,10 @@ function ChargeBreakdown({ line, lineIdx, currency, pricingDetail, onTogglePrici
                           </div>
                         )}
 
-                        {c.adjustments && c.adjustments.length > 0 && (
-                          <div>
-                            <div className="font-medium text-muted-foreground mb-1">Applied Price Rules</div>
-                            <table className="w-full">
-                              <thead>
-                                <tr className="text-muted-foreground">
-                                  <th className="text-left py-0.5 font-medium">Rule</th>
-                                  <th className="text-left py-0.5 font-medium">Type</th>
-                                  <th className="text-right py-0.5 font-medium">Value</th>
-                                  <th className="text-right py-0.5 font-medium">Before</th>
-                                  <th className="text-right py-0.5 font-medium">After</th>
-                                  <th className="text-right py-0.5 font-medium">Delta</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {c.adjustments.map((adj, ai) => (
-                                  <tr key={ai} className="border-t border-border/30">
-                                    <td className="py-0.5">{adj.ruleName}</td>
-                                    <td className="py-0.5">{RULE_TYPE_LABELS[adj.ruleType] ?? adj.ruleType}</td>
-                                    <td className="py-0.5 text-right font-mono">{fmtRuleValue(adj, currency)}</td>
-                                    <td className="py-0.5 text-right font-mono">{fmt(adj.unitPriceBefore, currency)}</td>
-                                    <td className="py-0.5 text-right font-mono">{fmt(adj.unitPriceAfter, currency)}</td>
-                                    <td className={`py-0.5 text-right font-mono ${adj.delta < 0 ? 'text-destructive' : adj.delta > 0 ? 'text-status-success-text' : ''}`}>
-                                      {adj.delta > 0 ? '+' : ''}{fmt(adj.delta, currency)}
-                                    </td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                        )}
+                        <div>
+                          <div className="font-medium text-muted-foreground mb-1">{t('cpq.priceAdjustments.waterfall.title', 'Price waterfall')}</div>
+                          <PriceWaterfall charge={c} currency={currency} reasonLabels={reasonLabels} renderManualActions={renderManualActions} />
+                        </div>
 
                         <div className="flex items-center justify-between pt-1 border-t text-sm font-semibold">
                           <span>Final Total</span>

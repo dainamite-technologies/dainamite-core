@@ -35,6 +35,6 @@ export async function POST(req: Request, { params }: Params) {
 }
 const errors = [cpqErrorDoc(400, 'Invalid input'), cpqErrorDoc(403, 'Missing permission or disabled feature'), cpqErrorDoc(404, 'Quote not found'), cpqErrorDoc(409, 'Adjustment locked or stale revision'), cpqErrorDoc(422, 'Invalid adjustment or guard rejection')]
 export const openApi: OpenApiRouteDoc = { tag: 'CPQ Quotes', pathParams: cpqQuoteIdPathParams, methods: {
-  GET: { summary: 'List quote price adjustments', query: listQuery, responses: [{ status: 200, description: 'Paged adjustments, revision and feature state' }], errors },
+  GET: { summary: 'List quote price adjustments', query: listQuery, responses: [{ status: 200, description: 'Paged adjustments, pricing revision, feature state and the reason options (`reasons: [{ value, label }]`)' }], errors },
   POST: { summary: 'Create a negotiated quote price adjustment', requestBody: { schema: cpqPriceAdjustmentInputSchema }, responses: [{ status: 201, description: 'Adjustment and updated quote' }], errors },
 } }

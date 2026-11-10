@@ -54,12 +54,25 @@ export class CpqAdjustmentService {
       ?? await findOneWithDecryption(em, CpqQuoteConfiguration, { ...scoped, quoteId }, undefined, scope)
     if (!quote) throw new QuotingError(404, 'Quote not found')
     const filter = { ...scoped, quoteConfigurationId: quote.id, isActive: true }
-    const [rows, total, enabled] = await Promise.all([
+    const [rows, total, enabled, reasons] = await Promise.all([
       findWithDecryption(em, CpqQuotePriceAdjustment, filter, { limit: pageSize, offset: (page - 1) * pageSize, orderBy: { createdAt: 'asc', id: 'asc' } }, scope),
       em.count(CpqQuotePriceAdjustment, filter),
       this.enabled(scope.tenantId),
+      this.reasons(em, scope),
     ])
-    return { items: rows.map(adjustmentSnapshot), total, page, pageSize, totalPages: Math.ceil(total / pageSize), pricingRevision: quote.pricingRevision ?? 0, enabled }
+    return { items: rows.map(adjustmentSnapshot), total, page, pageSize, totalPages: Math.ceil(total / pageSize), pricingRevision: quote.pricingRevision ?? 0, enabled, reasons }
+  }
+
+  /**
+   * Reason options for the adjustment dialog. Served here so reps need only
+   * `cpq.quotes.view`, not `dictionaries.view`. An inactive dictionary yields
+   * no options, matching `requireReason`.
+   */
+  async reasons(em: EntityManager, scope: TenantScope): Promise<Array<{ value: string; label: string }>> {
+    const dictionary = await findOneWithDecryption(em, Dictionary, { key: REASON_DICTIONARY, ...scope, deletedAt: null, isActive: true }, undefined, scope)
+    if (!dictionary) return []
+    const entries = await findWithDecryption(em, DictionaryEntry, { dictionary: dictionary.id, ...scope }, { orderBy: { position: 'asc', label: 'asc' } }, scope)
+    return entries.map((entry) => ({ value: entry.value, label: entry.label }))
   }
 
   async preview(quoteId: string, input: PriceAdjustmentInput, replaceAdjustmentId: string | undefined, scope: TenantScope) {

@@ -16,7 +16,7 @@ function setup() {
     assign: jest.fn((entity: object, values: object) => Object.assign(entity, values)),
     create: jest.fn((_entity: unknown, values: object) => ({ fromMonth: 1, toMonth: null, windowKind: 'relative', isActive: true, deletedAt: null, createdAt: new Date(), updatedAt: new Date(), ...values })),
     persist: jest.fn((row: CpqQuotePriceAdjustment) => { if (!rows.includes(row)) rows.push(row) }),
-    find: jest.fn(async () => rows.filter((row) => !row.deletedAt)),
+    find: jest.fn(async (entity: unknown) => entity === DictionaryEntry ? [{ value: 'competitive_match', label: 'Competitive match' }] : rows.filter((row) => !row.deletedAt)),
     count: jest.fn(async () => rows.filter((row) => !row.deletedAt).length),
     findOne: jest.fn(async (entity: unknown, where: Record<string, unknown>) => {
       if (entity === CpqQuoteConfiguration) return quote
@@ -122,6 +122,7 @@ it('scopes and paginates reads while reporting the revision and toggle state', a
   await service.create(quoteId, input, actor, scope)
   const listed = await service.list(quoteId, scope, 1, 25)
   expect(listed).toMatchObject({ total: 1, page: 1, pageSize: 25, pricingRevision: 1, enabled: true })
+  expect(listed.reasons).toEqual([{ value: 'competitive_match', label: 'Competitive match' }])
   expect(em.find).toHaveBeenCalledWith(CpqQuotePriceAdjustment, expect.objectContaining({ quoteConfigurationId: quoteId, ...scope, deletedAt: null, isActive: true }), { limit: 25, offset: 0, orderBy: { createdAt: 'asc', id: 'asc' } })
 })
 it('previews a draft without persisting rows, revision, or any flush', async () => {

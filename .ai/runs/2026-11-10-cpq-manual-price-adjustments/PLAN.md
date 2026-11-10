@@ -30,10 +30,10 @@ Engine: om-auto-create-pr-loop (steps: 22, --loop: no)
 | 4 | 4.1 | Waterfall and price columns | inline | done | 5f50680 |
 | 4 | 4.2 | Adjustment dialog and preview | inline | done | 70ac37a (with 4.3) |
 | 4 | 4.3 | Adjustment management panel | inline | done | 70ac37a (with 4.2) |
-| 4 | 4.4 | Order and inventory waterfall | inline | done | this commit (Playwright flow deferred: no DB here, no quote fixture helper) |
-| 5 | 5.1 | Operator manual and migration notes | inline | todo | — |
+| 4 | 4.4 | Order and inventory waterfall | inline | done | cbc16ca (Playwright flow deferred: no DB here, no quote fixture helper) |
+| 5 | 5.1 | Operator manual and migration notes | inline | done | adcb50f |
 | 5 | 5.2 | Demo seed | inline | todo | — |
-| 5 | 5.3 | Archive capability delta | inline | todo | — |
+| 5 | 5.3 | Archive capability delta | inline | done | this commit |
 
 ## Goal
 

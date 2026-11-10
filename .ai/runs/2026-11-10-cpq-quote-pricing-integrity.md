@@ -59,6 +59,6 @@ Stop CPQ from changing quote prices behind the rep's back before manual price ad
 
 ### Phase 3: Guards, openApi, docs
 
-- [ ] 3.1 Mutation guards + `openApi` on status, items, recalculate, convert routes.
-- [ ] 3.2 Docs: `MIGRATION.md`, ARC manual.
-- [ ] 3.3 Archive the Delta into `.ai/specs/capabilities/`.
+- [x] 3.1 Mutation guards + `openApi` on status, items, recalculate, convert routes. — 7fef579
+- [x] 3.2 Docs: `MIGRATION.md`, ARC manual. — 8d57b1b
+- [x] 3.3 Archive the Delta into `.ai/specs/capabilities/`. — 728cb05

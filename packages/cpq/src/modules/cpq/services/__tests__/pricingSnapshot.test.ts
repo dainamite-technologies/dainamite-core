@@ -53,3 +53,10 @@ it('stable hash and money after repeated resolver passes', () => {
   const second = resolveManualAdjustments(first.lines, [row], 'USD')
   expect(computeWaterfallSummary(first.lines.map((priced) => ({ ...priced, quantity: 2 })), [row], 'USD')).toEqual(computeWaterfallSummary(second.lines.map((priced) => ({ ...priced, quantity: 2 })), [row], 'USD'))
 })
+it('hash tracks deal eligibility and normalizes omitted eligibility to true', () => {
+  const baseline = computeWaterfallSummary([line], [], 'USD')
+  expect(computeWaterfallSummary([{ ...line, includeInDeal: true }], [], 'USD').snapshotHash).toBe(baseline.snapshotHash)
+  const excluded = computeWaterfallSummary([{ ...line, includeInDeal: false }], [], 'USD')
+  expect(excluded.dealValue.offer).toBe(0)
+  expect(excluded.snapshotHash).not.toBe(baseline.snapshotHash)
+})

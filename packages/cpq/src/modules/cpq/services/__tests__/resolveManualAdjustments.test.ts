@@ -83,3 +83,8 @@ it('handles zero charge quantities without division by zero', () => {
   expect(result.lines[0].charges[0].unitPrice).toBe(0)
   expect(result.lines[0].charges[0].totalPrice).toBe(0)
 })
+it('skips an invalid same-level override without treating it as an overlap with a valid discount', () => {
+  const result = price([row, { ...row, id: 'invalid', adjustmentType: 'price_override', currencyCode: 'USD', value: 200 }])
+  expect(result.errors).toEqual([expect.objectContaining({ adjustmentId: 'invalid', code: 'ABOVE_STANDARD' })])
+  expect(result.lines[0].charges[0].totalPrice).toBe(80)
+})

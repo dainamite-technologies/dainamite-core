@@ -71,10 +71,9 @@ export function resolveManualAdjustments(
       }
       const standard = charge.standardUnitPrice!
       const total = charge.standardTotalPrice
-      let applied = false
-      for (const row of candidates) {
+      const valid = candidates.filter((row) => {
         // Line discounts cover billable NRC/MRC, never metered usage.
-        if (charge.chargeType === 'usage' && row.level === 'line') continue
+        if (charge.chargeType === 'usage' && row.level === 'line') return false
         let code: AdjustmentError['code'] | undefined
         if (charge.chargeType === 'usage' || total === null || !Number.isFinite(row.value) || row.value < 0 ||
           (row.adjustmentType === 'price_override' && charge.pricingMethod !== 'flat' && charge.pricingMethod !== 'per_unit') ||
@@ -84,9 +83,15 @@ export function resolveManualAdjustments(
         else if ((row.currencyCode && row.currencyCode !== currencyCode) || charge.currencyCode !== currencyCode ||
           (row.adjustmentType !== 'discount_percent' && !row.currencyCode)) code = 'CURRENCY_MISMATCH'
         else if (row.adjustmentType === 'price_override' && row.value > standard) code = 'ABOVE_STANDARD'
-        const duplicates = candidates.filter((other) => rank(other) === rank(row))
-        if (!code && duplicates.length > 1) code = 'ADJUSTMENT_OVERLAP'
-        if (code) { addError(row, code, charge.chargeCode, line.lineId); continue }
+        if (code) addError(row, code, charge.chargeCode, line.lineId)
+        return !code
+      })
+      let applied = false
+      for (const row of valid) {
+        if (valid.filter((other) => rank(other) === rank(row)).length > 1) {
+          addError(row, 'ADJUSTMENT_OVERLAP', charge.chargeCode, line.lineId)
+          continue
+        }
         if (applied) continue
         const quantity = charge.quantity ?? 1
         const afterTotal = row.adjustmentType === 'discount_absolute' ? Math.max(0, total! - row.value)

@@ -61,7 +61,7 @@ export function computeWaterfallSummary(
     if (manualDepth !== null) lineDepths.push(manualDepth)
   }
   const pricedLines = lines.map((line) => ({
-    lineId: line.lineId, quantity: line.quantity, termMonths: line.termMonths ?? 12,
+    lineId: line.lineId, quantity: line.quantity, termMonths: line.termMonths ?? 12, includeInDeal: line.includeInDeal !== false,
     charges: line.charges.map((input) => {
       const charge = withChargeWaterfall(input)
       return { chargeCode: charge.chargeCode, chargeType: charge.chargeType, currencyCode: charge.currencyCode,

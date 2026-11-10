@@ -288,7 +288,7 @@ type PricingSnapshot = {
 { tenantId, organizationId, ...PricingSnapshot, fromStatus, toStatus, cause: 'manual' | 'auto', actorUserId: string | null, occurredAt }
 ```
 
-`snapshotHash` = SHA-256 of canonical JSON (sorted keys) of: per line (sorted by `lineId`) `quantity` and per charge (sorted by `chargeCode`) list / standard / offer unit and total prices; per adjustment (sorted by `id`) `level`, target, `adjustmentType`, `value`, `currencyCode`, window. Reason fields, authors and timestamps are excluded. Versioning: fields are only added; a breaking change gets a new event id.
+`snapshotHash` = SHA-256 of canonical JSON (sorted keys) of: per line (sorted by `lineId`) `quantity`, normalized `termMonths` horizon and normalized `includeInDeal` eligibility (omitted means true), and per charge (sorted by `chargeCode`) list / standard / offer unit and total prices; per adjustment (sorted by `id`) `level`, target, `adjustmentType`, `value`, `currencyCode`, window. Reason fields, authors and timestamps are excluded. Versioning: fields are only added; a breaking change gets a new event id.
 
 **ACL:** `cpq.quotes.adjust_price` in `acl.ts`; `setup.ts defaultRoleFeatures` for `admin` and `employee`; enforced via route `requireFeatures`.
 

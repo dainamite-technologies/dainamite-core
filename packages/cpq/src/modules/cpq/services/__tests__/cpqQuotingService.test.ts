@@ -655,4 +655,27 @@ describe('DefaultCpqQuotingService.recalculate', () => {
 
     expect(cpqConfig.cpqStatus).toBe('with_customer') // unchanged
   })
+
+  it('persists a saved recalculation on an accepted (terminal) quote', async () => {
+    const { em, service } = makeService()
+    em.findOne
+      .mockResolvedValueOnce({
+        id: 'cpq-1',
+        quoteId: 'sq-1',
+        cpqStatus: 'accepted',
+        customerId: 'cust',
+        currencyCode: 'USD',
+        version: 1,
+        parentQuoteId: null,
+        validationResult: null,
+        pricingSummary: null,
+        quoteContext: null,
+      })
+      .mockResolvedValueOnce({ id: 'sq-1', currencyCode: 'USD', quoteNumber: 'Q-0001' })
+    em.find.mockResolvedValueOnce([])
+
+    await service.recalculate('cpq-1', { save: true }, SCOPE)
+
+    expect(em.flush).toHaveBeenCalled()
+  })
 })

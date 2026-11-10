@@ -1,3 +1,4 @@
+import { loadQuoteAdjustments } from './loadQuoteAdjustments'
 import { randomUUID } from 'node:crypto'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { findWithDecryption, findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
@@ -58,6 +59,28 @@ export class CpqAdjustmentService {
       this.enabled(scope.tenantId),
     ])
     return { items: rows.map(adjustmentSnapshot), total, page, pageSize, totalPages: Math.ceil(total / pageSize), pricingRevision: quote.pricingRevision ?? 0, enabled }
+  }
+
+  async preview(quoteId: string, input: PriceAdjustmentInput, replaceAdjustmentId: string | undefined, scope: TenantScope) {
+    const parsed = cpqPriceAdjustmentInputSchema.parse(input)
+    await this.requireEnabled(scope)
+    const em = this.deps.em.fork({ clear: true, useContext: false })
+    const scoped = { ...scope, deletedAt: null }
+    const quote = await findOneWithDecryption(em, CpqQuoteConfiguration, { ...scoped, id: quoteId }, undefined, scope)
+      ?? await findOneWithDecryption(em, CpqQuoteConfiguration, { ...scoped, quoteId }, undefined, scope)
+    if (!quote) throw new QuotingError(404, 'Quote not found')
+    if (parsed.expectedRevision !== undefined && parsed.expectedRevision !== (quote.pricingRevision ?? 0)) throw new QuotingError(409, 'STALE_REVISION')
+    await this.assertMutable(em, quote, scope)
+    await this.requireTarget(em, quote.id, parsed.quoteLineId, scope)
+    const stored = await loadQuoteAdjustments(em, quote.id, scope)
+    const replaced = stored.find((row) => row.id === replaceAdjustmentId)
+    if (replaceAdjustmentId && !replaced) throw new QuotingError(404, 'Adjustment not found')
+    if (replaced && (replaced.level !== parsed.level || replaced.quoteLineId !== parsed.quoteLineId || (replaced.chargeCode ?? null) !== (parsed.chargeCode ?? null))) throw new QuotingError(422, 'Adjustment target is immutable')
+    if (!replaced || replaced.reasonCode !== parsed.reasonCode) await this.requireReason(em, parsed.reasonCode, scope)
+    const draft = { ...parsed, id: replaceAdjustmentId ?? randomUUID() }
+    const adjustments = [...stored.filter((row) => row.id !== replaceAdjustmentId), draft]
+    const result = await this.deps.quotingService.recalculateLockedQuote(em, quote, scope, false, adjustments)
+    return { quote: result, errors: result.adjustmentErrors ?? [] }
   }
 
   async create(quoteId: string, input: PriceAdjustmentInput, actor: string, scope: TenantScope): Promise<AdjustmentWriteResult> {

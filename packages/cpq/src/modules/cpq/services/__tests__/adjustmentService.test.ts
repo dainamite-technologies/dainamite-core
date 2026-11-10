@@ -3,7 +3,7 @@ import { CpqOrderConfiguration, CpqQuoteConfiguration, CpqQuoteLineConfiguration
 import { Dictionary, DictionaryEntry } from '@open-mercato/core/modules/dictionaries/data/entities'
 import { adjustmentInput } from '../priceAdjustments/adjustmentService'
 import { resolveManualAdjustments } from '../priceAdjustments/resolveManualAdjustments'
-import type { PriceAdjustmentInput } from '../../data/price-adjustments'
+import type { PriceAdjustmentInput, PriceAdjustment } from '../../data/price-adjustments'
 const scope = { tenantId: '11111111-1111-4111-8111-111111111111', organizationId: '22222222-2222-4222-8222-222222222222' }
 const quoteId = '33333333-3333-4333-8333-333333333333', lineId = '44444444-4444-4444-8444-444444444444', actor = '55555555-5555-4555-8555-555555555555'
 const input: PriceAdjustmentInput = { level: 'charge', quoteLineId: lineId, chargeCode: 'fee', adjustmentType: 'price_override', value: 80, currencyCode: 'USD', reasonCode: 'competitive_match' }
@@ -30,10 +30,10 @@ function setup() {
   }
   em.fork.mockReturnValue(em)
   em.transactional.mockImplementation(async (execute: (tx: typeof em) => Promise<unknown>) => execute(em))
-  const recalculateLockedQuote = jest.fn(async () => {
+  const recalculateLockedQuote = jest.fn(async (_em?: unknown, _quote?: unknown, _scope?: unknown, _save?: boolean, draft?: PriceAdjustment[]) => {
     const resolved = resolveManualAdjustments([{ lineId, parentLineId: null, enginePriced: true, mirrored: false,
       charges: [{ chargeCode: 'fee', chargeName: 'Fee', chargeType: 'mrc', pricingMethod: 'flat', currencyCode: 'USD', unitPrice: 100, totalPrice: 100, quantity: 1 }] }],
-      rows.filter((row) => !row.deletedAt).map((row) => ({ ...adjustmentInput(row), id: row.id })), 'USD')
+      draft ?? rows.filter((row) => !row.deletedAt).map((row) => ({ ...adjustmentInput(row), id: row.id })), 'USD')
     return { id: quoteId, adjustmentErrors: resolved.errors, lines: resolved.lines }
   })
   const service = new CpqAdjustmentService({ em: em as never, quotingService: { recalculateLockedQuote } as never,
@@ -122,4 +122,23 @@ it('scopes and paginates reads while reporting the revision and toggle state', a
   const listed = await service.list(quoteId, scope, 1, 25)
   expect(listed).toMatchObject({ total: 1, page: 1, pageSize: 25, pricingRevision: 1, enabled: true })
   expect(em.find).toHaveBeenCalledWith(CpqQuotePriceAdjustment, expect.objectContaining({ quoteConfigurationId: quoteId, ...scope, deletedAt: null, isActive: true }), { limit: 25, offset: 0, orderBy: { createdAt: 'asc', id: 'asc' } })
+})
+it('previews a draft without persisting rows, revision, or any flush', async () => {
+  const { service, em, quote, rows, recalculateLockedQuote } = setup()
+  const preview = await service.preview(quoteId, input, undefined, scope)
+  expect(preview.errors).toEqual([])
+  expect(preview.quote.lines[0].charges[0].totalPrice).toBe(80)
+  expect(rows).toEqual([])
+  expect(quote.pricingRevision).toBe(0)
+  expect(em.flush).not.toHaveBeenCalled()
+  expect(em.persist).not.toHaveBeenCalled()
+  expect(em.transactional).not.toHaveBeenCalled()
+  expect(recalculateLockedQuote).toHaveBeenCalledWith(em, quote, scope, false, expect.any(Array))
+})
+it('returns invalid draft errors without saving and refuses a nonexistent replacement', async () => {
+  const { service, em } = setup()
+  const preview = await service.preview(quoteId, { ...input, value: 120 }, undefined, scope)
+  expect(preview.errors).toEqual([expect.objectContaining({ code: 'ABOVE_STANDARD' })])
+  await expect(service.preview(quoteId, input, actor, scope)).rejects.toMatchObject({ status: 404 })
+  expect(em.flush).not.toHaveBeenCalled()
 })

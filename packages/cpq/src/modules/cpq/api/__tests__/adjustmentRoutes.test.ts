@@ -1,9 +1,10 @@
-const execute = jest.fn(), list = jest.fn(), guards = jest.fn(), after = jest.fn()
+const execute = jest.fn(), list = jest.fn(), preview = jest.fn(), guards = jest.fn(), after = jest.fn()
 const ctx = { auth: { sub: 'user', tenantId: 'tenant' }, tenantId: 'tenant', organizationId: 'org', organizationScope: null,
-  container: { resolve: (name: string) => name === 'commandBus' ? { execute } : { list } } }
+  container: { resolve: (name: string) => name === 'commandBus' ? { execute } : { list, preview } } }
 jest.mock('../context', () => ({ resolveCpqRouteContext: jest.fn(async () => ctx) }))
 jest.mock('../_helpers/quoteMutationGuard', () => ({ runCpqMutationGuards: (...args: unknown[]) => guards(...args) }))
 import { GET, POST, metadata } from '../quotes/[quoteId]/price-adjustments/route'
+import { POST as PREVIEW } from '../quotes/[quoteId]/price-adjustments/preview/route'
 import { PATCH, DELETE } from '../quotes/[quoteId]/price-adjustments/[adjustmentId]/route'
 import { QuotingError } from '../../services/cpqQuotingService'
 const quoteId = '11111111-1111-4111-8111-111111111111', adjustmentId = '22222222-2222-4222-8222-222222222222'
@@ -14,6 +15,7 @@ beforeEach(() => {
   jest.clearAllMocks()
   guards.mockResolvedValue({ ok: true, runAfterSuccess: after })
   execute.mockResolvedValue({ result: { adjustment: { id: adjustmentId }, quote: { id: quoteId } }, logEntry: null })
+  preview.mockResolvedValue({ quote: { id: quoteId }, errors: [] })
   list.mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 25, pricingRevision: 1 })
 })
 it('requires view on GET and both immutable manage/adjust features on POST', () => {
@@ -66,4 +68,12 @@ it('returns the framework undo operation metadata for a logged command', async (
   execute.mockResolvedValue({ result: { adjustment: { id: adjustmentId }, quote: { id: quoteId } },
     logEntry: { id: 'log', commandId: 'cpq.quote_price_adjustment.create', undoToken: 'undo', createdAt: new Date() } })
   expect((await POST(request('POST', input), params)).headers.get('x-om-operation')).toBeTruthy()
+})
+it('previews through the read-only service without commands or mutation hooks', async () => {
+  const response = await PREVIEW(request('POST', { draft: input }), params)
+  expect(response.status).toBe(200)
+  expect(preview).toHaveBeenCalledWith(quoteId, input, undefined, { tenantId: 'tenant', organizationId: 'org' })
+  expect(execute).not.toHaveBeenCalled()
+  expect(guards).not.toHaveBeenCalled()
+  expect((await PREVIEW(request('POST', { draft: {} }), params)).status).toBe(400)
 })

@@ -47,3 +47,8 @@ export const adjustmentErrorSchema = z.object({
   code: z.enum(['ADJUSTMENT_TARGET_MISSING', 'TARGET_AMBIGUOUS', 'ABOVE_STANDARD', 'CURRENCY_MISMATCH', 'TYPE_NOT_ALLOWED', 'LINE_NOT_ELIGIBLE', 'ADJUSTMENT_OVERLAP']),
 })
 export type AdjustmentError = z.infer<typeof adjustmentErrorSchema>
+
+export const cpqPriceAdjustmentPreviewSchema = z.object({
+  draft: cpqPriceAdjustmentInputSchema,
+  replaceAdjustmentId: z.string().uuid().optional(),
+}).strict()

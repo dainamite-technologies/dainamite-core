@@ -19,8 +19,8 @@ Engine: om-auto-create-pr-loop (steps: 22, --loop: no)
 | 1 | 1.7 | Integrate adjustment pricing | inline | done | db4808a |
 | 1 | 1.7-review-fix | Isolate quote transaction identity maps | inline | done | bfeb322 |
 | 2 | 2.1 | Undoable commands | inline | done | dda90af |
-| 2 | 2.2 | Adjustment CRUD routes | inline | done | this commit |
-| 2 | 2.3 | Draft preview | inline | todo | — |
+| 2 | 2.2 | Adjustment CRUD routes | inline | done | c6baba1 |
+| 2 | 2.3 | Draft preview | inline | done | this commit |
 | 2 | 2.4 | ACL and reason dictionary | inline | todo | — |
 | 2 | 2.5 | Clone and removal | inline | todo | — |
 | 2 | 2.6 | Conversion validation | inline | todo | — |
@@ -108,3 +108,5 @@ Transaction boundary: explicit transaction EM flows through quote item writes, s
 Commands/service: authenticated actor/scope, explicit immutable-feature authorization (including undo), persisted audited before/after snapshots, stale undo refusal, active reason checks on create/reason change, tenant feature toggle gate, status/order lock, invalid/overlap/revision checks. 698 CPQ tests pass; package typecheck pass. Added required feature_toggles dependency and verified generated command loaders register all three commands. Root typecheck found obsolete test-only connect:false option; removed it (MikroORM v7 initializes lazily).
 
 CRUD routes: view/list with bounded pagination; create/PATCH/delete run guarded commands and return undo metadata. Paths cannot be overwritten by a guard. Added scoped target validation and numeric(18,4) precision limits. 713 CPQ tests pass; package typecheck pass. Package build/generation in progress for new routes.
+
+Preview service/route: prices a synthetic draft on an isolated EM, with no persist/flush/revision/events; supports immutable-target replacement and inactive existing reason preservation. 716 CPQ tests pass. Root typecheck in progress (post-preview).

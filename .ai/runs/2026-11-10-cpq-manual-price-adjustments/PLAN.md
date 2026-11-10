@@ -10,8 +10,8 @@ Engine: om-auto-create-pr-loop (steps: 22, --loop: no)
 | Phase | Step | Title | Exec | Status | Commit |
 |-------|------|-------|------|--------|--------|
 | 1 | 1.1 | Characterize pricing | inline | done | 73c9553 |
-| 1 | 1.2 | Capture list and standard prices | inline | done | this commit |
-| 1 | 1.3 | Entity and migration | inline | todo | — |
+| 1 | 1.2 | Capture list and standard prices | inline | done | 5c46335 |
+| 1 | 1.3 | Entity and migration | inline | done | this commit |
 | 1 | 1.4 | Manual adjustment resolver | inline | todo | — |
 | 1 | 1.5 | Summary math | inline | todo | — |
 | 1 | 1.6 | Quote transaction boundary | inline | todo | — |
@@ -94,3 +94,5 @@ No external skill URLs. Framework APIs are inspected in installed dependencies.
 ## Execution placement
 
 Steps run inline because they share the pricing model and quote aggregate refactor; splitting them between fresh executors would repeatedly re-derive tightly coupled context. Independent final review uses a separate read-only task. Checkpoints after five steps or phase boundaries.
+
+Migration generation: `yarn mercato db generate` scans only local app modules; used installed MikroORM migrator in offline snapshot mode for packaged CPQ. Generated SQL adds only the adjustment table/indexes and pricing_revision. Snapshot serialization changes reflect the installed ORM version. No migration applied. CPQ tests: 642/642 pass; generation pass.

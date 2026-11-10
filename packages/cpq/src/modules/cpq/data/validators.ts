@@ -691,3 +691,5 @@ export const cpqConvertQuoteToOrderSchema = z.object({
 export const cpqOrderStatusTransitionSchema = z.object({
   targetStatus: z.string().min(1),
 })
+
+export { cpqPriceAdjustmentInputSchema, cpqPriceAdjustmentPatchSchema } from './price-adjustments'

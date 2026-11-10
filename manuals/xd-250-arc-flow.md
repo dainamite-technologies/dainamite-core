@@ -442,6 +442,28 @@ This section is for developers extending or debugging ARC. Operators don't need 
 | Renew (merge) | Consolidates 2+ subscriptions into one new sub with a new term. | A **new** subscription row is created with the new term + combined items. All input subs go to `superseded` with `mergedIntoSubscriptionId` → new sub. |
 | Cancel | Terminates the subscription(s). | Subscription → `terminated`; items → `terminated`; assets → `cancelled`. |
 
+## Prices on Amend quotes — "price kept"
+
+Every existing item mirrored onto an **Amend** quote keeps the price the
+customer pays today. The line shows a grey **price kept** badge, and neither
+**Recalculate** nor activating the order changes that item's price — even when
+the catalog price or a price rule changed since the subscription started.
+
+A line is re-priced at today's catalog price only when you change one of its
+pricing inputs: an attribute (configuration), the quantity, the term, the start
+or end date, or a usage estimate. The badge then disappears and a blue banner
+above the lines explains that reconfigured lines use the current catalog price.
+Negotiated prices from the subscription are not carried over to reconfigured
+lines yet — re-enter them by hand if needed.
+
+Renew quotes still price every line at today's catalog price (renewal starts a
+new term); Cancel quotes are not priced. Amend quotes created before this
+change keep re-pricing every line.
+
+**Checkpoint:** on an Amend quote, every mirrored existing item shows
+**price kept**; after Recalculate its MRC is unchanged. Change one item's
+attribute → only that line's badge disappears and its price updates.
+
 ## Concurrency safeguards
 
 - **One ARC quote per subscription at a time.** `validateArcQuote` and the attach endpoint reject attaching a sub that is already on a non-terminal ARC quote. Operators must resolve the existing quote first (accept, reject, or cancel). UI surfaces this via a confirm dialog (Scenario 8).

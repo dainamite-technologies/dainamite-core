@@ -232,6 +232,12 @@ adds the missing Billing Item and runs Retry. Account outcome is
 
 ### Entity 4: BillRun
 
+> **Class name:** `BillingRun` since `@dainamite/billing` 0.20.0, and
+> `BillRunOutcome` is now `BillingRunOutcome`. Open Mercato resolves an entity
+> id to its table by class name, so the class must match its id
+> (`billing:billing_run`). Tables are unchanged. The prose below keeps the
+> original names.
+
 A single execution of the engine.
 
 | Column | Type | Nullable | Description |
@@ -308,6 +314,9 @@ with the crashed process, but the `BillRun` row may be left at
   results visible in summary + outcomes
 
 ### Entity 5: DraftInvoiceEdit *(audit table)*
+
+> **Class name:** `BillingDraftInvoiceEdit` since `@dainamite/billing` 0.20.0
+> (id `billing:billing_draft_invoice_edit`, table unchanged).
 
 Every operator edit on a draft invoice line is recorded for audit.
 

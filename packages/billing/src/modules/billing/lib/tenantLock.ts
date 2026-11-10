@@ -13,7 +13,7 @@ import type { EntityManager } from '@mikro-orm/postgresql'
  *     signal instead of waiting on a row.
  *   - It's released automatically when the transaction ends (commit,
  *     rollback, or process death) — so there is no lock-leak path even
- *     on `kill -9`. The `BillRun` row's `status='running'` may be left
+ *     on `kill -9`. The `BillingRun` row's `status='running'` may be left
  *     hanging, but the lock itself vanishes; the reaper worker
  *     (workers/reap-stale-bill-runs.ts) handles the orphaned row.
  *   - It works without a sentinel table — we hash a string key into the

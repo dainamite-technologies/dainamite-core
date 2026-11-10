@@ -23,7 +23,7 @@ import {
   wipeTestInvoicesCommand,
 } from '../../commands/invoices'
 import {
-  DraftInvoiceEdit,
+  BillingDraftInvoiceEdit,
 } from '../../data/entities'
 
 type FakeInvoice = {
@@ -167,7 +167,7 @@ function createEnv(
     }) as never,
     create: jest.fn((entity: unknown, data: Record<string, unknown>) => {
       const ctor = (entity as { name?: string }).name ?? ''
-      if (ctor === 'DraftInvoiceEdit') {
+      if (ctor === 'BillingDraftInvoiceEdit') {
         auditIdCounter += 1
         return { ...data, id: `audit-${auditIdCounter}` }
       }
@@ -318,7 +318,7 @@ describe('editDraftLineCommand', () => {
     expect(line.totalNetAmount).toBe('999.9900')
   })
 
-  it('persists a DraftInvoiceEdit audit row with before+after snapshots', async () => {
+  it('persists a BillingDraftInvoiceEdit audit row with before+after snapshots', async () => {
     const invoice = makeInvoice({ status: 'draft' })
     const line = makeLine(invoice, {
       description: 'Old',
@@ -458,7 +458,7 @@ describe('wipeTestInvoicesCommand', () => {
   })
 })
 
-// Suppress unused-import warning — DraftInvoiceEdit is needed by the
+// Suppress unused-import warning — BillingDraftInvoiceEdit is needed by the
 // mock's discriminator path but not directly referenced by name in
 // individual assertions.
-void DraftInvoiceEdit
+void BillingDraftInvoiceEdit

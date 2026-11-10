@@ -318,13 +318,20 @@ export class BillingAccountUsage {
   deletedAt?: Date | null
 }
 
-// ─── BillRun ─────────────────────────────────────────────────────
+// ─── BillingRun ──────────────────────────────────────────────────
 //
 // A single execution of the engine — one row per trigger (schedule or
 // manual). The concurrency lock is a Postgres transaction-scoped advisory
 // lock keyed by hash(tenant_id || 'billing-run'); it is NOT stored on this
 // row. Crash recovery for zombie `status='running'` rows is handled by
 // workers/reap-stale-bill-runs.ts.
+//
+// Class names must be the PascalCase of the entity-id suffix (`billing:
+// billing_run` → `BillingRun`) — that is how Open Mercato maps an id to its
+// table. Until 0.20.0 this class was `BillRun` (likewise `BillRunOutcome`,
+// `DraftInvoiceEdit`), and those three ids resolved to no table; see
+// data/entityIds.ts. Type-only aliases for the old names are at the end of
+// this file.
 
 @Entity({ tableName: 'billing_runs' })
 @Index({
@@ -335,7 +342,7 @@ export class BillingAccountUsage {
   name: 'billing_runs_parent_idx',
   properties: ['parentRunId'],
 })
-export class BillRun {
+export class BillingRun {
   [OptionalProps]?:
     | 'parentRunId'
     | 'dryRun'
@@ -417,10 +424,10 @@ export class BillRun {
   deletedAt?: Date | null
 }
 
-// ─── BillRunOutcome ──────────────────────────────────────────────
+// ─── BillingRunOutcome ───────────────────────────────────────────
 //
 // Per-account outcome of a Bill Run. Stored in its own table (not as a
-// JSONB array on BillRun.summary) so operators can query failures across
+// JSONB array on BillingRun.summary) so operators can query failures across
 // runs without jsonb_array_elements gymnastics. See spec rationale.
 
 @Entity({ tableName: 'billing_run_outcomes' })
@@ -432,7 +439,7 @@ export class BillRun {
   name: 'billing_run_outcomes_account_history_idx',
   properties: ['organizationId', 'tenantId', 'billAccountId', 'createdAt'],
 })
-export class BillRunOutcome {
+export class BillingRunOutcome {
   [OptionalProps]?:
     | 'errorMessage'
     | 'warnings'
@@ -493,7 +500,7 @@ export class BillRunOutcome {
   deletedAt?: Date | null
 }
 
-// ─── DraftInvoiceEdit (audit) ────────────────────────────────────
+// ─── BillingDraftInvoiceEdit (audit) ─────────────────────────────
 //
 // Append-only audit of every operator edit on a draft invoice line.
 // Pattern mirrors `cpq_subscription_change_logs` — minimal columns
@@ -509,7 +516,7 @@ export class BillRunOutcome {
   name: 'billing_draft_invoice_edits_user_idx',
   properties: ['organizationId', 'tenantId', 'userId', 'createdAt'],
 })
-export class DraftInvoiceEdit {
+export class BillingDraftInvoiceEdit {
   [OptionalProps]?: 'invoiceLineId' | 'beforeJson' | 'afterJson' | 'createdAt' | 'deletedAt'
 
   @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
@@ -630,8 +637,8 @@ export class BillingAccountBalance {
 // ─── BillingAccountTransaction (SPEC-002, append-only) ───────────
 //
 // The source of truth for every balance movement. Append-only — pattern
-// mirrors DraftInvoiceEdit (no `updated_at` / `is_active`; `deleted_at`
-// reserved for compliance erasure only). `balance = SUM(amount)`.
+// mirrors BillingDraftInvoiceEdit (no `updated_at` / `is_active`;
+// `deleted_at` reserved for compliance erasure only). `balance = SUM(amount)`.
 //
 // The unique `(tenant_id, bill_account_id, source_ref)` is the idempotency
 // gate: a deduplicated usage upload or a retried recurring charge can never
@@ -860,7 +867,7 @@ export class BillingStatement {
   @Property({ name: 'bill_account_id', type: 'uuid' })
   billAccountId!: string
 
-  // FK (string) to the BillRun that generated it (period close reuses the
+  // FK (string) to the BillingRun that generated it (period close reuses the
   // run engine). Null for a manually-generated statement.
   @Property({ name: 'bill_run_id', type: 'uuid', nullable: true })
   billRunId?: string | null
@@ -914,3 +921,17 @@ export class BillingStatement {
   @Property({ name: 'updated_at', type: Date, onUpdate: () => new Date() })
   updatedAt: Date = new Date()
 }
+
+// ─── Deprecated names (0.20.0) ───────────────────────────────────
+//
+// Type-only on purpose: a runtime alias (`export const BillRun = BillingRun`)
+// would make the app's generated `entities` list carry the same class twice.
+// Code that used the old names as values (`em.find(BillRun, …)`) must switch
+// to the new ones — TypeScript flags it.
+
+/** @deprecated Renamed to {@link BillingRun} in 0.20.0. */
+export type BillRun = BillingRun
+/** @deprecated Renamed to {@link BillingRunOutcome} in 0.20.0. */
+export type BillRunOutcome = BillingRunOutcome
+/** @deprecated Renamed to {@link BillingDraftInvoiceEdit} in 0.20.0. */
+export type DraftInvoiceEdit = BillingDraftInvoiceEdit

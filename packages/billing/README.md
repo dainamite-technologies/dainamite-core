@@ -71,6 +71,20 @@ Items automatically. Register it **after** both `cpq` and `billing`.
   a direct relation.
 - **Ships its own migrations** under `src/modules/billing/migrations/`.
 - Ships `src/` (types) + `dist/` (runtime JS); no `.d.ts` emitted.
+- **Ships its entity-id registry** in `generated/` (see below).
+
+## Entity ids and `generated/`
+
+A host app's `yarn generate` registers billing's entity ids (`billing:billing_account`,
+…) from `generated/entities.ids.generated.ts`, which ships with the package. The
+query index rejects unregistered ids, and `mercato entities install` treats them
+as virtual custom entities, so **run `yarn generate` after every upgrade**.
+
+`generated/` is derived. Never edit it by hand. The build regenerates it from
+`src/modules/billing/data/entityIds.ts` (ids) and `data/entities.ts` (columns),
+using `scripts/generate-entity-registry.mjs`. Commit the result; a unit test
+fails when it drifts. Each id suffix must be the snake_case of its entity class
+name (`billing:billing_run` → `BillingRun`), or the build fails.
 
 ## License
 

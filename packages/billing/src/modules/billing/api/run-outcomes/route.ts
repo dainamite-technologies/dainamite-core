@@ -3,7 +3,7 @@ import type { EntityManager } from '@mikro-orm/postgresql'
 import type { AwilixContainer } from 'awilix'
 import { SalesInvoice } from '@open-mercato/core/modules/sales/data/entities'
 import { makeCrudRoute } from '@open-mercato/shared/lib/crud/factory'
-import { BillingAccount, BillRunOutcome } from '../../data/entities'
+import { BillingAccount, BillingRunOutcome } from '../../data/entities'
 import { billingEntityIds } from '../../data/entityIds'
 import {
   BILL_RUN_OUTCOME_STATUSES,
@@ -56,7 +56,7 @@ const billRunOutcomeListItemSchema = z.object({
 const crud = makeCrudRoute({
   metadata: routeMetadata,
   orm: {
-    entity: BillRunOutcome,
+    entity: BillingRunOutcome,
     idField: 'id',
     orgField: 'organizationId',
     tenantField: 'tenantId',

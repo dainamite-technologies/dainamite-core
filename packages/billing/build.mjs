@@ -3,9 +3,19 @@ import { glob } from 'glob'
 import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync, readdirSync, rmSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { generateEntityRegistry } from './scripts/generate-entity-registry.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const outdir = join(__dirname, 'dist')
+
+// Entity-id registry read by a consuming app's `mercato generate` — see
+// scripts/generate-entity-registry.mjs. Regenerated on every build so the
+// published package can never ship ids that drift from data/entityIds.ts.
+const registry = await generateEntityRegistry({ packageRoot: __dirname })
+console.log(
+  `Entity registry: ${registry.entityKeys.length} ids` +
+    (registry.changed.length > 0 ? ` (updated ${registry.changed.join(', ')})` : ' (unchanged)'),
+)
 
 mkdirSync(outdir, { recursive: true })
 for (const entry of readdirSync(outdir)) {

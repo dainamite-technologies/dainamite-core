@@ -67,7 +67,7 @@ export const openApi = createBillingCrudOpenApi({
     responseSchema: addLineResponseSchema,
     description:
       'Appends a new line to a draft invoice (e.g. operator adds a ' +
-      'one-off adjustment). Writes a `DraftInvoiceEdit` audit row ' +
+      'one-off adjustment). Writes a `BillingDraftInvoiceEdit` audit row ' +
       '(action=`line_added`, `before_json=null`). Recomputes invoice ' +
       'totals. Refuses non-draft invoices.',
   },

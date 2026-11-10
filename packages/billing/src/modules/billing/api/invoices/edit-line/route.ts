@@ -14,7 +14,7 @@ import { createBillingCrudOpenApi } from '../../openapi'
 /**
  * `POST /api/billing/invoices/edit-line` — edits one line of a draft
  * invoice. Refuses non-drafts (409 / `billing.invoice.not_draft`).
- * Writes a `DraftInvoiceEdit` audit row per spec. Recomputes invoice
+ * Writes a `BillingDraftInvoiceEdit` audit row per spec. Recomputes invoice
  * totals from the surviving lines after the edit.
  *
  * Operator surface: route is gated by `billing.invoice.edit_draft`.
@@ -82,7 +82,7 @@ export const openApi = createBillingCrudOpenApi({
     description:
       'Edits one line of a draft invoice (description, quantity, ' +
       "unit_price, or explicit `totalNetAmount` override). Writes a " +
-      '`DraftInvoiceEdit` audit row with before+after snapshots and ' +
+      '`BillingDraftInvoiceEdit` audit row with before+after snapshots and ' +
       'recomputes invoice totals. Refuses non-draft invoices with ' +
       'HTTP 409 + `billing.invoice.not_draft`.',
   },

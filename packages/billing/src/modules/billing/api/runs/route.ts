@@ -2,7 +2,7 @@ import { z } from 'zod'
 import { makeCrudRoute } from '@open-mercato/shared/lib/crud/factory'
 import { withScopedPayload } from '@open-mercato/shared/lib/api/scoped'
 import { resolveTranslations } from '@open-mercato/shared/lib/i18n/server'
-import { BillRun } from '../../data/entities'
+import { BillingRun } from '../../data/entities'
 import { billingEntityIds } from '../../data/entityIds'
 import {
   billingRunListQuerySchema,
@@ -64,7 +64,7 @@ const rawBodySchema = z.object({}).passthrough()
 const crud = makeCrudRoute({
   metadata: routeMetadata,
   orm: {
-    entity: BillRun,
+    entity: BillingRun,
     idField: 'id',
     orgField: 'organizationId',
     tenantField: 'tenantId',

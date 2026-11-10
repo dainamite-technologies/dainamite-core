@@ -5,7 +5,7 @@ import {
   BillingAccountTransaction,
   BillingItem,
   BillingStatement,
-  BillRun,
+  BillingRun,
 } from '../data/entities'
 import type { BillCycle } from '../data/validators'
 import { advanceNextBillDate, addDays, deriveBillPeriod, isCycleDue, type BillPeriod } from './billPeriod'
@@ -75,7 +75,7 @@ export type ProcessPrepaidParams = {
 export async function processPrepaidAccount(
   em: EntityManager,
   account: BillingAccount,
-  billRun: BillRun,
+  billRun: BillingRun,
   params: ProcessPrepaidParams,
 ): Promise<PrepaidAccountResult> {
   const maxCycles =
@@ -212,7 +212,7 @@ async function closePrepaidPeriod(
   em: EntityManager,
   account: BillingAccount,
   period: BillPeriod,
-  billRun: BillRun,
+  billRun: BillingRun,
   opts: {
     mode: PrepaidCloseMode
     statementEnabled: boolean

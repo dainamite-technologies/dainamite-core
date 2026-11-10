@@ -1,7 +1,7 @@
 import type { JobContext, QueuedJob, WorkerMeta } from '@open-mercato/queue'
 import type { FilterQuery } from '@mikro-orm/core'
 import type { EntityManager } from '@mikro-orm/postgresql'
-import { BillRun } from '../data/entities'
+import { BillingRun } from '../data/entities'
 
 export const metadata: WorkerMeta = {
   queue: 'billing-reap-stale-runs',
@@ -19,7 +19,7 @@ type HandlerContext = JobContext & {
  * Background — the Bill Run engine acquires a per-tenant Postgres
  * transaction-scoped advisory lock (`pg_try_advisory_xact_lock`). When the
  * holding transaction ends (commit / rollback / process death) the lock is
- * released automatically — so there is no lock leak — but the `BillRun`
+ * released automatically — so there is no lock leak — but the `BillingRun`
  * row's `status='running'` stays set forever, blocking restarts and
  * confusing the dashboard.
  *
@@ -38,10 +38,10 @@ const STALE_THRESHOLD_MS = 60 * 60 * 1000 // 1 hour
 export default async function handle(_job: QueuedJob, ctx: HandlerContext): Promise<void> {
   const em = ctx.resolve<EntityManager>('em')
   const threshold = new Date(Date.now() - STALE_THRESHOLD_MS)
-  const stale = await em.find(BillRun, {
+  const stale = await em.find(BillingRun, {
     status: 'running',
     startedAt: { $lt: threshold },
-  } satisfies FilterQuery<BillRun>)
+  } satisfies FilterQuery<BillingRun>)
   if (stale.length === 0) return
   const now = new Date()
   for (const run of stale) {

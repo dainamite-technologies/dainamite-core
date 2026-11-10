@@ -8,7 +8,7 @@ import {
 } from '@open-mercato/shared/lib/commands/scope'
 import { CrudHttpError } from '@open-mercato/shared/lib/crud/errors'
 import { SalesInvoice, SalesInvoiceLine } from '@open-mercato/core/modules/sales/data/entities'
-import { BillingAccount, DraftInvoiceEdit } from '../data/entities'
+import { BillingAccount, BillingDraftInvoiceEdit } from '../data/entities'
 import { emitBillingEvent, type BillingEventId } from '../events'
 import { buildPostpaidCreditCrossingEvents } from '../lib/accountStatus'
 import {
@@ -182,7 +182,7 @@ const postInvoiceCommand: CommandHandler<BillingInvoicePostInput, PostResult> = 
 // Three commands sharing the same shape:
 //   1. Assert the invoice is still a draft (refuse otherwise).
 //   2. Mutate the line / collection.
-//   3. Write a `DraftInvoiceEdit` audit row carrying before+after
+//   3. Write a `BillingDraftInvoiceEdit` audit row carrying before+after
 //      snapshots (`null` on the "no prior state" / "no resulting state"
 //      side per the spec — see entity column docs).
 //   4. Recompute the invoice totals from the surviving lines.
@@ -267,7 +267,7 @@ async function recomputeInvoiceTotals(
 
 function getUserIdFromCtx(ctx: CommandRuntimeContext): string {
   const userId = (ctx.auth?.sub as string | undefined) ?? null
-  // The DraftInvoiceEdit.user_id column is NOT NULL. For system-driven
+  // The BillingDraftInvoiceEdit.user_id column is NOT NULL. For system-driven
   // edits (e.g. catch-up flow that revises a value), we fall back to
   // a sentinel UUID. Operator-driven edits always have a real
   // ctx.auth.sub.
@@ -303,7 +303,7 @@ const editDraftLineCommand: CommandHandler<
     }
 
     const before = snapshotLine(line)
-    let audit: DraftInvoiceEdit | null = null
+    let audit: BillingDraftInvoiceEdit | null = null
 
     await withAtomicFlush(em, [
       () => {
@@ -339,7 +339,7 @@ const editDraftLineCommand: CommandHandler<
       },
       () => {
         const after = snapshotLine(line)
-        audit = em.create(DraftInvoiceEdit, {
+        audit = em.create(BillingDraftInvoiceEdit, {
           tenantId: parsed.tenantId,
           organizationId: parsed.organizationId,
           invoiceId: invoice.id,
@@ -408,7 +408,7 @@ const addDraftLineCommand: CommandHandler<
         operator_added: true,
       },
     })
-    let audit: DraftInvoiceEdit | null = null
+    let audit: BillingDraftInvoiceEdit | null = null
 
     await withAtomicFlush(em, [
       () => {
@@ -419,7 +419,7 @@ const addDraftLineCommand: CommandHandler<
       },
       () => {
         const after = snapshotLine(line)
-        audit = em.create(DraftInvoiceEdit, {
+        audit = em.create(BillingDraftInvoiceEdit, {
           tenantId: parsed.tenantId,
           organizationId: parsed.organizationId,
           invoiceId: invoice.id,
@@ -466,7 +466,7 @@ const removeDraftLineCommand: CommandHandler<
     }
 
     const before = snapshotLine(line)
-    let audit: DraftInvoiceEdit | null = null
+    let audit: BillingDraftInvoiceEdit | null = null
 
     await withAtomicFlush(em, [
       () => {
@@ -476,7 +476,7 @@ const removeDraftLineCommand: CommandHandler<
         await recomputeInvoiceTotals(em, invoice)
       },
       () => {
-        audit = em.create(DraftInvoiceEdit, {
+        audit = em.create(BillingDraftInvoiceEdit, {
           tenantId: parsed.tenantId,
           organizationId: parsed.organizationId,
           invoiceId: invoice.id,

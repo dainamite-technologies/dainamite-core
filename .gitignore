@@ -63,6 +63,9 @@ next-env.d.ts
 .mercato/
 generated/
 src/generated/
+# …except the entity-id registry @dainamite/billing ships to consuming apps
+# (scripts/generate-entity-registry.mjs; drift-checked by its unit tests).
+!packages/billing/generated/
 .test-cache.json
 
 # runtime state

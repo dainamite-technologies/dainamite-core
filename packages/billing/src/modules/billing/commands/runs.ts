@@ -7,7 +7,7 @@ import {
   ensureTenantScope,
 } from '@open-mercato/shared/lib/commands/scope'
 import { CrudHttpError } from '@open-mercato/shared/lib/crud/errors'
-import { BillRun, BillRunOutcome } from '../data/entities'
+import { BillingRun, BillingRunOutcome } from '../data/entities'
 import {
   billingRunRetryFailedSchema,
   billingRunTriggerSchema,
@@ -107,7 +107,7 @@ const retryFailedCommand: CommandHandler<BillingRunRetryFailedInput, TriggerResu
     ensureOrganizationScope(ctx, parsed.organizationId)
 
     const em = getEm(ctx)
-    const parentRun = await em.findOne(BillRun, {
+    const parentRun = await em.findOne(BillingRun, {
       id: parsed.billRunId,
       tenantId: parsed.tenantId,
       organizationId: parsed.organizationId,
@@ -116,7 +116,7 @@ const retryFailedCommand: CommandHandler<BillingRunRetryFailedInput, TriggerResu
     if (!parentRun) {
       throw new CrudHttpError(404, { error: 'Parent Bill Run not found' })
     }
-    const failedOutcomes = await em.find(BillRunOutcome, {
+    const failedOutcomes = await em.find(BillingRunOutcome, {
       billRunId: parentRun.id,
       tenantId: parsed.tenantId,
       organizationId: parsed.organizationId,

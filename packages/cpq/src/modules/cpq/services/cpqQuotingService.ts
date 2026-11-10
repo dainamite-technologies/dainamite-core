@@ -2066,50 +2066,54 @@ DefaultCpqQuotingService.prototype.detachTargetSubscription = async function (
   scope: TenantScope,
 ): Promise<{ ok: true }> {
   const em = (this as unknown as { em: EntityManager }).em
-  const cpqConfig = await loadCpqConfigStrict(em, quoteId, scope)
-  ensureEditable(cpqConfig)
+  // Detaching removes priced lines (rep-added lines may carry negotiated
+  // prices), so it takes the same aggregate lock and revision bump as any
+  // other pricing write and re-prices the remaining lines.
+  await withQuotePricingWrite(em, quoteId, scope, async (tx, cpqConfig) => {
+    ensureEditable(cpqConfig)
 
-  const target = await em.findOne(CpqQuoteTargetSubscription, {
-    id: targetId,
-    quoteId: cpqConfig.id,
-    organizationId: scope.organizationId,
-    tenantId: scope.tenantId,
-    deletedAt: null,
-  })
-  if (!target) throw new QuotingError(404, 'Target subscription not found')
-
-  // Drop any quote lines that pointed at this target.
-  const lines = await em.find(CpqQuoteLineConfiguration, {
-    quoteConfigurationId: cpqConfig.id,
-    targetSubscriptionId: target.subscriptionId,
-    organizationId: scope.organizationId,
-    tenantId: scope.tenantId,
-    deletedAt: null,
-  })
-  const now = new Date()
-  for (const line of lines) {
-    line.deletedAt = now
-    const salesLine = await em.findOne(SalesQuoteLine, { id: line.quoteLineId })
-    if (salesLine) salesLine.deletedAt = now
-  }
-
-  target.deletedAt = now
-
-  // Auto-revert merge mode if only one renew target remains.
-  if (target.quoteType === 'renew') {
-    const remaining = await em.find(CpqQuoteTargetSubscription, {
+    const target = await tx.findOne(CpqQuoteTargetSubscription, {
+      id: targetId,
       quoteId: cpqConfig.id,
       organizationId: scope.organizationId,
       tenantId: scope.tenantId,
       deletedAt: null,
-      id: { $ne: target.id },
     })
-    if (remaining.length === 1) {
-      remaining[0].mergeAction = 'standalone'
-    }
-  }
+    if (!target) throw new QuotingError(404, 'Target subscription not found')
 
-  await em.flush()
+    // Drop quote lines that pointed at this target, with their bundle
+    // children, sales lines and price adjustments.
+    const lines = await tx.find(CpqQuoteLineConfiguration, {
+      quoteConfigurationId: cpqConfig.id,
+      targetSubscriptionId: target.subscriptionId,
+      organizationId: scope.organizationId,
+      tenantId: scope.tenantId,
+      deletedAt: null,
+    })
+    for (const line of lines) {
+      if (line.deletedAt) continue
+      await removeQuoteLineTree(tx, cpqConfig.id, line, scope)
+    }
+
+    target.deletedAt = new Date()
+
+    // Auto-revert merge mode if only one renew target remains.
+    if (target.quoteType === 'renew') {
+      const remaining = await tx.find(CpqQuoteTargetSubscription, {
+        quoteId: cpqConfig.id,
+        organizationId: scope.organizationId,
+        tenantId: scope.tenantId,
+        deletedAt: null,
+        id: { $ne: target.id },
+      })
+      if (remaining.length === 1) {
+        remaining[0].mergeAction = 'standalone'
+      }
+    }
+
+    await tx.flush()
+    await this.recalculateLockedQuote(tx, cpqConfig, scope, true)
+  }, (status, message) => new QuotingError(status, message), undefined, undefined, { pricingCause: 'line' })
   return { ok: true }
 }
 

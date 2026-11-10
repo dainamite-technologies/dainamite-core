@@ -53,8 +53,16 @@ it('keeps Delete for an invalid row while locked and names the error in text', (
   expect(html).not.toContain('Edit adjustment')
 })
 
-it('renders nothing when the feature toggle is off', () => {
-  expect(render(ui({ enabled: false }), panel())).toBe('')
+it('stays visible but read-only when the toggle is off and adjustments exist', () => {
+  const html = render(ui({ enabled: false }), panel())
+  expect(text(html)).toContain('Manual price adjustments are turned off')
+  expect(text(html)).toContain('Competitive match')
+  expect(html).not.toContain('Edit adjustment')
+  expect(html).not.toContain('Delete adjustment')
+})
+
+it('renders nothing when the toggle is off and nothing is stored', () => {
+  expect(render(ui({ enabled: false }), <PriceAdjustmentsPanel quoteId="q1" items={[]} total={0} lines={[line]} currency="USD" errorsById={new Map()} />)).toBe('')
 })
 
 it('hides actions without permission and disables them with a tooltip on ARC mirror lines', () => {

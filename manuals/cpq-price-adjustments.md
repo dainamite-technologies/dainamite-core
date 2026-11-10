@@ -84,6 +84,9 @@ surcharge shows as a positive depth (`+5%`), a discount as negative (`−20%`).
 | Feature toggle `cpq.manual_price_adjustments` | Turns the capability on per tenant. Seeded **on**; switch it off to hide the actions and refuse writes (`403`). Stored adjustments keep pricing quotes. |
 | Dictionary `cpq.price_adjustment_reason` | Reason list, editable under Dictionaries. Seeded with: competitive match, volume commitment, loyalty, promotion, strategic deal, price correction, other. |
 
+**Upgrading an existing installation:** after `yarn mercato db migrate`, run
+`yarn mercato cpq seed-price-adjustments` and `yarn mercato auth sync-role-acls`.
+
 ## Approvals (project configuration)
 
 CPQ does not decide who approves a discount. It emits two events after every

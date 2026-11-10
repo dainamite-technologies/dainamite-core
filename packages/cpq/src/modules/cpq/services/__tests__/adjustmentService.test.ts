@@ -150,3 +150,23 @@ it('allows a new quote cloned from an ARC mirror to negotiate its engine price',
   const result = await service.create(quoteId, input, actor, scope)
   expect(result.adjustment.value).toBe(80)
 })
+it('refuses an overlapping adjustment at write time, even when the stored one is currently invalid', async () => {
+  const { service, rows, quote } = setup()
+  // 120 > standard 100 → ABOVE_STANDARD would reject it; store it directly as a pre-existing invalid row.
+  rows.push({ id: '66666666-6666-4666-8666-666666666666', quoteConfigurationId: quoteId, quoteId, ...scope, level: 'charge', quoteLineId: lineId,
+    chargeCode: 'fee', chargeTypeFilter: null, adjustmentType: 'price_override', value: '120', currencyCode: 'USD', reasonCode: 'competitive_match',
+    reasonNote: null, windowKind: 'relative', fromMonth: 1, toMonth: null, createdByUserId: actor, isActive: true, deletedAt: null,
+    createdAt: new Date(), updatedAt: new Date() } as unknown as CpqQuotePriceAdjustment)
+  await expect(service.create(quoteId, input, actor, scope)).rejects.toMatchObject({ status: 422, message: 'ADJUSTMENT_OVERLAP' })
+  expect(rows).toHaveLength(1)
+  expect(quote.pricingRevision).toBe(1) // bumped in the rolled-back transaction only
+})
+it('allows a recurring and a one-time line discount side by side, but not two covering all charges', async () => {
+  const { adjustmentsOverlap } = await import('../priceAdjustments/adjustmentService')
+  const base = { level: 'line', quoteLineId: 'l1', chargeCode: null }
+  expect(adjustmentsOverlap({ ...base, id: 'a', chargeTypeFilter: 'mrc' }, { ...base, id: 'b', chargeTypeFilter: 'nrc' })).toBe(false)
+  expect(adjustmentsOverlap({ ...base, id: 'a', chargeTypeFilter: 'mrc' }, { ...base, id: 'b', chargeTypeFilter: null })).toBe(true)
+  expect(adjustmentsOverlap({ ...base, id: 'a', chargeTypeFilter: null }, { ...base, id: 'a', chargeTypeFilter: null })).toBe(false)
+  expect(adjustmentsOverlap({ id: 'a', level: 'charge', quoteLineId: 'l1', chargeCode: 'fee' }, { id: 'b', level: 'charge', quoteLineId: 'l1', chargeCode: 'setup' })).toBe(false)
+  expect(adjustmentsOverlap({ id: 'a', level: 'charge', quoteLineId: 'l1', chargeCode: 'fee' }, { id: 'b', level: 'line', quoteLineId: 'l1' })).toBe(false)
+})

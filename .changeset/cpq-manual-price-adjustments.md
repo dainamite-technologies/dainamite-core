@@ -6,7 +6,11 @@ Negotiated prices on quotes (manual price adjustments) with a price waterfall.
 
 - New table `cpq_quote_price_adjustments` and column
   `cpq_quote_configurations.pricing_revision` (migration
-  `Migration20261110213052`). Run `yarn mercato db migrate`.
+  `Migration20261110213052`). **Upgrade steps for existing tenants (required):**
+  `yarn mercato db migrate`, then `yarn mercato cpq seed-price-adjustments`
+  (rollout toggle + reason dictionary) and `yarn mercato auth sync-role-acls`
+  (`cpq.quotes.adjust_price` grant). Without them writes return `403` and the
+  UI hides the actions. New tenants get all three at initialization.
 - Reps with `cpq.quotes.manage` + `cpq.quotes.adjust_price` can override a
   charge's unit price, take an amount off a charge or give a percentage on a
   charge or line (`/api/cpq/quotes/{quoteId}/price-adjustments`, plus a

@@ -100,6 +100,8 @@ export function allowedAdjustmentTypes(level: AdjustmentLevel, charge?: Pick<Wat
 
 export type LineEligibilityInput = {
   offeringId: string | null
+  /** Product-only lines are eligible too (server: `offeringId || productId`). */
+  productId?: string | null
   configuration?: Record<string, unknown> | null
 }
 
@@ -107,7 +109,7 @@ export type LineEligibilityInput = {
 export function lineAdjustmentBlock(line: LineEligibilityInput, quoteType: string): 'mirror' | 'free_form' | null {
   const mirrored = quoteType !== 'new' && typeof line.configuration?._arcMirroredFromItemId === 'string'
   if (mirrored) return 'mirror'
-  if (!line.offeringId) return 'free_form'
+  if (!line.offeringId && !line.productId) return 'free_form'
   return null
 }
 
@@ -225,4 +227,33 @@ export function parseStoredCharge(raw: unknown): (WaterfallChargeInput & { charg
     standardTotalPrice: num(record.standardTotalPrice) ?? null,
     adjustments,
   }
+}
+
+type ErrorSource = { adjustmentId?: string; code?: string; message?: string }
+export type AdjustmentErrorSourceQuote = {
+  adjustmentErrors?: ErrorSource[]
+  validationResult?: { errors?: ErrorSource[] } | null
+  lines?: Array<{ validationErrors?: ErrorSource[] | null; charges?: Array<{ adjustmentErrors?: ErrorSource[] }> }>
+}
+
+/**
+ * adjustmentId → first error code. Recalculation responses carry
+ * `adjustmentErrors`; a plain GET carries only the persisted validation
+ * errors (code in `message`), which is where target-missing errors live.
+ */
+export function collectAdjustmentErrors(quote: AdjustmentErrorSourceQuote | null | undefined): Map<string, string> {
+  const map = new Map<string, string>()
+  const add = (entries: ErrorSource[] | null | undefined) => {
+    for (const entry of entries ?? []) {
+      const code = entry.code ?? entry.message
+      if (entry.adjustmentId && code && !map.has(entry.adjustmentId)) map.set(entry.adjustmentId, code)
+    }
+  }
+  add(quote?.adjustmentErrors)
+  for (const line of quote?.lines ?? []) {
+    for (const charge of line.charges ?? []) add(charge.adjustmentErrors)
+    add(line.validationErrors)
+  }
+  add(quote?.validationResult?.errors)
+  return map
 }

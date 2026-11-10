@@ -49,7 +49,8 @@ export function PriceAdjustmentsPanel({ quoteId, items, total, lines, currency, 
   const ui = usePriceAdjustmentUi()
   const lineById = React.useMemo(() => new Map(lines.map((line) => [line.lineId, line])), [lines])
   const accessText = useAccessReasonText()
-  if (!ui || ui.access.reason === 'disabled') return null
+  // Toggle off: stored adjustments still price the quote, so keep them visible (read-only).
+  if (!ui || (ui.access.reason === 'disabled' && items.length === 0)) return null
 
   return (
     <div className="rounded-lg border bg-card" data-testid="cpq-price-adjustments-panel">

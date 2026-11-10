@@ -79,6 +79,7 @@ type ArcLineSource = {
 type QuoteLine = {
   lineId: string
   offeringId: string | null
+  productId?: string | null
   offeringName: string
   offeringType: string | null
   parentLineId: string | null

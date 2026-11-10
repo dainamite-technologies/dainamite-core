@@ -177,8 +177,17 @@ and `cpq_quote_configurations.pricing_revision int default 0`. Rollback drops
 both. No data migration: existing quotes keep their stored charges; list /
 standard prices are derived for responses until the next saved recalculation.
 
-**Write serialization.** Every pricing write (line add / update / remove, saved
-recalculation, clone, status change, adjustment CRUD, order conversion) runs in
+**Upgrade steps for existing tenants (required).** The toggle, the reason
+dictionary and the role grant are created by `setup.ts` at tenant
+initialization only. After `yarn mercato db migrate`, run
+`yarn mercato cpq seed-price-adjustments` (idempotent; `--tenant` / `--org`
+to target one) and `yarn mercato auth sync-role-acls`. Skipping them leaves the
+feature fail-closed: writes `403`, actions hidden, and every reason
+`REASON_NOT_FOUND` if the toggle is switched on by hand.
+
+**Write serialization.** Every pricing write (line add / update / remove, ARC
+target detach, saved recalculation, clone, status change, adjustment CRUD,
+order conversion) runs in
 a transaction that locks the quote row (`SELECT … FOR UPDATE`) and bumps
 `pricing_revision`. Adjustment writes accept `expectedRevision` and return
 `409 STALE_REVISION` on mismatch.

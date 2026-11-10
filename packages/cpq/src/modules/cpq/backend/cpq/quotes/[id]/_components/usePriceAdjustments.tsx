@@ -10,6 +10,8 @@ import {
   adjustmentAccess,
   adjustmentErrorCode,
   canDeleteInvalidAdjustment,
+  collectAdjustmentErrors,
+  type AdjustmentErrorSourceQuote,
   type AdjustmentTarget,
 } from '../../../../../lib/priceAdjustmentView'
 import { PriceAdjustmentDialog, type AdjustmentReason, type ExistingAdjustment } from './PriceAdjustmentDialog'
@@ -72,16 +74,7 @@ export function usePriceAdjustments<Q extends ControllerQuote>({ quote, quoteTyp
 
   const reasons = React.useMemo(() => list?.reasons ?? [], [list])
   const reasonLabels = React.useMemo(() => Object.fromEntries(reasons.map((reason) => [reason.value, reason.label])), [reasons])
-  const errorsById = React.useMemo(() => {
-    const map = new Map<string, string>()
-    for (const error of quote?.adjustmentErrors ?? []) if (!map.has(error.adjustmentId)) map.set(error.adjustmentId, error.code)
-    for (const line of quote?.lines ?? []) for (const charge of line.charges) {
-      for (const error of (charge as { adjustmentErrors?: Array<{ adjustmentId: string; code: string }> }).adjustmentErrors ?? []) {
-        if (!map.has(error.adjustmentId)) map.set(error.adjustmentId, error.code)
-      }
-    }
-    return map
-  }, [quote])
+  const errorsById = React.useMemo(() => collectAdjustmentErrors(quote as AdjustmentErrorSourceQuote | null), [quote])
 
   const accessInput = {
     enabled: list ? list.enabled : null,

@@ -33,6 +33,14 @@ export function adjustmentSnapshot(row: CpqQuotePriceAdjustment) {
     updatedAt: row.updatedAt.toISOString(), deletedAt: row.deletedAt?.toISOString() ?? null, isActive: row.isActive }
 }
 export type AdjustmentSnapshot = ReturnType<typeof adjustmentSnapshot>
+
+type OverlapKey = { id: string; level: string; quoteLineId: string; chargeCode?: string | null; chargeTypeFilter?: string | null }
+/** Same level and target; line filters overlap when either covers all charges or both match. */
+export function adjustmentsOverlap(a: OverlapKey, b: OverlapKey): boolean {
+  if (a.id === b.id || a.level !== b.level || a.quoteLineId !== b.quoteLineId) return false
+  if (a.level === 'charge') return (a.chargeCode ?? null) === (b.chargeCode ?? null)
+  return !a.chargeTypeFilter || !b.chargeTypeFilter || a.chargeTypeFilter === b.chargeTypeFilter
+}
 export interface AdjustmentWriteResult {
   adjustment: AdjustmentSnapshot
   before: AdjustmentSnapshot | null
@@ -104,7 +112,9 @@ export class CpqAdjustmentService {
       await this.assertMutable(em, quote, scope)
       await this.requireReason(em, parsed.reasonCode, scope)
       await this.requireTarget(em, quote, parsed.quoteLineId, scope)
-      const row = em.create(CpqQuotePriceAdjustment, { ...scope, id: randomUUID(), quoteConfigurationId: quote.id,
+      const id = randomUUID()
+      await this.rejectOverlap(em, quote, { id, ...parsed }, scope)
+      const row = em.create(CpqQuotePriceAdjustment, { ...scope, id, quoteConfigurationId: quote.id,
         quoteId: quote.quoteId, ...this.values(parsed), createdByUserId: actor })
       return this.save(em, quote, row, null, scope, true)
     })
@@ -120,6 +130,7 @@ export class CpqAdjustmentService {
       await this.requireTarget(em, quote, row.quoteLineId, scope)
       const merged = cpqPriceAdjustmentInputSchema.parse({ ...adjustmentInput(row), ...parsed })
       if (merged.reasonCode !== row.reasonCode) await this.requireReason(em, merged.reasonCode, scope)
+      await this.rejectOverlap(em, quote, { id: row.id, ...merged }, scope)
       em.assign(row, { ...this.values(merged), updatedByUserId: actor, updatedAt: new Date() })
       return this.save(em, quote, row, before, scope, true)
     })
@@ -192,6 +203,18 @@ export class CpqAdjustmentService {
     const line = await findOneWithDecryption(em, CpqQuoteLineConfiguration, { quoteConfigurationId: quote.id, quoteLineId, ...scope, deletedAt: null }, undefined, scope)
     if (!line) throw new QuotingError(404, 'Quote line not found')
     if (!(line.offeringId || line.productId) || isArcMirrorLine(line.configuration, quote.quoteType)) throw new QuotingError(422, 'LINE_NOT_ELIGIBLE')
+  }
+
+  /**
+   * Refuse overlaps against every stored row, valid or not: an overlap hidden
+   * behind a currently-invalid row would start applying once that row is
+   * deleted, changing the price of a submitted quote. Runs before any mutation.
+   */
+  private async rejectOverlap(em: EntityManager, quote: CpqQuoteConfiguration, candidate: Parameters<typeof adjustmentsOverlap>[0], scope: TenantScope) {
+    const stored = await loadQuoteAdjustments(em, quote.id, scope)
+    if (stored.some((other) => adjustmentsOverlap(candidate, other))) {
+      throw new QuotingError(422, 'ADJUSTMENT_OVERLAP', undefined, { code: 'ADJUSTMENT_OVERLAP', adjustmentId: candidate.id })
+    }
   }
 
   private async requireReason(em: EntityManager, code: string, scope: TenantScope) {

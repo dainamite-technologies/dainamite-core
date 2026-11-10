@@ -1,5 +1,5 @@
 import {
-  adjustmentAccess, adjustmentErrorCode, allowedAdjustmentTypes, buildAdjustmentDraft, canDeleteInvalidAdjustment, discountDepth, formatDepth, parseStoredCharge, toAdjustmentPatch,
+  adjustmentAccess, adjustmentErrorCode, collectAdjustmentErrors, allowedAdjustmentTypes, buildAdjustmentDraft, canDeleteInvalidAdjustment, discountDepth, formatDepth, parseStoredCharge, toAdjustmentPatch,
   lineAdjustmentBlock, lineWaterfallTotals, waterfallRows,
 } from '../priceAdjustmentView'
 import { TERMINAL_STATUSES } from '../../services/types'
@@ -70,6 +70,7 @@ describe('eligibility and access', () => {
     expect(lineAdjustmentBlock({ offeringId: 'o', configuration: { _arcMirroredFromItemId: 'i' } }, 'amend')).toBe('mirror')
     expect(lineAdjustmentBlock({ offeringId: 'o', configuration: { _arcMirroredFromItemId: 'i' } }, 'new')).toBeNull()
     expect(lineAdjustmentBlock({ offeringId: null }, 'new')).toBe('free_form')
+    expect(lineAdjustmentBlock({ offeringId: null, productId: 'p1' }, 'new')).toBeNull()
     expect(lineAdjustmentBlock({ offeringId: 'o', configuration: {} }, 'renew')).toBeNull()
   })
 
@@ -132,5 +133,20 @@ describe('parseStoredCharge', () => {
   })
   it.each([null, 'x', { chargeType: 'mrc' }, { chargeType: 'other', unitPrice: 1 }])('rejects %j', (raw) => {
     expect(parseStoredCharge(raw)).toBeNull()
+  })
+})
+
+describe('collectAdjustmentErrors', () => {
+  it('reads recalculation errors, charge errors and persisted validation errors (after reload)', () => {
+    const map = collectAdjustmentErrors({
+      adjustmentErrors: [{ adjustmentId: 'a1', code: 'ABOVE_STANDARD' }],
+      lines: [{ charges: [{ adjustmentErrors: [{ adjustmentId: 'a1', code: 'CURRENCY_MISMATCH' }, { adjustmentId: 'a2', code: 'ADJUSTMENT_OVERLAP' }] }],
+        validationErrors: [{ adjustmentId: 'a3', message: 'ADJUSTMENT_TARGET_MISSING' }, { message: 'Port size is required' }] }],
+      validationResult: { errors: [{ adjustmentId: 'a4', message: 'TARGET_AMBIGUOUS' }] },
+    })
+    expect(Object.fromEntries(map)).toEqual({ a1: 'ABOVE_STANDARD', a2: 'ADJUSTMENT_OVERLAP', a3: 'ADJUSTMENT_TARGET_MISSING', a4: 'TARGET_AMBIGUOUS' })
+  })
+  it('is empty for a missing quote', () => {
+    expect(collectAdjustmentErrors(null).size).toBe(0)
   })
 })

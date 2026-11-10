@@ -7,7 +7,7 @@ import { withQuotePricingWrite } from '../priceAdjustments/quotePricingWrite'
 /** Real identity maps, no database: only transaction SQL/reads are stubbed. */
 it.each([false, true])('keeps preloaded parent entities and pending writes isolated (failure=%s)', async (fail) => {
   const orm = await MikroORM.init({ entities: [CpqQuoteConfiguration, CpqQuoteLineConfiguration],
-    dbName: 'cpq_isolation_probe', connect: false, metadataProvider: ReflectMetadataProvider })
+    dbName: 'cpq_isolation_probe', metadataProvider: ReflectMetadataProvider })
   const parent = orm.em.fork({ clear: true })
   const scope = { tenantId: '11111111-1111-4111-8111-111111111111', organizationId: '22222222-2222-4222-8222-222222222222' }
   const quoteId = '33333333-3333-4333-8333-333333333333'

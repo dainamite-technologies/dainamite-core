@@ -17,8 +17,8 @@ Engine: om-auto-create-pr-loop (steps: 22, --loop: no)
 | 1 | 1.5-review-fix | Fix foundation review findings | inline | done | 55f7cd8 |
 | 1 | 1.6 | Quote transaction boundary | inline | done | be4cb81 |
 | 1 | 1.7 | Integrate adjustment pricing | inline | done | db4808a |
-| 1 | 1.7-review-fix | Isolate quote transaction identity maps | inline | done | this commit |
-| 2 | 2.1 | Undoable commands | inline | todo | — |
+| 1 | 1.7-review-fix | Isolate quote transaction identity maps | inline | done | bfeb322 |
+| 2 | 2.1 | Undoable commands | inline | done | this commit |
 | 2 | 2.2 | Adjustment CRUD routes | inline | todo | — |
 | 2 | 2.3 | Draft preview | inline | todo | — |
 | 2 | 2.4 | ACL and reason dictionary | inline | todo | — |
@@ -104,3 +104,5 @@ Migration generation: `yarn mercato db generate` scans only local app modules; u
 Transaction boundary: explicit transaction EM flows through quote item writes, saved recalculation, clone, status and conversion. Scoped pessimistic row lock/refresh and revision increment share one helper. 677 CPQ tests pass. DB-backed two-writer tests remain unexercised because no database is available; do not claim concurrency verified until integration QA runs.
 
 1.7-review-fix. **Isolate quote transaction identity maps** — fresh clear fork with context resolution disabled; transactional clear:true; no propagation into caller identity map. Real-ORM no-DB success/failure regression and683 CPQ tests pass. DB concurrency remains unverified.
+
+Commands/service: authenticated actor/scope, explicit immutable-feature authorization (including undo), persisted audited before/after snapshots, stale undo refusal, active reason checks on create/reason change, tenant feature toggle gate, status/order lock, invalid/overlap/revision checks. 698 CPQ tests pass; package typecheck pass. Added required feature_toggles dependency and verified generated command loaders register all three commands. Root typecheck found obsolete test-only connect:false option; removed it (MikroORM v7 initializes lazily).

@@ -166,6 +166,7 @@ export interface PricingSummary extends Partial<PricingWaterfallSummary> {
 }
 
 export interface QuoteResult {
+  adjustmentErrors?: import('../data/price-adjustments').AdjustmentError[]
   pricingRevision?: number
   id: string
   quoteId: string

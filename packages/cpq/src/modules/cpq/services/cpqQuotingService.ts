@@ -1,3 +1,4 @@
+import type { PriceAdjustment } from '../data/price-adjustments'
 import { withAtomicFlush } from '@open-mercato/shared/lib/commands/flush'
 import { loadQuoteAdjustments } from './priceAdjustments/loadQuoteAdjustments'
 import { resolveManualAdjustments } from './priceAdjustments/resolveManualAdjustments'
@@ -825,6 +826,16 @@ export class DefaultCpqQuotingService {
       (status, message) => new QuotingError(status, message), expectedRevision)
   }
 
+  /** Called by adjustment commands that already own the quote lock/revision. */
+  async recalculateLockedQuote(
+    em: EntityManager, quote: CpqQuoteConfiguration, scope: TenantScope,
+    save = true, adjustments?: PriceAdjustment[],
+  ): Promise<QuoteResult> {
+    const salesQuote = await this.loadSalesQuote(em, quote.quoteId, scope)
+    const config = save ? quote : { ...quote } as CpqQuoteConfiguration
+    return this.recalculateInternal(em, config, salesQuote, scope, save, adjustments)
+  }
+
   // ─── Internal: Recalculate ─────────────────────────────────────
 
   private async recalculateInternal(
@@ -833,6 +844,7 @@ export class DefaultCpqQuotingService {
     salesQuote: SalesQuote,
     scope: TenantScope,
     save: boolean,
+    draftAdjustments?: PriceAdjustment[],
   ): Promise<QuoteResult> {
     const lineConfigs = await em.find(CpqQuoteLineConfiguration, {
       quoteConfigurationId: cpqConfig.id,
@@ -927,7 +939,7 @@ export class DefaultCpqQuotingService {
       computedLines.push({ lineConfig, charges, nrcTotal, mrcTotal, usageEstimates, usageTotalEstimated, validationErrors, isConfigured })
 
     }
-    const adjustments = await loadQuoteAdjustments(em, cpqConfig.id, scope)
+    const adjustments = draftAdjustments ?? await loadQuoteAdjustments(em, cpqConfig.id, scope)
     const adjusted = resolveManualAdjustments(computedLines.map(({ lineConfig, charges }) => ({
       lineId: lineConfig.quoteLineId, parentLineId: lineConfig.parentLineId ?? null,
       enginePriced: !!(lineConfig.offeringId || lineConfig.productId),
@@ -1044,7 +1056,9 @@ export class DefaultCpqQuotingService {
       await em.flush()
     }
 
-    return this.buildQuoteResultFromComputed(em, cpqConfig, salesQuote, computedLines, validationResult, pricingSummary)
+    const result = await this.buildQuoteResultFromComputed(em, cpqConfig, salesQuote, computedLines, validationResult, pricingSummary)
+    result.adjustmentErrors = adjusted.errors
+    return result
   }
 
   // ─── Helpers ───────────────────────────────────────────────────

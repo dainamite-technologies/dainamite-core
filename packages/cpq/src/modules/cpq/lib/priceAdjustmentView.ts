@@ -199,3 +199,30 @@ export function adjustmentErrorCode(status: number, body: unknown): string {
   if (status === 409) return 'ADJUSTMENT_LOCKED'
   return typeof record.error === 'string' ? record.error : 'UNKNOWN'
 }
+
+/** Narrow a stored charge jsonb (subscription / order item) to the waterfall shape; null when unusable. */
+export function parseStoredCharge(raw: unknown): (WaterfallChargeInput & { chargeName: string; quantity: number | null }) | null {
+  if (!raw || typeof raw !== 'object') return null
+  const record = raw as Record<string, unknown>
+  const num = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) ? value : undefined)
+  const chargeType = record.chargeType === 'nrc' || record.chargeType === 'mrc' || record.chargeType === 'usage' ? record.chargeType : null
+  const unitPrice = num(record.unitPrice)
+  if (!chargeType || unitPrice === undefined) return null
+  const adjustments = Array.isArray(record.adjustments)
+    ? (record.adjustments as Array<Record<string, unknown>>).filter((entry) =>
+      entry && typeof entry === 'object' && typeof entry.ruleType === 'string' && num(entry.unitPriceAfter) !== undefined && num(entry.delta) !== undefined) as unknown as WaterfallChargeInput['adjustments']
+    : null
+  return {
+    chargeName: typeof record.chargeName === 'string' ? record.chargeName : typeof record.chargeCode === 'string' ? record.chargeCode : '—',
+    chargeType,
+    pricingMethod: typeof record.pricingMethod === 'string' ? record.pricingMethod : null,
+    unitPrice,
+    quantity: num(record.quantity) ?? null,
+    totalPrice: num(record.totalPrice) ?? null,
+    listUnitPrice: num(record.listUnitPrice),
+    listTotalPrice: num(record.listTotalPrice) ?? null,
+    standardUnitPrice: num(record.standardUnitPrice),
+    standardTotalPrice: num(record.standardTotalPrice) ?? null,
+    adjustments,
+  }
+}

@@ -12,6 +12,7 @@ import {
   type OrderCpqStatus,
 } from '../../../../components/statusMaps'
 import { StatusPath } from '../../../../components/StatusPath'
+import { DepthBadge, PriceWaterfall } from '../../../../components/PriceWaterfall'
 
 // ─── Types ───────────────────────────────────────────────────────
 
@@ -24,7 +25,7 @@ type ArcLineSource = {
 }
 
 type TierBreakdownEntry = { tier: number; from: number; to: number; pricePerUnit: number; quantity: number; subtotal: number }
-type RuleAdjustment = { ruleCode: string; ruleName: string; ruleType: string; value: number; unitPriceBefore: number; unitPriceAfter: number; delta: number }
+type RuleAdjustment = { ruleCode: string; ruleName: string; ruleType: string; value: number; unitPriceBefore: number; unitPriceAfter: number; delta: number; origin?: 'rule' | 'manual'; adjustmentId?: string; reasonCode?: string }
 
 type ResolvedCharge = {
   chargeName?: string
@@ -36,6 +37,15 @@ type ResolvedCharge = {
   note?: string | null
   breakdown?: { tiers: TierBreakdownEntry[] } | null
   adjustments?: RuleAdjustment[] | null
+  listUnitPrice?: number
+  listTotalPrice?: number | null
+  standardUnitPrice?: number
+  standardTotalPrice?: number | null
+}
+
+/** Order lines carry the quote's stored waterfall verbatim (no recalculation at conversion). */
+function toWaterfallCharge(c: ResolvedCharge) {
+  return { ...c, chargeType: (c.chargeType ?? 'mrc') as 'nrc' | 'mrc' | 'usage', unitPrice: c.unitPrice ?? 0, totalPrice: c.totalPrice ?? null }
 }
 
 type OrderLineResult = {
@@ -84,19 +94,6 @@ const ARC_BADGE_VARIANTS: Record<string, 'brand' | 'success' | 'error'> = {
   cancel: 'error',
 }
 
-const RULE_TYPE_LABELS: Record<string, string> = {
-  discount_percent: '% discount',
-  discount_absolute: 'fixed discount',
-  surcharge_percent: '% surcharge',
-  surcharge_absolute: 'fixed surcharge',
-  price_override: 'override',
-}
-
-function fmtRuleValue(adj: RuleAdjustment, currency?: string): string {
-  if (adj.ruleType === 'discount_percent' || adj.ruleType === 'surcharge_percent') return `${adj.value}%`
-  if (currency) return fmt(adj.value, currency)
-  return String(adj.value)
-}
 
 // ─── Constants ───────────────────────────────────────────────────
 
@@ -692,7 +689,8 @@ function ChargeBreakdown({ line, lineIdx, currency, pricingDetail, onTogglePrici
         <tr className="text-muted-foreground">
           <th className="text-left py-1 font-medium">Charge</th>
           <th className="text-left py-1 font-medium">Type</th>
-          <th className="text-right py-1 font-medium">Unit Price</th>
+          <th className="text-right py-1 font-medium">List</th>
+          <th className="text-right py-1 font-medium">Offer</th>
           <th className="text-right py-1 font-medium">Qty</th>
           <th className="text-right py-1 font-medium">Total</th>
           <th className="w-8" />
@@ -707,7 +705,13 @@ function ChargeBreakdown({ line, lineIdx, currency, pricingDetail, onTogglePrici
               <tr className="border-t border-dashed border-border/50">
                 <td className="py-1">{c.chargeName ?? '—'}</td>
                 <td className="py-1 uppercase">{c.chargeType ?? '—'}</td>
-                <td className="py-1 text-right font-mono">{c.unitPrice != null ? fmt(c.unitPrice, currency) : '—'}</td>
+                <td className="py-1 text-right font-mono text-muted-foreground">{c.listUnitPrice != null ? fmt(c.listUnitPrice, currency) : c.unitPrice != null ? fmt(c.unitPrice, currency) : '—'}</td>
+                <td className="py-1 text-right font-mono">
+                  <span className="inline-flex items-center gap-1">
+                    <DepthBadge before={c.listUnitPrice ?? c.unitPrice} after={c.unitPrice} />
+                    {c.unitPrice != null ? fmt(c.unitPrice, currency) : '—'}
+                  </span>
+                </td>
                 <td className="py-1 text-right font-mono">{c.quantity ?? '—'}</td>
                 <td className="py-1 text-right font-mono">{c.totalPrice != null ? fmt(c.totalPrice, currency) : c.note ?? '—'}</td>
                 <td className="py-1 text-center">
@@ -726,7 +730,7 @@ function ChargeBreakdown({ line, lineIdx, currency, pricingDetail, onTogglePrici
               </tr>
               {isDetailOpen && (
                 <tr>
-                  <td colSpan={6} className="pb-3 pt-1">
+                  <td colSpan={7} className="pb-3 pt-1">
                     <div className="rounded border bg-background p-3 space-y-3 text-xs">
                       <div className="flex items-center justify-between">
                         <span className="font-semibold text-sm">Pricing Details — {c.chargeName}</span>
@@ -767,37 +771,10 @@ function ChargeBreakdown({ line, lineIdx, currency, pricingDetail, onTogglePrici
                         </div>
                       )}
 
-                      {c.adjustments && c.adjustments.length > 0 && (
-                        <div>
-                          <div className="font-medium text-muted-foreground mb-1">Applied Price Rules</div>
-                          <table className="w-full">
-                            <thead>
-                              <tr className="text-muted-foreground">
-                                <th className="text-left py-0.5 font-medium">Rule</th>
-                                <th className="text-left py-0.5 font-medium">Type</th>
-                                <th className="text-right py-0.5 font-medium">Value</th>
-                                <th className="text-right py-0.5 font-medium">Before</th>
-                                <th className="text-right py-0.5 font-medium">After</th>
-                                <th className="text-right py-0.5 font-medium">Delta</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {c.adjustments.map((adj, ai) => (
-                                <tr key={ai} className="border-t border-border/30">
-                                  <td className="py-0.5">{adj.ruleName}</td>
-                                  <td className="py-0.5">{RULE_TYPE_LABELS[adj.ruleType] ?? adj.ruleType}</td>
-                                  <td className="py-0.5 text-right font-mono">{fmtRuleValue(adj, currency)}</td>
-                                  <td className="py-0.5 text-right font-mono">{fmt(adj.unitPriceBefore, currency)}</td>
-                                  <td className="py-0.5 text-right font-mono">{fmt(adj.unitPriceAfter, currency)}</td>
-                                  <td className={`py-0.5 text-right font-mono ${adj.delta < 0 ? 'text-destructive' : adj.delta > 0 ? 'text-status-success-text' : ''}`}>
-                                    {adj.delta > 0 ? '+' : ''}{fmt(adj.delta, currency)}
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      )}
+                      <div>
+                        <div className="font-medium text-muted-foreground mb-1">Price waterfall</div>
+                        <PriceWaterfall charge={toWaterfallCharge(c)} currency={currency} />
+                      </div>
 
                       <div className="flex items-center justify-between pt-1 border-t text-sm font-semibold">
                         <span>Final Total</span>

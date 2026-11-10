@@ -1,5 +1,5 @@
 import {
-  adjustmentAccess, adjustmentErrorCode, allowedAdjustmentTypes, buildAdjustmentDraft, canDeleteInvalidAdjustment, discountDepth, formatDepth, toAdjustmentPatch,
+  adjustmentAccess, adjustmentErrorCode, allowedAdjustmentTypes, buildAdjustmentDraft, canDeleteInvalidAdjustment, discountDepth, formatDepth, parseStoredCharge, toAdjustmentPatch,
   lineAdjustmentBlock, lineWaterfallTotals, waterfallRows,
 } from '../priceAdjustmentView'
 import { TERMINAL_STATUSES } from '../../services/types'
@@ -120,5 +120,17 @@ describe('request bodies', () => {
     [500, null, 'UNKNOWN'],
   ])('maps %s %j → %s', (status, body, code) => {
     expect(adjustmentErrorCode(status, body)).toBe(code)
+  })
+})
+
+describe('parseStoredCharge', () => {
+  it('keeps waterfall fields and well-formed adjustments, drops malformed ones', () => {
+    const parsed = parseStoredCharge({ chargeCode: 'fee', chargeType: 'mrc', unitPrice: 80, totalPrice: 80, quantity: 1, listUnitPrice: 100, standardUnitPrice: 90,
+      adjustments: [{ ...manual }, { ruleType: 'x' }, null] })
+    expect(parsed).toMatchObject({ chargeName: 'fee', chargeType: 'mrc', unitPrice: 80, listUnitPrice: 100, standardUnitPrice: 90, quantity: 1 })
+    expect(parsed?.adjustments).toHaveLength(1)
+  })
+  it.each([null, 'x', { chargeType: 'mrc' }, { chargeType: 'other', unitPrice: 1 }])('rejects %j', (raw) => {
+    expect(parseStoredCharge(raw)).toBeNull()
   })
 })

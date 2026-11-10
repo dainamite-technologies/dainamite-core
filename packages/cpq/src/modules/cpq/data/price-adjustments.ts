@@ -32,3 +32,17 @@ export const cpqPriceAdjustmentInputSchema = z.object({
 export const cpqPriceAdjustmentPatchSchema = z.object(adjustmentFields).partial().strict()
 export type PriceAdjustmentInput = z.infer<typeof cpqPriceAdjustmentInputSchema>
 export type PriceAdjustmentPatch = z.infer<typeof cpqPriceAdjustmentPatchSchema>
+
+/** Pure pricing representation; persistence metadata stays outside the resolver. */
+export const resolvedPriceAdjustmentSchema = cpqPriceAdjustmentInputSchema.safeExtend({
+  id: z.string().uuid(),
+  createdByUserId: z.string().uuid().optional(),
+})
+export type PriceAdjustment = z.infer<typeof resolvedPriceAdjustmentSchema>
+export const adjustmentErrorSchema = z.object({
+  adjustmentId: z.string(),
+  quoteLineId: z.string(),
+  chargeCode: z.string().optional(),
+  code: z.enum(['ADJUSTMENT_TARGET_MISSING', 'TARGET_AMBIGUOUS', 'ABOVE_STANDARD', 'CURRENCY_MISMATCH', 'TYPE_NOT_ALLOWED', 'LINE_NOT_ELIGIBLE', 'ADJUSTMENT_OVERLAP']),
+})
+export type AdjustmentError = z.infer<typeof adjustmentErrorSchema>

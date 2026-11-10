@@ -180,6 +180,14 @@ export interface QuoteResult {
 // ─── Resolved charge (extended for v2) ───────────────────────────
 
 export interface RuleAdjustment {
+  adjustmentId?: string
+  class?: 'rep' | 'carried_over'
+  level?: 'charge' | 'line' | 'quote'
+  windowKind?: 'relative' | 'absolute'
+  fromMonth?: number
+  toMonth?: number | null
+  reasonCode?: string
+  createdByUserId?: string
   /** Missing on legacy snapshots. */
   origin?: 'rule' | 'manual'
   ruleCode: string
@@ -213,6 +221,7 @@ export interface ResolvedCharge {
   totalPrice: number | null
   currencyCode: string
   /** Additive waterfall fields; absent on snapshots saved before negotiated pricing. */
+  adjustmentErrors?: import('../data/price-adjustments').AdjustmentError[]
   listUnitPrice?: number
   listTotalPrice?: number | null
   standardUnitPrice?: number

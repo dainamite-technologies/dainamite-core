@@ -11,8 +11,8 @@ Engine: om-auto-create-pr-loop (steps: 22, --loop: no)
 |-------|------|-------|------|--------|--------|
 | 1 | 1.1 | Characterize pricing | inline | done | 73c9553 |
 | 1 | 1.2 | Capture list and standard prices | inline | done | 5c46335 |
-| 1 | 1.3 | Entity and migration | inline | done | this commit |
-| 1 | 1.4 | Manual adjustment resolver | inline | todo | — |
+| 1 | 1.3 | Entity and migration | inline | done | 4bb5bc0 |
+| 1 | 1.4 | Manual adjustment resolver | inline | done | this commit |
 | 1 | 1.5 | Summary math | inline | todo | — |
 | 1 | 1.6 | Quote transaction boundary | inline | todo | — |
 | 1 | 1.7 | Integrate adjustment pricing | inline | todo | — |

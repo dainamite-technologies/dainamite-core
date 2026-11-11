@@ -1,3 +1,4 @@
+import { OrderError } from '../../services/cpqOrderService'
 const addQuoteItem = jest.fn()
 const updateQuoteItem = jest.fn()
 const removeQuoteItem = jest.fn()
@@ -87,5 +88,13 @@ it.each(cases.slice(0, 2))('$name refuses invalid guard-modified fields before w
   runCpqMutationGuards.mockResolvedValue({ ok: true, modifiedPayload: { quantity: 0 }, runAfterSuccess })
   expect((await invoke()).status).toBe(400)
   expect(service).not.toHaveBeenCalled()
+  expect(runAfterSuccess).not.toHaveBeenCalled()
+})
+
+it('returns the invalid adjustment line/code from conversion without running after-success', async () => {
+  convertQuoteToOrder.mockRejectedValueOnce(new OrderError(422, 'ADJUSTMENT_INVALID', { lineId, code: 'ABOVE_STANDARD' }))
+  const response = await convert(request('POST', { quoteId }))
+  expect(response.status).toBe(422)
+  expect(await response.json()).toEqual({ error: 'ADJUSTMENT_INVALID', lineId, code: 'ABOVE_STANDARD' })
   expect(runAfterSuccess).not.toHaveBeenCalled()
 })

@@ -1,3 +1,12 @@
+import { cloneQuoteAdjustments, removeQuoteLineTree } from './priceAdjustments/quoteAdjustmentLifecycle'
+import type { PriceAdjustment } from '../data/price-adjustments'
+import { withAtomicFlush } from '@open-mercato/shared/lib/commands/flush'
+import { loadQuoteAdjustments } from './priceAdjustments/loadQuoteAdjustments'
+import { resolveManualAdjustments } from './priceAdjustments/resolveManualAdjustments'
+import { withChargeWaterfall } from './priceAdjustments/chargeWaterfall'
+import { withQuotePricingWrite } from './priceAdjustments/quotePricingWrite'
+import { emitQuoteWriteEvents, type QuoteWriteEvents } from './priceAdjustments/quotePricingEvents'
+import { computeWaterfallSummary } from './priceAdjustments/pricingSnapshot'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { SalesQuote, SalesQuoteLine } from '@open-mercato/core/modules/sales/data/entities'
 import { CustomerEntity } from '@open-mercato/core/modules/customers/data/entities'
@@ -42,6 +51,7 @@ import {
   arcPricingInputsChanged,
   buildArcMirrorConfiguration,
   isFrozenAmendMirrorLine,
+  isArcMirrorLine,
   stripArcMarkers,
   stripQuoteOnlyArcMarkers,
 } from './arcPriceFreeze'
@@ -178,11 +188,13 @@ export class DefaultCpqQuotingService {
   // ─── Add Quote Item ────────────────────────────────────────────
 
   async addQuoteItem(quoteId: string, item: QuoteItemInput, scope: TenantScope): Promise<QuoteResult> {
-    const em = this.em
+    return this.writeQuote(quoteId, scope, (em, quote) => this.addQuoteItemInTransaction(quoteId, item, scope, em, quote), undefined, undefined, LINE_EVENTS)
+  }
+
+  private async addQuoteItemInTransaction(quoteId: string, item: QuoteItemInput, scope: TenantScope, em: EntityManager, cpqConfig: CpqQuoteConfiguration): Promise<QuoteResult> {
     // ARC markers (`_arc*`) are server-owned — never accept them from callers.
     item = { ...item, configuration: stripArcMarkers(item.configuration) }
 
-    const cpqConfig = await this.loadCpqConfig(em, quoteId, scope)
     const salesQuote = await this.loadSalesQuote(em, cpqConfig.quoteId, scope)
 
     if (TERMINAL_STATUSES.includes(cpqConfig.cpqStatus as CpqStatus)) {
@@ -333,19 +345,23 @@ export class DefaultCpqQuotingService {
 
   // ─── Update Quote Item ─────────────────────────────────────────
 
-  async updateQuoteItem(
+  async updateQuoteItem(quoteId: string,
+    lineId: string,
+    update: { configuration: Record<string, unknown>; quantity?: number; usageEstimates?: Array<{ chargeCode: string; estimatedQuantity: number }>; startDate?: string; termMonths?: number; endDate?: string },
+    scope: TenantScope): Promise<QuoteResult> {
+    return this.writeQuote(quoteId, scope, (em, quote) => this.updateQuoteItemInTransaction(quoteId, lineId, update, scope, em, quote), undefined, undefined, LINE_EVENTS)
+  }
+
+  private async updateQuoteItemInTransaction(
     quoteId: string,
     lineId: string,
     update: { configuration: Record<string, unknown>; quantity?: number; usageEstimates?: Array<{ chargeCode: string; estimatedQuantity: number }>; startDate?: string; termMonths?: number; endDate?: string },
-    scope: TenantScope,
-  ): Promise<QuoteResult> {
-    const em = this.em
+    scope: TenantScope, em: EntityManager, cpqConfig: CpqQuoteConfiguration): Promise<QuoteResult> {
     // ARC markers (`_arc*`) are server-owned: the quote page echoes the line's
     // stored configuration (markers included) back, so drop them here and
     // re-apply the server's own markers below.
     update = { ...update, configuration: stripArcMarkers(update.configuration) }
 
-    const cpqConfig = await this.loadCpqConfig(em, quoteId, scope)
     const salesQuote = await this.loadSalesQuote(em, cpqConfig.quoteId, scope)
 
     if (TERMINAL_STATUSES.includes(cpqConfig.cpqStatus as CpqStatus)) {
@@ -503,9 +519,11 @@ export class DefaultCpqQuotingService {
   // ─── Remove Quote Item ─────────────────────────────────────────
 
   async removeQuoteItem(quoteId: string, lineId: string, scope: TenantScope): Promise<QuoteResult> {
-    const em = this.em
+    return this.writeQuote(quoteId, scope, (em, quote) => this.removeQuoteItemInTransaction(quoteId, lineId, scope, em, quote), undefined, undefined, LINE_EVENTS)
+  }
 
-    const cpqConfig = await this.loadCpqConfig(em, quoteId, scope)
+  private async removeQuoteItemInTransaction(quoteId: string, lineId: string, scope: TenantScope, em: EntityManager, cpqConfig: CpqQuoteConfiguration): Promise<QuoteResult> {
+
     const salesQuote = await this.loadSalesQuote(em, cpqConfig.quoteId, scope)
 
     if (TERMINAL_STATUSES.includes(cpqConfig.cpqStatus as CpqStatus)) {
@@ -522,37 +540,7 @@ export class DefaultCpqQuotingService {
     })
     if (!lineConfig) throw new QuotingError(404, 'Quote line not found')
 
-    const now = new Date()
-    lineConfig.deletedAt = now
-
-    // Soft-delete children
-    const children = await em.find(CpqQuoteLineConfiguration, {
-      parentLineId: lineId,
-      quoteConfigurationId: cpqConfig.id,
-      organizationId: scope.organizationId,
-      tenantId: scope.tenantId,
-      deletedAt: null,
-    })
-    for (const child of children) {
-      child.deletedAt = now
-      // Also soft-delete the SalesQuoteLine
-      const childSalesLine = await em.findOne(SalesQuoteLine, {
-        id: child.quoteLineId,
-        organizationId: scope.organizationId,
-        tenantId: scope.tenantId,
-      })
-      if (childSalesLine) childSalesLine.deletedAt = now
-    }
-
-    // Soft-delete the SalesQuoteLine
-    const salesLine = await em.findOne(SalesQuoteLine, {
-      id: lineId,
-      organizationId: scope.organizationId,
-      tenantId: scope.tenantId,
-    })
-    if (salesLine) salesLine.deletedAt = now
-
-    await em.flush()
+    await removeQuoteLineTree(em, cpqConfig.id, lineConfig, scope)
 
     return this.recalculateInternal(em, cpqConfig, salesQuote, scope, true)
   }
@@ -578,27 +566,46 @@ export class DefaultCpqQuotingService {
   // ─── Recalculate ───────────────────────────────────────────────
 
   async recalculate(quoteId: string, options: { save: boolean }, scope: TenantScope): Promise<QuoteResult> {
-    const em = options.save ? this.em.fork() : this.em
+    if (options.save) {
+      return this.writeQuote(quoteId, scope, (em, quote) => this.recalculateFromConfig(em, quote, scope, true), undefined,
+        (quote) => {
+          if (TERMINAL_STATUSES.includes(quote.cpqStatus as CpqStatus)) throw new QuotingError(409, `Cannot recalculate quote in '${quote.cpqStatus}' status`)
+        })
+    }
+    const cpqConfig = await this.loadCpqConfig(this.em, quoteId, scope)
+    return this.recalculateFromConfig(this.em, { ...cpqConfig } as CpqQuoteConfiguration, scope, false)
+  }
 
-    const cpqConfig = await this.loadCpqConfig(em, quoteId, scope)
+  private async recalculateFromConfig(em: EntityManager, cpqConfig: CpqQuoteConfiguration, scope: TenantScope, save: boolean): Promise<QuoteResult> {
 
     // A terminal quote's stored prices are final (accepted quotes are the
     // basis for order conversion) — a saved recalculation must not move them.
-    if (options.save && TERMINAL_STATUSES.includes(cpqConfig.cpqStatus as CpqStatus)) {
+    if (save && TERMINAL_STATUSES.includes(cpqConfig.cpqStatus as CpqStatus)) {
       throw new QuotingError(409, `Cannot recalculate quote in '${cpqConfig.cpqStatus}' status`)
     }
 
     const salesQuote = await this.loadSalesQuote(em, cpqConfig.quoteId, scope)
 
-    return this.recalculateInternal(em, cpqConfig, salesQuote, scope, options.save)
+    return this.recalculateInternal(em, cpqConfig, salesQuote, scope, save)
   }
 
   // ─── Clone Quote ───────────────────────────────────────────────
 
   async cloneQuote(quoteId: string, scope: TenantScope): Promise<QuoteResult> {
-    const em = this.em
+    const created: { quote?: CpqQuoteConfiguration } = {}
+    const result = await this.writeQuote(quoteId, scope,
+      (em, quote) => this.cloneQuoteInTransaction(quoteId, scope, em, quote, created),
+      undefined, undefined, { pricingCause: 'clone' })
+    // The copy is a new aggregate: its first committed snapshot is a pricing signal.
+    if (created.quote) await emitQuoteWriteEvents(null, created.quote, { pricingCause: 'clone' })
+    return result
+  }
 
-    const original = await this.loadCpqConfig(em, quoteId, scope)
+  private async cloneQuoteInTransaction(
+    quoteId: string, scope: TenantScope, em: EntityManager, original: CpqQuoteConfiguration,
+    created: { quote?: CpqQuoteConfiguration } = {},
+  ): Promise<QuoteResult> {
+
     const originalQuote = await this.loadSalesQuote(em, original.quoteId, scope)
 
     // Generate new quote number
@@ -632,11 +639,13 @@ export class DefaultCpqQuotingService {
 
     // Create new CpqQuoteConfiguration
     const newCpqConfig = em.create(CpqQuoteConfiguration, {
+      id: crypto.randomUUID(),
       organizationId: scope.organizationId,
       tenantId: scope.tenantId,
       quoteId: newSalesQuoteId,
       customerId: original.customerId,
       cpqStatus: 'new',
+      pricingRevision: 1,
       version: original.version + 1,
       parentQuoteId: original.id,
       currencyCode: original.currencyCode,
@@ -645,6 +654,8 @@ export class DefaultCpqQuotingService {
       pricingSummary: emptyPricingSummary(original.currencyCode),
     })
     em.persist(newCpqConfig)
+    created.quote = newCpqConfig
+    await em.flush()
 
     // Copy all lines
     const originalLines = await em.find(CpqQuoteLineConfiguration, {
@@ -739,15 +750,21 @@ export class DefaultCpqQuotingService {
     await em.flush()
 
     // Recalculate the new quote at current rates
+    await cloneQuoteAdjustments(em, original.id, newCpqConfig, lineIdMap, scope)
+    await em.flush()
+
     return this.recalculateInternal(em, newCpqConfig, newSalesQuote, scope, true)
   }
 
   // ─── Transition Status ─────────────────────────────────────────
 
-  async transitionStatus(quoteId: string, targetStatus: string, scope: TenantScope): Promise<QuoteResult> {
-    const em = this.em
+  async transitionStatus(quoteId: string, targetStatus: string, scope: TenantScope, actorUserId: string | null = null): Promise<QuoteResult> {
+    return this.writeQuote(quoteId, scope, (em, quote) => this.transitionStatusInTransaction(quoteId, targetStatus, scope, em, quote),
+      undefined, undefined, { pricingCause: 'recalculate', statusCause: 'manual', actorUserId })
+  }
 
-    const cpqConfig = await this.loadCpqConfig(em, quoteId, scope)
+  private async transitionStatusInTransaction(quoteId: string, targetStatus: string, scope: TenantScope, em: EntityManager, cpqConfig: CpqQuoteConfiguration): Promise<QuoteResult> {
+
     const salesQuote = await this.loadSalesQuote(em, cpqConfig.quoteId, scope)
 
     const currentStatus = cpqConfig.cpqStatus as CpqStatus
@@ -769,7 +786,7 @@ export class DefaultCpqQuotingService {
       targetStatus === 'with_customer'
     const quoteType = cpqConfig.quoteType ?? 'new'
     if (isSubmitForApproval && quoteType !== 'new') {
-      const validation = await this.validateArcQuote(quoteId, scope)
+      const validation = await this.validateArcQuote(quoteId, scope, em)
       if (!validation.ok) {
         throw new QuotingError(
           422,
@@ -791,6 +808,28 @@ export class DefaultCpqQuotingService {
     return this.buildQuoteResult(em, cpqConfig, salesQuote, lines)
   }
 
+  private async writeQuote(
+    quoteId: string,
+    scope: TenantScope,
+    execute: (em: EntityManager, quote: CpqQuoteConfiguration) => Promise<QuoteResult>,
+    expectedRevision?: number,
+    validate?: (quote: CpqQuoteConfiguration) => void,
+    events: QuoteWriteEvents = { pricingCause: 'recalculate' },
+  ): Promise<QuoteResult> {
+    return withQuotePricingWrite(this.em, quoteId, scope, execute,
+      (status, message) => new QuotingError(status, message), expectedRevision, validate, events)
+  }
+
+  /** Called by adjustment commands that already own the quote lock/revision. */
+  async recalculateLockedQuote(
+    em: EntityManager, quote: CpqQuoteConfiguration, scope: TenantScope,
+    save = true, adjustments?: PriceAdjustment[],
+  ): Promise<QuoteResult> {
+    const salesQuote = await this.loadSalesQuote(em, quote.quoteId, scope)
+    const config = save ? quote : { ...quote } as CpqQuoteConfiguration
+    return this.recalculateInternal(em, config, salesQuote, scope, save, adjustments)
+  }
+
   // ─── Internal: Recalculate ─────────────────────────────────────
 
   private async recalculateInternal(
@@ -799,6 +838,7 @@ export class DefaultCpqQuotingService {
     salesQuote: SalesQuote,
     scope: TenantScope,
     save: boolean,
+    draftAdjustments?: PriceAdjustment[],
   ): Promise<QuoteResult> {
     const lineConfigs = await em.find(CpqQuoteLineConfiguration, {
       quoteConfigurationId: cpqConfig.id,
@@ -892,36 +932,71 @@ export class DefaultCpqQuotingService {
 
       computedLines.push({ lineConfig, charges, nrcTotal, mrcTotal, usageEstimates, usageTotalEstimated, validationErrors, isConfigured })
 
-      if (save) {
-        em.assign(lineConfig, {
-          charges: charges as unknown as Array<Record<string, unknown>>,
-          nrcTotal: String(nrcTotal),
-          mrcTotal: String(mrcTotal),
-          usageEstimates: usageEstimates ?? null,
-          usageTotalEstimated: usageTotalEstimated != null ? String(usageTotalEstimated) : null,
-          validationErrors: validationErrors.length > 0 ? validationErrors as unknown as Array<Record<string, unknown>> : null,
-          isConfigured,
-        })
-
-        const salesLine = await em.findOne(SalesQuoteLine, {
-          id: lineConfig.quoteLineId,
-          organizationId: scope.organizationId,
-          tenantId: scope.tenantId,
-        })
-        if (salesLine) {
-          const perInstanceNrc = charges.filter((c) => c.chargeType === 'nrc').reduce((s, c) => s + (c.totalPrice ?? 0), 0)
-          const perInstanceMrc = charges.filter((c) => c.chargeType === 'mrc').reduce((s, c) => s + (c.totalPrice ?? 0), 0)
-          const unitPriceNet = perInstanceNrc + perInstanceMrc
-          em.assign(salesLine, {
-            quantity: String(lineConfig.quantity),
-            unitPriceNet: String(unitPriceNet),
-            unitPriceGross: String(unitPriceNet),
-            totalNetAmount: String(unitPriceNet * lineConfig.quantity),
-            totalGrossAmount: String(unitPriceNet * lineConfig.quantity),
-            updatedAt: new Date(),
-          })
-        }
+    }
+    const adjustments = draftAdjustments ?? await loadQuoteAdjustments(em, cpqConfig.id, scope)
+    const adjusted = resolveManualAdjustments(computedLines.map(({ lineConfig, charges }) => ({
+      lineId: lineConfig.quoteLineId, parentLineId: lineConfig.parentLineId ?? null,
+      enginePriced: !!(lineConfig.offeringId || lineConfig.productId),
+      mirrored: isArcMirrorLine(lineConfig.configuration, cpqConfig.quoteType), charges,
+    })), adjustments, cpqConfig.currencyCode)
+    const adjustedById = new Map(adjusted.lines.map((line) => [line.lineId, line]))
+    const computedIds = new Set(computedLines.map((line) => line.lineConfig.quoteLineId))
+    for (const computed of computedLines) {
+      const { lineConfig } = computed
+      // No adjustments: preserve legacy/frozen snapshots byte-for-byte on disk.
+      if (adjustments.length) computed.charges = adjustedById.get(lineConfig.quoteLineId)!.charges
+      const adjustmentErrors = adjusted.errors.filter((error) => error.quoteLineId === lineConfig.quoteLineId)
+      if (adjustmentErrors.length) {
+        computed.isConfigured = false
+        allValid = false
+        const errors = adjustmentErrors.map((error) => ({ message: error.code, attribute: error.chargeCode, lineId: error.quoteLineId, adjustmentId: error.adjustmentId }))
+        computed.validationErrors.push(...errors)
+        allErrors.push(...errors)
       }
+      Object.assign(computed, computeLineTotals(computed.charges, lineConfig.quantity,
+        lineConfig.usageEstimates?.map((entry) => ({ chargeCode: entry.chargeCode, estimatedQuantity: entry.estimatedQuantity }))))
+      const { charges, nrcTotal, mrcTotal, usageEstimates, usageTotalEstimated, validationErrors, isConfigured } = computed
+      if (save) {
+        await withAtomicFlush(em, [
+          () => {
+            em.assign(lineConfig, {
+              charges: charges as unknown as Array<Record<string, unknown>>,
+              nrcTotal: String(nrcTotal),
+              mrcTotal: String(mrcTotal),
+              usageEstimates: usageEstimates ?? null,
+              usageTotalEstimated: usageTotalEstimated != null ? String(usageTotalEstimated) : null,
+              validationErrors: validationErrors.length > 0 ? validationErrors as unknown as Array<Record<string, unknown>> : null,
+              isConfigured,
+            })
+          },
+          async () => {
+            const salesLine = await em.findOne(SalesQuoteLine, {
+              id: lineConfig.quoteLineId,
+              organizationId: scope.organizationId,
+              tenantId: scope.tenantId,
+            })
+            if (salesLine) {
+              const perInstanceNrc = charges.filter((charge) => charge.chargeType === 'nrc').reduce((sum, charge) => sum + (charge.totalPrice ?? 0), 0)
+              const perInstanceMrc = charges.filter((charge) => charge.chargeType === 'mrc').reduce((sum, charge) => sum + (charge.totalPrice ?? 0), 0)
+              const unitPriceNet = perInstanceNrc + perInstanceMrc
+              em.assign(salesLine, {
+                quantity: String(lineConfig.quantity),
+                unitPriceNet: String(unitPriceNet),
+                unitPriceGross: String(unitPriceNet),
+                totalNetAmount: String(unitPriceNet * lineConfig.quantity),
+                totalGrossAmount: String(unitPriceNet * lineConfig.quantity),
+                updatedAt: new Date(),
+              })
+            }
+          },
+        ])
+      }
+    }
+    // A missing line target must still invalidate the quote (normally removal
+    // soft-deletes its adjustments in the same aggregate transaction).
+    for (const error of adjusted.errors.filter((entry) => !computedIds.has(entry.quoteLineId))) {
+      allValid = false
+      allErrors.push({ message: error.code, attribute: error.chargeCode, lineId: error.quoteLineId, adjustmentId: error.adjustmentId })
     }
 
     const relationshipErrors = await this.validationService.validateRelationships({
@@ -951,6 +1026,10 @@ export class DefaultCpqQuotingService {
 
     // Build pricing summary from freshly computed data (not from stale entity fields)
     const pricingSummary = computePricingSummaryFromComputed(computedLines, cpqConfig.currencyCode)
+    Object.assign(pricingSummary, computeWaterfallSummary(computedLines.map(({ lineConfig, charges }) => ({
+      lineId: lineConfig.quoteLineId, quantity: lineConfig.quantity, termMonths: lineConfig.termMonths,
+      includeInDeal: !isArcMirrorLine(lineConfig.configuration, cpqConfig.quoteType), charges,
+    })), adjustments, cpqConfig.currencyCode))
 
     const validationResult = { valid: allValid, errors: allErrors }
 
@@ -971,7 +1050,9 @@ export class DefaultCpqQuotingService {
       await em.flush()
     }
 
-    return this.buildQuoteResultFromComputed(em, cpqConfig, salesQuote, computedLines, validationResult, pricingSummary)
+    const result = await this.buildQuoteResultFromComputed(em, cpqConfig, salesQuote, computedLines, validationResult, pricingSummary)
+    result.adjustmentErrors = adjusted.errors
+    return result
   }
 
   // ─── Helpers ───────────────────────────────────────────────────
@@ -1087,7 +1168,7 @@ export class DefaultCpqQuotingService {
         mrcTotal: Number(lc.mrcTotal),
         usageEstimates: lc.usageEstimates ?? null,
         usageTotalEstimated: lc.usageTotalEstimated != null ? Number(lc.usageTotalEstimated) : null,
-        charges: (lc.charges ?? []) as unknown as ResolvedCharge[],
+        charges: ((lc.charges ?? []) as unknown as ResolvedCharge[]).map(withChargeWaterfall),
         isConfigured: lc.isConfigured,
         validationErrors: lc.validationErrors as unknown as ValidationError[] ?? null,
         arcSource: pickArcSource(lc, arcSourceMap),
@@ -1097,6 +1178,13 @@ export class DefaultCpqQuotingService {
 
     const finalValidation = validationResult ?? (cpqConfig.validationResult as { valid: boolean; errors: ValidationError[] }) ?? { valid: true, errors: [] }
     const finalPricing = pricingSummary ?? computePricingSummary(lineConfigs, cpqConfig.currencyCode)
+    if (!pricingSummary) {
+      const adjustments = await loadQuoteAdjustments(em, cpqConfig.id, { organizationId: cpqConfig.organizationId, tenantId: cpqConfig.tenantId })
+      Object.assign(finalPricing, computeWaterfallSummary(lines.map((line) => ({
+        lineId: line.lineId, quantity: line.quantity, termMonths: line.termMonths,
+        includeInDeal: !isArcMirrorLine(line.configuration, cpqConfig.quoteType), charges: line.charges,
+      })), adjustments, cpqConfig.currencyCode))
+    }
 
     const { customerName, convertedOrderId } = await resolveQuoteSideData(em, cpqConfig)
 
@@ -1108,6 +1196,7 @@ export class DefaultCpqQuotingService {
       customerName,
       cpqStatus: cpqConfig.cpqStatus,
       version: cpqConfig.version,
+      pricingRevision: cpqConfig.pricingRevision ?? 0,
       parentQuoteId: cpqConfig.parentQuoteId ?? null,
       currencyCode: cpqConfig.currencyCode,
       convertedOrderId,
@@ -1184,7 +1273,7 @@ export class DefaultCpqQuotingService {
         mrcTotal,
         usageEstimates,
         usageTotalEstimated,
-        charges,
+        charges: charges.map(withChargeWaterfall),
         isConfigured,
         validationErrors: validationErrors.length > 0 ? validationErrors : null,
         arcSource: pickArcSource(lc, arcSourceMap),
@@ -1202,6 +1291,7 @@ export class DefaultCpqQuotingService {
       customerName,
       cpqStatus: cpqConfig.cpqStatus,
       version: cpqConfig.version,
+      pricingRevision: cpqConfig.pricingRevision ?? 0,
       parentQuoteId: cpqConfig.parentQuoteId ?? null,
       currencyCode: cpqConfig.currencyCode,
       convertedOrderId,
@@ -1320,6 +1410,7 @@ function aggregateAdjustmentTotals(allCharges: ResolvedCharge[]): { discountTota
   for (const charge of allCharges) {
     if (!charge.adjustments) continue
     for (const adj of charge.adjustments) {
+      if (adj.origin === 'manual') continue
       if (adj.delta < 0) {
         discountTotal += Math.abs(adj.delta) * (charge.quantity ?? 1)
       } else if (adj.delta > 0) {
@@ -1421,8 +1512,13 @@ function computePricingSummaryFromComputed(
   }
 }
 
+const LINE_EVENTS: QuoteWriteEvents = { pricingCause: 'line' }
+
 function emptyPricingSummary(currencyCode: string): Record<string, unknown> {
   return {
+    // A new quote starts with a real baseline hash, so its first priced line is
+    // a pricing change; only pre-feature quotes have no stored hash.
+    snapshotHash: computeWaterfallSummary([], [], currencyCode).snapshotHash,
     nrcTotal: 0,
     mrcTotal: 0,
     usageCharges: [],
@@ -1606,7 +1702,7 @@ declare module './cpqQuotingService' {
     ): Promise<TargetSubscriptionView>
     setCancelMeta(quoteId: string, meta: CancelMetaInput, scope: TenantScope): Promise<QuoteResult>
     setMergeMeta(quoteId: string, meta: MergeMetaInput, scope: TenantScope): Promise<QuoteResult>
-    validateArcQuote(quoteId: string, scope: TenantScope): Promise<ArcQuoteValidationResult>
+    validateArcQuote(quoteId: string, scope: TenantScope, transactionEm?: EntityManager): Promise<ArcQuoteValidationResult>
   }
 }
 
@@ -1970,50 +2066,51 @@ DefaultCpqQuotingService.prototype.detachTargetSubscription = async function (
   scope: TenantScope,
 ): Promise<{ ok: true }> {
   const em = (this as unknown as { em: EntityManager }).em
-  const cpqConfig = await loadCpqConfigStrict(em, quoteId, scope)
-  ensureEditable(cpqConfig)
-
-  const target = await em.findOne(CpqQuoteTargetSubscription, {
-    id: targetId,
-    quoteId: cpqConfig.id,
-    organizationId: scope.organizationId,
-    tenantId: scope.tenantId,
-    deletedAt: null,
-  })
-  if (!target) throw new QuotingError(404, 'Target subscription not found')
-
-  // Drop any quote lines that pointed at this target.
-  const lines = await em.find(CpqQuoteLineConfiguration, {
-    quoteConfigurationId: cpqConfig.id,
-    targetSubscriptionId: target.subscriptionId,
-    organizationId: scope.organizationId,
-    tenantId: scope.tenantId,
-    deletedAt: null,
-  })
-  const now = new Date()
-  for (const line of lines) {
-    line.deletedAt = now
-    const salesLine = await em.findOne(SalesQuoteLine, { id: line.quoteLineId })
-    if (salesLine) salesLine.deletedAt = now
-  }
-
-  target.deletedAt = now
-
-  // Auto-revert merge mode if only one renew target remains.
-  if (target.quoteType === 'renew') {
-    const remaining = await em.find(CpqQuoteTargetSubscription, {
+  // Detaching removes priced lines (rep-added lines may carry negotiated
+  // prices), so it takes the same aggregate lock and revision bump as any
+  // other pricing write and re-prices the remaining lines.
+  await withQuotePricingWrite(em, quoteId, scope, async (tx, cpqConfig) => {
+    const target = await tx.findOne(CpqQuoteTargetSubscription, {
+      id: targetId,
       quoteId: cpqConfig.id,
       organizationId: scope.organizationId,
       tenantId: scope.tenantId,
       deletedAt: null,
-      id: { $ne: target.id },
     })
-    if (remaining.length === 1) {
-      remaining[0].mergeAction = 'standalone'
-    }
-  }
+    if (!target) throw new QuotingError(404, 'Target subscription not found')
 
-  await em.flush()
+    // Drop quote lines that pointed at this target, with their bundle
+    // children, sales lines and price adjustments.
+    const lines = await tx.find(CpqQuoteLineConfiguration, {
+      quoteConfigurationId: cpqConfig.id,
+      targetSubscriptionId: target.subscriptionId,
+      organizationId: scope.organizationId,
+      tenantId: scope.tenantId,
+      deletedAt: null,
+    })
+    for (const line of lines) {
+      if (line.deletedAt) continue
+      await removeQuoteLineTree(tx, cpqConfig.id, line, scope)
+    }
+
+    // Read the remaining renew targets before mutating, so no query runs
+    // between a scalar change and its flush.
+    const remaining = target.quoteType === 'renew'
+      ? await tx.find(CpqQuoteTargetSubscription, {
+        quoteId: cpqConfig.id,
+        organizationId: scope.organizationId,
+        tenantId: scope.tenantId,
+        deletedAt: null,
+        id: { $ne: target.id },
+      })
+      : []
+    await withAtomicFlush(tx, [() => {
+      target.deletedAt = new Date()
+      // Auto-revert merge mode if only one renew target remains.
+      if (remaining.length === 1) remaining[0].mergeAction = 'standalone'
+    }])
+    await this.recalculateLockedQuote(tx, cpqConfig, scope, true)
+  }, (status, message) => new QuotingError(status, message), undefined, ensureEditable, { pricingCause: 'line' })
   return { ok: true }
 }
 
@@ -2110,8 +2207,9 @@ DefaultCpqQuotingService.prototype.validateArcQuote = async function (
   this: DefaultCpqQuotingService,
   quoteId: string,
   scope: TenantScope,
+  transactionEm?: EntityManager,
 ): Promise<ArcQuoteValidationResult> {
-  const em = (this as unknown as { em: EntityManager }).em
+  const em = transactionEm ?? (this as unknown as { em: EntityManager }).em
   const cpqConfig = await loadCpqConfigStrict(em, quoteId, scope)
   const errors: string[] = []
 
@@ -2414,6 +2512,7 @@ async function mapTargetView(
 
 function emptyArcPricingSummary(currencyCode: string): Record<string, unknown> {
   return {
+    snapshotHash: computeWaterfallSummary([], [], currencyCode).snapshotHash,
     nrcTotal: 0,
     mrcTotal: 0,
     usageCharges: [],

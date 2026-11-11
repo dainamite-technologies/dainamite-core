@@ -4,7 +4,7 @@ const runAfterSuccess = jest.fn()
 
 jest.mock('../../../../context', () => ({
   resolveCpqRouteContext: jest.fn().mockResolvedValue({
-    auth: { sub: 'user-1', tenantId: 't-1' },
+    auth: { sub: '77777777-7777-4777-8777-777777777777', tenantId: 't-1' },
     organizationId: 'org-1',
     tenantId: 't-1',
   }),
@@ -55,7 +55,7 @@ describe('POST /api/cpq/quotes/{quoteId}/status — mutation guards', () => {
         mutationPayload: { action: 'transition_status', targetStatus: 'with_customer' },
       },
     )
-    expect(transitionStatus).toHaveBeenCalledWith('cpq-1', 'with_customer', { organizationId: 'org-1', tenantId: 't-1' })
+    expect(transitionStatus).toHaveBeenCalledWith('cpq-1', 'with_customer', { organizationId: 'org-1', tenantId: 't-1' }, '77777777-7777-4777-8777-777777777777')
     expect(runAfterSuccess).toHaveBeenCalledTimes(1)
   })
 

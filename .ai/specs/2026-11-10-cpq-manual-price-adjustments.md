@@ -19,7 +19,7 @@ Sales reps need to set negotiated prices on CPQ quotes; today the engine's price
 | Q4 | Adjustments on ARC mirror lines (Amend / Renew)? | Not allowed until `arc-continuity` (`LINE_NOT_ELIGIBLE`); new `add` lines on ARC quotes are adjustable | `modify` price changes reach CPQ inventory but not billing (amend / renew events carry only added and removed items, `cpqOrderService.ts:1220-1302`); `add` lines reach billing as added items. |
 | Q5 | `discountTotal` | Unchanged (deprecated); new `ruleDiscountTotal` / `manualDiscountTotal` both include line quantity | Today's formula omits the line quantity (`cpqQuotingService.ts:1269-1283`); summing a corrected and an uncorrected figure would be wrong. |
 | Q6 | Calculate-price waterfall fields | Opt-in `includeWaterfall: true` | The public Puffin calculator proxies charges to anonymous visitors (`demo_puffin/api/cloud-pricing-calculator/price/route.ts`); nothing new leaks by default. |
-| Q7 | Rollback lever | Feature toggle `cpq.manual_price_adjustments` gates writes and UI; the resolver keeps applying stored adjustments | Turning writes off must not reset negotiated prices. ⚠ NEEDS HUMAN CONFIRMATION that the `feature_toggles` module supports per-tenant flags (docs-only). |
+| Q7 | Rollback lever | Feature toggle `cpq.manual_price_adjustments` gates writes and UI; the resolver keeps applying stored adjustments | Turning writes off must not reset negotiated prices. Verified in installed Open Mercato 0.9.0: `featureTogglesService.getBoolConfig` resolves tenant overrides; writes fail closed when missing or disabled. |
 
 ## 📝 Problem Statement
 
@@ -288,7 +288,7 @@ type PricingSnapshot = {
 { tenantId, organizationId, ...PricingSnapshot, fromStatus, toStatus, cause: 'manual' | 'auto', actorUserId: string | null, occurredAt }
 ```
 
-`snapshotHash` = SHA-256 of canonical JSON (sorted keys) of: per line (sorted by `lineId`) `quantity` and per charge (sorted by `chargeCode`) list / standard / offer unit and total prices; per adjustment (sorted by `id`) `level`, target, `adjustmentType`, `value`, `currencyCode`, window. Reason fields, authors and timestamps are excluded. Versioning: fields are only added; a breaking change gets a new event id.
+`snapshotHash` = SHA-256 of canonical JSON (sorted keys) of: per line (sorted by `lineId`) `quantity`, normalized `termMonths` horizon and normalized `includeInDeal` eligibility (omitted means true), and per charge (sorted by `chargeCode`) list / standard / offer unit and total prices; per adjustment (sorted by `id`) `level`, target, `adjustmentType`, `value`, `currencyCode`, window. Reason fields, authors and timestamps are excluded. Versioning: fields are only added; a breaking change gets a new event id.
 
 **ACL:** `cpq.quotes.adjust_price` in `acl.ts`; `setup.ts defaultRoleFeatures` for `admin` and `employee`; enforced via route `requireFeatures`.
 

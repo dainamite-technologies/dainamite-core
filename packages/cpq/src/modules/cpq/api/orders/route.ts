@@ -80,7 +80,7 @@ function handleError(err: unknown, context: string) {
     return NextResponse.json({ error: 'Validation error', details: err.issues }, { status: 400 })
   }
   if (isOrderError(err)) {
-    return NextResponse.json({ error: err.message }, { status: err.status })
+    return NextResponse.json({ error: err.message, ...err.details }, { status: err.status })
   }
   const errObj = err as Record<string, unknown>
   if (typeof errObj?.status === 'number' && typeof errObj?.error === 'string') {
@@ -104,7 +104,7 @@ export const openApi: OpenApiRouteDoc = {
         cpqErrorDoc(400, 'Validation error'),
         cpqErrorDoc(404, 'Quote not found'),
         cpqErrorDoc(409, 'Quote cannot be converted in its status or is already converted'),
-        cpqErrorDoc(422, 'Quote has no lines, or blocked by a mutation guard'),
+        cpqErrorDoc(422, 'Quote has no lines or has invalid stored adjustments, or blocked by a mutation guard'),
       ],
     },
     GET: {

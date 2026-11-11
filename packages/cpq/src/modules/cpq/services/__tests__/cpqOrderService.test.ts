@@ -1,7 +1,10 @@
+import { CpqOrderLineConfiguration } from '../../data/entities'
 import { DefaultCpqOrderService, OrderError } from '../cpqOrderService'
 import type { TenantScope } from '../types'
 
 interface MockEm {
+  fork: jest.MockedFunction<() => MockEm>
+  transactional: jest.MockedFunction<(callback: (em: MockEm) => Promise<unknown>) => Promise<unknown>>
   findOne: jest.MockedFunction<(entity: unknown, where: Record<string, unknown>) => Promise<unknown>>
   find: jest.MockedFunction<
     (entity: unknown, where: Record<string, unknown>, options?: Record<string, unknown>) => Promise<unknown[]>
@@ -24,14 +27,19 @@ interface MockNumberGenerator {
 }
 
 function createMockEm(): MockEm {
-  return {
+  const em: MockEm = {
+    fork: jest.fn(),
+    transactional: jest.fn(),
     findOne: jest.fn(),
-    find: jest.fn(),
+    find: jest.fn().mockResolvedValue([]),
     findAndCount: jest.fn(),
     create: jest.fn().mockImplementation((_e, data: Record<string, unknown>) => ({ ...data })),
     persist: jest.fn(),
     flush: jest.fn().mockResolvedValue(undefined),
   }
+  em.fork.mockReturnValue(em)
+  em.transactional.mockImplementation((callback) => callback(em))
+  return em
 }
 
 function createService(): {
@@ -599,5 +607,30 @@ describe('DefaultCpqOrderService.getOrder', () => {
     const result = await service.getOrder('oc1', SCOPE)
     expect(result.lines[0].offeringName).toBe('Configured Item')
     expect(result.lines[0].offeringType).toBeNull()
+  })
+})
+
+
+describe('conversion stored-adjustment baseline', () => {
+  it.each([false, true])('converts valid stored offers and refuses invalid snapshots (invalid=%s)', async (invalid) => {
+    const { em, service } = createService()
+    const charges = [{ chargeCode: 'fee', chargeType: 'mrc', pricingMethod: 'flat', quantity: 1, unitPrice: 80, totalPrice: 80,
+      listUnitPrice: 120, listTotalPrice: 120, standardUnitPrice: 100, standardTotalPrice: 100, currencyCode: 'USD',
+      adjustmentErrors: invalid ? [{ adjustmentId: 'a', quoteLineId: 'line', code: 'ABOVE_STANDARD' }] : [] }]
+    em.findOne.mockResolvedValueOnce({ id: 'quote', quoteId: 'sales', cpqStatus: 'accepted', currencyCode: 'USD', customerId: 'customer', pricingSummary: { nrcTotal: 0, mrcTotal: 80 } })
+      .mockResolvedValueOnce(null) // no existing order
+    em.find.mockResolvedValueOnce([{ quoteLineId: 'line', quantity: 1, action: 'add', nrcTotal: '0', mrcTotal: '80', charges,
+      configuration: { _arcPriceFrozen: true, _arcRepriced: true }, offeringId: null }]).mockResolvedValueOnce([])
+    em.create.mockImplementation((_entity, values: Record<string, unknown>) => ({ createdAt: new Date(), ...values }))
+    if (invalid) {
+      await expect(service.convertQuoteToOrder('quote', SCOPE)).rejects.toMatchObject({ status: 422, message: 'ADJUSTMENT_INVALID', details: { lineId: 'line', code: 'ABOVE_STANDARD' } })
+      expect(em.create).not.toHaveBeenCalled()
+      return
+    }
+    await service.convertQuoteToOrder('quote', SCOPE)
+    expect(em.create).toHaveBeenCalledWith(CpqOrderLineConfiguration, expect.objectContaining({ charges, mrcTotal: '80' }))
+    const orderLine = em.create.mock.calls.find(([entity]) => entity === CpqOrderLineConfiguration)?.[1]
+    expect(orderLine?.configuration).not.toHaveProperty('_arcPriceFrozen')
+    expect(orderLine?.configuration).not.toHaveProperty('_arcRepriced')
   })
 })

@@ -2,6 +2,14 @@ import type { CustomEntitySpec } from '@open-mercato/shared/modules/entities'
 
 const entities: CustomEntitySpec[] = [
   {
+    id: 'cpq:cpq_quote_price_adjustment',
+    label: 'Quote Price Adjustment',
+    description: 'Negotiated charge or line discount on a quote.',
+    labelField: 'reasonCode',
+    showInSidebar: false,
+    fields: [],
+  },
+  {
     id: 'cpq:cpq_product_specification',
     label: 'Product Specification',
     description: 'CPQ product blueprint — defines attributes, dependencies, and relationships.',

@@ -166,6 +166,48 @@ the `@dainamite/cpq` package, per
 
 ## Schema / API changelog (track breaking changes here)
 
+### 2026-11-10 — Manual price adjustments and price waterfall (price adjustments, Phase 1)
+
+Spec: `.ai/specs/2026-11-10-cpq-manual-price-adjustments.md`. Manual:
+`manuals/cpq-price-adjustments.md`.
+
+**Schema (additive).** Migration `Migration20261110213052` adds
+`cpq_quote_price_adjustments` (tenant-scoped, soft-deleted, FK-string ids only)
+and `cpq_quote_configurations.pricing_revision int default 0`. Rollback drops
+both. No data migration: existing quotes keep their stored charges; list /
+standard prices are derived for responses until the next saved recalculation.
+
+**Upgrade steps for existing tenants (required).** The toggle, the reason
+dictionary and the role grant are created by `setup.ts` at tenant
+initialization only. After `yarn mercato db migrate`, run
+`yarn mercato cpq seed-price-adjustments` (idempotent; `--tenant` / `--org`
+to target one) and `yarn mercato auth sync-role-acls`. Skipping them leaves the
+feature fail-closed: writes `403`, actions hidden, and every reason
+`REASON_NOT_FOUND` if the toggle is switched on by hand.
+
+**Write serialization.** Every pricing write (line add / update / remove, ARC
+target detach, saved recalculation, clone, status change, adjustment CRUD,
+order conversion) runs in
+a transaction that locks the quote row (`SELECT … FOR UPDATE`) and bumps
+`pricing_revision`. Adjustment writes accept `expectedRevision` and return
+`409 STALE_REVISION` on mismatch.
+
+**Response shapes (additive).** See the changeset. `discountTotal` keeps its
+old meaning (rule discounts only) for existing consumers; use
+`ruleDiscountTotal` / `manualDiscountTotal` for the split.
+
+**Events.** `cpq.quote.pricing_changed` fires after a committed save whose
+`snapshotHash` changed; `cpq.quote.status_changed` after every committed status
+change (`cause: manual | auto`). Quotes saved before this release have no
+stored hash: their first save records a baseline silently. New and ARC quotes
+start with an empty-quote hash, so their first priced line is a signal.
+`transitionStatus(quoteId, status, scope, actorUserId?)` gained an optional
+actor argument.
+
+**Conversion.** A quote whose stored waterfall contains an invalid manual
+adjustment can no longer be converted (`422 ADJUSTMENT_INVALID` with
+`lineId` / `code`).
+
 ### 2026-11-10 — Quote pricing integrity (price adjustments, Phase 1)
 
 Spec: `.ai/specs/2026-11-10-cpq-quote-pricing-integrity.md`. No schema change.

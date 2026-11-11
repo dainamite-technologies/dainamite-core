@@ -9,6 +9,7 @@ import { DefaultCpqQuotingService } from './services/cpqQuotingService'
 import { DefaultCpqWizardService } from './services/cpqWizardService'
 import { DefaultCpqInventoryService } from './services/cpqInventoryService'
 import { DefaultCpqOrderService } from './services/cpqOrderService'
+import { CpqAdjustmentService } from './services/priceAdjustments/adjustmentService'
 import { DefaultCpqBundleService } from './services/cpqBundleService'
 
 /**
@@ -20,6 +21,11 @@ import { DefaultCpqBundleService } from './services/cpqBundleService'
  */
 export function register(container: AppContainer) {
   container.register({
+    cpqAdjustmentService: asFunction(() => new CpqAdjustmentService({
+      em: container.resolve('em'),
+      quotingService: container.resolve('cpqQuotingService'),
+      featureTogglesService: container.resolve('featureTogglesService'),
+    })).scoped(),
     cpqPricingService: asFunction(({ em }: { em: EntityManager }) => {
       return new DefaultCpqPricingService(em)
     }).scoped().proxy(),

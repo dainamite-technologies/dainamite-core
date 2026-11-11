@@ -11,8 +11,11 @@ import { Dictionary, DictionaryEntry } from '@open-mercato/core/modules/dictiona
 import { CpqOrderConfiguration, CpqQuoteConfiguration, CpqQuoteLineConfiguration, CpqQuotePriceAdjustment } from '../../data/entities'
 import { cpqPriceAdjustmentInputSchema, cpqPriceAdjustmentPatchSchema, type PriceAdjustmentInput, type PriceAdjustmentPatch } from '../../data/price-adjustments'
 import { QuotingError, type DefaultCpqQuotingService } from '../cpqQuotingService'
-import type { QuoteResult, TenantScope } from '../types'
+import { TERMINAL_STATUSES, type CpqStatus, type QuoteResult, type TenantScope } from '../types'
 import { withQuotePricingWrite } from './quotePricingWrite'
+
+/** Quote statuses in which reps may still add / edit / delete manual adjustments. */
+const ADJUSTMENT_MUTABLE_STATUSES: readonly CpqStatus[] = ['new', 'incomplete', 'ready']
 
 
 type Dependencies = {
@@ -164,11 +167,8 @@ export class CpqAdjustmentService {
       const restored = before ? cpqPriceAdjustmentInputSchema.parse(this.inputFromSnapshot(before)) : null
       // Restoring an active row must not create an overlap a rep added since.
       if (restored && before?.isActive && !before.deletedAt) await this.rejectOverlap(em, quote, { id, ...restored }, scope)
-      if (before && restored) em.assign(row, { ...this.values(restored),
-        deletedAt: before.deletedAt ? new Date(before.deletedAt) : null, isActive: before.isActive, updatedByUserId: actor, updatedAt: new Date() })
-      else { row.deletedAt = new Date(); row.isActive = false; row.updatedByUserId = actor; row.updatedAt = new Date() }
       const beforeUndo = adjustmentSnapshot(row)
-      if (before) em.assign(row, { ...this.values(cpqPriceAdjustmentInputSchema.parse(this.inputFromSnapshot(before))),
+      if (before && restored) em.assign(row, { ...this.values(restored),
         deletedAt: before.deletedAt ? new Date(before.deletedAt) : null, isActive: before.isActive, updatedByUserId: actor, updatedAt: new Date() })
       else { row.deletedAt = new Date(); row.isActive = false; row.updatedByUserId = actor; row.updatedAt = new Date() }
       await this.save(em, quote, row, beforeUndo, scope, false)
@@ -234,7 +234,6 @@ export class CpqAdjustmentService {
     const order = await findOneWithDecryption(em, CpqOrderConfiguration, { sourceQuoteId: quote.id, ...scope, deletedAt: null }, undefined, scope)
     const allowed = ADJUSTMENT_MUTABLE_STATUSES.includes(quote.cpqStatus as CpqStatus)
     const invalidException = invalidDelete && !TERMINAL_STATUSES.includes(quote.cpqStatus as CpqStatus)
-    const invalidException = invalidDelete && !['accepted', 'rejected', 'cancelled'].includes(quote.cpqStatus)
     if (order || (!allowed && !invalidException)) throw new QuotingError(409, 'ADJUSTMENT_LOCKED')
   }
 

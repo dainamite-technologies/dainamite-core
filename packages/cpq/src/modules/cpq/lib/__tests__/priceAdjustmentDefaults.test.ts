@@ -28,7 +28,7 @@ it('seeds seven editable reasons idempotently without resetting a disabled rollo
   expect(entries).toHaveLength(7)
   expect(entries[0].label).toBe('Tenant custom label')
   expect(flag.defaultValue).toBe(false)
-  expect(em.upsert).toHaveBeenCalledWith(FeatureToggle, expect.objectContaining({ defaultValue: true }), { onConflictFields: ['identifier'], onConflictAction: 'ignore' })
+  expect(em.upsert).toHaveBeenCalledWith(FeatureToggle, expect.objectContaining({ defaultValue: true, createdAt: expect.any(Date), updatedAt: expect.any(Date) }), { onConflictFields: ['identifier'], onConflictAction: 'ignore' })
 })
 it('declares and grants adjustment permission to both sales roles', () => {
   expect(features.some((entry) => entry.id === 'cpq.quotes.adjust_price')).toBe(true)

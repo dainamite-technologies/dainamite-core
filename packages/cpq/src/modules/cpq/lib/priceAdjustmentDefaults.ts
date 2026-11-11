@@ -9,8 +9,11 @@ import type { TenantScope } from '../services/types'
 export async function seedPriceAdjustmentDefaults(em: EntityManager, scope: TenantScope): Promise<void> {
   // Multiple tenants may initialize concurrently. Ignore an existing global
   // identifier (including disabled/deleted toggles), without resetting its value.
+  // POJO upserts skip entity property initializers, so timestamps must be explicit
+  // (`updated_at` is NOT NULL and only has an onUpdate hook).
+  const now = new Date()
   await em.upsert(FeatureToggle, { identifier: ADJUSTMENT_TOGGLE, name: 'CPQ manual price adjustments',
-    type: 'boolean', defaultValue: true, category: 'CPQ' },
+    type: 'boolean', defaultValue: true, category: 'CPQ', createdAt: now, updatedAt: now },
     { onConflictFields: ['identifier'], onConflictAction: 'ignore' })
   let dictionary = await findOneWithDecryption(em, Dictionary, { ...scope, key: REASON_DICTIONARY }, undefined, scope)
   if (!dictionary) {

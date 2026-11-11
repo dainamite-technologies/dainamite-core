@@ -40,9 +40,6 @@ export const resolvedPriceAdjustmentSchema = z.object({
   id: z.string().uuid(),
   createdByUserId: z.string().uuid().optional(),
 })
-  id: z.string().uuid(),
-  createdByUserId: z.string().uuid().optional(),
-})
 export type PriceAdjustment = z.infer<typeof resolvedPriceAdjustmentSchema>
 export const adjustmentErrorSchema = z.object({
   adjustmentId: z.string(),

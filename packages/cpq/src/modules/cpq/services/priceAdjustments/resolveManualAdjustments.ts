@@ -59,6 +59,9 @@ export function resolveManualAdjustments(
     while (parent && !visited.has(parent)) {
       visited.add(parent); lineage.push(parent); parent = byId.get(parent)?.parentLineId ?? null
     }
+    // Declared before use: `.sort()` below calls it eagerly (a `const` after it would hit the TDZ).
+    const rank = (row: PriceAdjustment) =>
+      row.level === 'charge' ? 0 : row.quoteLineId === line.lineId ? 1 : 2 + lineage.indexOf(row.quoteLineId)
     for (const charge of line.charges) {
       const candidates = adjustments.filter((row) => !invalid.has(row.id) && (
         row.level === 'charge'
@@ -66,10 +69,6 @@ export function resolveManualAdjustments(
           : (row.quoteLineId === line.lineId || lineage.includes(row.quoteLineId)) &&
             (!row.chargeTypeFilter || row.chargeTypeFilter === charge.chargeType)
       )).sort((a, b) => rank(a) - rank(b) || a.id.localeCompare(b.id))
-      const rank = (row: PriceAdjustment) =>
-        row.level === 'charge' ? 0 : row.quoteLineId === line.lineId ? 1 : 2 + lineage.indexOf(row.quoteLineId)
-        return row.level === 'charge' ? 0 : row.quoteLineId === line.lineId ? 1 : 2 + lineage.indexOf(row.quoteLineId)
-      }
       const standard = charge.standardUnitPrice!
       const total = charge.standardTotalPrice
       const valid = candidates.filter((row) => {

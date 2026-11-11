@@ -64,3 +64,11 @@ it('propagates a write failure out of transactional so the database rolls back',
   // the thrown error still rolls this SQL back in the real transaction.
   expect(transaction.flush).toHaveBeenCalledTimes(1)
 })
+it('refuses to run inside an ambient transaction instead of deadlocking on its own lock', async () => {
+  const { root, em } = setup()
+  Object.assign(root, { isInTransaction: () => true })
+  const write = jest.fn()
+  await expect(withQuotePricingWrite(em, 'quote', scope, write, error)).rejects.toThrow('must not run inside an existing transaction')
+  expect(root.fork).not.toHaveBeenCalled()
+  expect(write).not.toHaveBeenCalled()
+})

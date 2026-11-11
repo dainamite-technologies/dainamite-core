@@ -20,6 +20,10 @@ export async function withQuotePricingWrite<T>(
   // Do not inherit managed objects/pending writes or propagate committed state
   // back into the caller's identity map. The returned DTO is authoritative;
   // callers that need fresh entities must reload them in their own context.
+  // The isolated fork opens its own connection. Called from inside another
+  // transaction it could not see that transaction's uncommitted quote, and it
+  // would block forever on a row lock that transaction holds — fail fast.
+  if (em.isInTransaction?.()) throw new Error('withQuotePricingWrite must not run inside an existing transaction')
   const isolated = em.fork({ clear: true, useContext: false })
   const committed: { quote?: CpqQuoteConfiguration; before?: QuoteEventState } = {}
   const result = await isolated.transactional(async (transaction) => {

@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { resolveAuditActor } from '../lib/auditActor'
 import { resolveTranslations } from '@open-mercato/shared/lib/i18n/server'
 import { extractUndoPayload } from '@open-mercato/shared/lib/commands/undo'
 import { registerCommand, type CommandHandler, type CommandRuntimeContext } from '@open-mercato/shared/lib/commands'
@@ -24,13 +25,17 @@ const snapshotSchema = z.object({
 const undoSchema = z.object({ quoteId: id, before: snapshotSchema.nullable(), after: snapshotSchema })
 
 async function context(ctx: CommandRuntimeContext) {
-  const actor = ctx.auth?.sub
+  // RBAC is checked for the authenticated subject (user or API key); the
+  // stored author must be a user id (uuid columns).
+  const subject = ctx.auth?.sub
+  const actor = resolveAuditActor(ctx.auth)
   const tenantId = ctx.organizationScope?.tenantId ?? ctx.auth?.tenantId
   const organizationId = ctx.selectedOrganizationId
-  if (!actor || !tenantId || !organizationId) throw new QuotingError(403, 'An authenticated tenant and organization are required')
+  if (!subject || !tenantId || !organizationId) throw new QuotingError(403, 'An authenticated tenant and organization are required')
+  if (!actor) throw new QuotingError(403, 'Price adjustments require a user or a user-bound API key')
   const scope = { tenantId, organizationId }
   const rbac = ctx.container.resolve<RbacService>('rbacService')
-  if (!(await rbac.userHasAllFeatures(actor, ['cpq.quotes.manage', 'cpq.quotes.adjust_price'], scope))) throw new QuotingError(403, 'Price adjustment permission required')
+  if (!(await rbac.userHasAllFeatures(subject, ['cpq.quotes.manage', 'cpq.quotes.adjust_price'], scope))) throw new QuotingError(403, 'Price adjustment permission required')
   return { actor, scope, service: ctx.container.resolve<CpqAdjustmentService>('cpqAdjustmentService') }
 }
 

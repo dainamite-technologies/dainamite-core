@@ -42,3 +42,13 @@ it('rejects malformed undo data instead of silently succeeding', async () => {
   await expect(deleteAdjustmentCommand.undo!({ input: { quoteId, adjustmentId }, ctx, logEntry: { commandPayload: {} } })).rejects.toMatchObject({ status: 422 })
   expect(service.undo).not.toHaveBeenCalled()
 })
+it('authorizes an API key by its subject but records its owning user; refuses keys without a user', async () => {
+  const { ctx, service, userHasAllFeatures } = setup()
+  const keyCtx = { ...ctx, auth: { sub: 'api_key:k1', userId: actor, tenantId } } as unknown as CommandRuntimeContext
+  await createAdjustmentCommand.execute({ quoteId, adjustment }, keyCtx)
+  expect(userHasAllFeatures).toHaveBeenCalledWith('api_key:k1', ['cpq.quotes.manage', 'cpq.quotes.adjust_price'], { tenantId, organizationId })
+  expect(service.create).toHaveBeenCalledWith(quoteId, adjustment, actor, { tenantId, organizationId })
+  const orphanKey = { ...ctx, auth: { sub: 'api_key:k2', tenantId } } as unknown as CommandRuntimeContext
+  await expect(createAdjustmentCommand.execute({ quoteId, adjustment }, orphanKey)).rejects.toMatchObject({ status: 403 })
+  expect(service.create).toHaveBeenCalledTimes(1)
+})

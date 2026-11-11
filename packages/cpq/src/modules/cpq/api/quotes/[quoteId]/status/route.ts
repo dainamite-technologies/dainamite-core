@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { resolveCpqRouteContext } from '../../../context'
+import { resolveAuditActor } from '../../../../lib/auditActor'
 import { cpqTransitionStatusSchema } from '../../../../data/validators'
 import { resolveQuotingService } from '../../../resolveQuotingService'
 import { handleArcError } from '../../../_helpers/handleArcError'
@@ -31,7 +32,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ quoteId
     if (!guard.ok) return guard.response
 
     const service = resolveQuotingService(ctx)
-    const result = await service.transitionStatus(quoteId, body.targetStatus, scope, ctx.auth.sub ?? null)
+    const result = await service.transitionStatus(quoteId, body.targetStatus, scope, resolveAuditActor(ctx.auth))
     await guard.runAfterSuccess()
     return NextResponse.json(result)
   } catch (err) {

@@ -167,7 +167,11 @@ export class CpqAdjustmentService {
       if (before && restored) em.assign(row, { ...this.values(restored),
         deletedAt: before.deletedAt ? new Date(before.deletedAt) : null, isActive: before.isActive, updatedByUserId: actor, updatedAt: new Date() })
       else { row.deletedAt = new Date(); row.isActive = false; row.updatedByUserId = actor; row.updatedAt = new Date() }
-      await this.save(em, quote, row, adjustmentSnapshot(row), scope, false)
+      const beforeUndo = adjustmentSnapshot(row)
+      if (before) em.assign(row, { ...this.values(cpqPriceAdjustmentInputSchema.parse(this.inputFromSnapshot(before))),
+        deletedAt: before.deletedAt ? new Date(before.deletedAt) : null, isActive: before.isActive, updatedByUserId: actor, updatedAt: new Date() })
+      else { row.deletedAt = new Date(); row.isActive = false; row.updatedByUserId = actor; row.updatedAt = new Date() }
+      await this.save(em, quote, row, beforeUndo, scope, false)
     })
   }
 

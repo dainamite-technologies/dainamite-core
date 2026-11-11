@@ -464,6 +464,31 @@ change keep re-pricing every line.
 **price kept**; after Recalculate its MRC is unchanged. Change one item's
 attribute → only that line's badge disappears and its price updates.
 
+## Removing an existing item on Amend / Renew quotes
+
+On an **Amend** or **Renew** quote, the trash icon on a line that mirrors an
+existing subscription item does **not** delete the line. A confirmation dialog
+explains that the item will be cancelled on the subscription; after you
+confirm, the line stays in the list, greyed out, with a red **remove** badge
+and the old MRC struck through. Its components (for a bundle) are marked for
+removal with it; components this quote added under it are deleted.
+
+The line no longer counts towards the quote's NRC / MRC. In the Pricing Summary
+its old price stays in **Current MRC** and drops out of **New MRC**, so
+replacing a $400 item with a $1,130 one shows **MRC change +$730.00**. When the
+order is activated, the item is terminated on the subscription (its assets are
+cancelled) and the `cpq.subscription.amended` event lists it under
+`removedSubscriptionItemIds`.
+
+Until the quote leaves an editable status, **Restore** on the line brings the
+item back exactly as it is on the subscription (configuration, quantity,
+price). A component can be restored on its own only while its bundle stays.
+Lines the quote added are still deleted outright, without a dialog.
+
+**Checkpoint:** on an Amend quote, remove the existing item → dialog → confirm.
+The line shows **remove**, Current MRC still includes the item, New MRC does not.
+Click **Restore** → the line is back to **modify** with **price kept**.
+
 ## Concurrency safeguards
 
 - **One ARC quote per subscription at a time.** `validateArcQuote` and the attach endpoint reject attaching a sub that is already on a non-terminal ARC quote. Operators must resolve the existing quote first (accept, reject, or cancel). UI surfaces this via a confirm dialog (Scenario 8).

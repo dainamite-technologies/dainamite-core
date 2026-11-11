@@ -64,7 +64,7 @@ sub.click("Amend / Renew /  ─┬─→  ├─ renew (standalone) → extend t
 | Manual | [`manuals/xd-250-arc-flow.md`](../../../../manuals/xd-250-arc-flow.md) — 11 click-by-click operator scenarios |
 | Spec | [`specs/implementation/xd-250-arc-spec.md`](../../../../specs/implementation/xd-250-arc-spec.md) |
 | Migration | `migrations/Migration20260504064621_cpq_arc.ts` |
-| Integration tests | `__integration__/TC-CPQ-ARC-001.spec.ts` … `011.spec.ts` (cover amend, multi-target amend, merge renew, cancel + ETF, Expiring filter, concurrent rejection, renew-from-Expiring, suspended ARC, terminal-status gate, Change History empty, full lifecycle) |
+| Integration tests | `__integration__/TC-CPQ-ARC-001.spec.ts` … `012.spec.ts` (cover amend, remove-existing-item → cancel line + restore, multi-target amend, merge renew, cancel + ETF, Expiring filter, concurrent rejection, renew-from-Expiring, suspended ARC, terminal-status gate, Change History empty, full lifecycle) |
 
 ## Hard rules — non-negotiable invariants
 
@@ -206,10 +206,22 @@ ARC quote approval (status transitions through the lifecycle) reuses
   emits its own event and writes its own change-log row. `Inconsistent renew
   targets` error fires if a renew quote mixes `standalone` and `absorb`.
 
-- **Frontend `ArcLineSource` is duplicated per page.** Both `quotes/[id]/page.tsx`
-  and `orders/[id]/page.tsx` declare their own local `ArcLineSource` type
-  matching the service-side `services/types.ts` `ArcLineSource`. Acceptable
-  duplication — client components stay self-contained.
+- **Quote and order detail pages share their pricing UI.** `components/PricingSummaryCard.tsx`
+  (NRC / MRC / deal value with depth, ARC current → new MRC row),
+  `components/ChargeBreakdownTable.tsx` (list / standard / offer + waterfall)
+  and `components/ArcLineDiff.tsx` (`ArcLineDiff`, `LineActionBadge`) are used
+  by both — change them once. The order API computes the quote-style
+  waterfall summary from its stored line charges via
+  `services/orderPricingSummary.ts`.
+
+- **Deleting a mirror line on Amend / Renew = cancelling the item.**
+  Activation only applies explicit line actions, so a deleted mirror line
+  would silently keep the item active. `removeQuoteItem` therefore turns
+  mirror lines (and mirrored components) into `cancel` lines with zero
+  charges; recalc skips pricing and validation for them
+  (`isArcCancelledLine`), and `restoreQuoteItem` rebuilds them from the
+  subscription item. Pure rules live in `services/arcLineRemoval.ts`. Cancel
+  quotes are excluded — their cancel lines keep their price.
 
 - **`buildArcLineChange.add` MUST carry `parentQuoteLineId`.** Otherwise
   bundle-component lines added through ARC end up as standalone sub items

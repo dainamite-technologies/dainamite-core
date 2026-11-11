@@ -28,6 +28,7 @@ import {
 } from './types'
 import { emitCpqEvent } from '../events'
 import { stripQuoteOnlyArcMarkers } from './arcPriceFreeze'
+import { summarizeOrderPricing, type OrderWaterfallSummary } from './orderPricingSummary'
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -92,11 +93,12 @@ interface OrderResult {
    * order detail page to render the AMEND / RENEW / CANCEL badge. */
   quoteType: string
   currencyCode: string
+  /** NRC / MRC totals plus the source quote's list / discount / deal-value figures. */
   pricingSummary: {
     nrcTotal: number
     mrcTotal: number
     currencyCode: string
-  }
+  } & OrderWaterfallSummary
   activatedAt: string | null
   createdAt: string
   lines: OrderLineResult[]
@@ -1008,6 +1010,7 @@ export class DefaultCpqOrderService {
         nrcTotal: Number((pricing as Record<string, unknown>).nrcTotal ?? 0),
         mrcTotal: Number((pricing as Record<string, unknown>).mrcTotal ?? 0),
         currencyCode: orderConfig.currencyCode,
+        ...summarizeOrderPricing(lines, quoteType, orderConfig.currencyCode),
       },
       activatedAt: orderConfig.activatedAt?.toISOString() ?? null,
       createdAt: orderConfig.createdAt.toISOString(),

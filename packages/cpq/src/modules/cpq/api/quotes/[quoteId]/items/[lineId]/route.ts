@@ -93,7 +93,8 @@ export const openApi: OpenApiRouteDoc = {
     },
     DELETE: {
       summary: 'Remove a quote line',
-      description: 'Mutation guards run first (resource kind `cpq.quote_line`, delete).',
+      description:
+        'On an Amend / Renew quote, a line mirroring a live subscription item is not deleted: it (and its mirrored components) becomes a `cancel` line with zero totals, and activation terminates the item; lines this quote added under it are deleted. 409 when the item is already marked for removal — use `POST .../restore` to undo. Other lines are deleted with their descendants. Mutation guards run first (resource kind `cpq.quote_line`, delete).',
       responses: [{ status: 200, description: 'Quote after the removal' }],
       errors: CPQ_GUARDED_WRITE_ERRORS.filter((doc) => doc.status !== 400),
     },

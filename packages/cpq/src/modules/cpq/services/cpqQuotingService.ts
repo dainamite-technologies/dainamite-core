@@ -55,6 +55,7 @@ import {
   stripArcMarkers,
   stripQuoteOnlyArcMarkers,
 } from './arcPriceFreeze'
+import { isArcCancelledLine, planArcLineRemoval, planArcLineRestore, removalCancelsItem } from './arcLineRemoval'
 
 interface QuotingServiceDeps {
   em: EntityManager
@@ -199,6 +200,19 @@ export class DefaultCpqQuotingService {
 
     if (TERMINAL_STATUSES.includes(cpqConfig.cpqStatus as CpqStatus)) {
       throw new QuotingError(409, `Cannot modify quote in '${cpqConfig.cpqStatus}' status`)
+    }
+
+    if (item.parentLineId && cpqConfig.quoteType && cpqConfig.quoteType !== 'new') {
+      const parent = await em.findOne(CpqQuoteLineConfiguration, {
+        quoteLineId: item.parentLineId,
+        quoteConfigurationId: cpqConfig.id,
+        organizationId: scope.organizationId,
+        tenantId: scope.tenantId,
+        deletedAt: null,
+      })
+      if (parent && isArcCancelledLine(parent, cpqConfig.quoteType)) {
+        throw new QuotingError(409, 'Cannot add a component to a subscription item marked for removal')
+      }
     }
 
     // Resolve offering -> spec -> product
@@ -376,6 +390,9 @@ export class DefaultCpqQuotingService {
       deletedAt: null,
     })
     if (!lineConfig) throw new QuotingError(404, 'Quote line not found')
+    if (isArcCancelledLine(lineConfig, cpqConfig.quoteType)) {
+      throw new QuotingError(409, 'This subscription item is marked for removal — restore it before changing it')
+    }
 
     const quoteLine = await em.findOne(SalesQuoteLine, {
       id: lineId,
@@ -540,7 +557,92 @@ export class DefaultCpqQuotingService {
     })
     if (!lineConfig) throw new QuotingError(404, 'Quote line not found')
 
-    await removeQuoteLineTree(em, cpqConfig.id, lineConfig, scope)
+    if (removalCancelsItem(lineConfig, cpqConfig.quoteType)) {
+      // Amend / Renew: a line mirroring a live subscription item becomes a
+      // `cancel` line so activation terminates the item (see arcLineRemoval.ts).
+      if (lineConfig.action === 'cancel') {
+        throw new QuotingError(409, 'This subscription item is already marked for removal')
+      }
+      const plan = planArcLineRemoval(lineConfig, await loadLines(em, cpqConfig.id, scope), cpqConfig.quoteType)
+      for (const root of plan.removeRoots) await removeQuoteLineTree(em, cpqConfig.id, root, scope)
+      await withAtomicFlush(em, [() => {
+        for (const line of plan.cancel) {
+          line.action = 'cancel'
+          line.charges = []
+          line.nrcTotal = '0'
+          line.mrcTotal = '0'
+          line.isConfigured = true
+          line.validationErrors = null
+        }
+      }])
+    } else {
+      await removeQuoteLineTree(em, cpqConfig.id, lineConfig, scope)
+    }
+
+    return this.recalculateInternal(em, cpqConfig, salesQuote, scope, true)
+  }
+
+  // ─── Restore a removed subscription item (Amend / Renew) ───────
+
+  async restoreQuoteItem(quoteId: string, lineId: string, scope: TenantScope): Promise<QuoteResult> {
+    return this.writeQuote(quoteId, scope, (em, quote) => this.restoreQuoteItemInTransaction(lineId, scope, em, quote), undefined, undefined, LINE_EVENTS)
+  }
+
+  private async restoreQuoteItemInTransaction(lineId: string, scope: TenantScope, em: EntityManager, cpqConfig: CpqQuoteConfiguration): Promise<QuoteResult> {
+    const salesQuote = await this.loadSalesQuote(em, cpqConfig.quoteId, scope)
+
+    if (TERMINAL_STATUSES.includes(cpqConfig.cpqStatus as CpqStatus)) {
+      throw new QuotingError(409, `Cannot modify quote in '${cpqConfig.cpqStatus}' status`)
+    }
+
+    const lines = await loadLines(em, cpqConfig.id, scope)
+    const lineConfig = lines.find((line) => line.quoteLineId === lineId)
+    if (!lineConfig) throw new QuotingError(404, 'Quote line not found')
+    if (!isArcCancelledLine(lineConfig, cpqConfig.quoteType) || !isArcMirrorLine(lineConfig.configuration, cpqConfig.quoteType)) {
+      throw new QuotingError(409, 'Only subscription items marked for removal can be restored')
+    }
+
+    const plan = planArcLineRestore(lineConfig, lines, cpqConfig.quoteType)
+    if (!plan.ok) throw new QuotingError(409, 'Restore the parent item first')
+
+    const itemIdOf = (line: CpqQuoteLineConfiguration) =>
+      line.sourceSubscriptionItemId ?? ((line.configuration as Record<string, unknown> | null)?._arcMirroredFromItemId as string | undefined) ?? null
+    const itemIds = plan.restore.map(itemIdOf).filter((id): id is string => !!id)
+    const items = itemIds.length
+      ? await em.find(CpqInventorySubscriptionItem, { id: { $in: itemIds }, organizationId: scope.organizationId, tenantId: scope.tenantId, deletedAt: null })
+      : []
+    const itemById = new Map(items.map((item) => [item.id, item]))
+    const salesLines = await em.find(SalesQuoteLine, {
+      id: { $in: plan.restore.map((line) => line.quoteLineId) },
+      organizationId: scope.organizationId,
+      tenantId: scope.tenantId,
+      deletedAt: null,
+    })
+    const salesLineById = new Map(salesLines.map((line) => [line.id, line]))
+
+    const restores = plan.restore.map((line) => {
+      const itemId = itemIdOf(line)
+      const item = itemId ? itemById.get(itemId) : undefined
+      if (!item || ['terminated', 'expired', 'superseded'].includes(item.status)) {
+        throw new QuotingError(409, 'The subscription item is no longer active and cannot be restored')
+      }
+      return { line, item }
+    })
+    const arcType = cpqConfig.quoteType as 'amend' | 'renew'
+    await withAtomicFlush(em, [() => {
+      for (const { line, item } of restores) {
+        line.action = 'modify'
+        line.configuration = buildArcMirrorConfiguration(item.configuration, item, arcType)
+        line.charges = pickArcMirrorCharges(item, cpqConfig.currencyCode)
+        line.quantity = item.quantity
+        line.nrcTotal = String(item.nrcAmount ?? 0)
+        line.mrcTotal = String(item.mrcAmount)
+        line.isConfigured = true
+        line.validationErrors = null
+        const salesLine = salesLineById.get(line.quoteLineId)
+        if (salesLine) salesLine.quantity = String(item.quantity)
+      }
+    }])
 
     return this.recalculateInternal(em, cpqConfig, salesQuote, scope, true)
   }
@@ -884,7 +986,7 @@ export class DefaultCpqQuotingService {
       }
 
       let validationErrors: ValidationError[] = []
-      if (lineConfig.offeringId) {
+      if (lineConfig.offeringId && !isArcCancelledLine(lineConfig, cpqConfig.quoteType)) {
         const validation = await this.validationService.validateOfferingConfiguration({
           offeringId: lineConfig.offeringId,
           configuration: lineConfig.configuration,
@@ -906,7 +1008,11 @@ export class DefaultCpqQuotingService {
       // contracted price of items the amendment does not touch.
       const isFrozen = isFrozenAmendMirrorLine(cfgRecord, cpqConfig.quoteType)
       let charges: ResolvedCharge[]
-      if ((lineConfig.offeringId || lineConfig.productId) && !isFrozen) {
+      if (isArcCancelledLine(lineConfig, cpqConfig.quoteType)) {
+        // Item marked for removal: it leaves the subscription, so it adds
+        // nothing to the quote (its current price is shown via `arcSource`).
+        charges = []
+      } else if ((lineConfig.offeringId || lineConfig.productId) && !isFrozen) {
         charges = await this.pricingService.resolveProductCharges({
           offeringId: lineConfig.offeringId ?? undefined,
           productId: lineConfig.productId ?? undefined,

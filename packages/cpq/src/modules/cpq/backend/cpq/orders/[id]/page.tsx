@@ -12,7 +12,12 @@ import {
   type OrderCpqStatus,
 } from '../../../../components/statusMaps'
 import { StatusPath } from '../../../../components/StatusPath'
-import { DepthBadge, PriceWaterfall } from '../../../../components/PriceWaterfall'
+import { ChargeBreakdownTable, type ChargeRowView } from '../../../../components/ChargeBreakdownTable'
+import { PricingSummaryCard, type PricingSummaryView } from '../../../../components/PricingSummaryCard'
+import { ArcLineDiff, LineActionBadge } from '../../../../components/ArcLineDiff'
+import { arcRecurringDelta } from '../../../../lib/quoteSummaryView'
+import { isArcCancelledLine } from '../../../../services/arcLineRemoval'
+import { useT } from '@open-mercato/shared/lib/i18n/context'
 
 // ─── Types ───────────────────────────────────────────────────────
 
@@ -44,8 +49,8 @@ type ResolvedCharge = {
 }
 
 /** Order lines carry the quote's stored waterfall verbatim (no recalculation at conversion). */
-function toWaterfallCharge(c: ResolvedCharge) {
-  return { ...c, chargeType: (c.chargeType ?? 'mrc') as 'nrc' | 'mrc' | 'usage', unitPrice: c.unitPrice ?? 0, totalPrice: c.totalPrice ?? null }
+function toChargeRow(c: ResolvedCharge): ChargeRowView {
+  return { ...c, chargeName: c.chargeName ?? '—', chargeType: (c.chargeType ?? 'mrc') as 'nrc' | 'mrc' | 'usage', unitPrice: c.unitPrice ?? 0, totalPrice: c.totalPrice ?? null }
 }
 
 type OrderLineResult = {
@@ -78,11 +83,7 @@ type OrderResult = {
   sourceQuoteId: string | null
   quoteType: string
   currencyCode: string
-  pricingSummary: {
-    nrcTotal: number
-    mrcTotal: number
-    currencyCode: string
-  }
+  pricingSummary: PricingSummaryView & { currencyCode: string }
   activatedAt: string | null
   createdAt: string
   lines: OrderLineResult[]
@@ -419,24 +420,18 @@ export default function CpqOrderDetailPage(props: { params?: { id?: string } }) 
         </MetaCard>
       </div>
 
-      {/* Pricing Summary Card */}
-      <div className="rounded-lg border bg-card p-4">
-        <h3 className="text-sm font-medium mb-3">Pricing Summary</h3>
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <p className="text-xs text-muted-foreground">Non-Recurring (NRC)</p>
-            <p className="text-lg font-semibold font-mono">{fmt(order.pricingSummary.nrcTotal, currency)}</p>
-          </div>
-          <div>
-            <p className="text-xs text-muted-foreground">Monthly Recurring (MRC)</p>
-            <p className="text-lg font-semibold font-mono">{fmt(order.pricingSummary.mrcTotal, currency)}</p>
-          </div>
-        </div>
-      </div>
+      <PricingSummaryCard
+        summary={order.pricingSummary}
+        currency={currency}
+        arcDelta={order.quoteType === 'amend' || order.quoteType === 'renew'
+          ? arcRecurringDelta(order.lines.map((l) => ({ ...l, action: l.action as 'add' | 'modify' | 'cancel' })))
+          : null}
+      />
 
       {/* Order Lines */}
       <OrderLineTree
         lines={order.lines}
+        quoteType={order.quoteType}
         currency={currency}
         expandedLines={expandedLines}
         pricingDetail={pricingDetail}
@@ -462,6 +457,7 @@ function MetaCard({ label, children }: { label: string; children: React.ReactNod
 
 function OrderLineTree({
   lines,
+  quoteType,
   currency,
   expandedLines,
   pricingDetail,
@@ -469,6 +465,7 @@ function OrderLineTree({
   onTogglePricingDetail,
 }: {
   lines: OrderLineResult[]
+  quoteType: string
   currency: string
   expandedLines: Set<string>
   pricingDetail: { lineIdx: number; chargeIdx: number } | null
@@ -509,6 +506,7 @@ function OrderLineTree({
                 <OrderLineRow
                   line={line}
                   lineIdx={lineIdx}
+                  quoteType={quoteType}
                   currency={currency}
                   isExpanded={isExpanded}
                   isBundle={isBundle}
@@ -530,6 +528,7 @@ function OrderLineTree({
                           key={child.lineId}
                           line={child}
                           lineIdx={childIdx}
+                          quoteType={quoteType}
                           currency={currency}
                           isExpanded={expandedLines.has(child.lineId)}
                           isBundle={false}
@@ -552,20 +551,26 @@ function OrderLineTree({
   )
 }
 
-function OrderLineRow({ line, lineIdx, currency, isExpanded, isBundle, childCount, indent, pricingDetail, onToggle, onTogglePricingDetail }: {
-  line: OrderLineResult; lineIdx: number; currency: string; isExpanded: boolean; isBundle: boolean; childCount: number; indent: number
+function OrderLineRow({ line, lineIdx, quoteType, currency, isExpanded, isBundle, childCount, indent, pricingDetail, onToggle, onTogglePricingDetail }: {
+  line: OrderLineResult; lineIdx: number; quoteType: string; currency: string; isExpanded: boolean; isBundle: boolean; childCount: number; indent: number
   pricingDetail: { lineIdx: number; chargeIdx: number } | null
   onToggle: () => void
   onTogglePricingDetail: (lineIdx: number, chargeIdx: number) => void
 }) {
+  const t = useT()
   const paddingLeft = indent > 0 ? `${indent * 2 + 1}rem` : undefined
+  // Same presentation as the quote page: an existing item removed on an
+  // Amend / Renew quote reads as "remove", struck through.
+  const isRemoved = isArcCancelledLine(line, quoteType)
 
   return (
     <div>
       <div
-        className="flex items-center gap-3 px-4 py-3 hover:bg-muted/30 transition-colors cursor-pointer"
+        className={`flex items-center gap-3 px-4 py-3 hover:bg-muted/30 transition-colors cursor-pointer ${isRemoved ? 'bg-muted/20' : ''}`}
         style={paddingLeft ? { paddingLeft } : undefined}
         onClick={onToggle}
+        data-testid="cpq-order-line"
+        data-removed={isRemoved ? 'true' : undefined}
       >
         <button className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground">
           <svg className={`h-4 w-4 transition-transform ${isExpanded ? 'rotate-90' : ''}`} fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
@@ -579,14 +584,24 @@ function OrderLineRow({ line, lineIdx, currency, isExpanded, isBundle, childCoun
             {isBundle && (
               <Tag variant="brand" className="px-1.5 text-xs">bundle</Tag>
             )}
-            <span className="font-medium text-sm">{line.offeringName}</span>
+            <span className={`font-medium text-sm ${isRemoved ? 'text-muted-foreground line-through' : ''}`}>{line.offeringName}</span>
             {line.quantity > 1 && <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-medium">×{line.quantity}</span>}
-            <Tag variant="info" className="px-1.5 text-xs">{line.action}</Tag>
+            <LineActionBadge
+              action={line.action}
+              label={isRemoved ? t('cpq.quotes.arc.lineRemoved', 'remove') : undefined}
+              title={isRemoved ? t('cpq.quotes.arc.lineRemovedHint', 'This item is cancelled on the subscription when the order is activated') : undefined}
+            />
             {isBundle && <span className="text-xs text-muted-foreground">{childCount} component{childCount !== 1 ? 's' : ''}</span>}
           </div>
         </div>
 
         <div className="shrink-0 text-right text-xs space-y-0.5">
+          {isRemoved && line.arcSource && line.arcSource.mrcAmount > 0 && (
+            <div>
+              <span className="text-muted-foreground">MRC </span>
+              <span className="font-mono text-muted-foreground line-through">{fmt(line.arcSource.mrcAmount, currency)}</span>
+            </div>
+          )}
           {line.nrcTotal > 0 && <div><span className="text-muted-foreground">NRC </span><span className="font-mono font-medium">{fmt(line.nrcTotal, currency)}</span></div>}
           {line.mrcTotal > 0 && <div><span className="text-muted-foreground">MRC </span><span className="font-mono font-medium">{fmt(line.mrcTotal, currency)}</span></div>}
         </div>
@@ -609,9 +624,6 @@ function OrderLineRow({ line, lineIdx, currency, isExpanded, isBundle, childCoun
             className="border-t bg-muted/10 px-12 py-3 space-y-3"
             style={paddingLeft ? { paddingLeft: `calc(${paddingLeft} + 2rem)` } : undefined}
           >
-            {hasArcDiff && (
-              <ArcLineDiff line={line} currency={currency} />
-            )}
             {isEmpty ? (
               <div className="text-xs text-muted-foreground space-y-1">
                 <div>
@@ -646,16 +658,12 @@ function OrderLineRow({ line, lineIdx, currency, isExpanded, isBundle, childCoun
                 )}
 
                 {hasCharges && (
-                  <div>
-                    <p className="text-xs font-medium text-muted-foreground mb-1">Charges</p>
-                    <ChargeBreakdown
-                      line={line}
-                      lineIdx={lineIdx}
-                      currency={currency}
-                      pricingDetail={pricingDetail}
-                      onTogglePricingDetail={onTogglePricingDetail}
-                    />
-                  </div>
+                  <ChargeBreakdownTable
+                    charges={line.charges.map(toChargeRow)}
+                    currency={currency}
+                    openDetailIndex={pricingDetail?.lineIdx === lineIdx ? pricingDetail.chargeIdx : null}
+                    onToggleDetail={(chargeIdx) => onTogglePricingDetail(lineIdx, chargeIdx)}
+                  />
                 )}
 
                 {hasTerm && (
@@ -665,130 +673,15 @@ function OrderLineRow({ line, lineIdx, currency, isExpanded, isBundle, childCoun
                     {line.endDate && <span>End: {new Date(line.endDate).toLocaleDateString()}</span>}
                   </div>
                 )}
+
+                {/* XD-250 ARC: before/after preview below the charges, as on the quote. */}
+                {hasArcDiff && <ArcLineDiff line={line} currency={currency} />}
               </>
             )}
           </div>
         )
       })()}
     </div>
-  )
-}
-
-// Charge breakdown table with the waterfall ("show pricing details")
-// toggle. Same shape as the quote page so a charge looks identical on
-// both surfaces, including tier-by-tier subtotals and any price-rule
-// adjustments that fired during calculation.
-function ChargeBreakdown({ line, lineIdx, currency, pricingDetail, onTogglePricingDetail }: {
-  line: OrderLineResult; lineIdx: number; currency: string
-  pricingDetail: { lineIdx: number; chargeIdx: number } | null
-  onTogglePricingDetail: (lineIdx: number, chargeIdx: number) => void
-}) {
-  return (
-    <table className="w-full text-xs">
-      <thead>
-        <tr className="text-muted-foreground">
-          <th className="text-left py-1 font-medium">Charge</th>
-          <th className="text-left py-1 font-medium">Type</th>
-          <th className="text-right py-1 font-medium">List</th>
-          <th className="text-right py-1 font-medium">Offer</th>
-          <th className="text-right py-1 font-medium">Qty</th>
-          <th className="text-right py-1 font-medium">Total</th>
-          <th className="w-8" />
-        </tr>
-      </thead>
-      <tbody>
-        {line.charges.map((c, i) => {
-          const hasDetail = !!(c.breakdown?.tiers?.length || c.adjustments?.length)
-          const isDetailOpen = pricingDetail?.lineIdx === lineIdx && pricingDetail?.chargeIdx === i
-          return (
-            <React.Fragment key={i}>
-              <tr className="border-t border-dashed border-border/50">
-                <td className="py-1">{c.chargeName ?? '—'}</td>
-                <td className="py-1 uppercase">{c.chargeType ?? '—'}</td>
-                <td className="py-1 text-right font-mono text-muted-foreground">{c.listUnitPrice != null ? fmt(c.listUnitPrice, currency) : c.unitPrice != null ? fmt(c.unitPrice, currency) : '—'}</td>
-                <td className="py-1 text-right font-mono">
-                  <span className="inline-flex items-center gap-1">
-                    <DepthBadge before={c.listUnitPrice ?? c.unitPrice} after={c.unitPrice} />
-                    {c.unitPrice != null ? fmt(c.unitPrice, currency) : '—'}
-                  </span>
-                </td>
-                <td className="py-1 text-right font-mono">{c.quantity ?? '—'}</td>
-                <td className="py-1 text-right font-mono">{c.totalPrice != null ? fmt(c.totalPrice, currency) : c.note ?? '—'}</td>
-                <td className="py-1 text-center">
-                  {hasDetail && (
-                    <button
-                      onClick={() => onTogglePricingDetail(lineIdx, i)}
-                      className="inline-flex items-center justify-center rounded p-0.5 hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
-                      title="Show pricing breakdown"
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3.5 h-3.5">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
-                      </svg>
-                    </button>
-                  )}
-                </td>
-              </tr>
-              {isDetailOpen && (
-                <tr>
-                  <td colSpan={7} className="pb-3 pt-1">
-                    <div className="rounded border bg-background p-3 space-y-3 text-xs">
-                      <div className="flex items-center justify-between">
-                        <span className="font-semibold text-sm">Pricing Details — {c.chargeName}</span>
-                        <span className="text-muted-foreground">{c.pricingMethod ?? 'flat'}</span>
-                      </div>
-
-                      {c.breakdown?.tiers && c.breakdown.tiers.length > 0 && (
-                        <div>
-                          <div className="font-medium text-muted-foreground mb-1">Tier Breakdown</div>
-                          <table className="w-full">
-                            <thead>
-                              <tr className="text-muted-foreground">
-                                <th className="text-left py-0.5 font-medium">Tier</th>
-                                <th className="text-right py-0.5 font-medium">Range</th>
-                                <th className="text-right py-0.5 font-medium">Price/Unit</th>
-                                <th className="text-right py-0.5 font-medium">Qty</th>
-                                <th className="text-right py-0.5 font-medium">Subtotal</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {c.breakdown.tiers.map((t) => (
-                                <tr key={t.tier} className="border-t border-border/30">
-                                  <td className="py-0.5">{t.tier}</td>
-                                  <td className="py-0.5 text-right font-mono">{t.from}–{t.to}</td>
-                                  <td className="py-0.5 text-right font-mono">{fmt(t.pricePerUnit, currency)}</td>
-                                  <td className="py-0.5 text-right font-mono">{t.quantity}</td>
-                                  <td className="py-0.5 text-right font-mono">{fmt(t.subtotal, currency)}</td>
-                                </tr>
-                              ))}
-                              <tr className="border-t font-medium">
-                                <td colSpan={4} className="py-0.5 text-right">Tiered Total</td>
-                                <td className="py-0.5 text-right font-mono">
-                                  {fmt(c.breakdown.tiers.reduce((s, t) => s + t.subtotal, 0), currency)}
-                                </td>
-                              </tr>
-                            </tbody>
-                          </table>
-                        </div>
-                      )}
-
-                      <div>
-                        <div className="font-medium text-muted-foreground mb-1">Price waterfall</div>
-                        <PriceWaterfall charge={toWaterfallCharge(c)} currency={currency} />
-                      </div>
-
-                      <div className="flex items-center justify-between pt-1 border-t text-sm font-semibold">
-                        <span>Final Total</span>
-                        <span className="font-mono">{c.totalPrice != null ? fmt(c.totalPrice, currency) : '—'}</span>
-                      </div>
-                    </div>
-                  </td>
-                </tr>
-              )}
-            </React.Fragment>
-          )
-        })}
-      </tbody>
-    </table>
   )
 }
 
@@ -815,84 +708,5 @@ function ErrorBanner({ message, onDismiss }: { message: string; onDismiss?: () =
         </button>
       )}
     </Alert>
-  )
-}
-
-// XD-250 ARC: side-by-side "Before / After" snapshot for a quote / order line
-// that mirrors an existing subscription item. "Before" comes from the live
-// CpqInventorySubscriptionItem at render time; "After" is what the line will
-// apply on activation. For 'cancel' lines the after column is greyed out.
-function ArcLineDiff({ line, currency }: { line: OrderLineResult; currency: string }) {
-  const src = line.arcSource
-  if (!src) return null
-  const isCancel = line.action === 'cancel'
-
-  const beforeMrc = src.mrcAmount
-  const beforeNrc = src.nrcAmount
-  const beforeQty = src.quantity
-  const afterMrc = isCancel ? 0 : line.mrcTotal
-  const afterNrc = isCancel ? 0 : line.nrcTotal
-  const afterQty = isCancel ? 0 : line.quantity
-  const mrcDelta = afterMrc - beforeMrc
-  const nrcDelta = afterNrc - beforeNrc
-  const qtyDelta = afterQty - beforeQty
-
-  return (
-    <div>
-      <p className="text-xs font-medium text-muted-foreground mb-1.5">Change Preview</p>
-      <div className="rounded border bg-background overflow-hidden">
-        <table className="w-full text-xs">
-          <thead className="bg-muted/40">
-            <tr className="text-muted-foreground">
-              <th className="text-left px-3 py-1.5 font-medium" />
-              <th className="text-right px-3 py-1.5 font-medium">Before</th>
-              <th className="text-right px-3 py-1.5 font-medium">After</th>
-              <th className="text-right px-3 py-1.5 font-medium">Δ</th>
-            </tr>
-          </thead>
-          <tbody>
-            <ArcDiffRow label="Quantity" before={beforeQty} after={afterQty} delta={qtyDelta} currency={null} dimAfter={isCancel} />
-            <ArcDiffRow label="MRC" before={beforeMrc} after={afterMrc} delta={mrcDelta} currency={currency} dimAfter={isCancel} />
-            <ArcDiffRow label="NRC" before={beforeNrc} after={afterNrc} delta={nrcDelta} currency={currency} dimAfter={isCancel} />
-          </tbody>
-        </table>
-      </div>
-      {isCancel && (
-        <p className="text-xs text-destructive mt-1 italic">
-          Cancellation — item will be terminated on activation.
-        </p>
-      )}
-    </div>
-  )
-}
-
-function ArcDiffRow({
-  label,
-  before,
-  after,
-  delta,
-  currency,
-  dimAfter,
-}: {
-  label: string
-  before: number
-  after: number
-  delta: number
-  currency: string | null
-  dimAfter: boolean
-}) {
-  const fmtVal = (v: number) => (currency ? fmt(v, currency) : String(v))
-  const showDelta = delta !== 0
-  return (
-    <tr className="border-t border-dashed border-border/40">
-      <td className="px-3 py-1 text-muted-foreground">{label}</td>
-      <td className="px-3 py-1 text-right font-mono">{fmtVal(before)}</td>
-      <td className={`px-3 py-1 text-right font-mono ${dimAfter ? 'text-muted-foreground line-through' : ''}`}>
-        {fmtVal(after)}
-      </td>
-      <td className={`px-3 py-1 text-right font-mono font-medium ${showDelta ? (delta > 0 ? 'text-status-success-text' : 'text-destructive') : 'text-muted-foreground'}`}>
-        {showDelta ? `${delta > 0 ? '+' : ''}${fmtVal(delta)}` : '—'}
-      </td>
-    </tr>
   )
 }

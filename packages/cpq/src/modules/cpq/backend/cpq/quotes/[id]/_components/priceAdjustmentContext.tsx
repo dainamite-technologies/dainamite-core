@@ -4,6 +4,7 @@ import * as React from 'react'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { Percent, Pencil, Trash2 } from 'lucide-react'
 import { IconButton } from '@open-mercato/ui/primitives/icon-button'
+import { SimpleTooltip } from '@open-mercato/ui/primitives/tooltip'
 import type { AdjustmentAccess, LineEligibilityInput, WaterfallChargeInput } from '../../../../../lib/priceAdjustmentView'
 import { lineAdjustmentBlock } from '../../../../../lib/priceAdjustmentView'
 
@@ -57,6 +58,19 @@ export function useAdjustmentBlockReason(line: AdjustableLine): string | null {
   return accessText
 }
 
+/**
+ * Disabled buttons swallow no pointer events, so a native `title` never shows.
+ * Wrap a blocked action in a focusable span that carries the explanation.
+ */
+function BlockedReason({ reason, children }: { reason: string | null; children: React.ReactNode }) {
+  if (!reason) return <>{children}</>
+  return (
+    <SimpleTooltip content={reason} size="sm">
+      <span className="inline-flex cursor-not-allowed" tabIndex={0} aria-label={reason}>{children}</span>
+    </SimpleTooltip>
+  )
+}
+
 /** Per-charge "Adjust price" action. Hidden entirely when the feature is off or not permitted. */
 export function AdjustChargeAction({ line, charge }: { line: AdjustableLine; charge: AdjustableCharge }) {
   const t = useT()
@@ -66,12 +80,14 @@ export function AdjustChargeAction({ line, charge }: { line: AdjustableLine; cha
   if (ui.access.reason === 'disabled' || ui.access.reason === 'no_permission' || ui.access.reason === 'loading') return null
   const label = t('cpq.priceAdjustments.adjustPrice', 'Adjust price')
   return (
-    <IconButton
-      variant="ghost" size="xs" aria-label={label} title={reason ?? label} disabled={!!reason}
-      onClick={() => ui.openCharge(line, charge)} data-testid="cpq-adjust-charge"
-    >
-      <Pencil className="h-3.5 w-3.5" />
-    </IconButton>
+    <BlockedReason reason={reason}>
+      <IconButton
+        variant="ghost" size="xs" aria-label={label} title={reason ? undefined : label} disabled={!!reason}
+        onClick={() => ui.openCharge(line, charge)} data-testid="cpq-adjust-charge"
+      >
+        <Pencil className="h-3.5 w-3.5" />
+      </IconButton>
+    </BlockedReason>
   )
 }
 
@@ -83,12 +99,14 @@ export function DiscountLineAction({ line }: { line: AdjustableLine }) {
   if (!ui || ui.access.reason === 'disabled' || ui.access.reason === 'no_permission' || ui.access.reason === 'loading') return null
   const label = t('cpq.priceAdjustments.discountLine', 'Discount line')
   return (
-    <IconButton
-      variant="ghost" size="sm" aria-label={label} title={reason ?? label} disabled={!!reason}
-      onClick={() => ui.openLine(line)} data-testid="cpq-discount-line"
-    >
-      <Percent className="h-4 w-4" />
-    </IconButton>
+    <BlockedReason reason={reason}>
+      <IconButton
+        variant="ghost" size="sm" aria-label={label} title={reason ? undefined : label} disabled={!!reason}
+        onClick={() => ui.openLine(line)} data-testid="cpq-discount-line"
+      >
+        <Percent className="h-4 w-4" />
+      </IconButton>
+    </BlockedReason>
   )
 }
 

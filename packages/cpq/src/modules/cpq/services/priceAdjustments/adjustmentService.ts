@@ -232,7 +232,8 @@ export class CpqAdjustmentService {
 
   private async assertMutable(em: EntityManager, quote: CpqQuoteConfiguration, scope: TenantScope, invalidDelete = false) {
     const order = await findOneWithDecryption(em, CpqOrderConfiguration, { sourceQuoteId: quote.id, ...scope, deletedAt: null }, undefined, scope)
-    const allowed = ['new', 'incomplete', 'ready'].includes(quote.cpqStatus)
+    const allowed = ADJUSTMENT_MUTABLE_STATUSES.includes(quote.cpqStatus as CpqStatus)
+    const invalidException = invalidDelete && !TERMINAL_STATUSES.includes(quote.cpqStatus as CpqStatus)
     const invalidException = invalidDelete && !['accepted', 'rejected', 'cancelled'].includes(quote.cpqStatus)
     if (order || (!allowed && !invalidException)) throw new QuotingError(409, 'ADJUSTMENT_LOCKED')
   }

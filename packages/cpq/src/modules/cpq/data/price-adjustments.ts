@@ -35,7 +35,11 @@ export type PriceAdjustmentInput = z.infer<typeof cpqPriceAdjustmentInputSchema>
 export type PriceAdjustmentPatch = z.infer<typeof cpqPriceAdjustmentPatchSchema>
 
 /** Pure pricing representation; persistence metadata stays outside the resolver. */
-export const resolvedPriceAdjustmentSchema = cpqPriceAdjustmentInputSchema.safeExtend({
+export const resolvedPriceAdjustmentSchema = z.object({
+  ...cpqPriceAdjustmentInputSchema.shape,
+  id: z.string().uuid(),
+  createdByUserId: z.string().uuid().optional(),
+})
   id: z.string().uuid(),
   createdByUserId: z.string().uuid().optional(),
 })

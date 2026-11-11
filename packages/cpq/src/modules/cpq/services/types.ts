@@ -92,6 +92,8 @@ export interface QuoteItemInput {
 }
 
 export interface ValidationError {
+  lineId?: string
+  adjustmentId?: string
   type?: 'attribute' | 'relationship'
   attribute?: string
   relationshipType?: string
@@ -137,7 +139,20 @@ export interface QuoteLineResult {
   targetSubscriptionId: string | null
 }
 
-export interface PricingSummary {
+export interface PricingWaterfallSummary {
+  listNrcTotal: number
+  listMrcTotal: number
+  standardNrcTotal: number
+  standardMrcTotal: number
+  ruleDiscountTotal: number
+  manualDiscountTotal: number
+  dealValue: { list: number; standard: number; offer: number }
+  discountDepth: { rule: number | null; manual: number | null; total: number | null; maxLineManual: number | null }
+  hasTimeBasedAdjustments: boolean
+  snapshotHash: string
+}
+
+export interface PricingSummary extends Partial<PricingWaterfallSummary> {
   nrcTotal: number
   mrcTotal: number
   usageCharges: Array<{
@@ -153,6 +168,8 @@ export interface PricingSummary {
 }
 
 export interface QuoteResult {
+  adjustmentErrors?: import('../data/price-adjustments').AdjustmentError[]
+  pricingRevision?: number
   id: string
   quoteId: string
   quoteNumber: string
@@ -180,6 +197,16 @@ export interface QuoteResult {
 // ─── Resolved charge (extended for v2) ───────────────────────────
 
 export interface RuleAdjustment {
+  adjustmentId?: string
+  class?: 'rep' | 'carried_over'
+  level?: 'charge' | 'line' | 'quote'
+  windowKind?: 'relative' | 'absolute'
+  fromMonth?: number
+  toMonth?: number | null
+  reasonCode?: string
+  createdByUserId?: string
+  /** Missing on legacy snapshots. */
+  origin?: 'rule' | 'manual'
   ruleCode: string
   ruleName: string
   ruleType: string
@@ -210,6 +237,12 @@ export interface ResolvedCharge {
   quantity: number | null
   totalPrice: number | null
   currencyCode: string
+  /** Additive waterfall fields; absent on snapshots saved before negotiated pricing. */
+  adjustmentErrors?: import('../data/price-adjustments').AdjustmentError[]
+  listUnitPrice?: number
+  listTotalPrice?: number | null
+  standardUnitPrice?: number
+  standardTotalPrice?: number | null
   breakdown?: TierBreakdown | null
   note?: string | null
   adjustments?: RuleAdjustment[] | null

@@ -2,6 +2,7 @@ import type { ModuleCli } from '@open-mercato/shared/modules/registry'
 import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { seedCpqDemo } from './lib/seeds/demo'
+import { seedPriceAdjustmentDefaults } from './lib/priceAdjustmentDefaults'
 
 /**
  * `mercato cpq seed [--reset] [--tenant <id>] [--org <id>]`
@@ -86,4 +87,50 @@ const seed: ModuleCli = {
   },
 }
 
-export default [seed]
+/**
+ * `mercato cpq seed-price-adjustments [--tenant <id>] [--org <id>]`
+ *
+ * Upgrade step for tenants created before negotiated prices shipped: adds the
+ * `cpq.manual_price_adjustments` toggle and the `cpq.price_adjustment_reason`
+ * dictionary for every active organization (or one, with `--org` /
+ * `--tenant`). Idempotent — existing labels and toggle values are kept.
+ * Pair with `mercato auth sync-role-acls` for the `cpq.quotes.adjust_price` grant.
+ */
+const seedPriceAdjustments: ModuleCli = {
+  command: 'seed-price-adjustments',
+  async run(rest) {
+    const args = parseArgs(rest)
+    const container = await createRequestContainer()
+    const em = container.resolve<EntityManager>('em')
+    const scopes = await resolveAllScopes(em, args)
+    if (scopes.length === 0) {
+      console.error('[cpq seed-price-adjustments] No matching organization found.')
+      return
+    }
+    let failed = 0
+    for (const scope of scopes) {
+      try {
+        await seedPriceAdjustmentDefaults(em.fork(), scope)
+        console.log(`[cpq seed-price-adjustments] tenant=${scope.tenantId} org=${scope.organizationId} ✓`)
+      } catch (error) {
+        failed++
+        console.error(`[cpq seed-price-adjustments] tenant=${scope.tenantId} org=${scope.organizationId} failed`, error)
+      }
+    }
+    if (failed) process.exitCode = 1
+  },
+}
+
+async function resolveAllScopes(
+  em: EntityManager,
+  args: Record<string, string | boolean>,
+): Promise<Array<{ tenantId: string; organizationId: string }>> {
+  const { Organization } = await import('@open-mercato/core/modules/directory/data/entities')
+  const where: Record<string, unknown> = { isActive: true, deletedAt: null }
+  if (typeof args.org === 'string') where.id = args.org
+  if (typeof args.tenant === 'string') where.tenant = args.tenant
+  const orgs = await em.find(Organization, where as never, { orderBy: { createdAt: 'asc' } as never })
+  return orgs.map((org) => ({ organizationId: org.id, tenantId: org.tenant.id }))
+}
+
+export default [seed, seedPriceAdjustments]

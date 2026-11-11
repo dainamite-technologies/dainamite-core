@@ -1,0 +1,141 @@
+import {
+  ARC_PRICE_FROZEN_KEY,
+  arcPricingInputsChanged,
+  buildArcMirrorConfiguration,
+  ARC_REPRICED_KEY,
+  isArcPriceFrozen,
+  isFrozenAmendMirrorLine,
+  stripArcMarkers,
+  stripQuoteOnlyArcMarkers,
+} from '../arcPriceFreeze'
+
+const ITEM = { id: 'item-1', name: 'GIX Access Port' }
+
+describe('buildArcMirrorConfiguration', () => {
+  it('freezes Amend mirror lines and keeps the item configuration', () => {
+    const cfg = buildArcMirrorConfiguration({ port_size: '1G' }, ITEM, 'amend')
+    expect(cfg).toEqual({
+      port_size: '1G',
+      _arcMirroredFromItemId: 'item-1',
+      _arcMirroredName: 'GIX Access Port',
+      [ARC_PRICE_FROZEN_KEY]: true,
+    })
+    expect(isArcPriceFrozen(cfg)).toBe(true)
+  })
+
+  it.each(['renew', 'cancel'] as const)('does not freeze %s mirror lines', (quoteType) => {
+    const cfg = buildArcMirrorConfiguration({ port_size: '1G' }, ITEM, quoteType)
+    expect(isArcPriceFrozen(cfg)).toBe(false)
+    expect(cfg._arcMirroredFromItemId).toBe('item-1')
+  })
+
+  it('never inherits stale ARC markers from the item configuration', () => {
+    const stale = { port_size: '1G', _arcPriceFrozen: true, _arcMirroredFromItemId: 'old-item', _arcMirroredName: 'Old' }
+    const renew = buildArcMirrorConfiguration(stale, ITEM, 'renew')
+    expect(isArcPriceFrozen(renew)).toBe(false)
+    expect(renew).toEqual({ port_size: '1G', _arcMirroredFromItemId: 'item-1', _arcMirroredName: 'GIX Access Port' })
+  })
+
+  it('handles an item without configuration', () => {
+    expect(buildArcMirrorConfiguration(null, ITEM, 'amend')).toMatchObject({ _arcMirroredName: 'GIX Access Port' })
+  })
+})
+
+describe('isArcPriceFrozen', () => {
+  it('is false for missing or non-boolean markers', () => {
+    expect(isArcPriceFrozen(null)).toBe(false)
+    expect(isArcPriceFrozen({})).toBe(false)
+    expect(isArcPriceFrozen({ [ARC_PRICE_FROZEN_KEY]: 'true' })).toBe(false)
+  })
+})
+
+describe('arcPricingInputsChanged', () => {
+  const before = {
+    configuration: { port_size: '1G', data_centre: 'ld5', _arcMirroredFromItemId: 'item-1', [ARC_PRICE_FROZEN_KEY]: true },
+    quantity: 2,
+    termMonths: 12,
+    startDate: new Date('2027-01-01T00:00:00.000Z'),
+    endDate: null,
+    usageEstimates: [{ chargeCode: 'overage', estimatedQuantity: 10 }],
+  }
+
+  it('is false for an unchanged resubmission (markers stripped, key order differs, fields omitted)', () => {
+    expect(arcPricingInputsChanged(before, { configuration: { data_centre: 'ld5', port_size: '1G' } })).toBe(false)
+  })
+
+  it('is false when unchanged values are resubmitted explicitly', () => {
+    expect(
+      arcPricingInputsChanged(before, {
+        configuration: { port_size: '1G', data_centre: 'ld5' },
+        quantity: 2,
+        termMonths: 12,
+        startDate: '2027-01-01',
+        usageEstimates: [{ chargeCode: 'overage', estimatedQuantity: 10 }],
+      }),
+    ).toBe(false)
+  })
+
+  it('detects a configuration change', () => {
+    expect(arcPricingInputsChanged(before, { configuration: { port_size: '10G', data_centre: 'ld5' } })).toBe(true)
+  })
+
+  it('detects an added configuration key', () => {
+    expect(
+      arcPricingInputsChanged(before, { configuration: { port_size: '1G', data_centre: 'ld5', cloud_provider: 'aws' } }),
+    ).toBe(true)
+  })
+
+  it.each([
+    ['quantity', { quantity: 3 }],
+    ['termMonths', { termMonths: 24 }],
+    ['startDate', { startDate: '2027-02-01' }],
+    ['endDate', { endDate: '2028-01-01' }],
+    ['usageEstimates', { usageEstimates: [{ chargeCode: 'overage', estimatedQuantity: 20 }] }],
+  ])('detects a %s change', (_field, change) => {
+    expect(arcPricingInputsChanged(before, { configuration: { port_size: '1G', data_centre: 'ld5' }, ...change })).toBe(true)
+  })
+})
+
+describe('isFrozenAmendMirrorLine', () => {
+  const mirrored = { port_size: '1G', _arcMirroredFromItemId: 'item-1', [ARC_PRICE_FROZEN_KEY]: true }
+
+  it('is true only for a flagged mirror line on an Amend quote', () => {
+    expect(isFrozenAmendMirrorLine(mirrored, 'amend')).toBe(true)
+  })
+
+  it.each(['new', 'renew', 'cancel', null, undefined])('ignores the flag on a %s quote', (quoteType) => {
+    expect(isFrozenAmendMirrorLine(mirrored, quoteType)).toBe(false)
+  })
+
+  it('ignores the flag on a line that is not a mirror line', () => {
+    expect(isFrozenAmendMirrorLine({ port_size: '1G', [ARC_PRICE_FROZEN_KEY]: true }, 'amend')).toBe(false)
+  })
+})
+
+describe('stripArcMarkers', () => {
+  it('removes every _arc* key and keeps the rest', () => {
+    expect(
+      stripArcMarkers({ port_size: '1G', _arcMirroredFromItemId: 'item-1', [ARC_PRICE_FROZEN_KEY]: true, [ARC_REPRICED_KEY]: true }),
+    ).toEqual({ port_size: '1G' })
+    expect(stripArcMarkers(null)).toEqual({})
+  })
+})
+
+describe('stripQuoteOnlyArcMarkers', () => {
+  it('removes the freeze and re-priced flags and keeps the descriptive markers', () => {
+    expect(
+      stripQuoteOnlyArcMarkers({
+        port_size: '1G',
+        _arcMirroredFromItemId: 'item-1',
+        [ARC_PRICE_FROZEN_KEY]: true,
+        [ARC_REPRICED_KEY]: true,
+      }),
+    ).toEqual({ port_size: '1G', _arcMirroredFromItemId: 'item-1' })
+  })
+
+  it('returns the input untouched when there is no quote-only marker', () => {
+    const cfg = { port_size: '1G' }
+    expect(stripQuoteOnlyArcMarkers(cfg)).toBe(cfg)
+    expect(stripQuoteOnlyArcMarkers(null)).toBeNull()
+  })
+})

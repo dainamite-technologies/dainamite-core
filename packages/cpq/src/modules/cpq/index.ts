@@ -8,7 +8,7 @@ export const metadata: ModuleInfo = {
     'Generic CPQ engine — configurable product attributes, multi-charge pricing tables, and guided quoting flows.',
   author: 'App',
   license: 'Proprietary',
-  requires: ['auth', 'directory', 'catalog', 'sales', 'customers', 'dictionaries'],
+  requires: ['auth', 'directory', 'catalog', 'sales', 'customers', 'dictionaries', 'feature_toggles'],
   ejectable: false,
 }
 

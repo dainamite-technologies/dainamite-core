@@ -50,6 +50,13 @@ TODO: Fix that latter to have reference by the package names
   --color-accent: var(--accent);
   --color-muted-foreground: var(--muted-foreground);
   --color-muted: var(--muted);
+  /* Disabled-state tokens used by @open-mercato/ui Button / IconButton
+     (`disabled:bg-bg-disabled disabled:text-text-disabled
+     disabled:border-border-disabled`). Without them disabled controls render
+     exactly like enabled ones. */
+  --color-bg-disabled: var(--bg-disabled);
+  --color-text-disabled: var(--text-disabled);
+  --color-border-disabled: var(--border-disabled);
   --color-secondary-foreground: var(--secondary-foreground);
   --color-secondary: var(--secondary);
   --color-primary-foreground: var(--primary-foreground);
@@ -119,6 +126,9 @@ TODO: Fix that latter to have reference by the package names
   --secondary: oklch(0.97 0 0);
   --secondary-foreground: oklch(0.205 0 0);
   --muted: oklch(0.97 0 0);
+  --bg-disabled: oklch(0.97 0 0);      /* = --muted */
+  --text-disabled: oklch(0.708 0 0);   /* neutral-400 */
+  --border-disabled: oklch(0.922 0 0); /* neutral-200 */
   --muted-foreground: oklch(0.556 0 0);
   --accent: oklch(0.97 0 0);
   --accent-foreground: oklch(0.205 0 0);
@@ -196,6 +206,9 @@ TODO: Fix that latter to have reference by the package names
   --secondary: oklch(0.269 0 0);
   --secondary-foreground: oklch(0.985 0 0);
   --muted: oklch(0.269 0 0);
+  --bg-disabled: oklch(0.269 0 0);     /* = dark --muted */
+  --text-disabled: oklch(0.556 0 0);   /* neutral-500 */
+  --border-disabled: oklch(0.371 0 0); /* neutral-700 */
   --muted-foreground: oklch(0.708 0 0);
   --accent: oklch(0.269 0 0);
   --accent-foreground: oklch(0.985 0 0);

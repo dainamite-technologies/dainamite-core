@@ -4,6 +4,9 @@ import { resolveCpqRouteContext } from '../context'
 import { cpqConvertQuoteToOrderSchema } from '../../data/validators'
 import { isOrderError } from '../../services/cpqOrderService'
 import type { DefaultCpqOrderService } from '../../services/cpqOrderService'
+import { CPQ_QUOTE_RESOURCE_KIND, runCpqMutationGuards } from '../_helpers/quoteMutationGuard'
+import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
+import { cpqErrorDoc } from '../_helpers/quoteRouteOpenApi'
 
 export const metadata = {
   POST: { requireAuth: true, requireFeatures: ['cpq.orders.manage'] },
@@ -18,8 +21,19 @@ export async function POST(req: Request) {
     const body = cpqConvertQuoteToOrderSchema.parse(await req.json())
     const scope = { organizationId: ctx.organizationId, tenantId: ctx.tenantId }
 
+    // Conversion turns a quote into an order — projects can block it (e.g.
+    // until an approval workflow has signed a discounted quote off).
+    const guard = await runCpqMutationGuards(ctx, req, {
+      resourceKind: CPQ_QUOTE_RESOURCE_KIND,
+      resourceId: body.quoteId,
+      operation: 'custom',
+      mutationPayload: { action: 'convert_to_order' },
+    })
+    if (!guard.ok) return guard.response
+
     const service = ctx.container.resolve('cpqOrderService') as DefaultCpqOrderService
     const result = await service.convertQuoteToOrder(body.quoteId, scope)
+    await guard.runAfterSuccess()
     return NextResponse.json(result, { status: 201 })
   } catch (err) {
     return handleError(err, 'cpq/orders.POST')
@@ -66,7 +80,7 @@ function handleError(err: unknown, context: string) {
     return NextResponse.json({ error: 'Validation error', details: err.issues }, { status: 400 })
   }
   if (isOrderError(err)) {
-    return NextResponse.json({ error: err.message }, { status: err.status })
+    return NextResponse.json({ error: err.message, ...err.details }, { status: err.status })
   }
   const errObj = err as Record<string, unknown>
   if (typeof errObj?.status === 'number' && typeof errObj?.error === 'string') {
@@ -74,4 +88,40 @@ function handleError(err: unknown, context: string) {
   }
   console.error(`[${context}]`, err)
   return NextResponse.json({ error: 'Internal error' }, { status: 500 })
+}
+
+export const openApi: OpenApiRouteDoc = {
+  tag: 'CPQ Orders',
+  summary: 'CPQ orders',
+  methods: {
+    POST: {
+      summary: 'Convert a CPQ quote into an order',
+      description:
+        'Creates the sales order and CPQ order configuration from the quote. Refused for cancelled or rejected quotes; mutation guards (resource kind `cpq.quote`, action `convert_to_order`) run first.',
+      requestBody: { schema: cpqConvertQuoteToOrderSchema },
+      responses: [{ status: 201, description: 'Created order' }],
+      errors: [
+        cpqErrorDoc(400, 'Validation error'),
+        cpqErrorDoc(404, 'Quote not found'),
+        cpqErrorDoc(409, 'Quote cannot be converted in its status or is already converted'),
+        cpqErrorDoc(422, 'Quote has no lines or has invalid stored adjustments, or blocked by a mutation guard'),
+      ],
+    },
+    GET: {
+      summary: 'List CPQ orders',
+      query: z.object({
+        customerId: z.string().uuid().optional(),
+        sourceQuoteId: z.string().uuid().optional(),
+        salesOrderId: z.string().uuid().optional(),
+        cpqStatus: z.string().optional(),
+        currencyCode: z.string().optional(),
+        search: z.string().optional(),
+        sortField: z.enum(['createdAt', 'updatedAt', 'cpqStatus', 'activatedAt', 'currencyCode']).optional(),
+        sortDir: z.enum(['asc', 'desc']).optional(),
+        page: z.coerce.number().int().min(1).optional(),
+        pageSize: z.coerce.number().int().min(1).max(100).optional(),
+      }),
+      responses: [{ status: 200, description: 'Paged list of CPQ orders' }],
+    },
+  },
 }

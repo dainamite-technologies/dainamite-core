@@ -164,7 +164,7 @@ Save these IDs — replace `<ACCESS_PORT_ID>` and `<CLOUD_CONNECT_ID>` in tests 
 With the `ui-nrc-10pct-off` rule (10% discount, chargeTypeFilter=nrc) active:
 
 ```js
-const res = await fetch('/api/cpq/cpq-quotes/price', {
+const res = await fetch('/api/cpq/quotes/price', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({
@@ -201,7 +201,7 @@ console.log('adjustments:', JSON.stringify(monthlyFee.adjustments, null, 2))
 Both user rules active: `ui-nrc-10pct-off` (sortOrder=10, 10% NRC) + `ui-flat-5-off` (sortOrder=20, $5 off setup_fee). Seed rule `volume-mrc-10pct` (sortOrder=20) also active.
 
 ```js
-const res = await fetch('/api/cpq/cpq-quotes/price', {
+const res = await fetch('/api/cpq/quotes/price', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({
@@ -245,7 +245,7 @@ console.log('monthly_port_fee unitPrice:', monthlyFee.unitPrice, '(expected: 225
 Now test the effect. Note: `ui-mrc-20pct-surcharge` (sortOrder=5) runs BEFORE the seed rule `volume-mrc-10pct` (sortOrder=20), so both rules chain.
 
 ```js
-const res = await fetch('/api/cpq/cpq-quotes/price', {
+const res = await fetch('/api/cpq/quotes/price', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({
@@ -283,7 +283,7 @@ Final: unitPrice = 270, totalPrice = 270, 2 adjustments.
 Now test:
 
 ```js
-const res = await fetch('/api/cpq/cpq-quotes/price', {
+const res = await fetch('/api/cpq/quotes/price', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({
@@ -320,7 +320,7 @@ Final: unitPrice = 84.1, totalPrice = 84.1, 3 adjustments.
 3. Click **Create**
 
 ```js
-const res = await fetch('/api/cpq/cpq-quotes/price', {
+const res = await fetch('/api/cpq/quotes/price', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({

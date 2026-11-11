@@ -11,6 +11,8 @@ import {
   type SubscriptionStatus,
 } from '../../../../../components/statusMaps'
 import { StatusPath } from '../../../../../components/StatusPath'
+import { DepthBadge, PriceWaterfall } from '../../../../../components/PriceWaterfall'
+import { parseStoredCharge } from '../../../../../lib/priceAdjustmentView'
 
 // XD-250 — ARC integration on subscription detail.
 //   • header buttons (Amend / Renew / Cancel) call /from-subscription
@@ -682,21 +684,41 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
                               <tr className="text-muted-foreground">
                                 <th className="text-left py-1 font-medium">Charge</th>
                                 <th className="text-left py-1 font-medium">Type</th>
-                                <th className="text-right py-1 font-medium">Unit Price</th>
+                                <th className="text-right py-1 font-medium">List</th>
+                                <th className="text-right py-1 font-medium">Offer</th>
                                 <th className="text-right py-1 font-medium">Qty</th>
                                 <th className="text-right py-1 font-medium">Total</th>
                               </tr>
                             </thead>
                             <tbody>
-                              {item.charges.map((c, i) => (
-                                <tr key={i} className="border-t border-dashed border-border/50">
-                                  <td className="py-1">{(c as any).chargeName ?? '—'}</td>
-                                  <td className="py-1 uppercase">{(c as any).chargeType ?? '—'}</td>
-                                  <td className="py-1 text-right font-mono">{(c as any).unitPrice != null ? fmt((c as any).unitPrice, currency) : '—'}</td>
-                                  <td className="py-1 text-right font-mono">{(c as any).quantity ?? '—'}</td>
-                                  <td className="py-1 text-right font-mono">{(c as any).totalPrice != null ? fmt((c as any).totalPrice, currency) : '—'}</td>
-                                </tr>
-                              ))}
+                              {item.charges.map((raw, i) => {
+                                const c = parseStoredCharge(raw)
+                                if (!c) return null
+                                return (
+                                  <React.Fragment key={i}>
+                                    <tr className="border-t border-dashed border-border/50">
+                                      <td className="py-1">{c.chargeName}</td>
+                                      <td className="py-1 uppercase">{c.chargeType}</td>
+                                      <td className="py-1 text-right font-mono text-muted-foreground">{fmt(c.listUnitPrice ?? c.unitPrice, currency)}</td>
+                                      <td className="py-1 text-right font-mono">
+                                        <span className="inline-flex items-center gap-1">
+                                          <DepthBadge before={c.listUnitPrice ?? c.unitPrice} after={c.unitPrice} />
+                                          {fmt(c.unitPrice, currency)}
+                                        </span>
+                                      </td>
+                                      <td className="py-1 text-right font-mono">{c.quantity ?? '—'}</td>
+                                      <td className="py-1 text-right font-mono">{c.totalPrice != null ? fmt(c.totalPrice, currency) : '—'}</td>
+                                    </tr>
+                                    {(c.adjustments?.length ?? 0) > 0 && (
+                                      <tr>
+                                        <td colSpan={6} className="pb-2 pl-4">
+                                          <PriceWaterfall charge={c} currency={currency} />
+                                        </td>
+                                      </tr>
+                                    )}
+                                  </React.Fragment>
+                                )
+                              })}
                             </tbody>
                           </table>
                         </div>

@@ -631,6 +631,7 @@ export class CpqPriceRule {
 export class CpqQuoteConfiguration {
   [OptionalProps]?:
     | 'cpqStatus'
+    | 'pricingRevision'
     | 'version'
     | 'currencyCode'
     | 'quoteType'
@@ -652,6 +653,9 @@ export class CpqQuoteConfiguration {
 
   @Property({ name: 'customer_id', type: 'uuid' })
   customerId!: string
+
+  @Property({ name: 'pricing_revision', type: 'integer', default: 0 })
+  pricingRevision: number = 0
 
   @Property({ name: 'cpq_status', type: 'text', default: 'new' })
   cpqStatus: string = 'new'
@@ -1474,4 +1478,83 @@ export class CpqSubscriptionChangeLog {
   // Soft-delete reserved for compliance erasure; runtime ignores deleted rows.
   @Property({ name: 'deleted_at', type: Date, nullable: true })
   deletedAt?: Date | null
+}
+
+
+// ─── Deal-specific adjustments, separate from catalog price rules ───
+@Entity({ tableName: 'cpq_quote_price_adjustments' })
+@Index({ name: 'cpq_qpa_quote_config_idx', properties: ['organizationId', 'tenantId', 'quoteConfigurationId'] })
+@Index({ name: 'cpq_qpa_quote_line_idx', properties: ['organizationId', 'tenantId', 'quoteLineId'] })
+@Index({ name: 'cpq_qpa_quote_idx', properties: ['organizationId', 'tenantId', 'quoteId'] })
+export class CpqQuotePriceAdjustment {
+  [OptionalProps]?: 'windowKind' | 'fromMonth' | 'toMonth' | 'isActive' | 'createdAt' | 'updatedAt' | 'deletedAt'
+
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @Property({ name: 'organization_id', type: 'uuid' })
+  organizationId!: string
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  @Property({ name: 'quote_configuration_id', type: 'uuid' })
+  quoteConfigurationId!: string
+
+  @Property({ name: 'quote_id', type: 'uuid' })
+  quoteId!: string
+
+  @Property({ name: 'quote_line_id', type: 'uuid' })
+  quoteLineId!: string
+
+  @Property({ type: 'text' })
+  level!: 'charge' | 'line'
+
+  @Property({ name: 'charge_code', type: 'text', nullable: true })
+  chargeCode: string | null = null
+
+  @Property({ name: 'charge_type_filter', type: 'text', nullable: true })
+  chargeTypeFilter: 'nrc' | 'mrc' | null = null
+
+  @Property({ name: 'adjustment_type', type: 'text' })
+  adjustmentType!: 'discount_percent' | 'discount_absolute' | 'price_override'
+
+  @Property({ type: 'numeric', columnType: 'numeric(18, 4)' })
+  value!: string
+
+  @Property({ name: 'currency_code', type: 'text', nullable: true })
+  currencyCode: string | null = null
+
+  @Property({ name: 'window_kind', type: 'text', default: 'relative' })
+  windowKind: string = 'relative'
+
+  @Property({ name: 'from_month', type: 'integer', default: 1 })
+  fromMonth: number = 1
+
+  @Property({ name: 'to_month', type: 'integer', nullable: true })
+  toMonth: number | null = null
+
+  @Property({ name: 'reason_code', type: 'text' })
+  reasonCode!: string
+
+  @Property({ name: 'reason_note', type: 'text', nullable: true })
+  reasonNote: string | null = null
+
+  @Property({ name: 'created_by_user_id', type: 'uuid' })
+  createdByUserId!: string
+
+  @Property({ name: 'updated_by_user_id', type: 'uuid', nullable: true })
+  updatedByUserId: string | null = null
+
+  @Property({ name: 'is_active', type: 'boolean', default: true })
+  isActive: boolean = true
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+
+  @Property({ name: 'updated_at', type: Date, onUpdate: () => new Date() })
+  updatedAt: Date = new Date()
+
+  @Property({ name: 'deleted_at', type: Date, nullable: true })
+  deletedAt: Date | null = null
 }

@@ -1,3 +1,5 @@
+import { storedAdjustmentFailure } from './priceAdjustments/storedAdjustmentFailure'
+import { withQuotePricingWrite } from './priceAdjustments/quotePricingWrite'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { SalesOrder, SalesOrderLine } from '@open-mercato/core/modules/sales/data/entities'
 import type { SalesDocumentNumberGenerator } from '@open-mercato/core/modules/sales/services/salesDocumentNumberGenerator'
@@ -25,6 +27,8 @@ import {
   type TenantScope,
 } from './types'
 import { emitCpqEvent } from '../events'
+import { stripQuoteOnlyArcMarkers } from './arcPriceFreeze'
+import { summarizeOrderPricing, type OrderWaterfallSummary } from './orderPricingSummary'
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -89,11 +93,12 @@ interface OrderResult {
    * order detail page to render the AMEND / RENEW / CANCEL badge. */
   quoteType: string
   currencyCode: string
+  /** NRC / MRC totals plus the source quote's list / discount / deal-value figures. */
   pricingSummary: {
     nrcTotal: number
     mrcTotal: number
     currencyCode: string
-  }
+  } & OrderWaterfallSummary
   activatedAt: string | null
   createdAt: string
   lines: OrderLineResult[]
@@ -129,29 +134,12 @@ export class DefaultCpqOrderService {
   // ─── Convert Quote to Order ─────────────────────────────────
 
   async convertQuoteToOrder(quoteId: string, scope: TenantScope): Promise<OrderResult> {
-    const em = this.em
-
-    const cpqConfig = await em.findOne(CpqQuoteConfiguration, {
-      id: quoteId,
-      organizationId: scope.organizationId,
-      tenantId: scope.tenantId,
-      deletedAt: null,
-    })
-    if (!cpqConfig) {
-      const byQuoteId = await em.findOne(CpqQuoteConfiguration, {
-        quoteId,
-        organizationId: scope.organizationId,
-        tenantId: scope.tenantId,
-        deletedAt: null,
-      })
-      if (!byQuoteId) throw new OrderError(404, 'Quote not found')
-      return this.convertFromConfig(byQuoteId, scope)
-    }
-    return this.convertFromConfig(cpqConfig, scope)
+    return withQuotePricingWrite(this.em, quoteId, scope,
+      (em, quote) => this.convertFromConfig(quote, scope, em),
+      (status, message) => new OrderError(status, message))
   }
 
-  private async convertFromConfig(cpqConfig: CpqQuoteConfiguration, scope: TenantScope): Promise<OrderResult> {
-    const em = this.em
+  private async convertFromConfig(cpqConfig: CpqQuoteConfiguration, scope: TenantScope, em: EntityManager): Promise<OrderResult> {
 
     const blockedStatuses = ['cancelled', 'rejected']
     if (blockedStatuses.includes(cpqConfig.cpqStatus)) {
@@ -185,6 +173,9 @@ export class DefaultCpqOrderService {
     if (quoteLines.length === 0) {
       throw new OrderError(422, 'Cannot convert a quote with no line items')
     }
+
+    const invalidAdjustment = storedAdjustmentFailure(cpqConfig, quoteLines)
+    if (invalidAdjustment) throw new OrderError(422, 'ADJUSTMENT_INVALID', invalidAdjustment)
 
     const { number: orderNumber } = await this.numberGenerator.generate({
       kind: 'order',
@@ -309,7 +300,8 @@ export class DefaultCpqOrderService {
         startDate: ql.startDate,
         termMonths: ql.termMonths ?? null,
         endDate: ql.endDate,
-        configuration: { ...ql.configuration, offeringName },
+        // Quote-only ARC pricing markers stay on the quote.
+        configuration: { ...stripQuoteOnlyArcMarkers(ql.configuration), offeringName },
         quantity: ql.quantity,
         charges: ql.charges ? [...ql.charges] : null,
         nrcTotal: ql.nrcTotal,
@@ -641,7 +633,7 @@ export class DefaultCpqOrderService {
       offeringId: line.offeringId ?? undefined,
       specId: line.specId ?? undefined,
       name: this.getLineName(line),
-      configuration: line.configuration ?? {},
+      configuration: stripQuoteOnlyArcMarkers(line.configuration) ?? {},
       charges: (line.charges ?? []) as Array<Record<string, unknown>>,
       mrcAmount: Number(line.mrcTotal),
       nrcAmount: Number(line.nrcTotal),
@@ -711,7 +703,7 @@ export class DefaultCpqOrderService {
           purchasePrice: Number(line.nrcTotal),
           quantity: line.quantity,
           purchaseDate: new Date().toISOString().split('T')[0],
-          configuration: line.configuration ?? {},
+          configuration: stripQuoteOnlyArcMarkers(line.configuration) ?? {},
           charges: (line.charges ?? []) as Array<Record<string, unknown>>,
           sourceOrderId: orderConfig.id,
           sourceQuoteLineId: line.sourceQuoteLineId ?? undefined,
@@ -976,7 +968,7 @@ export class DefaultCpqOrderService {
         action: lc.action,
         parentLineId: lc.parentLineId ?? null,
         quantity: lc.quantity,
-        configuration: lc.configuration ?? {},
+        configuration: stripQuoteOnlyArcMarkers(lc.configuration) ?? {},
         startDate: lc.startDate?.toISOString() ?? null,
         termMonths: lc.termMonths ?? null,
         endDate: lc.endDate?.toISOString() ?? null,
@@ -1018,6 +1010,7 @@ export class DefaultCpqOrderService {
         nrcTotal: Number((pricing as Record<string, unknown>).nrcTotal ?? 0),
         mrcTotal: Number((pricing as Record<string, unknown>).mrcTotal ?? 0),
         currencyCode: orderConfig.currencyCode,
+        ...summarizeOrderPricing(lines, quoteType, orderConfig.currencyCode),
       },
       activatedAt: orderConfig.activatedAt?.toISOString() ?? null,
       createdAt: orderConfig.createdAt.toISOString(),
@@ -1055,6 +1048,7 @@ export class OrderError extends Error {
   constructor(
     public status: number,
     message: string,
+    public details?: Record<string, unknown>,
   ) {
     super(message)
     this.name = 'OrderError'
@@ -1082,7 +1076,7 @@ function buildArcLineChange(
       offeringId: line.offeringId ?? undefined,
       specId: line.specId ?? undefined,
       name: resolveLineName(line, specMap),
-      configuration: line.configuration ?? {},
+      configuration: stripQuoteOnlyArcMarkers(line.configuration) ?? {},
       charges: (line.charges ?? null) as Array<Record<string, unknown>> | undefined,
       mrcAmount: Number(line.mrcTotal),
       nrcAmount: Number(line.nrcTotal),
@@ -1109,7 +1103,7 @@ function buildArcLineChange(
     action,
     sourceSubscriptionItemId: line.sourceSubscriptionItemId ?? null,
     modifyPatch: {
-      configuration: line.configuration ?? undefined,
+      configuration: stripQuoteOnlyArcMarkers(line.configuration) ?? undefined,
       charges: (line.charges ?? undefined) as Array<Record<string, unknown>> | undefined,
       mrcAmount: Number(line.mrcTotal),
       nrcAmount: Number(line.nrcTotal),

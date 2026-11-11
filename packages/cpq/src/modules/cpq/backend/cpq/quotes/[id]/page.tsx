@@ -1,17 +1,29 @@
 "use client"
 import * as React from 'react'
+import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { useRouter, useParams, useSearchParams } from 'next/navigation'
 import ArcQuoteConfigurator, {
   type AttachedTarget,
 } from './_components/ArcQuoteConfigurator'
 import { StatusPath } from '../../../../components/StatusPath'
-import { ArrowRight, ExternalLink, Plus } from 'lucide-react'
+import { ArrowRight, ExternalLink, Plus, RotateCcw } from 'lucide-react'
 import { Alert, AlertTitle, AlertDescription } from '@open-mercato/ui/primitives/alert'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { FormHeader } from '@open-mercato/ui/backend/forms'
 import type { ActionItem } from '@open-mercato/ui/backend/forms/ActionsDropdown'
 import { NumberInput } from '../../../../components/NumberInput'
+import { ChargeBreakdownTable } from '../../../../components/ChargeBreakdownTable'
+import { PricingSummaryCard } from '../../../../components/PricingSummaryCard'
+import { ArcLineDiff, LineActionBadge } from '../../../../components/ArcLineDiff'
+import { ADJUST_PRICE_FEATURE } from '../../../../lib/priceAdjustmentView'
+import { arcRecurringDelta } from '../../../../lib/quoteSummaryView'
+import { usePriceAdjustments } from './_components/usePriceAdjustments'
+import { PriceAdjustmentsPanel } from './_components/PriceAdjustmentsPanel'
+import { ArcLineRemovalProvider, useArcLineRemoval, useArcLineRemovalUi } from './_components/arcLineRemoval'
+import { AdjustChargeAction, DiscountLineAction, ManualAdjustmentActions, PriceAdjustmentProvider, usePriceAdjustmentUi } from './_components/priceAdjustmentContext'
+import { useGrantedFeatures } from '../../../../components/useGrantedFeatures'
+import { canRecalculateQuote, QUOTE_MANAGE_FEATURE } from '../../../../lib/quotePermissions'
 import {
   formatStatusLabel,
   quoteCpqStatusMap,
@@ -32,7 +44,12 @@ type ConstrainedAttribute = {
 }
 
 type TierBreakdownEntry = { tier: number; from: number; to: number; pricePerUnit: number; quantity: number; subtotal: number }
-type RuleAdjustment = { ruleCode: string; ruleName: string; ruleType: string; value: number; unitPriceBefore: number; unitPriceAfter: number; delta: number }
+type RuleAdjustment = {
+  ruleCode: string; ruleName: string; ruleType: string; value: number; unitPriceBefore: number; unitPriceAfter: number; delta: number
+  /** Negotiated-pricing fields; absent on legacy snapshots (treated as rules). */
+  origin?: 'rule' | 'manual'; adjustmentId?: string; reasonCode?: string; createdByUserId?: string
+}
+type AdjustmentErrorEntry = { adjustmentId: string; quoteLineId: string; chargeCode?: string; code: string }
 
 type ResolvedCharge = {
   chargeCode: string
@@ -46,6 +63,11 @@ type ResolvedCharge = {
   breakdown?: { tiers: TierBreakdownEntry[] } | null
   note?: string | null
   adjustments?: RuleAdjustment[] | null
+  listUnitPrice?: number
+  listTotalPrice?: number | null
+  standardUnitPrice?: number
+  standardTotalPrice?: number | null
+  adjustmentErrors?: AdjustmentErrorEntry[]
 }
 
 type QuoteLineAction = 'add' | 'modify' | 'cancel'
@@ -61,6 +83,7 @@ type ArcLineSource = {
 type QuoteLine = {
   lineId: string
   offeringId: string | null
+  productId?: string | null
   offeringName: string
   offeringType: string | null
   parentLineId: string | null
@@ -84,15 +107,23 @@ type QuoteResult = {
   customerName: string | null
   cpqStatus: string
   version: number
+  pricingRevision?: number
   currencyCode: string
   convertedOrderId: string | null
   validationResult: { valid: boolean; errors: Array<{ message: string }> }
+  adjustmentErrors?: AdjustmentErrorEntry[]
   pricingSummary: {
     nrcTotal: number
     mrcTotal: number
     usageCharges: Array<{ chargeCode: string; chargeName: string; unitPrice: number; note: string | null }>
     usageTotalEstimated: number | null
     currencyCode: string
+    listNrcTotal?: number
+    listMrcTotal?: number
+    dealValue?: { list: number; standard: number; offer: number }
+    discountDepth?: { rule: number | null; manual: number | null; total: number | null; maxLineManual: number | null }
+    ruleDiscountTotal?: number
+    manualDiscountTotal?: number
   }
   lines: QuoteLine[]
 }
@@ -138,20 +169,6 @@ function fmt(amount: number, currency: string): string {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(amount)
 }
 
-const RULE_TYPE_LABELS: Record<string, string> = {
-  discount_percent: '% discount',
-  discount_absolute: 'fixed discount',
-  surcharge_percent: '% surcharge',
-  surcharge_absolute: 'fixed surcharge',
-  price_override: 'override',
-}
-
-function fmtRuleValue(adj: RuleAdjustment, currency?: string): string {
-  if (adj.ruleType === 'discount_percent' || adj.ruleType === 'surcharge_percent') return `${adj.value}%`
-  if (currency) return fmt(adj.value, currency)
-  return String(adj.value)
-}
-
 async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init)
   const json = await res.json()
@@ -172,6 +189,8 @@ function MetaCard({ label, children }: { label: string; children: React.ReactNod
   )
 }
 
+// Pricing-summary figure: label, monospace amount, and an optional smaller
+// bracketed note (discount depth / change %) inline after the amount.
 function MoreActionsDropdown({ items }: { items: ActionItem[] }) {
   // Local dropdown — `ActionsDropdown` inside FormHeader.actionsContent
   // would conflict with the inline button placement. This is a thin
@@ -231,26 +250,31 @@ function MoreActionsDropdown({ items }: { items: ActionItem[] }) {
 
 function buildMoreActions({
   recalculate,
+  canRecalculate,
   submitting,
   deletable,
   onDelete,
   deleting,
 }: {
   recalculate: () => void
+  canRecalculate: boolean
   submitting: boolean
   deletable: boolean
   onDelete: () => void
   deleting: boolean
 }): ActionItem[] {
-  const items: ActionItem[] = [
-    {
+  const items: ActionItem[] = []
+  // Recalculate persists prices: offered only to users with cpq.quotes.manage
+  // and only on non-terminal quotes (the API refuses both otherwise).
+  if (canRecalculate) {
+    items.push({
       id: 'recalculate',
       label: 'Recalculate',
       onSelect: recalculate,
       loading: submitting,
       disabled: submitting,
-    },
-  ]
+    })
+  }
   if (deletable) {
     items.push({
       id: 'delete',
@@ -272,7 +296,9 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
   const cpqConfigId = (props.params?.id ?? urlParams?.id) as string
   const isNew = cpqConfigId === 'new'
 
+  const t = useT()
   const [cpqQuote, setCpqQuote] = React.useState<QuoteResult | null>(null)
+  const grantedFeatures = useGrantedFeatures([QUOTE_MANAGE_FEATURE, ADJUST_PRICE_FEATURE])
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState<string | null>(null)
   const [submitting, setSubmitting] = React.useState(false)
@@ -326,6 +352,22 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
     if (!cpqConfigId || isNew) return
     void loadArcTargets()
   }, [cpqConfigId, isNew, loadArcTargets])
+
+  // ─── Negotiated prices ─────────────────────────────────────────
+  const reloadQuote = React.useCallback(async () => {
+    try {
+      setCpqQuote(await apiJson<QuoteResult>(`/api/cpq/quotes/${cpqConfigId}`))
+    } catch (err) {
+      setError((err as Error).message)
+    }
+  }, [cpqConfigId])
+  const priceAdjustments = usePriceAdjustments<QuoteResult>({
+    quote: isNew ? null : cpqQuote,
+    quoteType: arcQuoteType,
+    canAdjust: grantedFeatures.includes(QUOTE_MANAGE_FEATURE) && grantedFeatures.includes(ADJUST_PRICE_FEATURE),
+    onQuote: setCpqQuote,
+    reloadQuote,
+  })
 
   // ─── Load or create ──────────────────────────────────────────
 
@@ -436,14 +478,15 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
     finally { setSubmitting(false) }
   }
 
-  const removeItem = async (lineId: string) => {
-    if (!cpqQuote) return
-    try {
-      setError(null)
-      const result = await apiJson<QuoteResult>(`/api/cpq/quotes/${cpqQuote.id}/items/${lineId}`, { method: 'DELETE' })
-      setCpqQuote(result)
-    } catch (err) { setError((err as Error).message) }
-  }
+  // Amend / Renew: removing an existing subscription item confirms first and
+  // marks it for removal (a `cancel` line) instead of deleting the line.
+  const lineRemoval = useArcLineRemoval<QuoteResult>({
+    quote: isNew ? null : cpqQuote,
+    quoteType: arcQuoteType,
+    onQuote: setCpqQuote,
+    onError: setError,
+  })
+  const removeItem = lineRemoval.remove
 
   const recalculate = async () => {
     if (!cpqQuote) return
@@ -582,6 +625,7 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
   // ─── Render: detail ──────────────────────────────────────────
 
   const { pricingSummary: summary, currencyCode: currency } = cpqQuote
+  const arcDelta = arcQuoteType === 'amend' || arcQuoteType === 'renew' ? arcRecurringDelta(cpqQuote.lines) : null
 
   const arcEditable = ['new', 'incomplete', 'ready'].includes(cpqQuote.cpqStatus)
   const isMergeRenew =
@@ -601,7 +645,11 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
   }
 
   return (
+    <PriceAdjustmentProvider value={priceAdjustments.ui}>
+    <ArcLineRemovalProvider value={lineRemoval.ui}>
     <div className="space-y-6">
+      {priceAdjustments.elements}
+      {lineRemoval.ConfirmDialogElement}
       {arcDrawerOpen && (
         <ArcQuoteConfigurator
           quoteId={cpqQuote.id}
@@ -693,6 +741,7 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
                 <MoreActionsDropdown
                   items={buildMoreActions({
                     recalculate,
+                    canRecalculate: canRecalculateQuote(grantedFeatures, cpqQuote.cpqStatus),
                     submitting,
                     deletable: !['accepted', 'rejected', 'cancelled'].includes(cpqQuote.cpqStatus),
                     onDelete: () => setShowDeleteConfirm(true),
@@ -816,34 +865,7 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
       {/* Summary view */}
       {view === 'summary' && (
         <>
-          {/* Pricing Summary Card */}
-          <div className="rounded-lg border bg-card p-4">
-            <h3 className="text-sm font-medium mb-3">Pricing Summary</h3>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-              <div>
-                <p className="text-xs text-muted-foreground">Non-Recurring (NRC)</p>
-                <p className="text-lg font-semibold font-mono">{fmt(summary.nrcTotal, currency)}</p>
-              </div>
-              <div>
-                <p className="text-xs text-muted-foreground">Monthly Recurring (MRC)</p>
-                <p className="text-lg font-semibold font-mono">{fmt(summary.mrcTotal, currency)}</p>
-              </div>
-              {summary.usageTotalEstimated != null && (
-                <div>
-                  <p className="text-xs text-muted-foreground">Usage (est.)</p>
-                  <p className="text-lg font-semibold font-mono">{fmt(summary.usageTotalEstimated, currency)}</p>
-                </div>
-              )}
-              {summary.usageCharges.length > 0 && (
-                <div>
-                  <p className="text-xs text-muted-foreground">Usage Charges</p>
-                  {summary.usageCharges.map((uc, i) => (
-                    <p key={i} className="text-xs mt-0.5">{uc.chargeName}: {fmt(uc.unitPrice, currency)}/unit</p>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
+          <PricingSummaryCard summary={summary} currency={currency} arcDelta={arcDelta} />
 
           {/* Validation errors */}
           {!cpqQuote.validationResult.valid && (
@@ -859,6 +881,23 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
                     <span key={i} className="block">— {e.message}</span>
                   ))}
                 </span>
+              </AlertDescription>
+            </Alert>
+          )}
+
+          {/* Amend lines the rep reconfigured are re-priced at today's catalog
+              price (server marks them `_arcRepriced`); negotiated prices are
+              not carried over yet (later release). */}
+          {arcQuoteType === 'amend' && cpqQuote.lines.some((l) => l.action !== 'cancel' && l.configuration?._arcRepriced === true) && (
+            <Alert status="information" style="lighter">
+              <AlertTitle>
+                {t('cpq.quotes.arc.repricedTitle', 'Some existing items use the current catalog price')}
+              </AlertTitle>
+              <AlertDescription>
+                {t(
+                  'cpq.quotes.arc.repricedDescription',
+                  "Reconfigured lines were re-priced at today's catalog price. Negotiated prices from the subscription are not carried over to reconfigured lines yet.",
+                )}
               </AlertDescription>
             </Alert>
           )}
@@ -881,6 +920,15 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
                   : { lineIdx, chargeIdx },
               )
             }
+          />
+
+          <PriceAdjustmentsPanel
+            quoteId={cpqQuote.id}
+            items={priceAdjustments.items}
+            total={priceAdjustments.total}
+            lines={cpqQuote.lines}
+            currency={currency}
+            errorsById={priceAdjustments.errorsById}
           />
         </>
       )}
@@ -960,6 +1008,8 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
         />
       )}
     </div>
+    </ArcLineRemovalProvider>
+    </PriceAdjustmentProvider>
   )
 }
 
@@ -1215,11 +1265,20 @@ function QuoteLineRow({ line, lineIdx, currency, isExpanded, pricingDetail, isBu
   onAddComponent?: () => void
   onTogglePricingDetail: (lineIdx: number, chargeIdx: number) => void
 }) {
+  const t = useT()
+  const adjustmentUi = usePriceAdjustmentUi()
+  const removalUi = useArcLineRemovalUi()
+  const isRemoved = removalUi?.isRemoved(line) ?? false
   const paddingLeft = indent > 0 ? `${indent * 2 + 1}rem` : undefined
+  const chargeActions = {
+    reasonLabels: adjustmentUi?.reasonLabels,
+    renderChargeActions: (charge: ResolvedCharge) => <AdjustChargeAction line={line} charge={charge} />,
+    renderManualActions: (adjustmentId: string) => <ManualAdjustmentActions adjustmentId={adjustmentId} />,
+  }
 
   return (
     <div>
-      <div className="flex items-center gap-3 px-4 py-3 hover:bg-muted/30 transition-colors" style={paddingLeft ? { paddingLeft } : undefined}>
+      <div className={`flex items-center gap-3 px-4 py-3 hover:bg-muted/30 transition-colors ${isRemoved ? 'bg-muted/20' : ''}`} style={paddingLeft ? { paddingLeft } : undefined} data-testid="cpq-quote-line" data-removed={isRemoved ? 'true' : undefined}>
         {/* Expand toggle */}
         <button onClick={onToggle} className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground">
           <svg className={`h-4 w-4 transition-transform ${isExpanded ? 'rotate-90' : ''}`} fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
@@ -1236,9 +1295,25 @@ function QuoteLineRow({ line, lineIdx, currency, isExpanded, pricingDetail, isBu
             {isBundle && (
               <Tag variant="brand" className="px-1.5 text-xs">bundle</Tag>
             )}
-            <span className="font-medium text-sm">{line.offeringName}</span>
+            <span className={`font-medium text-sm ${isRemoved ? 'text-muted-foreground line-through' : ''}`}>{line.offeringName}</span>
             {line.quantity > 1 && <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-medium">×{line.quantity}</span>}
-            <ActionBadge action={line.action} />
+            <LineActionBadge
+              action={line.action}
+              label={isRemoved ? t('cpq.quotes.arc.lineRemoved', 'remove') : undefined}
+              title={isRemoved ? t('cpq.quotes.arc.lineRemovedHint', 'This item is cancelled on the subscription when the order is activated') : undefined}
+            />
+            {!isRemoved && line.configuration?._arcPriceFrozen === true && (
+              <Tag
+                variant="neutral"
+                className="px-1.5 text-xs"
+                title={t(
+                  'cpq.quotes.arc.priceKeptHint',
+                  'Price kept from the subscription — it changes only if you reconfigure this line',
+                )}
+              >
+                {t('cpq.quotes.arc.priceKept', 'price kept')}
+              </Tag>
+            )}
             {targetCodes.size >= 2 && line.targetSubscriptionId && targetCodes.get(line.targetSubscriptionId) && (
               <Tag
                 variant="brand"
@@ -1248,7 +1323,7 @@ function QuoteLineRow({ line, lineIdx, currency, isExpanded, pricingDetail, isBu
                 → {targetCodes.get(line.targetSubscriptionId)}
               </Tag>
             )}
-            {line.isConfigured ? (
+            {isRemoved ? null : line.isConfigured ? (
               <Tag variant="success" className="px-1.5 text-xs">configured</Tag>
             ) : (
               <Tag variant="warning" className="px-1.5 text-xs">incomplete</Tag>
@@ -1264,12 +1339,32 @@ function QuoteLineRow({ line, lineIdx, currency, isExpanded, pricingDetail, isBu
 
         {/* Pricing */}
         <div className="shrink-0 text-right text-xs space-y-0.5">
+          {isRemoved && line.arcSource && line.arcSource.mrcAmount > 0 && (
+            <div>
+              <span className="text-muted-foreground">MRC </span>
+              <span className="font-mono text-muted-foreground line-through">{fmt(line.arcSource.mrcAmount, currency)}</span>
+            </div>
+          )}
           {line.nrcTotal > 0 && <div><span className="text-muted-foreground">NRC </span><span className="font-mono font-medium">{fmt(line.nrcTotal, currency)}</span></div>}
           {line.mrcTotal > 0 && <div><span className="text-muted-foreground">MRC </span><span className="font-mono font-medium">{fmt(line.mrcTotal, currency)}</span></div>}
         </div>
 
         {/* Actions */}
+        {isRemoved ? (
+          <div className="flex items-center gap-1 shrink-0">
+            <Button
+              type="button" variant="ghost" size="sm"
+              onClick={() => removalUi?.restore(line.lineId)}
+              title={t('cpq.quotes.arc.restoreHint', 'Keep this item on the subscription')}
+              data-testid="cpq-line-restore"
+            >
+              <RotateCcw className="h-4 w-4" />
+              {t('cpq.quotes.arc.restore', 'Restore')}
+            </Button>
+          </div>
+        ) : (
         <div className="flex items-center gap-1 shrink-0">
+          <DiscountLineAction line={line} />
           {onAddComponent && (
             <button onClick={onAddComponent} className="rounded p-1.5 text-muted-foreground hover:text-primary hover:bg-primary/5 transition-colors" title="Add Component">
               <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor">
@@ -1288,96 +1383,28 @@ function QuoteLineRow({ line, lineIdx, currency, isExpanded, pricingDetail, isBu
             </svg>
           </button>
         </div>
+        )}
       </div>
 
-      {/* XD-250 ARC: before/after preview when line mirrors a sub item */}
-      {isExpanded && line.arcSource && (
-        <ArcLineDiff line={line} currency={currency} />
-      )}
       {/* Charge breakdown (non-bundle or any expanded line) */}
       {isExpanded && !isBundle && line.charges.length > 0 && (
-        <ChargeBreakdown line={line} lineIdx={lineIdx} currency={currency} pricingDetail={pricingDetail} onTogglePricingDetail={onTogglePricingDetail} />
+        <ChargeBreakdown line={line} lineIdx={lineIdx} currency={currency} pricingDetail={pricingDetail} onTogglePricingDetail={onTogglePricingDetail} {...chargeActions} />
       )}
       {/* For bundles: show own charges first, then children are rendered by parent */}
       {isExpanded && isBundle && line.charges.length > 0 && (
-        <ChargeBreakdown line={line} lineIdx={lineIdx} currency={currency} pricingDetail={pricingDetail} onTogglePricingDetail={onTogglePricingDetail} />
+        <ChargeBreakdown line={line} lineIdx={lineIdx} currency={currency} pricingDetail={pricingDetail} onTogglePricingDetail={onTogglePricingDetail} {...chargeActions} />
+      )}
+      {/* XD-250 ARC: before/after preview, below the charges, when line mirrors a sub item */}
+      {isExpanded && line.arcSource && (
+        <div className="border-t bg-muted/10 px-12 py-2">
+          <ArcLineDiff line={line} currency={currency} />
+        </div>
       )}
       {/* Fallback: line has no per-charge breakdown and no ARC diff (truly empty) */}
       {isExpanded && line.charges.length === 0 && !line.arcSource && (
         <LineSummaryFallback line={line} currency={currency} />
       )}
     </div>
-  )
-}
-
-function ArcLineDiff({ line, currency }: { line: QuoteLine; currency: string }) {
-  const src = line.arcSource
-  if (!src) return null
-  const isCancel = line.action === 'cancel'
-  const beforeMrc = src.mrcAmount
-  const beforeNrc = src.nrcAmount
-  const beforeQty = src.quantity
-  const afterMrc = isCancel ? 0 : line.mrcTotal
-  const afterNrc = isCancel ? 0 : line.nrcTotal
-  const afterQty = isCancel ? 0 : line.quantity
-  const fmtVal = (v: number, asCurrency: boolean) =>
-    asCurrency ? fmt(v, currency) : String(v)
-  const rows: Array<{ label: string; before: number; after: number; asCurrency: boolean }> = [
-    { label: 'Quantity', before: beforeQty, after: afterQty, asCurrency: false },
-    { label: 'MRC', before: beforeMrc, after: afterMrc, asCurrency: true },
-    { label: 'NRC', before: beforeNrc, after: afterNrc, asCurrency: true },
-  ]
-
-  return (
-    <div className="border-t bg-muted/10 px-12 py-2 space-y-1.5">
-      <p className="text-xs font-medium text-muted-foreground">Change Preview</p>
-      <div className="rounded border bg-background overflow-hidden">
-        <table className="w-full text-xs">
-          <thead className="bg-muted/40">
-            <tr className="text-muted-foreground">
-              <th className="text-left px-3 py-1.5 font-medium" />
-              <th className="text-right px-3 py-1.5 font-medium">Before</th>
-              <th className="text-right px-3 py-1.5 font-medium">After</th>
-              <th className="text-right px-3 py-1.5 font-medium">Δ</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => {
-              const delta = r.after - r.before
-              const showDelta = delta !== 0
-              return (
-                <tr key={r.label} className="border-t border-dashed border-border/40">
-                  <td className="px-3 py-1 text-muted-foreground">{r.label}</td>
-                  <td className="px-3 py-1 text-right font-mono">{fmtVal(r.before, r.asCurrency)}</td>
-                  <td className={`px-3 py-1 text-right font-mono ${isCancel ? 'text-muted-foreground line-through' : ''}`}>
-                    {fmtVal(r.after, r.asCurrency)}
-                  </td>
-                  <td className={`px-3 py-1 text-right font-mono font-medium ${showDelta ? (delta > 0 ? 'text-status-success-text' : 'text-destructive') : 'text-muted-foreground'}`}>
-                    {showDelta ? `${delta > 0 ? '+' : ''}${fmtVal(delta, r.asCurrency)}` : '—'}
-                  </td>
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
-      </div>
-      {isCancel && (
-        <p className="text-xs text-destructive italic">Cancellation — item will be terminated on activation.</p>
-      )}
-    </div>
-  )
-}
-
-function ActionBadge({ action }: { action: QuoteLineAction }) {
-  const variantByAction: Record<QuoteLineAction, 'info' | 'warning' | 'error'> = {
-    add: 'info',
-    modify: 'warning',
-    cancel: 'error',
-  }
-  return (
-    <Tag variant={variantByAction[action]} className="px-1.5 text-xs">
-      {action}
-    </Tag>
   )
 }
 
@@ -1404,138 +1431,22 @@ function LineSummaryFallback({ line, currency }: { line: QuoteLine; currency: st
   )
 }
 
-function ChargeBreakdown({ line, lineIdx, currency, pricingDetail, onTogglePricingDetail }: {
+function ChargeBreakdown({ line, lineIdx, pricingDetail, onTogglePricingDetail, ...tableProps }: {
   line: QuoteLine; lineIdx: number; currency: string
   pricingDetail: { lineIdx: number; chargeIdx: number } | null
   onTogglePricingDetail: (lineIdx: number, chargeIdx: number) => void
+  reasonLabels?: Record<string, string>
+  renderChargeActions?: (charge: ResolvedCharge) => React.ReactNode
+  renderManualActions?: (adjustmentId: string) => React.ReactNode
 }) {
   return (
     <div className="border-t bg-muted/10 px-12 py-2">
-      <table className="w-full text-xs">
-        <thead>
-          <tr className="text-muted-foreground">
-            <th className="text-left py-1 font-medium">Charge</th>
-            <th className="text-left py-1 font-medium">Type</th>
-            <th className="text-right py-1 font-medium">Unit Price</th>
-            <th className="text-right py-1 font-medium">Qty</th>
-            <th className="text-right py-1 font-medium">Total</th>
-            <th className="w-8" />
-          </tr>
-        </thead>
-        <tbody>
-          {line.charges.map((c, i) => {
-            const hasDetail = !!(c.breakdown?.tiers?.length || c.adjustments?.length)
-            const isDetailOpen = pricingDetail?.lineIdx === lineIdx && pricingDetail?.chargeIdx === i
-            return (
-              <React.Fragment key={i}>
-                <tr className="border-t border-dashed border-border/50">
-                  <td className="py-1">{c.chargeName}</td>
-                  <td className="py-1 uppercase">{c.chargeType}</td>
-                  <td className="py-1 text-right font-mono">{fmt(c.unitPrice, currency)}</td>
-                  <td className="py-1 text-right font-mono">{c.quantity ?? '—'}</td>
-                  <td className="py-1 text-right font-mono">{c.totalPrice != null ? fmt(c.totalPrice, currency) : c.note ?? '—'}</td>
-                  <td className="py-1 text-center">
-                    {hasDetail && (
-                      <button
-                        onClick={() => onTogglePricingDetail(lineIdx, i)}
-                        className="inline-flex items-center justify-center rounded p-0.5 hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
-                        title="Show pricing breakdown"
-                      >
-                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3.5 h-3.5">
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
-                        </svg>
-                      </button>
-                    )}
-                  </td>
-                </tr>
-                {isDetailOpen && (
-                  <tr>
-                    <td colSpan={6} className="pb-3 pt-1">
-                      <div className="rounded border bg-background p-3 space-y-3 text-xs">
-                        <div className="flex items-center justify-between">
-                          <span className="font-semibold text-sm">Pricing Details — {c.chargeName}</span>
-                          <span className="text-muted-foreground">{c.pricingMethod ?? 'flat'}</span>
-                        </div>
-
-                        {c.breakdown?.tiers && c.breakdown.tiers.length > 0 && (
-                          <div>
-                            <div className="font-medium text-muted-foreground mb-1">Tier Breakdown</div>
-                            <table className="w-full">
-                              <thead>
-                                <tr className="text-muted-foreground">
-                                  <th className="text-left py-0.5 font-medium">Tier</th>
-                                  <th className="text-right py-0.5 font-medium">Range</th>
-                                  <th className="text-right py-0.5 font-medium">Price/Unit</th>
-                                  <th className="text-right py-0.5 font-medium">Qty</th>
-                                  <th className="text-right py-0.5 font-medium">Subtotal</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {c.breakdown.tiers.map((t) => (
-                                  <tr key={t.tier} className="border-t border-border/30">
-                                    <td className="py-0.5">{t.tier}</td>
-                                    <td className="py-0.5 text-right font-mono">{t.from}–{t.to}</td>
-                                    <td className="py-0.5 text-right font-mono">{fmt(t.pricePerUnit, currency)}</td>
-                                    <td className="py-0.5 text-right font-mono">{t.quantity}</td>
-                                    <td className="py-0.5 text-right font-mono">{fmt(t.subtotal, currency)}</td>
-                                  </tr>
-                                ))}
-                                <tr className="border-t font-medium">
-                                  <td colSpan={4} className="py-0.5 text-right">Tiered Total</td>
-                                  <td className="py-0.5 text-right font-mono">
-                                    {fmt(c.breakdown.tiers.reduce((s, t) => s + t.subtotal, 0), currency)}
-                                  </td>
-                                </tr>
-                              </tbody>
-                            </table>
-                          </div>
-                        )}
-
-                        {c.adjustments && c.adjustments.length > 0 && (
-                          <div>
-                            <div className="font-medium text-muted-foreground mb-1">Applied Price Rules</div>
-                            <table className="w-full">
-                              <thead>
-                                <tr className="text-muted-foreground">
-                                  <th className="text-left py-0.5 font-medium">Rule</th>
-                                  <th className="text-left py-0.5 font-medium">Type</th>
-                                  <th className="text-right py-0.5 font-medium">Value</th>
-                                  <th className="text-right py-0.5 font-medium">Before</th>
-                                  <th className="text-right py-0.5 font-medium">After</th>
-                                  <th className="text-right py-0.5 font-medium">Delta</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {c.adjustments.map((adj, ai) => (
-                                  <tr key={ai} className="border-t border-border/30">
-                                    <td className="py-0.5">{adj.ruleName}</td>
-                                    <td className="py-0.5">{RULE_TYPE_LABELS[adj.ruleType] ?? adj.ruleType}</td>
-                                    <td className="py-0.5 text-right font-mono">{fmtRuleValue(adj, currency)}</td>
-                                    <td className="py-0.5 text-right font-mono">{fmt(adj.unitPriceBefore, currency)}</td>
-                                    <td className="py-0.5 text-right font-mono">{fmt(adj.unitPriceAfter, currency)}</td>
-                                    <td className={`py-0.5 text-right font-mono ${adj.delta < 0 ? 'text-destructive' : adj.delta > 0 ? 'text-status-success-text' : ''}`}>
-                                      {adj.delta > 0 ? '+' : ''}{fmt(adj.delta, currency)}
-                                    </td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                        )}
-
-                        <div className="flex items-center justify-between pt-1 border-t text-sm font-semibold">
-                          <span>Final Total</span>
-                          <span className="font-mono">{c.totalPrice != null ? fmt(c.totalPrice, currency) : '—'}</span>
-                        </div>
-                      </div>
-                    </td>
-                  </tr>
-                )}
-              </React.Fragment>
-            )
-          })}
-        </tbody>
-      </table>
+      <ChargeBreakdownTable
+        charges={line.charges}
+        openDetailIndex={pricingDetail?.lineIdx === lineIdx ? pricingDetail.chargeIdx : null}
+        onToggleDetail={(chargeIdx) => onTogglePricingDetail(lineIdx, chargeIdx)}
+        {...tableProps}
+      />
     </div>
   )
 }

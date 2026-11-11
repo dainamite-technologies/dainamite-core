@@ -703,7 +703,7 @@ Existing CPQ quote detail page (`src/modules/cpq/backend/cpq/quotes/[id]/page.ts
 - **"Modify subscription" button** — visible when quote is in editable status (`new`, `incomplete`, `ready`, `draft`). Opens the ARC configurator drawer (described below).
 - **Per-target item editor** — once the configurator has attached targets, the existing line list groups under each target:
   - "Add item from catalog" → new line with `target_subscription_id=<this target>`
-  - "Remove this item" on existing item lines → marks `action='cancel'`
+  - "Remove this item" on existing item lines → marks `action='cancel'` *(implemented 2026-11-11: on Amend / Renew quotes `DELETE /api/cpq/quotes/[quoteId]/items/[lineId]` on a mirror line turns it and its mirrored components into zero-priced `cancel` lines after a confirmation dialog; `POST .../items/[lineId]/restore` rebuilds it from the subscription item — see `services/arcLineRemoval.ts`)*
   - "Edit configuration" → `action='modify'` with new config
   - Read-only summary of "current items on this subscription that are NOT being changed" — visual aid so operators know what stays.
 - **Merge-renewal banner** — when the quote has `type='renew'` and 2+ targets, a banner shows "Merging {N} contracts into a new one" with the list of source codes and the proposed new contract code/name (auto-generated unless operator overrode). At activation, all source subs are marked **Merged**. (Internal: every target has `merge_action='absorb'`; activation creates a new `CpqInventorySubscription` and sets sources' status to `superseded`.)

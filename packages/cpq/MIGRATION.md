@@ -166,6 +166,80 @@ the `@dainamite/cpq` package, per
 
 ## Schema / API changelog (track breaking changes here)
 
+### 2026-11-10 — Manual price adjustments and price waterfall (price adjustments, Phase 1)
+
+Spec: `.ai/specs/2026-11-10-cpq-manual-price-adjustments.md`. Manual:
+`manuals/cpq-price-adjustments.md`.
+
+**Schema (additive).** Migration `Migration20261110213052` adds
+`cpq_quote_price_adjustments` (tenant-scoped, soft-deleted, FK-string ids only)
+and `cpq_quote_configurations.pricing_revision int default 0`. Rollback drops
+both. No data migration: existing quotes keep their stored charges; list /
+standard prices are derived for responses until the next saved recalculation.
+
+**Upgrade steps for existing tenants (required).** The toggle, the reason
+dictionary and the role grant are created by `setup.ts` at tenant
+initialization only. After `yarn mercato db migrate`, run
+`yarn mercato cpq seed-price-adjustments` (idempotent; `--tenant` / `--org`
+to target one) and `yarn mercato auth sync-role-acls`. Skipping them leaves the
+feature fail-closed: writes `403`, actions hidden, and every reason
+`REASON_NOT_FOUND` if the toggle is switched on by hand.
+
+**Write serialization.** Every pricing write (line add / update / remove, ARC
+target detach, saved recalculation, clone, status change, adjustment CRUD,
+order conversion) runs in
+a transaction that locks the quote row (`SELECT … FOR UPDATE`) and bumps
+`pricing_revision`. Adjustment writes accept `expectedRevision` and return
+`409 STALE_REVISION` on mismatch.
+
+**Response shapes (additive).** See the changeset. `discountTotal` keeps its
+old meaning (rule discounts only) for existing consumers; use
+`ruleDiscountTotal` / `manualDiscountTotal` for the split.
+
+**Events.** `cpq.quote.pricing_changed` fires after a committed save whose
+`snapshotHash` changed; `cpq.quote.status_changed` after every committed status
+change (`cause: manual | auto`). Quotes saved before this release have no
+stored hash: their first save records a baseline silently. New and ARC quotes
+start with an empty-quote hash, so their first priced line is a signal.
+`transitionStatus(quoteId, status, scope, actorUserId?)` gained an optional
+actor argument.
+
+**Conversion.** A quote whose stored waterfall contains an invalid manual
+adjustment can no longer be converted (`422 ADJUSTMENT_INVALID` with
+`lineId` / `code`).
+
+### 2026-11-10 — Quote pricing integrity (price adjustments, Phase 1)
+
+Spec: `.ai/specs/2026-11-10-cpq-quote-pricing-integrity.md`. No schema change.
+
+**Recalculate needs `cpq.quotes.manage` (breaking for view-only callers).**
+`POST /api/cpq/quotes/{quoteId}/recalculate` required only `cpq.quotes.view`,
+so a read-only user or API key could persist re-priced quotes. It now requires
+`cpq.quotes.manage`. A saved recalculation (`save: true`) on an `accepted`,
+`rejected` or `cancelled` quote returns `409` — an accepted quote's prices are
+the basis for order conversion. Dry runs (`save: false`) on terminal quotes
+still work for managers.
+
+**Amend mirror lines are frozen (behaviour change).** Engine-priced mirror
+lines on Amend quotes were re-priced at today's catalog price on every
+recalculation, and activation wrote that price back to the subscription item.
+They now carry `_arcPriceFrozen: true` in the line `configuration` and keep the
+source item's stored charges until a pricing input of the line changes
+(configuration — ARC markers and key order ignored — quantity, `termMonths`,
+`startDate`, `endDate`, `usageEstimates`); then the marker is dropped and the
+line is re-priced as before. Renew and Cancel quotes are unchanged. Amend
+quotes created before this release keep the old behaviour. The marker never
+reaches subscription items (stripped at activation) and mirror lines ignore any
+stale `_arc*` keys on an item's configuration.
+
+**Mutation guards on quote writes.** The status, items, recalculate and
+order-conversion routes now call `runRouteMutationGuards`
+(`@open-mercato/shared/lib/crud/route-mutation-guard`) with resource kinds
+`cpq.quote` (actions `transition_status`, `recalculate`, `convert_to_order`)
+and `cpq.quote_line` (create / update / delete). A guard can block the write or
+modify the line payload; after-success hooks run once the write commits.
+These routes now export `openApi`.
+
 ### 2026-11-03 — Open Mercato 0.9.0 peers; `isQuotingError` / `isOrderError`
 
 **Peer ranges (breaking for consumers).** `@open-mercato/*` `^0.9.0`,

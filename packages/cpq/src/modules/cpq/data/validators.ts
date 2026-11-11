@@ -378,6 +378,7 @@ const cpqPricePreviewItemSchema = z.object({
 )
 
 export const cpqPricePreviewSchema = z.object({
+  includeWaterfall: z.boolean().optional().default(false),
   primaryItem: cpqPricePreviewItemSchema.nullish(),
   childItems: z.array(cpqPricePreviewItemSchema),
   currencyCode: z.string().min(1).optional(),
@@ -691,3 +692,5 @@ export const cpqConvertQuoteToOrderSchema = z.object({
 export const cpqOrderStatusTransitionSchema = z.object({
   targetStatus: z.string().min(1),
 })
+
+export { cpqPriceAdjustmentInputSchema, cpqPriceAdjustmentPatchSchema } from './price-adjustments'

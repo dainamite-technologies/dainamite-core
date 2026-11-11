@@ -10,7 +10,7 @@ export const metadata = {
   pageTitleKey: 'cpq.orders.title',
   pageGroup: 'CPQ',
   pageGroupKey: 'customers~sales~cpq.nav.group',
-  pageOrder: 91,
+  pageOrder: 2,
   icon: ordersIcon,
   breadcrumb: [{ label: 'CPQ Orders', labelKey: 'cpq.orders.title' }],
 } as const

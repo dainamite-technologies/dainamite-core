@@ -2,8 +2,9 @@
 // - id: module id (plural snake_case; special cases: 'auth')
 // - from: '@open-mercato/core' | '@app' | custom alias/path in future
 import { parseBooleanWithDefault } from '@open-mercato/shared/lib/boolean'
+import type { ModuleOverrides } from '@open-mercato/shared/modules/overrides'
 
-export type ModuleEntry = { id: string; from?: '@open-mercato/core' | '@app' | string }
+export type ModuleEntry = { id: string; from?: '@open-mercato/core' | '@app' | string; overrides?: ModuleOverrides }
 
 export const enabledModules: ModuleEntry[] = [
   { id: 'dashboards', from: '@open-mercato/core' },
@@ -44,7 +45,25 @@ export const enabledModules: ModuleEntry[] = [
   { id: 'customer_accounts', from: '@open-mercato/core' },
   { id: 'portal', from: '@open-mercato/core' },
   // Dainamite product modules — extracted to @dainamite/* packages (see SPEC-001 + packages/cpq/MIGRATION.md)
-  { id: 'cpq', from: '@dainamite/cpq' },
+  {
+    id: 'cpq',
+    from: '@dainamite/cpq',
+    // App-wide sidebar group order (framework `overrides.nav.groupOrder`). Listed
+    // groups are PREPENDED ahead of every other group, so the core
+    // Customers → Catalog → Sales groups are repeated here to keep them on top,
+    // then CPQ — which lands it directly after Sales and above Billing.
+    // Role / user sidebar preferences still override this default.
+    overrides: {
+      nav: {
+        groupOrder: [
+          'customers.nav.group',
+          'catalog.nav.group',
+          'customers~sales.nav.group',
+          'customers~sales~cpq.nav.group',
+        ],
+      },
+    },
+  },
   // XD-249 Billing — recurring-billing engine; Phase 0 ships schema + setup
   // only, REST API and Bill Run engine land in later phases.
   { id: 'billing', from: '@dainamite/billing' },

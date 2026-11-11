@@ -66,7 +66,8 @@ export function resolveManualAdjustments(
           : (row.quoteLineId === line.lineId || lineage.includes(row.quoteLineId)) &&
             (!row.chargeTypeFilter || row.chargeTypeFilter === charge.chargeType)
       )).sort((a, b) => rank(a) - rank(b) || a.id.localeCompare(b.id))
-      function rank(row: PriceAdjustment) {
+      const rank = (row: PriceAdjustment) =>
+        row.level === 'charge' ? 0 : row.quoteLineId === line.lineId ? 1 : 2 + lineage.indexOf(row.quoteLineId)
         return row.level === 'charge' ? 0 : row.quoteLineId === line.lineId ? 1 : 2 + lineage.indexOf(row.quoteLineId)
       }
       const standard = charge.standardUnitPrice!

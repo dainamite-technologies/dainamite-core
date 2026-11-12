@@ -1595,6 +1595,17 @@ Phase 4: Index-linked costs + expiry warnings                 4 commits   WF1 / 
 
 ## Changelog
 
+### 2026-11-12 (detailed feature specs)
+- Five feature specs written from the briefs: `2026-11-12-cpq-cost-plus-{order-subscription-costs,supplier-sourcing,foreign-currency-costs,arc-costs,index-costs-expiry}.md`, each reviewed by a fresh staff-engineer pass.
+- Amendments they record against this App Spec:
+  - **R13 cancel end date:** `ended_at` = the cancelling order's change-log `effective_at` (the code has no separate cancel effective date). This resolves the R13 / US-6.4 conflict.
+  - **R1a / R1c:** reconfigured mirror lines (marker `_arcReconfigured`) instantiate catalog cost lines; unreconfigured mirrors never do.
+  - **Activation** becomes one transaction on a forked EM. ARC activation also locks the source quote and the target subscriptions (I-12, Q-D13). This is flagged for human confirmation.
+  - **R3 FX provider rule:** the `currencies` module has no default / priority provider, so a CPQ toggle `cpq.cost_plus.fx_source_priority` is used. v1 works with manual or UTC-midnight rates only, until upstream date normalization (UP-FX-1) is fixed. Flagged.
+  - **Expiry warnings** use a module schedule feeding a CPQ worker queue, not a scheduler command; a `registerCommand` API does not exist in scheduler 0.9.0.
+  - **R10a decline on a locked quote:** the amount is kept and downgraded to `estimated` (flagged).
+  - **Re-price from cost** ships only after `modifiedItems` exists in the billing connector (flagged).
+
 ### 2026-11-12 (user review)
 - Phase 0 answers confirmed by the user: Q-P0.1–Q-P0.4 and every Q-D default except Q-D1.
 - **Q-D1 changed:** reps see cost details and margin read-only (`cpq.costs.view` granted to `employee` by default; `cpq.costs.manage` stays `admin`).

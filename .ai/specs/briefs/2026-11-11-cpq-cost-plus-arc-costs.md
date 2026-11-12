@@ -20,10 +20,10 @@ Renewals and amendments do not know what the supplier charges, and supplier rene
   - Price lock on frozen Amend lines: cost changes move margin only. An explicit **Re-price from cost** un-freezes the line, and the new price flows through the existing `modifiedItems` path.
   - Renew: MRC costs whose validity or supplier term ends before the new term become `estimated` (renegotiation due). They need a request or **Keep current cost** with evidence before conversion.
   - Cancel shows supplier early-exit exposure.
-  - ARC activation closes old item-cost rows at E − 1 and opens new ones from E. A cost-only `modify` has a zero billing diff. Events `item_cost_changed` carry the cause.
+  - ARC activation updates the subscription item costs **in place** (ids never change), appends Cost History entries (`amend` / `renew` / `cancel` / `merge` / `reconfirm`) linked to the ARC order and change log, and re-points costs on merge. A cost-only `modify` has a zero billing diff. Events `item_cost_changed` carry the cause.
   - A cost-only Amend is internal: operator `ready → accepted` (Q-D12).
   - `ArcLineDiff` shows costs and margin; the Phase 1 banner is removed; forward compatibility with Phase-1 Renews is kept.
-  - Post-conversion re-confirmation before activation (Q-D13): margin only, sharing the lock with activation.
+  - Post-conversion re-confirmation before activation (Q-D13) on `CpqOrderLineCost`: margin only, sharing the lock with activation.
 - **Ladder:** `arcPriceFreeze` / `_arcRepriced`, ARC mirror and activation write-back (rung 1, grounded C8); the rest new code.
 - **Rejected:** automatic price pass-through on cost change (Q-D6); supplier early-termination charge recording (Q-D10); a lightweight non-ARC item-cost command (Q-D12).
 

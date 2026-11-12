@@ -18,14 +18,14 @@ Operators sell offers whose price is *supplier cost + markup*: third-party tails
 - A charge can use a new pricing method, `cost_plus`, and carry **cost elements** in the catalog.
 - On a quote, every line gets **cost lines** for those elements. A cost-plus charge's list price is computed as markup(Σ price-basis costs).
 - The existing waterfall (price rules → manual adjustments → offer) continues unchanged.
-- Holders of a new `cpq.costs.view` permission see costs, markup and a computed margin. Everyone else sees only cost status.
+- Holders of a new `cpq.costs.view` permission see costs, markup and a computed margin. It is granted by default to `admin` and to `employee`, so reps see cost details read-only. Editing needs `cpq.costs.manage` (`admin`). Roles without `cpq.costs.view` (custom roles, the public calculator) see only cost status.
 - Everything is behind the tenant feature toggle `cpq.cost_plus`, which is off by default.
 
 ## Resolved assumptions (autonomous defaults)
 
 | # | Question | Applied default | Rationale | Confirm? |
 |---|---|---|---|---|
-| Q1 | Should the conversion guard (R7) ship here or in the order / subscription feature, as the brief says? | **Here** (commit #17). The order / subscription feature keeps item costs, UI and ARC safety. | Without the guard, this feature alone would let an indicative quote become an order and break I-6. Moving one small commit keeps both features independently deployable. The App Spec is amended (dated changelog). | reversible |
+| Q1 | Should the conversion guard (R7) ship here or in the order / subscription feature, as the brief says? | **Here** (commit #17). The order / subscription feature keeps the order's own cost entity (`CpqOrderLineCost`, copied at conversion), the stable-id subscription item costs with their Cost History, the UI and ARC safety. | Without the guard, this feature alone would let an indicative quote become an order and break I-6. Moving one small commit keeps both features independently deployable. The App Spec is amended (dated changelog). | reversible |
 | Q2 | Command pattern and undo for cost writes | Commands `cpq.quote_line_cost.create / update / delete` and `cpq.quote_markup_override.set / clear`, **not undoable**. Audit snapshots carry ids, statuses, roles and `cost_key` only. | An undo payload must hold the previous amounts, and the action log is readable outside `cpq.costs.view` (App Spec I-4, architect checkpoint #1). Reversal is an ordinary edit. | reversible |
 | Q3 | Where is the markup override stored? | New table `cpq_quote_markup_overrides`: one row per (line, charge code). | The line `configuration` / `charges` jsonb is read by every quote reader (I-4). A cost line is the wrong owner, because the markup belongs to the charge, not to one cost. | reversible |
 | Q4 | Who may see `pricing_method = cost_plus` on a charge? | Everyone with the existing read feature. `markup_rule` / `markup_value` are stripped without `cpq.costs.view`. | The method alone reveals no cost. The markup combined with a visible list price would. | reversible |
@@ -437,7 +437,7 @@ Every route: `requireAuth`, `requireFeatures` (never `requireRoles`), an `openAp
 - `QuotePricingCause` gains `'cost'`.
 
 **ACL** (`acl.ts`, `setup.ts`):
-- `cpq.costs.view`, `cpq.costs.manage`; defaults `admin` only (Q-D1).
+- `cpq.costs.view` (default `admin` + `employee`: reps see cost details read-only) and `cpq.costs.manage` (default `admin`) — App Spec Q-D1, user decision 2026-11-12.
 - `seedCostPlusDefaults` upserts the global toggle `cpq.cost_plus` (`defaultValue: false`, `onConflictAction: 'ignore'`), following the `priceAdjustmentDefaults.ts` pattern.
 - A CLI `seed-cost-plus` is added, mirroring `cli.ts:99-113`.
 
@@ -452,7 +452,7 @@ Every route: `requireAuth`, `requireFeatures` (never `requireRoles`), an `openAp
 - **Pricing table detail:** a `purpose` selector, read-only once the table is referenced; a list filter by purpose.
 - **Quote detail** (`backend/cpq/quotes/[id]/page.tsx`):
   - **All users:** per-line cost status badges (`Cost pending`, `Estimated`, `Expired cost`) beside `ChargeBreakdown`; an `Indicative` chip in the header when any price-basis cost is estimated; for unpriced cost-plus charges, "≈ {fallback}" or "Price on request".
-  - **`cpq.costs.view` holders:**
+  - **`cpq.costs.view` holders (reps by default, read-only without `cpq.costs.manage`):**
     - a **Costs** sub-panel per line (`_components/CostsPanel.tsx`, injection spot `data-table:cpq.quote_line_costs`) with name, role, source, status, value, currency, supplier, valid until, and actions **Add cost**, **Edit / Confirm**, **Override markup** (needs `cpq.costs.manage`);
     - a **Margin** card beside `PricingSummaryCard` showing contract margin, margin %, NRC / MRC margin, "based on X% coverage" and flags, with a bundle-parent roll-up row.
   - Locked state: tooltip "Costs that change the price are locked in status X — margin-only costs and confirmations remain possible."
@@ -491,7 +491,7 @@ Mockups: skipped. No browser provider or test-env descriptor is configured in th
   None is breaking. These are logged in `packages/cpq/MIGRATION.md` and the package changelog.
 - **Schema:** additive. A down-migration drops only new tables and columns.
 - **Rollback by toggle is not neutral.** Toggle off keeps all data and stored prices readable. But every re-pricing of a cost-plus charge returns `COST_PLUS_DISABLED`, so open cost-plus quotes become not ready on their next save until the toggle is back on, or until their charges are switched to `fixed` / `table`. This is intentional: re-pricing from cost without costs would be wrong. The manual tells admins to check `GET /api/cpq/cost-plus/usage` first.
-- **Product direction calls (owner: product):** reps see no cost values (Q-D1); indicative quotes may be sent (Q-D2). Both are decided in the App Spec and reversible by role grants and status configuration.
+- **Product direction calls (owner: product):** reps see cost details read-only (Q-D1, user decision 2026-11-12); indicative quotes may be sent (Q-D2). Both are decided in the App Spec and reversible by role grants and status configuration.
 
 ## 📋 Phasing
 

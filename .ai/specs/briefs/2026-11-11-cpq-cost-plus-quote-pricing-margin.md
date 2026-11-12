@@ -35,7 +35,7 @@ Cost-plus offers (supplier tails, fixed supplier rate tables) are priced off-sys
 
 | Question | Answer (from the App Spec) |
 |----------|----------------------------|
-| Who sees costs | `cpq.costs.view` only (default admin); reps see cost status only (Q-D1) |
+| Who sees costs | `cpq.costs.view`, default `admin` + `employee`: reps see cost details and margin read-only; `cpq.costs.manage` default `admin` (Q-D1, user decision 2026-11-12) |
 | Estimated costs | Price the charge; quote indicative, may be sent; conversion blocked (Q-D2, R6, R7) |
 | Accepted quote, confirmed cost differs | Reopen and apply supplier answer → back to `ready`, re-accept (Q-D3) |
 | Markup granularity | One rule per cost-plus charge (Q-D7) |

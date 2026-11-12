@@ -18,11 +18,11 @@ Costs priced on a quote vanish after conversion. Renewals then start blind, and 
   - The conversion guard R7 and the post-conversion price freeze moved to the quote pricing and margin feature on 2026-11-12.
   - `CpqOrderLineCost`: every quote cost line is copied at conversion, in the same transaction (same `cost_key`, `source_quote_line_cost_id`).
   - `CpqSubscriptionItemCost`: **one row per item and `cost_key`, whose id stays the same for the life of the purchase**. It is created at the first activation (unique `(subscription_item_id, cost_key)`), updated in place by later changes, re-pointed on merge, and ended on cancel / removal.
-  - `CpqSubscriptionItemCostChange`: an append-only **Cost History**, one entry per change, with change type, source quote / order, effective date and before → after. It is linked to the subscription's `CpqSubscriptionChangeLog` row and idempotent per `(source_order_id, item_cost_id)`. Each entry emits `cpq.subscription.item_cost_changed`.
-  - Order and subscription UI: order costs and margin; item costs and margin; a **Cost History** section modelled on the existing Change History (`backend/cpq/inventory/subscriptions/[id]/page.tsx:754-790`). Gated server-side on `cpq.costs.view` (reps read-only).
+  - **Cost history uses the existing `CpqSubscriptionChangeLog`, with no new entity.** That log is already the history of subscription items: one row per subscription per order, with full before / after snapshots and quote / order links. `snapshotSubscription` (`cpqInventoryService.ts:1506`) adds `items[].costs[]`, and the change-log API strips `costs` for users without `cpq.costs.view`. `CpqOrderLineCost.subscription_item_cost_id` links each order cost to the item cost it set. Each created / changed / ended item cost emits `cpq.subscription.item_cost_changed`.
+  - Order and subscription UI: order costs and margin; item costs and margin; cost before → after per order inside the existing Change History (`backend/cpq/inventory/subscriptions/[id]/page.tsx:754-790`, `ChangeLogLineDetails`). Gated server-side on `cpq.costs.view` (reps read-only).
   - ARC safety:
     - Renew mirror lines with cost-plus charges are frozen, with a banner.
-    - Minimal activation write-back: Cancel / removal ends item costs; a re-priced mirror updates them in place. Ids are kept and history entries are written.
+    - Minimal activation write-back: Cancel / removal ends item costs; a re-priced mirror updates them in place. Ids are kept, and the changes show in the change-log snapshots.
 - **Ladder:** conversion / activation services and `arcPriceFreeze` (rung 1, grounded C7, C8); new entity and UI (rung 5).
 - **Rejected:** orders reading quote cost lines (architect #1 proposal, overruled by the user on 2026-11-12); close-and-reopen item cost rows (ids would change per purchase); costs in billing payloads.
 
@@ -33,7 +33,7 @@ Costs priced on a quote vanish after conversion. Renewals then start blind, and 
 | Billing | Unchanged payloads, byte-identical (I-9) |
 | Index revaluation of item costs | No — frozen until the next ARC (Q-D9) |
 | Item margin | Item MRC amount − Σ open MRC item costs × quantity; NRC once at activation (WF5) |
-| Entity fields | §1.4.6 last paragraphs (`CpqOrderLineCost`, `CpqSubscriptionItemCost`, `CpqSubscriptionItemCostChange`) |
+| Entity fields | §1.4.6 last paragraphs (`CpqOrderLineCost`, `CpqSubscriptionItemCost`, cost history in `CpqSubscriptionChangeLog`) |
 | Acceptance criteria | §7 Phase 1 I-6 / R7 and I-7 / I-9 / I-10 domain criteria; business criteria on conversion, activation, Renew, Cancel |
 
 ## Non-goals

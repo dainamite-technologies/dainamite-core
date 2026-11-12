@@ -2,7 +2,7 @@
 
 One line per atomic commit, in build order within each phase. Source of truth for estimates: App Spec §4 / §6.
 
-## Phase 1 — Cost-plus from known costs, margin, carry-through (27)
+## Phase 1 — Cost-plus from known costs, margin, carry-through (26)
 1. Toggle `cpq.cost_plus` + ACL `cpq.costs.view` / `cpq.costs.manage` + role defaults (`acl.ts`, `setup.ts`, defaults seeder).
 2. `CpqProductCharge` cost-plus columns + validators + migration; markup redaction in charge responses.
 3. `CpqPricingTable.purpose` + server-side guard on `pricing-tables` and `pricing-table-entries` routes.
@@ -24,11 +24,10 @@ One line per atomic commit, in build order within each phase. Source of truth fo
 16. Clone R16 + toggle-off behaviour R14 + usage endpoint `GET /api/cpq/cost-plus/usage`.
 17. Conversion guard R7 + post-conversion price freeze of cost lines.
 17b. `CpqOrderLineCost` + conversion copy (same transaction).
-18. `CpqSubscriptionItemCost` (stable id per item + `cost_key`) + activation write (same transaction).
-18b. `CpqSubscriptionItemCostChange` (append-only cost history, linked to `CpqSubscriptionChangeLog`) + `item_cost_changed` per entry.
-19. Order / subscription UI (order costs, item costs + margin, Cost History section modelled on Change History).
+18. `CpqSubscriptionItemCost` (stable id per item + `cost_key`) + activation write (same transaction) + item costs in `snapshotSubscription` (change-log before / after) + change-log API redaction without `cpq.costs.view` + `item_cost_changed`.
+19. Order / subscription UI (order costs, item costs + margin, cost before → after in the existing Change History).
 20. ARC safety: Renew mirrors with cost-plus charges frozen + banner.
-20a. ARC safety: minimal activation write-back (end on cancel / removal; in-place update on re-priced mirror, with history entries).
+20a. ARC safety: minimal activation write-back (end on cancel / removal; in-place update on re-priced mirror).
 21. Demo seed (GIX cost table, IP Transit with partner tail, quotes in each Phase 1 cost state, margin-approval recipe disabled) + manual `manuals/cpq-cost-plus-pricing.md`.
 
 ## Phase 2 — Supplier cost sourcing + FX (7)
@@ -45,9 +44,9 @@ One line per atomic commit, in build order within each phase. Source of truth fo
 30. Mirror carried costs + Renew reconciliation (R1c).
 31. Price lock + Re-price from cost action.
 32. Renew renegotiation due + Cancel supplier exposure.
-33. ARC activation: update item costs in place (stable ids), Cost History entries linked to the ARC change log, merge re-pointing, cost-only modify.
+33. ARC activation: update item costs in place (stable ids; history via the change-log snapshots), merge re-pointing, cost-only modify.
 34. `ArcLineDiff` cost / margin before-after + banners; Phase 1 safety banner removed.
-27. Post-conversion re-confirmation (Q-D13) on `CpqOrderLineCost` (lock-shared with activation; `reconfirm` history entry at activation).
+27. Post-conversion re-confirmation (Q-D13) on `CpqOrderLineCost` (lock-shared with activation).
 
 ## Phase 4 — Indexed costs + expiry (4)
 35. `CpqCostIndex` / values entities + API + import (server-assigned revision).
@@ -55,4 +54,4 @@ One line per atomic commit, in build order within each phase. Source of truth fo
 37. Engine: `index` source + snapshot (R4) + Renew re-evaluation.
 38. `cost_expiring` scheduled command (`SchedulerService`) + notification.
 
-Phase 4 seed additions (a demo index) ride on 37. Total: 27 + 7 + 7 + 4 = 45.
+Phase 4 seed additions (a demo index) ride on 37. Total: 26 + 7 + 7 + 4 = 44.

@@ -27,7 +27,7 @@ Engine: om-auto-create-pr-loop (steps: 24, --loop: no)
 | C | 13 | Write commands part 2 (markup override) | group:C1 | done | a831390 |
 | C | 12-review-fix | Manual per_unit costs follow the quantity | inline | done | 5e21994 |
 | C | 14 | Signals (marginTracker, margin_changed) | group:C2 | done | |
-| C | 15 | Status revision | group:C2 | todo | |
+| C | 15 | Status revision | group:C2 | done | |
 | C | 16 | Conversion guard | group:C2 | todo | |
 | C | 17 | Confidentiality sweep | group:C2 | todo | |
 | D | 18 | Charge editor UI | group:D | todo | |

@@ -867,9 +867,9 @@ export class DefaultCpqQuotingService {
 
   // ─── Transition Status ─────────────────────────────────────────
 
-  async transitionStatus(quoteId: string, targetStatus: string, scope: TenantScope, actorUserId: string | null = null): Promise<QuoteResult> {
+  async transitionStatus(quoteId: string, targetStatus: string, scope: TenantScope, actorUserId: string | null = null, expectedRevision?: number): Promise<QuoteResult> {
     return this.writeQuote(quoteId, scope, (em, quote) => this.transitionStatusInTransaction(quoteId, targetStatus, scope, em, quote),
-      undefined, undefined, { pricingCause: 'recalculate', statusCause: 'manual', actorUserId })
+      expectedRevision, undefined, { pricingCause: 'recalculate', statusCause: 'manual', actorUserId })
   }
 
   private async transitionStatusInTransaction(quoteId: string, targetStatus: string, scope: TenantScope, em: EntityManager, cpqConfig: CpqQuoteConfiguration): Promise<QuoteResult> {

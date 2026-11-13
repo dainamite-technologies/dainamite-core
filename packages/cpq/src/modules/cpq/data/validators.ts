@@ -555,6 +555,8 @@ export const cpqRecalculateSchema = z.object({
 
 export const cpqTransitionStatusSchema = z.object({
   targetStatus: z.string().min(1),
+  /** The `pricingRevision` the caller last saw; a different stored revision answers `409 STALE_REVISION`. */
+  expectedRevision: z.number().int().min(0).optional(),
 })
 
 export const cpqValidateRelationshipsSchema = z.object({

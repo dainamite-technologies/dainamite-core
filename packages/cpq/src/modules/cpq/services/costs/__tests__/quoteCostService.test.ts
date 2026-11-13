@@ -169,9 +169,18 @@ describe('cost lock matrix', () => {
     const { service } = setup({ orders: 1 })
     await expect(service.createCost(ids.quote, { ...create, ...priceBasis }, ACTOR, SCOPE)).rejects.toMatchObject({ status: 409, message: 'COST_LOCKED' })
   })
-  it('a terminal quote refuses even margin-only writes', async () => {
-    const { service } = setup({ status: 'accepted' })
-    await expect(service.createCost(ids.quote, create, ACTOR, SCOPE)).rejects.toMatchObject({ status: 409, message: 'COST_LOCKED' })
+  it('a rejected or cancelled quote refuses even margin-only writes', async () => {
+    for (const status of ['rejected', 'cancelled']) {
+      const { service } = setup({ status })
+      await expect(service.createCost(ids.quote, create, ACTOR, SCOPE)).rejects.toMatchObject({ status: 409, message: 'COST_LOCKED' })
+    }
+  })
+  it('an accepted quote still confirms an unchanged estimated value (needed to convert, R7) but refuses price changes', async () => {
+    const row = catalogRow()
+    const { service } = setup({ status: 'accepted', costs: [row] })
+    await service.updateCost(ids.quote, ids.cost, { valueStatus: 'confirmed' }, ACTOR, SCOPE)
+    expect(row.valueStatus).toBe('confirmed')
+    await expect(service.updateCost(ids.quote, ids.cost, { unitAmount: 1 }, ACTOR, SCOPE)).rejects.toMatchObject({ status: 409, message: 'COST_LOCKED' })
   })
   it('update: a price-basis value change is COST_LOCKED while locked', async () => {
     const row = manualRow()

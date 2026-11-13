@@ -50,7 +50,10 @@ describe('isWriteRefused', () => {
     expect(isWriteRefused({ locked: false, status: 'ready', priceAffecting: true })).toBe(false)
     expect(isWriteRefused({ locked: true, status: 'with_customer', priceAffecting: true })).toBe(true)
     expect(isWriteRefused({ locked: true, status: 'with_customer', priceAffecting: false })).toBe(false)
-    expect(isWriteRefused({ locked: true, status: 'accepted', priceAffecting: false })).toBe(true)
+    // accepted is locked, but not closed: the R11 exemptions stay open so costs can be confirmed for conversion (R7).
+    expect(isWriteRefused({ locked: true, status: 'accepted', priceAffecting: false })).toBe(false)
+    expect(isWriteRefused({ locked: true, status: 'accepted', priceAffecting: true })).toBe(true)
     expect(isWriteRefused({ locked: true, status: 'cancelled', priceAffecting: false })).toBe(true)
+    expect(isWriteRefused({ locked: true, status: 'rejected', priceAffecting: false })).toBe(true)
   })
 })

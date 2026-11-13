@@ -109,3 +109,8 @@
 - CI run 43480307531 at e4db511: unit tests ✅, integration tests ❌ — only the new `TC-CPQ-001-cost-plus-smoke` failed: it looked up a seeded "Acme" company that CI's tenant does not have (the GIX catalog itself was present). All other integration specs passed.
 - Fix: the smoke test creates its own company with `createCompanyFixture` (the pattern every CPQ integration spec uses). CI re-runs it; it cannot run locally.
 - The first review attempt (two reviewer subagents) was lost to a session restart before writing findings; re-dispatched.
+
+## 2026-11-13T22:51:52Z — CI integration failure #2 (blocker, real defect) → 12-review-fix-2
+- CI at 5056e2a: the smoke test now reaches the end and fails where the pricing manager confirms an estimated price-basis cost on an ACCEPTED quote: `409 COST_LOCKED`.
+- Root cause: the cost lock treated the quote state machine's `TERMINAL_STATUSES` (accepted, rejected, cancelled) as "no cost write at all". The App Spec's terminal set is rejected / cancelled / expired (§1.4.9, US-3.7); an accepted quote is the normal conversion source and R7 requires its price-basis costs confirmed — so a quote accepted with an estimated cost could never be converted.
+- Fix: `COST_CLOSED_STATUSES = ['rejected', 'cancelled']` in `costLock.ts`; accepted stays locked (price-affecting writes still `409`) with the R11 exemptions open. Tests updated (lock matrix + service), manual corrected. The archived capability already described the correct behaviour.

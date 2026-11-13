@@ -163,9 +163,11 @@ A rep with only `cpq.costs.view` sees the same panel read-only.
 Price-basis costs and markup overrides lock with the same rule as negotiated
 prices: the quote has left **New / Incomplete / Ready**, or an order exists.
 While locked, price-affecting writes return `409 COST_LOCKED`. Always allowed in
-non-terminal statuses: margin-only cost changes, **confirming an unchanged
-value** (estimated → confirmed), and extending validity or supplier term.
-Terminal quotes (accepted, rejected, cancelled) refuse every cost write. To
+statuses other than Rejected / Cancelled: margin-only cost changes,
+**confirming an unchanged value** (estimated → confirmed), and extending
+validity or supplier term. An **Accepted** quote keeps these exemptions — it is
+where a pricing manager confirms the remaining estimated costs before
+conversion. Rejected and Cancelled quotes refuse every cost write. To
 change a price-basis value on a locked quote, move the quote back to Ready,
 edit, and resend. Every cost write bumps the quote's `pricingRevision`; the
 write routes accept `expectedRevision` and answer `409 STALE_REVISION` on

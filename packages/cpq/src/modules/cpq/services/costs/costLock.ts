@@ -1,4 +1,4 @@
-import { TERMINAL_STATUSES } from '../types'
+import type { CpqStatus } from '../types'
 
 /**
  * Cost lock matrix (App Spec R11). Pure: which quote-cost writes a locked quote
@@ -29,8 +29,18 @@ export type CostLockState = {
 
 const sameAmount = (a: string | number | null, b: string | number | null) => (a === null || b === null ? a === b : Number(a) === Number(b))
 
-/** True when the status is terminal: nothing about the quote's costs may change any more. */
-export const isTerminalQuoteStatus = (status: string): boolean => (TERMINAL_STATUSES as string[]).includes(status)
+/**
+ * Statuses that close a quote's costs: no cost write at all. This is the App Spec's
+ * terminal set (rejected, cancelled, expired — CPQ has no `expired`), NOT the quote
+ * state machine's `TERMINAL_STATUSES`: an `accepted` quote is the normal source of
+ * conversion, and conversion needs its price-basis costs confirmed (R7), so the R11
+ * exemptions (confirming an unchanged value, margin-only, validity extensions) must
+ * stay open there. Price-affecting writes on `accepted` are still refused by the lock.
+ */
+export const COST_CLOSED_STATUSES: readonly CpqStatus[] = ['rejected', 'cancelled']
+
+/** True when the quote's costs are closed: no cost write at all. */
+export const isTerminalQuoteStatus = (status: string): boolean => (COST_CLOSED_STATUSES as readonly string[]).includes(status)
 
 /**
  * Whether a write changes what a price-basis cost contributes to the price.

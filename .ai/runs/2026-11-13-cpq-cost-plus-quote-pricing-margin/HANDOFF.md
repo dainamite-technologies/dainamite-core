@@ -1,16 +1,16 @@
 # Handoff — 2026-11-13-cpq-cost-plus-quote-pricing-margin
 
-**Last updated:** 2026-11-13T09:26:52Z
+**Last updated:** 2026-11-13T09:44:39Z
 **Branch:** feat/cpq-cost-plus-quote-pricing-margin (local worktree branch `cez/fdfb25fb`, push with `git push origin HEAD:feat/cpq-cost-plus-quote-pricing-margin`)
 **PR:** #93 (draft) https://github.com/dainamite-technologies/dainamite-core/pull/93
-**Current phase/step:** Phase B, after checkpoint 2; next Step 9
-**Last commit:** faefbb0 — Step 8-review-fix (+ this checkpoint commit)
+**Current phase/step:** Phase B closed (checkpoint 3); next Phase C Step 11
+**Last commit:** a371ea3 — Step 9-review-fix (+ this checkpoint commit)
 
 ## What just happened
-- Golden characterization, lookup refactor (golden byte-identical), cost line / markup override entities, catalog cost resolution on saved recalculations, and a fix keeping element codes unique across a line's charges. Full suite green (1531 tests).
+- Cost-plus charges now price from their costs (R2) through the existing waterfall; unpriced ones block readiness. Margin computation and `marginHash` exist as a pure service (not yet exposed). Full suite green (1622 tests).
 
 ## Next concrete action
-- Step 9 — Cost-plus price (`costPlusPrice.ts`; lift `COST_PLUS_NOT_AVAILABLE`), then Step 10 — Margin (`quoteMargin.ts`). Group B3.
+- Phase C, group C1: Step 11 (read API `GET /quotes/{id}/costs`, `POST /cost-preview`, `GET /cost-plus/usage`), Step 12 (cost line write commands + lock), Step 13 (markup override commands).
 
 ## Blockers / open questions
 - none
@@ -21,7 +21,8 @@
 - Migrations generated DB-less (`TMPDIR=/tmp node_modules/.bin/tsx node_modules/.cache/cpq-tools/gen-cpq-migration.mts`), never applied
 - Demo tests import CPQ's `dist`: run `yarn workspace @dainamite/cpq build` before the full `yarn test`
 - Tasks-table `Commit` cells are filled with real SHAs at each checkpoint
-- Manual cost lines (Step 12) need cost keys that cannot collide with catalog element codes (resolver never touches `manual` rows, but a catalog element claiming a manual key is skipped)
+- Step 12: manual cost keys must not collide with catalog element codes
+- Step 23: record in MIGRATION.md that `ResolvedCharge.unitPrice` / `listUnitPrice` are now `number | null`
 
 ## Worktree
 - Path: /home/ubuntu/cezar/projects/dainamite-core/.ai/cezar/worktrees/fdfb25fb-8422-4d50-a8df-fb197d1b558d

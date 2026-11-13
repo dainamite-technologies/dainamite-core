@@ -40,3 +40,6 @@
 - Finding (major, spec contract on money): App Spec R2 says a cost-plus `per_unit` charge introduces "no unit × qty drift", but `discount_percent` / `surcharge_percent` price rules recompute `total = adjustedUnit × qty` from the 4 dp unit (e.g. 3 units of 100.00 at −10 % → 89.99991 instead of 90.00). Manual adjustments and absolute rules already work from totals.
 - Fix (Step 9-review-fix, inline): for cost-plus charges only, percent price rules scale the exact per-instance total; every other charge keeps today's arithmetic, so the golden fixture is untouched.
 - Noted for Step 23 (MIGRATION.md / changeset): `ResolvedCharge.unitPrice` / `listUnitPrice` became `number | null` (unpriced cost-plus charges) — a type-level change for package consumers; margin percentages are 0–100 numbers, null when undefined.
+
+## 2026-11-13T09:44:39Z — checkpoint 3 (Phase B closed)
+- Steps B.9, B.10, 9-review-fix (8801297..a371ea3): typecheck ✅, build ✅, full `yarn test` 108 suites / 1622 tests ✅; golden fixture unchanged. UI pass skipped (no UI touched; no runnable app env).

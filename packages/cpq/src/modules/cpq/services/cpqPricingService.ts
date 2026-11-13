@@ -212,6 +212,14 @@ export class DefaultCpqPricingService {
             continue
         }
 
+        // A cost-plus per_unit unit is the rounded list total ÷ quantity at 4 dp, so
+        // percent rules scale the exact per-instance total instead of unit × quantity
+        // (App Spec R2: no unit × qty drift). Other charges keep today's arithmetic.
+        if (charge.pricingMethod === 'cost_plus' && charge.totalPrice !== null) {
+          if (rule.ruleType === 'discount_percent') totalPriceOverride = Math.max(0, charge.totalPrice * (1 - ruleValue / 100))
+          if (rule.ruleType === 'surcharge_percent') totalPriceOverride = charge.totalPrice * (1 + ruleValue / 100)
+        }
+
         charge.unitPrice = unitPriceAfter
 
         if (charge.chargeType === 'usage') {

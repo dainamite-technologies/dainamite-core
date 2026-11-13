@@ -156,6 +156,22 @@ describe('cost-plus charge through the pricing service', () => {
     const [charge] = await new DefaultCpqPricingService(em as never).resolveProductCharges({ offeringId: 'o', configuration: {}, currencyCode: 'EUR', ...SCOPE, costPlus: ctx() })
     expect(charge).toMatchObject({ listTotalPrice: 500, standardTotalPrice: 450, totalPrice: 450 })
   })
+
+  it.each([
+    ['discount_percent', '10', 90],
+    ['surcharge_percent', '10', 110],
+  ])('per_unit: a %s rule scales the exact list total, not the 4 dp unit × quantity (R2, no drift)', async (ruleType, value, expected) => {
+    // 3 units of a 100.00 total: unit 33.3333; 33.3333 × 0.9 × 3 would be 89.99991.
+    const rule = { id: 'r', code: 'promo', name: 'Promo', ruleType, value, sortOrder: 0, applicabilityCondition: null, chargeCodeFilter: null, chargeTypeFilter: null }
+    const charge = costPlusCharge({ chargeModel: 'per_unit', quantityAttributeCode: 'qty', markupValue: '0' })
+    const em = { find: jest.fn(async (entity: unknown) => (entity === CpqProductCharge ? [charge] : entity === CpqPriceRule ? [rule] : [])), findOne: jest.fn() }
+    const [priced] = await new DefaultCpqPricingService(em as never).resolveProductCharges({
+      offeringId: 'o', configuration: { qty: 3 }, currencyCode: 'EUR', ...SCOPE, costPlus: ctx({ costs: [{ chargeCode: 'tail_mrc', ...basis(100) }] }),
+    })
+    expect(priced.listTotalPrice).toBe(100)
+    expect(priced.totalPrice).toBeCloseTo(expected, 10)
+    expect(priced.standardTotalPrice).toBeCloseTo(expected, 10)
+  })
 })
 
 // ─── Readiness and preview = save through recalculateInternal ───────────────

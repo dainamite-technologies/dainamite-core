@@ -25,3 +25,8 @@
 
 ## 2026-11-13 — step 8 (scope decisions)
 - Cost lock = no `CpqOrderConfiguration` for the quote AND status in `ADJUSTMENT_MUTABLE_STATUSES` (moved to `data/price-adjustments.ts`, re-exported from adjustmentService); R1c skip = `isFrozenAmendMirrorLine` or `isArcCancelledLine`. R1b needs the previous driver values, so step 8 adds nullable `driver_hash` to `cpq_quote_line_costs` (second generated migration; step 7 was already pushed).
+
+## 2026-11-13T09:23:09Z — review fix after Step 8
+- Finding (major): an element `code` becomes the quote `cost_key` (unique per line, I-1), but codes were only unique per charge; two charges of one offering sharing a code made Step 8's resolver keep the first and silently drop the other's cost (R1a violated, cost/margin understated).
+- Fix (Step 8-review-fix, inline): `DUPLICATE_CODE` now checks every charge priced together on a line (same offering; all of the product's charges for a product-level charge). The resolver's first-wins stays as the deterministic fallback for a concurrent-create race (only the target charge is locked). Scope widening of the App Spec's "unique per charge" is the minimal reading that satisfies I-1 while keeping "code = cost key".
+- Accepted from Step 8's report: `driver_hash` on `cpq_quote_line_costs` (second generated migration) to detect R1b driver changes; cost lock = status ∉ {new, incomplete, ready} or an order exists (App Spec glossary "Cost lock").

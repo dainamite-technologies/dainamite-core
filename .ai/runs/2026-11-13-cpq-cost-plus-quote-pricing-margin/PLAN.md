@@ -18,6 +18,7 @@ Engine: om-auto-create-pr-loop (steps: 24, --loop: no)
 | B | 6 | Refactor the lookup into costLookup | group:B1 | done | |
 | B | 7 | Cost line and markup override entities | group:B2 | done | |
 | B | 8 | Cost resolution | group:B2 | done | |
+| B | 8-review-fix | Cost element codes unique across a line's charges | inline | done | |
 | B | 9 | Cost-plus price | group:B3 | todo | |
 | B | 10 | Margin | group:B3 | todo | |
 | C | 11 | Read API, cost preview, usage | group:C1 | todo | |

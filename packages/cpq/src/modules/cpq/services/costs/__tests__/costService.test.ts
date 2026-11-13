@@ -33,6 +33,7 @@ function store(rows: { charges?: Row[]; elements?: Row[]; tables?: Row[] }) {
   ])
   const matches = (row: Row, where: Row) => Object.entries(where).every(([key, value]) => {
     if (value && typeof value === 'object' && '$ne' in value) return row[key] !== (value as { $ne: unknown }).$ne
+    if (value && typeof value === 'object' && '$in' in value) return (value as { $in: unknown[] }).$in.includes(row[key])
     return (row[key] ?? null) === value
   })
   const em: Record<string, jest.Mock> = {
@@ -52,7 +53,7 @@ function store(rows: { charges?: Row[]; elements?: Row[]; tables?: Row[] }) {
   return em
 }
 const costService = (em: unknown) => new CpqCostService({ em: em as never, featureTogglesService: { getBoolConfig: jest.fn() } })
-const charge = (overrides: Row = {}) => ({ id: chargeId, ...SCOPE, deletedAt: null, pricingMethod: 'cost_plus', chargeType: 'mrc', quantityAttributeCode: null, isActive: true, ...overrides })
+const charge = (overrides: Row = {}) => ({ id: chargeId, ...SCOPE, deletedAt: null, productId: 'product-1', offeringId: 'offering-1', pricingMethod: 'cost_plus', chargeType: 'mrc', quantityAttributeCode: null, isActive: true, ...overrides })
 const element = (overrides: Row = {}) => ({ id: elementId, ...SCOPE, deletedAt: null, productChargeId: chargeId, code: 'tail', name: 'Tail',
   role: 'price_basis', costType: 'mrc', source: 'on_request', costModel: 'flat', amount: null, currencyCode: null, costTableId: null,
   costColumnKey: null, estimateAmount: null, isActive: true, sortOrder: 0, ...overrides })
@@ -93,6 +94,26 @@ describe('CpqCostService.createElement', () => {
 
   it('refuses a duplicate code among non-deleted elements (DUPLICATE_CODE)', async () => {
     const em = store({ charges: [charge()], elements: [element()] })
+    await expect(costService(em).createElement(input, SCOPE)).rejects.toMatchObject({ status: 422, message: 'DUPLICATE_CODE' })
+  })
+
+  it('refuses a code already used by another charge of the same offering (one quote line, I-1)', async () => {
+    const sibling = charge({ id: 'sibling-charge', pricingMethod: 'fixed' })
+    const em = store({ charges: [charge(), sibling], elements: [element({ id: 'other', productChargeId: 'sibling-charge', role: 'margin_only' })] })
+    await expect(costService(em).createElement(input, SCOPE)).rejects.toMatchObject({ status: 422, message: 'DUPLICATE_CODE' })
+    expect(em.persist).not.toHaveBeenCalled()
+  })
+
+  it('allows the same code on a charge of another offering', async () => {
+    const elsewhere = charge({ id: 'elsewhere-charge', offeringId: 'offering-2' })
+    const em = store({ charges: [charge(), elsewhere], elements: [element({ id: 'other', productChargeId: 'elsewhere-charge' })] })
+    await expect(costService(em).createElement(input, SCOPE)).resolves.toMatchObject({ code: 'tail' })
+  })
+
+  it('checks every charge of the product for a product-level charge', async () => {
+    const productCharge = charge({ offeringId: null })
+    const offeringCharge = charge({ id: 'offering-charge', offeringId: 'offering-9' })
+    const em = store({ charges: [productCharge, offeringCharge], elements: [element({ id: 'other', productChargeId: 'offering-charge' })] })
     await expect(costService(em).createElement(input, SCOPE)).rejects.toMatchObject({ status: 422, message: 'DUPLICATE_CODE' })
   })
 

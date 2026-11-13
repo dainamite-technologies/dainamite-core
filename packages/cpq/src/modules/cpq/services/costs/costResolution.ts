@@ -208,7 +208,9 @@ export async function resolveQuoteCosts(params: CostResolutionParams): Promise<C
       if (!evaluateApplicability(charge.applicabilityCondition, mergedConfig)) continue
       for (const element of elementsByCharge.get(charge.id) ?? []) {
         if (!evaluateApplicability(element.applicabilityCondition, mergedConfig)) continue
-        // I-1: one cost line per cost key on a line; the first element in charge / sort order wins.
+        // I-1: one cost line per cost key on a line. Element codes are unique across the charges
+        // priced together (DUPLICATE_CODE at catalog write); should a concurrent write slip a
+        // duplicate through, the first element in charge / sort order wins deterministically.
         if (desiredKeys.has(element.code)) continue
         desiredKeys.add(element.code)
         const row = rowByKey.get(element.code)

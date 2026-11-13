@@ -22,6 +22,7 @@ jest.mock('../_helpers/quoteMutationGuard', () => ({
 import { GET, POST, PUT, DELETE, metadata, openApi } from '../charge-cost-elements/route'
 
 const chargeId = '33333333-3333-4333-8333-333333333333'
+const siblingChargeId = '77777777-7777-4777-8777-777777777777'
 const tableId = '44444444-4444-4444-8444-444444444444'
 const elementId = '66666666-6666-4666-8666-666666666666'
 const scope = { organizationId: 'org', tenantId: 'tenant', deletedAt: null }
@@ -62,6 +63,7 @@ beforeEach(() => {
     return null
   })
   em.count.mockImplementation(async (_entity: unknown, where: Record<string, unknown>) => (where.code ? duplicates : otherPriceBasis))
+  em.find.mockImplementation(async (entity: unknown) => (entity === CpqProductCharge ? [{ id: chargeId }, { id: siblingChargeId }] : []))
 })
 
 describe('charge-cost-elements metadata', () => {
@@ -153,12 +155,12 @@ describe('POST', () => {
     expect(em.findOne).toHaveBeenCalledWith(CpqPricingTable, { ...scope, id: tableId })
   })
 
-  it('422 DUPLICATE_CODE when the charge already has the code', async () => {
+  it('422 DUPLICATE_CODE when a charge priced on the same line already has the code', async () => {
     duplicates = 1
     const response = await POST(request('POST', fixedBody))
     expect(response.status).toBe(422)
     expect(await response.json()).toMatchObject({ error: 'DUPLICATE_CODE' })
-    expect(em.count).toHaveBeenCalledWith(CpqChargeCostElement, { ...scope, productChargeId: chargeId, code: 'cross_connect' })
+    expect(em.count).toHaveBeenCalledWith(CpqChargeCostElement, { ...scope, productChargeId: { $in: [chargeId, siblingChargeId] }, code: 'cross_connect' })
   })
 
   it('422 MODEL_REQUIRES_TABLE for a tiered fixed element', async () => {

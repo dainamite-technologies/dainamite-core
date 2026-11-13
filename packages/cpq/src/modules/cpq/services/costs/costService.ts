@@ -136,7 +136,10 @@ export class CpqCostService {
     const parsed = cpqChargeCostElementCreateSchema.parse(input)
     return this.inChargeLock(parsed.productChargeId, scope, async (tx, charge) => {
       await this.validateElement(tx, parsed, charge, scope)
-      const duplicate = await tx.count(CpqChargeCostElement, { ...scoped(scope), productChargeId: charge.id, code: parsed.code })
+      // The code becomes the quote cost key, unique per quote line (I-1), so it must be
+      // unique across every charge priced together on one line — not just this charge.
+      const siblingChargeIds = await this.pricedTogetherChargeIds(tx, charge, scope)
+      const duplicate = await tx.count(CpqChargeCostElement, { ...scoped(scope), productChargeId: { $in: siblingChargeIds }, code: parsed.code })
       if (duplicate > 0) throw new QuotingError(422, 'DUPLICATE_CODE')
       const row = tx.create(CpqChargeCostElement, {
         ...scope,
@@ -212,6 +215,21 @@ export class CpqCostService {
    * Element writes serialize on the owning charge row (PESSIMISTIC_WRITE), so
    * two concurrent deactivations cannot both pass the last-price-basis rule.
    */
+  /**
+   * Charges a quote line prices together, mirroring `resolveProductCharges`: the
+   * offering's charges for an offering charge, the product's charges otherwise.
+   * Inactive charges count too — they can be reactivated. Concurrent creates on two
+   * sibling charges are not serialized (only this charge is locked); cost resolution
+   * keeps the first element per key deterministically as the fallback.
+   */
+  private async pricedTogetherChargeIds(tx: EntityManager, charge: CpqProductCharge, scope: TenantScope): Promise<string[]> {
+    const siblings = await tx.find(CpqProductCharge, {
+      ...scoped(scope),
+      ...(charge.offeringId ? { offeringId: charge.offeringId } : { productId: charge.productId }),
+    }, { fields: ['id'] })
+    return [...new Set([charge.id, ...siblings.map((sibling) => sibling.id)])]
+  }
+
   private async inChargeLock<T>(chargeId: string, scope: TenantScope, execute: (tx: EntityManager, charge: CpqProductCharge) => Promise<T>): Promise<T> {
     const em = this.deps.em.fork({ clear: true, useContext: false })
     return em.transactional(async (tx) => {

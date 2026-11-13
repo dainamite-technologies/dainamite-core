@@ -1,4 +1,5 @@
 import { seedPriceAdjustmentDefaults } from './lib/priceAdjustmentDefaults'
+import { seedCostPlusDefaults } from './lib/costPlusDefaults'
 import type { ModuleSetupConfig } from '@open-mercato/shared/modules/setup'
 
 /**
@@ -10,7 +11,8 @@ import type { ModuleSetupConfig } from '@open-mercato/shared/modules/setup'
  *
  * What still lives here:
  *   - `defaultRoleFeatures` — required for any tenant that has cpq enabled
- *   - structural defaults (price adjustment reasons and rollout toggle)
+ *   - structural defaults (price adjustment reasons and rollout toggle,
+ *     the cost-plus toggle — default off)
  *
  * What used to live here and moved out:
  *   - GIX product/pricing/charge/rule/bundle/wizard seed → `src/modules/demo_gix/`
@@ -20,6 +22,7 @@ import type { ModuleSetupConfig } from '@open-mercato/shared/modules/setup'
 export const setup: ModuleSetupConfig = {
   async seedDefaults({ em, tenantId, organizationId }) {
     if (tenantId && organizationId) await seedPriceAdjustmentDefaults(em, { tenantId, organizationId })
+    await seedCostPlusDefaults(em)
   },
   defaultRoleFeatures: {
     admin: [
@@ -45,6 +48,9 @@ export const setup: ModuleSetupConfig = {
       'cpq.arc.renew.manage',
       'cpq.arc.cancel.manage',
       'cpq.arc.changelog.view',
+      // Cost-plus: admins see and edit costs, markup and margin.
+      'cpq.costs.view',
+      'cpq.costs.manage',
     ],
     employee: [
       'cpq.quotes.view',
@@ -62,6 +68,8 @@ export const setup: ModuleSetupConfig = {
       'cpq.arc.renew.manage',
       'cpq.arc.cancel.manage',
       'cpq.arc.changelog.view',
+      // Cost-plus: reps see cost details and margin read-only (App Spec Q-D1).
+      'cpq.costs.view',
     ],
   },
 }

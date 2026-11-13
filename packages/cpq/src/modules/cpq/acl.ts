@@ -19,6 +19,9 @@ export const features = [
   { id: 'cpq.arc.renew.manage', title: 'Manage Renew Quotes', module: 'cpq' },
   { id: 'cpq.arc.cancel.manage', title: 'Manage Cancel Quotes', module: 'cpq' },
   { id: 'cpq.arc.changelog.view', title: 'View Subscription Change History', module: 'cpq' },
+  // Cost-plus pricing: see cost values / suppliers / markup / margin, and edit them.
+  { id: 'cpq.costs.view', title: 'View CPQ Costs and Margin', module: 'cpq' },
+  { id: 'cpq.costs.manage', title: 'Manage CPQ Costs', module: 'cpq' },
   // Expiring-subscriptions feature retired — the dedicated /expiring page
   // was replaced by an "Expiring within (days)" filter + saved perspective
   // on the main subscriptions list, which uses `cpq.inventory.view`.

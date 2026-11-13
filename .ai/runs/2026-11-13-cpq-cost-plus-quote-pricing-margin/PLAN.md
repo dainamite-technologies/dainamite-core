@@ -10,7 +10,7 @@ Engine: om-auto-create-pr-loop (steps: 24, --loop: no)
 
 | Phase | Step | Title | Exec | Status | Commit |
 |-------|------|-------|------|--------|--------|
-| A | 1 | Toggle and ACL | group:A | todo | |
+| A | 1 | Toggle and ACL | group:A | done | |
 | A | 2 | Charge columns and markup redaction | group:A | todo | |
 | A | 3 | Pricing table purpose | group:A | todo | |
 | A | 4 | Cost elements | group:A | todo | |

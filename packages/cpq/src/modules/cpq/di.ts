@@ -11,6 +11,7 @@ import { DefaultCpqInventoryService } from './services/cpqInventoryService'
 import { DefaultCpqOrderService } from './services/cpqOrderService'
 import { CpqAdjustmentService } from './services/priceAdjustments/adjustmentService'
 import { DefaultCpqBundleService } from './services/cpqBundleService'
+import { CpqCostService } from './services/costs/costService'
 
 /**
  * Resolve dependencies from the container closure rather than via destructured
@@ -24,6 +25,10 @@ export function register(container: AppContainer) {
     cpqAdjustmentService: asFunction(() => new CpqAdjustmentService({
       em: container.resolve('em'),
       quotingService: container.resolve('cpqQuotingService'),
+      featureTogglesService: container.resolve('featureTogglesService'),
+    })).scoped(),
+    cpqCostService: asFunction(() => new CpqCostService({
+      em: container.resolve('em'),
       featureTogglesService: container.resolve('featureTogglesService'),
     })).scoped(),
     cpqPricingService: asFunction(({ em }: { em: EntityManager }) => {

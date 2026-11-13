@@ -3,6 +3,7 @@ import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { seedCpqDemo } from './lib/seeds/demo'
 import { seedPriceAdjustmentDefaults } from './lib/priceAdjustmentDefaults'
+import { seedCostPlusDefaults } from './lib/costPlusDefaults'
 
 /**
  * `mercato cpq seed [--reset] [--tenant <id>] [--org <id>]`
@@ -121,6 +122,30 @@ const seedPriceAdjustments: ModuleCli = {
   },
 }
 
+/**
+ * `mercato cpq seed-cost-plus`
+ *
+ * Upgrade step for installs created before cost-plus pricing shipped: registers
+ * the global `cpq.cost_plus` feature toggle (default off). Idempotent — an
+ * existing toggle and every per-tenant override are kept. Switch it on per
+ * tenant in Feature Toggles; pair with `mercato auth sync-role-acls` for the
+ * `cpq.costs.view` / `cpq.costs.manage` grants.
+ */
+const seedCostPlus: ModuleCli = {
+  command: 'seed-cost-plus',
+  async run() {
+    const container = await createRequestContainer()
+    const em = container.resolve<EntityManager>('em')
+    try {
+      await seedCostPlusDefaults(em.fork())
+      console.log('[cpq seed-cost-plus] cpq.cost_plus toggle registered (existing values kept) ✓')
+    } catch (error) {
+      console.error('[cpq seed-cost-plus] failed', error)
+      process.exitCode = 1
+    }
+  },
+}
+
 async function resolveAllScopes(
   em: EntityManager,
   args: Record<string, string | boolean>,
@@ -133,4 +158,4 @@ async function resolveAllScopes(
   return orgs.map((org) => ({ organizationId: org.id, tenantId: org.tenant.id }))
 }
 
-export default [seed, seedPriceAdjustments]
+export default [seed, seedPriceAdjustments, seedCostPlus]

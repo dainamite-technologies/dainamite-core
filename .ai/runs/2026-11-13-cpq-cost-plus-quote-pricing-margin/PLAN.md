@@ -33,6 +33,7 @@ Engine: om-auto-create-pr-loop (steps: 24, --loop: no)
 | C | 14-review-fix | margin_changed for a write creating the first cost lines | inline | done | 0c7c25d |
 | D | 18 | Charge editor UI | group:D | done | |
 | D | 19 | Quote page: badges, Costs panel | group:D | done | |
+| D | 19-review-fix | Unpriced cost-plus charges carry the fallback price | inline | done | |
 | D | 20 | Quote page: Margin card and dialogs | group:D | todo | |
 | E | 21 | Calculate-price | group:E1 | todo | |
 | E | 22 | Clone, removal, toggle-off | group:E1 | todo | |

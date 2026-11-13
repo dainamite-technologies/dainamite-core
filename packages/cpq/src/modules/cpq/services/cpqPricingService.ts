@@ -344,7 +344,11 @@ export class DefaultCpqPricingService {
     const quantity = perUnit ? Number(configuration[charge.quantityAttributeCode ?? ''] ?? 0) : 1
     const unpriced = (code?: CostPlusErrorCode | 'COST_PLUS_DISABLED'): ResolvedCharge => {
       if (code) costPlus?.errors.push({ chargeCode: charge.code, code })
-      return { ...base, pricingMethod: 'cost_plus', unitPrice: null, quantity: perUnit ? quantity : 1, totalPrice: null }
+      const fallback = charge.fixedPrice === null || charge.fixedPrice === undefined ? null : Number(charge.fixedPrice)
+      return {
+        ...base, pricingMethod: 'cost_plus', unitPrice: null, quantity: perUnit ? quantity : 1, totalPrice: null,
+        ...(fallback !== null && Number.isFinite(fallback) ? { fallbackPrice: fallback } : {}),
+      }
     }
     // R14: never produce a price from nothing (no context = a caller that does not resolve costs).
     if (!costPlus) return unpriced()

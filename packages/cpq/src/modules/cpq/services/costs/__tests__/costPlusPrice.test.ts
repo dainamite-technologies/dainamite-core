@@ -123,6 +123,15 @@ describe('cost-plus charge through the pricing service', () => {
     expect(adjusted.lines[0].charges[0]).toMatchObject({ unitPrice: null, totalPrice: null })
   })
 
+  it('an unpriced charge carries its fallback indicative price for display only (R5); a priced one does not', async () => {
+    const pending = ctx({ costs: [{ chargeCode: 'tail_mrc', ...basis(null, 'none') }] })
+    const [unpriced] = await priced(costPlusCharge({ fixedPrice: '450' }), pending)
+    expect(unpriced).toMatchObject({ unitPrice: null, totalPrice: null, fallbackPrice: 450 })
+    const [pricedCharge] = await priced(costPlusCharge({ fixedPrice: '450' }), ctx())
+    expect(pricedCharge.totalPrice).toBe(500)
+    expect(pricedCharge).not.toHaveProperty('fallbackPrice')
+  })
+
   it('NO_PRICE_BASIS_COST when no cost line belongs to the charge', async () => {
     const costPlus = ctx({ costs: [{ chargeCode: 'other', ...basis(300) }] })
     const [charge] = await priced(costPlusCharge(), costPlus)

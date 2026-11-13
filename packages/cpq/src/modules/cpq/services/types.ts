@@ -248,6 +248,11 @@ export interface ResolvedCharge {
   breakdown?: TierBreakdown | null
   note?: string | null
   adjustments?: RuleAdjustment[] | null
+  /**
+   * Unpriced cost-plus charges only: the charge's fallback indicative price (App Spec §1.4.3 / R5),
+   * shown as "≈" while costs are unknown. Display only — never a list price, never in totals.
+   */
+  fallbackPrice?: number | null
 }
 
 // ─── Inventory status constants ──────────────────────────────────

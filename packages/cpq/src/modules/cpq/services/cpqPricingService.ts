@@ -3,6 +3,7 @@ import { CpqProductCharge, CpqPricingTable, CpqPricingTableEntry, CpqPriceRule }
 import type { ResolvedCharge, RuleAdjustment, TierBreakdown } from './types'
 import { getBaseCurrencyCode } from './types'
 import { normalizeChargePricing } from '../data/charge-pricing'
+import { lookupTablePrice, type LookupModel, type LookupTable, type TableLookupResult } from './costs/costLookup'
 
 export type { ResolvedCharge, RuleAdjustment, TierBreakdown }
 
@@ -40,25 +41,7 @@ function evaluateApplicability(
   return true
 }
 
-function entryMatchesDimensions(
-  entry: CpqPricingTableEntry,
-  dimensions: Array<{ key: string }>,
-  configuration: Record<string, unknown>,
-): boolean {
-  return dimensions.every((dim) => {
-    const configVal = String(configuration[dim.key] ?? '')
-    const entryVal = String(entry.dimensionValues[dim.key] ?? '')
-    return configVal.toLowerCase() === entryVal.toLowerCase()
-  })
-}
-
-function matchEntry(
-  entries: CpqPricingTableEntry[],
-  dimensions: Array<{ key: string }>,
-  configuration: Record<string, unknown>,
-): CpqPricingTableEntry | null {
-  return entries.find((entry) => entryMatchesDimensions(entry, dimensions, configuration)) ?? null
-}
+type PricedLookup = Extract<TableLookupResult, { outcome: 'priced' }>
 
 export class DefaultCpqPricingService {
   private em: EntityManager
@@ -304,165 +287,73 @@ export class DefaultCpqPricingService {
     const entries = await this.em.find(CpqPricingTableEntry, entryFilters)
 
     const priceKey = charge.priceColumnKey ?? ''
+    const lookupModel: LookupModel = model
+    const quantity = Number(configuration[charge.quantityAttributeCode ?? ''] ?? 0)
+    const lookup = lookupTablePrice(
+      { dimensions: table.dimensions, entries } as LookupTable,
+      priceKey,
+      lookupModel,
+      configuration,
+      quantity,
+      currencyCode,
+    )
+    if (lookup.outcome === 'miss') return base
+    if (lookup.outcome === 'zero_quantity') return { ...base, quantity: 0, totalPrice: 0 }
 
-    if (model === 'flat') {
-      return this.calculateFlat(base, charge, entries, table.dimensions, configuration, priceKey)
-    }
-    if (model === 'per_unit') {
-      return this.calculatePerUnit(base, charge, entries, table.dimensions, configuration, priceKey)
-    }
-    if (model === 'volume') {
-      return this.calculateVolume(base, charge, entries, table.dimensions, configuration, priceKey)
-    }
-    if (model === 'tiered') {
-      return this.calculateTiered(base, charge, entries, table.dimensions, configuration, priceKey)
-    }
+    if (model === 'flat') return this.applyFlat(base, charge, lookup)
+    if (model === 'per_unit') return this.applyPerUnit(base, charge, lookup)
+    if (model === 'volume') return this.applyVolume(base, lookup)
+    if (model === 'tiered') return this.applyTiered(base, lookup)
 
     return base
   }
 
-  private calculateFlat(
-    base: ResolvedCharge,
-    charge: CpqProductCharge,
-    entries: CpqPricingTableEntry[],
-    dimensions: Array<{ key: string }>,
-    configuration: Record<string, unknown>,
-    priceKey: string,
-  ): ResolvedCharge {
-    const entry = matchEntry(entries, dimensions, configuration)
-    if (!entry) return base
-    const unitPrice = entry.prices[priceKey] ?? 0
-
-    if (charge.chargeType === 'usage') {
-      return {
-        ...base,
-        unitPrice,
-        quantity: null,
-        totalPrice: null,
-        currencyCode: entry.currencyCode,
-        note: charge.description ?? 'Usage-based charge — billed on actual consumption.',
-      }
-    }
-
-    return { ...base, unitPrice, quantity: 1, totalPrice: unitPrice, currencyCode: entry.currencyCode }
+  private applyFlat(base: ResolvedCharge, charge: CpqProductCharge, lookup: PricedLookup): ResolvedCharge {
+    if (charge.chargeType === 'usage') return this.usageResult(base, charge, lookup)
+    return { ...base, unitPrice: lookup.unitPrice, quantity: 1, totalPrice: lookup.unitPrice, currencyCode: lookup.currencyCode ?? base.currencyCode }
   }
 
-  private calculatePerUnit(
-    base: ResolvedCharge,
-    charge: CpqProductCharge,
-    entries: CpqPricingTableEntry[],
-    dimensions: Array<{ key: string }>,
-    configuration: Record<string, unknown>,
-    priceKey: string,
-  ): ResolvedCharge {
-    const entry = matchEntry(entries, dimensions, configuration)
-    if (!entry) return base
-    const unitPrice = entry.prices[priceKey] ?? 0
-    const entryCurrency = entry.currencyCode
-
-    if (charge.chargeType === 'usage') {
-      return {
-        ...base,
-        unitPrice,
-        quantity: null,
-        totalPrice: null,
-        currencyCode: entryCurrency,
-        note: charge.description ?? 'Usage-based charge — billed on actual consumption.',
-      }
-    }
-
-    const quantity = Number(configuration[charge.quantityAttributeCode ?? ''] ?? 0)
-    return { ...base, unitPrice, quantity, totalPrice: unitPrice * quantity, currencyCode: entryCurrency }
-  }
-
-  private calculateTiered(
-    base: ResolvedCharge,
-    charge: CpqProductCharge,
-    entries: CpqPricingTableEntry[],
-    dimensions: Array<{ key: string }>,
-    configuration: Record<string, unknown>,
-    priceKey: string,
-  ): ResolvedCharge {
-    const quantity = Number(configuration[charge.quantityAttributeCode ?? ''] ?? 0)
-    if (quantity <= 0) return { ...base, quantity: 0, totalPrice: 0 }
-
-    // tiered must filter to the dimension-matched slice first; flat/per_unit do this via matchEntry.
-    const matched = entries.filter((entry) => entryMatchesDimensions(entry, dimensions, configuration))
-    // No row matches the configured dimensions → unpriced; fall back to base
-    // (quantity 1, total 0), consistent with flat/per_unit's null-match path.
-    if (matched.length === 0) return base
-
-    const sorted = [...matched].sort((a, b) => (a.tierNumber ?? 0) - (b.tierNumber ?? 0))
-
-    let allocated = 0
-    let total = 0
-    const tiers: TierBreakdown['tiers'] = []
-    let entryCurrency = base.currencyCode
-
-    for (const entry of sorted) {
-      if (allocated >= quantity) break
-      const to = entry.rangeTo ? Number(entry.rangeTo) : Infinity
-      const tierCeil = to === Infinity ? quantity : Math.min(to, quantity)
-      const qty = tierCeil - allocated
-      if (qty <= 0) continue
-      const price = entry.prices[priceKey] ?? 0
-      entryCurrency = entry.currencyCode
-      tiers.push({
-        tier: entry.tierNumber ?? 0,
-        from: allocated + 1,
-        to: allocated + qty,
-        pricePerUnit: price,
-        quantity: qty,
-        subtotal: qty * price,
-      })
-      total += qty * price
-      allocated += qty
-    }
-
+  private applyPerUnit(base: ResolvedCharge, charge: CpqProductCharge, lookup: PricedLookup): ResolvedCharge {
+    if (charge.chargeType === 'usage') return this.usageResult(base, charge, lookup)
     return {
       ...base,
-      unitPrice: quantity > 0 ? total / quantity : 0,
-      quantity,
-      totalPrice: total,
-      breakdown: { tiers },
-      currencyCode: entryCurrency,
+      unitPrice: lookup.unitPrice,
+      quantity: lookup.quantity,
+      totalPrice: lookup.totalPrice,
+      currencyCode: lookup.currencyCode ?? base.currencyCode,
     }
   }
 
-  // Volume pricing: the WHOLE quantity is billed at the single rate of the tier
-  // whose range contains the total quantity — unlike tiered, which bills each
-  // slice at its own rate. Dimension-filtered first, like tiered.
-  private calculateVolume(
-    base: ResolvedCharge,
-    charge: CpqProductCharge,
-    entries: CpqPricingTableEntry[],
-    dimensions: Array<{ key: string }>,
-    configuration: Record<string, unknown>,
-    priceKey: string,
-  ): ResolvedCharge {
-    const quantity = Number(configuration[charge.quantityAttributeCode ?? ''] ?? 0)
-    if (quantity <= 0) return { ...base, quantity: 0, totalPrice: 0 }
-
-    const matched = entries.filter((entry) => entryMatchesDimensions(entry, dimensions, configuration))
-    if (matched.length === 0) return base
-
-    // Ranges are [rangeFrom, rangeTo]; rangeTo null = ∞. Fall back to the top
-    // tier if the quantity overflows every defined range.
-    const sorted = [...matched].sort((a, b) => (a.tierNumber ?? 0) - (b.tierNumber ?? 0))
-    const entry =
-      sorted.find((e) => {
-        const from = e.rangeFrom != null ? Number(e.rangeFrom) : 0
-        const to = e.rangeTo != null ? Number(e.rangeTo) : Infinity
-        return quantity >= from && quantity <= to
-      }) ?? sorted[sorted.length - 1]
-
-    const unitPrice = entry.prices[priceKey] ?? 0
+  private usageResult(base: ResolvedCharge, charge: CpqProductCharge, lookup: PricedLookup): ResolvedCharge {
     return {
       ...base,
-      unitPrice,
-      quantity,
-      totalPrice: unitPrice * quantity,
-      currencyCode: entry.currencyCode,
+      unitPrice: lookup.unitPrice,
+      quantity: null,
+      totalPrice: null,
+      currencyCode: lookup.currencyCode ?? base.currencyCode,
+      note: charge.description ?? 'Usage-based charge — billed on actual consumption.',
+    }
+  }
+
+  private applyTiered(base: ResolvedCharge, lookup: PricedLookup): ResolvedCharge {
+    return {
+      ...base,
+      unitPrice: lookup.unitPrice,
+      quantity: lookup.quantity,
+      totalPrice: lookup.totalPrice,
+      breakdown: { tiers: lookup.tiers ?? [] },
+      currencyCode: lookup.currencyCode ?? base.currencyCode,
+    }
+  }
+
+  // Volume: whole quantity at one tier's rate (see lookupTablePrice).
+  private applyVolume(base: ResolvedCharge, lookup: PricedLookup): ResolvedCharge {
+    return {
+      ...base,
+      unitPrice: lookup.unitPrice,
+      quantity: lookup.quantity,
+      totalPrice: lookup.totalPrice,
+      currencyCode: lookup.currencyCode ?? base.currencyCode,
     }
   }
 }

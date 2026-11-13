@@ -38,8 +38,8 @@ Fuel- and energy-linked supplier costs move with published indices. Today CPQ ha
 | Q10 | Can an index's currency change? | Only while it has no values and no referencing element (`422 INDEX_CURRENCY_LOCKED`). `code` is immutable. | Changing the currency would silently reinterpret every stored value and snapshot. | reversible |
 | Q11 | A pricing manager has overwritten an index cost line's value (PR #87 manual overwrite, `value_origin = manual`). Does the next recalculation refresh it? | No. Only lines with `value_origin = catalog` are re-resolved. The manual value stays until the manager clears it back to the catalog value. | Same intent as PR #87's note-required overwrite of catalog values; refreshing would silently drop a deliberate override. | reversible |
 | Q12 | Renew re-evaluation of a carried index cost: which lines, which formula, which fields? | **Lines:** only Renew carried lines with `source = index`, `value_origin = carried` and **not** flagged `renegotiation_due`. Lines whose value came from a supplier answer or a manual entry are kept (consistent with Q11). **Formula:** the line's own `index_snapshot` `{indexId, factor, offset}` (the contracted formula); only the value moves to the one in force on the recalculation date. **Fields:** `unit_amount` and `index_snapshot` only; `value_status` and `renegotiation_due` are never changed. Amend mirrors are **not** re-evaluated (price lock, R13). | Coordinator decision (recommended option). The supplier contract fixes the formula; today's catalog factor belongs to new sales. Renegotiation due and R1c reconciliation belong to the ARC spec, so this branch must not undo them. | reversible |
-| Q13 | Who may read indices and values? | Read: `cpq.pricing.view` **+** `cpq.costs.view`. Write: `cpq.pricing.manage` **+** `cpq.costs.view` (App Spec §1.4.10). Reps (default `cpq.costs.view`, Q-D1) can read indices; custom roles without `cpq.costs.view` cannot. | Index values are cost data (I-4). The App Spec names only the manage pair. | ⚠ NEEDS HUMAN CONFIRMATION |
-| Q14 | Recipients of `cpq.cost.expiring` in multi-organization tenants | Users holding **both** `cpq.costs.manage` and `cpq.costs.view` **whose organization scope includes the quote's organization**. Built by one shared helper, `notifyCostManagers(scope, organizationId, notification)` (`lib/notifyCostManagers.ts`). It uses the notifications module's feature lookup, filters by the second feature and by organization, and sends a batch. The helper is shared with the sourcing spec and owned by whichever ships first (sourcing, Phase 2). | `createForFeature` resolves recipients per tenant only (`core/notifications/lib/notificationService.ts:423-440`, `notificationRecipients.ts:81-118`). Without the filter, managers of other organizations would see quote numbers and cost names they cannot open. | ⚠ NEEDS HUMAN CONFIRMATION |
+| Q13 | Who may read indices and values? | Read: `cpq.pricing.view` **+** `cpq.costs.view`. Write: `cpq.pricing.manage` **+** `cpq.costs.view` (App Spec §1.4.10). Reps (default `cpq.costs.view`, Q-D1) can read indices; custom roles without `cpq.costs.view` cannot. | Index values are cost data (I-4). The App Spec names only the manage pair. | Confirmed by the product owner in PR review (2026-11-13). Reversible. |
+| Q14 | Recipients of `cpq.cost.expiring` in multi-organization tenants | Users holding **both** `cpq.costs.manage` and `cpq.costs.view` **whose organization scope includes the quote's organization**. Built by one shared helper, `notifyCostManagers(scope, organizationId, notification)` (`lib/notifyCostManagers.ts`). It uses the notifications module's feature lookup, filters by the second feature and by organization, and sends a batch. The helper is shared with the sourcing spec and owned by whichever ships first (sourcing, Phase 2). | `createForFeature` resolves recipients per tenant only (`core/notifications/lib/notificationService.ts:423-440`, `notificationRecipients.ts:81-118`). Without the filter, managers of other organizations would see quote numbers and cost names they cannot open. | Confirmed by the product owner in PR review (2026-11-13). Reversible. |
 | Q15 | Delivery guarantee of `cost_expiring` | The ledger row is committed first, then the event is emitted and the notification sent, and `emitted_at` is stamped. A row left un-stamped for more than 10 minutes is re-emitted by the next run. Duplicates are possible only after a crash between emit and stamp. | A ledger insert gives "once per `(line, valid_until)`" under concurrency and retries. A strict exactly-once across commit and event bus is not available. Consumers can dedupe on `warningId`. | reversible |
 | Q16 | Split into separate specs (index costs vs expiry warnings)? | **One spec, two independent PRs** (Phasing). | The commit plan and brief bundle them. Each PR is independently deployable, which is the split test. | reversible |
 
@@ -67,7 +67,7 @@ Fuel- and energy-linked supplier costs move with published indices. Today CPQ ha
    - **Call order (coordinated with the ARC costs spec, `.ai/specs/2026-11-12-cpq-cost-plus-arc-costs.md`, under revision):** inside the saved recalculation, ARC's `reconcileRenewCosts` runs first (carry, R1c, renegotiation due); `reevaluateCarriedIndexCosts` runs immediately after, on the reconciled lines.
    - The ARC spec adds `source` and `index_snapshot` to its carry field list, so carried lines have the formula to re-evaluate.
    - Amend mirrors are untouched (R13).
-   - After **Renew activation**, the ARC activation path updates the subscription item cost in place from the order line cost (e.g. 70.00 → 82.40, `item_cost_changed` with cause `renew`). Q-D9 means only "no revaluation between ARC changes".
+   - After **Renew activation**, the ARC activation path updates the subscription item cost in place from the order line cost (e.g. 70.00 → 82.40, `cost_changed` with cause `renew`). Q-D9 means only "no revaluation between ARC changes".
 4. **Expiry scan.** `costExpiryService.run(scope, today)` selects candidates in one indexed query, inserts ledger rows `ON CONFLICT DO NOTHING`, commits, then emits `cpq.quote.cost_expiring` and the notification for the inserted rows. It is driven by a module-registered daily schedule → `cpq-cost-expiry` queue worker, and by a CLI for manual runs.
 
 **Alternatives considered:**
@@ -202,7 +202,7 @@ The system SHALL, on a saved recalculation of an unlocked Renew quote, after the
 
 ##### Scenario: Renew activation
 - WHEN that Renew is converted and activated
-- THEN the same item cost row (same id) holds 82.40 with the new snapshot, and `item_cost_changed` is emitted with cause `renew`
+- THEN the same item cost row (same id) holds 82.40 with the new snapshot, and `cost_changed` is emitted with cause `renew`
 
 ##### Scenario: Renegotiation-due line is not touched
 - WHEN the carried index line is flagged renegotiation due (`estimated`)
@@ -488,7 +488,7 @@ Mockups: skipped — no browser provider configured (text-only spec).
   - **PR 1:** cost-index routes called without `cpq.costs.view` (`403`); command logs of `cpq.cost_index.*` / `cpq.cost_index_value.append`.
   - **PR 2:** quote / line / order / calculate-price responses, the Puffin proxy and broadcast events, for quotes with index cost lines and snapshots.
   - **PR 3:** the `cost_expiring` payload and the notification title / body / data (no amount, no supplier).
-- **Product direction calls (owner: product):** Q13 (reps read index values) and Q14 (organization filtering of recipients) are flagged ⚠.
+- **Product direction calls (owner: product):** Q13 (reps read index values) and Q14 (organization filtering of recipients) were confirmed in PR review on 2026-11-13.
 
 ## 📋 Phasing
 
@@ -534,7 +534,7 @@ Each step leaves the app working and is verified by the named tests (`yarn test`
     - a **renegotiation-due line stays `estimated`**, keeps its value and snapshot, and conversion still returns `422 COSTS_NOT_CONFIRMED`;
     - `supplier` / `manual` values are not re-evaluated;
     - Amend kept; other carried values unchanged;
-    - the item cost is unchanged before activation, then updated in place (same id, 82.40, `item_cost_changed` cause `renew`) after activation, via a mock-EM activation test reusing the ARC spec's fixture.
+    - the item cost is unchanged before activation, then updated in place (same id, 82.40, `cost_changed` cause `renew`) after activation, via a mock-EM activation test reusing the ARC spec's fixture.
 
     On merge: **archive** `cpq-arc` (*Index carried costs re-evaluated on Renew*).
 13. **Demo seed (#37 rider):** `demo_gix`:

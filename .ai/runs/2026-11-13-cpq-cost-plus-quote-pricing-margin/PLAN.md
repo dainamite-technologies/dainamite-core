@@ -38,6 +38,7 @@ Engine: om-auto-create-pr-loop (steps: 24, --loop: no)
 | E | 21 | Calculate-price | group:E1 | done | |
 | E | 22 | Clone, removal, toggle-off | group:E1 | done | |
 | E | 23 | Demo seed and docs | group:E2 | done | |
+| E | 23-review-fix | Demo pricing manager also holds the employee role | inline | done | |
 | E | 24 | Archive the Delta | group:E2 | done | |
 
 ## Goal

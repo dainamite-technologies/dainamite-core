@@ -46,7 +46,8 @@ registerCpqUseCase({
         email: PRICING_MANAGER_EMAIL,
         password: PRICING_MANAGER_PASSWORD,
         displayName: 'GIX Pricing Manager',
-        roles: ['pricing_manager'],
+        // `employee` carries the standard backend features; `pricing_manager` adds cost management.
+        roles: ['employee', 'pricing_manager'],
       },
     ],
   },

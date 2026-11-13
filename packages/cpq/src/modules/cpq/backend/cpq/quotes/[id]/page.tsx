@@ -23,6 +23,12 @@ import { PriceAdjustmentsPanel } from './_components/PriceAdjustmentsPanel'
 import { ArcLineRemovalProvider, useArcLineRemoval, useArcLineRemovalUi } from './_components/arcLineRemoval'
 import { AdjustChargeAction, DiscountLineAction, ManualAdjustmentActions, PriceAdjustmentProvider, usePriceAdjustmentUi } from './_components/priceAdjustmentContext'
 import { useGrantedFeatures } from '../../../../components/useGrantedFeatures'
+import { useQuoteCosts } from './_components/useQuoteCosts'
+import { QuoteCostsProvider, useQuoteCostsUi, type QuoteCostsUi } from './_components/quoteCostsContext'
+import { CostStatusBadges } from './_components/CostStatusBadges'
+import { CostsPanel } from './_components/CostsPanel'
+import { isCostLocked, isQuoteIndicative, type RedactedQuoteCost } from '../../../../lib/quoteCostView'
+import { COSTS_MANAGE_FEATURE, COSTS_VIEW_FEATURE } from '../../../../data/costs'
 import { canRecalculateQuote, QUOTE_MANAGE_FEATURE } from '../../../../lib/quotePermissions'
 import {
   formatStatusLabel,
@@ -55,8 +61,11 @@ type ResolvedCharge = {
   chargeCode: string
   chargeName: string
   chargeType: 'nrc' | 'mrc' | 'usage'
-  pricingMethod?: 'flat' | 'tiered' | 'per_unit'
-  unitPrice: number
+  pricingMethod?: 'flat' | 'tiered' | 'per_unit' | 'cost_plus'
+  /** null = unpriced cost-plus charge (cost pending / missing / toggle off). */
+  unitPrice: number | null
+  /** Indicative fallback price of an unpriced cost-plus charge, when the API provides one. */
+  fallbackPrice?: number | null
   quantity: number | null
   totalPrice: number | null
   currencyCode: string
@@ -298,7 +307,7 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
 
   const t = useT()
   const [cpqQuote, setCpqQuote] = React.useState<QuoteResult | null>(null)
-  const grantedFeatures = useGrantedFeatures([QUOTE_MANAGE_FEATURE, ADJUST_PRICE_FEATURE])
+  const grantedFeatures = useGrantedFeatures([QUOTE_MANAGE_FEATURE, ADJUST_PRICE_FEATURE, COSTS_VIEW_FEATURE, COSTS_MANAGE_FEATURE])
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState<string | null>(null)
   const [submitting, setSubmitting] = React.useState(false)
@@ -368,6 +377,23 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
     onQuote: setCpqQuote,
     reloadQuote,
   })
+
+  // ─── Cost-plus costs and margin ────────────────────────────────
+  const quoteCosts = useQuoteCosts({ quoteId: isNew ? null : cpqQuote?.id ?? null, revision: cpqQuote?.pricingRevision ?? 0 })
+  const canViewCosts = grantedFeatures.includes(COSTS_VIEW_FEATURE)
+  const costsUi: QuoteCostsUi | null = cpqQuote && quoteCosts.state === 'ready'
+    ? {
+      quoteId: cpqQuote.id,
+      cpqStatus: cpqQuote.cpqStatus,
+      locked: isCostLocked(cpqQuote.cpqStatus, cpqQuote.convertedOrderId),
+      canView: canViewCosts,
+      canManage: canViewCosts && grantedFeatures.includes(COSTS_MANAGE_FEATURE) && grantedFeatures.includes(QUOTE_MANAGE_FEATURE),
+      data: quoteCosts.data,
+      costsFor: (lineId) => quoteCosts.byLine.get(lineId) ?? [],
+      reload: quoteCosts.reload,
+    }
+    : null
+  const indicative = costsUi?.data ? isQuoteIndicative(costsUi.data.lines) : false
 
   // ─── Load or create ──────────────────────────────────────────
 
@@ -647,6 +673,7 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
   return (
     <PriceAdjustmentProvider value={priceAdjustments.ui}>
     <ArcLineRemovalProvider value={lineRemoval.ui}>
+    <QuoteCostsProvider value={costsUi}>
     <div className="space-y-6">
       {priceAdjustments.elements}
       {lineRemoval.ConfirmDialogElement}
@@ -694,6 +721,11 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
               <Tag variant="brand" className="uppercase">{arcQuoteType}</Tag>
             )}
             {cpqQuote.convertedOrderId && <Tag variant="success" dot>Converted</Tag>}
+            {indicative && (
+              <Tag variant="warning" dot title={t('cpq.quoteCosts.indicativeHint', 'A price-basis cost is still an estimate, so the price may change.')} data-testid="cpq-indicative-chip">
+                {t('cpq.quoteCosts.indicative', 'Indicative')}
+              </Tag>
+            )}
           </div>
         }
         // FormHeader.detail ignores `utilityActions` whenever `actionsContent`
@@ -1008,6 +1040,7 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
         />
       )}
     </div>
+    </QuoteCostsProvider>
     </ArcLineRemovalProvider>
     </PriceAdjustmentProvider>
   )
@@ -1267,12 +1300,15 @@ function QuoteLineRow({ line, lineIdx, currency, isExpanded, pricingDetail, isBu
 }) {
   const t = useT()
   const adjustmentUi = usePriceAdjustmentUi()
+  const costsUi = useQuoteCostsUi()
+  const lineCosts = costsUi?.costsFor(line.lineId) ?? []
   const removalUi = useArcLineRemovalUi()
   const isRemoved = removalUi?.isRemoved(line) ?? false
   const paddingLeft = indent > 0 ? `${indent * 2 + 1}rem` : undefined
   const chargeActions = {
     reasonLabels: adjustmentUi?.reasonLabels,
-    renderChargeActions: (charge: ResolvedCharge) => <AdjustChargeAction line={line} charge={charge} />,
+    // An unpriced cost-plus charge has no price to adjust.
+    renderChargeActions: (charge: ResolvedCharge) => (charge.unitPrice === null ? null : <AdjustChargeAction line={line} charge={{ ...charge, unitPrice: charge.unitPrice }} />),
     renderManualActions: (adjustmentId: string) => <ManualAdjustmentActions adjustmentId={adjustmentId} />,
   }
 
@@ -1388,11 +1424,23 @@ function QuoteLineRow({ line, lineIdx, currency, isExpanded, pricingDetail, isBu
 
       {/* Charge breakdown (non-bundle or any expanded line) */}
       {isExpanded && !isBundle && line.charges.length > 0 && (
-        <ChargeBreakdown line={line} lineIdx={lineIdx} currency={currency} pricingDetail={pricingDetail} onTogglePricingDetail={onTogglePricingDetail} {...chargeActions} />
+        <ChargeBreakdown line={line} lineIdx={lineIdx} currency={currency} pricingDetail={pricingDetail} onTogglePricingDetail={onTogglePricingDetail} costs={lineCosts} {...chargeActions} />
       )}
       {/* For bundles: show own charges first, then children are rendered by parent */}
       {isExpanded && isBundle && line.charges.length > 0 && (
-        <ChargeBreakdown line={line} lineIdx={lineIdx} currency={currency} pricingDetail={pricingDetail} onTogglePricingDetail={onTogglePricingDetail} {...chargeActions} />
+        <ChargeBreakdown line={line} lineIdx={lineIdx} currency={currency} pricingDetail={pricingDetail} onTogglePricingDetail={onTogglePricingDetail} costs={lineCosts} {...chargeActions} />
+      )}
+      {/* Cost-plus: the Costs sub-panel, for `cpq.costs.view` holders only. */}
+      {isExpanded && costsUi?.canView && (
+        <CostsPanel
+          quoteId={costsUi.quoteId}
+          lineId={line.lineId}
+          lineName={line.offeringName}
+          costs={lineCosts}
+          locked={costsUi.locked}
+          status={costsUi.cpqStatus}
+          canManage={costsUi.canManage}
+        />
       )}
       {/* XD-250 ARC: before/after preview, below the charges, when line mirrors a sub item */}
       {isExpanded && line.arcSource && (
@@ -1431,8 +1479,10 @@ function LineSummaryFallback({ line, currency }: { line: QuoteLine; currency: st
   )
 }
 
-function ChargeBreakdown({ line, lineIdx, pricingDetail, onTogglePricingDetail, ...tableProps }: {
+function ChargeBreakdown({ line, lineIdx, pricingDetail, onTogglePricingDetail, costs, ...tableProps }: {
   line: QuoteLine; lineIdx: number; currency: string
+  /** Cost lines of this quote line (status badges for every user). */
+  costs?: ReadonlyArray<Pick<RedactedQuoteCost, 'valueStatus' | 'expired'>>
   pricingDetail: { lineIdx: number; chargeIdx: number } | null
   onTogglePricingDetail: (lineIdx: number, chargeIdx: number) => void
   reasonLabels?: Record<string, string>
@@ -1441,6 +1491,7 @@ function ChargeBreakdown({ line, lineIdx, pricingDetail, onTogglePricingDetail, 
 }) {
   return (
     <div className="border-t bg-muted/10 px-12 py-2">
+      {costs && <CostStatusBadges costs={costs} />}
       <ChargeBreakdownTable
         charges={line.charges}
         openDetailIndex={pricingDetail?.lineIdx === lineIdx ? pricingDetail.chargeIdx : null}

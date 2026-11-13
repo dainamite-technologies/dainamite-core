@@ -28,7 +28,7 @@ export type AdjustmentReason = { value: string; label: string }
 /** Minimal view of the quote the dialog needs, kept local so the page owns the full type. */
 type PreviewQuote = {
   pricingRevision?: number
-  lines: Array<{ lineId: string; mrcTotal: number; nrcTotal: number; charges: Array<WaterfallChargeInput & { chargeCode: string; adjustmentErrors?: Array<{ adjustmentId: string; code: string }> }> }>
+  lines: Array<{ lineId: string; mrcTotal: number; nrcTotal: number; charges: Array<Omit<WaterfallChargeInput, 'unitPrice'> & { unitPrice: number | null; chargeCode: string; adjustmentErrors?: Array<{ adjustmentId: string; code: string }> }> }>
 }
 
 export type ExistingAdjustment = {
@@ -220,13 +220,13 @@ export function PriceAdjustmentDialog<Q extends PreviewQuote>(props: PriceAdjust
           <div className="rounded border bg-muted/20 p-2 text-xs" aria-live="polite" data-testid="cpq-adjustment-preview">
             {!draftKey && <span className="text-muted-foreground">{t('cpq.priceAdjustments.dialog.previewEmpty', 'Enter a value and reason to preview the new price.')}</span>}
             {draftKey && previewing && <span className="text-muted-foreground">{t('cpq.priceAdjustments.dialog.previewing', 'Calculating…')}</span>}
-            {draftKey && !previewing && previewCharge && (
+            {draftKey && !previewing && previewCharge && previewCharge.unitPrice !== null && (
               <span>
                 {t('cpq.priceAdjustments.dialog.previewCharge', 'New offer price')}: <span className="font-mono font-medium">{money(previewCharge.unitPrice, currency)}</span>
                 {' '}{formatDepth(discountDepth(previewCharge.standardUnitPrice ?? standardUnit, previewCharge.unitPrice)) ?? ''}
               </span>
             )}
-            {draftKey && !previewing && !previewCharge && previewLine && (
+            {draftKey && !previewing && (!previewCharge || previewCharge.unitPrice === null) && previewLine && (
               <span>
                 {t('cpq.priceAdjustments.dialog.previewLine', 'Line totals')}: MRC <span className="font-mono font-medium">{money(previewLine.mrcTotal, currency)}</span>
                 {' · '}NRC <span className="font-mono font-medium">{money(previewLine.nrcTotal, currency)}</span>

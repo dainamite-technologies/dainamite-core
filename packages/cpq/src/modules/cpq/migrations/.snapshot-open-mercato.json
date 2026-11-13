@@ -3878,6 +3878,23 @@
           "enumItems": [],
           "mappedType": "json"
         },
+        "purpose": {
+          "name": "purpose",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": "'price'",
+          "comment": null,
+          "collation": null,
+          "enumItems": [],
+          "mappedType": "text"
+        },
         "tenant_id": {
           "name": "tenant_id",
           "type": "uuid",

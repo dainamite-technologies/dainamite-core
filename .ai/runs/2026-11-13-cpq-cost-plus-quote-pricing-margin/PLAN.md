@@ -12,7 +12,7 @@ Engine: om-auto-create-pr-loop (steps: 24, --loop: no)
 |-------|------|-------|------|--------|--------|
 | A | 1 | Toggle and ACL | group:A | done | |
 | A | 2 | Charge columns and markup redaction | group:A | done | |
-| A | 3 | Pricing table purpose | group:A | todo | |
+| A | 3 | Pricing table purpose | group:A | done | |
 | A | 4 | Cost elements | group:A | todo | |
 | B | 5 | Characterize before any change | group:B1 | todo | |
 | B | 6 | Refactor the lookup into costLookup | group:B1 | todo | |

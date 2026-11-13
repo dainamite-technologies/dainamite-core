@@ -10,3 +10,8 @@ export const COST_PLUS_TOGGLE = 'cpq.cost_plus'
 export const COSTS_VIEW_FEATURE = 'cpq.costs.view'
 /** Add / edit manual costs, enter or confirm costs, markup overrides. */
 export const COSTS_MANAGE_FEATURE = 'cpq.costs.manage'
+
+/** `CpqPricingTable.purpose`: `cost` tables are readable only with `cpq.costs.view`. */
+export const PRICING_TABLE_PURPOSES = ['price', 'cost'] as const
+export type PricingTablePurpose = (typeof PRICING_TABLE_PURPOSES)[number]
+export const isCostTable = (table: { purpose?: string | null }): boolean => table.purpose === 'cost'

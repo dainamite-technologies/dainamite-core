@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { normalizeChargePricing } from './charge-pricing'
+import { PRICING_TABLE_PURPOSES } from './costs'
 
 // ─── Product Specification ───────────────────────────────────────
 
@@ -372,6 +373,8 @@ export const cpqPricingTableCreateSchema = z.object({
   dimensions: z.array(keyLabelItem).superRefine(uniqueKeys('dimension')),
   priceColumns: z.array(keyLabelItem).superRefine(uniqueKeys('price column')),
   currencyCodeList: z.array(z.string().min(1)).min(1),
+  // `cost` tables feed cost elements and are confidential (cpq.costs.view).
+  purpose: z.enum(PRICING_TABLE_PURPOSES).optional().default('price'),
   isActive: z.boolean().optional().default(true),
 })
 

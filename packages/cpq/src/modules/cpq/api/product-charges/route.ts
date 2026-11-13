@@ -8,6 +8,7 @@ import { normalizeChargePricing } from '../../data/charge-pricing'
 import { anyChargeHasMarkup, chargeMarkupFields } from '../../lib/chargeView'
 import type { CpqCostService } from '../../services/costs/costService'
 import { QuotingError } from '../../services/cpqQuotingService'
+import { assertPriceTable } from '../../services/costs/pricingTablePurpose'
 import { canViewCosts } from '../_helpers/costAccess'
 import { handleArcError } from '../_helpers/handleArcError'
 import { cpqErrorDoc } from '../_helpers/quoteRouteOpenApi'
@@ -132,6 +133,7 @@ export async function POST(req: Request) {
     // Persist the canonical split shape regardless of whether the client sent
     // the new fields or a legacy combined pricingMethod.
     const { model, source } = normalizeChargePricing(body)
+    if (!isCostPlus && source === 'table') await assertPriceTable(ctx.em, body.pricingTableId, scope)
     const entity = ctx.em.create(CpqProductCharge, {
       ...body,
       markupValue: markupColumn(body.markupValue),
@@ -189,6 +191,9 @@ export async function PUT(req: Request) {
       if (issues.length) return NextResponse.json({ error: 'Validation error', details: issues }, { status: 400 })
     }
     if (toCostPlus && (updates.pricingMethod === COST_PLUS || markupChanged)) await assertCostPlusWrite(ctx)
+    if (updates.pricingTableId && updates.pricingTableId !== entity.pricingTableId) {
+      await assertPriceTable(ctx.em, updates.pricingTableId, { organizationId: ctx.organizationId, tenantId: ctx.tenantId })
+    }
 
     ctx.em.assign(entity, normalizedUpdates)
     await ctx.em.flush()
@@ -244,7 +249,7 @@ const writeErrors = [
   cpqErrorDoc(400, 'Validation error (V-CHG-1)'),
   cpqErrorDoc(403, 'COSTS_VIEW_REQUIRED — cost-plus pricing and markup need cpq.costs.view'),
   cpqErrorDoc(404, 'Charge not found'),
-  cpqErrorDoc(422, 'COST_PLUS_DISABLED (tenant toggle off) or COST_PLUS_NOT_AVAILABLE'),
+  cpqErrorDoc(422, 'COST_PLUS_DISABLED (tenant toggle off), COST_PLUS_NOT_AVAILABLE, or WRONG_TABLE_PURPOSE (a price charge referencing a cost table)'),
 ]
 
 export const openApi: OpenApiRouteDoc = {

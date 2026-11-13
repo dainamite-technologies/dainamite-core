@@ -386,7 +386,7 @@ export class CpqProductAttribute {
 @Index({ name: 'cpq_pricing_tables_scope_idx', properties: ['organizationId', 'tenantId'] })
 @Unique({ name: 'cpq_pricing_tables_code_unique', properties: ['organizationId', 'tenantId', 'code'] })
 export class CpqPricingTable {
-  [OptionalProps]?: 'isActive' | 'createdAt' | 'updatedAt' | 'deletedAt'
+  [OptionalProps]?: 'purpose' | 'isActive' | 'createdAt' | 'updatedAt' | 'deletedAt'
 
   @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
   id!: string
@@ -411,6 +411,12 @@ export class CpqPricingTable {
 
   @Property({ name: 'currency_code_list', type: 'jsonb' })
   currencyCodeList!: string[]
+
+  // `price` (charge list prices) | `cost` (cost-element lookups). Cost tables and
+  // their entries are confidential: readable only with `cpq.costs.view`.
+  // Immutable while referenced by a charge or cost element (PURPOSE_LOCKED).
+  @Property({ type: 'text', default: 'price' })
+  purpose: string = 'price'
 
   @Property({ name: 'is_active', type: 'boolean', default: true })
   isActive: boolean = true

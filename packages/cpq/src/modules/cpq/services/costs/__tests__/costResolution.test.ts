@@ -3,7 +3,7 @@ import {
   CpqQuoteConfiguration, CpqQuoteLineConfiguration, CpqQuoteLineCost, CpqPriceRule, CpqProductOffering,
 } from '../../../data/entities'
 import { DefaultCpqQuotingService } from '../../cpqQuotingService'
-import { isQuoteCostLocked, resolveQuoteCosts } from '../costResolution'
+import { isQuoteCostLocked, resolveCostPlusInputs, resolveQuoteCosts } from '../costResolution'
 
 const SCOPE = { organizationId: 'org', tenantId: 'tenant' }
 const QUOTE_ID = 'quote-cfg'
@@ -235,10 +235,53 @@ describe('recalculateInternal wiring', () => {
     expect(enabled).toHaveBeenCalledWith(SCOPE.tenantId)
   })
 
-  it('does not invoke it for a preview', async () => {
+  it('resolves cost inputs for a preview too, but persists nothing', async () => {
     const enabled = jest.fn().mockResolvedValue(true)
     const { em, quotingService } = service(enabled)
     await quotingService.recalculateLockedQuote(em as never, cfg(), SCOPE, false)
-    expect(enabled).not.toHaveBeenCalled()
+    expect(enabled).toHaveBeenCalledWith(SCOPE.tenantId)
+    expect(em.persist).not.toHaveBeenCalled()
+    expect(em.flush).not.toHaveBeenCalled()
+  })
+})
+
+describe('resolveCostPlusInputs', () => {
+  const inputs = (s: ReturnType<typeof store>, save: boolean, opts: { enabled?: boolean; quoteOver?: Row } = {}) =>
+    resolveCostPlusInputs({
+      em: s.em as never, quote: quote(opts.quoteOver), scope: SCOPE, save,
+      isEnabled: async () => opts.enabled ?? true,
+      lines: [{ lineConfig: lineConfig(), mergedConfig: {} }],
+    })
+
+  it('toggle off reads nothing and reports disabled (R14)', async () => {
+    const s = store({ charges: [charge()], elements: [element()] })
+    expect(await inputs(s, true, { enabled: false })).toMatchObject({ enabled: false })
+    expect(s.em.find).not.toHaveBeenCalled()
+  })
+
+  it('a preview returns the values a save would persist and writes nothing', async () => {
+    const preview = store({ charges: [charge()], elements: [element()] })
+    const previewResult = await inputs(preview, false)
+    expect(preview.costs).toHaveLength(0)
+    expect(preview.em.persist).not.toHaveBeenCalled()
+    const saved = store({ charges: [charge()], elements: [element()] })
+    const savedResult = await inputs(saved, true)
+    expect(saved.costs).toHaveLength(1)
+    expect(previewResult.costsByLine).toEqual(savedResult.costsByLine)
+    expect(previewResult.costsByLine.get(LINE_ID)).toEqual([expect.objectContaining({ costKey: 'tail', chargeCode: 'mrc', role: 'price_basis', valueStatus: 'confirmed', instanceAmount: '100' })])
+  })
+
+  it('a preview does not mutate stored rows when the catalog value moved', async () => {
+    const s = store({ charges: [charge()], elements: [element({ amount: '150' })], costs: [catalogCost()] })
+    const result = await inputs(s, false)
+    expect(s.costs[0]).toMatchObject({ instanceAmount: '100' })
+    expect(result.costsByLine.get(LINE_ID)).toEqual([expect.objectContaining({ instanceAmount: '150' })])
+  })
+
+  it('a locked quote reads the stored lines (values frozen, R4)', async () => {
+    const s = store({ charges: [charge()], elements: [element({ amount: '150' })], costs: [catalogCost({ instanceAmount: '100' })] })
+    const result = await inputs(s, true, { quoteOver: { cpqStatus: 'with_customer' } })
+    expect(result.costsByLine.get(LINE_ID)).toEqual([expect.objectContaining({ instanceAmount: '100' })])
+    expect(s.costs[0]).toMatchObject({ instanceAmount: '100' })
   })
 })

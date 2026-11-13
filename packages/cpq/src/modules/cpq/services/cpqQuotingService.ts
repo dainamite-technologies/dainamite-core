@@ -21,7 +21,7 @@ import {
   CpqProductOffering,
   CpqProductSpecification,
 } from '../data/entities'
-import type { DefaultCpqPricingService } from './cpqPricingService'
+import type { CostPlusLineContext, DefaultCpqPricingService } from './cpqPricingService'
 import type { DefaultCpqValidationService } from './cpqValidationService'
 import type { DefaultCpqProductService } from './cpqProductService'
 import type {
@@ -56,7 +56,7 @@ import {
   stripQuoteOnlyArcMarkers,
 } from './arcPriceFreeze'
 import type { CpqCostService } from './costs/costService'
-import { resolveQuoteCosts } from './costs/costResolution'
+import { resolveCostPlusInputs } from './costs/costResolution'
 import { isArcCancelledLine, planArcLineRemoval, planArcLineRestore, removalCancelsItem } from './arcLineRemoval'
 
 interface QuotingServiceDeps {
@@ -971,6 +971,8 @@ export class DefaultCpqQuotingService {
       isConfigured: boolean
     }> = []
 
+    // Pass 1: offering context per line (cost resolution must run before any charge is priced).
+    const prepared: Array<{ lineConfig: CpqQuoteLineConfiguration; offering: CpqProductOffering | null; mergedConfig: Record<string, unknown> }> = []
     for (const lineConfig of lineConfigs) {
       let offering: CpqProductOffering | null = null
       if (lineConfig.offeringId) {
@@ -983,7 +985,7 @@ export class DefaultCpqQuotingService {
       }
 
       offeringDesignTimeValues.set(lineConfig.quoteLineId, offering?.designTimeValues ?? {})
-      const mergedConfig = {
+      const mergedConfig: Record<string, unknown> = {
         ...(cpqConfig.quoteContext ?? {}),
         ...(offering?.designTimeValues ?? {}),
         ...lineConfig.configuration,
@@ -992,7 +994,21 @@ export class DefaultCpqQuotingService {
       if (lineConfig.termMonths) {
         mergedConfig.term_months = lineConfig.termMonths
       }
+      prepared.push({ lineConfig, offering, mergedConfig })
+    }
 
+    // Cost inputs of cost-plus pricing (steps 8-9). Saved recalculations persist the catalog cost lines
+    // (never `charges` or a price); previews compute the same values in memory; locked quotes read the
+    // stored lines. Resolution always runs BEFORE pricing so both see the same values.
+    const costService = this.costService
+    const costInputs = costService
+      ? await resolveCostPlusInputs({
+        em, quote: cpqConfig, scope, save, isEnabled: (tenantId) => costService.enabled(tenantId),
+        lines: prepared.map(({ lineConfig, mergedConfig }) => ({ lineConfig, mergedConfig })),
+      })
+      : null
+
+    for (const { lineConfig, offering, mergedConfig } of prepared) {
       let validationErrors: ValidationError[] = []
       if (lineConfig.offeringId && !isArcCancelledLine(lineConfig, cpqConfig.quoteType)) {
         const validation = await this.validationService.validateOfferingConfiguration({
@@ -1021,13 +1037,26 @@ export class DefaultCpqQuotingService {
         // nothing to the quote (its current price is shown via `arcSource`).
         charges = []
       } else if ((lineConfig.offeringId || lineConfig.productId) && !isFrozen) {
+        const costPlus: CostPlusLineContext = {
+          enabled: costInputs?.enabled ?? false,
+          costs: costInputs?.costsByLine.get(lineConfig.quoteLineId) ?? [],
+          overrides: new Map([...(costInputs?.overrides ?? [])]
+            .filter(([key]) => key.startsWith(`${lineConfig.quoteLineId}\u0000`))
+            .map(([key, value]) => [key.slice(lineConfig.quoteLineId.length + 1), value])),
+          errors: [],
+        }
         charges = await this.pricingService.resolveProductCharges({
           offeringId: lineConfig.offeringId ?? undefined,
           productId: lineConfig.productId ?? undefined,
           configuration: mergedConfig,
           currencyCode: cpqConfig.currencyCode,
           ...scope,
+          costPlus,
         })
+        // An unpriced cost-plus charge makes the line (and so the quote) not ready.
+        for (const error of costPlus.errors) {
+          validationErrors.push({ message: error.code, attribute: error.chargeCode, lineId: lineConfig.quoteLineId })
+        }
       } else {
         charges = (lineConfig.charges ?? []) as unknown as ResolvedCharge[]
       }
@@ -1046,23 +1075,6 @@ export class DefaultCpqQuotingService {
 
       computedLines.push({ lineConfig, charges, nrcTotal, mrcTotal, usageEstimates, usageTotalEstimated, validationErrors, isConfigured })
 
-    }
-    // Catalog cost lines (cost-plus step 8): saved recalculations only; previews compute nothing persistent.
-    // Reads and writes cost rows only, never `charges` or any price.
-    const costService = this.costService
-    if (save && costService) {
-      await resolveQuoteCosts({
-        em, quote: cpqConfig, scope, isEnabled: (tenantId) => costService.enabled(tenantId),
-        lines: computedLines.map(({ lineConfig }) => ({
-          lineConfig,
-          mergedConfig: {
-            ...(cpqConfig.quoteContext ?? {}),
-            ...(offeringDesignTimeValues.get(lineConfig.quoteLineId) ?? {}),
-            ...lineConfig.configuration,
-            ...(lineConfig.termMonths ? { term_months: lineConfig.termMonths } : {}),
-          },
-        })),
-      })
     }
     const adjustments = draftAdjustments ?? await loadQuoteAdjustments(em, cpqConfig.id, scope)
     const adjusted = resolveManualAdjustments(computedLines.map(({ lineConfig, charges }) => ({
@@ -1573,7 +1585,7 @@ function computePricingSummary(lineConfigs: CpqQuoteLineConfiguration[], currenc
         usageCharges.push({
           chargeCode: charge.chargeCode,
           chargeName: charge.chargeName,
-          unitPrice: charge.unitPrice,
+          unitPrice: charge.unitPrice ?? 0,
           note: charge.note ?? null,
         })
       }
@@ -1623,7 +1635,7 @@ function computePricingSummaryFromComputed(
         usageCharges.push({
           chargeCode: charge.chargeCode,
           chargeName: charge.chargeName,
-          unitPrice: charge.unitPrice,
+          unitPrice: charge.unitPrice ?? 0,
           note: charge.note ?? null,
         })
       }

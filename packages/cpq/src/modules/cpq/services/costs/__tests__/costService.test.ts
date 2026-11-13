@@ -9,9 +9,9 @@ describe('CpqCostService.assertCostPlusChargeWritable', () => {
     await expect(service(false).assertCostPlusChargeWritable('tenant')).rejects.toMatchObject({ status: 422, message: 'COST_PLUS_DISABLED' })
   })
 
-  it('refuses with 422 COST_PLUS_NOT_AVAILABLE until the engine can price cost-plus charges', async () => {
-    expect(COST_PLUS_PRICING_AVAILABLE).toBe(false)
-    await expect(service(true).assertCostPlusChargeWritable('tenant')).rejects.toMatchObject({ status: 422, message: 'COST_PLUS_NOT_AVAILABLE' })
+  it('allows writing a cost-plus charge now that the engine can price it', async () => {
+    expect(COST_PLUS_PRICING_AVAILABLE).toBe(true)
+    await expect(service(true).assertCostPlusChargeWritable('tenant')).resolves.toBeUndefined()
   })
 })
 

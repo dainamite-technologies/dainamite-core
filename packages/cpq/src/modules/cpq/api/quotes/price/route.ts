@@ -87,7 +87,7 @@ export async function POST(req: Request) {
 
 const chargeDoc = z.object({
   chargeCode: z.string(), chargeName: z.string(), chargeType: z.enum(['nrc', 'mrc', 'usage']),
-  pricingMethod: z.enum(['flat', 'per_unit', 'volume', 'tiered']), currencyCode: z.string(),
+  pricingMethod: z.enum(['flat', 'per_unit', 'volume', 'tiered', 'cost_plus']), currencyCode: z.string(),
   unitPrice: z.number(), quantity: z.number().nullable(), totalPrice: z.number().nullable(),
   listUnitPrice: z.number().optional(), listTotalPrice: z.number().nullable().optional(),
   standardUnitPrice: z.number().optional(), standardTotalPrice: z.number().nullable().optional(),

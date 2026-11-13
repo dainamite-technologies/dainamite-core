@@ -3,6 +3,7 @@ import { CpqProductCharge, CpqPricingTable, CpqPricingTableEntry, CpqPriceRule }
 import type { ResolvedCharge, RuleAdjustment, TierBreakdown } from './types'
 import { getBaseCurrencyCode } from './types'
 import { normalizeChargePricing } from '../data/charge-pricing'
+import { computeCostPlusPrice, type CostPlusCostInput, type CostPlusErrorCode, type MarkupRule } from './costs/costPlusPrice'
 import { lookupTablePrice, type LookupModel, type LookupTable, type TableLookupResult } from './costs/costLookup'
 
 export type { ResolvedCharge, RuleAdjustment, TierBreakdown }
@@ -41,6 +42,17 @@ export function evaluateApplicability(
   return true
 }
 
+/** Cost inputs of cost-plus pricing for ONE quote line (resolved before pricing; see costResolution). */
+export type CostPlusLineContext = {
+  /** `cpq.cost_plus` toggle (R14): off → a cost-plus charge is never priced from nothing. */
+  enabled: boolean
+  costs: Array<CostPlusCostInput & { chargeCode: string | null }>
+  /** Markup override per charge code (replaces the charge's markup). */
+  overrides: Map<string, { markupRule: string; markupValue: string }>
+  /** Output: why each cost-plus charge is unpriced. */
+  errors: Array<{ chargeCode: string; code: CostPlusErrorCode | 'COST_PLUS_DISABLED' }>
+}
+
 type PricedLookup = Extract<TableLookupResult, { outcome: 'priced' }>
 
 export class DefaultCpqPricingService {
@@ -62,8 +74,9 @@ export class DefaultCpqPricingService {
     currencyCode?: string
     tenantId: string
     organizationId: string
+    costPlus?: CostPlusLineContext
   }): Promise<ResolvedCharge[]> {
-    const { offeringId, productId, configuration, tenantId, organizationId, currencyCode } = params
+    const { offeringId, productId, configuration, tenantId, organizationId, currencyCode, costPlus } = params
 
     const chargeFilter: Record<string, unknown> = {
       tenantId,
@@ -96,6 +109,7 @@ export class DefaultCpqPricingService {
         tenantId,
         organizationId,
         currencyCode,
+        costPlus,
       })
       // R-CPRICE-8: quote-level currency overrides entry-level currency for consistency.
       // Entry filtering by currencyCode (line 274) ensures price values already match.
@@ -163,6 +177,8 @@ export class DefaultCpqPricingService {
         if (rule.chargeCodeFilter && rule.chargeCodeFilter !== charge.chargeCode) continue
         if (rule.chargeTypeFilter && rule.chargeTypeFilter !== charge.chargeType) continue
 
+        // An unpriced cost-plus charge has nothing to adjust.
+        if (charge.unitPrice === null) continue
         const unitPriceBefore = charge.unitPrice
         const ruleValue = Number(rule.value)
         let unitPriceAfter: number
@@ -234,8 +250,9 @@ export class DefaultCpqPricingService {
     tenantId: string
     organizationId: string
     currencyCode?: string
+    costPlus?: CostPlusLineContext
   }): Promise<ResolvedCharge> {
-    const { charge, configuration, tenantId, organizationId, currencyCode } = params
+    const { charge, configuration, tenantId, organizationId, currencyCode, costPlus } = params
 
     // Resolve the two axes (chargeModel × pricingSource), tolerating legacy
     // rows that still carry a combined pricingMethod (flat | per_unit | tiered).
@@ -252,6 +269,8 @@ export class DefaultCpqPricingService {
       totalPrice: 0,
       currencyCode: fallbackCurrency,
     }
+
+    if (charge.pricingMethod === 'cost_plus') return this.priceCostPlus(base, charge, configuration, costPlus)
 
     // ── Fixed price: unit price is the charge's own fixedPrice. Also the
     // fallback when a table-sourced charge has no table configured yet. ──
@@ -306,6 +325,37 @@ export class DefaultCpqPricingService {
     if (model === 'tiered') return this.applyTiered(base, lookup)
 
     return base
+  }
+
+  /**
+   * list = markup(Σ known price-basis costs) (R2). The charge's `fixedPrice` is
+   * an indicative fallback for calculate-price only and is never quoted here.
+   */
+  private priceCostPlus(base: ResolvedCharge, charge: CpqProductCharge, configuration: Record<string, unknown>, costPlus?: CostPlusLineContext): ResolvedCharge {
+    const perUnit = charge.chargeModel === 'per_unit'
+    const quantity = perUnit ? Number(configuration[charge.quantityAttributeCode ?? ''] ?? 0) : 1
+    const unpriced = (code?: CostPlusErrorCode | 'COST_PLUS_DISABLED'): ResolvedCharge => {
+      if (code) costPlus?.errors.push({ chargeCode: charge.code, code })
+      return { ...base, pricingMethod: 'cost_plus', unitPrice: null, quantity: perUnit ? quantity : 1, totalPrice: null }
+    }
+    // R14: never produce a price from nothing (no context = a caller that does not resolve costs).
+    if (!costPlus) return unpriced()
+    if (!costPlus.enabled) return unpriced('COST_PLUS_DISABLED')
+
+    const override = costPlus.overrides.get(charge.code)
+    const rule = override?.markupRule ?? charge.markupRule
+    const value = override?.markupValue ?? charge.markupValue
+    if (!rule || value === null || value === undefined) return unpriced('MARKUP_INVALID')
+    const result = computeCostPlusPrice({
+      costs: costPlus.costs.filter((cost) => cost.chargeCode === charge.code),
+      markupRule: rule as MarkupRule,
+      markupValue: value,
+      chargeModel: perUnit ? 'per_unit' : 'flat',
+      quantity,
+      currencyCode: base.currencyCode,
+    })
+    if (!result.ok) return unpriced(result.error)
+    return { ...base, pricingMethod: 'cost_plus', unitPrice: result.listUnit, quantity: result.quantity, totalPrice: result.listTotal }
   }
 
   private applyFlat(base: ResolvedCharge, charge: CpqProductCharge, lookup: PricedLookup): ResolvedCharge {

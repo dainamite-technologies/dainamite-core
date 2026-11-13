@@ -1221,7 +1221,7 @@ describe('negotiated-pricing baseline — all rule types across charge models', 
       const quantity = model === 'flat' ? 1 : 4
       const expectedTotal = type === 'price_override' && model === 'flat' ? 20 : total
       expect(Math.round((result.totalPrice ?? 0) * 100)).toBe(expectedTotal * 100)
-      expect(Math.round(result.unitPrice * quantity * 100)).toBe(expectedTotal * 100)
+      expect(Math.round(result.unitPrice! * quantity * 100)).toBe(expectedTotal * 100)
       expect(result.quantity).toBe(quantity)
       expect(result.currencyCode).toBe('USD')
       expect(result.listTotalPrice).toBe(100)

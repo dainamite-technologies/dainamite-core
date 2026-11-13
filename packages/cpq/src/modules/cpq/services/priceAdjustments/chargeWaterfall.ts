@@ -9,7 +9,7 @@ export function withChargeWaterfall(charge: ResolvedCharge): ResolvedCharge {
   const standardUnitPrice = charge.standardUnitPrice ?? rules.at(-1)?.unitPriceAfter ?? manual?.unitPriceBefore ?? charge.unitPrice
   // Keep the exact stored total when no recalculation is needed (tier averages
   // may not multiply back to the byte-identical stored total).
-  const totalAt = (unit: number) => charge.totalPrice === null ? null
+  const totalAt = (unit: number | null) => charge.totalPrice === null || unit === null ? null
     : unit === charge.unitPrice ? charge.totalPrice : unit * (charge.quantity ?? 1)
   return {
     ...charge,

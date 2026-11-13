@@ -9,6 +9,7 @@ import {
   CpqPricingTableEntry,
   CpqProductCharge,
   CpqQuoteLineCost,
+  CpqQuoteMarkupOverride,
   type CpqQuoteConfiguration,
   type CpqQuoteLineConfiguration,
 } from '../../data/entities'
@@ -149,23 +150,120 @@ export type CostResolutionParams = {
   isEnabled: (tenantId: string) => Promise<boolean>
 }
 
+/** What cost-plus pricing reads from a cost line (plain values, safe to hand around without persisting). */
+export type CostLineValue = {
+  quoteLineId: string
+  chargeCode: string | null
+  costKey: string
+  role: string
+  valueStatus: string
+  instanceAmount: string | null
+  errorCode: string | null
+}
+
+export type MarkupOverrideValue = { markupRule: string; markupValue: string }
+
+type RowPatch = Record<string, unknown>
+type CostPlan = {
+  stats: CostResolutionStats
+  creates: Array<Record<string, unknown>>
+  updates: Array<{ row: CpqQuoteLineCost; patch: RowPatch }>
+  drops: CpqQuoteLineCost[]
+  existing: CpqQuoteLineCost[]
+}
+
+const toCostLineValue = (source: Record<string, unknown>): CostLineValue => ({
+  quoteLineId: source.quoteLineId as string,
+  chargeCode: (source.chargeCode as string | null | undefined) ?? null,
+  costKey: source.costKey as string,
+  role: source.role as string,
+  valueStatus: source.valueStatus as string,
+  instanceAmount: (source.instanceAmount as string | null | undefined) ?? null,
+  errorCode: (source.errorCode as string | null | undefined) ?? null,
+})
+
 export async function resolveQuoteCosts(params: CostResolutionParams): Promise<CostResolutionStats> {
   const { em, quote, scope } = params
-  const stats: CostResolutionStats = { skipped: null, created: 0, updated: 0, dropped: 0 }
-
   // R14: toggle off = no reads beyond the toggle check.
-  if (!(await params.isEnabled(scope.tenantId))) return { ...stats, skipped: 'disabled' }
+  if (!(await params.isEnabled(scope.tenantId))) return { skipped: 'disabled', created: 0, updated: 0, dropped: 0 }
   // R4 / R11: a locked quote keeps stored cost lines and values.
-  if (await isQuoteCostLocked(em, quote, scope)) return { ...stats, skipped: 'locked' }
+  if (await isQuoteCostLocked(em, quote, scope)) return { skipped: 'locked', created: 0, updated: 0, dropped: 0 }
+  const plan = await planQuoteCosts(params)
+  await applyCostPlan(em, plan)
+  return plan.stats
+}
+
+export type CostPlusInputs = {
+  enabled: boolean
+  /** Cost lines per quote line: the values the pricing step reads. */
+  costsByLine: Map<string, CostLineValue[]>
+  /** Markup overrides keyed by `markupOverrideKey(lineId, chargeCode)`. */
+  overrides: Map<string, MarkupOverrideValue>
+}
+
+export const markupOverrideKey = (quoteLineId: string, chargeCode: string) => `${quoteLineId}\u0000${chargeCode}`
+
+/**
+ * The cost inputs of cost-plus pricing for one recalculation. Previews and saves
+ * see the same values: unlocked quotes resolve catalog costs (persisted only
+ * when `save`; a preview computes the same plan in memory and writes nothing),
+ * locked quotes read the stored lines (R4: values frozen). Toggle off (R14):
+ * nothing is read and `enabled` is false.
+ */
+export async function resolveCostPlusInputs(params: CostResolutionParams & { save: boolean }): Promise<CostPlusInputs> {
+  const { em, quote, scope } = params
+  const empty: CostPlusInputs = { enabled: false, costsByLine: new Map(), overrides: new Map() }
+  if (!(await params.isEnabled(scope.tenantId))) return empty
+
+  const costsByLine = new Map<string, CostLineValue[]>()
+  const add = (value: CostLineValue) => costsByLine.set(value.quoteLineId, [...(costsByLine.get(value.quoteLineId) ?? []), value])
+  if (await isQuoteCostLocked(em, quote, scope)) {
+    const stored = await em.find(CpqQuoteLineCost, { ...scoped(scope), quoteConfigurationId: quote.id })
+    for (const row of stored) add(toCostLineValue(row as unknown as Record<string, unknown>))
+  } else {
+    const plan = await planQuoteCosts(params)
+    if (params.save) await applyCostPlan(em, plan)
+    const patchByRow = new Map(plan.updates.map(({ row, patch }) => [row, patch]))
+    const dropped = new Set(plan.drops)
+    for (const row of plan.existing) {
+      if (dropped.has(row)) continue
+      add(toCostLineValue({ ...(row as unknown as Record<string, unknown>), ...(patchByRow.get(row) ?? {}) }))
+    }
+    for (const data of plan.creates) add(toCostLineValue(data))
+  }
+
+  const overrides = new Map<string, MarkupOverrideValue>()
+  const rows = await em.find(CpqQuoteMarkupOverride, { ...scoped(scope), quoteConfigurationId: quote.id })
+  for (const row of rows) overrides.set(markupOverrideKey(row.quoteLineId, row.chargeCode), { markupRule: row.markupRule, markupValue: row.markupValue })
+  return { enabled: true, costsByLine, overrides }
+}
+
+async function applyCostPlan(em: EntityManager, plan: CostPlan): Promise<void> {
+  const { creates, updates, drops } = plan
+  if (creates.length === 0 && updates.length === 0 && drops.length === 0) return
+  const now = new Date()
+  await withAtomicFlush(em, [
+    () => {
+      for (const data of creates) em.persist(em.create(CpqQuoteLineCost, data as never))
+      for (const { row, patch } of updates) Object.assign(row, patch)
+      for (const row of drops) row.deletedAt = now
+    },
+  ])
+}
+
+/** Reads and computes only: nothing is persisted or mutated here. */
+async function planQuoteCosts(params: CostResolutionParams): Promise<CostPlan> {
+  const { em, quote, scope } = params
+  const stats: CostResolutionStats = { skipped: null, created: 0, updated: 0, dropped: 0 }
 
   // R1c: cancelled lines and frozen Amend mirror lines (unreconfigured) are never re-instantiated from the catalog.
   const lines = params.lines.filter(({ lineConfig }) => (lineConfig.offeringId || lineConfig.productId)
     && !isArcCancelledLine(lineConfig, quote.quoteType)
     && !isFrozenAmendMirrorLine(lineConfig.configuration, quote.quoteType))
-  if (lines.length === 0) return stats
 
   // ── Reads first (no mutation before the last query) ──
   const existing = await em.find(CpqQuoteLineCost, { ...scoped(scope), quoteConfigurationId: quote.id })
+  if (lines.length === 0) return { stats, creates: [], updates: [], drops: [], existing }
   const existingByLine = new Map<string, CpqQuoteLineCost[]>()
   for (const row of existing) existingByLine.set(row.quoteLineId, [...(existingByLine.get(row.quoteLineId) ?? []), row])
 
@@ -195,9 +293,9 @@ export async function resolveQuoteCosts(params: CostResolutionParams): Promise<C
   }]))
 
   // ── Compute ──
-  const creates: Array<Parameters<EntityManager['create']>[1]> = []
-  const updates: Array<() => void> = []
-  const now = new Date()
+  const creates: CostPlan['creates'] = []
+  const updates: CostPlan['updates'] = []
+  const drops: CostPlan['drops'] = []
   for (const { lineConfig, mergedConfig } of lines) {
     const rows = existingByLine.get(lineConfig.quoteLineId) ?? []
     const rowByKey = new Map(rows.map((row) => [row.costKey, row]))
@@ -235,20 +333,19 @@ export async function resolveQuoteCosts(params: CostResolutionParams): Promise<C
           continue
         }
 
-        updates.push(() => {
-          Object.assign(row, structure)
-          if (element.source === 'on_request') {
-            // R1b: a driving attribute changed since the value was set: reset it, keep the old value in the note.
-            const driversChanged = row.driverHash !== null && row.driverHash !== hash
-            if (driversChanged && row.valueStatus !== 'none') row.note = resetNote(row, attributes)
-            // Entered values (manual) survive unless a driver changed; catalog estimates follow the catalog.
-            if (driversChanged || row.valueOrigin !== 'manual') Object.assign(row, toFields(resolved))
-          } else {
-            // fixed / table values come from the catalog on every saved recalculation while unlocked (R4).
-            Object.assign(row, toFields(resolved))
-          }
-          row.driverHash = hash
-        })
+        const patch: RowPatch = { ...structure }
+        if (element.source === 'on_request') {
+          // R1b: a driving attribute changed since the value was set: reset it, keep the old value in the note.
+          const driversChanged = row.driverHash !== null && row.driverHash !== hash
+          if (driversChanged && row.valueStatus !== 'none') patch.note = resetNote(row, attributes)
+          // Entered values (manual) survive unless a driver changed; catalog estimates follow the catalog.
+          if (driversChanged || row.valueOrigin !== 'manual') Object.assign(patch, toFields(resolved))
+        } else {
+          // fixed / table values come from the catalog on every saved recalculation while unlocked (R4).
+          Object.assign(patch, toFields(resolved))
+        }
+        patch.driverHash = hash
+        updates.push({ row, patch })
         stats.updated += 1
       }
     }
@@ -256,19 +353,11 @@ export async function resolveQuoteCosts(params: CostResolutionParams): Promise<C
     // R1a: catalog lines whose element is gone / inactive / no longer applicable are dropped (manual lines untouched).
     for (const row of rows) {
       if (row.origin !== 'catalog' || desiredKeys.has(row.costKey)) continue
-      updates.push(() => { row.deletedAt = now })
+      drops.push(row)
       stats.dropped += 1
     }
   }
-
-  if (creates.length === 0 && updates.length === 0) return stats
-  await withAtomicFlush(em, [
-    () => {
-      for (const data of creates) em.persist(em.create(CpqQuoteLineCost, data as never))
-      for (const apply of updates) apply()
-    },
-  ])
-  return stats
+  return { stats, creates, updates, drops, existing }
 }
 
 function toFields(value: ResolvedValue) {

@@ -16,11 +16,10 @@ import { QuotingError } from '../cpqQuotingService'
 import type { TenantScope } from '../types'
 
 /**
- * Whether the engine can price `cost_plus` charges. Until the cost-plus price
- * step ships (feature spec Implementation Plan step 9) saving a cost-plus
- * charge is refused, so no unpriceable charge can exist.
+ * Whether the engine can price `cost_plus` charges (shipped with the cost-plus
+ * price step). Kept as a switch so the 422 gate below stays a one-line revert.
  */
-export const COST_PLUS_PRICING_AVAILABLE = false
+export const COST_PLUS_PRICING_AVAILABLE = true
 
 type Dependencies = {
   em: EntityManager
@@ -79,7 +78,7 @@ export class CpqCostService {
   /**
    * Gate for writing a charge as `cost_plus` (or changing its markup):
    * `422 COST_PLUS_DISABLED` with the toggle off (R14), then
-   * `422 COST_PLUS_NOT_AVAILABLE` until the engine can price it.
+   * `422 COST_PLUS_NOT_AVAILABLE` if the engine cannot price it.
    */
   async assertCostPlusChargeWritable(tenantId: string): Promise<void> {
     if (!(await this.enabled(tenantId))) throw new QuotingError(422, 'COST_PLUS_DISABLED')

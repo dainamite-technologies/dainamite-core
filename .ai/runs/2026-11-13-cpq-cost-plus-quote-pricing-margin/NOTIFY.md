@@ -33,3 +33,4 @@
 
 ## 2026-11-13T09:26:52Z — checkpoint 2
 - Steps B.5–B.8 + 8-review-fix (064dd52..faefbb0): generate ✅, build ✅, typecheck ✅, full `yarn test` 106 suites / 1531 tests ✅; golden fixture unchanged across the refactor; mutation probe confirms the characterization bites. UI pass skipped (no UI touched; no runnable app env).
+- Step 9: markup_value is a percent number (25 = 25%); list total rounded once to Intl currency precision, per_unit unit = round4(total/qty); previews/saves/locked quotes all hand cost values in memory via resolveCostPlusInputs (resolution runs before pricing; preview persists nothing, locked reads stored lines); unpriced charges carry unitPrice/totalPrice null (ResolvedCharge widened) and push COST_PENDING / NO_PRICE_BASIS_COST / COST_PLUS_DISABLED / MARKUP_INVALID into line validationErrors.

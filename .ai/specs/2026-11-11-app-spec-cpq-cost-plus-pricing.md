@@ -129,7 +129,7 @@ Costs live in CPQ (catalog defaults + supplier quotes on the quote)
 | Line ready / quote `ready` | **Line ready** = the line is configured with no blocking error (C9). **Quote `ready`** = the `cpqStatus` value set automatically when every line is ready. | derived | — |
 | Cost lock | The sibling spec's adjustment lock, extended to price-basis cost lines and markup overrides: no create / change while `cpqStatus ∉ {new, incomplete, ready}` or an order exists. Exempt: margin-only costs, confirming a value without changing it, extending `valid_until` / supplier term, sourcing-status changes, and post-conversion re-confirmations before activation (margin only, Q-D13) (R11). | quote | — |
 | Order line cost | A cost copied from a quote cost line to the order at conversion (entity `CpqOrderLineCost`, same `cost_key`). It never affects price. Only Q-D13 re-confirmations (margin only) change it, and only until activation. | conversion | — |
-| Subscription item cost | The contracted cost of a live item: **one row per item and `cost_key` for the whole life of the purchase**. Its **id never changes**: ARC activations update it in place, a merge re-points it, and a cancel ends it. Entity `CpqSubscriptionItemCost`. Frozen between ARC changes (R12). | activation / ARC | started / ended |
+| Inventory cost (item cost / asset cost) | The contracted cost of a live subscription item **or asset** — the record that carries the sold line's price (an assetizable line sold on a new sale becomes an asset, so e.g. a server's recurring licence is an asset cost). **One row per owner and `cost_key` for the whole life of the purchase**. Its **id never changes**: ARC activations update item costs in place, a merge re-points it, and a cancel ends it. Entity `CpqInventoryCost`. Frozen between ARC changes (R12). | activation / ARC | started / ended |
 | Cost history | The cost part of the subscription's existing Change History. Each `CpqSubscriptionChangeLog` row (one per subscription per order: created / amend / renew / cancel / merge, `entities.ts:1387`) already holds full before / after snapshots of the subscription and its items. Item costs are added to those snapshots, so the before → after of every cost, with its quote and order links, comes from the same row. No separate history entity. | activation / ARC | dated |
 | Cost renegotiation | An ARC change to a subscription item's cost (new supplier price, new supplier, re-sourced tail), with or without a customer price change. | ARC quote | effective date |
 | Price lock (ARC) | On a frozen Amend mirror line, a cost change updates margin but **not** the customer price, until the user explicitly chooses **Re-price from cost** (which un-freezes the line). | ARC amend | — |
@@ -174,7 +174,7 @@ Cost lines (price_basis + margin_only) ─────────────�
 | `CpqQuoteLineCost` (new) | cpq | system (from cost elements); pricing manager (manual); system on clone / ARC mirror | engine, cost-guarded API, conversion | pricing manager / procurement / workflow via API, per R11 |
 | Margin (computed, **not stored**): pure `computeQuoteMargin()` over stored `charges` + cost lines; `margin_hash` computed before / after each write inside `withQuotePricingWrite` | cpq | engine | cost-guarded API, `margin_changed` event, project guards | — |
 | `CpqOrderLineCost` (new; copy of quote cost lines at conversion) | cpq | conversion | cost-guarded API, activation | Q-D13 re-confirmation only, until activation |
-| `CpqSubscriptionItemCost` (new; stable id per item + `cost_key`) | cpq | first activation | cost-guarded API, ARC mirror, reports | ARC activation in place (values, status `ended` on cancel / removal); merge re-points `subscription_item_id` |
+| `CpqInventoryCost` (new; stable id per owner — subscription item or asset — + `cost_key`) | cpq | first activation | cost-guarded API, ARC mirror (item costs), reports | ARC activation in place (values, status `ended` on cancel / removal); merge re-points `subscription_item_id` / `subscription_id` |
 | `CpqSubscriptionChangeLog.before_snapshot` / `after_snapshot` (existing) — `items[].costs[]` added | cpq | `snapshotSubscription` (`cpqInventoryService.ts:1506`) at every activation / ARC activation / merge | change-log API (costs redacted without `cpq.costs.view`), Change History UI | never (append-only, as today) |
 | Toggle `cpq.cost_plus` | feature_toggles | `cpq/setup.ts` | all cost paths | tenant admin |
 
@@ -251,17 +251,17 @@ Indexes: `(organization_id, tenant_id, quote_configuration_id)`, `(organization_
 **`CpqOrderLineCost`** (table `cpq_order_line_costs`): the same value, currency, FX, index, supplier, validity and supplier-term fields as the quote cost line, plus:
 - `order_configuration_id`, `order_line_id`, `cost_key`, `cost_element_id`, `role`, `cost_type`, `charge_code`, `cost_model`, `origin`, `value_status`, `value_origin`;
 - `source_quote_line_cost_id` (uuid, required);
-- `subscription_item_cost_id` (uuid, null on new-sale lines; set on ARC lines whose cost is carried from a live item);
+- `inventory_cost_id` (uuid, null on new-sale lines; set on ARC lines whose cost is carried from a live item);
 - `reconfirmed_at` and `reconfirmed_by_user_id` (Q-D13).
 
 Unique `(order_line_id, cost_key)`.
 
-**`CpqSubscriptionItemCost`** (table `cpq_subscription_item_costs`): the same value, currency, FX, index, supplier, validity and supplier-term fields, plus:
-- `subscription_id`, `subscription_item_id`, `cost_key`, `cost_element_id`, `role`, `cost_type`, `charge_code`, `cost_model` and the computed totals;
+**`CpqInventoryCost`** (table `cpq_inventory_costs`): the same value, currency, FX, index, supplier, validity and supplier-term fields, plus:
+- `subscription_id`, the owner — exactly one of `subscription_item_id` (an item cost) or `asset_id` (an asset cost) —, `cost_key`, `cost_element_id`, `role`, `cost_type`, `charge_code`, `cost_model` and the computed totals;
 - `status` (`active` | `ended`), `started_at`, `ended_at`;
 - `last_change_id`.
 
-Unique `(subscription_item_id, cost_key)`. The **id is stable for the life of the purchase**: it is created once at the first activation of its item and never re-created. Amend / Renew / re-confirmation activations update it in place. Cancel and item removal set `status = ended` and `ended_at`. A merge (C13: items are cloned under new ids) re-points `subscription_item_id` and `subscription_id` without changing the cost id.
+Unique per owner and `cost_key`. The **id is stable for the life of the purchase**: it is created once at the first activation of its owner and never re-created. ARC mirrors items only, so asset costs are never carried or renegotiated by Amend / Renew; they end on Cancel (or when a cancel line cancels the asset) and follow the asset on a merge. Amend / Renew / re-confirmation activations update it in place. Cancel and item removal set `status = ended` and `ended_at`. A merge (C13: items are cloned under new ids) re-points `subscription_item_id` and `subscription_id` without changing the cost id.
 
 **Cost history — no new entity.** The existing `CpqSubscriptionChangeLog` (`entities.ts:1387`) is already the history of subscription items:
 - one append-only row per subscription per order, with change types `created` / `amend` / `renew` / `cancel` / `merge-source` / `merge-result`;
@@ -271,7 +271,7 @@ Unique `(subscription_item_id, cost_key)`. The **id is stable for the life of th
 
 `snapshotSubscription` gains `items[].costs[]`: per item cost, the id, `cost_key`, name, role, value, currency, FX, supplier, quote ref, validity, supplier term and status. Every cost change is therefore recorded in the same row, and with the same links, as the item change that carried it.
 
-Order line costs complete the trail. `CpqOrderLineCost.subscription_item_cost_id` is set at conversion for carried costs and at activation for new ones, so the orders that set a given cost can also be listed directly.
+Order line costs complete the trail. `CpqOrderLineCost.inventory_cost_id` is set at conversion for carried costs and at activation for new ones, so the orders that set a given cost can also be listed directly.
 
 Order items are **not** a history of subscription items today. `CpqOrderLineConfiguration` has no subscription-item reference: only `source_quote_line_id` → quote line → `source_subscription_item_id` (`entities.ts:1302`, `:867`). So the change log, not the order lines, is the pattern to follow.
 
@@ -316,8 +316,8 @@ The computed margin (`computeQuoteMargin()`) returns `margin_hash` (hash of ever
   - Status transitions sent from the UI carry `expectedRevision`; a supplier answer (or any price-affecting write) that lands between the rep's last view and the transition yields `409 STALE_REVISION`, so a rep never sends a price they have not seen. The answer API itself takes the lock and needs no revision (automated callers never fail on concurrent margin-only edits).
   - Extending `valid_until` / the supplier term requires a new `supplier_quote_ref` or a note (evidence), recorded in the audit trail.
 - **R12 Order and subscription.**
-  - Conversion copies every quote cost line to a `CpqOrderLineCost` (same `cost_key`, `source_quote_line_cost_id`, and `subscription_item_cost_id` for costs carried from a live item). From then on, costs never affect price. Only Q-D13 re-confirmations on the order line cost (margin only) are allowed, until activation.
-  - The first activation of an item creates one `CpqSubscriptionItemCost` per order line cost (stable id), sets the order line cost's `subscription_item_cost_id`, and is recorded in the `created` change-log row's `after_snapshot`. Values, FX and index snapshots are **frozen until the next ARC change**. An index moving after activation does not revalue item costs in this scope (Q-D9).
+  - Conversion copies every quote cost line to a `CpqOrderLineCost` (same `cost_key`, `source_quote_line_cost_id`, and `inventory_cost_id` for costs carried from a live item). From then on, costs never affect price. Only Q-D13 re-confirmations on the order line cost (margin only) are allowed, until activation.
+  - The first activation of an item creates one `CpqInventoryCost` per order line cost (stable id), sets the order line cost's `inventory_cost_id`, and is recorded in the `created` change-log row's `after_snapshot`. Values, FX and index snapshots are **frozen until the next ARC change**. An index moving after activation does not revalue item costs in this scope (Q-D9).
   - **Billing payloads are unchanged** (I-9).
 - **R13 ARC.**
   - **Amend:**
@@ -329,7 +329,7 @@ The computed margin (`computeQuoteMargin()`) returns `margin_hash` (hash of ever
     - A carried MRC cost whose `valid_until` or `supplier_term_end` falls before the new term end is turned into `estimated` ("renegotiation due"; value kept, shown with the previous supplier term). A cost request can be opened on it. It blocks conversion until confirmed (R7): either a new supplier answer, or "keep current cost" with a new validity.
   - **Cancel:** cost lines are not editable. The Cancel quote shows, per item, any cost whose `supplier_term_end` is after the cancel effective date ("supplier early-exit exposure"). At activation, item costs are ended (`status = ended`, `ended_at` = the cancel effective date), visible in the `cancel` change-log row. Recording a supplier early-termination charge is Q-D10.
   - **At ARC activation:**
-    - A changed cost **updates the same `CpqSubscriptionItemCost` in place** (its id is unchanged), exactly as items are updated today. Its before → after is captured by that order's `amend` / `renew` change-log snapshots, together with the item changes. A re-confirmation made on the order (Q-D13) is simply the value written at activation.
+    - A changed cost **updates the same `CpqInventoryCost` in place** (its id is unchanged), exactly as items are updated today. Its before → after is captured by that order's `amend` / `renew` change-log snapshots, together with the item changes. A re-confirmation made on the order (Q-D13) is simply the value written at activation.
     - A cost new to the item (e.g. an element added at Renew) creates its row.
     - Cancel or removal sets `status = ended` (visible in the `cancel` / `amend` change-log snapshots).
     - A cost-only change produces a `modify` change with **no billing impact** (C8, I-9).
@@ -365,7 +365,7 @@ The computed margin (`computeQuoteMargin()`) returns `margin_hash` (hash of ever
 | I-7 | Subscription item costs equal the quote cost lines (as re-confirmed, Q-D13) at activation, with dates materialised; `cost_key` is kept at every step. |
 | I-8 | A quote with no cost-plus charges and no cost lines prices identically before and after this capability. |
 | I-9 | Billing event payloads and billing items are identical with the toggle on or off. |
-| I-10 | Per subscription item and `cost_key`, exactly one `CpqSubscriptionItemCost` exists for the life of the purchase, and its id never changes (a merge re-points it). Every activation that changes it is recorded in that order's `CpqSubscriptionChangeLog` row, whose `after_snapshot` holds the cost's new state. No separate history entity exists. |
+| I-10 | Per owner (subscription item or asset) and `cost_key`, exactly one `CpqInventoryCost` exists for the life of the purchase, and its id never changes (a merge re-points it). Every activation that changes it is recorded in that order's `CpqSubscriptionChangeLog` row, whose `after_snapshot` holds the cost's new state. No separate history entity exists. |
 | I-11 | On a frozen ARC mirror line, no cost change alters the offer price. |
 | I-12 | A carried cost line whose source item cost changed since mirroring (hash mismatch) blocks ARC activation (`409 COST_SOURCE_CHANGED`) — same pattern as the sibling's carried adjustments. |
 | I-13 | A supplier answer is applied only when it quotes the cost line's current `cost_request_id`; otherwise `409 COST_REQUEST_SUPERSEDED`. A repeated answer with the same `supplier_quote_ref` **on the same cost line** is a no-op (a clone's cost line accepts it as new). |
@@ -382,7 +382,7 @@ The computed margin (`computeQuoteMargin()`) returns `margin_hash` (hash of ever
 | Notification `cpq.cost.expiring` (Phase 4) | with `cost_expiring` → to `cpq.costs.manage` holders | quote no., cost name, `validUntil` — no amount | — |
 | `cpq.quote.cost_expiring` (new, scheduled, later phase) | a confirmed price-basis cost on a non-terminal, unconverted quote reaches `valid_until` − N days | ids, `validUntil` | no |
 | `cpq.quote.status_changed` (existing) | unchanged | gains only `hasPendingCosts` / `hasEstimatedCosts` (booleans, not sensitive) | yes (existing) |
-| `cpq.subscription.item_cost_changed` (new) | an activation or ARC activation (incl. the Phase 1 minimal write-back) or a merge creates, changes, ends or re-points an item cost | `subscriptionId`, `subscriptionItemId`, `itemCostId`, `changeLogId`, `costKey`, `effectiveDate`, `supplierId`, `sourceOrderId`, `cause: 'activation' \| 'amend' \| 'renew' \| 'cancel' \| 'merge' \| 'reconfirm'`; no amounts | no |
+| `cpq.subscription.cost_changed` (new) | an activation or ARC activation (incl. the Phase 1 minimal write-back) or a merge creates, changes, ends or re-points an inventory cost | `subscriptionId`, `ownerType` (`subscription_item` \| `asset`), `subscriptionItemId`, `assetId`, `inventoryCostId`, `changeLogId`, `costKey`, `effectiveDate`, `supplierId`, `sourceOrderId`, `cause: 'activation' \| 'amend' \| 'renew' \| 'cancel' \| 'merge' \| 'reconfirm'`; no amounts | no |
 
 **Anti-corruption boundary.** External data enters at three points, each validated by a Zod schema at the API:
 - supplier answers (cost confirm API: request id, amount ≥ 0, currency known to `currencies`, `valid_until` ≥ today);
@@ -576,7 +576,7 @@ The computed margin (`computeQuoteMargin()`) returns `margin_hash` (hash of ever
 
 **Item margin:** per subscription item and month: item MRC amount − Σ open MRC item costs (× quantity); NRC margin recorded once at activation.
 
-**Journey:** accepted quote → conversion (guard R7) → `CpqOrderLineCost` copies → (optional re-confirmation of value / validity before activation, Q-D13) → activation → one `CpqSubscriptionItemCost` per item cost (stable id) (recorded in the `created` change-log snapshot) → `cpq.subscription.item_cost_changed (cause: activation)` → billing receives the unchanged payload (I-9) → the subscription page shows contracted cost, supplier, supplier term and margin.
+**Journey:** accepted quote → conversion (guard R7) → `CpqOrderLineCost` copies → (optional re-confirmation of value / validity before activation, Q-D13) → activation → one `CpqInventoryCost` per item cost (stable id) (recorded in the `created` change-log snapshot) → `cpq.subscription.cost_changed (cause: activation)` → billing receives the unchanged payload (I-9) → the subscription page shows contracted cost, supplier, supplier term and margin.
 
 **ROI:**
 - 100% of activated cost-plus and costed items have their contracted cost recorded, so renewals start from the real supplier cost (WF6).
@@ -605,7 +605,7 @@ The computed margin (`computeQuoteMargin()`) returns `margin_hash` (hash of ever
 
 ### WF6: Renegotiate costs through Amend / Renew; close them on Cancel
 
-**Journey (amend):** Amend quote → mirror lines carry item costs (`carried`, hashed) → procurement records the renegotiated supplier price on the carried cost (margin only — price lock) → optionally **Re-price from cost** → activation (stale-hash guard I-12) → the same item cost updated in place from E, with before → after in the Amend order's change-log snapshots → `item_cost_changed (amend)`; billing changes only if the price changed (existing modify path).
+**Journey (amend):** Amend quote → mirror lines carry item costs (`carried`, hashed) → procurement records the renegotiated supplier price on the carried cost (margin only — price lock) → optionally **Re-price from cost** → activation (stale-hash guard I-12) → the same item cost updated in place from E, with before → after in the Amend order's change-log snapshots → `cost_changed (amend)`; billing changes only if the price changed (existing modify path).
 **Journey (renew):** Renew quote → re-priced at today's standard; carried costs kept; costs with validity or supplier term ending before the new term end become `estimated` (renegotiation due) → cost request → answer / "keep current cost" → conversion → activation → item costs re-dated.
 **Journey (cancel):** Cancel quote shows supplier early-exit exposure → activation ends item costs (visible in the `cancel` change-log row).
 
@@ -787,7 +787,7 @@ Atomic commits. Scope `app` = `packages/cpq` (L2), `demo` = `src/modules/demo_*`
 | Step | Platform capability | Gap | Scope | Commits | Phase | Notes |
 |------|--------------------|-----|-------|---------|-------|-------|
 | `CpqOrderLineCost` + conversion copy (same transaction) | conversion | 2 | app | 1 | 1 | grounded C7; restored by user decision 2026-11-12 (supersedes architect #1) |
-| `CpqSubscriptionItemCost` (stable id) + activation write (same transaction) + item costs in `snapshotSubscription` + change-log API redaction + `item_cost_changed` | activation; existing `CpqSubscriptionChangeLog` | 2 | app | 1 | 1 | grounded C7, `entities.ts:1387`, `cpqInventoryService.ts:1506` |
+| `CpqInventoryCost` (stable id) + activation write (same transaction) + item costs in `snapshotSubscription` + change-log API redaction + `cost_changed` | activation; existing `CpqSubscriptionChangeLog` | 2 | app | 1 | 1 | grounded C7, `entities.ts:1387`, `cpqInventoryService.ts:1506` |
 | Order + subscription UI: order costs; item costs; cost diffs in the existing Change History | existing pages | 2 | app | 1 | 1 | grounded `inventory/subscriptions/[id]/page.tsx:754-790` |
 | Order re-confirmation (Q-D13) | — | 1 | app | 1 | 3 | deferred from Phase 2 (architect #2) |
 
@@ -801,7 +801,7 @@ Atomic commits. Scope `app` = `packages/cpq` (L2), `demo` = `src/modules/demo_*`
 | Mirror carried costs, skip catalog instantiation (R1c) | mirror service | 2 | app | 1 | 3 | grounded C8 |
 | Price lock + **Re-price from cost** action | `arcPriceFreeze` | 2 | app | 1 | 3 | grounded |
 | Renew renegotiation due + cancel exposure | — | 2 | app | 1 | 3 | |
-| ARC activation: update item costs in place (captured in the change-log snapshots), merge re-pointing, `item_cost_changed`, cost-only modify | activation write-back | 2 | app | 1 | 3 | grounded C8 |
+| ARC activation: update item costs in place (captured in the change-log snapshots), merge re-pointing, `cost_changed`, cost-only modify | activation write-back | 2 | app | 1 | 3 | grounded C8 |
 | `ArcLineDiff` costs + banners | existing component | 1 | app | 1 | 3 | |
 
 ### Gap Summary
@@ -1097,7 +1097,7 @@ Success: the value / validity change on the `CpqOrderLineCost` (margin only); th
 
 **US-5.3** As sales / ops, I see each subscription item's contracted cost, supplier and supplier term, and, in the subscription's Change History, how every order changed it, so that I know what we pay for what we bill and how it got there.
 Identity: rep (read-only) / order manager / pricing manager / procurement with `cpq.costs.view`, Subscription detail → item costs + Change History.
-Success: one `CpqSubscriptionItemCost` per item and cost key, with an id that stays the same for the life of the purchase; its state in the `created` change-log row of the order; `item_cost_changed (activation)`; the billing payload is unchanged (I-9).
+Success: one `CpqInventoryCost` per item and cost key, with an id that stays the same for the life of the purchase; its state in the `created` change-log row of the order; `cost_changed (activation)`; the billing payload is unchanged (I-9).
 **Happy path:** activate → the item shows "Tail: 270 EUR/month, Carrier X, term to 2028-11-30" → Change History shows "Created · Order O-123" with the tail at 270 EUR.
 **Alternate paths:** an item without costs → "No cost recorded"; after a later Amend (Phase 3) the same cost row shows 240, and Change History shows the Amend order's row with the tail 270 → 240.
 **Failure paths:** an activation retry → idempotent (unique `(subscription_item_id, cost_key)` and the existing change-log `(source_order_id, subscription_id)`), no duplicates; a user without `cpq.costs.view` → no cost columns, `403` on the cost API, and the change-log API returns the snapshots without `costs`.
@@ -1106,7 +1106,7 @@ Success: one `CpqSubscriptionItemCost` per item and cost key, with an id that st
 
 **US-6.1** (Phase 3) As procurement, I record a renegotiated supplier price on an Amend quote without changing the customer price, so that savings show as margin.
 Identity: procurement / ARC operator, Amend quote detail.
-Success: carried cost lines (R13); the price lock holds (I-11); activation updates the same item cost in place (same id) and the Amend order's change-log snapshots show before → after; `item_cost_changed (amend)`; no billing change.
+Success: carried cost lines (R13); the price lock holds (I-11); activation updates the same item cost in place (same id) and the Amend order's change-log snapshots show before → after; `cost_changed (amend)`; no billing change.
 **Happy path:** Amend → tail 270 → 240 → activate → the item cost (same id) shows 240; Change History shows the Amend order's row with the tail 270 → 240.
 **Alternate paths:** a supplier switch (new supplier and quote ref) on the same cost key.
 **Failure paths:** another ARC activated first → `409 COST_SOURCE_CHANGED` → refresh the mirror; the cost is edited on a cancel line → refused.
@@ -1442,7 +1442,7 @@ Written by the DDD challenger (`app-spec-notes/cost-plus-challenger-phase4.md`);
 - [ ] **I-10.**
   - A changed cost updates its row in place (same id), and the order's change-log `after_snapshot` equals its new state; Cancel ends the row.
   - A merge re-points item costs to the merged item without changing their ids (captured by the `merge-result` snapshot).
-  - `item_cost_changed` is emitted once per created / changed / ended / re-pointed item cost, with its cause.
+  - `cost_changed` is emitted once per created / changed / ended / re-pointed item cost, with its cause.
 - [ ] **I-9.** A cost-only Amend produces a `modify` change with a zero billing diff.
 - [ ] **Renew.** An MRC carried cost whose validity or supplier term ends before the new term becomes `estimated` with its value kept, and blocks conversion until it is confirmed or kept with evidence.
 - [ ] **Forward compatibility.** A Renew created under the Phase 1 safety freeze still activates correctly after the Phase 3 upgrade.
@@ -1595,23 +1595,28 @@ Phase 4: Index-linked costs + expiry warnings                 4 commits   WF1 / 
 
 ## Changelog
 
+### 2026-11-13 (feature-spec review)
+- Product-owner review of PRs #88–#92: the open feature-spec decisions are confirmed as proposed, except two revisions in the order / subscription costs spec:
+  - **Asset costs (its Q2):** costs of an assetizable line sold on a new sale are tracked under the **asset** (e.g. a server's recurring licence), not left on the order. The cost entity becomes owner-neutral: `CpqInventoryCost` (table `cpq_inventory_costs`), owned by exactly one subscription item or asset; the order line cost link is `inventory_cost_id`; the event is `cpq.subscription.cost_changed` with `ownerType`. New-sale assets are created before the `created` change-log snapshot so their costs are recorded there.
+  - **Cost-plus Renew line (its Q4):** a Renew mirror line is frozen only when the item's stored charges contain a cost-plus charge.
+
 ### 2026-11-12 (detailed feature specs)
 - Five feature specs written from the briefs: `2026-11-12-cpq-cost-plus-{order-subscription-costs,supplier-sourcing,foreign-currency-costs,arc-costs,index-costs-expiry}.md`, each reviewed by a fresh staff-engineer pass.
 - Amendments they record against this App Spec:
   - **R13 cancel end date:** `ended_at` = the cancelling order's change-log `effective_at` (the code has no separate cancel effective date). This resolves the R13 / US-6.4 conflict.
   - **R1a / R1c:** reconfigured mirror lines (marker `_arcReconfigured`) instantiate catalog cost lines; unreconfigured mirrors never do.
-  - **Activation** becomes one transaction on a forked EM. ARC activation also locks the source quote and the target subscriptions (I-12, Q-D13). This is flagged for human confirmation.
-  - **R3 FX provider rule:** the `currencies` module has no default / priority provider, so a CPQ toggle `cpq.cost_plus.fx_source_priority` is used. v1 works with manual or UTC-midnight rates only, until upstream date normalization (UP-FX-1) is fixed. Flagged.
+  - **Activation** becomes one transaction on a forked EM. ARC activation also locks the source quote and the target subscriptions (I-12, Q-D13). Confirmed 2026-11-13.
+  - **R3 FX provider rule:** the `currencies` module has no default / priority provider, so a CPQ toggle `cpq.cost_plus.fx_source_priority` is used. v1 works with manual or UTC-midnight rates only, until upstream date normalization (UP-FX-1) is fixed. Confirmed 2026-11-13.
   - **Expiry warnings** use a module schedule feeding a CPQ worker queue, not a scheduler command; a `registerCommand` API does not exist in scheduler 0.9.0.
-  - **R10a decline on a locked quote:** the amount is kept and downgraded to `estimated` (flagged).
-  - **Re-price from cost** ships only after `modifiedItems` exists in the billing connector (flagged).
+  - **R10a decline on a locked quote:** the amount is kept and downgraded to `estimated` (confirmed 2026-11-13).
+  - **Re-price from cost** ships only after `modifiedItems` exists in the billing connector (confirmed 2026-11-13).
 
 ### 2026-11-12 (user review)
 - Phase 0 answers confirmed by the user: Q-P0.1–Q-P0.4 and every Q-D default except Q-D1.
 - **Q-D1 changed:** reps see cost details and margin read-only (`cpq.costs.view` granted to `employee` by default; `cpq.costs.manage` stays `admin`).
 - **Order and subscription cost model changed** (user decision; supersedes the architect #1 removal of the order copy). Cost history was then moved onto the existing `CpqSubscriptionChangeLog` (no new entity, −1 commit, total 44):
   - `CpqOrderLineCost` is restored as the order's own cost entity, copied at conversion.
-  - `CpqSubscriptionItemCost` keeps **one stable id per item and cost key for the whole life of the purchase**: updated in place by ARC, re-pointed on merge, ended on cancel. The earlier close-and-reopen rows are dropped.
+  - `CpqInventoryCost` keeps **one stable id per item and cost key for the whole life of the purchase**: updated in place by ARC, re-pointed on merge, ended on cancel. The earlier close-and-reopen rows are dropped.
   - Cost history uses the existing `CpqSubscriptionChangeLog`. Item costs are added to its snapshots, and the Change History renders cost before → after per order. A separate history entity was considered and dropped after user review (2026-11-12): subscription item history already lives in the change log, not in order items.
   - WF5 +2 commits; total 45 (Phase 1: 27).
 

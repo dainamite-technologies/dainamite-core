@@ -543,6 +543,15 @@ export class CpqProductCharge {
   @Property({ name: 'quantity_attribute_code', type: 'text', nullable: true })
   quantityAttributeCode?: string | null
 
+  // Cost-plus (`pricingMethod = 'cost_plus'`): list = markup(Σ price-basis costs).
+  // Confidential — returned only to `cpq.costs.view` holders (lib/chargeView.ts).
+  //   markupRule: markup_percent | target_margin_percent | markup_absolute
+  @Property({ name: 'markup_rule', type: 'text', nullable: true })
+  markupRule?: string | null
+
+  @Property({ name: 'markup_value', type: 'numeric', columnType: 'numeric(18, 4)', nullable: true })
+  markupValue?: string | null
+
   @Property({ name: 'applicability_condition', type: 'jsonb', nullable: true })
   applicabilityCondition?: Record<string, unknown> | null
 

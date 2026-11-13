@@ -15,3 +15,7 @@
 - Recovered: an unpushed local autosave (820328a) held near-complete Step 4 work; soft-reset into the working tree and handed to the Step 4 executor to finish (no remote history touched).
 - Decision: claim protocol — three-signal check clean (no assignee, no in-progress label, no claim comment, no om-locks ref). Atomic lock + claim comment skipped: labels are disabled in this run's local config (the claim reference makes disabled labels block acquisition) and the PR is owned by this cezar task's own branch; a lock ref left by a session cut off mid-run would block other actors for 24 h.
 - Delegation: Step 4 (group:A remainder) → executor subagent, standard tier.
+
+## 2026-11-13T08:53:50Z — checkpoint 1
+- Steps A.1–A.4 (5a30eca..bb6e1d8): build ✅, typecheck ✅, full `yarn test` 102 suites / 1481 tests ✅. UI pass skipped (no UI touched; no runnable app env).
+- Decision: Tasks-table `Commit` cells hold the real code-commit SHAs, filled at each checkpoint; Step 4's executor had written its unreachable pre-amend SHA (cf45d4a), corrected to bb6e1d8.

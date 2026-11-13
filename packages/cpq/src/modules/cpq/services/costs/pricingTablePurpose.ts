@@ -1,5 +1,5 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
-import { CpqPricingTable, CpqProductCharge } from '../../data/entities'
+import { CpqChargeCostElement, CpqPricingTable, CpqProductCharge } from '../../data/entities'
 import type { TenantScope } from '../types'
 import { QuotingError } from '../cpqQuotingService'
 
@@ -7,7 +7,9 @@ import { QuotingError } from '../cpqQuotingService'
 export async function isPricingTableReferenced(em: EntityManager, tableId: string, scope: TenantScope): Promise<boolean> {
   const scoped = { organizationId: scope.organizationId, tenantId: scope.tenantId, deletedAt: null }
   const charges = await em.count(CpqProductCharge, { ...scoped, pricingTableId: tableId })
-  return charges > 0
+  if (charges > 0) return true
+  const elements = await em.count(CpqChargeCostElement, { ...scoped, costTableId: tableId })
+  return elements > 0
 }
 
 /**

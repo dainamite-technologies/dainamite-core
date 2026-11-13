@@ -8,6 +8,8 @@ import type { CpqRouteContext } from '../context'
 /** Mutation-guard resource kinds for CPQ quote writes (`module.entity`). */
 export const CPQ_QUOTE_RESOURCE_KIND = 'cpq.quote'
 export const CPQ_QUOTE_LINE_RESOURCE_KIND = 'cpq.quote_line'
+/** Catalog cost elements of a product charge (cost-plus pricing). */
+export const CPQ_CHARGE_COST_ELEMENT_RESOURCE_KIND = 'cpq.charge_cost_element'
 
 /**
  * Run every registered mutation guard for a CPQ custom write route.

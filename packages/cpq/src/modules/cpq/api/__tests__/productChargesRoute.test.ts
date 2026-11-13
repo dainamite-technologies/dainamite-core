@@ -1,9 +1,13 @@
 const userHasAllFeatures = jest.fn()
 const assertCostPlusChargeWritable = jest.fn()
+const assertCostPlusChargeHasPriceBasis = jest.fn()
+const deactivatePriceBasisElements = jest.fn()
+const deleteChargeElements = jest.fn()
+const costService = { assertCostPlusChargeWritable, assertCostPlusChargeHasPriceBasis, deactivatePriceBasisElements, deleteChargeElements }
 const em = { findAndCount: jest.fn(), find: jest.fn(), findOne: jest.fn(), create: jest.fn(), assign: jest.fn(), flush: jest.fn() }
 const ctx = {
   auth: { sub: 'user-1', tenantId: 'tenant' }, tenantId: 'tenant', organizationId: 'org', organizationScope: null, em,
-  container: { resolve: (name: string) => name === 'rbacService' ? { userHasAllFeatures } : { assertCostPlusChargeWritable } },
+  container: { resolve: (name: string) => name === 'rbacService' ? { userHasAllFeatures } : costService },
 }
 jest.mock('../context', () => ({ resolveCpqRouteContext: jest.fn(async () => ctx) }))
 

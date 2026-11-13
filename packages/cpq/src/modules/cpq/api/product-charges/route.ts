@@ -54,8 +54,10 @@ function serializeCharge(item: CpqProductCharge, showCosts: boolean) {
  */
 async function assertCostPlusWrite(ctx: CpqRouteContext): Promise<void> {
   if (!(await canViewCosts(ctx))) throw new QuotingError(403, 'COSTS_VIEW_REQUIRED')
-  await ctx.container.resolve<CpqCostService>('cpqCostService').assertCostPlusChargeWritable(ctx.tenantId)
+  await costService(ctx).assertCostPlusChargeWritable(ctx.tenantId)
 }
+
+const costService = (ctx: CpqRouteContext) => ctx.container.resolve<CpqCostService>('cpqCostService')
 
 const touchesMarkup = (body: { markupRule?: unknown; markupValue?: unknown }) =>
   body.markupRule !== undefined || body.markupValue !== undefined
@@ -115,7 +117,12 @@ export async function POST(req: Request) {
     const body = cpqProductChargeCreateSchema.parse(await req.json())
     const scope = { organizationId: ctx.organizationId, tenantId: ctx.tenantId }
     const isCostPlus = body.pricingMethod === COST_PLUS
-    if (isCostPlus) await assertCostPlusWrite(ctx)
+    if (isCostPlus) {
+      await assertCostPlusWrite(ctx)
+      // A new charge has no cost elements yet: an active cost-plus charge is
+      // refused (NO_PRICE_BASIS_ELEMENT) — create it inactive, add elements, activate.
+      await costService(ctx).assertCostPlusChargeHasPriceBasis(ctx.em, { pricingMethod: COST_PLUS, isActive: body.isActive }, scope)
+    }
 
     // Resolve productId from offering if not provided
     let productId = body.productId
@@ -190,11 +197,19 @@ export async function PUT(req: Request) {
       const issues = chargePricingShapeIssues({ ...entity, ...normalizedUpdates } as Parameters<typeof chargePricingShapeIssues>[0])
       if (issues.length) return NextResponse.json({ error: 'Validation error', details: issues }, { status: 400 })
     }
-    if (toCostPlus && (updates.pricingMethod === COST_PLUS || markupChanged)) await assertCostPlusWrite(ctx)
+    const activating = updates.isActive === true && !entity.isActive
+    if (toCostPlus && (updates.pricingMethod === COST_PLUS || markupChanged || activating)) {
+      await assertCostPlusWrite(ctx)
+      await costService(ctx).assertCostPlusChargeHasPriceBasis(ctx.em,
+        { id: entity.id, pricingMethod: COST_PLUS, isActive: updates.isActive ?? entity.isActive }, scope)
+    }
     if (updates.pricingTableId && updates.pricingTableId !== entity.pricingTableId) {
       await assertPriceTable(ctx.em, updates.pricingTableId, { organizationId: ctx.organizationId, tenantId: ctx.tenantId })
     }
 
+    // Leaving cost-plus: `price_basis` is only valid on cost-plus charges, so
+    // its price-basis elements are deactivated in the same flush.
+    if (entity.pricingMethod === COST_PLUS && !toCostPlus) await costService(ctx).deactivatePriceBasisElements(ctx.em, entity.id, scope)
     ctx.em.assign(entity, normalizedUpdates)
     await ctx.em.flush()
 
@@ -218,6 +233,7 @@ export async function DELETE(req: Request) {
     if (!entity) return NextResponse.json({ error: 'Not found' }, { status: 404 })
 
     entity.deletedAt = new Date()
+    await costService(ctx).deleteChargeElements(ctx.em, entity.id, scope)
     await ctx.em.flush()
 
     return NextResponse.json({ success: true })
@@ -249,7 +265,7 @@ const writeErrors = [
   cpqErrorDoc(400, 'Validation error (V-CHG-1)'),
   cpqErrorDoc(403, 'COSTS_VIEW_REQUIRED — cost-plus pricing and markup need cpq.costs.view'),
   cpqErrorDoc(404, 'Charge not found'),
-  cpqErrorDoc(422, 'COST_PLUS_DISABLED (tenant toggle off), COST_PLUS_NOT_AVAILABLE, or WRONG_TABLE_PURPOSE (a price charge referencing a cost table)'),
+  cpqErrorDoc(422, 'COST_PLUS_DISABLED (tenant toggle off), COST_PLUS_NOT_AVAILABLE, NO_PRICE_BASIS_ELEMENT (activating a cost-plus charge without an active price-basis cost element), or WRONG_TABLE_PURPOSE (a price charge referencing a cost table)'),
 ]
 
 export const openApi: OpenApiRouteDoc = {

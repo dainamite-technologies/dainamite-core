@@ -68,3 +68,7 @@
 - Fix (Step 14-review-fix, inline): when nothing existed before, `after` repeats the same indexed existence query; if cost lines now exist the margin is reported with `previousMarginHash: null`. Quotes without costs still compute no margin (one existence query per side).
 - Accepted: `margin_changed` (non-broadcast) carries quote-level aggregates (`contractMargin`, `marginPercent`, `costCoverage`) as the feature spec Delta lists; conversion guard reviewed (price-basis on live lines, expiry, toggle-independent, before the order number); Step 17 sweep found no leak; `ce.ts` needs no exclusion (label-only registrations).
 - Deferred (feature 2 scope): conversion and ARC detach-target writes run without the tracker — conversion locks the quote's costs (copied to order costs by the order/subscription costs feature).
+
+## 2026-11-13T13:33:54Z — checkpoint 5 (Phase C closed)
+- Steps C.14–C.17 + 14-review-fix (4bc3274..0c7c25d): generate ✅, typecheck ✅, build ✅, full `yarn test` 116 suites / 1713 tests ✅. UI pass skipped (no UI touched; no runnable app env).
+- Decision: the revision bump on margin-only cost writes (noted at checkpoint 4) stays — App Spec R11 expects concurrent margin-only edits to collide on the revision (that is why the supplier-answer API takes no revision).

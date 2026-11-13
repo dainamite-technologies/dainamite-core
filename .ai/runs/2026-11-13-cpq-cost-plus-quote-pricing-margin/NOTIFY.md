@@ -62,3 +62,9 @@
 
 ## 2026-11-13T13:09:37Z — checkpoint 4
 - Steps C.11–C.13 + 12-review-fix (c7e8e7d..5e21994): generate ✅, typecheck ✅, build ✅, full `yarn test` 115 suites / 1684 tests ✅. UI pass skipped (no UI touched; no runnable app env).
+
+## 2026-11-13T13:30:04Z — review of Steps 14–17
+- Finding (major, R8 signal gap — flagged by the executor): the margin tracker skipped any write on a quote with no cost lines before it, so a saved recalculation that created the quote's first cost lines (a costed line added, or the toggle switched on) never emitted `margin_changed`.
+- Fix (Step 14-review-fix, inline): when nothing existed before, `after` repeats the same indexed existence query; if cost lines now exist the margin is reported with `previousMarginHash: null`. Quotes without costs still compute no margin (one existence query per side).
+- Accepted: `margin_changed` (non-broadcast) carries quote-level aggregates (`contractMargin`, `marginPercent`, `costCoverage`) as the feature spec Delta lists; conversion guard reviewed (price-basis on live lines, expiry, toggle-independent, before the order number); Step 17 sweep found no leak; `ce.ts` needs no exclusion (label-only registrations).
+- Deferred (feature 2 scope): conversion and ARC detach-target writes run without the tracker — conversion locks the quote's costs (copied to order costs by the order/subscription costs feature).

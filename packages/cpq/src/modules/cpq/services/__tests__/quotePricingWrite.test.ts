@@ -92,13 +92,22 @@ describe('createMarginTracker skip rules', () => {
     expect(loadMargin).not.toHaveBeenCalled()
   })
 
-  it('runs exactly one existence query and no margin computation for a quote without costs', async () => {
+  it('computes no margin for a quote without costs before or after the write (one existence query each side)', async () => {
     const em = tx(null)
     const tracker = createMarginTracker({ scope, isEnabled: async () => true })
     await tracker.before(em, quote)
     expect(await tracker.after(em, quote)).toBeNull()
-    expect(em.findOne).toHaveBeenCalledTimes(1)
+    expect(em.findOne).toHaveBeenCalledTimes(2)
     expect(loadMargin).not.toHaveBeenCalled()
+  })
+
+  it('reports the margin of a write that creates the quote\'s first cost lines (no previous hash)', async () => {
+    const em = tx(null)
+    const tracker = createMarginTracker({ scope, isEnabled: async () => true })
+    await tracker.before(em, quote)
+    em.findOne.mockResolvedValue({ id: 'c' })
+    expect(await tracker.after(em, quote)).toMatchObject({ previousMarginHash: null, marginHash: 'h1', approvalInvalidated: false })
+    expect(loadMargin).toHaveBeenCalledTimes(1)
   })
 
   it('computes the before and after hashes for a quote with costs and flags no invalidation while ready', async () => {

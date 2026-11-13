@@ -9,7 +9,8 @@ import { loadQuoteMargin } from './quoteCostView'
  * Quote-level aggregates only: never a per-line amount, cost, supplier or markup.
  */
 export interface MarginSignal {
-  previousMarginHash: string
+  /** Null when the write produced the quote's first cost lines (there was no margin before). */
+  previousMarginHash: string | null
   marginHash: string
   /** True when the quote is past `ready` and has no order: an approval given on the old margin no longer holds. */
   approvalInvalidated: boolean
@@ -36,26 +37,31 @@ export interface MarginTrackerOptions {
 }
 
 /**
- * Tracks the margin hash across one write. Skipped (no margin computation, no further queries) when the toggle is off
- * or the quote has no cost lines: ONE indexed existence query on `cpq_quote_line_costs` by quote.
+ * Tracks the margin hash across one write. Skipped (no margin computation) when the toggle is off, or when the quote
+ * has no cost lines before the write (ONE indexed existence query on `cpq_quote_line_costs` by quote) and none after
+ * it (the same query once more) — so a write that creates the first cost lines still reports its margin.
  */
 export function createMarginTracker(options: MarginTrackerOptions): MarginTracker {
   const { scope } = options
+  let state: 'off' | 'none_before' | 'tracked' = 'off'
   let previous: string | null = null
+  const hasCostLines = async (tx: EntityManager, quote: CpqQuoteConfiguration) => Boolean(await tx.findOne(CpqQuoteLineCost, {
+    quoteConfigurationId: quote.id, organizationId: scope.organizationId, tenantId: scope.tenantId, deletedAt: null,
+  }, { fields: ['id'] }))
   return {
     async before(tx, quote) {
+      state = 'off'
       previous = null
       if (!options.force) {
         if (!(await options.isEnabled(scope.tenantId))) return
-        const any = await tx.findOne(CpqQuoteLineCost, {
-          quoteConfigurationId: quote.id, organizationId: scope.organizationId, tenantId: scope.tenantId, deletedAt: null,
-        }, { fields: ['id'] })
-        if (!any) return
+        if (!(await hasCostLines(tx, quote))) { state = 'none_before'; return }
       }
+      state = 'tracked'
       previous = (await loadQuoteMargin(tx, quote, scope)).marginHash
     },
     async after(tx, quote) {
-      if (previous === null) return null
+      if (state === 'off') return null
+      if (state === 'none_before' && !(await hasCostLines(tx, quote))) return null
       const margin = await loadQuoteMargin(tx, quote, scope)
       const changed = margin.marginHash !== previous
       let approvalInvalidated = false

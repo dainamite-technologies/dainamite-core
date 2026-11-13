@@ -8,8 +8,8 @@ App Spec: `.ai/specs/2026-11-11-app-spec-cpq-cost-plus-pricing.md` (source of tr
 Brief: `.ai/specs/briefs/2026-11-11-cpq-cost-plus-foreign-currency-costs.md`.
 Stories: US-2.4.
 Commit plan: `.ai/specs/app-spec-notes/cost-plus-commits-WF.md` #26.
-Depends on: `.ai/specs/2026-11-12-cpq-cost-plus-quote-pricing-margin.md` (PR #87: `cpq_quote_line_costs` with nullable `fx_rate` / `fx_rate_date`, `costService`, `costResolution`, `withQuotePricingWrite` + `marginTracker`, cost preview). Step 9 only also depends on **PR 1 of `.ai/specs/2026-11-12-cpq-cost-plus-order-subscription-costs.md`**, which creates `cpq_order_line_costs` / `cpq_subscription_item_costs` with `fx_rate` / `fx_rate_date`, the conversion copy and the activation copy.
-Tracked upstream dependency: **UP-FX-1**, `@open-mercato/core` `currencies` date normalization. `ExchangeRateService.getRate` matches UTC midnight only, while the built-in NBP / Raiffeisen providers store Warsaw-midnight timestamps. This spec does not wait for it; rates from the built-in providers become usable once it is fixed (⚠ Q14).
+Depends on: `.ai/specs/2026-11-12-cpq-cost-plus-quote-pricing-margin.md` (PR #87: `cpq_quote_line_costs` with nullable `fx_rate` / `fx_rate_date`, `costService`, `costResolution`, `withQuotePricingWrite` + `marginTracker`, cost preview). Step 9 only also depends on **PR 1 of `.ai/specs/2026-11-12-cpq-cost-plus-order-subscription-costs.md`**, which creates `cpq_order_line_costs` / `cpq_inventory_costs` with `fx_rate` / `fx_rate_date`, the conversion copy and the activation copy.
+Tracked upstream dependency: **UP-FX-1**, `@open-mercato/core` `currencies` date normalization. `ExchangeRateService.getRate` matches UTC midnight only, while the built-in NBP / Raiffeisen providers store Warsaw-midnight timestamps. This spec does not wait for it; rates from the built-in providers become usable once it is fixed (Q14, confirmed).
 
 ## 📝 TLDR
 
@@ -21,7 +21,7 @@ Supplier costs often arrive in the supplier's currency (USD / EUR carrier tails,
 - No rate means `CURRENCY_NO_RATE` as today, never a 1:1 conversion.
 - Cost tables prefer entries in the quote currency, else entries in the element's currency, converted.
 - Without the `currencies` module installed, CPQ keeps the PR #87 behavior.
-- **Scope in practice (⚠ Q14):** FX works with rates entered manually in `currencies` (`POST /api/currencies/exchange-rates`) or with custom providers that store rates at UTC midnight.
+- **Scope in practice (Q14, confirmed):** FX works with rates entered manually in `currencies` (`POST /api/currencies/exchange-rates`) or with custom providers that store rates at UTC midnight.
   - The built-in NBP and Raiffeisen providers do not feed it today. They store PLN pairs at Warsaw-midnight timestamps, which `getRate` never matches, and they hold no direct pairs between non-PLN currencies such as USD→EUR.
   - The usage endpoint and the cost dialog tell operators which pairs are missing.
   - Rates from the built-in providers become usable once the upstream issue UP-FX-1 is fixed.
@@ -31,10 +31,10 @@ Supplier costs often arrive in the supplier's currency (USD / EUR carrier tails,
 | # | Question | Applied default | Rationale | Confirm? |
 |---|---|---|---|---|
 | Q1 | Where does the tenant-configurable look-back live? | Number feature toggle **`cpq.cost_plus.fx_max_days_back`** (default 7, clamped to 0–30), read with `featureTogglesService.getNumberConfig`. `ModuleConfigService` was considered and rejected. | CPQ already reads its tenant settings through `featureTogglesService` (`di.ts:27`, `services/priceAdjustments/adjustmentService.ts:56-59`). Feature toggles support `number` / `json` values (`feature_toggles/lib/feature-flag-check.ts:222-232`) and have a per-tenant override UI (App Spec U1). `ModuleConfigService` (`configs/lib/module-config-service.ts:106-116`) has a tenant scope but no tenant-facing UI, and CPQ does not use it anywhere. | reversible |
-| Q2 | Provider rule: "tenant default provider, else highest priority". | The `currencies` module has **no** default-provider or priority concept (verified: `ExchangeRate` has a free-text `source`, `data/entities.ts:98-100`; `CurrencyFetchConfig` has only `provider` + `isEnabled`, `:143-148`; `getRate` returns every provider's row, `exchangeRateService.ts:26-33, 152-160`). CPQ therefore adds a JSON toggle **`cpq.cost_plus.fx_source_priority`** (ordered `source` names, default `[]`). It picks the first listed source that has a rate. Otherwise a single rate is used as-is, and several unlisted rates are tie-broken by `source` ascending. The chosen `source` is stored. | This is the closest deterministic and auditable reading of R3 that the platform supports. Choosing between providers changes customer prices, and the App Spec rule assumed a platform concept that does not exist. | ⚠ NEEDS HUMAN CONFIRMATION |
+| Q2 | Provider rule: "tenant default provider, else highest priority". | The `currencies` module has **no** default-provider or priority concept (verified: `ExchangeRate` has a free-text `source`, `data/entities.ts:98-100`; `CurrencyFetchConfig` has only `provider` + `isEnabled`, `:143-148`; `getRate` returns every provider's row, `exchangeRateService.ts:26-33, 152-160`). CPQ therefore adds a JSON toggle **`cpq.cost_plus.fx_source_priority`** (ordered `source` names, default `[]`). It picks the first listed source that has a rate. Otherwise a single rate is used as-is, and several unlisted rates are tie-broken by `source` ascending. The chosen `source` is stored. | This is the closest deterministic and auditable reading of R3 that the platform supports. Choosing between providers changes customer prices, and the App Spec rule assumed a platform concept that does not exist. | Confirmed by the product owner in PR review (2026-11-13). Reversible. |
 | Q3 | Inverse and cross rates | Direct pair (cost → quote currency) first, from any source. The inverse pair is tried **only when no source has a direct rate**; then `fx_rate = round(1 / rate, 8)` and `fx_rate_derivation = 'inverse'`. No triangulation through a pivot currency; pivot-currency triangulation is recorded as a follow-up option. | A manual rate is usually entered in one direction only. Bid / ask caveat: a provider's two directions can be different rate types (NBP stores PLN→X as 1/ask `sell` and X→PLN as `bid` `buy`, `providers/nbp.ts:89-106`), so 1/rate of one direction is not the other direction's quoted rate. CPQ never ignores an existing direct rate in favour of an inverted one, and the derivation is stored. Cross rates would add a second derived number per line and a choice of pivot. If neither pair exists, the line gets `CURRENCY_NO_RATE`, which is safe. | reversible |
 | Q4 | Which date is the "saved recalculation date"? | The server's current UTC date at the write. The quote date and `valid_until` are not used. | R4 says the rate is taken as of the date of the saved recalculation. `getRate` refuses future dates (`exchangeRateService.ts:54-55, 230-240`), and "today" never trips that check. | reversible |
-| Q5 | Store the rate's provider and derivation? | Yes. New nullable columns `fx_rate_source` (text, the `ExchangeRate.source` as stored) and `fx_rate_derivation` (text, `direct` \| `inverse`) on `cpq_quote_line_costs`, `cpq_order_line_costs` and `cpq_subscription_item_costs`. | Two providers can disagree, and an inverted rate is not a quoted one (Q3). Without these columns, a stored rate cannot be explained or audited. Keeping them separate avoids parsing a suffixed source. The change is additive and nullable. | reversible |
+| Q5 | Store the rate's provider and derivation? | Yes. New nullable columns `fx_rate_source` (text, the `ExchangeRate.source` as stored) and `fx_rate_derivation` (text, `direct` \| `inverse`) on `cpq_quote_line_costs`, `cpq_order_line_costs` and `cpq_inventory_costs`. | Two providers can disagree, and an inverted rate is not a quoted one (Q3). Without these columns, a stored rate cannot be explained or audited. Keeping them separate avoids parsing a suffixed source. The change is additive and nullable. | reversible |
 | Q6 | Does a saved recalculation refresh an unchanged foreign cost's rate? | Yes, on every saved recalculation while unlocked (US-2.4 alternate path). The price and `margin_hash` may move, and the existing `pricing_changed` / `margin_changed` events fire. **Exception:** lines carried from subscription items (`origin = carried`, or any line of an ARC mirror, i.e. `configuration._arcMirroredFromItemId` set) never refresh their snapshot. The ARC costs feature decides any renegotiation. | App Spec R4 and the US-2.4 alternate path. Mirror lines carry a contracted cost (R13, I-11), and a silent re-rate would move a frozen price or margin. | reversible |
 | Q7 | Optional dependency | `cpqFxRateResolver` is registered in CPQ `di.ts`. It resolves `exchangeRateService` only when `container.hasRegistration('exchangeRateService')`. Otherwise it returns "unavailable", and every foreign cost is `CURRENCY_NO_RATE` (the PR #87 behavior). No static import from `currencies`. | Rule "CPQ installable alone". Precedent: `getBaseCurrencyCode` degrades when `currencies` is absent (`services/types.ts:18-36`). | reversible |
 | Q8 | `getRate` throws (same currency, future date, DB error) | Same currency never calls the service: the rate is 1, and no FX columns are set. Any throw is caught, logged without amounts, and mapped to `CURRENCY_NO_RATE`. The write itself never fails because of FX. | Rate lookup is reference data. A missing rate is already a defined line state. | reversible |
@@ -43,7 +43,7 @@ Supplier costs often arrive in the supplier's currency (USD / EUR carrier tails,
 | Q11 | Separate toggle for FX? | No. FX runs whenever `cpq.cost_plus` is on and `currencies` is installed. | Least new surface. The only alternative to FX is a not-ready line. | reversible |
 | Q12 | Calculate-price (no quote) | It converts at today's rate in memory and never returns a rate or a cost. With no rate, it returns `priceOnRequest: true` (PR #87 contract). Public calculator prices of foreign-cost charges therefore move with each new daily rate (accepted). | I-4. The public calculator must not reveal supplier currency or rates. Calculator prices are indicative and are not stored. | reversible |
 | Q13 | A manual or supplier value entered while no rate existed: what status does it get once a rate appears? | It becomes `estimated` (catalog `fixed` / `table` lines become `confirmed`). A pricing manager confirms it, which blocks conversion until then (R7). | PR #87 stores "no rate" as `value_status = none`, so the status that was entered is not kept. Nobody has seen the converted price yet, and confirming it is the cheap and safe choice. | reversible |
-| Q14 | Ship FX while the built-in providers cannot feed it (NBP / Raiffeisen store Warsaw-midnight timestamps that `getRate` never matches, `exchangeRateService.ts:207-224, 246-250` vs `providers/nbp.ts:76-80`, and hold no USD→EUR pair)? | Yes. Scope v1 to manually entered rates and custom providers that store rates at UTC midnight. File the upstream issue **UP-FX-1** (date normalization in `currencies`) as a named, tracked dependency; rates from the built-in providers become usable once it is fixed, with no CPQ change. Add operator signals: `missingFxPairs` in `GET /api/cpq/cost-plus/usage`, and "No USD→EUR rate maintained" in the cost dialog. CPQ does not work around the framework, for example with a date-range query or its own provider. | Failure is safe (`CURRENCY_NO_RATE`, never a wrong rate). A CPQ workaround would duplicate `currencies` lookup semantics and break when the framework is fixed. Tenants whose only rate source is NBP get no automatic FX until UP-FX-1 lands, so this is a scope limit on a confirmed product decision (Q-D4). | ⚠ NEEDS HUMAN CONFIRMATION |
+| Q14 | Ship FX while the built-in providers cannot feed it (NBP / Raiffeisen store Warsaw-midnight timestamps that `getRate` never matches, `exchangeRateService.ts:207-224, 246-250` vs `providers/nbp.ts:76-80`, and hold no USD→EUR pair)? | Yes. Scope v1 to manually entered rates and custom providers that store rates at UTC midnight. File the upstream issue **UP-FX-1** (date normalization in `currencies`) as a named, tracked dependency; rates from the built-in providers become usable once it is fixed, with no CPQ change. Add operator signals: `missingFxPairs` in `GET /api/cpq/cost-plus/usage`, and "No USD→EUR rate maintained" in the cost dialog. CPQ does not work around the framework, for example with a date-range query or its own provider. | Failure is safe (`CURRENCY_NO_RATE`, never a wrong rate). A CPQ workaround would duplicate `currencies` lookup semantics and break when the framework is fixed. Tenants whose only rate source is NBP get no automatic FX until UP-FX-1 lands, so this is a scope limit on a confirmed product decision (Q-D4). | Confirmed by the product owner in PR review (2026-11-13). Reversible. |
 | Q15 | `margin_hash` stability | FX fields enter the hash **only when set** (null-stable). A quote with no FX snapshot keeps a byte-identical `margin_hash`. | No spurious `margin_changed` / `approvalInvalidated` on deploy for existing quotes. | reversible |
 
 ## 📝 Problem Statement
@@ -52,15 +52,15 @@ Supplier costs often arrive in the supplier's currency (USD / EUR carrier tails,
 - **Table lookups are quote-currency-only.** The engine filters pricing-table entries by the quote currency with no fallback (`services/cpqPricingService.ts:301`). A cost table kept in USD therefore never matches a EUR quote.
 - **No FX code exists in CPQ** (App Spec C12). The only coupling to `currencies` is the base-currency lookup, which degrades to `'USD'` when the module is missing (`services/types.ts:18-36`).
 - **Evidence:** App Spec Q-D4 (confirmed 2026-11-12) says carrier tails are often USD / EUR. The App Spec production reality check states "Our USD carrier costs need converting by hand until Phase 2".
-- **Platform limit (⚠ Q14).** The built-in rate providers do not produce rates that `getRate` can return:
+- **Platform limit (Q14, confirmed).** The built-in rate providers do not produce rates that `getRate` can return:
   - Timestamps: NBP stores Warsaw midnight (`providers/nbp.ts:76-80`), while `getRate` matches UTC midnight exactly (`exchangeRateService.ts:207-224, 246-250`).
   - Pairs: they store only PLN pairs.
   - In practice, this feature therefore converts with manually maintained rates or rates from custom UTC-midnight providers until UP-FX-1 is fixed.
 
 ## 📝 Prior spec drift
 
-- **App Spec R3 vs platform.** R3 relies on "the tenant's default provider" and a provider "priority". Neither exists in `currencies` 0.9.0 (see Q2). The code is the truth: this spec adds a CPQ-side `source` priority setting (⚠ Q2).
-- **App Spec architect checkpoint #1 vs `getRate` storage semantics.** Checkpoint #1 grounded `getRate` as returning "rates for the date". In fact `findExactRates` matches `date` **exactly at UTC midnight** (`exchangeRateService.ts:207-224, 246-250`). The NBP provider, however, stores Warsaw midnight converted to UTC (`providers/nbp.ts:76-80`), i.e. 22:00 / 23:00 UTC of the previous day. As read, `getRate` would therefore not find NBP-fetched rows. The same applies to Raiffeisen, which also uses PLN pairs. This is a framework issue outside CPQ, tracked as UP-FX-1 (⚠ Q14). The impact is a safe failure (`CURRENCY_NO_RATE`, never a wrong rate). The demo seeds manual rates at UTC midnight.
+- **App Spec R3 vs platform.** R3 relies on "the tenant's default provider" and a provider "priority". Neither exists in `currencies` 0.9.0 (see Q2). The code is the truth: this spec adds a CPQ-side `source` priority setting (Q2, confirmed).
+- **App Spec architect checkpoint #1 vs `getRate` storage semantics.** Checkpoint #1 grounded `getRate` as returning "rates for the date". In fact `findExactRates` matches `date` **exactly at UTC midnight** (`exchangeRateService.ts:207-224, 246-250`). The NBP provider, however, stores Warsaw midnight converted to UTC (`providers/nbp.ts:76-80`), i.e. 22:00 / 23:00 UTC of the previous day. As read, `getRate` would therefore not find NBP-fetched rows. The same applies to Raiffeisen, which also uses PLN pairs. This is a framework issue outside CPQ, tracked as UP-FX-1 (Q14, confirmed). The impact is a safe failure (`CURRENCY_NO_RATE`, never a wrong rate). The demo seeds manual rates at UTC midnight.
 
 ## 📝 Proposed Solution
 
@@ -216,7 +216,7 @@ The order / subscription costs spec already copies `fx_rate` and `fx_rate_date` 
 
 The system SHALL copy `fx_rate`, `fx_rate_date`, `fx_rate_source` and `fx_rate_derivation` unchanged:
 - from quote cost lines to `CpqOrderLineCost` at conversion;
-- from order line costs to `CpqSubscriptionItemCost` at activation.
+- from order line costs to `CpqInventoryCost` at activation.
 
 It SHALL include them in the `items[].costs[]` change-log snapshot. It SHALL NOT look up a rate on these paths.
 
@@ -270,7 +270,7 @@ The migrations are generated with `yarn mercato db generate` in `packages/cpq/sr
 | | **`fx_rate_source`** (new) | text | yes | the `ExchangeRate.source` used, verbatim; set together with `fx_rate` |
 | | **`fx_rate_derivation`** (new) | text | yes | `direct` \| `inverse` (Q3); set together with `fx_rate` |
 | `cpq_order_line_costs` (order / subscription spec PR 1; `fx_rate`, `fx_rate_date` are part of its shared cost value columns) | **`fx_rate_source`**, **`fx_rate_derivation`** (new) | as above | yes | copied verbatim at conversion |
-| `cpq_subscription_item_costs` (same spec, PR 1) | same | as above | yes | copied at activation; changed only by ARC activation (Phase 3) |
+| `cpq_inventory_costs` (same spec, PR 1) | same | as above | yes | copied at activation; changed only by ARC activation (Phase 3) |
 
 Invariants:
 - The four `fx_*` columns are all null or all set.
@@ -292,7 +292,7 @@ flowchart LR
     classDef existingEntity fill:#e5e7eb,color:#111,stroke:#9ca3af
     entity_1["CpqQuoteLineCost (+ fx_rate_source, fx_rate_derivation)"]:::newEntity
     entity_2["CpqOrderLineCost (+ fx_rate_source, fx_rate_derivation)"]:::newEntity
-    entity_3["CpqSubscriptionItemCost (+ fx_rate_source, fx_rate_derivation)"]:::newEntity
+    entity_3["CpqInventoryCost (+ fx_rate_source, fx_rate_derivation)"]:::newEntity
     entity_4["CpqQuoteConfiguration (currency_code)"]:::existingEntity
     entity_5["currencies ExchangeRate (read via service, no FK)"]:::existingEntity
     entity_6["CpqChargeCostElement (currency_code = fallback table currency)"]:::existingEntity
@@ -350,7 +350,7 @@ Mockups: skipped — no browser provider configured (text-only spec).
 | Rate exists only for the inverse pair | `fx_rate = round(1/rate, 8)`, `fx_rate_derivation = inverse` |
 | Direct rate from one source, inverse from another | the direct rate is used; the inverse is never consulted (Q3) |
 | Carried / ARC mirror line on an unlocked quote | the snapshot is kept; no lookup (Q6) |
-| Several providers, none in `fx_source_priority` | lowest `source` ascending (deterministic); stored source visible (⚠ Q2) |
+| Several providers, none in `fx_source_priority` | lowest `source` ascending (deterministic); stored source visible (Q2, confirmed) |
 | Rate older than the look-back | `CURRENCY_NO_RATE`; the message names the pair, the date and the window |
 | Toggle `fx_max_days_back` missing / wrong type / outside 0–30 | the default 7 is used, clamped; logged once per request |
 | `getRate` throws (DB error) | `CURRENCY_NO_RATE` for that line; the write commits; warning logged without amounts |
@@ -360,13 +360,13 @@ Mockups: skipped — no browser provider configured (text-only spec).
 | Post-conversion re-confirmation (Q-D13, Phase 3) | keeps the stored rate (margin only) |
 | Clone (PR #87 R16) | FX columns are copied with manual / supplier values; catalog lines re-resolve, and so do their rates, on the clone's first saved recalculation (the clone is `new`) |
 | Server timezone not UTC | the date passed is today's UTC date; `getRate`'s look-back uses local `setDate` (`exchangeRateService.ts:255-259`), so production runs UTC (documented in the manual) |
-| Tenant relies on the built-in NBP / Raiffeisen fetch | rows are stored at Warsaw midnight and hold PLN pairs only → `CURRENCY_NO_RATE`, never a wrong rate; listed in `missingFxPairs` until UP-FX-1 is fixed or rates are maintained manually (⚠ Q14) |
+| Tenant relies on the built-in NBP / Raiffeisen fetch | rows are stored at Warsaw midnight and hold PLN pairs only → `CURRENCY_NO_RATE`, never a wrong rate; listed in `missingFxPairs` until UP-FX-1 is fixed or rates are maintained manually (Q14, confirmed) |
 | Quote currency changed (if supported) | the next saved recalculation re-resolves every line against the new currency |
 
 ## 📝 Risks & Impact Review
 
 - **Contracts:** additive only. Two new nullable columns in three tables. New response fields are behind `cpq.costs.view`, plus `missingFxPairs` on the usage endpoint. Two new feature-toggle identifiers. One behavior change in a public contract: calculate-price now prices foreign-cost charges that returned `priceOnRequest` before. That is the intended effect of the MODIFIED requirement; it is not breaking. Public calculator prices of foreign-cost charges move with each new daily rate (accepted, Q12). Logged in `packages/cpq/MIGRATION.md` and the changeset.
-- **Framework dependency (High for value, safe for correctness; ⚠ Q14).**
+- **Framework dependency (High for value, safe for correctness; Q14, confirmed).**
   - The built-in providers never feed the resolver: Warsaw-midnight timestamps vs `getRate`'s exact UTC-midnight match, and PLN pairs only.
   - In practice, v1 FX works only with manually entered rates or custom UTC-midnight providers. Tenants relying on NBP / Raiffeisen get `CURRENCY_NO_RATE` (safe, visible in `missingFxPairs` and in the cost dialog).
   - **UP-FX-1** (date normalization in `@open-mercato/core` `currencies`) is a named, tracked dependency. The issue is filed by the implementation PR (outside this spec's write scope). Once it is fixed, built-in direct / inverse PLN pairs work with no CPQ change. Cross pairs still need pivot-currency triangulation (follow-up option).
@@ -381,9 +381,9 @@ Mockups: skipped — no browser provider configured (text-only spec).
   - PR #87's `costConfidentiality.test.ts` (sentinel 7777.77) gains a USD cost with a sentinel rate of `0.77777777` and source `SENTINEL_FX`.
   - Neither may appear for a user without `cpq.costs.view` in any quote / line / order / calculate-price / change-log response, any broadcast event, or any command log.
   - The `CURRENCY_NO_RATE` projection without `cpq.costs.view` carries no currency codes.
-- **Product direction calls (owner: product):**
-  - the provider selection rule (⚠ Q2);
-  - shipping with manual / custom-provider rates only until UP-FX-1 is fixed (⚠ Q14).
+- **Product direction calls (owner: product), confirmed in PR review on 2026-11-13:**
+  - the provider selection rule (Q2);
+  - shipping with manual / custom-provider rates only until UP-FX-1 is fixed (Q14).
 
 ## 📋 Phasing
 
@@ -423,8 +423,8 @@ Tests run with `yarn test` (`jest.config.cjs`), using the mock-EM pattern of `.a
      - the PR #87 golden test stays byte-identical (I-8).
 7. **Writes.** In `costService`: manual create / value edit in a foreign currency per Q9, and a currency change on a locked price-basis line → `COST_LOCKED`. Tests: `costService.test.ts`, `commands/__tests__/quote-line-costs.test.ts`.
 8. **Read APIs.** The cost projection fields in `GET /quotes/{id}/costs`, `cost-preview` and calculate-price (no FX fields), plus `missingFxPairs` in `GET /cost-plus/usage`, with the `openApi` updates. Usage route test: grouped pairs; converted / terminal quotes excluded. Extend the confidentiality sweep (sentinel rate and source). Tests: route tests for both projections; `services/__tests__/costConfidentiality.test.ts`.
-9. **Carry-through.** `Depends on:` PR 1 of `.ai/specs/2026-11-12-cpq-cost-plus-order-subscription-costs.md` (`cpq_order_line_costs` / `cpq_subscription_item_costs` with `fx_rate` / `fx_rate_date` in their shared cost value columns, plus the conversion copy and activation copy).
-   - Add `fxRateSource` / `fxRateDerivation` to `CpqOrderLineCost` / `CpqSubscriptionItemCost`, then `yarn mercato db generate`.
+9. **Carry-through.** `Depends on:` PR 1 of `.ai/specs/2026-11-12-cpq-cost-plus-order-subscription-costs.md` (`cpq_order_line_costs` / `cpq_inventory_costs` with `fx_rate` / `fx_rate_date` in their shared cost value columns, plus the conversion copy and activation copy).
+   - Add `fxRateSource` / `fxRateDerivation` to `CpqOrderLineCost` / `CpqInventoryCost`, then `yarn mercato db generate`.
    - Extend that spec's copy so that all four `fx_*` fields are copied verbatim, with no lookup.
    - The `snapshotSubscription` builder (`services/cpqInventoryService.ts:1506`) `items[].costs[]` includes them.
    - Tests: `cpqOrderService.test.ts` (copy; the resolver is not called), `cpqInventoryService` activation / snapshot tests.

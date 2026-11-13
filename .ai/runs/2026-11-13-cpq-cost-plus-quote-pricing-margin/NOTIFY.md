@@ -90,3 +90,9 @@
 
 ## 2026-11-13T17:52:10Z — safety checkpoint cleared
 - The user instructed: continue autonomously until the whole task (all six cost-plus feature specs) is complete, without further confirmation. Resuming at E.21.
+
+## 2026-11-13 — Step 23 (scope decisions)
+- Margin-approval workflow recipe: the repo seeds no workflow definitions anywhere (only the wizard-rename migration touches the table), so the recipe is documented in `manuals/cpq-cost-plus-pricing.md` (route + stored-hash mutation guard example) and NOT seeded; nothing to disable.
+- Demo identities: `admin@gix.com` (pricing manager, holds `cpq.costs.*` by default), `employee@gix.com` (rep, view only) and a new `pricing@gix.com` with a `pricing_manager` role whose features come from `demo_gix` `setup.defaultRoleFeatures` (applied by `ensureCustomRoleAcls`). `cpq.cost_plus` is switched on for the GIX tenant through a per-tenant `FeatureToggleOverride` (never overwrites an existing override); the global default stays off.
+- The demo seed is split: catalog (toggle override, cross-connect cost table, IP Transit offering + cost-plus charge + 3 elements) runs in `seedGixDefaults`; the four demo quotes (pending / estimated / confirmed / expired, keyed by `quoteContext.scenario`) run in `seedGixExamples` on Acme. Catalog rows are written through entities (like the other GIX seeds), quotes and cost confirmation through the public services.
+- Playwright smoke `.ai/qa/tests/TC-CPQ-001-cost-plus-smoke.spec.ts` was written and type-checked, but NOT run (no Postgres / Docker / browser). It is API-driven against the seeded GIX tenant.

@@ -166,6 +166,74 @@ the `@dainamite/cpq` package, per
 
 ## Schema / API changelog (track breaking changes here)
 
+### 2026-11-13 — Cost-plus charges, cost catalog and quote margin (cost-plus pricing, feature 1)
+
+Spec: `.ai/specs/2026-11-12-cpq-cost-plus-quote-pricing-margin.md`. Manual:
+`manuals/cpq-cost-plus-pricing.md`. Minor release of `@dainamite/cpq`.
+
+**Schema (additive).** Migrations `Migration20261113081626` ... `Migration20261113091513`:
+new tables `cpq_charge_cost_elements`, `cpq_quote_line_costs` (incl. nullable
+`driver_hash`) and `cpq_quote_markup_overrides` (tenant-scoped, soft-deleted,
+FK-string ids only; partial unique indexes on cost key / charge code); new columns
+`cpq_product_charges.markup_rule` / `markup_value` and
+`cpq_pricing_tables.purpose` (default `'price'`). Rollback drops them. No data
+migration: nothing changes for quotes without cost-plus charges (charges,
+`pricingSummary` and `snapshotHash` are byte-identical).
+
+**Upgrade steps for existing tenants (required to use the feature).** After
+`yarn mercato db migrate`, run `yarn mercato cpq seed-cost-plus` (idempotent;
+registers the toggle `cpq.cost_plus`, default **off**, never overwrites an
+existing value) and `yarn mercato auth sync-role-acls` (grants `cpq.costs.view`
+to `admin` and `employee`, `cpq.costs.manage` to `admin`). Then turn the toggle on
+per tenant. New tenants get the toggle and grants at initialization. Before
+switching it off again check `GET /api/cpq/cost-plus/usage`: with the toggle off
+cost-plus charges lose their price on re-pricing (`COST_PLUS_DISABLED`).
+
+**New ACL features.** `cpq.costs.view`, `cpq.costs.manage`. Users without
+`cpq.costs.view` never receive cost, supplier, markup or margin data; cost
+pricing tables are hidden from them and `markupRule` / `markupValue` are stripped
+from product-charge responses.
+
+**New routes.** `/api/cpq/charge-cost-elements` (GET / POST / PUT / DELETE),
+`/api/cpq/cost-preview`, `/api/cpq/cost-plus/usage`,
+`/api/cpq/quotes/{quoteId}/costs` (GET / POST),
+`/api/cpq/quotes/{quoteId}/costs/{costId}` (PATCH / DELETE),
+`/api/cpq/quotes/{quoteId}/markup-overrides` (PUT / DELETE). Product-charge,
+pricing-table and pricing-table-entry routes gain `openApi` exports; pricing
+tables accept and return `purpose`; product charges accept `pricingMethod:
+cost_plus` with `markupRule` / `markupValue`. Cost writes are commands
+(`cpq.quote_line_cost.*`, `cpq.quote_markup_override.*`), not undoable.
+`POST /api/cpq/quotes/{quoteId}/status` accepts an optional `expectedRevision`
+(`409 STALE_REVISION`).
+
+**Events.** New non-broadcast `cpq.quote.margin_changed` (`marginHash`,
+`previousMarginHash` — `null` when the write created the quote's first costs —
+`approvalInvalidated`, contract margin, margin %, coverage, flags).
+`cpq.quote.status_changed` gains the booleans `hasPendingCosts` and
+`hasEstimatedCosts`. `pricing_changed` is unchanged.
+
+**New error codes.** `COST_PLUS_DISABLED`, `COST_PLUS_NOT_AVAILABLE`,
+`NO_PRICE_BASIS_ELEMENT`, `PRICE_BASIS_REQUIRES_COST_PLUS`, `COST_TYPE_MISMATCH`,
+`WRONG_TABLE_PURPOSE`, `PURPOSE_LOCKED`, `DUPLICATE_CODE` (unique across the
+charges priced together on one line, not only per charge), `COST_LOCKED`,
+`COSTS_VIEW_REQUIRED`, `CURRENCY_NO_RATE`, line errors `COST_PENDING`,
+`NO_PRICE_BASIS_COST`, `MARKUP_INVALID`, `TABLE_NO_MATCH`, and on conversion
+**`422 COSTS_NOT_CONFIRMED`**: a quote with an unconfirmed or expired price-basis
+cost can no longer be converted (margin-only costs never block). Manual cost keys
+are `manual:<8 hex>`.
+
+**Calculate-price (additive).** `POST /api/cpq/quotes/price` charges gain
+optional `indicative` and `priceOnRequest`; an unpriceable cost-plus charge has
+`unitPrice` / `totalPrice` `null` and is excluded from totals. No cost or markup
+is ever returned.
+
+**Type change for TypeScript consumers.** `ResolvedCharge.unitPrice`,
+`totalPrice`, `listUnitPrice` and `listTotalPrice` are now `number | null` (an
+unpriced cost-plus charge has no price), plus an optional `fallbackPrice`
+(display-only indicative price). Code that reads these fields from
+`QuoteResult` / `ResolvedCharge` must handle `null`; runtime values for existing
+charges are unchanged.
+
 ### 2026-11-10 — Manual price adjustments and price waterfall (price adjustments, Phase 1)
 
 Spec: `.ai/specs/2026-11-10-cpq-manual-price-adjustments.md`. Manual:

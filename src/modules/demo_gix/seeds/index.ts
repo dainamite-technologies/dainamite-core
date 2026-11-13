@@ -2,6 +2,7 @@ import type { CpqUseCaseSeedContext } from '@dainamite/cpq/modules/cpq/lib/seeds
 import { seedGixExamples as seedGixExamplesImpl } from './examples'
 import { seedGixPriceAdjustmentExample } from './price-adjustment-examples'
 import { seedCpqArcExamples } from './arc-examples'
+import { seedGixCostPlusCatalog, seedGixCostPlusExamples } from './cost-plus-examples'
 import {
   seedGixBundleData,
   seedGixPriceRules,
@@ -17,7 +18,7 @@ import { seedGixWizards } from './wizards'
  * Seed the GIX catalog into the given tenant scope. Idempotent.
  *
  * Order matters: products → pricing tables → attributes → charges → specs/offerings
- *   (which links charges to offerings) → price rules → bundles → wizards.
+ *   (which links charges to offerings) → price rules → bundles → wizards → cost-plus catalog.
  */
 export async function seedGixDefaults(ctx: CpqUseCaseSeedContext): Promise<void> {
   const { em } = ctx
@@ -31,6 +32,8 @@ export async function seedGixDefaults(ctx: CpqUseCaseSeedContext): Promise<void>
   await seedGixPriceRules(em, scope)
   await seedGixBundleData(em, scope)
   await seedGixWizards(em, scope)
+  // Cost-plus: tenant toggle ON, cross-connect cost table, IP Transit offering (idempotent).
+  await seedGixCostPlusCatalog(em, ctx.container, scope)
 }
 
 /**
@@ -49,4 +52,6 @@ export async function seedGixExamples(ctx: CpqUseCaseSeedContext): Promise<void>
   // Idempotent + self-contained — items use generic name-only inputs so
   // they don't depend on the GIX product catalog.
   await seedCpqArcExamples(ctx.em, ctx.container, scope)
+  // Cost-plus demo quotes in the pending / estimated / confirmed / expired cost states.
+  await seedGixCostPlusExamples(ctx.em, ctx.container, scope)
 }

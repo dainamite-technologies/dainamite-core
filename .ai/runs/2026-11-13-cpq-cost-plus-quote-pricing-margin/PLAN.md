@@ -40,6 +40,7 @@ Engine: om-auto-create-pr-loop (steps: 24, --loop: no)
 | E | 23 | Demo seed and docs | group:E2 | done | |
 | E | 23-review-fix | Demo pricing manager also holds the employee role | inline | done | |
 | E | 24 | Archive the Delta | group:E2 | done | |
+| E | 24-review-fix | Smoke test creates its own customer | inline | done | |
 
 ## Goal
 

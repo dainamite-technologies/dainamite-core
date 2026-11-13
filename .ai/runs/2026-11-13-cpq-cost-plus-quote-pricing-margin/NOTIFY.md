@@ -100,3 +100,12 @@
 ## 2026-11-13T18:12:04Z — review of Steps 21–24
 - Finding (minor, demo): the seeded `pricing@gix.com` user held only the CPQ-only `pricing_manager` role, which lacks the standard backend features (dashboard etc.) the `employee` role carries. Fix (23-review-fix): the user holds `employee` + `pricing_manager`.
 - Accepted: calculate-price strips `fallbackPrice` (the public contract says "no price" for price-on-request charges); no workflow definitions are seeded anywhere in the repo, so the margin-approval recipe is documented in the manual instead of seeded; the Playwright smoke `TC-CPQ-001-cost-plus-smoke.spec.ts` is written and type-checked but not executed (no Postgres / Docker / browser).
+
+## 2026-11-13T18:14:38Z — final gate (local) + review pass started
+- Local final gate at e4db511: `yarn generate` ✅, `yarn typecheck` ✅, CPQ build ✅, `yarn test` 123 suites / 1795 tests ✅. Integration suite: not runnable here (no Postgres / Docker / browser) — CI's "Integration tests" job runs it (incl. the new TC-CPQ-001 smoke). Style-compliance pass: skipped — the repo has no ESLint config or design-system lint (`yarn lint` = `next lint` without config).
+- om-auto-review-pr 93 --autofix: two read-only reviewer subagents in parallel (cap 2) — (1) triage of the 29 inherited claude[bot] inline comments + summary asks and an API security re-check, (2) a fresh om-code-review of the branch. Fixes follow serially as X-review-fix Steps.
+
+## 2026-11-13T22:41:35Z — CI integration failure (blocker) → 24-review-fix
+- CI run 43480307531 at e4db511: unit tests ✅, integration tests ❌ — only the new `TC-CPQ-001-cost-plus-smoke` failed: it looked up a seeded "Acme" company that CI's tenant does not have (the GIX catalog itself was present). All other integration specs passed.
+- Fix: the smoke test creates its own company with `createCompanyFixture` (the pattern every CPQ integration spec uses). CI re-runs it; it cannot run locally.
+- The first review attempt (two reviewer subagents) was lost to a session restart before writing findings; re-dispatched.

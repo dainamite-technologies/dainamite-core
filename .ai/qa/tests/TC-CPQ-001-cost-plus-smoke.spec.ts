@@ -1,5 +1,6 @@
 import { expect, test, type APIRequestContext } from '@playwright/test'
 import { apiRequest, getAuthToken } from '@open-mercato/core/helpers/integration/api'
+import { createCompanyFixture } from '@open-mercato/core/helpers/integration/crmFixtures'
 
 /**
  * TC-CPQ-001: cost-plus smoke (API-driven).
@@ -51,9 +52,8 @@ test.describe('TC-CPQ-001: cost-plus smoke', () => {
     expect((await call(request, admin, 'PUT', '/api/cpq/product-charges', { id: chargeId, isActive: true })).status).toBe(200)
 
     // 2. Rep: quote the offering. The cost-plus charge is priced from the estimate: 100 x 1.2 = 120.00.
-    const customers = await call(request, rep, 'GET', '/api/customers/companies?search=Acme')
-    const customerId = (customers.body.items as Json[])[0]?.id as string
-    expect(customerId, 'seeded demo customer').toBeTruthy()
+    // Own customer fixture: the test must not depend on seeded CRM data.
+    const customerId = await createCompanyFixture(request, admin, `Cost-plus smoke ${suffix}`)
     const quote = await call(request, rep, 'POST', '/api/cpq/quotes', { customerId, currencyCode: 'USD' })
     expect(quote.status).toBe(201)
     const quoteId = quote.body.id as string

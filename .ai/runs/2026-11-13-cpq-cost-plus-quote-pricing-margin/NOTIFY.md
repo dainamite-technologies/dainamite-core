@@ -59,3 +59,6 @@
 - Fix (Step 12-review-fix, inline): on unlocked recalculations (save and preview), the resolver refreshes only the per-instance amount of manual `per_unit` rows from the charge quantity; value, status, origin and note are untouched. Line-level `per_unit` manual costs were already refused (`QUANTITY_ATTRIBUTE_REQUIRED`).
 - Accepted from the executor's report: entered/confirmed values on catalog lines survive recalculation until a driving attribute changes (otherwise an overwrite is undone by the next save); `QuotePricingCause` gains `'cost'`; `CHARGE_NOT_FOUND` for an unknown charge code on a markup override; manual cost keys `manual:<8 hex>` (element codes cannot contain `:`); cost commands `replayable: false` so the command log never stores amounts.
 - Minor (deferred to the final review): every cost write bumps `pricingRevision` (existing `withQuotePricingWrite` convention), so a margin-only edit will make a rep's status change return `409 STALE_REVISION` once Step 15 lands, although R11 only requires that for price-affecting writes.
+
+## 2026-11-13T13:09:37Z — checkpoint 4
+- Steps C.11–C.13 + 12-review-fix (c7e8e7d..5e21994): generate ✅, typecheck ✅, build ✅, full `yarn test` 115 suites / 1684 tests ✅. UI pass skipped (no UI touched; no runnable app env).

@@ -1,16 +1,16 @@
 # Handoff — 2026-11-13-cpq-cost-plus-quote-pricing-margin
 
-**Last updated:** 2026-11-13T09:44:39Z
+**Last updated:** 2026-11-13T13:09:37Z
 **Branch:** feat/cpq-cost-plus-quote-pricing-margin (local worktree branch `cez/fdfb25fb`, push with `git push origin HEAD:feat/cpq-cost-plus-quote-pricing-margin`)
 **PR:** #93 (draft) https://github.com/dainamite-technologies/dainamite-core/pull/93
-**Current phase/step:** Phase B closed (checkpoint 3); next Phase C Step 11
-**Last commit:** a371ea3 — Step 9-review-fix (+ this checkpoint commit)
+**Current phase/step:** Phase C, after checkpoint 4; next Step 14 (group C2: 14–17)
+**Last commit:** 5e21994 — Step 12-review-fix (+ this checkpoint commit)
 
 ## What just happened
-- Cost-plus charges now price from their costs (R2) through the existing waterfall; unpriced ones block readiness. Margin computation and `marginHash` exist as a pure service (not yet exposed). Full suite green (1622 tests).
+- Quote cost read API (two projections), cost preview, usage, cost-line and markup-override write commands with the cost lock and R11 exemptions; manual per_unit amounts follow the quantity. Full suite green (1684 tests).
 
 ## Next concrete action
-- Phase C, group C1: Step 11 (read API `GET /quotes/{id}/costs`, `POST /cost-preview`, `GET /cost-plus/usage`), Step 12 (cost line write commands + lock), Step 13 (markup override commands).
+- Group C2: Step 14 (signals: marginTracker, margin_changed, status_changed booleans, 'cost' cause), Step 15 (status expectedRevision), Step 16 (conversion guard COSTS_NOT_CONFIRMED + price freeze), Step 17 (confidentiality sweep, sentinel 7777.77).
 
 ## Blockers / open questions
 - none
@@ -21,7 +21,7 @@
 - Migrations generated DB-less (`TMPDIR=/tmp node_modules/.bin/tsx node_modules/.cache/cpq-tools/gen-cpq-migration.mts`), never applied
 - Demo tests import CPQ's `dist`: run `yarn workspace @dainamite/cpq build` before the full `yarn test`
 - Tasks-table `Commit` cells are filled with real SHAs at each checkpoint
-- Step 12: manual cost keys must not collide with catalog element codes
+- Final review: every cost write bumps pricingRevision (margin-only too) → spurious 409 on status change after Step 15 (minor, NOTIFY)
 - Step 23: record in MIGRATION.md that `ResolvedCharge.unitPrice` / `listUnitPrice` are now `number | null`
 
 ## Worktree

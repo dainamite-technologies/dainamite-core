@@ -238,6 +238,15 @@ export async function resolveCostPlusInputs(params: CostResolutionParams & { sav
   return { enabled: true, costsByLine, overrides }
 }
 
+/**
+ * Catalog cost lines a configuration WOULD get, computed in memory (cost preview):
+ * nothing is read from or written to a quote, no toggle or lock check.
+ */
+export async function previewCatalogCosts(params: Omit<CostResolutionParams, 'isEnabled'>): Promise<Array<Record<string, unknown>>> {
+  const plan = await planQuoteCosts({ ...params, isEnabled: async () => true })
+  return plan.creates
+}
+
 async function applyCostPlan(em: EntityManager, plan: CostPlan): Promise<void> {
   const { creates, updates, drops } = plan
   if (creates.length === 0 && updates.length === 0 && drops.length === 0) return

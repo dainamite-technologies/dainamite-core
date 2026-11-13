@@ -2,7 +2,7 @@ import { emitCpqEvent } from '../../events'
 import type { CpqQuoteConfiguration } from '../../data/entities'
 import type { PricingWaterfallSummary } from '../types'
 
-export type QuotePricingCause = 'adjustment' | 'line' | 'recalculate' | 'clone'
+export type QuotePricingCause = 'adjustment' | 'line' | 'recalculate' | 'clone' | 'cost'
 export type QuoteStatusCause = 'manual' | 'auto'
 
 /** Describes the write so its committed effect can be named in the events. */

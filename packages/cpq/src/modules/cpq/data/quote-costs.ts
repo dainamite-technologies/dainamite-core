@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { COST_ROLES, COST_TYPES, COST_VALUE_STATUSES, costAmount } from './costs'
+import { cpqMarkupRuleEnum, cpqMarkupValueSchema } from './validators'
 
 /**
  * Quote-side cost writes (App Spec §1.4.6 / R10 / R11): manual cost lines,
@@ -57,6 +58,25 @@ export const cpqQuoteLineCostUpdateSchema = z.object({
 
 export const cpqQuoteLineCostDeleteSchema = z.object({ expectedRevision: z.coerce.number().int().min(0).optional() }).strict()
 
+export const cpqQuoteMarkupOverrideSetSchema = z.object({
+  quoteLineId: z.string().uuid(),
+  chargeCode: z.string().trim().min(1).max(100),
+  markupRule: cpqMarkupRuleEnum,
+  markupValue: cpqMarkupValueSchema,
+  note: z.string().trim().min(1).max(COST_NOTE_MAX_LENGTH),
+  expectedRevision: expectedRevision.optional(),
+}).strict().superRefine((value, ctx) => {
+  if (value.markupRule === 'target_margin_percent' && value.markupValue >= 100) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['markupValue'], message: 'A target margin must be below 100%' })
+  }
+})
+
+export const cpqQuoteMarkupOverrideClearSchema = z.object({
+  quoteLineId: z.string().uuid(),
+  chargeCode: z.string().trim().min(1).max(100),
+  expectedRevision: z.coerce.number().int().min(0).optional(),
+}).strict()
+
 export const cpqCostPreviewSchema = z.object({
   offeringId: z.string().uuid().optional(),
   productId: z.string().uuid().optional(),
@@ -67,4 +87,6 @@ export const cpqCostPreviewSchema = z.object({
 
 export type QuoteLineCostCreate = z.infer<typeof cpqQuoteLineCostCreateSchema>
 export type QuoteLineCostUpdate = z.infer<typeof cpqQuoteLineCostUpdateSchema>
+export type QuoteMarkupOverrideSet = z.infer<typeof cpqQuoteMarkupOverrideSetSchema>
+export type QuoteMarkupOverrideClear = z.infer<typeof cpqQuoteMarkupOverrideClearSchema>
 export type CostPreviewInput = z.infer<typeof cpqCostPreviewSchema>

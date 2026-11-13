@@ -12,6 +12,8 @@ export const CPQ_QUOTE_LINE_RESOURCE_KIND = 'cpq.quote_line'
 export const CPQ_CHARGE_COST_ELEMENT_RESOURCE_KIND = 'cpq.charge_cost_element'
 /** Manual cost lines and cost confirmation on a quote. */
 export const CPQ_QUOTE_LINE_COST_RESOURCE_KIND = 'cpq.quote_line_cost'
+/** Per-line markup overrides of a cost-plus charge. */
+export const CPQ_QUOTE_MARKUP_OVERRIDE_RESOURCE_KIND = 'cpq.quote_markup_override'
 
 /**
  * Run every registered mutation guard for a CPQ custom write route.

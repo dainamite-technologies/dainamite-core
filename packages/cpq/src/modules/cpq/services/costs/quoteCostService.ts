@@ -10,7 +10,7 @@ import {
   CpqQuoteLineCost,
   CpqQuoteMarkupOverride,
 } from '../../data/entities'
-import { MANUAL_COST_KEY_PREFIX, cpqCostPreviewSchema, cpqQuoteLineCostCreateSchema, cpqQuoteLineCostUpdateSchema, type CostPreviewInput, type QuoteLineCostCreate, type QuoteLineCostUpdate } from '../../data/quote-costs'
+import { MANUAL_COST_KEY_PREFIX, cpqCostPreviewSchema, cpqQuoteLineCostCreateSchema, cpqQuoteLineCostUpdateSchema, cpqQuoteMarkupOverrideSetSchema, type CostPreviewInput, type QuoteLineCostCreate, type QuoteLineCostUpdate, type QuoteMarkupOverrideSet } from '../../data/quote-costs'
 import { isArcCancelledLine } from '../arcLineRemoval'
 import { isArcMirrorLine } from '../arcPriceFreeze'
 import { evaluateApplicability } from '../cpqPricingService'
@@ -267,6 +267,45 @@ export class CpqQuoteCostService {
       this.assertWritable(quote, locked, affectsPrice(lockState(row), null))
       const margin = await this.persistAndPrice(em, quote, scope, locked, () => { row.deletedAt = new Date() })
       return { cost: null, audit: { before: auditBefore, after: null }, margin, pricingRevision: quote.pricingRevision ?? 0 }
+    })
+  }
+
+  // ─── Markup overrides ──────────────────────────────────────────
+
+  async setMarkupOverride(quoteId: string, input: QuoteMarkupOverrideSet, actor: string, scope: TenantScope): Promise<MarkupOverrideWriteResult> {
+    const parsed = cpqQuoteMarkupOverrideSetSchema.parse(input)
+    await this.requireEnabled(scope)
+    return this.write(quoteId, scope, parsed.expectedRevision, actor, async (em, quote) => {
+      const line = await this.requireLine(em, quote, parsed.quoteLineId, scope, true)
+      const charge = await this.requireCharge(em, line, parsed.chargeCode, scope)
+      if (charge.pricingMethod !== 'cost_plus') throw new QuotingError(422, 'CHARGE_NOT_COST_PLUS')
+      const locked = await isQuoteCostLocked(em, quote, scope)
+      this.assertWritable(quote, locked, true)
+      const existing = await em.findOne(CpqQuoteMarkupOverride, { ...scoped(scope), quoteConfigurationId: quote.id, quoteLineId: line.quoteLineId, chargeCode: charge.code })
+      const auditBefore = existing ? { id: existing.id, quoteLineId: existing.quoteLineId, chargeCode: existing.chargeCode } : null
+      const values = { markupRule: parsed.markupRule, markupValue: String(parsed.markupValue), note: parsed.note, updatedByUserId: actor }
+      const row = existing ?? em.create(CpqQuoteMarkupOverride, {
+        ...scope, id: randomUUID(), quoteConfigurationId: quote.id, quoteId: quote.quoteId, quoteLineId: line.quoteLineId,
+        chargeCode: charge.code, createdByUserId: actor, ...values,
+      } as never)
+      const margin = await this.persistAndPrice(em, quote, scope, locked, () => {
+        if (existing) Object.assign(existing, values)
+        else em.persist(row)
+      })
+      return { override: markupOverrideView(row), audit: { before: auditBefore, after: { id: row.id, quoteLineId: row.quoteLineId, chargeCode: row.chargeCode } }, margin, pricingRevision: quote.pricingRevision ?? 0 }
+    })
+  }
+
+  async clearMarkupOverride(quoteId: string, quoteLineId: string, chargeCode: string, actor: string, scope: TenantScope, expectedRevision?: number): Promise<MarkupOverrideWriteResult> {
+    await this.requireEnabled(scope)
+    return this.write(quoteId, scope, expectedRevision, actor, async (em, quote) => {
+      const row = await em.findOne(CpqQuoteMarkupOverride, { ...scoped(scope), quoteConfigurationId: quote.id, quoteLineId, chargeCode })
+      if (!row) throw new QuotingError(404, 'Markup override not found')
+      const locked = await isQuoteCostLocked(em, quote, scope)
+      this.assertWritable(quote, locked, true)
+      const auditBefore = { id: row.id, quoteLineId: row.quoteLineId, chargeCode: row.chargeCode }
+      const margin = await this.persistAndPrice(em, quote, scope, locked, () => { row.deletedAt = new Date(); row.updatedByUserId = actor })
+      return { override: null, audit: { before: auditBefore, after: null }, margin, pricingRevision: quote.pricingRevision ?? 0 }
     })
   }
 

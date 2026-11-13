@@ -212,6 +212,12 @@ describe('cost lock matrix', () => {
     await b.service.deleteCost(ids.quote, ids.cost, ACTOR, SCOPE)
     expect(row.deletedAt).toBeInstanceOf(Date)
   })
+  it('markup overrides are COST_LOCKED while locked (set and clear)', async () => {
+    const a = setup({ ...locked, overrides: [{ id: 'o', quoteLineId: ids.line, chargeCode: 'tail', markupRule: 'markup_percent', markupValue: '10', note: 'n' }] })
+    const input = { quoteLineId: ids.line, chargeCode: 'tail', markupRule: 'markup_percent' as const, markupValue: 30, note: 'deal' }
+    await expect(a.service.setMarkupOverride(ids.quote, input, ACTOR, SCOPE)).rejects.toMatchObject({ status: 409, message: 'COST_LOCKED' })
+    await expect(a.service.clearMarkupOverride(ids.quote, ids.line, 'tail', ACTOR, SCOPE)).rejects.toMatchObject({ status: 409, message: 'COST_LOCKED' })
+  })
 })
 
 describe('updateCost rules', () => {
@@ -251,5 +257,40 @@ describe('deleteCost', () => {
     expect(recalculate).toHaveBeenCalled()
     const audit = JSON.stringify(result.audit)
     for (const leak of ['4242', 'Hidden', 'private']) expect(audit).not.toContain(leak)
+  })
+})
+
+describe('markup overrides', () => {
+  const input = { quoteLineId: ids.line, chargeCode: 'tail', markupRule: 'markup_percent' as const, markupValue: 30, note: 'deal desk' }
+  it('creates, re-prices, then updates in place', async () => {
+    const { service, overrides, recalculate } = setup()
+    const first = await service.setMarkupOverride(ids.quote, input, ACTOR, SCOPE)
+    expect(overrides).toHaveLength(1)
+    expect(overrides[0]).toMatchObject({ chargeCode: 'tail', markupRule: 'markup_percent', markupValue: '30', note: 'deal desk', createdByUserId: ACTOR })
+    expect(recalculate).toHaveBeenCalledTimes(1)
+    expect(first.audit.after).toEqual({ id: expect.any(String), quoteLineId: ids.line, chargeCode: 'tail' })
+    await service.setMarkupOverride(ids.quote, { ...input, markupValue: 40 }, ACTOR, SCOPE)
+    expect(overrides).toHaveLength(1)
+    expect(overrides[0].markupValue).toBe('40')
+  })
+  it('CHARGE_NOT_COST_PLUS / CHARGE_NOT_FOUND', async () => {
+    const { service } = setup()
+    await expect(service.setMarkupOverride(ids.quote, { ...input, chargeCode: 'fixed_fee' }, ACTOR, SCOPE)).rejects.toMatchObject({ status: 422, message: 'CHARGE_NOT_COST_PLUS' })
+    await expect(service.setMarkupOverride(ids.quote, { ...input, chargeCode: 'nope' }, ACTOR, SCOPE)).rejects.toMatchObject({ status: 422, message: 'CHARGE_NOT_FOUND' })
+  })
+  it('validates the markup like a charge: target margin below 100, non-negative', async () => {
+    const { service } = setup()
+    await expect(service.setMarkupOverride(ids.quote, { ...input, markupRule: 'target_margin_percent', markupValue: 100 }, ACTOR, SCOPE)).rejects.toThrow()
+    await expect(service.setMarkupOverride(ids.quote, { ...input, markupValue: -1 }, ACTOR, SCOPE)).rejects.toThrow()
+    await expect(service.setMarkupOverride(ids.quote, { ...input, note: '' }, ACTOR, SCOPE)).rejects.toThrow()
+  })
+  it('clear soft-deletes, 404 when absent, stale revision refused', async () => {
+    const row = { id: 'o', quoteLineId: ids.line, chargeCode: 'tail', markupRule: 'markup_percent', markupValue: '10', note: 'n', deletedAt: null }
+    const { service, recalculate } = setup({ overrides: [row] })
+    await expect(service.clearMarkupOverride(ids.quote, ids.line, 'tail', ACTOR, SCOPE, 1)).rejects.toMatchObject({ status: 409, message: 'STALE_REVISION' })
+    await service.clearMarkupOverride(ids.quote, ids.line, 'tail', ACTOR, SCOPE)
+    expect(row.deletedAt).toBeInstanceOf(Date)
+    expect(recalculate).toHaveBeenCalled()
+    await expect(service.clearMarkupOverride(ids.quote, ids.line, 'tail', ACTOR, SCOPE)).rejects.toMatchObject({ status: 404 })
   })
 })

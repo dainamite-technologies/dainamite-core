@@ -3,7 +3,7 @@ import type { z } from 'zod'
 import type { CommandBus, CommandRuntimeContext } from '@open-mercato/shared/lib/commands'
 import type { CpqRouteContext } from '../context'
 import type { CpqCostService } from '../../services/costs/costService'
-import type { QuoteCostWriteResult } from '../../services/costs/quoteCostService'
+import type { MarkupOverrideWriteResult, QuoteCostWriteResult } from '../../services/costs/quoteCostService'
 import { canViewCosts } from './costAccess'
 import { runCpqMutationGuards } from './quoteMutationGuard'
 
@@ -49,7 +49,7 @@ export async function costCommandRoute<T extends object>(req: Request, ctx: CpqR
     selectedOrganizationId: ctx.organizationId, organizationIds: [ctx.organizationId], request: req,
   }
   const bus = ctx.container.resolve<CommandBus>('commandBus')
-  const { result } = await bus.execute<Record<string, unknown>, QuoteCostWriteResult>(options.commandId, { input: options.buildInput(effective), ctx: commandCtx })
+  const { result } = await bus.execute<Record<string, unknown>, QuoteCostWriteResult & MarkupOverrideWriteResult>(options.commandId, { input: options.buildInput(effective), ctx: commandCtx })
   if (!result) throw new Error('Cost command did not return a result')
   await guard.runAfterSuccess()
   const view = await canViewCosts(ctx)
@@ -57,6 +57,7 @@ export async function costCommandRoute<T extends object>(req: Request, ctx: CpqR
   if ('cost' in result) {
     payload.cost = view || !result.cost ? result.cost : Object.fromEntries(REDACTED_COST_KEYS.filter((key) => key in result.cost!).map((key) => [key, (result.cost as unknown as Record<string, unknown>)[key]]))
   }
+  if ('override' in result) payload.override = view || !result.override ? result.override : { id: result.override.id, quoteLineId: result.override.quoteLineId, chargeCode: result.override.chargeCode }
   if (view) payload.margin = result.margin
   return NextResponse.json(payload, { status: options.status })
 }

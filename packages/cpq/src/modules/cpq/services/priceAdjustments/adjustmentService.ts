@@ -1,6 +1,7 @@
 import { isArcMirrorLine } from '../arcPriceFreeze'
 import { ADJUSTMENT_TOGGLE, REASON_DICTIONARY } from '../../data/price-adjustments'
-export { ADJUSTMENT_TOGGLE, REASON_DICTIONARY } from '../../data/price-adjustments'
+export { ADJUSTMENT_TOGGLE, REASON_DICTIONARY, ADJUSTMENT_MUTABLE_STATUSES } from '../../data/price-adjustments'
+import { ADJUSTMENT_MUTABLE_STATUSES } from '../../data/price-adjustments'
 import { loadQuoteAdjustments } from './loadQuoteAdjustments'
 import { randomUUID } from 'node:crypto'
 import type { EntityManager } from '@mikro-orm/postgresql'
@@ -14,8 +15,6 @@ import { QuotingError, type DefaultCpqQuotingService } from '../cpqQuotingServic
 import { TERMINAL_STATUSES, type CpqStatus, type QuoteResult, type TenantScope } from '../types'
 import { withQuotePricingWrite } from './quotePricingWrite'
 
-/** Quote statuses in which reps may still add / edit / delete manual adjustments. */
-const ADJUSTMENT_MUTABLE_STATUSES: readonly CpqStatus[] = ['new', 'incomplete', 'ready']
 
 
 type Dependencies = {

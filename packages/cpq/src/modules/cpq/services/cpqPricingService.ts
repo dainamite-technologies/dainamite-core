@@ -27,7 +27,7 @@ interface ApplicabilityCondition {
   value: string
 }
 
-function evaluateApplicability(
+export function evaluateApplicability(
   condition: Record<string, unknown> | null | undefined,
   configuration: Record<string, unknown>,
 ): boolean {

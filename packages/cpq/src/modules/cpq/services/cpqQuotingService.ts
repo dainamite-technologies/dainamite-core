@@ -55,6 +55,8 @@ import {
   stripArcMarkers,
   stripQuoteOnlyArcMarkers,
 } from './arcPriceFreeze'
+import type { CpqCostService } from './costs/costService'
+import { resolveQuoteCosts } from './costs/costResolution'
 import { isArcCancelledLine, planArcLineRemoval, planArcLineRestore, removalCancelsItem } from './arcLineRemoval'
 
 interface QuotingServiceDeps {
@@ -63,6 +65,8 @@ interface QuotingServiceDeps {
   cpqValidationService: DefaultCpqValidationService
   cpqProductService: DefaultCpqProductService
   salesDocumentNumberGenerator: SalesDocumentNumberGenerator
+  /** Cost-plus toggle check (R14); absent in tests / hosts without cost-plus, which disables cost resolution. */
+  cpqCostService?: Pick<CpqCostService, 'enabled'>
 }
 
 export class DefaultCpqQuotingService {
@@ -71,6 +75,7 @@ export class DefaultCpqQuotingService {
   private validationService: DefaultCpqValidationService
   private productService: DefaultCpqProductService
   private numberGenerator: SalesDocumentNumberGenerator
+  private costService?: Pick<CpqCostService, 'enabled'>
 
   constructor(deps: QuotingServiceDeps) {
     this.em = deps.em
@@ -78,6 +83,7 @@ export class DefaultCpqQuotingService {
     this.validationService = deps.cpqValidationService
     this.productService = deps.cpqProductService
     this.numberGenerator = deps.salesDocumentNumberGenerator
+    this.costService = deps.cpqCostService
   }
 
   // ─── Create Quote ──────────────────────────────────────────────
@@ -951,6 +957,7 @@ export class DefaultCpqQuotingService {
 
     let allValid = true
     const allErrors: ValidationError[] = []
+    const offeringDesignTimeValues = new Map<string, Record<string, unknown>>()
 
     // Collect freshly computed data for each line (used for response regardless of save)
     const computedLines: Array<{
@@ -975,6 +982,7 @@ export class DefaultCpqQuotingService {
         })
       }
 
+      offeringDesignTimeValues.set(lineConfig.quoteLineId, offering?.designTimeValues ?? {})
       const mergedConfig = {
         ...(cpqConfig.quoteContext ?? {}),
         ...(offering?.designTimeValues ?? {}),
@@ -1038,6 +1046,23 @@ export class DefaultCpqQuotingService {
 
       computedLines.push({ lineConfig, charges, nrcTotal, mrcTotal, usageEstimates, usageTotalEstimated, validationErrors, isConfigured })
 
+    }
+    // Catalog cost lines (cost-plus step 8): saved recalculations only; previews compute nothing persistent.
+    // Reads and writes cost rows only, never `charges` or any price.
+    const costService = this.costService
+    if (save && costService) {
+      await resolveQuoteCosts({
+        em, quote: cpqConfig, scope, isEnabled: (tenantId) => costService.enabled(tenantId),
+        lines: computedLines.map(({ lineConfig }) => ({
+          lineConfig,
+          mergedConfig: {
+            ...(cpqConfig.quoteContext ?? {}),
+            ...(offeringDesignTimeValues.get(lineConfig.quoteLineId) ?? {}),
+            ...lineConfig.configuration,
+            ...(lineConfig.termMonths ? { term_months: lineConfig.termMonths } : {}),
+          },
+        })),
+      })
     }
     const adjustments = draftAdjustments ?? await loadQuoteAdjustments(em, cpqConfig.id, scope)
     const adjusted = resolveManualAdjustments(computedLines.map(({ lineConfig, charges }) => ({

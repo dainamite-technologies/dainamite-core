@@ -1762,6 +1762,14 @@ export class CpqQuoteLineCost {
   @Property({ name: 'fx_rate_date', type: 'date', nullable: true })
   fxRateDate: string | null = null
 
+  /**
+   * Hash of the configuration attributes that drive this cost (applicability
+   * condition + table dimensions) when the value was last resolved; R1b resets an
+   * `on_request` value when it changes.
+   */
+  @Property({ name: 'driver_hash', type: 'text', nullable: true })
+  driverHash: string | null = null
+
   @Property({ name: 'index_snapshot', type: 'jsonb', nullable: true })
   indexSnapshot: Record<string, unknown> | null = null
 

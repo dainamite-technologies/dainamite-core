@@ -59,6 +59,7 @@ export function register(container: AppContainer) {
         cpqValidationService: container.resolve('cpqValidationService'),
         cpqProductService: container.resolve('cpqProductService'),
         salesDocumentNumberGenerator: container.resolve('salesDocumentNumberGenerator'),
+        cpqCostService: container.resolve('cpqCostService'),
       })
     }).scoped().proxy(),
     cpqInventoryService: asFunction(() => {

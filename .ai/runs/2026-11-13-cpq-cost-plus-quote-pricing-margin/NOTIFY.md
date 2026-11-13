@@ -30,3 +30,6 @@
 - Finding (major): an element `code` becomes the quote `cost_key` (unique per line, I-1), but codes were only unique per charge; two charges of one offering sharing a code made Step 8's resolver keep the first and silently drop the other's cost (R1a violated, cost/margin understated).
 - Fix (Step 8-review-fix, inline): `DUPLICATE_CODE` now checks every charge priced together on a line (same offering; all of the product's charges for a product-level charge). The resolver's first-wins stays as the deterministic fallback for a concurrent-create race (only the target charge is locked). Scope widening of the App Spec's "unique per charge" is the minimal reading that satisfies I-1 while keeping "code = cost key".
 - Accepted from Step 8's report: `driver_hash` on `cpq_quote_line_costs` (second generated migration) to detect R1b driver changes; cost lock = status ∉ {new, incomplete, ready} or an order exists (App Spec glossary "Cost lock").
+
+## 2026-11-13T09:26:52Z — checkpoint 2
+- Steps B.5–B.8 + 8-review-fix (064dd52..faefbb0): generate ✅, build ✅, typecheck ✅, full `yarn test` 106 suites / 1531 tests ✅; golden fixture unchanged across the refactor; mutation probe confirms the characterization bites. UI pass skipped (no UI touched; no runnable app env).

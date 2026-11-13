@@ -25,6 +25,7 @@ Engine: om-auto-create-pr-loop (steps: 24, --loop: no)
 | C | 11 | Read API, cost preview, usage | group:C1 | done | |
 | C | 12 | Write commands part 1 (cost lines, lock) | group:C1 | done | |
 | C | 13 | Write commands part 2 (markup override) | group:C1 | done | |
+| C | 12-review-fix | Manual per_unit costs follow the quantity | inline | done | |
 | C | 14 | Signals (marginTracker, margin_changed) | group:C2 | todo | |
 | C | 15 | Status revision | group:C2 | todo | |
 | C | 16 | Conversion guard | group:C2 | todo | |

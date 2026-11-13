@@ -52,3 +52,10 @@
 - Every cost write bumps `pricingRevision` (withQuotePricingWrite), including margin-only ones; `QuotePricingCause` gained `'cost'`.
 - Command logs: `replayable: false` (the bus would otherwise store the raw input incl. amounts as the redo payload) and snapshots hold ids / statuses / roles / cost_key only.
 - Route paths follow the spec; `CHARGE_NOT_FOUND` is also used by the markup override for an unknown charge code.
+
+## 2026-11-13T13:08:00Z — review of Steps 11–13
+- Note: the first C1 executor died on a provider rate limit before changing anything (clean tree, HEAD unchanged); re-dispatched at the same tier — not a quality rescue.
+- Finding (major): a manual `per_unit` cost line kept the `instance_amount` computed at entry, because the resolver never touches `origin = manual` rows. Changing the quantity (a saved recalculation) then re-priced a cost-plus charge from a stale cost.
+- Fix (Step 12-review-fix, inline): on unlocked recalculations (save and preview), the resolver refreshes only the per-instance amount of manual `per_unit` rows from the charge quantity; value, status, origin and note are untouched. Line-level `per_unit` manual costs were already refused (`QUANTITY_ATTRIBUTE_REQUIRED`).
+- Accepted from the executor's report: entered/confirmed values on catalog lines survive recalculation until a driving attribute changes (otherwise an overwrite is undone by the next save); `QuotePricingCause` gains `'cost'`; `CHARGE_NOT_FOUND` for an unknown charge code on a markup override; manual cost keys `manual:<8 hex>` (element codes cannot contain `:`); cost commands `replayable: false` so the command log never stores amounts.
+- Minor (deferred to the final review): every cost write bumps `pricingRevision` (existing `withQuotePricingWrite` convention), so a margin-only edit will make a rep's status change return `409 STALE_REVISION` once Step 15 lands, although R11 only requires that for price-affecting writes.

@@ -115,6 +115,18 @@ describe('resolveQuoteCosts', () => {
     expect(s.costs[0]).toMatchObject({ unitAmount: '2.5', instanceAmount: '10' })
   })
 
+  it('a manual per_unit cost keeps its unit amount but its instance amount follows the quantity', async () => {
+    const manual = catalogCost({ id: 'c-m', costKey: 'manual:abcd1234', origin: 'manual', valueOrigin: 'manual', chargeCode: 'mrc',
+      costModel: 'per_unit', unitAmount: '10', instanceAmount: '30', valueStatus: 'confirmed', note: 'carrier fee' })
+    const s = store({ charges: [charge()], costs: [manual] })
+    await run(s, { config: { qty: 5 } })
+    expect(s.costs[0]).toMatchObject({ unitAmount: '10', instanceAmount: '50', valueStatus: 'confirmed', valueOrigin: 'manual', note: 'carrier fee' })
+    // a manual flat cost is left alone
+    const flat = catalogCost({ id: 'c-f', costKey: 'manual:ffff0000', origin: 'manual', valueOrigin: 'manual', chargeCode: 'mrc', costModel: 'flat', unitAmount: '10', instanceAmount: '10' })
+    const s2 = store({ charges: [charge()], costs: [flat] })
+    expect(await run(s2, { config: { qty: 5 } })).toMatchObject({ updated: 0 })
+  })
+
   it('applies charge and element applicability conditions', async () => {
     const s = store({
       charges: [charge(), charge({ id: 'charge-2', code: 'nrc', applicabilityCondition: { attribute: 'tier', operator: 'eq', value: 'gold' } })],

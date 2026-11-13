@@ -369,6 +369,18 @@ async function planQuoteCosts(params: CostResolutionParams): Promise<CostPlan> {
       drops.push(row)
       stats.dropped += 1
     }
+
+    // A manual `per_unit` cost keeps its entered unit amount; its per-instance amount follows the
+    // charge quantity, so a reconfigured quantity re-prices from the right cost.
+    for (const row of rows) {
+      if (row.origin !== 'manual' || row.costModel !== 'per_unit' || row.unitAmount === null || row.unitAmount === undefined) continue
+      const charge = ownerCharges.find((candidate) => candidate.code === row.chargeCode)
+      if (!charge) continue
+      const instanceAmount = money(Number(row.unitAmount) * quantityOf(charge, mergedConfig))
+      if (instanceAmount === row.instanceAmount) continue
+      updates.push({ row, patch: { instanceAmount } })
+      stats.updated += 1
+    }
   }
   return { stats, creates, updates, drops, existing }
 }

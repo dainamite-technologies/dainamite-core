@@ -29,7 +29,7 @@ Engine: om-auto-create-pr-loop (steps: 24, --loop: no)
 | C | 14 | Signals (marginTracker, margin_changed) | group:C2 | done | |
 | C | 15 | Status revision | group:C2 | done | |
 | C | 16 | Conversion guard | group:C2 | done | |
-| C | 17 | Confidentiality sweep | group:C2 | todo | |
+| C | 17 | Confidentiality sweep | group:C2 | done | |
 | D | 18 | Charge editor UI | group:D | todo | |
 | D | 19 | Quote page: badges, Costs panel | group:D | todo | |
 | D | 20 | Quote page: Margin card and dialogs | group:D | todo | |

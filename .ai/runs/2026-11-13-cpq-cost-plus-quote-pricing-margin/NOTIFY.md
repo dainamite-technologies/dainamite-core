@@ -72,3 +72,4 @@
 ## 2026-11-13T13:33:54Z — checkpoint 5 (Phase C closed)
 - Steps C.14–C.17 + 14-review-fix (4bc3274..0c7c25d): generate ✅, typecheck ✅, build ✅, full `yarn test` 116 suites / 1713 tests ✅. UI pass skipped (no UI touched; no runnable app env).
 - Decision: the revision bump on margin-only cost writes (noted at checkpoint 4) stays — App Spec R11 expects concurrent margin-only edits to collide on the revision (that is why the supplier-answer API takes no revision).
+- Step 18: the specification page has no charge editor (its bulk charge form is dead code, never rendered), so the cost-plus editor lives on the offering page only. CPQ ships no locale files; strings use `t(key, fallback)` like the rest of the module, so there is no `en` file to extend. The API exposes no "referenced" flag on pricing tables, so the purpose selector becomes read-only after the first `422 PURPOSE_LOCKED`.

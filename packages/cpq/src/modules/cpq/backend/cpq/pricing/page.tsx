@@ -12,6 +12,7 @@ type PricingTable = {
   id: string
   code: string
   name: string
+  purpose?: 'price' | 'cost'
   priceColumns: Array<{ key: string; label: string }>
   currencyCodeList: string[]
   isActive: boolean
@@ -22,6 +23,7 @@ const PAGE_SIZE = 50
 function buildFilterParams(values: FilterValues, params: URLSearchParams) {
   if (values.isActive === true) params.set('isActive', 'true')
   if (values.isActive === false) params.set('isActive', 'false')
+  if (values.purpose === 'price' || values.purpose === 'cost') params.set('purpose', values.purpose)
 }
 
 export default function PricingTablesPage() {
@@ -42,6 +44,15 @@ export default function PricingTablesPage() {
         label: t('cpq.pricing.filters.isActive', 'Active'),
         type: 'checkbox',
       },
+      {
+        id: 'purpose',
+        label: t('cpq.pricing.filters.purpose', 'Purpose'),
+        type: 'select',
+        options: [
+          { value: 'price', label: t('cpq.pricing.purposes.price', 'Price (sell side)') },
+          { value: 'cost', label: t('cpq.pricing.purposes.cost', 'Cost (confidential)') },
+        ],
+      },
     ],
     [t],
   )
@@ -57,6 +68,15 @@ export default function PricingTablesPage() {
         accessorKey: 'code',
         header: t('cpq.pricing.code', 'Code'),
         cell: ({ row }) => <span className="font-mono text-xs">{row.original.code}</span>,
+      },
+      {
+        id: 'purpose',
+        header: t('cpq.pricing.purpose', 'Purpose'),
+        cell: ({ row }) => (
+          <Tag variant={row.original.purpose === 'cost' ? 'warning' : 'neutral'}>
+            {row.original.purpose === 'cost' ? t('cpq.pricing.purposes.cost', 'Cost (confidential)') : t('cpq.pricing.purposes.price', 'Price (sell side)')}
+          </Tag>
+        ),
       },
       {
         id: 'priceColumns',

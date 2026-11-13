@@ -6,7 +6,12 @@ import { Alert } from '@open-mercato/ui/primitives/alert'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
+import { useConfirmDialog } from '@open-mercato/ui/backend/confirm-dialog'
 import { NumberInput } from '../../../../components/NumberInput'
+import { ChargeCostElements } from '../../../../components/costPlus/ChargeCostElements'
+import { CostPlusFields } from '../../../../components/costPlus/CostPlusFields'
+import { useCostPlusAccess } from '../../../../components/costPlus/useCostPlusAccess'
+import { costPlusAllowed, countActivePriceBasis, type CostElementRow } from '../../../../lib/costPlusView'
 import { normalizeChargePricing } from '../../../../data/charge-pricing'
 import {
   chargeTypeMap,
@@ -72,6 +77,9 @@ type Charge = {
   fixedPrice: string | null
   currencyCode: string | null
   quantityAttributeCode: string | null
+  /** Only returned to holders of `cpq.costs.view`. */
+  markupRule?: string | null
+  markupValue?: string | null
   applicabilityCondition: Record<string, unknown> | null
   sortOrder: number
   isActive: boolean
@@ -163,6 +171,7 @@ const CHARGE_MODEL_LABELS: Record<string, string> = {
 const PRICING_SOURCE_LABELS: Record<string, string> = {
   fixed: 'Fixed Price',
   table: 'Table Lookup',
+  cost_plus: 'Cost-plus',
 }
 
 // V-CHG-1 in `validators.ts`: mirror the (chargeModel × pricingMethod) rules in
@@ -175,15 +184,23 @@ type ChargeShape = {
   fixedPrice: string | null
   currencyCode: string | null
   quantityAttributeCode: string | null
+  markupRule?: string | null
+  markupValue?: string | null
 }
 
-function isChargeComplete(charge: ChargeShape): boolean {
-  return chargeMissingFields(charge).length === 0
-}
-
-function chargeMissingFields(charge: ChargeShape): string[] {
-  const { model, source } = normalizeChargePricing(charge)
+function chargeMissingFields(charge: ChargeShape, canViewCosts = true): string[] {
   const missing: string[] = []
+  if (charge.pricingMethod === 'cost_plus') {
+    // The markup is redacted for users without `cpq.costs.view`: not "missing" for them.
+    if (canViewCosts) {
+      if (!charge.markupRule) missing.push('Markup Rule')
+      if (charge.markupValue == null || charge.markupValue === '') missing.push('Markup Value')
+      if ((charge.fixedPrice || charge.markupRule === 'markup_absolute') && !charge.currencyCode) missing.push('Currency')
+    }
+    if (charge.chargeModel === 'per_unit' && !charge.quantityAttributeCode) missing.push('Quantity Attribute')
+    return missing
+  }
+  const { model, source } = normalizeChargePricing(charge)
   if (source === 'fixed') {
     if (!charge.fixedPrice) missing.push('Fixed Price')
     if (!charge.currencyCode) missing.push('Currency')
@@ -208,6 +225,8 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
   // ─── State ──────────────────────────────────────────────────
 
   const [tab, setTab] = React.useState<'general' | 'charges' | 'components'>('general')
+  const costPlus = useCostPlusAccess()
+  const { confirm: confirmDialog, ConfirmDialogElement } = useConfirmDialog()
   const [form, setForm] = React.useState(EMPTY_FORM)
   const [designTimeValues, setDesignTimeValues] = React.useState<Record<string, unknown>>({})
   const [charges, setCharges] = React.useState<Charge[]>([])
@@ -406,7 +425,7 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
       // Normalise legacy rows (chargeModel null, combined pricingMethod) into
       // the split shape the form's two dropdowns expect.
       const { model, source } = normalizeChargePricing(charge)
-      setEditingCharge({ ...charge, chargeModel: model, pricingMethod: source })
+      setEditingCharge({ ...charge, chargeModel: model, pricingMethod: charge.pricingMethod === 'cost_plus' ? 'cost_plus' : source })
     } else {
       setEditingCharge({ ...EMPTY_CHARGE })
     }
@@ -419,9 +438,27 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
     setError(null)
     try {
       const isEdit = !!editingCharge.id
+      const isCostPlus = editingCharge.pricingMethod === 'cost_plus'
       const payload = {
         ...editingCharge,
+        // Markup only exists on cost-plus charges; the API refuses it elsewhere.
+        markupRule: isCostPlus ? editingCharge.markupRule ?? null : null,
+        markupValue: isCostPlus ? editingCharge.markupValue ?? null : null,
         offeringId,
+      }
+      // Leaving cost-plus deactivates the charge's price-basis cost elements.
+      const wasCostPlus = isEdit && charges.find((c) => c.id === editingCharge.id)?.pricingMethod === 'cost_plus'
+      if (wasCostPlus && !isCostPlus) {
+        const list = await apiCall<{ items: CostElementRow[] }>(`/api/cpq/charge-cost-elements?productChargeId=${encodeURIComponent(editingCharge.id as string)}&pageSize=100`)
+        const count = list.ok && list.result ? countActivePriceBasis(list.result.items) : 0
+        if (count > 0) {
+          const ok = await confirmDialog({
+            title: t('cpq.costPlus.leave.title', 'Deactivate {count} price-basis cost elements? Open unlocked quotes will re-price on their next save.', { count }),
+            confirmText: t('cpq.costPlus.leave.confirm', 'Deactivate'),
+            variant: 'destructive',
+          })
+          if (!ok) return
+        }
       }
       const res = await fetch('/api/cpq/product-charges', {
         method: isEdit ? 'PUT' : 'POST',
@@ -477,6 +514,7 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
 
   return (
     <div className="space-y-6">
+      {ConfirmDialogElement}
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
@@ -794,7 +832,7 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                   <select value={editingCharge.chargeType} onChange={(e) => setEditingCharge({ ...editingCharge, chargeType: e.target.value })} className="w-full rounded-md border px-2 py-1.5 text-sm">
                     <option value="mrc">MRC (Monthly Recurring)</option>
                     <option value="nrc">NRC (Non-Recurring)</option>
-                    <option value="usage">Usage</option>
+                    <option value="usage" disabled={editingCharge.pricingMethod === 'cost_plus'}>Usage</option>
                   </select>
                 </div>
                 <div>
@@ -817,8 +855,8 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                   >
                     <option value="flat">Flat Fee</option>
                     <option value="per_unit">Per Unit</option>
-                    <option value="volume">Volume-based</option>
-                    <option value="tiered">Tiered</option>
+                    <option value="volume" disabled={editingCharge.pricingMethod === 'cost_plus'}>Volume-based</option>
+                    <option value="tiered" disabled={editingCharge.pricingMethod === 'cost_plus'}>Tiered</option>
                   </select>
                 </div>
                 <div>
@@ -827,13 +865,22 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                     value={editingCharge.pricingMethod}
                     onChange={(e) => {
                       const source = e.target.value
-                      if (source === 'fixed') {
+                      if (source === 'cost_plus') {
+                        // The price comes from costs. A cost-plus charge starts inactive:
+                        // price-basis cost elements can only be added once it is saved.
+                        setEditingCharge({
+                          ...editingCharge, pricingMethod: source, pricingTableId: null, priceColumnKey: null, fixedPrice: null,
+                          markupRule: editingCharge.markupRule ?? 'markup_percent', markupValue: editingCharge.markupValue ?? null,
+                          ...(editingCharge.chargeModel === 'per_unit' ? {} : { quantityAttributeCode: null }),
+                          ...(editingCharge.pricingMethod === 'cost_plus' ? {} : { isActive: false }),
+                        })
+                      } else if (source === 'fixed') {
                         // Only per_unit keeps the quantity attribute under a fixed
                         // price; flat must drop it (V-CHG-1 forbids it).
                         const keepQty = editingCharge.chargeModel === 'per_unit'
-                        setEditingCharge({ ...editingCharge, pricingMethod: source, pricingTableId: null, priceColumnKey: null, ...(keepQty ? {} : { quantityAttributeCode: null }) })
+                        setEditingCharge({ ...editingCharge, pricingMethod: source, pricingTableId: null, priceColumnKey: null, markupRule: null, markupValue: null, ...(keepQty ? {} : { quantityAttributeCode: null }) })
                       } else {
-                        setEditingCharge({ ...editingCharge, pricingMethod: source, fixedPrice: null })
+                        setEditingCharge({ ...editingCharge, pricingMethod: source, fixedPrice: null, markupRule: null, markupValue: null })
                       }
                     }}
                     className="w-full rounded-md border px-2 py-1.5 text-sm"
@@ -843,9 +890,31 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                       <option value="fixed">Fixed Price</option>
                     )}
                     <option value="table">Table Lookup</option>
+                    {(costPlus.enabled || editingCharge.pricingMethod === 'cost_plus') && (
+                      <option value="cost_plus" disabled={!costPlusAllowed(editingCharge)}>{t('cpq.costPlus.method', 'Cost-plus')}</option>
+                    )}
                   </select>
                 </div>
-                {editingCharge.pricingMethod === 'fixed' ? (
+                {editingCharge.pricingMethod === 'cost_plus' ? (
+                  <>
+                    {costPlus.canView && (
+                      <CostPlusFields
+                        markupRule={editingCharge.markupRule ?? null}
+                        markupValue={editingCharge.markupValue ?? null}
+                        onChange={(patch) => setEditingCharge({ ...editingCharge, ...patch })}
+                      />
+                    )}
+                    <div>
+                      <label className="block text-xs font-medium mb-1">{t('cpq.costPlus.fallbackPrice', 'Fallback price (indicative)')}</label>
+                      <input type="text" value={editingCharge.fixedPrice ?? ''} onChange={(e) => setEditingCharge({ ...editingCharge, fixedPrice: e.target.value || null })} placeholder="0.00" className="w-full rounded-md border px-2 py-1.5 text-sm" />
+                      <p className="text-xs text-muted-foreground mt-0.5">{t('cpq.costPlus.fallbackHint', 'Shown as “≈” while costs are unknown. Never a list price.')}</p>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium mb-1">Currency{(editingCharge.fixedPrice || editingCharge.markupRule === 'markup_absolute') && <span className="text-destructive"> *</span>}</label>
+                      <input type="text" value={editingCharge.currencyCode ?? ''} onChange={(e) => setEditingCharge({ ...editingCharge, currencyCode: e.target.value.toUpperCase() || null })} className="w-full rounded-md border px-2 py-1.5 text-sm" />
+                    </div>
+                  </>
+                ) : editingCharge.pricingMethod === 'fixed' ? (
                   <>
                     <div>
                       <label className="block text-xs font-medium mb-1">Fixed Price <span className="text-destructive">*</span></label>
@@ -888,7 +957,7 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                 {/* Quantity attribute drives the unit count — needed for per-unit
                     (any source) and for volume / tiered table lookups. */}
                 {((editingCharge.pricingMethod === 'table' && editingCharge.chargeModel !== 'flat') ||
-                  (editingCharge.pricingMethod === 'fixed' && editingCharge.chargeModel === 'per_unit')) && (
+                  ((editingCharge.pricingMethod === 'fixed' || editingCharge.pricingMethod === 'cost_plus') && editingCharge.chargeModel === 'per_unit')) && (
                   <div>
                     <label className="block text-xs font-medium mb-1">Quantity Attribute <span className="text-destructive">*</span></label>
                     <select value={editingCharge.quantityAttributeCode ?? ''} onChange={(e) => setEditingCharge({ ...editingCharge, quantityAttributeCode: e.target.value || null })} className="w-full rounded-md border px-2 py-1.5 text-sm">
@@ -929,10 +998,20 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                 </label>
               </div>
               {(() => {
-                const missing = chargeMissingFields(editingCharge)
-                const blocked = saving || !editingCharge.code || !editingCharge.name || missing.length > 0
+                const missing = chargeMissingFields(editingCharge, costPlus.canView)
+                // Cost-plus writes need cost visibility (markup is confidential).
+                const costPlusLocked = editingCharge.pricingMethod === 'cost_plus' && !costPlus.canView
+                const blocked = saving || !editingCharge.code || !editingCharge.name || missing.length > 0 || costPlusLocked
                 return (
                   <>
+                    {editingCharge.pricingMethod === 'cost_plus' && !editingCharge.isActive && (
+                      <Alert variant="info">
+                        {t('cpq.costPlus.inactiveHint', 'A cost-plus charge needs an active price-basis cost element. Save it inactive, add the cost elements below, then tick Active.')}
+                      </Alert>
+                    )}
+                    {costPlusLocked && (
+                      <Alert variant="warning">{t('cpq.costPlus.needsView', 'Editing a cost-plus charge needs the cost-visibility permission.')}</Alert>
+                    )}
                     {missing.length > 0 && (
                       <Alert variant="destructive">
                         Missing required field{missing.length > 1 ? 's' : ''} for {editingCharge.pricingMethod} pricing: {missing.join(', ')}
@@ -947,6 +1026,13 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                   </>
                 )
               })()}
+              {editingCharge.id && (costPlus.enabled || editingCharge.pricingMethod === 'cost_plus') && costPlus.canView && (
+                <ChargeCostElements
+                  charge={{ id: editingCharge.id, code: editingCharge.code, chargeType: editingCharge.chargeType, currencyCode: editingCharge.currencyCode, quantityAttributeCode: editingCharge.quantityAttributeCode, isCostPlus: charges.find((c) => c.id === editingCharge.id)?.pricingMethod === 'cost_plus' }}
+                  offeringId={offeringId}
+                  attributes={attributes}
+                />
+              )}
             </div>
           )}
 
@@ -971,7 +1057,7 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                 </thead>
                 <tbody>
                   {charges.map((charge) => {
-                    const incomplete = !isChargeComplete(charge)
+                    const incomplete = chargeMissingFields(charge, costPlus.canView).length > 0
                     const tableRef = charge.pricingTableId
                       ? pricingTables.find((pt) => pt.id === charge.pricingTableId)
                       : null
@@ -995,10 +1081,17 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                         </td>
                         <td className="px-4 py-3 text-xs">
                           {CHARGE_MODEL_LABELS[model] ?? model}
-                          <span className="text-muted-foreground"> · {PRICING_SOURCE_LABELS[source] ?? source}</span>
+                          <span className="text-muted-foreground"> · {charge.pricingMethod === 'cost_plus' ? t('cpq.costPlus.method', 'Cost-plus') : PRICING_SOURCE_LABELS[source] ?? source}</span>
                         </td>
                         <td className="px-4 py-3 text-xs">
-                          {source === 'fixed' ? (
+                          {charge.pricingMethod === 'cost_plus' ? (
+                            <div className="flex flex-col gap-0.5">
+                              {costPlus.canView && charge.markupRule && charge.markupValue != null && (
+                                <span>{t(`cpq.costPlus.markupRules.${charge.markupRule}`, charge.markupRule)}: {charge.markupValue}</span>
+                              )}
+                              {charge.fixedPrice != null && <span className="text-muted-foreground">≈ {`${charge.currencyCode ?? ''} ${charge.fixedPrice}`}</span>}
+                            </div>
+                          ) : source === 'fixed' ? (
                             <div className="flex flex-col gap-0.5">
                               {charge.fixedPrice != null
                                 ? <span>{`${charge.currencyCode ?? 'USD'} ${charge.fixedPrice}`}</span>

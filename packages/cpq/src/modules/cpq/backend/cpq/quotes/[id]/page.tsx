@@ -27,7 +27,12 @@ import { useQuoteCosts } from './_components/useQuoteCosts'
 import { QuoteCostsProvider, useQuoteCostsUi, type QuoteCostsUi } from './_components/quoteCostsContext'
 import { CostStatusBadges } from './_components/CostStatusBadges'
 import { CostsPanel } from './_components/CostsPanel'
-import { isCostLocked, isQuoteIndicative, type RedactedQuoteCost } from '../../../../lib/quoteCostView'
+import { MarginCard } from './_components/MarginCard'
+import { StaleRevisionBanner } from './_components/StaleRevisionBanner'
+import { CostHeaderActions, CostRowActions } from './_components/CostActionButtons'
+import { useCostActions } from './_components/useCostActions'
+import { hasAnyCosts, isCostLocked, isQuoteIndicative, statusFailure, type RedactedQuoteCost } from '../../../../lib/quoteCostView'
+import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import { COSTS_MANAGE_FEATURE, COSTS_VIEW_FEATURE } from '../../../../data/costs'
 import { canRecalculateQuote, QUOTE_MANAGE_FEATURE } from '../../../../lib/quotePermissions'
 import {
@@ -331,6 +336,7 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
   const [expandedLines, setExpandedLines] = React.useState<Set<string>>(new Set())
   const [converting, setConverting] = React.useState(false)
   const [transitioning, setTransitioning] = React.useState(false)
+  const [staleStatus, setStaleStatus] = React.useState(false)
   const [deleting, setDeleting] = React.useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = React.useState(false)
   const [pricingDetail, setPricingDetail] = React.useState<{ lineIdx: number; chargeIdx: number } | null>(null)
@@ -381,16 +387,34 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
   // ─── Cost-plus costs and margin ────────────────────────────────
   const quoteCosts = useQuoteCosts({ quoteId: isNew ? null : cpqQuote?.id ?? null, revision: cpqQuote?.pricingRevision ?? 0 })
   const canViewCosts = grantedFeatures.includes(COSTS_VIEW_FEATURE)
+  const canManageCosts = canViewCosts && grantedFeatures.includes(COSTS_MANAGE_FEATURE) && grantedFeatures.includes(QUOTE_MANAGE_FEATURE)
+  const chargesFor = React.useCallback(
+    (lineId: string) => (cpqQuote?.lines.find((line) => line.lineId === lineId)?.charges ?? []).map((charge) => ({
+      chargeCode: charge.chargeCode, chargeName: charge.chargeName, chargeType: charge.chargeType, pricingMethod: charge.pricingMethod,
+    })),
+    [cpqQuote],
+  )
+  const costActions = useCostActions({
+    quoteId: isNew ? null : cpqQuote?.id ?? null,
+    currency: cpqQuote?.currencyCode ?? 'EUR',
+    data: quoteCosts.data,
+    canManage: canManageCosts,
+    chargesFor,
+    reloadCosts: quoteCosts.reload,
+    reloadQuote,
+  })
   const costsUi: QuoteCostsUi | null = cpqQuote && quoteCosts.state === 'ready'
     ? {
       quoteId: cpqQuote.id,
       cpqStatus: cpqQuote.cpqStatus,
       locked: isCostLocked(cpqQuote.cpqStatus, cpqQuote.convertedOrderId),
       canView: canViewCosts,
-      canManage: canViewCosts && grantedFeatures.includes(COSTS_MANAGE_FEATURE) && grantedFeatures.includes(QUOTE_MANAGE_FEATURE),
+      canManage: canManageCosts,
       data: quoteCosts.data,
       costsFor: (lineId) => quoteCosts.byLine.get(lineId) ?? [],
       reload: quoteCosts.reload,
+      chargesFor,
+      actions: costActions.actions,
     }
     : null
   const indicative = costsUi?.data ? isQuoteIndicative(costsUi.data.lines) : false
@@ -544,14 +568,17 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
 
   const transitionStatus = async (targetStatus: string) => {
     if (!cpqQuote) return
+    setTransitioning(true); setError(null); setStaleStatus(false)
     try {
-      setTransitioning(true); setError(null)
-      const result = await apiJson<QuoteResult>(`/api/cpq/quotes/${cpqQuote.id}/status`, {
+      const call = await apiCall<QuoteResult>(`/api/cpq/quotes/${cpqQuote.id}/status`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ targetStatus }),
+        body: JSON.stringify({ targetStatus, expectedRevision: cpqQuote.pricingRevision }),
       })
-      setCpqQuote(result)
+      if (call.ok && call.result) { setCpqQuote(call.result); return }
+      const failure = statusFailure(call.status, call.result)
+      if (failure.kind === 'stale') setStaleStatus(true)
+      else setError(failure.message)
     } catch (err) { setError((err as Error).message) }
     finally { setTransitioning(false) }
   }
@@ -676,6 +703,7 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
     <QuoteCostsProvider value={costsUi}>
     <div className="space-y-6">
       {priceAdjustments.elements}
+      {costActions.elements}
       {lineRemoval.ConfirmDialogElement}
       {arcDrawerOpen && (
         <ArcQuoteConfigurator
@@ -820,6 +848,9 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
       </div>
 
       {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
+      {staleStatus && (
+        <StaleRevisionBanner onReload={() => { setStaleStatus(false); void reloadQuote(); void quoteCosts.reload() }} />
+      )}
 
       {arcQuoteType !== 'new' && arcTargets.length > 0 && (
         <div className="rounded-md border border-brand-violet/30 bg-brand-violet/10 px-4 py-3 text-sm text-brand-violet">
@@ -897,7 +928,21 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
       {/* Summary view */}
       {view === 'summary' && (
         <>
-          <PricingSummaryCard summary={summary} currency={currency} arcDelta={arcDelta} />
+          {costsUi?.canView ? (
+            <div className="grid gap-4 lg:grid-cols-2">
+              <PricingSummaryCard summary={summary} currency={currency} arcDelta={arcDelta} />
+              <MarginCard
+                margin={costsUi.data?.margin}
+                hasCosts={hasAnyCosts(costsUi.data?.lines)}
+                currency={currency}
+                bundleParents={cpqQuote.lines
+                  .filter((line) => cpqQuote.lines.some((child) => child.parentLineId === line.lineId))
+                  .map((line) => ({ lineId: line.lineId, name: line.offeringName }))}
+              />
+            </div>
+          ) : (
+            <PricingSummaryCard summary={summary} currency={currency} arcDelta={arcDelta} />
+          )}
 
           {/* Validation errors */}
           {!cpqQuote.validationResult.valid && (
@@ -1440,6 +1485,8 @@ function QuoteLineRow({ line, lineIdx, currency, isExpanded, pricingDetail, isBu
           locked={costsUi.locked}
           status={costsUi.cpqStatus}
           canManage={costsUi.canManage}
+          headerActions={<CostHeaderActions line={{ lineId: line.lineId, lineName: line.offeringName }} />}
+          renderRowActions={costsUi.actions ? (cost) => <CostRowActions cost={cost} line={{ lineId: line.lineId, lineName: line.offeringName }} /> : undefined}
         />
       )}
       {/* XD-250 ARC: before/after preview, below the charges, when line mirrors a sub item */}

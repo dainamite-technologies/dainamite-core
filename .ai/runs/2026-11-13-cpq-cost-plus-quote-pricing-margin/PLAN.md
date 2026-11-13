@@ -34,7 +34,7 @@ Engine: om-auto-create-pr-loop (steps: 24, --loop: no)
 | D | 18 | Charge editor UI | group:D | done | |
 | D | 19 | Quote page: badges, Costs panel | group:D | done | |
 | D | 19-review-fix | Unpriced cost-plus charges carry the fallback price | inline | done | |
-| D | 20 | Quote page: Margin card and dialogs | group:D | todo | |
+| D | 20 | Quote page: Margin card and dialogs | group:D | done | |
 | E | 21 | Calculate-price | group:E1 | todo | |
 | E | 22 | Clone, removal, toggle-off | group:E1 | todo | |
 | E | 23 | Demo seed and docs | group:E2 | todo | |

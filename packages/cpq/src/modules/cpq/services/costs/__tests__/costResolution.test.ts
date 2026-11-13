@@ -296,4 +296,16 @@ describe('resolveCostPlusInputs', () => {
     expect(result.costsByLine.get(LINE_ID)).toEqual([expect.objectContaining({ instanceAmount: '100' })])
     expect(s.costs[0]).toMatchObject({ instanceAmount: '100' })
   })
+
+  it('a converted quote keeps its prices frozen: a ready quote with an order reads stored lines, never the moved catalog', async () => {
+    const s = store({
+      charges: [charge()], elements: [element({ amount: '150' })], costs: [catalogCost({ instanceAmount: '100' })],
+      orders: [{ ...SCOPE, sourceQuoteId: QUOTE_ID, deletedAt: null }],
+    })
+    const saved = await inputs(s, true, { quoteOver: { cpqStatus: 'ready' } })
+    expect(saved.costsByLine.get(LINE_ID)).toEqual([expect.objectContaining({ instanceAmount: '100' })])
+    expect(await run(s, { quoteOver: { cpqStatus: 'ready' } })).toMatchObject({ skipped: 'locked' })
+    expect(s.costs[0]).toMatchObject({ instanceAmount: '100' })
+    expect(s.em.persist).not.toHaveBeenCalled()
+  })
 })

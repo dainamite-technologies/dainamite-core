@@ -1,4 +1,5 @@
 import { storedAdjustmentFailure } from './priceAdjustments/storedAdjustmentFailure'
+import { loadUnconfirmedPriceBasisCosts } from './costs/conversionGuard'
 import { withQuotePricingWrite } from './priceAdjustments/quotePricingWrite'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { SalesOrder, SalesOrderLine } from '@open-mercato/core/modules/sales/data/entities'
@@ -176,6 +177,10 @@ export class DefaultCpqOrderService {
 
     const invalidAdjustment = storedAdjustmentFailure(cpqConfig, quoteLines)
     if (invalidAdjustment) throw new OrderError(422, 'ADJUSTMENT_INVALID', invalidAdjustment)
+
+    // Price-basis costs still estimated / unpriced / past their validity mean the price is indicative: no order yet.
+    const unconfirmed = await loadUnconfirmedPriceBasisCosts(em, cpqConfig.id, quoteLines.map((line) => line.quoteLineId), scope)
+    if (unconfirmed.length > 0) throw new OrderError(422, 'COSTS_NOT_CONFIRMED', { lines: unconfirmed })
 
     const { number: orderNumber } = await this.numberGenerator.generate({
       kind: 'order',

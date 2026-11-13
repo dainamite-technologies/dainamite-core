@@ -674,3 +674,45 @@ describe('conversion output shape (characterization before cost-plus guard)', ()
     expect(em.find).not.toHaveBeenCalled()
   })
 })
+
+
+describe('conversion cost guard (COSTS_NOT_CONFIRMED)', () => {
+  const charges = [{ chargeCode: 'fee', chargeType: 'mrc', pricingMethod: 'cost_plus', quantity: 1, unitPrice: 80, totalPrice: 80,
+    listUnitPrice: 80, listTotalPrice: 80, standardUnitPrice: 80, standardTotalPrice: 80, currencyCode: 'USD', adjustmentErrors: [] }]
+  const lines = () => [{ quoteLineId: 'line', quantity: 1, action: 'add', nrcTotal: '0', mrcTotal: '80', charges, configuration: {}, offeringId: null }]
+  const cost = (over: Record<string, unknown>) => ({ quoteLineId: 'line', costKey: 'tail', role: 'price_basis', valueStatus: 'confirmed', validUntil: null, ...over })
+
+  async function convert(costs: Array<Record<string, unknown>>) {
+    const { em, service } = createService()
+    em.findOne.mockResolvedValueOnce({ id: 'quote', quoteId: 'sales', cpqStatus: 'accepted', currencyCode: 'USD', customerId: 'customer', pricingSummary: { nrcTotal: 0, mrcTotal: 80 } })
+      .mockResolvedValueOnce(null)
+    em.find.mockResolvedValueOnce(lines() as never).mockResolvedValueOnce(costs as never)
+    em.create.mockImplementation((_entity, values: Record<string, unknown>) => ({ createdAt: new Date(), ...values }))
+    return { em, run: () => service.convertQuoteToOrder('quote', SCOPE) }
+  }
+
+  it('refuses an estimated price-basis cost and names the line and key, creating nothing', async () => {
+    const { em, run } = await convert([cost({ valueStatus: 'estimated' }), cost({ costKey: 'ok' })])
+    await expect(run()).rejects.toMatchObject({ status: 422, message: 'COSTS_NOT_CONFIRMED', details: { lines: [{ quoteLineId: 'line', costKeys: ['tail'] }] } })
+    expect(em.create).not.toHaveBeenCalled()
+  })
+
+  it('refuses an unpriced (none) price-basis cost and an expired confirmed one', async () => {
+    const none = await convert([cost({ valueStatus: 'none' })])
+    await expect(none.run()).rejects.toMatchObject({ message: 'COSTS_NOT_CONFIRMED' })
+    const expired = await convert([cost({ validUntil: '2000-01-01' })])
+    await expect(expired.run()).rejects.toMatchObject({ message: 'COSTS_NOT_CONFIRMED', details: { lines: [{ quoteLineId: 'line', costKeys: ['tail'] }] } })
+  })
+
+  it('converts when every price-basis cost is confirmed and valid, margin-only costs never block', async () => {
+    const { em, run } = await convert([cost({ validUntil: '2999-01-01' }), cost({ costKey: 'overhead', role: 'margin_only', valueStatus: 'estimated' })])
+    await run()
+    expect(em.create).toHaveBeenCalledWith(CpqOrderLineConfiguration, expect.anything())
+  })
+
+  it('only reads price-basis lines of the quote (margin-only rows are filtered out in the query)', async () => {
+    const { em, run } = await convert([])
+    await run()
+    expect(em.find).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ quoteConfigurationId: 'quote', role: 'price_basis' }))
+  })
+})

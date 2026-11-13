@@ -80,3 +80,10 @@
 - Finding (major, R5 / §UI): the quote page could only show "Price on request" for an unpriced cost-plus charge, because resolved charges never carried the charge's fallback indicative price (the "≈ {fallback}" label had no data).
 - Fix (Step 19-review-fix, inline): unpriced cost-plus charges carry `fallbackPrice` (from the charge's `fixedPrice`) for display only; `unitPrice` / `totalPrice` stay null, so totals and readiness are unchanged.
 - Accepted: the cost-plus editor lives on the offering page only (the specification page renders no charge editor); CPQ ships no locale files, strings use `t(key, fallback)` like the rest of the module; the pricing-table purpose selector turns read-only after the API's `422 PURPOSE_LOCKED` (no "referenced" flag in the API).
+
+## 2026-11-13T17:51:24Z — checkpoint 6 (Phase D closed)
+- Steps D.18–D.20 + 19-review-fix (f6e0157..b42681c): generate ✅, typecheck ✅, build ✅, full `yarn test` 122 suites / 1775 tests ✅. UI touched but browser verification skipped: the app cannot run here (no Postgres, Docker socket denied) and no browser provider is configured.
+
+## 2026-11-13T17:51:24Z — safety checkpoint: paused for user review
+- This resume landed 22 consecutive Steps (A.4 → D.20, including 5 review fixes). Per the executor-dispatch safety stop (~20 Steps), dispatch halts here for a user review. Status stays in-progress; the PR stays a draft.
+- Resume with `om-auto-continue-pr-loop 93` → first remaining Step: E.21 (calculate-price).

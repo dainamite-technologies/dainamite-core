@@ -31,10 +31,10 @@ Engine: om-auto-create-pr-loop (steps: 24, --loop: no)
 | C | 16 | Conversion guard | group:C2 | done | 8526cf9 |
 | C | 17 | Confidentiality sweep | group:C2 | done | 59f580e |
 | C | 14-review-fix | margin_changed for a write creating the first cost lines | inline | done | 0c7c25d |
-| D | 18 | Charge editor UI | group:D | done | |
-| D | 19 | Quote page: badges, Costs panel | group:D | done | |
-| D | 19-review-fix | Unpriced cost-plus charges carry the fallback price | inline | done | |
-| D | 20 | Quote page: Margin card and dialogs | group:D | done | |
+| D | 18 | Charge editor UI | group:D | done | f6e0157 |
+| D | 19 | Quote page: badges, Costs panel | group:D | done | ac914b8 |
+| D | 19-review-fix | Unpriced cost-plus charges carry the fallback price | inline | done | 9870e69 |
+| D | 20 | Quote page: Margin card and dialogs | group:D | done | b42681c |
 | E | 21 | Calculate-price | group:E1 | todo | |
 | E | 22 | Clone, removal, toggle-off | group:E1 | todo | |
 | E | 23 | Demo seed and docs | group:E2 | todo | |

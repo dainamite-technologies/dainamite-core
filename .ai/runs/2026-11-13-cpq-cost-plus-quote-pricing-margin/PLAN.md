@@ -20,7 +20,7 @@ Engine: om-auto-create-pr-loop (steps: 24, --loop: no)
 | B | 8 | Cost resolution | group:B2 | done | 4a7abaf |
 | B | 8-review-fix | Cost element codes unique across a line's charges | inline | done | faefbb0 |
 | B | 9 | Cost-plus price | group:B3 | done | |
-| B | 10 | Margin | group:B3 | todo | |
+| B | 10 | Margin | group:B3 | done | |
 | C | 11 | Read API, cost preview, usage | group:C1 | todo | |
 | C | 12 | Write commands part 1 (cost lines, lock) | group:C1 | todo | |
 | C | 13 | Write commands part 2 (markup override) | group:C1 | todo | |

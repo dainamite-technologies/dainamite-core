@@ -127,7 +127,9 @@ describe('pricing output (quote lines, orders, calculate-price)', () => {
   it('the calculate-price route returns no cost, supplier or markup for a cost-plus charge', async () => {
     const { resolveCpqRouteContext } = jest.requireMock('../../api/context') as { resolveCpqRouteContext: jest.Mock }
     const pricing = pricingService([{ ...costPlusCharge(), fixedPrice: '10' }])
-    resolveCpqRouteContext.mockResolvedValue({ auth: { sub: 'user' }, tenantId: 'tenant', organizationId: 'org', em: { findOne: async () => null }, container: { resolve: () => pricing } })
+    const priceEm: Row = { findOne: async () => null, find: async () => [] }
+    priceEm.fork = () => priceEm
+    resolveCpqRouteContext.mockResolvedValue({ auth: { sub: 'user' }, tenantId: 'tenant', organizationId: 'org', em: priceEm, container: { resolve: (name: string) => (name === 'cpqCostService' ? { enabled: async () => true } : pricing) } })
     const { POST } = await import('../../api/quotes/price/route')
     const response = await POST(new Request('http://localhost/api/cpq/quotes/price', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },

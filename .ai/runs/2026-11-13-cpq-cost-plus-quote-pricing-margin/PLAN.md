@@ -23,7 +23,7 @@ Engine: om-auto-create-pr-loop (steps: 24, --loop: no)
 | B | 10 | Margin | group:B3 | done | daa5323 |
 | B | 9-review-fix | Percent price rules keep cost-plus totals exact | inline | done | a371ea3 |
 | C | 11 | Read API, cost preview, usage | group:C1 | done | |
-| C | 12 | Write commands part 1 (cost lines, lock) | group:C1 | todo | |
+| C | 12 | Write commands part 1 (cost lines, lock) | group:C1 | done | |
 | C | 13 | Write commands part 2 (markup override) | group:C1 | todo | |
 | C | 14 | Signals (marginTracker, margin_changed) | group:C2 | todo | |
 | C | 15 | Status revision | group:C2 | todo | |

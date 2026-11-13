@@ -43,3 +43,12 @@
 
 ## 2026-11-13T09:44:39Z — checkpoint 3 (Phase B closed)
 - Steps B.9, B.10, 9-review-fix (8801297..a371ea3): typecheck ✅, build ✅, full `yarn test` 108 suites / 1622 tests ✅; golden fixture unchanged. UI pass skipped (no UI touched; no runnable app env).
+
+## 2026-11-13 — Steps 11-13 scope decisions
+- Manual cost key scheme: `manual:` + 8 hex chars. Catalog element codes cannot contain `:` (validator regex), so no collision is possible and no extra element check was needed.
+- Cost lock (Step 12): `isQuoteCostLocked` (status outside new/incomplete/ready, or an order) plus terminal statuses refuse every cost write with `409 COST_LOCKED`; locked quotes accept only price-neutral writes (margin-only, estimated -> confirmed with an unchanged value, supplier validity/term edits) and are NOT re-priced (re-pricing would re-read the catalog). Unlocked quotes run the saved recalculation after every cost / markup write.
+- Resolver change (Step 12, costResolution): a value a pricing manager entered or confirmed (`value_origin = manual`) now survives recalculation for fixed/table elements too (previously only on_request), reset only when a driver changes (R1b); its per-instance amount follows the quantity. Without it an overwritten catalog value would be undone by the very next recalculation.
+- Known limitation: a `manual` per_unit cost line's `instance_amount` is not refreshed when the charge quantity changes later (the resolver never touches origin = manual rows); re-save the line to refresh.
+- Every cost write bumps `pricingRevision` (withQuotePricingWrite), including margin-only ones; `QuotePricingCause` gained `'cost'`.
+- Command logs: `replayable: false` (the bus would otherwise store the raw input incl. amounts as the redo payload) and snapshots hold ids / statuses / roles / cost_key only.
+- Route paths follow the spec; `CHARGE_NOT_FOUND` is also used by the markup override for an unknown charge code.

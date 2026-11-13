@@ -40,7 +40,7 @@ export const AVAILABLE_COST_SOURCES = ['fixed', 'table', 'on_request'] as const
 export const COST_MODELS = ['flat', 'per_unit', 'tiered', 'volume'] as const
 
 // numeric(18,4): never silently round an entered amount.
-const costAmount = z.number().finite().min(0).max(99_999_999_999_999).multipleOf(0.0001)
+export const costAmount = z.number().finite().min(0).max(99_999_999_999_999).multipleOf(0.0001)
 const elementFields = {
   name: z.string().trim().min(1).max(255),
   role: z.enum(COST_ROLES),

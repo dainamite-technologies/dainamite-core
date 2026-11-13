@@ -343,15 +343,19 @@ async function planQuoteCosts(params: CostResolutionParams): Promise<CostPlan> {
         }
 
         const patch: RowPatch = { ...structure }
-        if (element.source === 'on_request') {
-          // R1b: a driving attribute changed since the value was set: reset it, keep the old value in the note.
-          const driversChanged = row.driverHash !== null && row.driverHash !== hash
-          if (driversChanged && row.valueStatus !== 'none') patch.note = resetNote(row, attributes)
-          // Entered values (manual) survive unless a driver changed; catalog estimates follow the catalog.
-          if (driversChanged || row.valueOrigin !== 'manual') Object.assign(patch, toFields(resolved))
-        } else {
-          // fixed / table values come from the catalog on every saved recalculation while unlocked (R4).
+        // R1b: a driving attribute changed since the value was set. On a catalog `on_request` value, or on a value a
+        // pricing manager entered / confirmed (origin `manual`), that resets it and keeps the old value in the note.
+        const driversChanged = row.driverHash !== null && row.driverHash !== hash
+        if (driversChanged && row.valueStatus !== 'none' && (element.source === 'on_request' || row.valueOrigin === 'manual')) {
+          patch.note = resetNote(row, attributes)
+        }
+        if (driversChanged || row.valueOrigin !== 'manual') {
+          // Catalog values follow the catalog on every saved recalculation while unlocked (R4).
           Object.assign(patch, toFields(resolved))
+        } else if (row.unitAmount !== null && row.unitAmount !== undefined) {
+          // An entered / confirmed value survives, but its per-instance amount follows the quantity.
+          const unit = Number(row.unitAmount)
+          patch.instanceAmount = money(element.costModel === 'per_unit' ? unit * quantityOf(charge, mergedConfig) : unit)
         }
         patch.driverHash = hash
         updates.push({ row, patch })

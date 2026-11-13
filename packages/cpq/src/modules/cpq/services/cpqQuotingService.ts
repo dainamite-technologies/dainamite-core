@@ -5,6 +5,7 @@ import { loadQuoteAdjustments } from './priceAdjustments/loadQuoteAdjustments'
 import { resolveManualAdjustments } from './priceAdjustments/resolveManualAdjustments'
 import { withChargeWaterfall } from './priceAdjustments/chargeWaterfall'
 import { withQuotePricingWrite } from './priceAdjustments/quotePricingWrite'
+import { createMarginTracker } from './costs/quoteMarginTracker'
 import { emitQuoteWriteEvents, type QuoteWriteEvents } from './priceAdjustments/quotePricingEvents'
 import { computeWaterfallSummary } from './priceAdjustments/pricingSnapshot'
 import type { EntityManager } from '@mikro-orm/postgresql'
@@ -924,8 +925,12 @@ export class DefaultCpqQuotingService {
     validate?: (quote: CpqQuoteConfiguration) => void,
     events: QuoteWriteEvents = { pricingCause: 'recalculate' },
   ): Promise<QuoteResult> {
+    // The copy of a clone keeps its own baseline; the original is only locked, never repriced.
+    const costService = this.costService
+    const marginTracker = events.pricingCause === 'clone' || !costService ? undefined
+      : createMarginTracker({ scope, isEnabled: (tenantId) => costService.enabled(tenantId) })
     return withQuotePricingWrite(this.em, quoteId, scope, execute,
-      (status, message) => new QuotingError(status, message), expectedRevision, validate, events)
+      (status, message) => new QuotingError(status, message), expectedRevision, validate, events, marginTracker)
   }
 
   /** Called by adjustment commands that already own the quote lock/revision. */

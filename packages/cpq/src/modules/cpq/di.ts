@@ -27,6 +27,7 @@ export function register(container: AppContainer) {
       em: container.resolve('em'),
       quotingService: container.resolve('cpqQuotingService'),
       featureTogglesService: container.resolve('featureTogglesService'),
+      costService: container.resolve('cpqCostService'),
     })).scoped(),
     cpqCostService: asFunction(() => new CpqCostService({
       em: container.resolve('em'),

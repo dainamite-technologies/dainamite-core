@@ -22,6 +22,7 @@ import type { CpqCostService } from './costService'
 import { isQuoteCostLocked, previewCatalogCosts } from './costResolution'
 import { computeCostPlusPrice, type MarkupRule } from './costPlusPrice'
 import type { QuoteMargin } from './quoteMargin'
+import { createMarginTracker } from './quoteMarginTracker'
 import {
   fullCostView, groupByLine, loadQuoteCosts, loadQuoteMargin, loadQuoteMarkupOverrides, markupOverrideView, redactedCostView,
   type FullCostView, type MarkupOverrideView,
@@ -312,7 +313,8 @@ export class CpqQuoteCostService {
   // ─── Internals ─────────────────────────────────────────────────
 
   private write<T>(quoteId: string, scope: TenantScope, revision: number | undefined, actor: string, execute: (em: EntityManager, quote: CpqQuoteConfiguration) => Promise<T>) {
-    return withQuotePricingWrite(this.deps.em, quoteId, scope, execute, (status, message) => new QuotingError(status, message), revision, undefined, { pricingCause: 'cost', actorUserId: actor })
+    return withQuotePricingWrite(this.deps.em, quoteId, scope, execute, (status, message) => new QuotingError(status, message), revision, undefined, { pricingCause: 'cost', actorUserId: actor },
+      createMarginTracker({ scope, isEnabled: (tenantId) => this.deps.costService.enabled(tenantId), force: true }))
   }
 
   /**

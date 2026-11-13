@@ -164,3 +164,57 @@ describe('withQuotePricingWrite events', () => {
     expect(emitCpqEvent).not.toHaveBeenCalled()
   })
 })
+
+describe('margin signals', () => {
+  const signal = (overrides: Record<string, unknown> = {}) => ({
+    previousMarginHash: 'm-0', marginHash: 'm-1', approvalInvalidated: false, contractMargin: 120.5, marginPercent: 12.05,
+    costCoverage: 80, hasPendingCosts: false, hasEstimatedCosts: true, hasExpiredCosts: false, ...overrides,
+  })
+
+  it('emits margin_changed once, quote-level only, when the margin hash moved', async () => {
+    await emitQuoteWriteEvents(captureQuoteEventState(quote({ cpqStatus: 'in_approval' })), quote({ cpqStatus: 'in_approval' }), { pricingCause: 'cost', actorUserId: 'u1' }, emitCpqEvent, signal({ approvalInvalidated: true }))
+    expect(emitted()).toEqual(['cpq.quote.margin_changed'])
+    expect(emitCpqEvent.mock.calls[0][1]).toEqual({
+      tenantId: 'tenant', organizationId: 'org', quoteId: 'cfg-1', cpqStatus: 'in_approval', currencyCode: 'USD', pricingRevision: 3,
+      previousMarginHash: 'm-0', marginHash: 'm-1', approvalInvalidated: true, contractMargin: 120.5, marginPercent: 12.05,
+      costCoverage: 80, hasPendingCosts: false, hasEstimatedCosts: true, hasExpiredCosts: false, cause: 'cost', occurredAt: expect.any(String),
+    })
+  })
+
+  it('emits no margin_changed for a confirmation or status-only change that left the hash alone', async () => {
+    await emitQuoteWriteEvents(captureQuoteEventState(quote()), quote(), { pricingCause: 'cost' }, emitCpqEvent, signal({ marginHash: 'm-0' }))
+    expect(emitCpqEvent).not.toHaveBeenCalled()
+  })
+
+  it('adds the cost flags to status_changed only when the quote carries costs', async () => {
+    await emitQuoteWriteEvents({ snapshotHash: 'hash-a', cpqStatus: 'ready' }, quote({ cpqStatus: 'with_customer' }),
+      { pricingCause: 'recalculate', statusCause: 'manual' }, emitCpqEvent, signal({ marginHash: 'm-0', hasPendingCosts: true }))
+    expect(emitCpqEvent.mock.calls[0][1]).toMatchObject({ hasPendingCosts: true, hasEstimatedCosts: true })
+    expect(Object.keys(emitCpqEvent.mock.calls[0][1])).not.toContain('contractMargin')
+    emitCpqEvent.mockClear()
+    await emitQuoteWriteEvents({ snapshotHash: 'hash-a', cpqStatus: 'ready' }, quote({ cpqStatus: 'with_customer' }), { pricingCause: 'recalculate' }, emitCpqEvent)
+    expect(emitCpqEvent.mock.calls[0][1]).not.toHaveProperty('hasPendingCosts')
+  })
+
+  it('emits margin_changed after the commit through withQuotePricingWrite, and swallows a failing dispatch', async () => {
+    const locked = quote()
+    const { em } = writeHarness(locked)
+    const tracker = { before: jest.fn().mockResolvedValue(undefined), after: jest.fn().mockResolvedValue(signal()) }
+    await withQuotePricingWrite(em, 'cfg-1', scope, async () => 'ok', error, undefined, undefined, { pricingCause: 'cost' }, tracker)
+    expect(tracker.before).toHaveBeenCalledTimes(1)
+    expect(tracker.after).toHaveBeenCalledTimes(1)
+    expect(emitted()).toEqual(['cpq.quote.margin_changed'])
+    emitCpqEvent.mockClear()
+    emitCpqEvent.mockRejectedValueOnce(new Error('bus down'))
+    const log = jest.spyOn(console, 'error').mockImplementation(() => undefined)
+    await expect(withQuotePricingWrite(em, 'cfg-1', scope, async () => 'ok', error, undefined, undefined, { pricingCause: 'cost' }, tracker)).resolves.toBe('ok')
+    log.mockRestore()
+  })
+
+  it('does not run the tracker for a refused stale revision', async () => {
+    const { em } = writeHarness(quote())
+    const tracker = { before: jest.fn(), after: jest.fn() }
+    await expect(withQuotePricingWrite(em, 'cfg-1', scope, async () => 'never', error, 1, undefined, { pricingCause: 'cost' }, tracker)).rejects.toMatchObject({ status: 409 })
+    expect(tracker.before).not.toHaveBeenCalled()
+  })
+})

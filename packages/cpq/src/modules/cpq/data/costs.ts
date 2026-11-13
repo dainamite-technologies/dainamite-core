@@ -18,6 +18,18 @@ export const PRICING_TABLE_PURPOSES = ['price', 'cost'] as const
 export type PricingTablePurpose = (typeof PRICING_TABLE_PURPOSES)[number]
 export const isCostTable = (table: { purpose?: string | null }): boolean => table.purpose === 'cost'
 
+// ─── Quote line costs (App Spec §1.4.6) ─────────────────────────
+
+/** `carried` arrives with the ARC feature. */
+export const COST_LINE_ORIGINS = ['catalog', 'manual'] as const
+export const COST_VALUE_STATUSES = ['none', 'estimated', 'confirmed'] as const
+/** `supplier` / `carried` arrive with the sourcing / ARC features. */
+export const COST_VALUE_ORIGINS = ['catalog', 'manual'] as const
+export const COST_SOURCING_STATUSES = ['not_requested', 'requested', 'answered', 'declined', 'cancelled'] as const
+export const COST_LINE_ERROR_CODES = ['TABLE_NO_MATCH', 'CURRENCY_NO_RATE', 'INDEX_NO_VALUE', 'CHARGE_NOT_FOUND', 'COST_PLUS_DISABLED'] as const
+export type CostValueStatus = (typeof COST_VALUE_STATUSES)[number]
+export type CostLineErrorCode = (typeof COST_LINE_ERROR_CODES)[number]
+
 // ─── Charge cost elements (App Spec §1.4.4) ─────────────────────
 
 export const COST_ROLES = ['price_basis', 'margin_only'] as const

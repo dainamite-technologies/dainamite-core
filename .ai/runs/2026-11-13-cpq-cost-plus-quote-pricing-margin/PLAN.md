@@ -35,7 +35,7 @@ Engine: om-auto-create-pr-loop (steps: 24, --loop: no)
 | D | 19 | Quote page: badges, Costs panel | group:D | done | ac914b8 |
 | D | 19-review-fix | Unpriced cost-plus charges carry the fallback price | inline | done | 9870e69 |
 | D | 20 | Quote page: Margin card and dialogs | group:D | done | b42681c |
-| E | 21 | Calculate-price | group:E1 | todo | |
+| E | 21 | Calculate-price | group:E1 | done | |
 | E | 22 | Clone, removal, toggle-off | group:E1 | todo | |
 | E | 23 | Demo seed and docs | group:E2 | todo | |
 | E | 24 | Archive the Delta | group:E2 | todo | |

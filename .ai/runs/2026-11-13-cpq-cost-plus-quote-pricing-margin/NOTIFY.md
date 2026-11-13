@@ -87,3 +87,6 @@
 ## 2026-11-13T17:51:24Z — safety checkpoint: paused for user review
 - This resume landed 22 consecutive Steps (A.4 → D.20, including 5 review fixes). Per the executor-dispatch safety stop (~20 Steps), dispatch halts here for a user review. Status stays in-progress; the PR stays a draft.
 - Resume with `om-auto-continue-pr-loop 93` → first remaining Step: E.21 (calculate-price).
+
+## 2026-11-13T17:52:10Z — safety checkpoint cleared
+- The user instructed: continue autonomously until the whole task (all six cost-plus feature specs) is complete, without further confirmation. Resuming at E.21.

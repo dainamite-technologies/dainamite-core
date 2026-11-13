@@ -1,0 +1,5031 @@
+[
+  {
+    "name": "gix access port 10G ld5 (flat table, nrc+mrc, rule on mrc)",
+    "listCharges": [
+      {
+        "chargeCode": "setup_fee",
+        "chargeName": "Setup Fee",
+        "chargeType": "nrc",
+        "pricingMethod": "flat",
+        "unitPrice": 416.5,
+        "quantity": 1,
+        "totalPrice": 416.5,
+        "currencyCode": "USD",
+        "listUnitPrice": 490,
+        "listTotalPrice": 490,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "access-port-nrc-15pct-off",
+            "ruleName": "Access Port — 15% Setup Discount",
+            "ruleType": "discount_percent",
+            "value": 15,
+            "unitPriceBefore": 490,
+            "unitPriceAfter": 416.5,
+            "delta": -73.5
+          }
+        ],
+        "standardUnitPrice": 416.5,
+        "standardTotalPrice": 416.5
+      },
+      {
+        "chargeCode": "monthly_port_fee",
+        "chargeName": "Monthly Port Fee",
+        "chargeType": "mrc",
+        "pricingMethod": "flat",
+        "unitPrice": 405,
+        "quantity": 1,
+        "totalPrice": 405,
+        "currencyCode": "USD",
+        "listUnitPrice": 450,
+        "listTotalPrice": 450,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 450,
+            "unitPriceAfter": 405,
+            "delta": -45
+          }
+        ],
+        "standardUnitPrice": 405,
+        "standardTotalPrice": 405
+      }
+    ],
+    "charges": [
+      {
+        "chargeCode": "setup_fee",
+        "chargeName": "Setup Fee",
+        "chargeType": "nrc",
+        "pricingMethod": "flat",
+        "unitPrice": 416.5,
+        "quantity": 1,
+        "totalPrice": 416.5,
+        "currencyCode": "USD",
+        "listUnitPrice": 490,
+        "listTotalPrice": 490,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "access-port-nrc-15pct-off",
+            "ruleName": "Access Port — 15% Setup Discount",
+            "ruleType": "discount_percent",
+            "value": 15,
+            "unitPriceBefore": 490,
+            "unitPriceAfter": 416.5,
+            "delta": -73.5
+          }
+        ],
+        "standardUnitPrice": 416.5,
+        "standardTotalPrice": 416.5,
+        "adjustmentErrors": []
+      },
+      {
+        "chargeCode": "monthly_port_fee",
+        "chargeName": "Monthly Port Fee",
+        "chargeType": "mrc",
+        "pricingMethod": "flat",
+        "unitPrice": 405,
+        "quantity": 1,
+        "totalPrice": 405,
+        "currencyCode": "USD",
+        "listUnitPrice": 450,
+        "listTotalPrice": 450,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 450,
+            "unitPriceAfter": 405,
+            "delta": -45
+          }
+        ],
+        "standardUnitPrice": 405,
+        "standardTotalPrice": 405,
+        "adjustmentErrors": []
+      }
+    ],
+    "adjustmentErrors": [],
+    "pricingSummary": {
+      "listNrcTotal": 490,
+      "listMrcTotal": 450,
+      "standardNrcTotal": 416.5,
+      "standardMrcTotal": 405,
+      "ruleDiscountTotal": 118.5,
+      "manualDiscountTotal": 0,
+      "dealValue": {
+        "list": 5890,
+        "standard": 5276.5,
+        "offer": 5276.5
+      },
+      "discountDepth": {
+        "rule": 0.10415959252971141,
+        "manual": 0,
+        "total": 0.10415959252971141,
+        "maxLineManual": 0
+      },
+      "hasTimeBasedAdjustments": false,
+      "snapshotHash": "ee6ca6a4319cfd973f239405303d19e793a8932b155b386eb4b3c5ef1afa0ac3"
+    },
+    "snapshotHash": "ee6ca6a4319cfd973f239405303d19e793a8932b155b386eb4b3c5ef1afa0ac3"
+  },
+  {
+    "name": "gix access port 100G (surcharge_absolute + offering rule + cap override)",
+    "listCharges": [
+      {
+        "chargeCode": "setup_fee",
+        "chargeName": "Setup Fee",
+        "chargeType": "nrc",
+        "pricingMethod": "flat",
+        "unitPrice": 170,
+        "quantity": 1,
+        "totalPrice": 170,
+        "currencyCode": "USD",
+        "listUnitPrice": 890,
+        "listTotalPrice": 890,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "setup-fee-cap-200",
+            "ruleName": "Setup Fee Cap at $200",
+            "ruleType": "price_override",
+            "value": 200,
+            "unitPriceBefore": 890,
+            "unitPriceAfter": 200,
+            "delta": -690
+          },
+          {
+            "origin": "rule",
+            "ruleCode": "access-port-nrc-15pct-off",
+            "ruleName": "Access Port — 15% Setup Discount",
+            "ruleType": "discount_percent",
+            "value": 15,
+            "unitPriceBefore": 200,
+            "unitPriceAfter": 170,
+            "delta": -30
+          }
+        ],
+        "standardUnitPrice": 170,
+        "standardTotalPrice": 170
+      },
+      {
+        "chargeCode": "monthly_port_fee",
+        "chargeName": "Monthly Port Fee",
+        "chargeType": "mrc",
+        "pricingMethod": "flat",
+        "unitPrice": 1040,
+        "quantity": 1,
+        "totalPrice": 1040,
+        "currencyCode": "USD",
+        "listUnitPrice": 1100,
+        "listTotalPrice": 1100,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 1100,
+            "unitPriceAfter": 990,
+            "delta": -110
+          },
+          {
+            "origin": "rule",
+            "ruleCode": "premium-100g-surcharge",
+            "ruleName": "100G Port Premium Surcharge",
+            "ruleType": "surcharge_absolute",
+            "value": 50,
+            "unitPriceBefore": 990,
+            "unitPriceAfter": 1040,
+            "delta": 50
+          }
+        ],
+        "standardUnitPrice": 1040,
+        "standardTotalPrice": 1040
+      }
+    ],
+    "charges": [
+      {
+        "chargeCode": "setup_fee",
+        "chargeName": "Setup Fee",
+        "chargeType": "nrc",
+        "pricingMethod": "flat",
+        "unitPrice": 170,
+        "quantity": 1,
+        "totalPrice": 170,
+        "currencyCode": "USD",
+        "listUnitPrice": 890,
+        "listTotalPrice": 890,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "setup-fee-cap-200",
+            "ruleName": "Setup Fee Cap at $200",
+            "ruleType": "price_override",
+            "value": 200,
+            "unitPriceBefore": 890,
+            "unitPriceAfter": 200,
+            "delta": -690
+          },
+          {
+            "origin": "rule",
+            "ruleCode": "access-port-nrc-15pct-off",
+            "ruleName": "Access Port — 15% Setup Discount",
+            "ruleType": "discount_percent",
+            "value": 15,
+            "unitPriceBefore": 200,
+            "unitPriceAfter": 170,
+            "delta": -30
+          }
+        ],
+        "standardUnitPrice": 170,
+        "standardTotalPrice": 170,
+        "adjustmentErrors": []
+      },
+      {
+        "chargeCode": "monthly_port_fee",
+        "chargeName": "Monthly Port Fee",
+        "chargeType": "mrc",
+        "pricingMethod": "flat",
+        "unitPrice": 1040,
+        "quantity": 1,
+        "totalPrice": 1040,
+        "currencyCode": "USD",
+        "listUnitPrice": 1100,
+        "listTotalPrice": 1100,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 1100,
+            "unitPriceAfter": 990,
+            "delta": -110
+          },
+          {
+            "origin": "rule",
+            "ruleCode": "premium-100g-surcharge",
+            "ruleName": "100G Port Premium Surcharge",
+            "ruleType": "surcharge_absolute",
+            "value": 50,
+            "unitPriceBefore": 990,
+            "unitPriceAfter": 1040,
+            "delta": 50
+          }
+        ],
+        "standardUnitPrice": 1040,
+        "standardTotalPrice": 1040,
+        "adjustmentErrors": []
+      }
+    ],
+    "adjustmentErrors": [],
+    "pricingSummary": {
+      "listNrcTotal": 1780,
+      "listMrcTotal": 2200,
+      "standardNrcTotal": 340,
+      "standardMrcTotal": 2080,
+      "ruleDiscountTotal": 1660,
+      "manualDiscountTotal": 0,
+      "dealValue": {
+        "list": 54580,
+        "standard": 50260,
+        "offer": 50260
+      },
+      "discountDepth": {
+        "rule": 0.07914987174789301,
+        "manual": 0,
+        "total": 0.07914987174789301,
+        "maxLineManual": 0
+      },
+      "hasTimeBasedAdjustments": false,
+      "snapshotHash": "02d58f10563ed8946274c48aaddd24bfa3323abf7f62834798b7818bc033f255"
+    },
+    "snapshotHash": "02d58f10563ed8946274c48aaddd24bfa3323abf7f62834798b7818bc033f255"
+  },
+  {
+    "name": "gix access port dimension miss",
+    "listCharges": [
+      {
+        "chargeCode": "setup_fee",
+        "chargeName": "Setup Fee",
+        "chargeType": "nrc",
+        "pricingMethod": "flat",
+        "unitPrice": 0,
+        "quantity": 1,
+        "totalPrice": 0,
+        "currencyCode": "USD",
+        "listUnitPrice": 0,
+        "listTotalPrice": 0,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "access-port-nrc-15pct-off",
+            "ruleName": "Access Port — 15% Setup Discount",
+            "ruleType": "discount_percent",
+            "value": 15,
+            "unitPriceBefore": 0,
+            "unitPriceAfter": 0,
+            "delta": 0
+          }
+        ],
+        "standardUnitPrice": 0,
+        "standardTotalPrice": 0
+      },
+      {
+        "chargeCode": "monthly_port_fee",
+        "chargeName": "Monthly Port Fee",
+        "chargeType": "mrc",
+        "pricingMethod": "flat",
+        "unitPrice": 0,
+        "quantity": 1,
+        "totalPrice": 0,
+        "currencyCode": "USD",
+        "listUnitPrice": 0,
+        "listTotalPrice": 0,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 0,
+            "unitPriceAfter": 0,
+            "delta": 0
+          }
+        ],
+        "standardUnitPrice": 0,
+        "standardTotalPrice": 0
+      }
+    ],
+    "charges": [
+      {
+        "chargeCode": "setup_fee",
+        "chargeName": "Setup Fee",
+        "chargeType": "nrc",
+        "pricingMethod": "flat",
+        "unitPrice": 0,
+        "quantity": 1,
+        "totalPrice": 0,
+        "currencyCode": "USD",
+        "listUnitPrice": 0,
+        "listTotalPrice": 0,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "access-port-nrc-15pct-off",
+            "ruleName": "Access Port — 15% Setup Discount",
+            "ruleType": "discount_percent",
+            "value": 15,
+            "unitPriceBefore": 0,
+            "unitPriceAfter": 0,
+            "delta": 0
+          }
+        ],
+        "standardUnitPrice": 0,
+        "standardTotalPrice": 0,
+        "adjustmentErrors": []
+      },
+      {
+        "chargeCode": "monthly_port_fee",
+        "chargeName": "Monthly Port Fee",
+        "chargeType": "mrc",
+        "pricingMethod": "flat",
+        "unitPrice": 0,
+        "quantity": 1,
+        "totalPrice": 0,
+        "currencyCode": "USD",
+        "listUnitPrice": 0,
+        "listTotalPrice": 0,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 0,
+            "unitPriceAfter": 0,
+            "delta": 0
+          }
+        ],
+        "standardUnitPrice": 0,
+        "standardTotalPrice": 0,
+        "adjustmentErrors": []
+      }
+    ],
+    "adjustmentErrors": [],
+    "pricingSummary": {
+      "listNrcTotal": 0,
+      "listMrcTotal": 0,
+      "standardNrcTotal": 0,
+      "standardMrcTotal": 0,
+      "ruleDiscountTotal": 0,
+      "manualDiscountTotal": 0,
+      "dealValue": {
+        "list": 0,
+        "standard": 0,
+        "offer": 0
+      },
+      "discountDepth": {
+        "rule": null,
+        "manual": null,
+        "total": null,
+        "maxLineManual": null
+      },
+      "hasTimeBasedAdjustments": false,
+      "snapshotHash": "a71c30d56a67ea315d5e57255cda94ab5884468e7e8e72deaae05efa4eeff7ce"
+    },
+    "snapshotHash": "a71c30d56a67ea315d5e57255cda94ab5884468e7e8e72deaae05efa4eeff7ce"
+  },
+  {
+    "name": "gix access port case-insensitive match",
+    "listCharges": [
+      {
+        "chargeCode": "setup_fee",
+        "chargeName": "Setup Fee",
+        "chargeType": "nrc",
+        "pricingMethod": "flat",
+        "unitPrice": 246.5,
+        "quantity": 1,
+        "totalPrice": 246.5,
+        "currencyCode": "USD",
+        "listUnitPrice": 290,
+        "listTotalPrice": 290,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "access-port-nrc-15pct-off",
+            "ruleName": "Access Port — 15% Setup Discount",
+            "ruleType": "discount_percent",
+            "value": 15,
+            "unitPriceBefore": 290,
+            "unitPriceAfter": 246.5,
+            "delta": -43.5
+          }
+        ],
+        "standardUnitPrice": 246.5,
+        "standardTotalPrice": 246.5
+      },
+      {
+        "chargeCode": "monthly_port_fee",
+        "chargeName": "Monthly Port Fee",
+        "chargeType": "mrc",
+        "pricingMethod": "flat",
+        "unitPrice": 225,
+        "quantity": 1,
+        "totalPrice": 225,
+        "currencyCode": "USD",
+        "listUnitPrice": 250,
+        "listTotalPrice": 250,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 250,
+            "unitPriceAfter": 225,
+            "delta": -25
+          }
+        ],
+        "standardUnitPrice": 225,
+        "standardTotalPrice": 225
+      }
+    ],
+    "charges": [
+      {
+        "chargeCode": "setup_fee",
+        "chargeName": "Setup Fee",
+        "chargeType": "nrc",
+        "pricingMethod": "flat",
+        "unitPrice": 246.5,
+        "quantity": 1,
+        "totalPrice": 246.5,
+        "currencyCode": "USD",
+        "listUnitPrice": 290,
+        "listTotalPrice": 290,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "access-port-nrc-15pct-off",
+            "ruleName": "Access Port — 15% Setup Discount",
+            "ruleType": "discount_percent",
+            "value": 15,
+            "unitPriceBefore": 290,
+            "unitPriceAfter": 246.5,
+            "delta": -43.5
+          }
+        ],
+        "standardUnitPrice": 246.5,
+        "standardTotalPrice": 246.5,
+        "adjustmentErrors": []
+      },
+      {
+        "chargeCode": "monthly_port_fee",
+        "chargeName": "Monthly Port Fee",
+        "chargeType": "mrc",
+        "pricingMethod": "flat",
+        "unitPrice": 225,
+        "quantity": 1,
+        "totalPrice": 225,
+        "currencyCode": "USD",
+        "listUnitPrice": 250,
+        "listTotalPrice": 250,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 250,
+            "unitPriceAfter": 225,
+            "delta": -25
+          }
+        ],
+        "standardUnitPrice": 225,
+        "standardTotalPrice": 225,
+        "adjustmentErrors": []
+      }
+    ],
+    "adjustmentErrors": [],
+    "pricingSummary": {
+      "listNrcTotal": 290,
+      "listMrcTotal": 250,
+      "standardNrcTotal": 246.5,
+      "standardMrcTotal": 225,
+      "ruleDiscountTotal": 68.5,
+      "manualDiscountTotal": 0,
+      "dealValue": {
+        "list": 3290,
+        "standard": 2946.5,
+        "offer": 2946.5
+      },
+      "discountDepth": {
+        "rule": 0.10440729483282674,
+        "manual": 0,
+        "total": 0.10440729483282674,
+        "maxLineManual": 0
+      },
+      "hasTimeBasedAdjustments": false,
+      "snapshotHash": "1b5621ee64fdaafbf277ea206290736d8818bb51699c4dab258d26e6e1043249"
+    },
+    "snapshotHash": "1b5621ee64fdaafbf277ea206290736d8818bb51699c4dab258d26e6e1043249"
+  },
+  {
+    "name": "gix internet peering 75 Mb (tiered, partial second tier)",
+    "listCharges": [
+      {
+        "chargeCode": "bandwidth_fee",
+        "chargeName": "Bandwidth Fee",
+        "chargeType": "mrc",
+        "pricingMethod": "tiered",
+        "unitPrice": 0.459,
+        "quantity": 75,
+        "totalPrice": 34.425000000000004,
+        "currencyCode": "USD",
+        "breakdown": {
+          "tiers": [
+            {
+              "tier": 0,
+              "from": 1,
+              "to": 50,
+              "pricePerUnit": 0.52,
+              "quantity": 50,
+              "subtotal": 26
+            },
+            {
+              "tier": 1,
+              "from": 51,
+              "to": 75,
+              "pricePerUnit": 0.49,
+              "quantity": 25,
+              "subtotal": 12.25
+            }
+          ]
+        },
+        "listUnitPrice": 0.51,
+        "listTotalPrice": 38.25,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 0.51,
+            "unitPriceAfter": 0.459,
+            "delta": -0.05099999999999999
+          }
+        ],
+        "standardUnitPrice": 0.459,
+        "standardTotalPrice": 34.425000000000004
+      }
+    ],
+    "charges": [
+      {
+        "chargeCode": "bandwidth_fee",
+        "chargeName": "Bandwidth Fee",
+        "chargeType": "mrc",
+        "pricingMethod": "tiered",
+        "unitPrice": 0.459,
+        "quantity": 75,
+        "totalPrice": 34.425000000000004,
+        "currencyCode": "USD",
+        "breakdown": {
+          "tiers": [
+            {
+              "tier": 0,
+              "from": 1,
+              "to": 50,
+              "pricePerUnit": 0.52,
+              "quantity": 50,
+              "subtotal": 26
+            },
+            {
+              "tier": 1,
+              "from": 51,
+              "to": 75,
+              "pricePerUnit": 0.49,
+              "quantity": 25,
+              "subtotal": 12.25
+            }
+          ]
+        },
+        "listUnitPrice": 0.51,
+        "listTotalPrice": 38.25,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 0.51,
+            "unitPriceAfter": 0.459,
+            "delta": -0.05099999999999999
+          }
+        ],
+        "standardUnitPrice": 0.459,
+        "standardTotalPrice": 34.425000000000004,
+        "adjustmentErrors": []
+      }
+    ],
+    "adjustmentErrors": [],
+    "pricingSummary": {
+      "listNrcTotal": 0,
+      "listMrcTotal": 38.25,
+      "standardNrcTotal": 0,
+      "standardMrcTotal": 34.425000000000004,
+      "ruleDiscountTotal": 3.8249999999999993,
+      "manualDiscountTotal": 0,
+      "dealValue": {
+        "list": 459,
+        "standard": 413.1,
+        "offer": 413.1
+      },
+      "discountDepth": {
+        "rule": 0.09999999999999998,
+        "manual": 0,
+        "total": 0.09999999999999998,
+        "maxLineManual": 0
+      },
+      "hasTimeBasedAdjustments": false,
+      "snapshotHash": "e856422c0642bf85ecd022c8ef53916807db7a5b77986db7b6953570fdb8a66c"
+    },
+    "snapshotHash": "e856422c0642bf85ecd022c8ef53916807db7a5b77986db7b6953570fdb8a66c"
+  },
+  {
+    "name": "gix internet peering 2000 Mb (tiered across all tiers)",
+    "listCharges": [
+      {
+        "chargeCode": "bandwidth_fee",
+        "chargeName": "Bandwidth Fee",
+        "chargeType": "mrc",
+        "pricingMethod": "tiered",
+        "unitPrice": 0.381825,
+        "quantity": 2000,
+        "totalPrice": 763.6500000000001,
+        "currencyCode": "USD",
+        "breakdown": {
+          "tiers": [
+            {
+              "tier": 0,
+              "from": 1,
+              "to": 50,
+              "pricePerUnit": 0.52,
+              "quantity": 50,
+              "subtotal": 26
+            },
+            {
+              "tier": 1,
+              "from": 51,
+              "to": 100,
+              "pricePerUnit": 0.49,
+              "quantity": 50,
+              "subtotal": 24.5
+            },
+            {
+              "tier": 2,
+              "from": 101,
+              "to": 250,
+              "pricePerUnit": 0.47,
+              "quantity": 150,
+              "subtotal": 70.5
+            },
+            {
+              "tier": 3,
+              "from": 251,
+              "to": 500,
+              "pricePerUnit": 0.45,
+              "quantity": 250,
+              "subtotal": 112.5
+            },
+            {
+              "tier": 4,
+              "from": 501,
+              "to": 1000,
+              "pricePerUnit": 0.43,
+              "quantity": 500,
+              "subtotal": 215
+            },
+            {
+              "tier": 5,
+              "from": 1001,
+              "to": 2000,
+              "pricePerUnit": 0.4,
+              "quantity": 1000,
+              "subtotal": 400
+            }
+          ]
+        },
+        "listUnitPrice": 0.42425,
+        "listTotalPrice": 848.5,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 0.42425,
+            "unitPriceAfter": 0.381825,
+            "delta": -0.04242499999999999
+          }
+        ],
+        "standardUnitPrice": 0.381825,
+        "standardTotalPrice": 763.6500000000001
+      }
+    ],
+    "charges": [
+      {
+        "chargeCode": "bandwidth_fee",
+        "chargeName": "Bandwidth Fee",
+        "chargeType": "mrc",
+        "pricingMethod": "tiered",
+        "unitPrice": 0.381825,
+        "quantity": 2000,
+        "totalPrice": 763.6500000000001,
+        "currencyCode": "USD",
+        "breakdown": {
+          "tiers": [
+            {
+              "tier": 0,
+              "from": 1,
+              "to": 50,
+              "pricePerUnit": 0.52,
+              "quantity": 50,
+              "subtotal": 26
+            },
+            {
+              "tier": 1,
+              "from": 51,
+              "to": 100,
+              "pricePerUnit": 0.49,
+              "quantity": 50,
+              "subtotal": 24.5
+            },
+            {
+              "tier": 2,
+              "from": 101,
+              "to": 250,
+              "pricePerUnit": 0.47,
+              "quantity": 150,
+              "subtotal": 70.5
+            },
+            {
+              "tier": 3,
+              "from": 251,
+              "to": 500,
+              "pricePerUnit": 0.45,
+              "quantity": 250,
+              "subtotal": 112.5
+            },
+            {
+              "tier": 4,
+              "from": 501,
+              "to": 1000,
+              "pricePerUnit": 0.43,
+              "quantity": 500,
+              "subtotal": 215
+            },
+            {
+              "tier": 5,
+              "from": 1001,
+              "to": 2000,
+              "pricePerUnit": 0.4,
+              "quantity": 1000,
+              "subtotal": 400
+            }
+          ]
+        },
+        "listUnitPrice": 0.42425,
+        "listTotalPrice": 848.5,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 0.42425,
+            "unitPriceAfter": 0.381825,
+            "delta": -0.04242499999999999
+          }
+        ],
+        "standardUnitPrice": 0.381825,
+        "standardTotalPrice": 763.6500000000001,
+        "adjustmentErrors": []
+      }
+    ],
+    "adjustmentErrors": [],
+    "pricingSummary": {
+      "listNrcTotal": 0,
+      "listMrcTotal": 848.5,
+      "standardNrcTotal": 0,
+      "standardMrcTotal": 763.6500000000001,
+      "ruleDiscountTotal": 84.84999999999998,
+      "manualDiscountTotal": 0,
+      "dealValue": {
+        "list": 30546,
+        "standard": 27491.4,
+        "offer": 27491.4
+      },
+      "discountDepth": {
+        "rule": 0.09999999999999998,
+        "manual": 0,
+        "total": 0.09999999999999998,
+        "maxLineManual": 0
+      },
+      "hasTimeBasedAdjustments": false,
+      "snapshotHash": "1179be5d0cdbb5100503c7d5c456eade8937aeebd5873e81d497ef9066c284c1"
+    },
+    "snapshotHash": "1179be5d0cdbb5100503c7d5c456eade8937aeebd5873e81d497ef9066c284c1"
+  },
+  {
+    "name": "gix internet peering zero quantity",
+    "listCharges": [
+      {
+        "chargeCode": "bandwidth_fee",
+        "chargeName": "Bandwidth Fee",
+        "chargeType": "mrc",
+        "pricingMethod": "tiered",
+        "unitPrice": 0,
+        "quantity": 0,
+        "totalPrice": 0,
+        "currencyCode": "USD",
+        "listUnitPrice": 0,
+        "listTotalPrice": 0,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 0,
+            "unitPriceAfter": 0,
+            "delta": 0
+          }
+        ],
+        "standardUnitPrice": 0,
+        "standardTotalPrice": 0
+      }
+    ],
+    "charges": [
+      {
+        "chargeCode": "bandwidth_fee",
+        "chargeName": "Bandwidth Fee",
+        "chargeType": "mrc",
+        "pricingMethod": "tiered",
+        "unitPrice": 0,
+        "quantity": 0,
+        "totalPrice": 0,
+        "currencyCode": "USD",
+        "listUnitPrice": 0,
+        "listTotalPrice": 0,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 0,
+            "unitPriceAfter": 0,
+            "delta": 0
+          }
+        ],
+        "standardUnitPrice": 0,
+        "standardTotalPrice": 0,
+        "adjustmentErrors": []
+      }
+    ],
+    "adjustmentErrors": [],
+    "pricingSummary": {
+      "listNrcTotal": 0,
+      "listMrcTotal": 0,
+      "standardNrcTotal": 0,
+      "standardMrcTotal": 0,
+      "ruleDiscountTotal": 0,
+      "manualDiscountTotal": 0,
+      "dealValue": {
+        "list": 0,
+        "standard": 0,
+        "offer": 0
+      },
+      "discountDepth": {
+        "rule": null,
+        "manual": null,
+        "total": null,
+        "maxLineManual": null
+      },
+      "hasTimeBasedAdjustments": false,
+      "snapshotHash": "a3660c4b2535f154dff66a36fb065155e19a66e2210f127421b49eaa44846208"
+    },
+    "snapshotHash": "a3660c4b2535f154dff66a36fb065155e19a66e2210f127421b49eaa44846208"
+  },
+  {
+    "name": "gix mobile peering 300 Mb",
+    "listCharges": [
+      {
+        "chargeCode": "bandwidth_fee",
+        "chargeName": "Bandwidth Fee",
+        "chargeType": "mrc",
+        "pricingMethod": "tiered",
+        "unitPrice": 0.9285000000000001,
+        "quantity": 300,
+        "totalPrice": 278.55,
+        "currencyCode": "USD",
+        "breakdown": {
+          "tiers": [
+            {
+              "tier": 0,
+              "from": 1,
+              "to": 50,
+              "pricePerUnit": 1.23,
+              "quantity": 50,
+              "subtotal": 61.5
+            },
+            {
+              "tier": 1,
+              "from": 51,
+              "to": 100,
+              "pricePerUnit": 1.11,
+              "quantity": 50,
+              "subtotal": 55.50000000000001
+            },
+            {
+              "tier": 2,
+              "from": 101,
+              "to": 250,
+              "pricePerUnit": 1,
+              "quantity": 150,
+              "subtotal": 150
+            },
+            {
+              "tier": 3,
+              "from": 251,
+              "to": 300,
+              "pricePerUnit": 0.85,
+              "quantity": 50,
+              "subtotal": 42.5
+            }
+          ]
+        },
+        "listUnitPrice": 1.0316666666666667,
+        "listTotalPrice": 309.5,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 1.0316666666666667,
+            "unitPriceAfter": 0.9285000000000001,
+            "delta": -0.10316666666666663
+          }
+        ],
+        "standardUnitPrice": 0.9285000000000001,
+        "standardTotalPrice": 278.55
+      }
+    ],
+    "charges": [
+      {
+        "chargeCode": "bandwidth_fee",
+        "chargeName": "Bandwidth Fee",
+        "chargeType": "mrc",
+        "pricingMethod": "tiered",
+        "unitPrice": 0.9285000000000001,
+        "quantity": 300,
+        "totalPrice": 278.55,
+        "currencyCode": "USD",
+        "breakdown": {
+          "tiers": [
+            {
+              "tier": 0,
+              "from": 1,
+              "to": 50,
+              "pricePerUnit": 1.23,
+              "quantity": 50,
+              "subtotal": 61.5
+            },
+            {
+              "tier": 1,
+              "from": 51,
+              "to": 100,
+              "pricePerUnit": 1.11,
+              "quantity": 50,
+              "subtotal": 55.50000000000001
+            },
+            {
+              "tier": 2,
+              "from": 101,
+              "to": 250,
+              "pricePerUnit": 1,
+              "quantity": 150,
+              "subtotal": 150
+            },
+            {
+              "tier": 3,
+              "from": 251,
+              "to": 300,
+              "pricePerUnit": 0.85,
+              "quantity": 50,
+              "subtotal": 42.5
+            }
+          ]
+        },
+        "listUnitPrice": 1.0316666666666667,
+        "listTotalPrice": 309.5,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 1.0316666666666667,
+            "unitPriceAfter": 0.9285000000000001,
+            "delta": -0.10316666666666663
+          }
+        ],
+        "standardUnitPrice": 0.9285000000000001,
+        "standardTotalPrice": 278.55,
+        "adjustmentErrors": []
+      }
+    ],
+    "adjustmentErrors": [],
+    "pricingSummary": {
+      "listNrcTotal": 0,
+      "listMrcTotal": 309.5,
+      "standardNrcTotal": 0,
+      "standardMrcTotal": 278.55,
+      "ruleDiscountTotal": 30.94999999999999,
+      "manualDiscountTotal": 0,
+      "dealValue": {
+        "list": 3714,
+        "standard": 3342.6000000000004,
+        "offer": 3342.6000000000004
+      },
+      "discountDepth": {
+        "rule": 0.09999999999999987,
+        "manual": 0,
+        "total": 0.09999999999999987,
+        "maxLineManual": 0
+      },
+      "hasTimeBasedAdjustments": false,
+      "snapshotHash": "5d1a13145006d38bcbb238cbbc466ef92cc396651f3597207c6283cdee025954"
+    },
+    "snapshotHash": "5d1a13145006d38bcbb238cbbc466ef92cc396651f3597207c6283cdee025954"
+  },
+  {
+    "name": "gix cloud connect flat (per_unit, applicability eq)",
+    "listCharges": [
+      {
+        "chargeCode": "flat_bandwidth_fee",
+        "chargeName": "Flat Bandwidth Fee",
+        "chargeType": "mrc",
+        "pricingMethod": "per_unit",
+        "unitPrice": 0.4446,
+        "quantity": 500,
+        "totalPrice": 222.3,
+        "currencyCode": "USD",
+        "listUnitPrice": 0.52,
+        "listTotalPrice": 260,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 0.52,
+            "unitPriceAfter": 0.468,
+            "delta": -0.05199999999999999
+          },
+          {
+            "origin": "rule",
+            "ruleCode": "cloud-connect-5pct-off",
+            "ruleName": "Cloud Connect Promo — 5% Off",
+            "ruleType": "discount_percent",
+            "value": 5,
+            "unitPriceBefore": 0.468,
+            "unitPriceAfter": 0.4446,
+            "delta": -0.023400000000000032
+          }
+        ],
+        "standardUnitPrice": 0.4446,
+        "standardTotalPrice": 222.3
+      }
+    ],
+    "charges": [
+      {
+        "chargeCode": "flat_bandwidth_fee",
+        "chargeName": "Flat Bandwidth Fee",
+        "chargeType": "mrc",
+        "pricingMethod": "per_unit",
+        "unitPrice": 0.4446,
+        "quantity": 500,
+        "totalPrice": 222.3,
+        "currencyCode": "USD",
+        "listUnitPrice": 0.52,
+        "listTotalPrice": 260,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 0.52,
+            "unitPriceAfter": 0.468,
+            "delta": -0.05199999999999999
+          },
+          {
+            "origin": "rule",
+            "ruleCode": "cloud-connect-5pct-off",
+            "ruleName": "Cloud Connect Promo — 5% Off",
+            "ruleType": "discount_percent",
+            "value": 5,
+            "unitPriceBefore": 0.468,
+            "unitPriceAfter": 0.4446,
+            "delta": -0.023400000000000032
+          }
+        ],
+        "standardUnitPrice": 0.4446,
+        "standardTotalPrice": 222.3,
+        "adjustmentErrors": []
+      }
+    ],
+    "adjustmentErrors": [],
+    "pricingSummary": {
+      "listNrcTotal": 0,
+      "listMrcTotal": 260,
+      "standardNrcTotal": 0,
+      "standardMrcTotal": 222.3,
+      "ruleDiscountTotal": 37.70000000000001,
+      "manualDiscountTotal": 0,
+      "dealValue": {
+        "list": 3120,
+        "standard": 2667.6000000000004,
+        "offer": 2667.6000000000004
+      },
+      "discountDepth": {
+        "rule": 0.1449999999999999,
+        "manual": 0,
+        "total": 0.1449999999999999,
+        "maxLineManual": 0
+      },
+      "hasTimeBasedAdjustments": false,
+      "snapshotHash": "6198dd251836b8f6b8f16f9c9e19166d0ec690f3585682efd16a0bb86dc00fc6"
+    },
+    "snapshotHash": "6198dd251836b8f6b8f16f9c9e19166d0ec690f3585682efd16a0bb86dc00fc6"
+  },
+  {
+    "name": "gix cloud connect burstable (per_unit + usage overage)",
+    "listCharges": [
+      {
+        "chargeCode": "commit_bandwidth_fee",
+        "chargeName": "Committed Bandwidth Fee",
+        "chargeType": "mrc",
+        "pricingMethod": "per_unit",
+        "unitPrice": 0.38475,
+        "quantity": 200,
+        "totalPrice": 76.95,
+        "currencyCode": "USD",
+        "listUnitPrice": 0.45,
+        "listTotalPrice": 90,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 0.45,
+            "unitPriceAfter": 0.405,
+            "delta": -0.044999999999999984
+          },
+          {
+            "origin": "rule",
+            "ruleCode": "cloud-connect-5pct-off",
+            "ruleName": "Cloud Connect Promo — 5% Off",
+            "ruleType": "discount_percent",
+            "value": 5,
+            "unitPriceBefore": 0.405,
+            "unitPriceAfter": 0.38475,
+            "delta": -0.020250000000000046
+          }
+        ],
+        "standardUnitPrice": 0.38475,
+        "standardTotalPrice": 76.95
+      },
+      {
+        "chargeCode": "overage_fee",
+        "chargeName": "Overage Fee",
+        "chargeType": "usage",
+        "pricingMethod": "per_unit",
+        "unitPrice": 0.6365,
+        "quantity": null,
+        "totalPrice": null,
+        "currencyCode": "USD",
+        "note": "Usage-based charge — billed on actual consumption.",
+        "listUnitPrice": 0.67,
+        "listTotalPrice": null,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "cloud-connect-5pct-off",
+            "ruleName": "Cloud Connect Promo — 5% Off",
+            "ruleType": "discount_percent",
+            "value": 5,
+            "unitPriceBefore": 0.67,
+            "unitPriceAfter": 0.6365,
+            "delta": -0.033500000000000085
+          }
+        ],
+        "standardUnitPrice": 0.6365,
+        "standardTotalPrice": null
+      }
+    ],
+    "charges": [
+      {
+        "chargeCode": "commit_bandwidth_fee",
+        "chargeName": "Committed Bandwidth Fee",
+        "chargeType": "mrc",
+        "pricingMethod": "per_unit",
+        "unitPrice": 0.38475,
+        "quantity": 200,
+        "totalPrice": 76.95,
+        "currencyCode": "USD",
+        "listUnitPrice": 0.45,
+        "listTotalPrice": 90,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 0.45,
+            "unitPriceAfter": 0.405,
+            "delta": -0.044999999999999984
+          },
+          {
+            "origin": "rule",
+            "ruleCode": "cloud-connect-5pct-off",
+            "ruleName": "Cloud Connect Promo — 5% Off",
+            "ruleType": "discount_percent",
+            "value": 5,
+            "unitPriceBefore": 0.405,
+            "unitPriceAfter": 0.38475,
+            "delta": -0.020250000000000046
+          }
+        ],
+        "standardUnitPrice": 0.38475,
+        "standardTotalPrice": 76.95,
+        "adjustmentErrors": []
+      },
+      {
+        "chargeCode": "overage_fee",
+        "chargeName": "Overage Fee",
+        "chargeType": "usage",
+        "pricingMethod": "per_unit",
+        "unitPrice": 0.6365,
+        "quantity": null,
+        "totalPrice": null,
+        "currencyCode": "USD",
+        "note": "Usage-based charge — billed on actual consumption.",
+        "listUnitPrice": 0.67,
+        "listTotalPrice": null,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "cloud-connect-5pct-off",
+            "ruleName": "Cloud Connect Promo — 5% Off",
+            "ruleType": "discount_percent",
+            "value": 5,
+            "unitPriceBefore": 0.67,
+            "unitPriceAfter": 0.6365,
+            "delta": -0.033500000000000085
+          }
+        ],
+        "standardUnitPrice": 0.6365,
+        "standardTotalPrice": null,
+        "adjustmentErrors": []
+      }
+    ],
+    "adjustmentErrors": [],
+    "pricingSummary": {
+      "listNrcTotal": 0,
+      "listMrcTotal": 90,
+      "standardNrcTotal": 0,
+      "standardMrcTotal": 76.95,
+      "ruleDiscountTotal": 13.050000000000006,
+      "manualDiscountTotal": 0,
+      "dealValue": {
+        "list": 1080,
+        "standard": 923.4000000000001,
+        "offer": 923.4000000000001
+      },
+      "discountDepth": {
+        "rule": 0.1449999999999999,
+        "manual": 0,
+        "total": 0.1449999999999999,
+        "maxLineManual": 0
+      },
+      "hasTimeBasedAdjustments": false,
+      "snapshotHash": "e8f0373837d936571c72546364c9d4781fd687d0e738d468fe2ad9e388273cb9"
+    },
+    "snapshotHash": "e8f0373837d936571c72546364c9d4781fd687d0e738d468fe2ad9e388273cb9"
+  },
+  {
+    "name": "gix cloud connect dimension miss",
+    "listCharges": [
+      {
+        "chargeCode": "flat_bandwidth_fee",
+        "chargeName": "Flat Bandwidth Fee",
+        "chargeType": "mrc",
+        "pricingMethod": "per_unit",
+        "unitPrice": 0,
+        "quantity": 1,
+        "totalPrice": 0,
+        "currencyCode": "USD",
+        "listUnitPrice": 0,
+        "listTotalPrice": 0,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 0,
+            "unitPriceAfter": 0,
+            "delta": 0
+          },
+          {
+            "origin": "rule",
+            "ruleCode": "cloud-connect-5pct-off",
+            "ruleName": "Cloud Connect Promo — 5% Off",
+            "ruleType": "discount_percent",
+            "value": 5,
+            "unitPriceBefore": 0,
+            "unitPriceAfter": 0,
+            "delta": 0
+          }
+        ],
+        "standardUnitPrice": 0,
+        "standardTotalPrice": 0
+      }
+    ],
+    "charges": [
+      {
+        "chargeCode": "flat_bandwidth_fee",
+        "chargeName": "Flat Bandwidth Fee",
+        "chargeType": "mrc",
+        "pricingMethod": "per_unit",
+        "unitPrice": 0,
+        "quantity": 1,
+        "totalPrice": 0,
+        "currencyCode": "USD",
+        "listUnitPrice": 0,
+        "listTotalPrice": 0,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 0,
+            "unitPriceAfter": 0,
+            "delta": 0
+          },
+          {
+            "origin": "rule",
+            "ruleCode": "cloud-connect-5pct-off",
+            "ruleName": "Cloud Connect Promo — 5% Off",
+            "ruleType": "discount_percent",
+            "value": 5,
+            "unitPriceBefore": 0,
+            "unitPriceAfter": 0,
+            "delta": 0
+          }
+        ],
+        "standardUnitPrice": 0,
+        "standardTotalPrice": 0,
+        "adjustmentErrors": []
+      }
+    ],
+    "adjustmentErrors": [],
+    "pricingSummary": {
+      "listNrcTotal": 0,
+      "listMrcTotal": 0,
+      "standardNrcTotal": 0,
+      "standardMrcTotal": 0,
+      "ruleDiscountTotal": 0,
+      "manualDiscountTotal": 0,
+      "dealValue": {
+        "list": 0,
+        "standard": 0,
+        "offer": 0
+      },
+      "discountDepth": {
+        "rule": null,
+        "manual": null,
+        "total": null,
+        "maxLineManual": null
+      },
+      "hasTimeBasedAdjustments": false,
+      "snapshotHash": "be8e78876222fd4451a88b1a4ad8beedde464da0b3c97e758c4fc369b9519d12"
+    },
+    "snapshotHash": "be8e78876222fd4451a88b1a4ad8beedde464da0b3c97e758c4fc369b9519d12"
+  },
+  {
+    "name": "puffin compute on demand (usage per_unit, unsupported \"in\" operator)",
+    "listCharges": [
+      {
+        "chargeCode": "compute_on_demand",
+        "chargeName": "Compute (on-demand, per hour)",
+        "chargeType": "usage",
+        "pricingMethod": "per_unit",
+        "unitPrice": 0.0333,
+        "quantity": null,
+        "totalPrice": null,
+        "currencyCode": "USD",
+        "note": "Usage-based charge — billed on actual consumption.",
+        "listUnitPrice": 0.0333,
+        "listTotalPrice": null,
+        "adjustments": [],
+        "standardUnitPrice": 0.0333,
+        "standardTotalPrice": null
+      }
+    ],
+    "charges": [
+      {
+        "chargeCode": "compute_on_demand",
+        "chargeName": "Compute (on-demand, per hour)",
+        "chargeType": "usage",
+        "pricingMethod": "per_unit",
+        "unitPrice": 0.0333,
+        "quantity": null,
+        "totalPrice": null,
+        "currencyCode": "USD",
+        "note": "Usage-based charge — billed on actual consumption.",
+        "listUnitPrice": 0.0333,
+        "listTotalPrice": null,
+        "adjustments": [],
+        "standardUnitPrice": 0.0333,
+        "standardTotalPrice": null,
+        "adjustmentErrors": []
+      }
+    ],
+    "adjustmentErrors": [],
+    "pricingSummary": {
+      "listNrcTotal": 0,
+      "listMrcTotal": 0,
+      "standardNrcTotal": 0,
+      "standardMrcTotal": 0,
+      "ruleDiscountTotal": 0,
+      "manualDiscountTotal": 0,
+      "dealValue": {
+        "list": 0,
+        "standard": 0,
+        "offer": 0
+      },
+      "discountDepth": {
+        "rule": null,
+        "manual": null,
+        "total": null,
+        "maxLineManual": null
+      },
+      "hasTimeBasedAdjustments": false,
+      "snapshotHash": "024db9ca523b9e91cb83f6f43f5efe006fea6d987b0a17d74c4c11c8b3d337a6"
+    },
+    "snapshotHash": "024db9ca523b9e91cb83f6f43f5efe006fea6d987b0a17d74c4c11c8b3d337a6"
+  },
+  {
+    "name": "puffin compute reserved 1y (per_unit mrc + rule)",
+    "listCharges": [
+      {
+        "chargeCode": "compute_on_demand",
+        "chargeName": "Compute (on-demand, per hour)",
+        "chargeType": "usage",
+        "pricingMethod": "per_unit",
+        "unitPrice": 1.45,
+        "quantity": null,
+        "totalPrice": null,
+        "currencyCode": "USD",
+        "note": "Usage-based charge — billed on actual consumption.",
+        "listUnitPrice": 1.45,
+        "listTotalPrice": null,
+        "adjustments": [],
+        "standardUnitPrice": 1.45,
+        "standardTotalPrice": null
+      },
+      {
+        "chargeCode": "compute_reserved_1y_mrc",
+        "chargeName": "Compute (reserved 1y, MRC)",
+        "chargeType": "mrc",
+        "pricingMethod": "per_unit",
+        "unitPrice": 1.0179,
+        "quantity": 730,
+        "totalPrice": 743.067,
+        "currencyCode": "USD",
+        "listUnitPrice": 1.45,
+        "listTotalPrice": 1058.5,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 1.45,
+            "unitPriceAfter": 1.305,
+            "delta": -0.14500000000000002
+          },
+          {
+            "origin": "rule",
+            "ruleCode": "puffin-reserved-1y-compute",
+            "ruleName": "Reserved 1y",
+            "ruleType": "discount_percent",
+            "value": 22,
+            "unitPriceBefore": 1.305,
+            "unitPriceAfter": 1.0179,
+            "delta": -0.2870999999999999
+          }
+        ],
+        "standardUnitPrice": 1.0179,
+        "standardTotalPrice": 743.067
+      }
+    ],
+    "charges": [
+      {
+        "chargeCode": "compute_on_demand",
+        "chargeName": "Compute (on-demand, per hour)",
+        "chargeType": "usage",
+        "pricingMethod": "per_unit",
+        "unitPrice": 1.45,
+        "quantity": null,
+        "totalPrice": null,
+        "currencyCode": "USD",
+        "note": "Usage-based charge — billed on actual consumption.",
+        "listUnitPrice": 1.45,
+        "listTotalPrice": null,
+        "adjustments": [],
+        "standardUnitPrice": 1.45,
+        "standardTotalPrice": null,
+        "adjustmentErrors": []
+      },
+      {
+        "chargeCode": "compute_reserved_1y_mrc",
+        "chargeName": "Compute (reserved 1y, MRC)",
+        "chargeType": "mrc",
+        "pricingMethod": "per_unit",
+        "unitPrice": 1.0179,
+        "quantity": 730,
+        "totalPrice": 743.067,
+        "currencyCode": "USD",
+        "listUnitPrice": 1.45,
+        "listTotalPrice": 1058.5,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 1.45,
+            "unitPriceAfter": 1.305,
+            "delta": -0.14500000000000002
+          },
+          {
+            "origin": "rule",
+            "ruleCode": "puffin-reserved-1y-compute",
+            "ruleName": "Reserved 1y",
+            "ruleType": "discount_percent",
+            "value": 22,
+            "unitPriceBefore": 1.305,
+            "unitPriceAfter": 1.0179,
+            "delta": -0.2870999999999999
+          }
+        ],
+        "standardUnitPrice": 1.0179,
+        "standardTotalPrice": 743.067,
+        "adjustmentErrors": []
+      }
+    ],
+    "adjustmentErrors": [],
+    "pricingSummary": {
+      "listNrcTotal": 0,
+      "listMrcTotal": 1058.5,
+      "standardNrcTotal": 0,
+      "standardMrcTotal": 743.067,
+      "ruleDiscountTotal": 315.43299999999994,
+      "manualDiscountTotal": 0,
+      "dealValue": {
+        "list": 12702,
+        "standard": 8916.804,
+        "offer": 8916.804
+      },
+      "discountDepth": {
+        "rule": 0.29800000000000004,
+        "manual": 0,
+        "total": 0.29800000000000004,
+        "maxLineManual": 0
+      },
+      "hasTimeBasedAdjustments": false,
+      "snapshotHash": "c420ac88708b8867bb998d5085ccb7ec6072f1caf902792556dea1575a34f11b"
+    },
+    "snapshotHash": "c420ac88708b8867bb998d5085ccb7ec6072f1caf902792556dea1575a34f11b"
+  },
+  {
+    "name": "puffin cdn egress 60000 gb (tiered usage + fixed mrc)",
+    "listCharges": [
+      {
+        "chargeCode": "cdn_egress",
+        "chargeName": "CDN Egress (tiered)",
+        "chargeType": "usage",
+        "pricingMethod": "tiered",
+        "unitPrice": 0.07,
+        "quantity": 60000,
+        "totalPrice": 4200,
+        "currencyCode": "USD",
+        "breakdown": {
+          "tiers": [
+            {
+              "tier": 0,
+              "from": 1,
+              "to": 10000,
+              "pricePerUnit": 0.085,
+              "quantity": 10000,
+              "subtotal": 850.0000000000001
+            },
+            {
+              "tier": 1,
+              "from": 10001,
+              "to": 50000,
+              "pricePerUnit": 0.07,
+              "quantity": 40000,
+              "subtotal": 2800.0000000000005
+            },
+            {
+              "tier": 2,
+              "from": 50001,
+              "to": 60000,
+              "pricePerUnit": 0.055,
+              "quantity": 10000,
+              "subtotal": 550
+            }
+          ]
+        },
+        "listUnitPrice": 0.07,
+        "listTotalPrice": 4200,
+        "adjustments": [],
+        "standardUnitPrice": 0.07,
+        "standardTotalPrice": 4200
+      },
+      {
+        "chargeCode": "cdn_platform_fee",
+        "chargeName": "CDN Platform Fee",
+        "chargeType": "mrc",
+        "pricingMethod": "flat",
+        "unitPrice": 22.5,
+        "quantity": 1,
+        "totalPrice": 22.5,
+        "currencyCode": "USD",
+        "listUnitPrice": 25,
+        "listTotalPrice": 25,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 25,
+            "unitPriceAfter": 22.5,
+            "delta": -2.5
+          }
+        ],
+        "standardUnitPrice": 22.5,
+        "standardTotalPrice": 22.5
+      },
+      {
+        "chargeCode": "cdn_waf_fee",
+        "chargeName": "CDN WAF Fee",
+        "chargeType": "mrc",
+        "pricingMethod": "flat",
+        "unitPrice": 45,
+        "quantity": 1,
+        "totalPrice": 45,
+        "currencyCode": "USD",
+        "listUnitPrice": 50,
+        "listTotalPrice": 50,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 50,
+            "unitPriceAfter": 45,
+            "delta": -5
+          }
+        ],
+        "standardUnitPrice": 45,
+        "standardTotalPrice": 45
+      }
+    ],
+    "charges": [
+      {
+        "chargeCode": "cdn_egress",
+        "chargeName": "CDN Egress (tiered)",
+        "chargeType": "usage",
+        "pricingMethod": "tiered",
+        "unitPrice": 0.07,
+        "quantity": 60000,
+        "totalPrice": 4200,
+        "currencyCode": "USD",
+        "breakdown": {
+          "tiers": [
+            {
+              "tier": 0,
+              "from": 1,
+              "to": 10000,
+              "pricePerUnit": 0.085,
+              "quantity": 10000,
+              "subtotal": 850.0000000000001
+            },
+            {
+              "tier": 1,
+              "from": 10001,
+              "to": 50000,
+              "pricePerUnit": 0.07,
+              "quantity": 40000,
+              "subtotal": 2800.0000000000005
+            },
+            {
+              "tier": 2,
+              "from": 50001,
+              "to": 60000,
+              "pricePerUnit": 0.055,
+              "quantity": 10000,
+              "subtotal": 550
+            }
+          ]
+        },
+        "listUnitPrice": 0.07,
+        "listTotalPrice": 4200,
+        "adjustments": [],
+        "standardUnitPrice": 0.07,
+        "standardTotalPrice": 4200,
+        "adjustmentErrors": []
+      },
+      {
+        "chargeCode": "cdn_platform_fee",
+        "chargeName": "CDN Platform Fee",
+        "chargeType": "mrc",
+        "pricingMethod": "flat",
+        "unitPrice": 22.5,
+        "quantity": 1,
+        "totalPrice": 22.5,
+        "currencyCode": "USD",
+        "listUnitPrice": 25,
+        "listTotalPrice": 25,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 25,
+            "unitPriceAfter": 22.5,
+            "delta": -2.5
+          }
+        ],
+        "standardUnitPrice": 22.5,
+        "standardTotalPrice": 22.5,
+        "adjustmentErrors": []
+      },
+      {
+        "chargeCode": "cdn_waf_fee",
+        "chargeName": "CDN WAF Fee",
+        "chargeType": "mrc",
+        "pricingMethod": "flat",
+        "unitPrice": 45,
+        "quantity": 1,
+        "totalPrice": 45,
+        "currencyCode": "USD",
+        "listUnitPrice": 50,
+        "listTotalPrice": 50,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 50,
+            "unitPriceAfter": 45,
+            "delta": -5
+          }
+        ],
+        "standardUnitPrice": 45,
+        "standardTotalPrice": 45,
+        "adjustmentErrors": []
+      }
+    ],
+    "adjustmentErrors": [],
+    "pricingSummary": {
+      "listNrcTotal": 0,
+      "listMrcTotal": 75,
+      "standardNrcTotal": 0,
+      "standardMrcTotal": 67.5,
+      "ruleDiscountTotal": 7.5,
+      "manualDiscountTotal": 0,
+      "dealValue": {
+        "list": 900,
+        "standard": 810,
+        "offer": 810
+      },
+      "discountDepth": {
+        "rule": 0.09999999999999998,
+        "manual": 0,
+        "total": 0.09999999999999998,
+        "maxLineManual": 0
+      },
+      "hasTimeBasedAdjustments": false,
+      "snapshotHash": "5c712fa7ea11bc9ffb2530674bfab873f19b735a7f054d9c9269f1da1c66c28d"
+    },
+    "snapshotHash": "5c712fa7ea11bc9ffb2530674bfab873f19b735a7f054d9c9269f1da1c66c28d"
+  },
+  {
+    "name": "puffin workspace 40 seats (per_unit, 1-dim, volume rule, fixed nrc)",
+    "listCharges": [
+      {
+        "chargeCode": "OFFER-PUFFIN-WORKSPACE-TEAM_mrc",
+        "chargeName": "Workspace Team — per seat",
+        "chargeType": "mrc",
+        "pricingMethod": "per_unit",
+        "unitPrice": 10.26,
+        "quantity": 40,
+        "totalPrice": 410.4,
+        "currencyCode": "USD",
+        "listUnitPrice": 12,
+        "listTotalPrice": 480,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "puffin-ws-volume-tier1",
+            "ruleName": "Workspace seats tier 1",
+            "ruleType": "discount_percent",
+            "value": 5,
+            "unitPriceBefore": 12,
+            "unitPriceAfter": 11.399999999999999,
+            "delta": -0.6000000000000014
+          },
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 11.399999999999999,
+            "unitPriceAfter": 10.26,
+            "delta": -1.1399999999999988
+          }
+        ],
+        "standardUnitPrice": 10.26,
+        "standardTotalPrice": 410.4
+      },
+      {
+        "chargeCode": "OFFER-PUFFIN-WORKSPACE-TEAM_setup",
+        "chargeName": "Workspace Setup",
+        "chargeType": "nrc",
+        "pricingMethod": "flat",
+        "unitPrice": 94.05,
+        "quantity": 1,
+        "totalPrice": 94.05,
+        "currencyCode": "USD",
+        "listUnitPrice": 99,
+        "listTotalPrice": 99,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "puffin-ws-volume-tier1",
+            "ruleName": "Workspace seats tier 1",
+            "ruleType": "discount_percent",
+            "value": 5,
+            "unitPriceBefore": 99,
+            "unitPriceAfter": 94.05,
+            "delta": -4.950000000000003
+          }
+        ],
+        "standardUnitPrice": 94.05,
+        "standardTotalPrice": 94.05
+      }
+    ],
+    "charges": [
+      {
+        "chargeCode": "OFFER-PUFFIN-WORKSPACE-TEAM_mrc",
+        "chargeName": "Workspace Team — per seat",
+        "chargeType": "mrc",
+        "pricingMethod": "per_unit",
+        "unitPrice": 10.26,
+        "quantity": 40,
+        "totalPrice": 410.4,
+        "currencyCode": "USD",
+        "listUnitPrice": 12,
+        "listTotalPrice": 480,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "puffin-ws-volume-tier1",
+            "ruleName": "Workspace seats tier 1",
+            "ruleType": "discount_percent",
+            "value": 5,
+            "unitPriceBefore": 12,
+            "unitPriceAfter": 11.399999999999999,
+            "delta": -0.6000000000000014
+          },
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 11.399999999999999,
+            "unitPriceAfter": 10.26,
+            "delta": -1.1399999999999988
+          }
+        ],
+        "standardUnitPrice": 10.26,
+        "standardTotalPrice": 410.4,
+        "adjustmentErrors": []
+      },
+      {
+        "chargeCode": "OFFER-PUFFIN-WORKSPACE-TEAM_setup",
+        "chargeName": "Workspace Setup",
+        "chargeType": "nrc",
+        "pricingMethod": "flat",
+        "unitPrice": 94.05,
+        "quantity": 1,
+        "totalPrice": 94.05,
+        "currencyCode": "USD",
+        "listUnitPrice": 99,
+        "listTotalPrice": 99,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "puffin-ws-volume-tier1",
+            "ruleName": "Workspace seats tier 1",
+            "ruleType": "discount_percent",
+            "value": 5,
+            "unitPriceBefore": 99,
+            "unitPriceAfter": 94.05,
+            "delta": -4.950000000000003
+          }
+        ],
+        "standardUnitPrice": 94.05,
+        "standardTotalPrice": 94.05,
+        "adjustmentErrors": []
+      }
+    ],
+    "adjustmentErrors": [],
+    "pricingSummary": {
+      "listNrcTotal": 99,
+      "listMrcTotal": 480,
+      "standardNrcTotal": 94.05,
+      "standardMrcTotal": 410.4,
+      "ruleDiscountTotal": 74.55000000000001,
+      "manualDiscountTotal": 0,
+      "dealValue": {
+        "list": 5859,
+        "standard": 5018.849999999999,
+        "offer": 5018.849999999999
+      },
+      "discountDepth": {
+        "rule": 0.14339477726574512,
+        "manual": 0,
+        "total": 0.14339477726574512,
+        "maxLineManual": 0
+      },
+      "hasTimeBasedAdjustments": false,
+      "snapshotHash": "1476aedc166dd3f4773a657aae8e99b8549cbb53e056136d74655dfc86814e4c"
+    },
+    "snapshotHash": "1476aedc166dd3f4773a657aae8e99b8549cbb53e056136d74655dfc86814e4c"
+  },
+  {
+    "name": "puffin object storage (fixed per_unit usage, absolute rule)",
+    "listCharges": [
+      {
+        "chargeCode": "object_storage_stored",
+        "chargeName": "Stored",
+        "chargeType": "usage",
+        "pricingMethod": "per_unit",
+        "unitPrice": 0.019600000000000003,
+        "quantity": 500,
+        "totalPrice": 10,
+        "currencyCode": "USD",
+        "listUnitPrice": 0.02,
+        "listTotalPrice": 10,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "puffin-api-free-tier",
+            "ruleName": "Free tier",
+            "ruleType": "discount_absolute",
+            "value": 0.2,
+            "unitPriceBefore": 0.02,
+            "unitPriceAfter": 0.019600000000000003,
+            "delta": -0.0003999999999999976
+          }
+        ],
+        "standardUnitPrice": 0.019600000000000003,
+        "standardTotalPrice": 10
+      },
+      {
+        "chargeCode": "object_storage_platform",
+        "chargeName": "Platform",
+        "chargeType": "mrc",
+        "pricingMethod": "flat",
+        "unitPrice": 0,
+        "quantity": 1,
+        "totalPrice": 0,
+        "currencyCode": "USD",
+        "listUnitPrice": 0,
+        "listTotalPrice": 0,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 0,
+            "unitPriceAfter": 0,
+            "delta": 0
+          }
+        ],
+        "standardUnitPrice": 0,
+        "standardTotalPrice": 0
+      }
+    ],
+    "charges": [
+      {
+        "chargeCode": "object_storage_stored",
+        "chargeName": "Stored",
+        "chargeType": "usage",
+        "pricingMethod": "per_unit",
+        "unitPrice": 0.019600000000000003,
+        "quantity": 500,
+        "totalPrice": 10,
+        "currencyCode": "USD",
+        "listUnitPrice": 0.02,
+        "listTotalPrice": 10,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "puffin-api-free-tier",
+            "ruleName": "Free tier",
+            "ruleType": "discount_absolute",
+            "value": 0.2,
+            "unitPriceBefore": 0.02,
+            "unitPriceAfter": 0.019600000000000003,
+            "delta": -0.0003999999999999976
+          }
+        ],
+        "standardUnitPrice": 0.019600000000000003,
+        "standardTotalPrice": 10,
+        "adjustmentErrors": []
+      },
+      {
+        "chargeCode": "object_storage_platform",
+        "chargeName": "Platform",
+        "chargeType": "mrc",
+        "pricingMethod": "flat",
+        "unitPrice": 0,
+        "quantity": 1,
+        "totalPrice": 0,
+        "currencyCode": "USD",
+        "listUnitPrice": 0,
+        "listTotalPrice": 0,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 0,
+            "unitPriceAfter": 0,
+            "delta": 0
+          }
+        ],
+        "standardUnitPrice": 0,
+        "standardTotalPrice": 0,
+        "adjustmentErrors": []
+      }
+    ],
+    "adjustmentErrors": [],
+    "pricingSummary": {
+      "listNrcTotal": 0,
+      "listMrcTotal": 0,
+      "standardNrcTotal": 0,
+      "standardMrcTotal": 0,
+      "ruleDiscountTotal": 0,
+      "manualDiscountTotal": 0,
+      "dealValue": {
+        "list": 0,
+        "standard": 0,
+        "offer": 0
+      },
+      "discountDepth": {
+        "rule": null,
+        "manual": null,
+        "total": null,
+        "maxLineManual": null
+      },
+      "hasTimeBasedAdjustments": false,
+      "snapshotHash": "e06e344028749e00de2948833669e7e51eae082c800cf3263768c28ed897ddd9"
+    },
+    "snapshotHash": "e06e344028749e00de2948833669e7e51eae082c800cf3263768c28ed897ddd9"
+  },
+  {
+    "name": "puffin managed db postgres md HA1 + vpc + replicas (3-dim flat, fixed, overrides, surcharge)",
+    "listCharges": [
+      {
+        "chargeCode": "db_base_mrc",
+        "chargeName": "Database Base MRC",
+        "chargeType": "mrc",
+        "pricingMethod": "flat",
+        "unitPrice": 113.4,
+        "quantity": 1,
+        "totalPrice": 113.4,
+        "currencyCode": "USD",
+        "listUnitPrice": 120,
+        "listTotalPrice": 120,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 120,
+            "unitPriceAfter": 108,
+            "delta": -12
+          },
+          {
+            "origin": "rule",
+            "ruleCode": "puffin-db-backup-retention-14",
+            "ruleName": "Retention 14d",
+            "ruleType": "surcharge_percent",
+            "value": 5,
+            "unitPriceBefore": 108,
+            "unitPriceAfter": 113.4,
+            "delta": 5.400000000000006
+          }
+        ],
+        "standardUnitPrice": 113.4,
+        "standardTotalPrice": 113.4
+      },
+      {
+        "chargeCode": "db_vpc_peering",
+        "chargeName": "VPC Peering",
+        "chargeType": "mrc",
+        "pricingMethod": "flat",
+        "unitPrice": 18,
+        "quantity": 1,
+        "totalPrice": 18,
+        "currencyCode": "USD",
+        "listUnitPrice": 20,
+        "listTotalPrice": 20,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 20,
+            "unitPriceAfter": 18,
+            "delta": -2
+          }
+        ],
+        "standardUnitPrice": 18,
+        "standardTotalPrice": 18
+      },
+      {
+        "chargeCode": "db_read_replicas",
+        "chargeName": "Read Replicas",
+        "chargeType": "mrc",
+        "pricingMethod": "per_unit",
+        "unitPrice": 32.4,
+        "quantity": 2,
+        "totalPrice": 64.8,
+        "currencyCode": "USD",
+        "listUnitPrice": 0,
+        "listTotalPrice": 0,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "puffin-db-read-replica-rate",
+            "ruleName": "Replica rate",
+            "ruleType": "price_override",
+            "value": 36,
+            "unitPriceBefore": 0,
+            "unitPriceAfter": 36,
+            "delta": 36
+          },
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 36,
+            "unitPriceAfter": 32.4,
+            "delta": -3.6000000000000014
+          }
+        ],
+        "standardUnitPrice": 32.4,
+        "standardTotalPrice": 64.8
+      }
+    ],
+    "charges": [
+      {
+        "chargeCode": "db_base_mrc",
+        "chargeName": "Database Base MRC",
+        "chargeType": "mrc",
+        "pricingMethod": "flat",
+        "unitPrice": 113.4,
+        "quantity": 1,
+        "totalPrice": 113.4,
+        "currencyCode": "USD",
+        "listUnitPrice": 120,
+        "listTotalPrice": 120,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 120,
+            "unitPriceAfter": 108,
+            "delta": -12
+          },
+          {
+            "origin": "rule",
+            "ruleCode": "puffin-db-backup-retention-14",
+            "ruleName": "Retention 14d",
+            "ruleType": "surcharge_percent",
+            "value": 5,
+            "unitPriceBefore": 108,
+            "unitPriceAfter": 113.4,
+            "delta": 5.400000000000006
+          }
+        ],
+        "standardUnitPrice": 113.4,
+        "standardTotalPrice": 113.4,
+        "adjustmentErrors": []
+      },
+      {
+        "chargeCode": "db_vpc_peering",
+        "chargeName": "VPC Peering",
+        "chargeType": "mrc",
+        "pricingMethod": "flat",
+        "unitPrice": 18,
+        "quantity": 1,
+        "totalPrice": 18,
+        "currencyCode": "USD",
+        "listUnitPrice": 20,
+        "listTotalPrice": 20,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 20,
+            "unitPriceAfter": 18,
+            "delta": -2
+          }
+        ],
+        "standardUnitPrice": 18,
+        "standardTotalPrice": 18,
+        "adjustmentErrors": []
+      },
+      {
+        "chargeCode": "db_read_replicas",
+        "chargeName": "Read Replicas",
+        "chargeType": "mrc",
+        "pricingMethod": "per_unit",
+        "unitPrice": 32.4,
+        "quantity": 2,
+        "totalPrice": 64.8,
+        "currencyCode": "USD",
+        "listUnitPrice": 0,
+        "listTotalPrice": 0,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "puffin-db-read-replica-rate",
+            "ruleName": "Replica rate",
+            "ruleType": "price_override",
+            "value": 36,
+            "unitPriceBefore": 0,
+            "unitPriceAfter": 36,
+            "delta": 36
+          },
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 36,
+            "unitPriceAfter": 32.4,
+            "delta": -3.6000000000000014
+          }
+        ],
+        "standardUnitPrice": 32.4,
+        "standardTotalPrice": 64.8,
+        "adjustmentErrors": []
+      }
+    ],
+    "adjustmentErrors": [],
+    "pricingSummary": {
+      "listNrcTotal": 0,
+      "listMrcTotal": 420,
+      "standardNrcTotal": 0,
+      "standardMrcTotal": 588.6,
+      "ruleDiscountTotal": 63.60000000000001,
+      "manualDiscountTotal": 0,
+      "dealValue": {
+        "list": 5040,
+        "standard": 7063.200000000001,
+        "offer": 7063.200000000001
+      },
+      "discountDepth": {
+        "rule": -0.40142857142857147,
+        "manual": 0,
+        "total": -0.40142857142857147,
+        "maxLineManual": 0
+      },
+      "hasTimeBasedAdjustments": false,
+      "snapshotHash": "24c6b0c954dabb0ec47f3f886333e4f2b8a11d69c5f986448cb0e1fcdd262b9e"
+    },
+    "snapshotHash": "24c6b0c954dabb0ec47f3f886333e4f2b8a11d69c5f986448cb0e1fcdd262b9e"
+  },
+  {
+    "name": "puffin managed db without vpc",
+    "listCharges": [
+      {
+        "chargeCode": "db_base_mrc",
+        "chargeName": "Database Base MRC",
+        "chargeType": "mrc",
+        "pricingMethod": "flat",
+        "unitPrice": 19.8,
+        "quantity": 1,
+        "totalPrice": 19.8,
+        "currencyCode": "USD",
+        "listUnitPrice": 22,
+        "listTotalPrice": 22,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 22,
+            "unitPriceAfter": 19.8,
+            "delta": -2.1999999999999993
+          }
+        ],
+        "standardUnitPrice": 19.8,
+        "standardTotalPrice": 19.8
+      },
+      {
+        "chargeCode": "db_read_replicas",
+        "chargeName": "Read Replicas",
+        "chargeType": "mrc",
+        "pricingMethod": "per_unit",
+        "unitPrice": 32.4,
+        "quantity": 0,
+        "totalPrice": 0,
+        "currencyCode": "USD",
+        "listUnitPrice": 0,
+        "listTotalPrice": 0,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "puffin-db-read-replica-rate",
+            "ruleName": "Replica rate",
+            "ruleType": "price_override",
+            "value": 36,
+            "unitPriceBefore": 0,
+            "unitPriceAfter": 36,
+            "delta": 36
+          },
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 36,
+            "unitPriceAfter": 32.4,
+            "delta": -3.6000000000000014
+          }
+        ],
+        "standardUnitPrice": 32.4,
+        "standardTotalPrice": 0
+      }
+    ],
+    "charges": [
+      {
+        "chargeCode": "db_base_mrc",
+        "chargeName": "Database Base MRC",
+        "chargeType": "mrc",
+        "pricingMethod": "flat",
+        "unitPrice": 19.8,
+        "quantity": 1,
+        "totalPrice": 19.8,
+        "currencyCode": "USD",
+        "listUnitPrice": 22,
+        "listTotalPrice": 22,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 22,
+            "unitPriceAfter": 19.8,
+            "delta": -2.1999999999999993
+          }
+        ],
+        "standardUnitPrice": 19.8,
+        "standardTotalPrice": 19.8,
+        "adjustmentErrors": []
+      },
+      {
+        "chargeCode": "db_read_replicas",
+        "chargeName": "Read Replicas",
+        "chargeType": "mrc",
+        "pricingMethod": "per_unit",
+        "unitPrice": 32.4,
+        "quantity": 0,
+        "totalPrice": 0,
+        "currencyCode": "USD",
+        "listUnitPrice": 0,
+        "listTotalPrice": 0,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "puffin-db-read-replica-rate",
+            "ruleName": "Replica rate",
+            "ruleType": "price_override",
+            "value": 36,
+            "unitPriceBefore": 0,
+            "unitPriceAfter": 36,
+            "delta": 36
+          },
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 36,
+            "unitPriceAfter": 32.4,
+            "delta": -3.6000000000000014
+          }
+        ],
+        "standardUnitPrice": 32.4,
+        "standardTotalPrice": 0,
+        "adjustmentErrors": []
+      }
+    ],
+    "adjustmentErrors": [],
+    "pricingSummary": {
+      "listNrcTotal": 0,
+      "listMrcTotal": 22,
+      "standardNrcTotal": 0,
+      "standardMrcTotal": 19.8,
+      "ruleDiscountTotal": 2.1999999999999993,
+      "manualDiscountTotal": 0,
+      "dealValue": {
+        "list": 264,
+        "standard": 237.60000000000002,
+        "offer": 237.60000000000002
+      },
+      "discountDepth": {
+        "rule": 0.09999999999999987,
+        "manual": 0,
+        "total": 0.09999999999999987,
+        "maxLineManual": 0
+      },
+      "hasTimeBasedAdjustments": false,
+      "snapshotHash": "174a48048750313b72a8be991236dc95cc0453f0b971f49ffda41a016af000fd"
+    },
+    "snapshotHash": "174a48048750313b72a8be991236dc95cc0453f0b971f49ffda41a016af000fd"
+  },
+  {
+    "name": "synthetic volume eu 150 units (volume mid tier, tiered multi-dim, surcharge rule)",
+    "listCharges": [
+      {
+        "chargeCode": "volume_fee",
+        "chargeName": "Volume Fee",
+        "chargeType": "mrc",
+        "pricingMethod": "volume",
+        "unitPrice": 0.7920000000000001,
+        "quantity": 150,
+        "totalPrice": 118.80000000000003,
+        "currencyCode": "USD",
+        "listUnitPrice": 0.8,
+        "listTotalPrice": 120,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "synthetic-surcharge-pct",
+            "ruleName": "Synthetic surcharge",
+            "ruleType": "surcharge_percent",
+            "value": 10,
+            "unitPriceBefore": 0.8,
+            "unitPriceAfter": 0.8800000000000001,
+            "delta": 0.08000000000000007
+          },
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 0.8800000000000001,
+            "unitPriceAfter": 0.7920000000000001,
+            "delta": -0.08799999999999997
+          }
+        ],
+        "standardUnitPrice": 0.7920000000000001,
+        "standardTotalPrice": 118.80000000000003
+      },
+      {
+        "chargeCode": "volume_usage",
+        "chargeName": "Volume Usage",
+        "chargeType": "usage",
+        "pricingMethod": "volume",
+        "unitPrice": 0.8,
+        "quantity": 150,
+        "totalPrice": 120,
+        "currencyCode": "USD",
+        "listUnitPrice": 0.8,
+        "listTotalPrice": 120,
+        "adjustments": [],
+        "standardUnitPrice": 0.8,
+        "standardTotalPrice": 120
+      },
+      {
+        "chargeCode": "tiered_fee",
+        "chargeName": "Tiered Fee",
+        "chargeType": "mrc",
+        "pricingMethod": "tiered",
+        "unitPrice": 2.82,
+        "quantity": 150,
+        "totalPrice": 423,
+        "currencyCode": "USD",
+        "breakdown": {
+          "tiers": [
+            {
+              "tier": 0,
+              "from": 1,
+              "to": 10,
+              "pricePerUnit": 5,
+              "quantity": 10,
+              "subtotal": 50
+            },
+            {
+              "tier": 1,
+              "from": 11,
+              "to": 150,
+              "pricePerUnit": 3,
+              "quantity": 140,
+              "subtotal": 420
+            }
+          ]
+        },
+        "listUnitPrice": 3.1333333333333333,
+        "listTotalPrice": 470,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 3.1333333333333333,
+            "unitPriceAfter": 2.82,
+            "delta": -0.31333333333333346
+          }
+        ],
+        "standardUnitPrice": 2.82,
+        "standardTotalPrice": 423
+      }
+    ],
+    "charges": [
+      {
+        "chargeCode": "volume_fee",
+        "chargeName": "Volume Fee",
+        "chargeType": "mrc",
+        "pricingMethod": "volume",
+        "unitPrice": 0.7920000000000001,
+        "quantity": 150,
+        "totalPrice": 118.80000000000003,
+        "currencyCode": "USD",
+        "listUnitPrice": 0.8,
+        "listTotalPrice": 120,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "synthetic-surcharge-pct",
+            "ruleName": "Synthetic surcharge",
+            "ruleType": "surcharge_percent",
+            "value": 10,
+            "unitPriceBefore": 0.8,
+            "unitPriceAfter": 0.8800000000000001,
+            "delta": 0.08000000000000007
+          },
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 0.8800000000000001,
+            "unitPriceAfter": 0.7920000000000001,
+            "delta": -0.08799999999999997
+          }
+        ],
+        "standardUnitPrice": 0.7920000000000001,
+        "standardTotalPrice": 118.80000000000003,
+        "adjustmentErrors": []
+      },
+      {
+        "chargeCode": "volume_usage",
+        "chargeName": "Volume Usage",
+        "chargeType": "usage",
+        "pricingMethod": "volume",
+        "unitPrice": 0.8,
+        "quantity": 150,
+        "totalPrice": 120,
+        "currencyCode": "USD",
+        "listUnitPrice": 0.8,
+        "listTotalPrice": 120,
+        "adjustments": [],
+        "standardUnitPrice": 0.8,
+        "standardTotalPrice": 120,
+        "adjustmentErrors": []
+      },
+      {
+        "chargeCode": "tiered_fee",
+        "chargeName": "Tiered Fee",
+        "chargeType": "mrc",
+        "pricingMethod": "tiered",
+        "unitPrice": 2.82,
+        "quantity": 150,
+        "totalPrice": 423,
+        "currencyCode": "USD",
+        "breakdown": {
+          "tiers": [
+            {
+              "tier": 0,
+              "from": 1,
+              "to": 10,
+              "pricePerUnit": 5,
+              "quantity": 10,
+              "subtotal": 50
+            },
+            {
+              "tier": 1,
+              "from": 11,
+              "to": 150,
+              "pricePerUnit": 3,
+              "quantity": 140,
+              "subtotal": 420
+            }
+          ]
+        },
+        "listUnitPrice": 3.1333333333333333,
+        "listTotalPrice": 470,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 3.1333333333333333,
+            "unitPriceAfter": 2.82,
+            "delta": -0.31333333333333346
+          }
+        ],
+        "standardUnitPrice": 2.82,
+        "standardTotalPrice": 423,
+        "adjustmentErrors": []
+      }
+    ],
+    "adjustmentErrors": [],
+    "pricingSummary": {
+      "listNrcTotal": 0,
+      "listMrcTotal": 590,
+      "standardNrcTotal": 0,
+      "standardMrcTotal": 541.8000000000001,
+      "ruleDiscountTotal": 60.20000000000002,
+      "manualDiscountTotal": 0,
+      "dealValue": {
+        "list": 7080,
+        "standard": 6501.6,
+        "offer": 6501.6
+      },
+      "discountDepth": {
+        "rule": 0.08169491525423722,
+        "manual": 0,
+        "total": 0.08169491525423722,
+        "maxLineManual": 0
+      },
+      "hasTimeBasedAdjustments": false,
+      "snapshotHash": "3146246902a118a6bd98f5101cad7c883c6ab0f3c440c68ca5ec1a84112df660"
+    },
+    "snapshotHash": "3146246902a118a6bd98f5101cad7c883c6ab0f3c440c68ca5ec1a84112df660"
+  },
+  {
+    "name": "synthetic volume eu 5000 units (top tier)",
+    "listCharges": [
+      {
+        "chargeCode": "volume_fee",
+        "chargeName": "Volume Fee",
+        "chargeType": "mrc",
+        "pricingMethod": "volume",
+        "unitPrice": 0.5940000000000001,
+        "quantity": 5000,
+        "totalPrice": 2970.0000000000005,
+        "currencyCode": "USD",
+        "listUnitPrice": 0.6,
+        "listTotalPrice": 3000,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "synthetic-surcharge-pct",
+            "ruleName": "Synthetic surcharge",
+            "ruleType": "surcharge_percent",
+            "value": 10,
+            "unitPriceBefore": 0.6,
+            "unitPriceAfter": 0.66,
+            "delta": 0.06000000000000005
+          },
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 0.66,
+            "unitPriceAfter": 0.5940000000000001,
+            "delta": -0.06599999999999995
+          }
+        ],
+        "standardUnitPrice": 0.5940000000000001,
+        "standardTotalPrice": 2970.0000000000005
+      },
+      {
+        "chargeCode": "volume_usage",
+        "chargeName": "Volume Usage",
+        "chargeType": "usage",
+        "pricingMethod": "volume",
+        "unitPrice": 0.6,
+        "quantity": 5000,
+        "totalPrice": 3000,
+        "currencyCode": "USD",
+        "listUnitPrice": 0.6,
+        "listTotalPrice": 3000,
+        "adjustments": [],
+        "standardUnitPrice": 0.6,
+        "standardTotalPrice": 3000
+      },
+      {
+        "chargeCode": "tiered_fee",
+        "chargeName": "Tiered Fee",
+        "chargeType": "mrc",
+        "pricingMethod": "tiered",
+        "unitPrice": 2.7036000000000002,
+        "quantity": 5000,
+        "totalPrice": 13518.000000000002,
+        "currencyCode": "USD",
+        "breakdown": {
+          "tiers": [
+            {
+              "tier": 0,
+              "from": 1,
+              "to": 10,
+              "pricePerUnit": 5,
+              "quantity": 10,
+              "subtotal": 50
+            },
+            {
+              "tier": 1,
+              "from": 11,
+              "to": 5000,
+              "pricePerUnit": 3,
+              "quantity": 4990,
+              "subtotal": 14970
+            }
+          ]
+        },
+        "listUnitPrice": 3.004,
+        "listTotalPrice": 15020,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 3.004,
+            "unitPriceAfter": 2.7036000000000002,
+            "delta": -0.3003999999999998
+          }
+        ],
+        "standardUnitPrice": 2.7036000000000002,
+        "standardTotalPrice": 13518.000000000002
+      }
+    ],
+    "charges": [
+      {
+        "chargeCode": "volume_fee",
+        "chargeName": "Volume Fee",
+        "chargeType": "mrc",
+        "pricingMethod": "volume",
+        "unitPrice": 0.5940000000000001,
+        "quantity": 5000,
+        "totalPrice": 2970.0000000000005,
+        "currencyCode": "USD",
+        "listUnitPrice": 0.6,
+        "listTotalPrice": 3000,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "synthetic-surcharge-pct",
+            "ruleName": "Synthetic surcharge",
+            "ruleType": "surcharge_percent",
+            "value": 10,
+            "unitPriceBefore": 0.6,
+            "unitPriceAfter": 0.66,
+            "delta": 0.06000000000000005
+          },
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 0.66,
+            "unitPriceAfter": 0.5940000000000001,
+            "delta": -0.06599999999999995
+          }
+        ],
+        "standardUnitPrice": 0.5940000000000001,
+        "standardTotalPrice": 2970.0000000000005,
+        "adjustmentErrors": []
+      },
+      {
+        "chargeCode": "volume_usage",
+        "chargeName": "Volume Usage",
+        "chargeType": "usage",
+        "pricingMethod": "volume",
+        "unitPrice": 0.6,
+        "quantity": 5000,
+        "totalPrice": 3000,
+        "currencyCode": "USD",
+        "listUnitPrice": 0.6,
+        "listTotalPrice": 3000,
+        "adjustments": [],
+        "standardUnitPrice": 0.6,
+        "standardTotalPrice": 3000,
+        "adjustmentErrors": []
+      },
+      {
+        "chargeCode": "tiered_fee",
+        "chargeName": "Tiered Fee",
+        "chargeType": "mrc",
+        "pricingMethod": "tiered",
+        "unitPrice": 2.7036000000000002,
+        "quantity": 5000,
+        "totalPrice": 13518.000000000002,
+        "currencyCode": "USD",
+        "breakdown": {
+          "tiers": [
+            {
+              "tier": 0,
+              "from": 1,
+              "to": 10,
+              "pricePerUnit": 5,
+              "quantity": 10,
+              "subtotal": 50
+            },
+            {
+              "tier": 1,
+              "from": 11,
+              "to": 5000,
+              "pricePerUnit": 3,
+              "quantity": 4990,
+              "subtotal": 14970
+            }
+          ]
+        },
+        "listUnitPrice": 3.004,
+        "listTotalPrice": 15020,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 3.004,
+            "unitPriceAfter": 2.7036000000000002,
+            "delta": -0.3003999999999998
+          }
+        ],
+        "standardUnitPrice": 2.7036000000000002,
+        "standardTotalPrice": 13518.000000000002,
+        "adjustmentErrors": []
+      }
+    ],
+    "adjustmentErrors": [],
+    "pricingSummary": {
+      "listNrcTotal": 0,
+      "listMrcTotal": 18020,
+      "standardNrcTotal": 0,
+      "standardMrcTotal": 16488.000000000004,
+      "ruleDiscountTotal": 1831.9999999999986,
+      "manualDiscountTotal": 0,
+      "dealValue": {
+        "list": 216240,
+        "standard": 197856.00000000003,
+        "offer": 197856.00000000003
+      },
+      "discountDepth": {
+        "rule": 0.08501664816870136,
+        "manual": 0,
+        "total": 0.08501664816870136,
+        "maxLineManual": 0
+      },
+      "hasTimeBasedAdjustments": false,
+      "snapshotHash": "867cdcd4f2e84072f62df81bd961c074a68e3d03d16825a2c757ca03d242f0a2"
+    },
+    "snapshotHash": "867cdcd4f2e84072f62df81bd961c074a68e3d03d16825a2c757ca03d242f0a2"
+  },
+  {
+    "name": "synthetic volume us 25 units (tiered us)",
+    "listCharges": [
+      {
+        "chargeCode": "volume_fee",
+        "chargeName": "Volume Fee",
+        "chargeType": "mrc",
+        "pricingMethod": "volume",
+        "unitPrice": 1.9800000000000002,
+        "quantity": 25,
+        "totalPrice": 49.50000000000001,
+        "currencyCode": "USD",
+        "listUnitPrice": 2,
+        "listTotalPrice": 50,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "synthetic-surcharge-pct",
+            "ruleName": "Synthetic surcharge",
+            "ruleType": "surcharge_percent",
+            "value": 10,
+            "unitPriceBefore": 2,
+            "unitPriceAfter": 2.2,
+            "delta": 0.20000000000000018
+          },
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 2.2,
+            "unitPriceAfter": 1.9800000000000002,
+            "delta": -0.21999999999999997
+          }
+        ],
+        "standardUnitPrice": 1.9800000000000002,
+        "standardTotalPrice": 49.50000000000001
+      },
+      {
+        "chargeCode": "volume_usage",
+        "chargeName": "Volume Usage",
+        "chargeType": "usage",
+        "pricingMethod": "volume",
+        "unitPrice": 2,
+        "quantity": 25,
+        "totalPrice": 50,
+        "currencyCode": "USD",
+        "listUnitPrice": 2,
+        "listTotalPrice": 50,
+        "adjustments": [],
+        "standardUnitPrice": 2,
+        "standardTotalPrice": 50
+      },
+      {
+        "chargeCode": "tiered_fee",
+        "chargeName": "Tiered Fee",
+        "chargeType": "mrc",
+        "pricingMethod": "tiered",
+        "unitPrice": 3.24,
+        "quantity": 25,
+        "totalPrice": 81,
+        "currencyCode": "USD",
+        "breakdown": {
+          "tiers": [
+            {
+              "tier": 0,
+              "from": 1,
+              "to": 10,
+              "pricePerUnit": 9,
+              "quantity": 10,
+              "subtotal": 90
+            }
+          ]
+        },
+        "listUnitPrice": 3.6,
+        "listTotalPrice": 90,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 3.6,
+            "unitPriceAfter": 3.24,
+            "delta": -0.3599999999999999
+          }
+        ],
+        "standardUnitPrice": 3.24,
+        "standardTotalPrice": 81
+      }
+    ],
+    "charges": [
+      {
+        "chargeCode": "volume_fee",
+        "chargeName": "Volume Fee",
+        "chargeType": "mrc",
+        "pricingMethod": "volume",
+        "unitPrice": 1.9800000000000002,
+        "quantity": 25,
+        "totalPrice": 49.50000000000001,
+        "currencyCode": "USD",
+        "listUnitPrice": 2,
+        "listTotalPrice": 50,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "synthetic-surcharge-pct",
+            "ruleName": "Synthetic surcharge",
+            "ruleType": "surcharge_percent",
+            "value": 10,
+            "unitPriceBefore": 2,
+            "unitPriceAfter": 2.2,
+            "delta": 0.20000000000000018
+          },
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 2.2,
+            "unitPriceAfter": 1.9800000000000002,
+            "delta": -0.21999999999999997
+          }
+        ],
+        "standardUnitPrice": 1.9800000000000002,
+        "standardTotalPrice": 49.50000000000001,
+        "adjustmentErrors": []
+      },
+      {
+        "chargeCode": "volume_usage",
+        "chargeName": "Volume Usage",
+        "chargeType": "usage",
+        "pricingMethod": "volume",
+        "unitPrice": 2,
+        "quantity": 25,
+        "totalPrice": 50,
+        "currencyCode": "USD",
+        "listUnitPrice": 2,
+        "listTotalPrice": 50,
+        "adjustments": [],
+        "standardUnitPrice": 2,
+        "standardTotalPrice": 50,
+        "adjustmentErrors": []
+      },
+      {
+        "chargeCode": "tiered_fee",
+        "chargeName": "Tiered Fee",
+        "chargeType": "mrc",
+        "pricingMethod": "tiered",
+        "unitPrice": 3.24,
+        "quantity": 25,
+        "totalPrice": 81,
+        "currencyCode": "USD",
+        "breakdown": {
+          "tiers": [
+            {
+              "tier": 0,
+              "from": 1,
+              "to": 10,
+              "pricePerUnit": 9,
+              "quantity": 10,
+              "subtotal": 90
+            }
+          ]
+        },
+        "listUnitPrice": 3.6,
+        "listTotalPrice": 90,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 3.6,
+            "unitPriceAfter": 3.24,
+            "delta": -0.3599999999999999
+          }
+        ],
+        "standardUnitPrice": 3.24,
+        "standardTotalPrice": 81,
+        "adjustmentErrors": []
+      }
+    ],
+    "adjustmentErrors": [],
+    "pricingSummary": {
+      "listNrcTotal": 0,
+      "listMrcTotal": 140,
+      "standardNrcTotal": 0,
+      "standardMrcTotal": 130.5,
+      "ruleDiscountTotal": 14.499999999999996,
+      "manualDiscountTotal": 0,
+      "dealValue": {
+        "list": 1680,
+        "standard": 1566,
+        "offer": 1566
+      },
+      "discountDepth": {
+        "rule": 0.06785714285714284,
+        "manual": 0,
+        "total": 0.06785714285714284,
+        "maxLineManual": 0
+      },
+      "hasTimeBasedAdjustments": false,
+      "snapshotHash": "85f31de0467e581b912e796c1b452a2d25d75adda28ca54e84b63975925ff87e"
+    },
+    "snapshotHash": "85f31de0467e581b912e796c1b452a2d25d75adda28ca54e84b63975925ff87e"
+  },
+  {
+    "name": "synthetic volume miss and zero",
+    "listCharges": [
+      {
+        "chargeCode": "volume_fee",
+        "chargeName": "Volume Fee",
+        "chargeType": "mrc",
+        "pricingMethod": "volume",
+        "unitPrice": 0,
+        "quantity": 0,
+        "totalPrice": 0,
+        "currencyCode": "USD",
+        "listUnitPrice": 0,
+        "listTotalPrice": 0,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "synthetic-surcharge-pct",
+            "ruleName": "Synthetic surcharge",
+            "ruleType": "surcharge_percent",
+            "value": 10,
+            "unitPriceBefore": 0,
+            "unitPriceAfter": 0,
+            "delta": 0
+          },
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 0,
+            "unitPriceAfter": 0,
+            "delta": 0
+          }
+        ],
+        "standardUnitPrice": 0,
+        "standardTotalPrice": 0
+      },
+      {
+        "chargeCode": "volume_usage",
+        "chargeName": "Volume Usage",
+        "chargeType": "usage",
+        "pricingMethod": "volume",
+        "unitPrice": 0,
+        "quantity": 0,
+        "totalPrice": 0,
+        "currencyCode": "USD",
+        "listUnitPrice": 0,
+        "listTotalPrice": 0,
+        "adjustments": [],
+        "standardUnitPrice": 0,
+        "standardTotalPrice": 0
+      },
+      {
+        "chargeCode": "tiered_fee",
+        "chargeName": "Tiered Fee",
+        "chargeType": "mrc",
+        "pricingMethod": "tiered",
+        "unitPrice": 0,
+        "quantity": 0,
+        "totalPrice": 0,
+        "currencyCode": "USD",
+        "listUnitPrice": 0,
+        "listTotalPrice": 0,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 0,
+            "unitPriceAfter": 0,
+            "delta": 0
+          }
+        ],
+        "standardUnitPrice": 0,
+        "standardTotalPrice": 0
+      }
+    ],
+    "charges": [
+      {
+        "chargeCode": "volume_fee",
+        "chargeName": "Volume Fee",
+        "chargeType": "mrc",
+        "pricingMethod": "volume",
+        "unitPrice": 0,
+        "quantity": 0,
+        "totalPrice": 0,
+        "currencyCode": "USD",
+        "listUnitPrice": 0,
+        "listTotalPrice": 0,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "synthetic-surcharge-pct",
+            "ruleName": "Synthetic surcharge",
+            "ruleType": "surcharge_percent",
+            "value": 10,
+            "unitPriceBefore": 0,
+            "unitPriceAfter": 0,
+            "delta": 0
+          },
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 0,
+            "unitPriceAfter": 0,
+            "delta": 0
+          }
+        ],
+        "standardUnitPrice": 0,
+        "standardTotalPrice": 0,
+        "adjustmentErrors": []
+      },
+      {
+        "chargeCode": "volume_usage",
+        "chargeName": "Volume Usage",
+        "chargeType": "usage",
+        "pricingMethod": "volume",
+        "unitPrice": 0,
+        "quantity": 0,
+        "totalPrice": 0,
+        "currencyCode": "USD",
+        "listUnitPrice": 0,
+        "listTotalPrice": 0,
+        "adjustments": [],
+        "standardUnitPrice": 0,
+        "standardTotalPrice": 0,
+        "adjustmentErrors": []
+      },
+      {
+        "chargeCode": "tiered_fee",
+        "chargeName": "Tiered Fee",
+        "chargeType": "mrc",
+        "pricingMethod": "tiered",
+        "unitPrice": 0,
+        "quantity": 0,
+        "totalPrice": 0,
+        "currencyCode": "USD",
+        "listUnitPrice": 0,
+        "listTotalPrice": 0,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 0,
+            "unitPriceAfter": 0,
+            "delta": 0
+          }
+        ],
+        "standardUnitPrice": 0,
+        "standardTotalPrice": 0,
+        "adjustmentErrors": []
+      }
+    ],
+    "adjustmentErrors": [],
+    "pricingSummary": {
+      "listNrcTotal": 0,
+      "listMrcTotal": 0,
+      "standardNrcTotal": 0,
+      "standardMrcTotal": 0,
+      "ruleDiscountTotal": 0,
+      "manualDiscountTotal": 0,
+      "dealValue": {
+        "list": 0,
+        "standard": 0,
+        "offer": 0
+      },
+      "discountDepth": {
+        "rule": null,
+        "manual": null,
+        "total": null,
+        "maxLineManual": null
+      },
+      "hasTimeBasedAdjustments": false,
+      "snapshotHash": "944d9e3a092e21169f45698d8cf750a994645c9f118586c4fb6405e3d9e4dd0b"
+    },
+    "snapshotHash": "944d9e3a092e21169f45698d8cf750a994645c9f118586c4fb6405e3d9e4dd0b"
+  },
+  {
+    "name": "synthetic volume dimension miss",
+    "listCharges": [
+      {
+        "chargeCode": "volume_fee",
+        "chargeName": "Volume Fee",
+        "chargeType": "mrc",
+        "pricingMethod": "volume",
+        "unitPrice": 0,
+        "quantity": 1,
+        "totalPrice": 0,
+        "currencyCode": "USD",
+        "listUnitPrice": 0,
+        "listTotalPrice": 0,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "synthetic-surcharge-pct",
+            "ruleName": "Synthetic surcharge",
+            "ruleType": "surcharge_percent",
+            "value": 10,
+            "unitPriceBefore": 0,
+            "unitPriceAfter": 0,
+            "delta": 0
+          },
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 0,
+            "unitPriceAfter": 0,
+            "delta": 0
+          }
+        ],
+        "standardUnitPrice": 0,
+        "standardTotalPrice": 0
+      },
+      {
+        "chargeCode": "volume_usage",
+        "chargeName": "Volume Usage",
+        "chargeType": "usage",
+        "pricingMethod": "volume",
+        "unitPrice": 0,
+        "quantity": 1,
+        "totalPrice": 0,
+        "currencyCode": "USD",
+        "listUnitPrice": 0,
+        "listTotalPrice": 0,
+        "adjustments": [],
+        "standardUnitPrice": 0,
+        "standardTotalPrice": 0
+      },
+      {
+        "chargeCode": "tiered_fee",
+        "chargeName": "Tiered Fee",
+        "chargeType": "mrc",
+        "pricingMethod": "tiered",
+        "unitPrice": 0,
+        "quantity": 1,
+        "totalPrice": 0,
+        "currencyCode": "USD",
+        "listUnitPrice": 0,
+        "listTotalPrice": 0,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 0,
+            "unitPriceAfter": 0,
+            "delta": 0
+          }
+        ],
+        "standardUnitPrice": 0,
+        "standardTotalPrice": 0
+      }
+    ],
+    "charges": [
+      {
+        "chargeCode": "volume_fee",
+        "chargeName": "Volume Fee",
+        "chargeType": "mrc",
+        "pricingMethod": "volume",
+        "unitPrice": 0,
+        "quantity": 1,
+        "totalPrice": 0,
+        "currencyCode": "USD",
+        "listUnitPrice": 0,
+        "listTotalPrice": 0,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "synthetic-surcharge-pct",
+            "ruleName": "Synthetic surcharge",
+            "ruleType": "surcharge_percent",
+            "value": 10,
+            "unitPriceBefore": 0,
+            "unitPriceAfter": 0,
+            "delta": 0
+          },
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 0,
+            "unitPriceAfter": 0,
+            "delta": 0
+          }
+        ],
+        "standardUnitPrice": 0,
+        "standardTotalPrice": 0,
+        "adjustmentErrors": []
+      },
+      {
+        "chargeCode": "volume_usage",
+        "chargeName": "Volume Usage",
+        "chargeType": "usage",
+        "pricingMethod": "volume",
+        "unitPrice": 0,
+        "quantity": 1,
+        "totalPrice": 0,
+        "currencyCode": "USD",
+        "listUnitPrice": 0,
+        "listTotalPrice": 0,
+        "adjustments": [],
+        "standardUnitPrice": 0,
+        "standardTotalPrice": 0,
+        "adjustmentErrors": []
+      },
+      {
+        "chargeCode": "tiered_fee",
+        "chargeName": "Tiered Fee",
+        "chargeType": "mrc",
+        "pricingMethod": "tiered",
+        "unitPrice": 0,
+        "quantity": 1,
+        "totalPrice": 0,
+        "currencyCode": "USD",
+        "listUnitPrice": 0,
+        "listTotalPrice": 0,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 0,
+            "unitPriceAfter": 0,
+            "delta": 0
+          }
+        ],
+        "standardUnitPrice": 0,
+        "standardTotalPrice": 0,
+        "adjustmentErrors": []
+      }
+    ],
+    "adjustmentErrors": [],
+    "pricingSummary": {
+      "listNrcTotal": 0,
+      "listMrcTotal": 0,
+      "standardNrcTotal": 0,
+      "standardMrcTotal": 0,
+      "ruleDiscountTotal": 0,
+      "manualDiscountTotal": 0,
+      "dealValue": {
+        "list": 0,
+        "standard": 0,
+        "offer": 0
+      },
+      "discountDepth": {
+        "rule": null,
+        "manual": null,
+        "total": null,
+        "maxLineManual": null
+      },
+      "hasTimeBasedAdjustments": false,
+      "snapshotHash": "944d9e3a092e21169f45698d8cf750a994645c9f118586c4fb6405e3d9e4dd0b"
+    },
+    "snapshotHash": "944d9e3a092e21169f45698d8cf750a994645c9f118586c4fb6405e3d9e4dd0b"
+  },
+  {
+    "name": "synthetic multi-currency USD (no currency override)",
+    "listCharges": [
+      {
+        "chargeCode": "mc_setup",
+        "chargeName": "MC Setup",
+        "chargeType": "nrc",
+        "pricingMethod": "flat",
+        "unitPrice": 100,
+        "quantity": 1,
+        "totalPrice": 100,
+        "currencyCode": "USD",
+        "listUnitPrice": 100,
+        "listTotalPrice": 100,
+        "adjustments": [],
+        "standardUnitPrice": 100,
+        "standardTotalPrice": 100
+      },
+      {
+        "chargeCode": "mc_monthly",
+        "chargeName": "MC Monthly",
+        "chargeType": "mrc",
+        "pricingMethod": "flat",
+        "unitPrice": 36,
+        "quantity": 1,
+        "totalPrice": 36,
+        "currencyCode": "USD",
+        "listUnitPrice": 40,
+        "listTotalPrice": 40,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 40,
+            "unitPriceAfter": 36,
+            "delta": -4
+          }
+        ],
+        "standardUnitPrice": 36,
+        "standardTotalPrice": 36
+      },
+      {
+        "chargeCode": "mc_missing_column",
+        "chargeName": "MC Missing Column",
+        "chargeType": "mrc",
+        "pricingMethod": "flat",
+        "unitPrice": 0,
+        "quantity": 1,
+        "totalPrice": 0,
+        "currencyCode": "USD",
+        "listUnitPrice": 0,
+        "listTotalPrice": 0,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 0,
+            "unitPriceAfter": 0,
+            "delta": 0
+          }
+        ],
+        "standardUnitPrice": 0,
+        "standardTotalPrice": 0
+      },
+      {
+        "chargeCode": "mc_fixed",
+        "chargeName": "MC Fixed",
+        "chargeType": "mrc",
+        "pricingMethod": "flat",
+        "unitPrice": 9,
+        "quantity": 1,
+        "totalPrice": 9,
+        "currencyCode": "USD",
+        "listUnitPrice": 10,
+        "listTotalPrice": 10,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 10,
+            "unitPriceAfter": 9,
+            "delta": -1
+          }
+        ],
+        "standardUnitPrice": 9,
+        "standardTotalPrice": 9
+      }
+    ],
+    "charges": [
+      {
+        "chargeCode": "mc_setup",
+        "chargeName": "MC Setup",
+        "chargeType": "nrc",
+        "pricingMethod": "flat",
+        "unitPrice": 100,
+        "quantity": 1,
+        "totalPrice": 100,
+        "currencyCode": "USD",
+        "listUnitPrice": 100,
+        "listTotalPrice": 100,
+        "adjustments": [],
+        "standardUnitPrice": 100,
+        "standardTotalPrice": 100,
+        "adjustmentErrors": []
+      },
+      {
+        "chargeCode": "mc_monthly",
+        "chargeName": "MC Monthly",
+        "chargeType": "mrc",
+        "pricingMethod": "flat",
+        "unitPrice": 36,
+        "quantity": 1,
+        "totalPrice": 36,
+        "currencyCode": "USD",
+        "listUnitPrice": 40,
+        "listTotalPrice": 40,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 40,
+            "unitPriceAfter": 36,
+            "delta": -4
+          }
+        ],
+        "standardUnitPrice": 36,
+        "standardTotalPrice": 36,
+        "adjustmentErrors": []
+      },
+      {
+        "chargeCode": "mc_missing_column",
+        "chargeName": "MC Missing Column",
+        "chargeType": "mrc",
+        "pricingMethod": "flat",
+        "unitPrice": 0,
+        "quantity": 1,
+        "totalPrice": 0,
+        "currencyCode": "USD",
+        "listUnitPrice": 0,
+        "listTotalPrice": 0,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 0,
+            "unitPriceAfter": 0,
+            "delta": 0
+          }
+        ],
+        "standardUnitPrice": 0,
+        "standardTotalPrice": 0,
+        "adjustmentErrors": []
+      },
+      {
+        "chargeCode": "mc_fixed",
+        "chargeName": "MC Fixed",
+        "chargeType": "mrc",
+        "pricingMethod": "flat",
+        "unitPrice": 9,
+        "quantity": 1,
+        "totalPrice": 9,
+        "currencyCode": "USD",
+        "listUnitPrice": 10,
+        "listTotalPrice": 10,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 10,
+            "unitPriceAfter": 9,
+            "delta": -1
+          }
+        ],
+        "standardUnitPrice": 9,
+        "standardTotalPrice": 9,
+        "adjustmentErrors": []
+      }
+    ],
+    "adjustmentErrors": [],
+    "pricingSummary": {
+      "listNrcTotal": 100,
+      "listMrcTotal": 50,
+      "standardNrcTotal": 100,
+      "standardMrcTotal": 45,
+      "ruleDiscountTotal": 5,
+      "manualDiscountTotal": 0,
+      "dealValue": {
+        "list": 700,
+        "standard": 640,
+        "offer": 640
+      },
+      "discountDepth": {
+        "rule": 0.08571428571428574,
+        "manual": 0,
+        "total": 0.08571428571428574,
+        "maxLineManual": 0
+      },
+      "hasTimeBasedAdjustments": false,
+      "snapshotHash": "be97a2199759ad664e5c52429310a496ee4c517d0d914698dbb5adcc1bd7a5cf"
+    },
+    "snapshotHash": "be97a2199759ad664e5c52429310a496ee4c517d0d914698dbb5adcc1bd7a5cf"
+  },
+  {
+    "name": "synthetic multi-currency EUR column selection",
+    "listCharges": [
+      {
+        "chargeCode": "mc_setup",
+        "chargeName": "MC Setup",
+        "chargeType": "nrc",
+        "pricingMethod": "flat",
+        "unitPrice": 90,
+        "quantity": 1,
+        "totalPrice": 90,
+        "currencyCode": "EUR",
+        "listUnitPrice": 90,
+        "listTotalPrice": 90,
+        "adjustments": [],
+        "standardUnitPrice": 90,
+        "standardTotalPrice": 90
+      },
+      {
+        "chargeCode": "mc_monthly",
+        "chargeName": "MC Monthly",
+        "chargeType": "mrc",
+        "pricingMethod": "flat",
+        "unitPrice": 32.4,
+        "quantity": 1,
+        "totalPrice": 32.4,
+        "currencyCode": "EUR",
+        "listUnitPrice": 36,
+        "listTotalPrice": 36,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 36,
+            "unitPriceAfter": 32.4,
+            "delta": -3.6000000000000014
+          }
+        ],
+        "standardUnitPrice": 32.4,
+        "standardTotalPrice": 32.4
+      },
+      {
+        "chargeCode": "mc_missing_column",
+        "chargeName": "MC Missing Column",
+        "chargeType": "mrc",
+        "pricingMethod": "flat",
+        "unitPrice": 0,
+        "quantity": 1,
+        "totalPrice": 0,
+        "currencyCode": "EUR",
+        "listUnitPrice": 0,
+        "listTotalPrice": 0,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 0,
+            "unitPriceAfter": 0,
+            "delta": 0
+          }
+        ],
+        "standardUnitPrice": 0,
+        "standardTotalPrice": 0
+      },
+      {
+        "chargeCode": "mc_fixed",
+        "chargeName": "MC Fixed",
+        "chargeType": "mrc",
+        "pricingMethod": "flat",
+        "unitPrice": 9,
+        "quantity": 1,
+        "totalPrice": 9,
+        "currencyCode": "EUR",
+        "listUnitPrice": 10,
+        "listTotalPrice": 10,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 10,
+            "unitPriceAfter": 9,
+            "delta": -1
+          }
+        ],
+        "standardUnitPrice": 9,
+        "standardTotalPrice": 9
+      }
+    ],
+    "charges": [
+      {
+        "chargeCode": "mc_setup",
+        "chargeName": "MC Setup",
+        "chargeType": "nrc",
+        "pricingMethod": "flat",
+        "unitPrice": 90,
+        "quantity": 1,
+        "totalPrice": 90,
+        "currencyCode": "EUR",
+        "listUnitPrice": 90,
+        "listTotalPrice": 90,
+        "adjustments": [],
+        "standardUnitPrice": 90,
+        "standardTotalPrice": 90,
+        "adjustmentErrors": []
+      },
+      {
+        "chargeCode": "mc_monthly",
+        "chargeName": "MC Monthly",
+        "chargeType": "mrc",
+        "pricingMethod": "flat",
+        "unitPrice": 32.4,
+        "quantity": 1,
+        "totalPrice": 32.4,
+        "currencyCode": "EUR",
+        "listUnitPrice": 36,
+        "listTotalPrice": 36,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 36,
+            "unitPriceAfter": 32.4,
+            "delta": -3.6000000000000014
+          }
+        ],
+        "standardUnitPrice": 32.4,
+        "standardTotalPrice": 32.4,
+        "adjustmentErrors": []
+      },
+      {
+        "chargeCode": "mc_missing_column",
+        "chargeName": "MC Missing Column",
+        "chargeType": "mrc",
+        "pricingMethod": "flat",
+        "unitPrice": 0,
+        "quantity": 1,
+        "totalPrice": 0,
+        "currencyCode": "EUR",
+        "listUnitPrice": 0,
+        "listTotalPrice": 0,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 0,
+            "unitPriceAfter": 0,
+            "delta": 0
+          }
+        ],
+        "standardUnitPrice": 0,
+        "standardTotalPrice": 0,
+        "adjustmentErrors": []
+      },
+      {
+        "chargeCode": "mc_fixed",
+        "chargeName": "MC Fixed",
+        "chargeType": "mrc",
+        "pricingMethod": "flat",
+        "unitPrice": 9,
+        "quantity": 1,
+        "totalPrice": 9,
+        "currencyCode": "EUR",
+        "listUnitPrice": 10,
+        "listTotalPrice": 10,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 10,
+            "unitPriceAfter": 9,
+            "delta": -1
+          }
+        ],
+        "standardUnitPrice": 9,
+        "standardTotalPrice": 9,
+        "adjustmentErrors": []
+      }
+    ],
+    "adjustmentErrors": [],
+    "pricingSummary": {
+      "listNrcTotal": 90,
+      "listMrcTotal": 46,
+      "standardNrcTotal": 90,
+      "standardMrcTotal": 41.4,
+      "ruleDiscountTotal": 4.600000000000001,
+      "manualDiscountTotal": 0,
+      "dealValue": {
+        "list": 642,
+        "standard": 586.8,
+        "offer": 586.8
+      },
+      "discountDepth": {
+        "rule": 0.08598130841121499,
+        "manual": 0,
+        "total": 0.08598130841121499,
+        "maxLineManual": 0
+      },
+      "hasTimeBasedAdjustments": false,
+      "snapshotHash": "389050af65c5196f05e18d9da4b693c9c14e36512bcd3b261c772f329d0edc72"
+    },
+    "snapshotHash": "389050af65c5196f05e18d9da4b693c9c14e36512bcd3b261c772f329d0edc72"
+  },
+  {
+    "name": "synthetic multi-currency GBP column selection",
+    "listCharges": [
+      {
+        "chargeCode": "mc_setup",
+        "chargeName": "MC Setup",
+        "chargeType": "nrc",
+        "pricingMethod": "flat",
+        "unitPrice": 80,
+        "quantity": 1,
+        "totalPrice": 80,
+        "currencyCode": "GBP",
+        "listUnitPrice": 80,
+        "listTotalPrice": 80,
+        "adjustments": [],
+        "standardUnitPrice": 80,
+        "standardTotalPrice": 80
+      },
+      {
+        "chargeCode": "mc_monthly",
+        "chargeName": "MC Monthly",
+        "chargeType": "mrc",
+        "pricingMethod": "flat",
+        "unitPrice": 27.900000000000002,
+        "quantity": 1,
+        "totalPrice": 27.900000000000002,
+        "currencyCode": "GBP",
+        "listUnitPrice": 31,
+        "listTotalPrice": 31,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 31,
+            "unitPriceAfter": 27.900000000000002,
+            "delta": -3.099999999999998
+          }
+        ],
+        "standardUnitPrice": 27.900000000000002,
+        "standardTotalPrice": 27.900000000000002
+      },
+      {
+        "chargeCode": "mc_missing_column",
+        "chargeName": "MC Missing Column",
+        "chargeType": "mrc",
+        "pricingMethod": "flat",
+        "unitPrice": 0,
+        "quantity": 1,
+        "totalPrice": 0,
+        "currencyCode": "GBP",
+        "listUnitPrice": 0,
+        "listTotalPrice": 0,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 0,
+            "unitPriceAfter": 0,
+            "delta": 0
+          }
+        ],
+        "standardUnitPrice": 0,
+        "standardTotalPrice": 0
+      },
+      {
+        "chargeCode": "mc_fixed",
+        "chargeName": "MC Fixed",
+        "chargeType": "mrc",
+        "pricingMethod": "flat",
+        "unitPrice": 9,
+        "quantity": 1,
+        "totalPrice": 9,
+        "currencyCode": "GBP",
+        "listUnitPrice": 10,
+        "listTotalPrice": 10,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 10,
+            "unitPriceAfter": 9,
+            "delta": -1
+          }
+        ],
+        "standardUnitPrice": 9,
+        "standardTotalPrice": 9
+      }
+    ],
+    "charges": [
+      {
+        "chargeCode": "mc_setup",
+        "chargeName": "MC Setup",
+        "chargeType": "nrc",
+        "pricingMethod": "flat",
+        "unitPrice": 80,
+        "quantity": 1,
+        "totalPrice": 80,
+        "currencyCode": "GBP",
+        "listUnitPrice": 80,
+        "listTotalPrice": 80,
+        "adjustments": [],
+        "standardUnitPrice": 80,
+        "standardTotalPrice": 80,
+        "adjustmentErrors": []
+      },
+      {
+        "chargeCode": "mc_monthly",
+        "chargeName": "MC Monthly",
+        "chargeType": "mrc",
+        "pricingMethod": "flat",
+        "unitPrice": 27.900000000000002,
+        "quantity": 1,
+        "totalPrice": 27.900000000000002,
+        "currencyCode": "GBP",
+        "listUnitPrice": 31,
+        "listTotalPrice": 31,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 31,
+            "unitPriceAfter": 27.900000000000002,
+            "delta": -3.099999999999998
+          }
+        ],
+        "standardUnitPrice": 27.900000000000002,
+        "standardTotalPrice": 27.900000000000002,
+        "adjustmentErrors": []
+      },
+      {
+        "chargeCode": "mc_missing_column",
+        "chargeName": "MC Missing Column",
+        "chargeType": "mrc",
+        "pricingMethod": "flat",
+        "unitPrice": 0,
+        "quantity": 1,
+        "totalPrice": 0,
+        "currencyCode": "GBP",
+        "listUnitPrice": 0,
+        "listTotalPrice": 0,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 0,
+            "unitPriceAfter": 0,
+            "delta": 0
+          }
+        ],
+        "standardUnitPrice": 0,
+        "standardTotalPrice": 0,
+        "adjustmentErrors": []
+      },
+      {
+        "chargeCode": "mc_fixed",
+        "chargeName": "MC Fixed",
+        "chargeType": "mrc",
+        "pricingMethod": "flat",
+        "unitPrice": 9,
+        "quantity": 1,
+        "totalPrice": 9,
+        "currencyCode": "GBP",
+        "listUnitPrice": 10,
+        "listTotalPrice": 10,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 10,
+            "unitPriceAfter": 9,
+            "delta": -1
+          }
+        ],
+        "standardUnitPrice": 9,
+        "standardTotalPrice": 9,
+        "adjustmentErrors": []
+      }
+    ],
+    "adjustmentErrors": [],
+    "pricingSummary": {
+      "listNrcTotal": 80,
+      "listMrcTotal": 41,
+      "standardNrcTotal": 80,
+      "standardMrcTotal": 36.900000000000006,
+      "ruleDiscountTotal": 4.099999999999998,
+      "manualDiscountTotal": 0,
+      "dealValue": {
+        "list": 572,
+        "standard": 522.8,
+        "offer": 522.8
+      },
+      "discountDepth": {
+        "rule": 0.08601398601398613,
+        "manual": 0,
+        "total": 0.08601398601398613,
+        "maxLineManual": 0
+      },
+      "hasTimeBasedAdjustments": false,
+      "snapshotHash": "0a790b021a3aefa5c6e5a5661d132e04acde8daaa37bfb2e8f955acd55715a49"
+    },
+    "snapshotHash": "0a790b021a3aefa5c6e5a5661d132e04acde8daaa37bfb2e8f955acd55715a49"
+  },
+  {
+    "name": "synthetic multi-currency with no entries (JPY)",
+    "listCharges": [
+      {
+        "chargeCode": "mc_setup",
+        "chargeName": "MC Setup",
+        "chargeType": "nrc",
+        "pricingMethod": "flat",
+        "unitPrice": 0,
+        "quantity": 1,
+        "totalPrice": 0,
+        "currencyCode": "JPY",
+        "listUnitPrice": 0,
+        "listTotalPrice": 0,
+        "adjustments": [],
+        "standardUnitPrice": 0,
+        "standardTotalPrice": 0
+      },
+      {
+        "chargeCode": "mc_monthly",
+        "chargeName": "MC Monthly",
+        "chargeType": "mrc",
+        "pricingMethod": "flat",
+        "unitPrice": 0,
+        "quantity": 1,
+        "totalPrice": 0,
+        "currencyCode": "JPY",
+        "listUnitPrice": 0,
+        "listTotalPrice": 0,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 0,
+            "unitPriceAfter": 0,
+            "delta": 0
+          }
+        ],
+        "standardUnitPrice": 0,
+        "standardTotalPrice": 0
+      },
+      {
+        "chargeCode": "mc_missing_column",
+        "chargeName": "MC Missing Column",
+        "chargeType": "mrc",
+        "pricingMethod": "flat",
+        "unitPrice": 0,
+        "quantity": 1,
+        "totalPrice": 0,
+        "currencyCode": "JPY",
+        "listUnitPrice": 0,
+        "listTotalPrice": 0,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 0,
+            "unitPriceAfter": 0,
+            "delta": 0
+          }
+        ],
+        "standardUnitPrice": 0,
+        "standardTotalPrice": 0
+      },
+      {
+        "chargeCode": "mc_fixed",
+        "chargeName": "MC Fixed",
+        "chargeType": "mrc",
+        "pricingMethod": "flat",
+        "unitPrice": 9,
+        "quantity": 1,
+        "totalPrice": 9,
+        "currencyCode": "JPY",
+        "listUnitPrice": 10,
+        "listTotalPrice": 10,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 10,
+            "unitPriceAfter": 9,
+            "delta": -1
+          }
+        ],
+        "standardUnitPrice": 9,
+        "standardTotalPrice": 9
+      }
+    ],
+    "charges": [
+      {
+        "chargeCode": "mc_setup",
+        "chargeName": "MC Setup",
+        "chargeType": "nrc",
+        "pricingMethod": "flat",
+        "unitPrice": 0,
+        "quantity": 1,
+        "totalPrice": 0,
+        "currencyCode": "JPY",
+        "listUnitPrice": 0,
+        "listTotalPrice": 0,
+        "adjustments": [],
+        "standardUnitPrice": 0,
+        "standardTotalPrice": 0,
+        "adjustmentErrors": []
+      },
+      {
+        "chargeCode": "mc_monthly",
+        "chargeName": "MC Monthly",
+        "chargeType": "mrc",
+        "pricingMethod": "flat",
+        "unitPrice": 0,
+        "quantity": 1,
+        "totalPrice": 0,
+        "currencyCode": "JPY",
+        "listUnitPrice": 0,
+        "listTotalPrice": 0,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 0,
+            "unitPriceAfter": 0,
+            "delta": 0
+          }
+        ],
+        "standardUnitPrice": 0,
+        "standardTotalPrice": 0,
+        "adjustmentErrors": []
+      },
+      {
+        "chargeCode": "mc_missing_column",
+        "chargeName": "MC Missing Column",
+        "chargeType": "mrc",
+        "pricingMethod": "flat",
+        "unitPrice": 0,
+        "quantity": 1,
+        "totalPrice": 0,
+        "currencyCode": "JPY",
+        "listUnitPrice": 0,
+        "listTotalPrice": 0,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 0,
+            "unitPriceAfter": 0,
+            "delta": 0
+          }
+        ],
+        "standardUnitPrice": 0,
+        "standardTotalPrice": 0,
+        "adjustmentErrors": []
+      },
+      {
+        "chargeCode": "mc_fixed",
+        "chargeName": "MC Fixed",
+        "chargeType": "mrc",
+        "pricingMethod": "flat",
+        "unitPrice": 9,
+        "quantity": 1,
+        "totalPrice": 9,
+        "currencyCode": "JPY",
+        "listUnitPrice": 10,
+        "listTotalPrice": 10,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 10,
+            "unitPriceAfter": 9,
+            "delta": -1
+          }
+        ],
+        "standardUnitPrice": 9,
+        "standardTotalPrice": 9,
+        "adjustmentErrors": []
+      }
+    ],
+    "adjustmentErrors": [],
+    "pricingSummary": {
+      "listNrcTotal": 0,
+      "listMrcTotal": 10,
+      "standardNrcTotal": 0,
+      "standardMrcTotal": 9,
+      "ruleDiscountTotal": 1,
+      "manualDiscountTotal": 0,
+      "dealValue": {
+        "list": 120,
+        "standard": 108,
+        "offer": 108
+      },
+      "discountDepth": {
+        "rule": 0.09999999999999998,
+        "manual": 0,
+        "total": 0.09999999999999998,
+        "maxLineManual": 0
+      },
+      "hasTimeBasedAdjustments": false,
+      "snapshotHash": "e65e718140543cbb8348e2976291e7fb0109ec3eee2dde674d33c4386b6c6016"
+    },
+    "snapshotHash": "e65e718140543cbb8348e2976291e7fb0109ec3eee2dde674d33c4386b6c6016"
+  },
+  {
+    "name": "synthetic orphan/legacy charges",
+    "listCharges": [
+      {
+        "chargeCode": "orphan_flat",
+        "chargeName": "Orphan Flat",
+        "chargeType": "mrc",
+        "pricingMethod": "flat",
+        "unitPrice": 13.5,
+        "quantity": 1,
+        "totalPrice": 13.5,
+        "currencyCode": "USD",
+        "listUnitPrice": 15,
+        "listTotalPrice": 15,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 15,
+            "unitPriceAfter": 13.5,
+            "delta": -1.5
+          }
+        ],
+        "standardUnitPrice": 13.5,
+        "standardTotalPrice": 13.5
+      },
+      {
+        "chargeCode": "orphan_tiered",
+        "chargeName": "Orphan Tiered",
+        "chargeType": "mrc",
+        "pricingMethod": "tiered",
+        "unitPrice": 6.3,
+        "quantity": 1,
+        "totalPrice": 6.3,
+        "currencyCode": "USD",
+        "listUnitPrice": 7,
+        "listTotalPrice": 7,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 7,
+            "unitPriceAfter": 6.3,
+            "delta": -0.7000000000000002
+          }
+        ],
+        "standardUnitPrice": 6.3,
+        "standardTotalPrice": 6.3
+      },
+      {
+        "chargeCode": "legacy_per_unit",
+        "chargeName": "Legacy Per Unit",
+        "chargeType": "mrc",
+        "pricingMethod": "per_unit",
+        "unitPrice": 2.7,
+        "quantity": 4,
+        "totalPrice": 10.8,
+        "currencyCode": "USD",
+        "listUnitPrice": 3,
+        "listTotalPrice": 12,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 3,
+            "unitPriceAfter": 2.7,
+            "delta": -0.2999999999999998
+          }
+        ],
+        "standardUnitPrice": 2.7,
+        "standardTotalPrice": 10.8
+      }
+    ],
+    "charges": [
+      {
+        "chargeCode": "orphan_flat",
+        "chargeName": "Orphan Flat",
+        "chargeType": "mrc",
+        "pricingMethod": "flat",
+        "unitPrice": 13.5,
+        "quantity": 1,
+        "totalPrice": 13.5,
+        "currencyCode": "USD",
+        "listUnitPrice": 15,
+        "listTotalPrice": 15,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 15,
+            "unitPriceAfter": 13.5,
+            "delta": -1.5
+          }
+        ],
+        "standardUnitPrice": 13.5,
+        "standardTotalPrice": 13.5,
+        "adjustmentErrors": []
+      },
+      {
+        "chargeCode": "orphan_tiered",
+        "chargeName": "Orphan Tiered",
+        "chargeType": "mrc",
+        "pricingMethod": "tiered",
+        "unitPrice": 6.3,
+        "quantity": 1,
+        "totalPrice": 6.3,
+        "currencyCode": "USD",
+        "listUnitPrice": 7,
+        "listTotalPrice": 7,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 7,
+            "unitPriceAfter": 6.3,
+            "delta": -0.7000000000000002
+          }
+        ],
+        "standardUnitPrice": 6.3,
+        "standardTotalPrice": 6.3,
+        "adjustmentErrors": []
+      },
+      {
+        "chargeCode": "legacy_per_unit",
+        "chargeName": "Legacy Per Unit",
+        "chargeType": "mrc",
+        "pricingMethod": "per_unit",
+        "unitPrice": 2.7,
+        "quantity": 4,
+        "totalPrice": 10.8,
+        "currencyCode": "USD",
+        "listUnitPrice": 3,
+        "listTotalPrice": 12,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 3,
+            "unitPriceAfter": 2.7,
+            "delta": -0.2999999999999998
+          }
+        ],
+        "standardUnitPrice": 2.7,
+        "standardTotalPrice": 10.8,
+        "adjustmentErrors": []
+      }
+    ],
+    "adjustmentErrors": [],
+    "pricingSummary": {
+      "listNrcTotal": 0,
+      "listMrcTotal": 34,
+      "standardNrcTotal": 0,
+      "standardMrcTotal": 30.6,
+      "ruleDiscountTotal": 3.3999999999999995,
+      "manualDiscountTotal": 0,
+      "dealValue": {
+        "list": 408,
+        "standard": 367.20000000000005,
+        "offer": 367.20000000000005
+      },
+      "discountDepth": {
+        "rule": 0.09999999999999987,
+        "manual": 0,
+        "total": 0.09999999999999987,
+        "maxLineManual": 0
+      },
+      "hasTimeBasedAdjustments": false,
+      "snapshotHash": "2c36d6ac710d523a78e9bfd4dabb1a6c5c2c8f4f0195a5a95ecb6ebceb9d11db"
+    },
+    "snapshotHash": "2c36d6ac710d523a78e9bfd4dabb1a6c5c2c8f4f0195a5a95ecb6ebceb9d11db"
+  },
+  {
+    "name": "manual adjustments on access port (charge-level override, line-level percent)",
+    "listCharges": [
+      {
+        "chargeCode": "setup_fee",
+        "chargeName": "Setup Fee",
+        "chargeType": "nrc",
+        "pricingMethod": "flat",
+        "unitPrice": 246.5,
+        "quantity": 1,
+        "totalPrice": 246.5,
+        "currencyCode": "USD",
+        "listUnitPrice": 290,
+        "listTotalPrice": 290,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "access-port-nrc-15pct-off",
+            "ruleName": "Access Port — 15% Setup Discount",
+            "ruleType": "discount_percent",
+            "value": 15,
+            "unitPriceBefore": 290,
+            "unitPriceAfter": 246.5,
+            "delta": -43.5
+          }
+        ],
+        "standardUnitPrice": 246.5,
+        "standardTotalPrice": 246.5
+      },
+      {
+        "chargeCode": "monthly_port_fee",
+        "chargeName": "Monthly Port Fee",
+        "chargeType": "mrc",
+        "pricingMethod": "flat",
+        "unitPrice": 225,
+        "quantity": 1,
+        "totalPrice": 225,
+        "currencyCode": "USD",
+        "listUnitPrice": 250,
+        "listTotalPrice": 250,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 250,
+            "unitPriceAfter": 225,
+            "delta": -25
+          }
+        ],
+        "standardUnitPrice": 225,
+        "standardTotalPrice": 225
+      }
+    ],
+    "charges": [
+      {
+        "chargeCode": "setup_fee",
+        "chargeName": "Setup Fee",
+        "chargeType": "nrc",
+        "pricingMethod": "flat",
+        "unitPrice": 246.5,
+        "quantity": 1,
+        "totalPrice": 246.5,
+        "currencyCode": "USD",
+        "listUnitPrice": 290,
+        "listTotalPrice": 290,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "access-port-nrc-15pct-off",
+            "ruleName": "Access Port — 15% Setup Discount",
+            "ruleType": "discount_percent",
+            "value": 15,
+            "unitPriceBefore": 290,
+            "unitPriceAfter": 246.5,
+            "delta": -43.5
+          }
+        ],
+        "standardUnitPrice": 246.5,
+        "standardTotalPrice": 246.5,
+        "adjustmentErrors": []
+      },
+      {
+        "chargeCode": "monthly_port_fee",
+        "chargeName": "Monthly Port Fee",
+        "chargeType": "mrc",
+        "pricingMethod": "flat",
+        "unitPrice": 200,
+        "quantity": 1,
+        "totalPrice": 200,
+        "currencyCode": "USD",
+        "listUnitPrice": 250,
+        "listTotalPrice": 250,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 250,
+            "unitPriceAfter": 225,
+            "delta": -25
+          },
+          {
+            "origin": "manual",
+            "adjustmentId": "adj-1",
+            "class": "rep",
+            "level": "charge",
+            "windowKind": "relative",
+            "fromMonth": 1,
+            "toMonth": null,
+            "ruleCode": "adj-1",
+            "ruleName": "competitive_match",
+            "ruleType": "price_override",
+            "reasonCode": "competitive_match",
+            "value": 200,
+            "unitPriceBefore": 225,
+            "unitPriceAfter": 200,
+            "delta": -25
+          }
+        ],
+        "standardUnitPrice": 225,
+        "standardTotalPrice": 225,
+        "adjustmentErrors": []
+      }
+    ],
+    "adjustmentErrors": [],
+    "pricingSummary": {
+      "listNrcTotal": 580,
+      "listMrcTotal": 500,
+      "standardNrcTotal": 493,
+      "standardMrcTotal": 450,
+      "ruleDiscountTotal": 137,
+      "manualDiscountTotal": 50,
+      "dealValue": {
+        "list": 6580,
+        "standard": 5893,
+        "offer": 5293
+      },
+      "discountDepth": {
+        "rule": 0.10440729483282674,
+        "manual": 0.1018157135584592,
+        "total": 0.1955927051671732,
+        "maxLineManual": 0.1018157135584592
+      },
+      "hasTimeBasedAdjustments": false,
+      "snapshotHash": "ec0ac284eb40c1c9f069b3843ec2fd2a250424feb93f15947170d88dd17c5ded"
+    },
+    "snapshotHash": "ec0ac284eb40c1c9f069b3843ec2fd2a250424feb93f15947170d88dd17c5ded"
+  },
+  {
+    "name": "manual adjustments on managed db (percent discount on charge)",
+    "listCharges": [
+      {
+        "chargeCode": "db_base_mrc",
+        "chargeName": "Database Base MRC",
+        "chargeType": "mrc",
+        "pricingMethod": "flat",
+        "unitPrice": 54,
+        "quantity": 1,
+        "totalPrice": 54,
+        "currencyCode": "USD",
+        "listUnitPrice": 60,
+        "listTotalPrice": 60,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 60,
+            "unitPriceAfter": 54,
+            "delta": -6
+          }
+        ],
+        "standardUnitPrice": 54,
+        "standardTotalPrice": 54
+      },
+      {
+        "chargeCode": "db_read_replicas",
+        "chargeName": "Read Replicas",
+        "chargeType": "mrc",
+        "pricingMethod": "per_unit",
+        "unitPrice": 32.4,
+        "quantity": 1,
+        "totalPrice": 32.4,
+        "currencyCode": "USD",
+        "listUnitPrice": 0,
+        "listTotalPrice": 0,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "puffin-db-read-replica-rate",
+            "ruleName": "Replica rate",
+            "ruleType": "price_override",
+            "value": 36,
+            "unitPriceBefore": 0,
+            "unitPriceAfter": 36,
+            "delta": 36
+          },
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 36,
+            "unitPriceAfter": 32.4,
+            "delta": -3.6000000000000014
+          }
+        ],
+        "standardUnitPrice": 32.4,
+        "standardTotalPrice": 32.4
+      }
+    ],
+    "charges": [
+      {
+        "chargeCode": "db_base_mrc",
+        "chargeName": "Database Base MRC",
+        "chargeType": "mrc",
+        "pricingMethod": "flat",
+        "unitPrice": 48.6,
+        "quantity": 1,
+        "totalPrice": 48.6,
+        "currencyCode": "USD",
+        "listUnitPrice": 60,
+        "listTotalPrice": 60,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 60,
+            "unitPriceAfter": 54,
+            "delta": -6
+          },
+          {
+            "origin": "manual",
+            "adjustmentId": "adj-2",
+            "class": "rep",
+            "level": "charge",
+            "windowKind": "relative",
+            "fromMonth": 1,
+            "toMonth": null,
+            "ruleCode": "adj-2",
+            "ruleName": "loyalty",
+            "ruleType": "discount_percent",
+            "reasonCode": "loyalty",
+            "value": 10,
+            "unitPriceBefore": 54,
+            "unitPriceAfter": 48.6,
+            "delta": -5.399999999999999
+          }
+        ],
+        "standardUnitPrice": 54,
+        "standardTotalPrice": 54,
+        "adjustmentErrors": []
+      },
+      {
+        "chargeCode": "db_read_replicas",
+        "chargeName": "Read Replicas",
+        "chargeType": "mrc",
+        "pricingMethod": "per_unit",
+        "unitPrice": 32.4,
+        "quantity": 1,
+        "totalPrice": 32.4,
+        "currencyCode": "USD",
+        "listUnitPrice": 0,
+        "listTotalPrice": 0,
+        "adjustments": [
+          {
+            "origin": "rule",
+            "ruleCode": "puffin-db-read-replica-rate",
+            "ruleName": "Replica rate",
+            "ruleType": "price_override",
+            "value": 36,
+            "unitPriceBefore": 0,
+            "unitPriceAfter": 36,
+            "delta": 36
+          },
+          {
+            "origin": "rule",
+            "ruleCode": "volume-mrc-10pct",
+            "ruleName": "Volume Discount — 10% MRC",
+            "ruleType": "discount_percent",
+            "value": 10,
+            "unitPriceBefore": 36,
+            "unitPriceAfter": 32.4,
+            "delta": -3.6000000000000014
+          }
+        ],
+        "standardUnitPrice": 32.4,
+        "standardTotalPrice": 32.4,
+        "adjustmentErrors": []
+      }
+    ],
+    "adjustmentErrors": [],
+    "pricingSummary": {
+      "listNrcTotal": 0,
+      "listMrcTotal": 60,
+      "standardNrcTotal": 0,
+      "standardMrcTotal": 86.4,
+      "ruleDiscountTotal": 9.600000000000001,
+      "manualDiscountTotal": 5.399999999999999,
+      "dealValue": {
+        "list": 1440,
+        "standard": 2073.6,
+        "offer": 1944
+      },
+      "discountDepth": {
+        "rule": -0.43999999999999995,
+        "manual": 0.0625,
+        "total": -0.3500000000000001,
+        "maxLineManual": 0.0625
+      },
+      "hasTimeBasedAdjustments": false,
+      "snapshotHash": "9fac4cbf57137c7271917b6ac1b239c1059e2597e0e9e3fb32e301c0629c170e"
+    },
+    "snapshotHash": "9fac4cbf57137c7271917b6ac1b239c1059e2597e0e9e3fb32e301c0629c170e"
+  }
+]

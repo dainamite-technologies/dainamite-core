@@ -14,7 +14,7 @@ Engine: om-auto-create-pr-loop (steps: 24, --loop: no)
 | A | 2 | Charge columns and markup redaction | group:A | done | 6bfa375 |
 | A | 3 | Pricing table purpose | group:A | done | e64e095 |
 | A | 4 | Cost elements | group:A | done | bb6e1d8 |
-| B | 5 | Characterize before any change | group:B1 | todo | |
+| B | 5 | Characterize before any change | group:B1 | done | |
 | B | 6 | Refactor the lookup into costLookup | group:B1 | todo | |
 | B | 7 | Cost line and markup override entities | group:B2 | todo | |
 | B | 8 | Cost resolution | group:B2 | todo | |

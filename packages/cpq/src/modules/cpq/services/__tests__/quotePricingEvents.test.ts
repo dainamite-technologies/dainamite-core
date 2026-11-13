@@ -31,6 +31,46 @@ const emitted = () => emitCpqEvent.mock.calls.map(([id]) => id)
 
 beforeEach(() => emitCpqEvent.mockClear())
 
+describe('emitQuoteWriteEvents — exact payload shapes (characterization)', () => {
+  const snapshot = {
+    tenantId: 'tenant', organizationId: 'org', quoteId: 'cfg-1', quoteType: 'new', cpqStatus: 'in_approval',
+    currencyCode: 'USD', pricingRevision: 3, snapshotHash: 'hash-a',
+    dealValue: { list: 1200, standard: 1000, offer: 800 },
+    discountDepth: { rule: 1 / 6, manual: 0.2, total: 1 / 3, maxLineManual: 0.2 },
+    hasTimeBasedAdjustments: false, occurredAt: expect.any(String),
+  }
+
+  it('pins the pricing_changed payload key set exactly', async () => {
+    await emitQuoteWriteEvents({ snapshotHash: 'hash-0', cpqStatus: 'in_approval' }, quote({ cpqStatus: 'in_approval' }), { pricingCause: 'recalculate' }, emitCpqEvent)
+    expect(emitCpqEvent).toHaveBeenCalledTimes(1)
+    expect(emitCpqEvent.mock.calls[0]).toEqual(['cpq.quote.pricing_changed', { ...snapshot, cause: 'recalculate' }])
+    expect(Object.keys(emitCpqEvent.mock.calls[0][1]).sort()).toEqual([
+      'cause', 'cpqStatus', 'currencyCode', 'dealValue', 'discountDepth', 'hasTimeBasedAdjustments', 'occurredAt',
+      'organizationId', 'pricingRevision', 'quoteId', 'quoteType', 'snapshotHash', 'tenantId',
+    ])
+  })
+
+  it('pins the status_changed payload key set exactly', async () => {
+    await emitQuoteWriteEvents({ snapshotHash: 'hash-a', cpqStatus: 'ready' }, quote({ cpqStatus: 'in_approval' }),
+      { pricingCause: 'line', statusCause: 'manual', actorUserId: 'user-1' }, emitCpqEvent)
+    expect(emitCpqEvent.mock.calls).toEqual([['cpq.quote.status_changed', {
+      ...snapshot, fromStatus: 'ready', toStatus: 'in_approval', cause: 'manual', actorUserId: 'user-1',
+    }]])
+    expect(Object.keys(emitCpqEvent.mock.calls[0][1]).sort()).toEqual([
+      'actorUserId', 'cause', 'cpqStatus', 'currencyCode', 'dealValue', 'discountDepth', 'fromStatus', 'hasTimeBasedAdjustments',
+      'occurredAt', 'organizationId', 'pricingRevision', 'quoteId', 'quoteType', 'snapshotHash', 'tenantId', 'toStatus',
+    ])
+  })
+
+  it('defaults a legacy summary to an empty hash and zeroed deal value in the snapshot', async () => {
+    await emitQuoteWriteEvents(null, quote({ pricingSummary: { snapshotHash: 'h' } }), { pricingCause: 'clone' }, emitCpqEvent)
+    expect(emitCpqEvent.mock.calls[0][1]).toMatchObject({
+      snapshotHash: 'h', dealValue: { list: 0, standard: 0, offer: 0 },
+      discountDepth: { rule: null, manual: null, total: null, maxLineManual: null }, hasTimeBasedAdjustments: false,
+    })
+  })
+})
+
 describe('emitQuoteWriteEvents', () => {
   it('emits one pricing_changed with the pricing snapshot when the stored hash changes', async () => {
     const q = quote()

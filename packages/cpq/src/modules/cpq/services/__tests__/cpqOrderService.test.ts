@@ -634,3 +634,43 @@ describe('conversion stored-adjustment baseline', () => {
     expect(orderLine?.configuration).not.toHaveProperty('_arcRepriced')
   })
 })
+
+describe('conversion output shape (characterization before cost-plus guard)', () => {
+  it('pins the created sales order, order configuration and order line payloads', async () => {
+    const { em, service } = createService()
+    const charges = [{ chargeCode: 'fee', chargeType: 'mrc', pricingMethod: 'flat', quantity: 1, unitPrice: 80, totalPrice: 80,
+      listUnitPrice: 120, listTotalPrice: 120, standardUnitPrice: 100, standardTotalPrice: 100, currencyCode: 'USD', adjustmentErrors: [] }]
+    em.findOne.mockResolvedValueOnce({ id: 'quote', quoteId: 'sales', cpqStatus: 'accepted', currencyCode: 'USD', customerId: 'customer',
+      pricingSummary: { nrcTotal: 10, mrcTotal: 80 } }).mockResolvedValueOnce(null)
+    em.find.mockResolvedValueOnce([{ quoteLineId: 'line', quantity: 2, action: 'add', nrcTotal: '10', mrcTotal: '80', charges,
+      configuration: { a: 1 }, offeringId: null, productId: 'prod', specId: null, startDate: null, endDate: null, termMonths: 12 }]).mockResolvedValueOnce([])
+    em.create.mockImplementation((_entity, values: Record<string, unknown>) => ({ createdAt: new Date(), ...values }))
+    await service.convertQuoteToOrder('quote', SCOPE)
+    const created = (entityName: string) => em.create.mock.calls.find(([entity]) => (entity as { name: string }).name === entityName)?.[1]
+    expect(created('SalesOrder')).toMatchObject({
+      orderNumber: 'ORD-0001', customerEntityId: 'customer', currencyCode: 'USD', status: 'draft',
+      subtotalNetAmount: '90', grandTotalNetAmount: '90', grandTotalGrossAmount: '90', lineItemCount: 1,
+      discountTotalAmount: '0', taxTotalAmount: '0', metadata: { sourceQuoteId: 'quote' },
+    })
+    expect(created('CpqOrderConfiguration')).toMatchObject({
+      sourceQuoteId: 'quote', customerId: 'customer', cpqStatus: 'draft', currencyCode: 'USD',
+      pricingSummary: { nrcTotal: 10, mrcTotal: 80, currencyCode: 'USD' },
+    })
+    expect(created('SalesOrderLine')).toMatchObject({
+      lineNumber: 1, kind: 'product', quantity: '2', unitPriceNet: '45', totalNetAmount: '90',
+      configuration: { offeringId: null, action: 'add', nrcTotal: 10, mrcTotal: 80, parentLineId: null },
+    })
+    expect(created('CpqOrderLineConfiguration')).toMatchObject({
+      action: 'add', quantity: 2, charges, nrcTotal: '10', mrcTotal: '80', sourceQuoteLineId: 'line', termMonths: 12,
+      configuration: { a: 1, offeringName: expect.any(String) },
+    })
+  })
+
+  it('checks status, then existing order, then lines, then stored adjustments (guard order)', async () => {
+    const { em, service } = createService()
+    em.findOne.mockResolvedValueOnce({ id: 'quote', cpqStatus: 'ready', currencyCode: 'USD', pricingSummary: {} })
+      .mockResolvedValueOnce({ orderId: 'existing' })
+    await expect(service.convertQuoteToOrder('quote', SCOPE)).rejects.toMatchObject({ status: 409, message: 'Quote has already been converted to order existing' })
+    expect(em.find).not.toHaveBeenCalled()
+  })
+})

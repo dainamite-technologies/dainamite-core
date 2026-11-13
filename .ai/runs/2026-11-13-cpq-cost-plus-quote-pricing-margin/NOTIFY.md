@@ -19,3 +19,6 @@
 ## 2026-11-13T08:53:50Z — checkpoint 1
 - Steps A.1–A.4 (5a30eca..bb6e1d8): build ✅, typecheck ✅, full `yarn test` 102 suites / 1481 tests ✅. UI pass skipped (no UI touched; no runnable app env).
 - Decision: Tasks-table `Commit` cells hold the real code-commit SHAs, filled at each checkpoint; Step 4's executor had written its unreachable pre-amend SHA (cf45d4a), corrected to bb6e1d8.
+
+## 2026-11-13 — step 5 (layering decision)
+- Golden test stays at `packages/cpq/.../services/__tests__/costPlusGolden.test.ts` and builds fixtures from a copied, reduced representation of the demo_gix/demo_puffin seed definitions (CPQ must not import `src/modules/*`); synthetic offerings cover volume and multi-currency, which the seeds do not use. Fixture: `__tests__/__fixtures__/costPlusGolden.json` (regenerate deliberately with `UPDATE_COST_PLUS_GOLDEN=1`).

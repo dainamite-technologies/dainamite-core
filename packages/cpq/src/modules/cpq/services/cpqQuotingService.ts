@@ -19,6 +19,7 @@ import {
   CpqInventorySubscription,
   CpqInventorySubscriptionItem,
   CpqOrderConfiguration,
+  CpqProductCharge,
   CpqProductOffering,
   CpqProductSpecification,
 } from '../data/entities'
@@ -57,7 +58,7 @@ import {
   stripQuoteOnlyArcMarkers,
 } from './arcPriceFreeze'
 import type { CpqCostService } from './costs/costService'
-import { resolveCostPlusInputs } from './costs/costResolution'
+import { isQuoteCostLocked, resolveCostPlusInputs } from './costs/costResolution'
 import { isArcCancelledLine, planArcLineRemoval, planArcLineRestore, removalCancelsItem } from './arcLineRemoval'
 
 interface QuotingServiceDeps {
@@ -224,6 +225,7 @@ export class DefaultCpqQuotingService {
 
     // Resolve offering -> spec -> product
     const { offering, spec } = await this.resolveOffering(em, item, scope)
+    await this.assertCostPlusLineWritable(em, cpqConfig, { offeringId: offering?.id, productId: item.productId ?? spec?.productId }, scope)
 
     // Merge context: quoteContext + designTimeValues + user configuration
     const mergedConfig = {
@@ -400,6 +402,10 @@ export class DefaultCpqQuotingService {
     if (isArcCancelledLine(lineConfig, cpqConfig.quoteType)) {
       throw new QuotingError(409, 'This subscription item is marked for removal — restore it before changing it')
     }
+    // Values compared, not "a field was sent": the quote page always resubmits the full configuration.
+    if (arcPricingInputsChanged({ configuration: lineConfig.configuration, quantity: lineConfig.quantity }, { configuration: update.configuration, quantity: update.quantity })) {
+      await this.assertCostPlusLineWritable(em, cpqConfig, lineConfig, scope)
+    }
 
     const quoteLine = await em.findOne(SalesQuoteLine, {
       id: lineId,
@@ -538,6 +544,29 @@ export class DefaultCpqQuotingService {
     await em.flush()
 
     return this.recalculateInternal(em, cpqConfig, salesQuote, scope, true)
+  }
+
+  /**
+   * R4 / R11: a cost-locked quote keeps its stored cost values, so a line priced from costs (its offering /
+   * product has an ACTIVE cost-plus charge) can be neither added nor reconfigured there: the stored per-unit
+   * instance amounts and table lookups would no longer match the configuration, and a line added while locked
+   * never gets cost lines. `409 COST_LOCKED` (costs that change the price are locked — move the quote back to
+   * Ready). Toggle off: cost-plus charges are not priced at all (R7 refuses them), nothing to protect here.
+   */
+  private async assertCostPlusLineWritable(
+    em: EntityManager,
+    cpqConfig: CpqQuoteConfiguration,
+    owner: { offeringId?: string | null; productId?: string | null },
+    scope: TenantScope,
+  ): Promise<void> {
+    const costService = this.costService
+    if (!costService || !(owner.offeringId || owner.productId)) return
+    if (!(await costService.enabled(scope.tenantId))) return
+    const costPlusCharges = await em.count(CpqProductCharge, {
+      organizationId: scope.organizationId, tenantId: scope.tenantId, deletedAt: null, isActive: true, pricingMethod: 'cost_plus',
+      ...(owner.offeringId ? { offeringId: owner.offeringId } : { productId: owner.productId }),
+    })
+    if (costPlusCharges > 0 && await isQuoteCostLocked(em, cpqConfig, scope)) throw new QuotingError(409, 'COST_LOCKED')
   }
 
   // ─── Remove Quote Item ─────────────────────────────────────────

@@ -46,6 +46,7 @@ Engine: om-auto-create-pr-loop (steps: 24, --loop: no)
 | E | review1-b | Cost-plus usage counts in SQL (no hydration, no bound id list) | dispatch | done | |
 | E | review1-c | ARC lines: mirror-line cost confirmation, cancel lines drop costs and never bind | dispatch | done | |
 | E | review1-d | R7 refuses unpriced cost-plus charges (chargeCodes) | dispatch | done | |
+| E | review1-e | Cost-locked quotes refuse adding / reconfiguring cost-plus lines | dispatch | done | |
 
 ## Goal
 

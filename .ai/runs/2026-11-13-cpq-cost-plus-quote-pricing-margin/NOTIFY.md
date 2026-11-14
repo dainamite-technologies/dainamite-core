@@ -120,3 +120,6 @@
 
 ## 2026-11-14T04:00:42Z — review1-c (ARC lines)
 - Decision: "ARC cancel line" = `isArcTerminationLine` (new, arcLineRemoval.ts): an item removed on Amend / Renew OR any line of a Cancel quote. The R7 guard ignores all of them and every cost write on them is `422 LINE_NOT_ELIGIBLE`. Cost rows are dropped only for Amend / Renew removals (at removal, whatever the toggle / lock, and again by `planQuoteCosts`); Cancel-quote lines keep their planned catalog costs because the engine still prices them (dropping would make their cost-plus charges `COST_PENDING` and the Cancel quote incomplete). Value writes (`updateCost`) reach non-frozen mirror lines; manual costs and markup overrides stay refused on every mirror line.
+
+## 2026-11-14T04:08:48Z — review1-e (locked-quote reconfiguration)
+- Decision: "changes configuration or quantity" compares values (ARC markers and key order ignored, via `arcPricingInputsChanged` restricted to configuration + quantity), because the quote page always resubmits the full line; term / dates / usage estimates stay editable on locked quotes (no cost-plus price depends on them). The check runs only with the toggle on and only when the line's offering (else product) has an ACTIVE cost-plus charge; ARC internal flows (mirroring, remove / restore) never call add / update.

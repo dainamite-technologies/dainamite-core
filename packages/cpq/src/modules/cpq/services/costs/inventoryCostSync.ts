@@ -332,3 +332,62 @@ export async function endSubscriptionCosts(em: EntityManager, subscriptionId: st
   }
   return result
 }
+
+/**
+ * Merge re-point (Q2, Q5): moves the open item costs of cloned source items onto their clones on the merged
+ * subscription. Rows keep their ids; only `subscription_id` and `subscription_item_id` change. Ended rows stay on
+ * the old item (its history). A clone is new, so the owner + `cost_key` unique index cannot collide. Every
+ * re-pointed row is a real change (`kind: 'repointed'`).
+ */
+export async function repointItemCosts(
+  em: EntityManager,
+  sourceItemToNewItem: Map<string, string>,
+  newSubscriptionId: string,
+  ctx: InventoryCostSyncContext,
+): Promise<InventoryCostSyncResult> {
+  const result: InventoryCostSyncResult = { rows: [], changes: [], links: [] }
+  if (sourceItemToNewItem.size === 0) return result
+  const open = await em.find(CpqInventoryCost, {
+    organizationId: ctx.scope.organizationId,
+    tenantId: ctx.scope.tenantId,
+    deletedAt: null,
+    status: 'active',
+    subscriptionItemId: { $in: [...sourceItemToNewItem.keys()] },
+  })
+  for (const row of open ?? []) {
+    const cloneId = row.subscriptionItemId ? sourceItemToNewItem.get(row.subscriptionItemId) : undefined
+    if (!cloneId) continue
+    row.subscriptionId = newSubscriptionId
+    row.subscriptionItemId = cloneId
+    result.rows.push(row)
+    result.changes.push(changeOf(row, 'subscription_item', 'repointed'))
+  }
+  return result
+}
+
+/**
+ * Merge re-point of asset costs: the asset moves to the merged subscription, so its open costs follow
+ * (`subscription_id` only; `asset_id` and ids are unchanged).
+ */
+export async function repointAssetCosts(
+  em: EntityManager,
+  assetIds: string[],
+  newSubscriptionId: string,
+  ctx: InventoryCostSyncContext,
+): Promise<InventoryCostSyncResult> {
+  const result: InventoryCostSyncResult = { rows: [], changes: [], links: [] }
+  if (assetIds.length === 0) return result
+  const open = await em.find(CpqInventoryCost, {
+    organizationId: ctx.scope.organizationId,
+    tenantId: ctx.scope.tenantId,
+    deletedAt: null,
+    status: 'active',
+    assetId: { $in: assetIds },
+  })
+  for (const row of open ?? []) {
+    row.subscriptionId = newSubscriptionId
+    result.rows.push(row)
+    result.changes.push(changeOf(row, 'asset', 'repointed'))
+  }
+  return result
+}

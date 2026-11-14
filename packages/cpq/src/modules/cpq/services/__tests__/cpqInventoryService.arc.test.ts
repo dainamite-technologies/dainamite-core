@@ -852,4 +852,71 @@ describe('ARC inventory cost write-back', () => {
     expect(order).toEqual(['snapshot', 'cost-write', 'snapshot']) // before-snapshot, write, after-snapshot
     expect(row.lastChangeId).not.toBe('log-old')
   })
+  describe('merge re-point (step 14)', () => {
+    const mergeSetup = () => {
+      const em = createStatefulEm()
+      const service = new DefaultCpqInventoryService(em as unknown as never)
+      em.seed(CpqInventorySubscription, [fakeSub({ id: 'sub-a', code: 'SUB-A' }), fakeSub({ id: 'sub-b', code: 'SUB-B' })].map((s) => ({ ...s, ...T })))
+      em.seed(CpqInventorySubscriptionItem, [fakeItem({ id: 'item-a', subscriptionId: 'sub-a', name: 'A' }), fakeItem({ id: 'item-b', subscriptionId: 'sub-b', name: 'B', sortOrder: 1 })])
+      em.seed(CpqInventoryAsset, [
+        { ...T, id: 'asset-a', code: 'AST-A', name: 'Asset A', status: 'active', subscriptionId: 'sub-a', subscriptionItemId: 'item-a', productId: null },
+      ])
+      em.seed(CpqInventoryCost, [
+        costRow('ic-a', { subscriptionId: 'sub-a', subscriptionItemId: 'item-a' }, 'tail', '270'),
+        costRow('ic-b', { subscriptionId: 'sub-b', subscriptionItemId: 'item-b' }, 'tail', '100'),
+        costRow('ic-old', { subscriptionId: 'sub-a', subscriptionItemId: 'item-a' }, 'gone', '1', { status: 'ended', endedAt: '2026-02-01' }),
+        costRow('ic-asset', { subscriptionId: 'sub-a', assetId: 'asset-a' }, 'licence', '40'),
+      ])
+      const merge = (lineChanges: ArcLineChange[] = []) => service.applyMergeRenewal(
+        { sourceIds: ['sub-a', 'sub-b'], sourceQuoteId: 'q', sourceOrderId: 'o', performedByUserId: null,
+          term: { newTermStart: '2027-01-01', newTermEnd: '2028-01-01', newTermMonths: 12 }, mergeMeta: { newSubCode: 'SUB-M' }, lineChanges },
+        SCOPE,
+      )
+      return { em, service, merge }
+    }
+
+    it('re-points open item and asset costs to M with the same ids; the merge-result snapshot shows them', async () => {
+      const { em, merge } = mergeSetup()
+      const result = await merge()
+      const m = result.mergedSubscription
+      const byId = Object.fromEntries(em.rows(CpqInventoryCost).map((r) => [r.id as string, r]))
+      const cloneIds = (result.mergeResultChangeLog.afterSnapshot as { items: Array<{ id: string; costs?: Array<{ id: string }> }> }).items
+      expect(byId['ic-a']).toMatchObject({ subscriptionId: m.id, subscriptionItemId: cloneIds[0].id, lastChangeId: result.mergeResultChangeLog.id })
+      expect(byId['ic-b']).toMatchObject({ subscriptionId: m.id, subscriptionItemId: cloneIds[1].id })
+      expect(byId['ic-asset']).toMatchObject({ subscriptionId: m.id, assetId: 'asset-a', subscriptionItemId: null })
+      expect(byId['ic-old']).toMatchObject({ subscriptionId: 'sub-a', subscriptionItemId: 'item-a', status: 'ended' }) // history stays
+      expect(cloneIds.map((i) => (i.costs ?? []).map((c) => c.id))).toEqual([['ic-a'], ['ic-b']])
+      const after = result.mergeResultChangeLog.afterSnapshot as { assets: Array<{ costs?: Array<{ id: string }> }> }
+      expect(after.assets[0].costs?.map((c) => c.id)).toEqual(['ic-asset'])
+      expect(result.inventoryCostChanges.map((c) => [c.inventoryCostId, c.kind, c.ownerType, c.changeLogId]).sort()).toEqual([
+        ['ic-a', 'repointed', 'subscription_item', result.mergeResultChangeLog.id],
+        ['ic-asset', 'repointed', 'asset', result.mergeResultChangeLog.id],
+        ['ic-b', 'repointed', 'subscription_item', result.mergeResultChangeLog.id],
+      ])
+      // The sources' before snapshots still show the costs on their own items.
+      const before = result.sourceChangeLogs[0].beforeSnapshot as { items: Array<{ costs?: Array<{ id: string }> }> }
+      expect(before.items[0].costs?.map((c) => c.id)).toContain('ic-a')
+    })
+
+    it('operator-edit phase on M applies step 13 rules: a cancel line ends the re-pointed cost (one change per cost)', async () => {
+      const { em, merge } = mergeSetup()
+      const result = await merge([{ action: 'cancel', quoteLineId: 'ql-c', sourceSubscriptionItemId: 'item-a' }])
+      const row = em.rows(CpqInventoryCost).find((r) => r.id === 'ic-a')
+      expect(row).toMatchObject({ status: 'ended', subscriptionId: result.mergedSubscription.id })
+      expect(result.inventoryCostChanges.filter((c) => c.inventoryCostId === 'ic-a').map((c) => c.kind)).toEqual(['ended'])
+    })
+
+    it('an uncosted merge reports no cost changes', async () => {
+      const em = createStatefulEm()
+      const service = new DefaultCpqInventoryService(em as unknown as never)
+      em.seed(CpqInventorySubscription, [fakeSub({ id: 'sub-a' }), fakeSub({ id: 'sub-b' })].map((s) => ({ ...s, ...T })))
+      em.seed(CpqInventorySubscriptionItem, [fakeItem({ id: 'item-a', subscriptionId: 'sub-a' })])
+      const result = await service.applyMergeRenewal(
+        { sourceIds: ['sub-a', 'sub-b'], sourceQuoteId: 'q', sourceOrderId: 'o', performedByUserId: null,
+          term: { newTermStart: '2027-01-01', newTermEnd: '2028-01-01' }, mergeMeta: {}, lineChanges: [] },
+        SCOPE,
+      )
+      expect(result.inventoryCostChanges).toEqual([])
+    })
+  })
 })

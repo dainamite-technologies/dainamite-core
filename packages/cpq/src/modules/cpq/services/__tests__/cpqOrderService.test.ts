@@ -1254,6 +1254,20 @@ describe('ARC write-back wiring in activateOrder (step 13)', () => {
     expect(h.trace.at(-1)).toBe('tx:commit')
   })
 
+  it('merge: re-pointed costs are emitted after the commit with cause merge and kind repointed', async () => {
+    const changes = [costChange({ kind: 'repointed' }), costChange({ inventoryCostId: 'ic-2', kind: 'repointed', costKey: 'install' })]
+    const h = createActivationHarness({
+      quoteType: 'renew',
+      quoteOver: { arcMergeNewTermStart: '2027-01-01', arcMergeNewTermEnd: '2028-01-01', arcMergeNewTermMonths: 12 },
+      targets: [{ subscriptionId: 'sub-a', mergeAction: 'absorb' }, { subscriptionId: 'sub-b', mergeAction: 'absorb' }],
+      inventory: { applyMergeRenewal: { mergedSubscription: { id: 'sub-m', currentTermStart: new Date('2027-01-01') }, mergeResultChangeLog: { id: 'log-m' }, sourceChangeLogs: [], inventoryCostChanges: changes } },
+    })
+    const emitSpy = jest.spyOn(eventsModule, 'emitCpqEvent').mockResolvedValue(undefined as never)
+    await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+    expect(costEvents(emitSpy).map((p) => [p.cause, p.kind, p.inventoryCostId])).toEqual([['merge', 'repointed', 'ic-1'], ['merge', 'repointed', 'ic-2']])
+    expect(h.trace.at(-1)).toBe('tx:commit')
+  })
+
   it('emits no cost_changed when the ARC step wrote nothing (frozen / no-op)', async () => {
     const h = createActivationHarness(fixture('renew', 'applyRenewal', []))
     const emitSpy = jest.spyOn(eventsModule, 'emitCpqEvent').mockResolvedValue(undefined as never)

@@ -13,6 +13,8 @@ import {
   endAssetCosts,
   endItemCosts,
   endSubscriptionCosts,
+  repointAssetCosts,
+  repointItemCosts,
   replaceItemCosts,
   type CostSeed,
   type InventoryCostChange,
@@ -167,6 +169,8 @@ export interface ApplyMergeRenewalResult {
   mergeResultChangeLog: CpqSubscriptionChangeLog
   /** One per source — change_type='merge-source'. */
   sourceChangeLogs: CpqSubscriptionChangeLog[]
+  /** Re-pointed and operator-edit cost changes, each carrying the merge-result row (no-op rows excluded). */
+  inventoryCostChanges: InventoryCostChange[]
 }
 
 export interface CreateSubscriptionInput {
@@ -1301,6 +1305,7 @@ export class DefaultCpqInventoryService {
           mergedSubscription: m,
           mergeResultChangeLog: mergeResult,
           sourceChangeLogs: existingSourceLogs,
+          inventoryCostChanges: [],
         }
       }
     }
@@ -1429,8 +1434,17 @@ export class DefaultCpqInventoryService {
     }
     await this.em.flush()
 
+    // Costs follow the clones (Q2, Q5): open item costs move to the cloned items, same ids.
+    const effectiveAt = new Date()
+    const costCtx = { scope, startedAt: isoDay(effectiveAt), endedAt: isoDay(effectiveAt) }
+    const costWrites: CostWrites = { rows: [], changes: [] }
+    const repointedItems = await repointItemCosts(this.em, sourceItemToNewItem, m.id, costCtx)
+    costWrites.rows.push(...repointedItems.rows)
+    costWrites.changes.push(...repointedItems.changes)
+
     // Migrate assets: every source's assets switch FK to M (and to the new
     // item id mapped from the original source item id).
+    const migratedAssetIds: string[] = []
     for (const source of sources) {
       const assets = await this.em.find(CpqInventoryAsset, {
         subscriptionId: source.id,
@@ -1441,12 +1455,16 @@ export class DefaultCpqInventoryService {
       })
       for (const asset of assets) {
         asset.subscriptionId = m.id
+        migratedAssetIds.push(asset.id)
         if (asset.subscriptionItemId) {
           const newItemId = sourceItemToNewItem.get(asset.subscriptionItemId)
           if (newItemId) asset.subscriptionItemId = newItemId
         }
       }
     }
+    const repointedAssets = await repointAssetCosts(this.em, migratedAssetIds, m.id, costCtx)
+    costWrites.rows.push(...repointedAssets.rows)
+    costWrites.changes.push(...repointedAssets.changes)
     await this.em.flush()
 
     // Operator-edit phase: apply lineChanges on M's combined item set.
@@ -1466,14 +1484,25 @@ export class DefaultCpqInventoryService {
       return lc
     })
 
-    const { lineChangeSummary } = await this.applyLineChanges(
+    const applied = await this.applyLineChanges(
       m,
       translatedChanges,
       scope,
       null,
     )
+    const { lineChangeSummary } = applied
 
     await this.recomputeSubscriptionAggregatesInPlace(m, scope)
+
+    // Step 13's rules on M (cancel ends, add creates, reconfigured mirror replaces), after the re-point.
+    const operatorWrites = await this.writeBackLineCosts(translatedChanges, applied, m, scope, effectiveAt)
+    costWrites.rows.push(...operatorWrites.rows)
+    // One change per inventory cost: an operator edit of a re-pointed row supersedes its `repointed` entry.
+    const operatorIds = new Set(operatorWrites.changes.map((change) => change.inventoryCostId))
+    costWrites.changes = [
+      ...costWrites.changes.filter((change) => !operatorIds.has(change.inventoryCostId)),
+      ...operatorWrites.changes,
+    ]
     await this.em.flush()
 
     const afterSnapshot = await this.snapshotSubscription(m, scope)
@@ -1516,6 +1545,7 @@ export class DefaultCpqInventoryService {
     }
 
     const mergeResultLog = this.createChangeLog({
+      effectiveAt,
       subscription: m,
       changeType: 'merge-result',
       sourceQuoteId: input.sourceQuoteId,
@@ -1535,6 +1565,7 @@ export class DefaultCpqInventoryService {
       mergedFromSubscriptionIds: input.sourceIds,
     })
     m.lastChangeLogId = mergeResultLog.id
+    const inventoryCostChanges = this.settleCostWrites(costWrites, mergeResultLog)
 
     await this.em.flush()
 
@@ -1542,6 +1573,7 @@ export class DefaultCpqInventoryService {
       mergedSubscription: m,
       mergeResultChangeLog: mergeResultLog,
       sourceChangeLogs: sourceLogs,
+      inventoryCostChanges,
     }
   }
 

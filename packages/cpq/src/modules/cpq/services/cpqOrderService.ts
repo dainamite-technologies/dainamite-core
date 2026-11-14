@@ -632,6 +632,8 @@ export class DefaultCpqOrderService {
           scope,
         )
 
+        costChanges.push(...(merge.inventoryCostChanges ?? []).map((change) => ({ ...change, cause: 'merge' as const })))
+
         // One event per source (`superseded`) + one for M (`merged`).
         const mergedFromSubscriptionIds = absorb.map((t) => t.subscriptionId)
         events.push(() =>

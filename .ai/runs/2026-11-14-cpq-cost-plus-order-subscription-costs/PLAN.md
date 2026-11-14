@@ -25,7 +25,7 @@ Engine: om-auto-create-pr-loop (steps: 21, --loop: no)
 | C | 11 | Reconfigured mirrors get cost lines | group:C1 | done | |
 | C | 12 | Renew banner | group:C2 | done | |
 | C | 13 | Write-back for Amend / Renew / Cancel | group:C2 | done | |
-| C | 14 | Merge re-point | group:C3 | todo | |
+| C | 14 | Merge re-point | group:C3 | done | |
 | C | 15 | Scrub CLI | group:C3 | todo | |
 | C | 16 | MIGRATION.md and changeset | group:C3 | todo | |
 | D | 17 | Order page costs and margin | group:D1 | todo | |

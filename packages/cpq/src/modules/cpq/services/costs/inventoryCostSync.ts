@@ -70,6 +70,10 @@ export type InventoryCostChange = {
   supplierId: string | null
   kind: 'created' | 'changed' | 'ended' | 'repointed'
   orderLineCostId?: string | null
+  /** Change-log row that recorded the change; set by the caller once that row exists. */
+  changeLogId?: string
+  /** `YYYY-MM-DD` of that change-log row's effective time; set with `changeLogId`. */
+  effectiveDate?: string
 }
 
 /** Order line cost -> the inventory cost it set (also reported for no-op rows, which are not changes). */

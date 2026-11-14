@@ -579,10 +579,14 @@ export class DefaultCpqInventoryService {
       if (changedCostIds.has(row.id)) row.lastChangeId = log.id
     }
     await this.em.flush()
+    // The change-log row that recorded each change travels with it, for the post-commit `cost_changed` event.
+    const effectiveDate = log.effectiveAt.toISOString().slice(0, 10)
+    const inventoryCostChanges = [...itemCosts.changes, ...assetCosts.changes]
+      .map((change) => ({ ...change, changeLogId: log.id, effectiveDate }))
     return {
       subscription: sub,
       assets,
-      inventoryCostChanges: [...itemCosts.changes, ...assetCosts.changes],
+      inventoryCostChanges,
       inventoryCostLinks: [...itemCosts.links, ...assetCosts.links],
     }
   }

@@ -1103,14 +1103,14 @@ describe('activateOrder writes inventory costs from the order line costs (step 5
     expect(readEntities.filter((name) => /Config(uration)?$/.test(name) && !/Order|Quote/.test(name))).toEqual([])
   })
 
-  it('threads the real inventory cost changes out of the transaction result (no event is declared or emitted here)', async () => {
+  it('threads the real inventory cost changes out of the transaction result (their events are covered in the step 7 block)', async () => {
     const changes = [{ inventoryCostId: 'ic-1', subscriptionId: 'sub-1', ownerType: 'subscription_item', subscriptionItemId: 'item-1', assetId: null, costKey: 'tail', supplierId: null, kind: 'created' }]
     const h = createActivationHarness({ ...fixture(), createdCosts: { inventoryCostChanges: changes } })
     const emitSpy = jest.spyOn(eventsModule, 'emitCpqEvent').mockResolvedValue(undefined as never)
     await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
     const transactionResult = await h.txEm.transactional.mock.results[0].value as { inventoryCostChanges: unknown[] }
     expect(transactionResult.inventoryCostChanges).toEqual(changes)
-    expect(emitSpy.mock.calls.map(([event]) => event)).toEqual(['cpq.subscription.activated'])
+    expect(emitSpy.mock.calls.map(([event]) => event)).toEqual(['cpq.subscription.activated', 'cpq.subscription.cost_changed'])
     emitSpy.mockRestore()
   })
 
@@ -1135,5 +1135,64 @@ describe('activateOrder writes inventory costs from the order line costs (step 5
     expect(h.store.committed).toEqual([])
     expect(h.store.committedOrderStatus).toBe('draft')
     jest.restoreAllMocks()
+  })
+})
+
+describe('cpq.subscription.cost_changed (step 7)', () => {
+  const line = (over: Record<string, unknown>) => ({ orderConfigurationId: 'oc-1', quantity: 1, configuration: {}, charges: [], parentLineId: null,
+    startDate: null, termMonths: null, offeringId: null, productId: null, specId: null, sourceQuoteLineId: null, nrcTotal: '0', mrcTotal: '0', ...over })
+  const base = {
+    quoteType: 'new' as const,
+    orderLines: [line({ orderLineId: 'ol-1', mrcTotal: '100', configuration: { offeringName: 'Hosting' } })],
+    specs: [],
+    subscriptionItems: [{ id: 'item-1' }],
+  }
+  const change = (over: Record<string, unknown>) => ({ inventoryCostId: 'ic-1', subscriptionId: 'sub-1', ownerType: 'subscription_item', subscriptionItemId: 'item-1',
+    assetId: null, costKey: 'tail', supplierId: 'sup-1', kind: 'created', changeLogId: 'log-1', effectiveDate: '2026-11-14', ...over })
+  const costEvents = (spy: jest.SpyInstance) => spy.mock.calls.filter(([id]) => id === 'cpq.subscription.cost_changed').map(([, payload]) => payload as Record<string, unknown>)
+
+  afterEach(() => jest.restoreAllMocks())
+
+  it('emits one event per real change after the commit, with ids and keys only (no amount keys)', async () => {
+    const changes = [
+      change({}),
+      change({ inventoryCostId: 'ic-2', ownerType: 'asset', subscriptionItemId: null, assetId: 'asset-1', costKey: 'licence', supplierId: null, kind: 'changed' }),
+    ]
+    const h = createActivationHarness({ ...base, createdCosts: { inventoryCostChanges: changes } })
+    const emitSpy = jest.spyOn(eventsModule, 'emitCpqEvent').mockResolvedValue(undefined as never)
+    await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+
+    const payloads = costEvents(emitSpy)
+    expect(payloads).toHaveLength(2)
+    // emitted after the activated event, i.e. after the commit
+    expect(emitSpy.mock.calls[0][0]).toBe('cpq.subscription.activated')
+    expect(payloads[0]).toEqual({
+      organizationId: ACTIVATION_SCOPE.organizationId, tenantId: ACTIVATION_SCOPE.tenantId, subscriptionId: 'sub-1',
+      ownerType: 'subscription_item', subscriptionItemId: 'item-1', assetId: null, inventoryCostId: 'ic-1', changeLogId: 'log-1',
+      costKey: 'tail', effectiveDate: '2026-11-14', supplierId: 'sup-1', sourceOrderId: 'oc-1', cause: 'activation', kind: 'created',
+    })
+    expect(payloads[1]).toMatchObject({ ownerType: 'asset', subscriptionItemId: null, assetId: 'asset-1', kind: 'changed' })
+    for (const payload of payloads) {
+      expect(Object.keys(payload).filter((key) => /amount|cost$|price|total|margin|fx/i.test(key))).toEqual([])
+    }
+  })
+
+  it('emits no cost_changed when no row really changed (no-op rows are not in the change list)', async () => {
+    const h = createActivationHarness({ ...base, createdCosts: { inventoryCostChanges: [] } })
+    const emitSpy = jest.spyOn(eventsModule, 'emitCpqEvent').mockResolvedValue(undefined as never)
+    await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+    expect(costEvents(emitSpy)).toEqual([])
+  })
+
+  it('emits nothing on rollback, and a failing dispatch never fails the committed activation', async () => {
+    const failed = createActivationHarness({ ...base, failInventory: 'createSubscription' as const, createdCosts: { inventoryCostChanges: [change({})] } })
+    const emitSpy = jest.spyOn(eventsModule, 'emitCpqEvent').mockResolvedValue(undefined as never)
+    await expect(failed.service.activateOrder('oc-1', ACTIVATION_SCOPE)).rejects.toThrow()
+    expect(emitSpy).not.toHaveBeenCalled()
+
+    const ok = createActivationHarness({ ...base, createdCosts: { inventoryCostChanges: [change({})] } })
+    jest.spyOn(console, 'error').mockImplementation(() => undefined)
+    emitSpy.mockImplementation(async (id) => { if (id === 'cpq.subscription.cost_changed') throw new Error('bus down') })
+    await expect(ok.service.activateOrder('oc-1', ACTIVATION_SCOPE)).resolves.toMatchObject({ cpqStatus: 'active' })
   })
 })

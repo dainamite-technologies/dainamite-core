@@ -253,6 +253,12 @@ describe('events', () => {
     expect(declared.find((e) => e.id === 'cpq.quote.margin_changed')?.clientBroadcast).toBe(false)
   })
 
+  it('cost_changed is not broadcast and declares no amount field (ids and keys only)', () => {
+    const event = declared.find((e) => e.id === 'cpq.subscription.cost_changed')
+    expect(event?.clientBroadcast).toBe(false)
+    for (const field of event?.payloadSchema?.fields ?? []) expect(field.path).not.toMatch(/amount|price|total|margin|markup|fx/i)
+  })
+
   it('declares previousMarginHash as optional (null when a write creates the first cost lines)', () => {
     const fields = (declared.find((e) => e.id === 'cpq.quote.margin_changed')?.payloadSchema?.fields ?? []) as Array<{ path: string; optional?: boolean }>
     expect(fields.find((f) => f.path === 'previousMarginHash')).toMatchObject({ optional: true })

@@ -423,6 +423,10 @@ export class DefaultCpqOrderService {
 
     // `transactional` resolved, so the activation is committed; a rolled-back
     // activation never reaches here. Emit lifecycle events AFTER the commit.
+    // One `cost_changed` per real inventory cost change (no-op rows are not in the list); no amounts.
+    for (const change of committed.inventoryCostChanges) {
+      postCommitEvents.push(() => emitCostChangedEvent(committed.orderConfig, change, 'activation', scope))
+    }
     for (const fire of postCommitEvents) {
       try {
         await fire()
@@ -1256,6 +1260,31 @@ async function emitActivatedEvent(
     sourceQuoteId: orderConfig.sourceQuoteId ?? null,
     sourceOrderId: orderConfig.id,
     items,
+  } as never)
+}
+
+/** `cpq.subscription.cost_changed`: ids and keys only, never an amount (not broadcast to the browser). */
+async function emitCostChangedEvent(
+  orderConfig: CpqOrderConfiguration,
+  change: InventoryCostChange,
+  cause: 'activation' | 'amend' | 'renew' | 'cancel' | 'merge',
+  scope: TenantScope,
+): Promise<void> {
+  await emitCpqEvent('cpq.subscription.cost_changed' as never, {
+    organizationId: scope.organizationId,
+    tenantId: scope.tenantId,
+    subscriptionId: change.subscriptionId,
+    ownerType: change.ownerType,
+    subscriptionItemId: change.subscriptionItemId,
+    assetId: change.assetId,
+    inventoryCostId: change.inventoryCostId,
+    changeLogId: change.changeLogId ?? null,
+    costKey: change.costKey,
+    effectiveDate: change.effectiveDate ?? new Date().toISOString().slice(0, 10),
+    supplierId: change.supplierId,
+    sourceOrderId: orderConfig.id,
+    cause,
+    kind: change.kind,
   } as never)
 }
 

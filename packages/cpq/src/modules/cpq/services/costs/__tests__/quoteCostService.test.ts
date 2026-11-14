@@ -1,5 +1,5 @@
 import {
-  CpqOrderConfiguration, CpqProductCharge, CpqQuoteConfiguration, CpqQuoteLineConfiguration, CpqQuoteLineCost, CpqQuoteMarkupOverride,
+  CpqInventoryCost, CpqInventorySubscription, CpqOrderConfiguration, CpqProductCharge, CpqQuoteConfiguration, CpqQuoteLineConfiguration, CpqQuoteLineCost, CpqQuoteMarkupOverride,
 } from '../../../data/entities'
 
 jest.mock('../../priceAdjustments/quotePricingWrite', () => ({
@@ -104,10 +104,16 @@ describe('reads', () => {
   })
   it('usage counts with one aggregate query per figure: no cost row hydrated, no bound id list', async () => {
     const { service, em, subquery } = setup({ costs: [catalogRow()] })
-    em.count.mockImplementation(async (entity: unknown) => (entity === CpqProductCharge ? 3 : entity === CpqQuoteConfiguration ? 2 : 0))
-    await expect(service.usage(SCOPE)).resolves.toEqual({ enabled: true, costPlusCharges: 3, openQuotes: 2, openRequests: 0, liveSubscriptions: 0 })
+    em.count.mockImplementation(async (entity: unknown) => (entity === CpqProductCharge ? 3 : entity === CpqQuoteConfiguration ? 2 : entity === CpqInventorySubscription ? 4 : 0))
+    await expect(service.usage(SCOPE)).resolves.toEqual({ enabled: true, costPlusCharges: 3, openQuotes: 2, openRequests: 0, liveSubscriptions: 4 })
     expect(em.find).not.toHaveBeenCalled()
-    expect(em.count).toHaveBeenCalledTimes(2)
+    expect(em.count).toHaveBeenCalledTimes(3)
+    // Live subscriptions with an open cost: a semi-join on active inventory costs, no bound id list.
+    const subWhere = em.count.mock.calls.find(([entity]: unknown[]) => entity === CpqInventorySubscription)[1]
+    expect(subWhere).toMatchObject({ ...SCOPE, deletedAt: null, status: { $nin: ['terminated', 'expired', 'superseded'] } })
+    expect(subWhere.id.$in).toBe(subquery)
+    expect(em.createQueryBuilder).toHaveBeenCalledWith(CpqInventoryCost, 'ic')
+    expect(subquery.where).toHaveBeenCalledWith({ ...SCOPE, deletedAt: null, status: 'active' })
     expect(em.count).toHaveBeenCalledWith(CpqProductCharge, { ...SCOPE, deletedAt: null, pricingMethod: 'cost_plus', isActive: true })
     const quoteWhere = em.count.mock.calls.find(([entity]: unknown[]) => entity === CpqQuoteConfiguration)[1]
     expect(quoteWhere).toMatchObject({ ...SCOPE, deletedAt: null, cpqStatus: { $nin: [...COST_CLOSED_STATUSES] } })
@@ -117,7 +123,7 @@ describe('reads', () => {
     // Accepted-but-unconverted quotes are open; ordered quotes (NOT IN order sources) are not.
     expect(quoteWhere.cpqStatus.$nin).not.toContain('accepted')
     expect(quoteWhere.id.$nin).toBe(subquery)
-    expect(em.createQueryBuilder).toHaveBeenCalledTimes(2)
+    expect(em.createQueryBuilder).toHaveBeenCalledTimes(3)
     expect(em.createQueryBuilder).toHaveBeenCalledWith(CpqQuoteLineCost, 'qlc')
     expect(em.createQueryBuilder).toHaveBeenCalledWith(CpqOrderConfiguration, 'oc')
     expect(subquery.select).toHaveBeenCalledWith('oc.sourceQuoteId')

@@ -92,3 +92,24 @@ export function groupInventoryCostSnapshots(rows: CpqInventoryCost[]): {
 export function costsEntry(costs: InventoryCostSnapshot[] | undefined): { costs?: InventoryCostSnapshot[] } {
   return costs && costs.length > 0 ? { [SNAPSHOT_COSTS_KEY]: costs } : {}
 }
+
+/**
+ * Redaction for the change-log read route (Q7): the snapshot without any `items[].costs` / `assets[].costs`
+ * key. The one place that strips it, by key, so the snapshot cost shape can grow without a leak. Returns a copy;
+ * a null / non-object snapshot is returned as is.
+ */
+export function stripSnapshotCosts<T>(snapshot: T): T {
+  if (!snapshot || typeof snapshot !== 'object') return snapshot
+  const copy: Record<string, unknown> = { ...(snapshot as Record<string, unknown>) }
+  for (const owners of ['items', 'assets']) {
+    const list = copy[owners]
+    if (Array.isArray(list)) {
+      copy[owners] = list.map((entry) => {
+        if (!entry || typeof entry !== 'object') return entry
+        const { [SNAPSHOT_COSTS_KEY]: _omitted, ...rest } = entry as Record<string, unknown>
+        return rest
+      })
+    }
+  }
+  return copy as T
+}

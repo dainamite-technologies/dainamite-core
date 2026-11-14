@@ -42,6 +42,12 @@ export type InventoryCostStatus = (typeof INVENTORY_COST_STATUSES)[number]
 export const INVENTORY_COST_OWNER_TYPES = ['subscription_item', 'asset'] as const
 export type InventoryCostOwnerType = (typeof INVENTORY_COST_OWNER_TYPES)[number]
 
+/** Owner statuses that end an inventory cost's "open" state without any write (feature spec Q6). */
+export const ITEM_NOT_LIVE_STATUSES = ['terminated', 'expired', 'superseded'] as const
+export const ASSET_NOT_LIVE_STATUSES = ['cancelled', 'returned'] as const
+export const isItemLive = (item: { status: string; deletedAt?: Date | null }): boolean => !item.deletedAt && !(ITEM_NOT_LIVE_STATUSES as readonly string[]).includes(item.status)
+export const isAssetLive = (asset: { status: string; deletedAt?: Date | null }): boolean => !asset.deletedAt && !(ASSET_NOT_LIVE_STATUSES as readonly string[]).includes(asset.status)
+
 // ─── Charge cost elements (App Spec §1.4.4) ─────────────────────
 
 export const COST_ROLES = ['price_basis', 'margin_only'] as const

@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { DEFAULT_INVOICE_LANGUAGE, INVOICE_LANGUAGE_CODES } from '../lib/invoiceLanguages'
+import { DOCUMENT_SERIES, validateMask } from '../lib/numbering'
 
 // ─── Enums ───────────────────────────────────────────────────────
 
@@ -34,8 +35,13 @@ export type BillRunOutcomeStatus = (typeof BILL_RUN_OUTCOME_STATUSES)[number]
 export const DRAFT_INVOICE_EDIT_ACTIONS = ['line_added', 'line_removed', 'line_edited'] as const
 export type DraftInvoiceEditAction = (typeof DRAFT_INVOICE_EDIT_ACTIONS)[number]
 
-export const INVOICE_STATUSES = ['draft', 'posted', 'paid', 'void'] as const
+// Spec 0: billing-owned document statuses. No 'void' — a posted document is
+// only neutralised by a credit memo ('credited'); drafts are deleted.
+export const INVOICE_STATUSES = ['draft', 'posted', 'partially_paid', 'paid', 'credited'] as const
 export type InvoiceStatus = (typeof INVOICE_STATUSES)[number]
+
+export const DOCUMENT_TYPES = ['invoice', 'credit_memo', 'debit_memo', 'receipt'] as const
+export type DocumentType = (typeof DOCUMENT_TYPES)[number]
 
 // ─── Prepaid (SPEC-002) enums ────────────────────────────────────
 
@@ -760,3 +766,55 @@ export const billingStatementListQuerySchema = z
 export type BillingStatementListQuery = z.infer<typeof billingStatementListQuerySchema>
 
 
+
+// ─── Spec 0 — invoice ledger + billing settings ──────────────────
+
+// Query-string boolean: only the literal strings count ("false" must NOT
+// coerce to true the way z.coerce.boolean() would).
+const queryBoolean = z.preprocess(
+  (value) => (value === 'true' || value === true ? true : value === 'false' || value === false ? false : undefined),
+  z.boolean().optional(),
+)
+
+export const billingInvoiceListQuerySchema = z
+  .object({
+    ...listPaginationBase,
+    id: z.string().uuid().optional(),
+    status: z.enum(INVOICE_STATUSES).optional(),
+    documentType: z.enum(DOCUMENT_TYPES).optional(),
+    billRunId: z.string().uuid().optional(),
+    billAccountId: z.string().uuid().optional(),
+    testRun: queryBoolean,
+    search: z.string().trim().max(100).optional(),
+  })
+  .passthrough()
+
+export type BillingInvoiceListQuery = z.infer<typeof billingInvoiceListQuerySchema>
+
+const numberMaskSchema = z
+  .string()
+  .trim()
+  .superRefine((mask, ctx) => {
+    for (const code of validateMask(mask)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: code })
+    }
+  })
+
+const moneyString = z.coerce.number().finite().nonnegative()
+
+export const billingSettingsUpdateSchema = scopedSchema.extend({
+  lowBalanceThresholdDefault: moneyString.optional(),
+  nearLimitBufferDefault: moneyString.optional(),
+  statementEnabled: z.boolean().optional(),
+  topupTaxRate: z.coerce.number().finite().min(0).max(100).optional(),
+  topupProvider: z.string().trim().min(1).max(64).optional(),
+  numberMasks: z
+    .object(Object.fromEntries(DOCUMENT_SERIES.map((series) => [series, numberMaskSchema.optional()])) as Record<
+      (typeof DOCUMENT_SERIES)[number],
+      z.ZodOptional<typeof numberMaskSchema>
+    >)
+    .strict()
+    .optional(),
+})
+
+export type BillingSettingsUpdateInput = z.infer<typeof billingSettingsUpdateSchema>

@@ -108,9 +108,9 @@ export async function consumePrepaidUsage(
   const currencyCode = account.currencyCode
   const threshold = resolveLowBalanceThreshold(
     await readAccountThreshold(em, input),
-    await getLowBalanceThresholdDefault(em),
+    await getLowBalanceThresholdDefault(em, { tenantId: account.tenantId, organizationId: account.organizationId }),
   )
-  const nearLimitBuffer = await getNearLimitBufferDefault(em)
+  const nearLimitBuffer = await getNearLimitBufferDefault(em, { tenantId: account.tenantId, organizationId: account.organizationId })
   const creditLimit = account.creditLimit ?? '0'
 
   // ─── Idempotency: a duplicate sourceRef never double-debits ────

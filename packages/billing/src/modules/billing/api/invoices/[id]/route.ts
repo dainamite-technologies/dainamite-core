@@ -4,55 +4,17 @@ import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
 
 /**
- * `GET /api/billing/invoices/[id]` — billing-invoice detail.
- *
- * Returns the `core/sales` invoice row + its lines, but only if the
- * invoice is billing-managed (carries `metadata.bill_run_id`). Other
- * `core/sales` invoices return 404 here even though the same UUID
- * resolves at `/api/sales/invoices/[id]` — this endpoint is the
- * billing operator's surface, scoped to the billing universe.
+ * `GET /api/billing/invoices/[id]` — one billing document with its lines
+ * (Spec 0: `billing_invoices` / `billing_invoice_lines`). Documents of other
+ * modules are never reachable here.
  */
 
 export const metadata = {
   GET: { requireAuth: true, requireFeatures: ['billing.invoice.view'] },
 }
 
-type InvoiceRow = {
-  id: string
-  invoice_number: string
-  status: string | null
-  status_entry_id: string | null
-  currency_code: string
-  issue_date: string | null
-  due_date: string | null
-  subtotal_net_amount: string
-  subtotal_gross_amount: string
-  discount_total_amount: string
-  tax_total_amount: string
-  grand_total_net_amount: string
-  grand_total_gross_amount: string
-  paid_total_amount: string
-  outstanding_amount: string
-  metadata: Record<string, unknown> | null
-  created_at: string
-  updated_at: string
-}
-
-type InvoiceLineRow = {
-  id: string
-  line_number: number
-  kind: string
-  description: string | null
-  quantity: string
-  currency_code: string
-  unit_price_net: string
-  unit_price_gross: string
-  tax_rate: string
-  tax_amount: string
-  total_net_amount: string
-  total_gross_amount: string
-  metadata: Record<string, unknown> | null
-}
+type InvoiceRow = Record<string, unknown> & { id: string; bill_account_id: string }
+type InvoiceLineRow = Record<string, unknown> & { id: string }
 
 export async function GET(
   req: Request,
@@ -76,19 +38,15 @@ export async function GET(
     const em = (container.resolve('em') as EntityManager).fork()
 
     const invoiceRows = (await em.execute(
-      `SELECT id, invoice_number, status, status_entry_id, currency_code,
-              issue_date, due_date,
-              subtotal_net_amount, subtotal_gross_amount,
-              discount_total_amount, tax_total_amount,
-              grand_total_net_amount, grand_total_gross_amount,
-              paid_total_amount, outstanding_amount,
-              metadata, created_at, updated_at
-       FROM sales_invoices
-       WHERE id = ?
-         AND tenant_id = ?
-         AND organization_id = ?
-         AND deleted_at IS NULL
-         AND jsonb_exists(metadata, 'bill_run_id')`,
+      `SELECT i.id, i.number, i.document_type, i.series, i.status, i.test_run, i.bill_account_id,
+              a.name AS bill_account_name, i.bill_run_id, i.bill_date, i.period_start, i.period_end,
+              i.issue_date, i.due_date, i.posted_at, i.currency_code, i.subtotal_net, i.tax_total,
+              i.total_gross, i.paid_total, i.credited_total, i.outstanding, i.corrects_invoice_id,
+              i.correction_reason, i.buyer_snapshot, i.seller_snapshot, i.topup_id, i.metadata,
+              i.created_at, i.updated_at
+       FROM billing_invoices i
+       LEFT JOIN billing_accounts a ON a.id = i.bill_account_id AND a.tenant_id = i.tenant_id
+       WHERE i.id = ? AND i.tenant_id = ? AND i.organization_id = ? AND i.deleted_at IS NULL`,
       [invoiceId, auth.tenantId, organizationId],
     )) as unknown as InvoiceRow[]
 
@@ -99,20 +57,19 @@ export async function GET(
     const invoice = invoiceRows[0]
 
     const lineRows = (await em.execute(
-      `SELECT id, line_number, kind, description, quantity, currency_code,
-              unit_price_net, unit_price_gross, tax_rate, tax_amount,
-              total_net_amount, total_gross_amount, metadata
-       FROM sales_invoice_lines
-       WHERE invoice_id = ?
-         AND tenant_id = ?
-         AND organization_id = ?
+      `SELECT id, line_number, billing_item_id, billing_type, description, quantity,
+              unit_price_net, tax_rate, net_amount, tax_amount, gross_amount,
+              service_period_start, service_period_end, corrects_line_id, metadata
+       FROM billing_invoice_lines
+       WHERE invoice_id = ? AND tenant_id = ? AND organization_id = ? AND deleted_at IS NULL
        ORDER BY line_number ASC`,
       [invoiceId, auth.tenantId, organizationId],
     )) as unknown as InvoiceLineRow[]
 
     return NextResponse.json({
       invoice,
-      lines: lineRows,
+      // Lines carry the document currency for display convenience.
+      lines: lineRows.map((line) => ({ ...line, currency_code: invoice.currency_code })),
     })
   } catch (err) {
     console.error('[billing/invoices/[id].GET]', err)
@@ -124,12 +81,11 @@ export const openApi = {
   methods: {
     GET: {
       tags: ['Billing'],
-      summary: 'Get a billing-managed invoice (with lines)',
+      summary: 'Get a billing document (with lines)',
       description:
-        'Returns the `core/sales` invoice + every line, scoped to ' +
-        "billing-managed invoices (`metadata.bill_run_id` set). Non-" +
-        'billing invoices return 404 even when the UUID resolves at ' +
-        '`/api/sales/invoices/[id]`.',
+        'Returns one billing document from `billing_invoices` (invoice, memo or receipt) with its ' +
+        'lines, the frozen buyer / seller snapshots and `bill_account_name`. 404 outside the ' +
+        'caller\'s organization.',
       parameters: [
         {
           name: 'id',

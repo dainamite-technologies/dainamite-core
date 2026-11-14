@@ -28,25 +28,27 @@ import {
 } from '../../../../components/DetailFields'
 import { billRunName } from '../../../../lib/billRunLabel'
 
+// Spec 0: billing_invoices / billing_invoice_lines field names.
 type BillingInvoice = {
   id: string
-  invoice_number: string
-  status: 'draft' | 'posted' | 'paid' | 'void' | null
+  number: string
+  document_type: 'invoice' | 'credit_memo' | 'debit_memo' | 'receipt'
+  status: 'draft' | 'posted' | 'partially_paid' | 'paid' | 'credited'
+  test_run: boolean
+  bill_account_id: string
+  bill_account_name: string | null
+  bill_run_id: string | null
+  bill_date: string | null
+  period_start: string | null
+  period_end: string | null
   currency_code: string
   issue_date: string | null
   due_date: string | null
-  subtotal_net_amount: string
-  grand_total_net_amount: string
-  grand_total_gross_amount: string
-  paid_total_amount: string
-  outstanding_amount: string
-  metadata: {
-    bill_run_id?: string
-    bill_account_id?: string
-    bill_period_start?: string
-    bill_period_end?: string
-    test_run?: boolean
-  } | null
+  subtotal_net: string
+  tax_total: string
+  total_gross: string
+  paid_total: string
+  outstanding: string
   created_at: string
   updated_at: string
 }
@@ -54,19 +56,16 @@ type BillingInvoice = {
 type InvoiceLine = {
   id: string
   line_number: number
-  kind: string
+  billing_type: string
   description: string | null
   quantity: string
   currency_code: string
   unit_price_net: string
-  total_net_amount: string
-  total_gross_amount: string
-  metadata: {
-    billing_item_id?: string
-    billing_type?: 'one_time' | 'recurring' | 'usage'
-    operator_added?: boolean
-    usage_tier_breakdown?: unknown
-  } | null
+  net_amount: string
+  gross_amount: string
+  service_period_start: string | null
+  service_period_end: string | null
+  metadata: { operator_added?: boolean; usage_tier_breakdown?: unknown } | null
 }
 
 type DetailResponse = {
@@ -79,11 +78,11 @@ function statusVariant(
 ): 'default' | 'success' | 'warning' | 'error' {
   switch (status) {
     case 'paid':
+    case 'credited':
       return 'success'
     case 'posted':
+    case 'partially_paid':
       return 'warning'
-    case 'void':
-      return 'error'
     case 'draft':
     default:
       return 'default'
@@ -91,11 +90,7 @@ function statusVariant(
 }
 
 function lineKindVariant(
-  type: InvoiceLine['metadata'] extends infer M
-    ? M extends { billing_type?: infer T }
-      ? T
-      : never
-    : never,
+  type: string,
 ): 'default' | 'success' | 'warning' | 'error' {
   switch (type) {
     case 'one_time':
@@ -182,8 +177,8 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
 
   // Resolve the FK names once the invoice is loaded (one bounded
   // request each — Bill Run name is derived from its as-of date).
-  const billRunId = invoice?.metadata?.bill_run_id
-  const billAccountId = invoice?.metadata?.bill_account_id
+  const billRunId = invoice?.bill_run_id
+  const billAccountId = invoice?.bill_account_id
   React.useEffect(() => {
     if (billAccountId) {
       readApiResultOrThrow<{ items: Array<{ name: string }> }>(
@@ -218,7 +213,7 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
       )
       flash(
         t('billing.invoices.post.success', 'Invoice posted') +
-          ` (${call.result?.invoiceNumber ?? invoice.invoice_number})`,
+          ` (${call.result?.invoiceNumber ?? invoice.number})`,
         'success',
       )
       void load()
@@ -244,7 +239,7 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
     if (!ok) return
     setWiping(true)
     try {
-      const billRunId = invoice.metadata?.bill_run_id
+      const billRunId = invoice.bill_run_id
       const call = await apiCallOrThrow<{ invoicesRemoved: number }>(
         '/api/billing/test-invoices/wipe',
         {
@@ -365,7 +360,7 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
         accessorKey: 'description',
         header: t('billing.invoices.lines.columns.description', 'Description'),
         cell: ({ row }) => {
-          const type = row.original.metadata?.billing_type
+          const type = row.original.billing_type
           const operatorAdded = row.original.metadata?.operator_added === true
           return (
             <div className="flex flex-col gap-1">
@@ -393,10 +388,10 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
           formatMoney(row.original.unit_price_net, row.original.currency_code),
       },
       {
-        accessorKey: 'total_net_amount',
+        accessorKey: 'net_amount',
         header: t('billing.invoices.lines.columns.total', 'Total net'),
         cell: ({ row }) =>
-          formatMoney(row.original.total_net_amount, row.original.currency_code),
+          formatMoney(row.original.net_amount, row.original.currency_code),
       },
       {
         id: 'actions',
@@ -462,7 +457,7 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
     )
   }
 
-  const isTest = invoice.metadata?.test_run === true
+  const isTest = invoice.test_run === true
   const isDraft = invoice.status === 'draft'
 
   return (
@@ -471,10 +466,10 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
         mode="detail"
         backHref="/backend/billing/invoices"
         entityTypeLabel={t('billing.invoices.detail.title', 'Billing Invoice')}
-        title={invoice.invoice_number}
+        title={invoice.number}
         statusBadge={
           <div className="flex items-center gap-2 flex-wrap">
-            <Tag variant={statusVariant(invoice.status)}>{invoice.status ?? '—'}</Tag>
+            <Tag variant={statusVariant(invoice.status)}>{invoice.status}</Tag>
             {isTest ? <Tag variant="warning">TEST</Tag> : null}
           </div>
         }
@@ -505,16 +500,16 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
         <div className="space-y-6">
           <DetailCard>
             <DetailField label={t('billing.invoices.detail.field.period', 'Bill period')}>
-              {invoice.metadata?.bill_period_start ?? '—'} →{' '}
-              {invoice.metadata?.bill_period_end ?? '—'}
+              {invoice.period_start?.slice(0, 10) ?? '—'} →{' '}
+              {invoice.period_end?.slice(0, 10) ?? '—'}
             </DetailField>
             <DetailField label={t('billing.invoices.detail.field.bill_run', 'Bill Run')}>
-              {invoice.metadata?.bill_run_id ? (
+              {invoice.bill_run_id ? (
                 <Link
-                  href={`/backend/billing/runs/${invoice.metadata.bill_run_id}`}
+                  href={`/backend/billing/runs/${invoice.bill_run_id}`}
                   className="text-primary hover:underline"
                 >
-                  {runName ?? invoice.metadata.bill_run_id}
+                  {runName ?? invoice.bill_run_id}
                 </Link>
               ) : (
                 '—'
@@ -523,12 +518,12 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
             <DetailField
               label={t('billing.invoices.detail.field.account', 'Billing Account')}
             >
-              {invoice.metadata?.bill_account_id ? (
+              {invoice.bill_account_id ? (
                 <Link
-                  href={`/backend/billing/accounts/${invoice.metadata.bill_account_id}`}
+                  href={`/backend/billing/accounts/${invoice.bill_account_id}`}
                   className="text-primary hover:underline"
                 >
-                  {accountName ?? invoice.metadata.bill_account_id}
+                  {accountName ?? invoice.bill_account_name ?? invoice.bill_account_id}
                 </Link>
               ) : (
                 '—'
@@ -545,19 +540,19 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
           <StatCard>
             <Stat
               label={t('billing.invoices.detail.subtotal', 'Subtotal net')}
-              value={formatMoney(invoice.subtotal_net_amount, invoice.currency_code)}
+              value={formatMoney(invoice.subtotal_net, invoice.currency_code)}
             />
             <Stat
               label={t('billing.invoices.detail.total', 'Grand total')}
-              value={formatMoney(invoice.grand_total_gross_amount, invoice.currency_code)}
+              value={formatMoney(invoice.total_gross, invoice.currency_code)}
             />
             <Stat
               label={t('billing.invoices.detail.paid', 'Paid')}
-              value={formatMoney(invoice.paid_total_amount, invoice.currency_code)}
+              value={formatMoney(invoice.paid_total, invoice.currency_code)}
             />
             <Stat
               label={t('billing.invoices.detail.outstanding', 'Outstanding')}
-              value={formatMoney(invoice.outstanding_amount, invoice.currency_code)}
+              value={formatMoney(invoice.outstanding, invoice.currency_code)}
             />
           </StatCard>
 

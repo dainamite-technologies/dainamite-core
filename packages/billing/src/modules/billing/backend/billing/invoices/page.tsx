@@ -19,25 +19,26 @@ import { readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
  * review queue is small and focused.
  */
 
+// Spec 0: rows come from billing_invoices with billing field names.
 type BillingInvoiceRow = {
   id: string
-  invoice_number: string
-  status: 'draft' | 'posted' | 'paid' | 'void' | null
+  number: string
+  document_type: 'invoice' | 'credit_memo' | 'debit_memo' | 'receipt'
+  status: 'draft' | 'posted' | 'partially_paid' | 'paid' | 'credited'
+  test_run: boolean
+  bill_account_id: string
+  bill_account_name: string | null
+  bill_run_id: string | null
+  bill_date: string | null
+  period_start: string | null
+  period_end: string | null
   currency_code: string
   issue_date: string | null
   due_date: string | null
-  subtotal_net_amount: string
-  grand_total_net_amount: string
-  grand_total_gross_amount: string
-  paid_total_amount: string
-  outstanding_amount: string
-  metadata: {
-    bill_run_id?: string
-    bill_account_id?: string
-    bill_period_start?: string
-    bill_period_end?: string
-    test_run?: boolean
-  } | null
+  subtotal_net: string
+  total_gross: string
+  paid_total: string
+  outstanding: string
   created_at: string
   updated_at: string
 }
@@ -59,11 +60,11 @@ function statusVariant(
 ): 'default' | 'success' | 'warning' | 'error' {
   switch (status) {
     case 'paid':
+    case 'credited':
       return 'success'
     case 'posted':
+    case 'partially_paid':
       return 'warning'
-    case 'void':
-      return 'error'
     case 'draft':
     default:
       return 'default'
@@ -101,8 +102,18 @@ export default function BillingInvoicesListPage() {
         options: [
           { value: 'draft', label: t('billing.invoices.status.draft', 'Draft') },
           { value: 'posted', label: t('billing.invoices.status.posted', 'Posted') },
+          { value: 'partially_paid', label: t('billing.invoices.status.partially_paid', 'Partially paid') },
           { value: 'paid', label: t('billing.invoices.status.paid', 'Paid') },
-          { value: 'void', label: t('billing.invoices.status.void', 'Void') },
+          { value: 'credited', label: t('billing.invoices.status.credited', 'Credited') },
+        ],
+      },
+      {
+        id: 'documentType',
+        label: t('billing.invoices.filters.document_type', 'Document type'),
+        type: 'select',
+        options: [
+          { value: 'invoice', label: t('billing.invoices.document_type.invoice', 'Invoice') },
+          { value: 'receipt', label: t('billing.invoices.document_type.receipt', 'Top-up receipt') },
         ],
       },
       {
@@ -132,6 +143,9 @@ export default function BillingInvoicesListPage() {
       if (typeof filters.status === 'string' && filters.status) {
         params.set('status', filters.status)
       }
+      if (typeof filters.documentType === 'string' && filters.documentType) {
+        params.set('documentType', filters.documentType)
+      }
       if (filters.testRun === 'true' || filters.testRun === 'false') {
         params.set('testRun', String(filters.testRun))
       }
@@ -144,7 +158,7 @@ export default function BillingInvoicesListPage() {
     } finally {
       setLoading(false)
     }
-  }, [filters.status, filters.testRun, page, pageSize, search])
+  }, [filters.documentType, filters.status, filters.testRun, page, pageSize, search])
 
   React.useEffect(() => {
     void loadRows()
@@ -153,14 +167,14 @@ export default function BillingInvoicesListPage() {
   const columns = React.useMemo<ColumnDef<BillingInvoiceRow>[]>(
     () => [
       {
-        accessorKey: 'invoice_number',
+        accessorKey: 'number',
         header: t('billing.invoices.columns.number', 'Number'),
         cell: ({ row }) => {
-          const isTest = row.original.metadata?.test_run === true
+          const isTest = row.original.test_run === true
           return (
             <div className="flex items-center gap-2">
               <span className="text-sm font-medium text-primary">
-                {row.original.invoice_number}
+                {row.original.number}
               </span>
               {isTest ? <Tag variant="warning">TEST</Tag> : null}
             </div>
@@ -171,15 +185,15 @@ export default function BillingInvoicesListPage() {
         accessorKey: 'status',
         header: t('billing.invoices.columns.status', 'Status'),
         cell: ({ row }) => (
-          <Tag variant={statusVariant(row.original.status)}>{row.original.status ?? '—'}</Tag>
+          <Tag variant={statusVariant(row.original.status)}>{row.original.status}</Tag>
         ),
       },
       {
         id: 'period',
         header: t('billing.invoices.columns.period', 'Period'),
         cell: ({ row }) => {
-          const start = row.original.metadata?.bill_period_start
-          const end = row.original.metadata?.bill_period_end
+          const start = row.original.period_start?.slice(0, 10)
+          const end = row.original.period_end?.slice(0, 10)
           if (!start || !end) return '—'
           return (
             <span className="text-xs">
@@ -192,13 +206,13 @@ export default function BillingInvoicesListPage() {
         id: 'total',
         header: t('billing.invoices.columns.total', 'Total'),
         cell: ({ row }) =>
-          formatMoney(row.original.grand_total_gross_amount, row.original.currency_code),
+          formatMoney(row.original.total_gross, row.original.currency_code),
       },
       {
-        accessorKey: 'outstanding_amount',
+        accessorKey: 'outstanding',
         header: t('billing.invoices.columns.outstanding', 'Outstanding'),
         cell: ({ row }) =>
-          formatMoney(row.original.outstanding_amount, row.original.currency_code),
+          formatMoney(row.original.outstanding, row.original.currency_code),
       },
       {
         accessorKey: 'issue_date',

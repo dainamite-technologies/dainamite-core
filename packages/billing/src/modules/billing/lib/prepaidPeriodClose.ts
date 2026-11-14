@@ -83,7 +83,7 @@ export async function processPrepaidAccount(
 ): Promise<PrepaidAccountResult> {
   const maxCycles = CATCH_UP_HARD_CAP
 
-  const statementEnabled = await getStatementEnabled(em)
+  const statementEnabled = await getStatementEnabled(em, { tenantId: account.tenantId, organizationId: account.organizationId })
   // Resolve the crossing thresholds once — they don't change during the run.
   const balanceRow = await em.findOne(BillingAccountBalance, {
     tenantId: account.tenantId,
@@ -91,9 +91,9 @@ export async function processPrepaidAccount(
   })
   const threshold = resolveLowBalanceThreshold(
     balanceRow?.lowBalanceThreshold ?? null,
-    await getLowBalanceThresholdDefault(em),
+    await getLowBalanceThresholdDefault(em, { tenantId: account.tenantId, organizationId: account.organizationId }),
   )
-  const nearLimitBuffer = await getNearLimitBufferDefault(em)
+  const nearLimitBuffer = await getNearLimitBufferDefault(em, { tenantId: account.tenantId, organizationId: account.organizationId })
   const creditLimit = account.creditLimit ?? '0'
 
   let cyclesEmitted = 0

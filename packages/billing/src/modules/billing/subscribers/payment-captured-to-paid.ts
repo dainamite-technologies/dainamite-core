@@ -1,7 +1,6 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
-import { SalesInvoice } from '@open-mercato/core/modules/sales/data/entities'
-import { resolveInvoiceStatusEntryId } from '../lib/invoiceStatus'
+import { BillingInvoice } from '../data/entities'
 
 /**
  * Subscriber: payment captured → billing invoice paid.
@@ -13,11 +12,10 @@ import { resolveInvoiceStatusEntryId } from '../lib/invoiceStatus'
  * pass `paymentId = invoice.id`; the subscriber matches on that.
  *
  * Behaviour:
- *   1. Try to find a `core/sales` invoice with `id = payload.paymentId`
+ *   1. Try to find a billing invoice (`billing_invoices`) with `id = payload.paymentId`
  *      scoped to the same tenant/organization.
- *   2. If found AND its `status == 'posted'`, flip it to `'paid'`
- *      (resolves the `paid` `DictionaryEntry`, updates `status` +
- *      `status_entry_id`). Drafts and already-paid / voided invoices
+ *   2. If found AND its `status` is `posted` / `partially_paid`, flip it to
+ *      `paid` and set the paid / outstanding totals. Drafts and already-paid / credited documents
  *      are left untouched.
  *   3. If `paymentId` does not point at a billing-known invoice (e.g.
  *      the payment was for a `sales.order`), the subscriber is a
@@ -53,12 +51,12 @@ export default async function handle(payload: CapturedPayload): Promise<void> {
   const container = await createRequestContainer()
   const em = (container.resolve('em') as EntityManager).fork()
 
-  const invoice = await em.findOne(SalesInvoice, {
+  const invoice = await em.findOne(BillingInvoice, {
     id: payload.paymentId,
     tenantId: payload.tenantId,
     organizationId: payload.organizationId,
     deletedAt: null,
-  })
+  } as never)
   if (!invoice) {
     // The captured payment isn't for a billing invoice — silent
     // no-op. Other subscribers (sales, checkout) handle their slice.
@@ -68,22 +66,15 @@ export default async function handle(payload: CapturedPayload): Promise<void> {
     // Already paid — idempotent re-firing.
     return
   }
-  if (invoice.status !== 'posted') {
-    // A captured payment for a draft / void invoice is suspicious but
-    // not actionable here. Future iteration: log to audit_logs.
+  if (invoice.status !== 'posted' && invoice.status !== 'partially_paid') {
+    // A captured payment for a draft / credited document is suspicious but
+    // not actionable here. (Spec C replaces this with a payment allocation.)
     return
   }
 
-  const paidStatusEntryId = await resolveInvoiceStatusEntryId(
-    em,
-    payload.tenantId,
-    payload.organizationId,
-    'paid',
-  )
   invoice.status = 'paid'
-  invoice.statusEntryId = paidStatusEntryId
-  invoice.paidTotalAmount = invoice.grandTotalGrossAmount
-  invoice.outstandingAmount = '0'
+  invoice.paidTotal = invoice.totalGross
+  invoice.outstanding = '0'
   invoice.updatedAt = new Date()
   await em.flush()
 }

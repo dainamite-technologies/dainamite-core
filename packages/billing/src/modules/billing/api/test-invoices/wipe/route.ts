@@ -2,10 +2,10 @@ import { z } from 'zod'
 import { makeCrudRoute } from '@open-mercato/shared/lib/crud/factory'
 import { withScopedPayload } from '@open-mercato/shared/lib/api/scoped'
 import { resolveTranslations } from '@open-mercato/shared/lib/i18n/server'
-import { SalesInvoice } from '@open-mercato/core/modules/sales/data/entities'
 import { billingEntityIds } from '../../../data/entityIds'
 import { billingWipeTestInvoicesSchema } from '../../../data/validators'
 import { createBillingCrudOpenApi } from '../../openapi'
+import { BillingInvoice } from '../../../data/entities'
 
 /**
  * `POST /api/billing/test-invoices/wipe` — hard-delete invoices
@@ -38,7 +38,7 @@ const rawBodySchema = z.object({}).passthrough()
 const crud = makeCrudRoute({
   metadata: routeMetadata,
   orm: {
-    entity: SalesInvoice,
+    entity: BillingInvoice,
     idField: 'id',
     orgField: 'organizationId',
     tenantField: 'tenantId',

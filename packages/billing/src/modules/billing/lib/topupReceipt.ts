@@ -1,24 +1,24 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
-import {
-  SalesInvoice,
-  SalesInvoiceLine,
-} from '@open-mercato/core/modules/sales/data/entities'
-import type { SalesDocumentNumberGenerator } from '@open-mercato/core/modules/sales/services/salesDocumentNumberGenerator'
-import type { TaxCalculationService } from '@open-mercato/core/modules/sales/services/taxCalculationService'
-import { resolveInvoiceStatusEntryId } from './invoiceStatus'
+import { BillingInvoice, BillingInvoiceLine } from '../data/entities'
+import { getBillingSettings, numberMaskFor } from './billingSettings'
+import { claimDocumentNumber } from './numbering'
+import { lineAmountsFromGross, money4 } from './vat'
 
 /**
- * Creates the fiscal VAT receipt for a captured prepaid top-up (SPEC-002 P2).
+ * Creates the fiscal VAT receipt for a captured prepaid top-up (SPEC-002 P2,
+ * Spec 0 E-D3).
  *
- * Deliberate divergence from the postpaid draft→post gate: a captured top-up
- * is a completed, already-paid transaction with nothing to review, so the
- * receipt is created **posted + paid** in one shot (the gate exists for
- * outbound bills, not money already received — mirrors the xd-249 "deviations"
- * convention).
+ * The receipt is a billing-owned document (`billing_invoices` with
+ * `document_type = 'receipt'`, `status = 'paid'`), numbered from the
+ * `receipt` series (default mask `RC/{YYYY}/{MM}/{SEQUENCE_NUM_MONTH:4}`).
+ * Nothing is written to core `sales`.
  *
- * **VAT at top-up.** The top-up `amount` is the GROSS the customer paid (= the
- * balance credited). The core tax service splits it into net + VAT at the
- * configured rate. Gap-free numbering reuses `salesDocumentNumberGenerator`.
+ * VAT at top-up: the top-up `amount` is the GROSS the customer paid (= the
+ * balance credited); `vat.lineAmountsFromGross` splits it into net + tax with
+ * `net + tax = gross` exactly.
+ *
+ * MUST run inside the capture transaction (`captureTopup`) so the receipt
+ * number, the balance credit and the top-up transition commit together.
  */
 
 export type TopupReceiptParams = {
@@ -36,11 +36,6 @@ export type TopupReceiptParams = {
   taxRate: number
 }
 
-export type TopupReceiptDeps = {
-  numberGenerator: Pick<SalesDocumentNumberGenerator, 'generate'>
-  taxService: TaxCalculationService
-}
-
 export type TopupReceipt = {
   invoiceId: string
   invoiceNumber: string
@@ -50,104 +45,76 @@ export type TopupReceipt = {
   taxRate: number
 }
 
-function fmt4(value: number): string {
-  return (Number.isFinite(value) ? value : 0).toFixed(4)
+function todayUtc(): Date {
+  const now = new Date()
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
 }
 
-export async function createTopupReceipt(
-  em: EntityManager,
-  deps: TopupReceiptDeps,
-  params: TopupReceiptParams,
-): Promise<TopupReceipt> {
+export async function createTopupReceipt(em: EntityManager, params: TopupReceiptParams): Promise<TopupReceipt> {
   const { account } = params
+  const scope = { tenantId: account.tenantId, organizationId: account.organizationId }
+  const taxRate = Number.isFinite(params.taxRate) && params.taxRate > 0 ? params.taxRate : 0
+  const amounts = lineAmountsFromGross(Number.parseFloat(params.amount), taxRate)
+  const net = money4(amounts.net)
+  const tax = money4(amounts.tax)
+  const gross = money4(amounts.gross)
 
-  // VAT split — the top-up amount is GROSS (what was paid = balance credited).
-  const tax = await deps.taxService.calculateUnitAmounts({
-    amount: Number.parseFloat(params.amount),
-    mode: 'gross',
-    organizationId: account.organizationId,
-    tenantId: account.tenantId,
-    taxRate: params.taxRate,
-  })
-  const net = fmt4(tax.netAmount)
-  const gross = fmt4(tax.grossAmount)
-  const taxAmount = fmt4(tax.taxAmount)
-  const effectiveRate = tax.taxRate ?? 0
-
-  const generated = await deps.numberGenerator.generate({
-    kind: 'invoice',
-    organizationId: account.organizationId,
-    tenantId: account.tenantId,
-  })
-
-  // Posted+paid in one shot — resolve the `paid` status entry directly.
-  const paidStatusEntryId = await resolveInvoiceStatusEntryId(
-    em,
-    account.tenantId,
-    account.organizationId,
-    'paid',
-  )
+  const settings = await getBillingSettings(em, scope)
+  const issueDate = todayUtc()
+  const claimed = await claimDocumentNumber(em, scope, 'receipt', numberMaskFor(settings, 'receipt'), issueDate)
 
   const now = new Date()
-  const invoice = em.create(SalesInvoice, {
-    organizationId: account.organizationId,
-    tenantId: account.tenantId,
-    invoiceNumber: generated.number,
-    statusEntryId: paidStatusEntryId,
+  const receipt = em.create(BillingInvoice, {
+    ...scope,
+    billAccountId: account.id,
+    documentType: 'receipt',
+    number: claimed.number,
+    series: 'receipt',
     status: 'paid',
-    issueDate: now,
+    testRun: false,
+    issueDate,
+    postedAt: now,
     currencyCode: account.currencyCode,
-    subtotalNetAmount: net,
-    subtotalGrossAmount: gross,
-    discountTotalAmount: '0',
-    taxTotalAmount: taxAmount,
-    grandTotalNetAmount: net,
-    grandTotalGrossAmount: gross,
-    paidTotalAmount: gross,
-    outstandingAmount: '0',
-    metadata: {
-      kind: 'prepaid_topup',
-      bill_account_id: account.id,
-      topup_id: params.topupId,
-      payment_id: params.paymentId,
-    },
+    subtotalNet: net,
+    taxTotal: tax,
+    totalGross: gross,
+    paidTotal: gross,
+    creditedTotal: '0',
+    outstanding: '0',
+    topupId: params.topupId,
+    metadata: { kind: 'prepaid_topup', payment_id: params.paymentId },
     createdAt: now,
     updatedAt: now,
   })
-  em.persist(invoice)
+  em.persist(receipt)
+  await em.flush() // need the receipt id for the line
 
-  const line = em.create(SalesInvoiceLine, {
-    invoice,
-    organizationId: account.organizationId,
-    tenantId: account.tenantId,
-    lineNumber: 1,
-    kind: 'service',
-    description: 'Account top-up',
-    quantity: '1',
-    normalizedQuantity: '1',
-    currencyCode: account.currencyCode,
-    unitPriceNet: net,
-    unitPriceGross: gross,
-    discountAmount: '0',
-    discountPercent: '0',
-    taxRate: fmt4(effectiveRate),
-    taxAmount,
-    totalNetAmount: net,
-    totalGrossAmount: gross,
-    metadata: {
-      kind: 'prepaid_topup',
-      topup_id: params.topupId,
-    },
-  })
-  em.persist(line)
+  em.persist(
+    em.create(BillingInvoiceLine, {
+      ...scope,
+      invoiceId: receipt.id,
+      lineNumber: 1,
+      billingType: 'receipt',
+      description: 'Account top-up',
+      quantity: '1.0000',
+      unitPriceNet: net,
+      taxRate: taxRate.toFixed(4),
+      netAmount: net,
+      taxAmount: tax,
+      grossAmount: gross,
+      metadata: { kind: 'prepaid_topup', topup_id: params.topupId },
+      createdAt: now,
+      updatedAt: now,
+    }),
+  )
   await em.flush()
 
   return {
-    invoiceId: invoice.id,
-    invoiceNumber: generated.number,
+    invoiceId: receipt.id,
+    invoiceNumber: claimed.number,
     netAmount: net,
-    taxAmount,
+    taxAmount: tax,
     grossAmount: gross,
-    taxRate: effectiveRate,
+    taxRate,
   }
 }

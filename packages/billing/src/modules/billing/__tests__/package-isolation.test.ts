@@ -128,10 +128,22 @@ describe('@dainamite/billing package isolation', () => {
     }
   })
 
-  it('declares all required modules in metadata.requires', () => {
-    expect(metadata.requires).toEqual(
-      expect.arrayContaining(['auth', 'directory', 'dictionaries', 'configs', 'sales']),
-    )
+  it('requires only platform modules (Spec 0: no core business modules)', () => {
+    expect(metadata.requires).toEqual(['auth', 'directory'])
+  })
+
+  it('never imports core sales / configs / dictionaries / payment_gateways (Spec 0)', () => {
+    const banned = new Set(['sales', 'configs', 'dictionaries', 'payment_gateways'])
+    const violations: string[] = []
+    for (const [file, specs] of importsByFile) {
+      for (const spec of specs) {
+        const subModule = extractCoreModuleSubpath(spec)
+        if (subModule && banned.has(subModule)) violations.push(`  ${path.relative(PACKAGE_ROOT, file)} → ${spec}`)
+      }
+    }
+    if (violations.length > 0) {
+      throw new Error(`Billing must not depend on core business modules:\n${violations.join('\n')}`)
+    }
   })
 
   it('does not import from sibling app modules', () => {

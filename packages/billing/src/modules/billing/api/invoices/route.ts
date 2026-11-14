@@ -1,61 +1,49 @@
 import { NextResponse } from 'next/server'
 import type { EntityManager } from '@mikro-orm/postgresql'
-import { z } from 'zod'
 import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
+import { billingInvoiceListQuerySchema } from '../../data/validators'
 
 /**
- * `GET /api/billing/invoices`
+ * `GET /api/billing/invoices` — paginated list of billing documents
+ * (Spec 0: billing-owned `billing_invoices`, never core `sales`).
  *
- * Lists `core/sales` invoices that the billing engine emitted (i.e.
- * carry `metadata.bill_run_id`). Hand-rolled rather than wrapped via
- * `makeCrudRoute` because the filter predicate is a JSONB
- * `metadata->>'bill_run_id' IS NOT NULL` check that doesn't map
- * cleanly onto the factory's `where`-shaped filter API, and the
- * entity itself is owned by `core/sales` — keeping the surface
- * read-only and hand-rolled avoids surprising the cross-module
- * reviewer.
+ * Filters (all on indexed columns): `status`, `documentType`, `billRunId`,
+ * `billAccountId`, `testRun` (`true` / `false`), `id`, `search` (number).
+ * Each row carries `bill_account_name` (one batched lookup per page).
  *
- * Filters:
- *   - `status` — draft / posted / paid / void
- *   - `billRunId` — exact match on `metadata->>'bill_run_id'`
- *   - `billAccountId` — exact match on `metadata->>'bill_account_id'`
- *   - `testRun=true|false` — flips the `metadata->>'test_run'` filter
- *   - `search` — substring on invoice_number
- *
- * Sort: started_at DESC (most recent first). Pagination: standard
- * page / pageSize (capped at 100).
+ * Hand-written SQL instead of the CRUD factory: documents are written by the
+ * bill-run engine without query-index side effects, so the factory's
+ * query-engine path would not see them. Sort: `created_at DESC`.
  */
 
 export const metadata = {
   GET: { requireAuth: true, requireFeatures: ['billing.invoice.view'] },
 }
 
-const querySchema = z
-  .object({
-    page: z.coerce.number().int().min(1).default(1),
-    pageSize: z.coerce.number().int().min(1).max(100).default(50),
-    status: z.enum(['draft', 'posted', 'paid', 'void']).optional(),
-    billRunId: z.string().uuid().optional(),
-    billAccountId: z.string().uuid().optional(),
-    testRun: z.coerce.boolean().optional(),
-    search: z.string().optional(),
-  })
-  .passthrough()
-
 type BillingInvoiceRow = {
   id: string
-  invoice_number: string
-  status: string | null
-  currency_code: string
+  number: string
+  document_type: string
+  status: string
+  test_run: boolean
+  bill_account_id: string
+  bill_account_name: string | null
+  bill_run_id: string | null
+  bill_date: string | null
+  period_start: string | null
+  period_end: string | null
   issue_date: string | null
   due_date: string | null
-  subtotal_net_amount: string
-  grand_total_net_amount: string
-  grand_total_gross_amount: string
-  paid_total_amount: string
-  outstanding_amount: string
-  metadata: Record<string, unknown> | null
+  currency_code: string
+  subtotal_net: string
+  tax_total: string
+  total_gross: string
+  paid_total: string
+  credited_total: string
+  outstanding: string
+  corrects_invoice_id: string | null
+  topup_id: string | null
   created_at: string
   updated_at: string
 }
@@ -76,65 +64,48 @@ export async function GET(req: Request) {
     }
 
     const url = new URL(req.url)
-    const query = querySchema.parse(
-      Object.fromEntries(url.searchParams.entries()),
-    )
+    const query = billingInvoiceListQuerySchema.parse(Object.fromEntries(url.searchParams.entries()))
 
     const em = (container.resolve('em') as EntityManager).fork()
 
-    // Build the predicate. `jsonb_exists(metadata, 'bill_run_id')` is
-    // the function form of the JSONB `?` "key exists" operator — the
-    // operator form cannot be used here because `em.execute` treats a
-    // literal `?` as a positional parameter placeholder. Keeps us
-    // narrow to billing-managed invoices, never bleeding into invoices
-    // written by other modules.
-    const whereClauses: string[] = [
-      'tenant_id = ?',
-      'organization_id = ?',
-      'deleted_at IS NULL',
-      "jsonb_exists(metadata, 'bill_run_id')",
-    ]
+    const whereClauses: string[] = ['i.tenant_id = ?', 'i.organization_id = ?', 'i.deleted_at IS NULL']
     const params: unknown[] = [auth.tenantId, organizationId]
-
-    if (query.status) {
-      whereClauses.push('status = ?')
-      params.push(query.status)
+    const filters: Array<[unknown, string]> = [
+      [query.id, 'i.id = ?'],
+      [query.status, 'i.status = ?'],
+      [query.documentType, 'i.document_type = ?'],
+      [query.billRunId, 'i.bill_run_id = ?'],
+      [query.billAccountId, 'i.bill_account_id = ?'],
+      [query.testRun, 'i.test_run = ?'],
+    ]
+    for (const [value, clause] of filters) {
+      if (value === undefined || value === null || value === '') continue
+      whereClauses.push(clause)
+      params.push(value)
     }
-    if (query.billRunId) {
-      whereClauses.push("metadata->>'bill_run_id' = ?")
-      params.push(query.billRunId)
-    }
-    if (query.billAccountId) {
-      whereClauses.push("metadata->>'bill_account_id' = ?")
-      params.push(query.billAccountId)
-    }
-    if (typeof query.testRun === 'boolean') {
-      if (query.testRun) {
-        whereClauses.push("metadata->>'test_run' = 'true'")
-      } else {
-        whereClauses.push("(metadata->>'test_run' IS NULL OR metadata->>'test_run' != 'true')")
-      }
-    }
-    if (typeof query.search === 'string' && query.search.trim()) {
-      whereClauses.push('invoice_number ILIKE ?')
-      params.push(`%${query.search.trim().replace(/[%_]/g, (m) => `\\${m}`)}%`)
+    if (query.search) {
+      whereClauses.push('i.number ILIKE ?')
+      params.push(`%${query.search.replace(/[%_\\]/g, (m) => `\\${m}`)}%`)
     }
 
     const whereSql = whereClauses.join(' AND ')
     const countRows = (await em.execute(
-      `SELECT COUNT(*)::int AS total FROM sales_invoices WHERE ${whereSql}`,
+      `SELECT COUNT(*)::int AS total FROM billing_invoices i WHERE ${whereSql}`,
       params,
     )) as unknown as Array<{ total: number }>
     const total = countRows?.[0]?.total ?? 0
 
     const offset = (query.page - 1) * query.pageSize
     const itemRows = (await em.execute(
-      `SELECT id, invoice_number, status, currency_code, issue_date, due_date,
-              subtotal_net_amount, grand_total_net_amount, grand_total_gross_amount,
-              paid_total_amount, outstanding_amount, metadata, created_at, updated_at
-       FROM sales_invoices
+      `SELECT i.id, i.number, i.document_type, i.status, i.test_run, i.bill_account_id,
+              a.name AS bill_account_name, i.bill_run_id, i.bill_date, i.period_start, i.period_end,
+              i.issue_date, i.due_date, i.currency_code, i.subtotal_net, i.tax_total, i.total_gross,
+              i.paid_total, i.credited_total, i.outstanding, i.corrects_invoice_id, i.topup_id,
+              i.created_at, i.updated_at
+       FROM billing_invoices i
+       LEFT JOIN billing_accounts a ON a.id = i.bill_account_id AND a.tenant_id = i.tenant_id
        WHERE ${whereSql}
-       ORDER BY created_at DESC
+       ORDER BY i.created_at DESC
        LIMIT ? OFFSET ?`,
       [...params, query.pageSize, offset],
     )) as unknown as BillingInvoiceRow[]
@@ -156,12 +127,13 @@ export const openApi = {
   methods: {
     GET: {
       tags: ['Billing'],
-      summary: 'List billing-managed invoices',
+      summary: 'List billing documents',
       description:
-        'Returns a paginated list of `core/sales` invoices that the ' +
-        'billing engine emitted (matched via `metadata->>\'bill_run_id\'` ' +
-        'presence). Supports status / billRunId / billAccountId / testRun ' +
-        '/ invoice_number search filters.',
+        'Paginated billing documents (invoices, credit / debit memos, top-up receipts) from ' +
+        '`billing_invoices`. Filters: status, documentType, billRunId, billAccountId, testRun ' +
+        '(`true`/`false`), id, number search. Fields use billing names: `number`, `document_type`, ' +
+        '`total_gross`, `outstanding`, `bill_date`, `period_start/end`, `bill_account_name`, … ' +
+        '(0.21.0 renamed them from the core-sales names — see MIGRATION.md).',
     },
   },
 }

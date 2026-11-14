@@ -6,6 +6,7 @@ import {
   BillingAccount,
   BillingAccountUsage,
   BillingItem,
+  BillingInvoice,
 } from '../../data/entities'
 
 /**
@@ -135,7 +136,15 @@ function createEnvironment(
       }
       return []
     }),
-    findOne: jest.fn(async (_entity: unknown, _where: unknown) => null),
+    // Dedupe check: an existing billing invoice for (account, bill date).
+    findOne: jest.fn(async (entity: unknown, where: unknown) => {
+      if (entity === BillingInvoice) {
+        const accountId = (where as { billAccountId?: string }).billAccountId
+        const existing = accountId ? options.openDraftIds?.get(accountId) : undefined
+        return existing ? { id: existing } : null
+      }
+      return null
+    }),
     nativeUpdate: jest.fn(async (entity: unknown, where: unknown, data: unknown) => {
       if (entity === BillingAccountUsage) {
         // Predicate-based bulk update (post-Phase-4f refactor): the
@@ -461,11 +470,10 @@ describe('runBillRun — orchestration', () => {
     expect(outcomes[0].status).toBe('success')
     // Persisted SalesInvoiceLine for the usage item with the right total
     const usageLine = captured.persisted.find((p) => {
-      const m = (p as { metadata?: { billing_type?: string } }).metadata
-      return m?.billing_type === 'usage'
+      return (p as { billingType?: string }).billingType === 'usage'
     })
     expect(usageLine).toBeDefined()
-    expect((usageLine as { totalNetAmount?: string }).totalNetAmount).toBe('15.0000')
+    expect((usageLine as { netAmount?: string }).netAmount).toBe('15.0000')
 
     // Real-mode marks records as rated
     expect(u1.ratedInBillRunId).toBe(billRun.id)
@@ -504,12 +512,11 @@ describe('runBillRun — orchestration', () => {
     await runBillRun(em as never, container as never, params({}))
 
     const usageLine = captured.persisted.find((p) => {
-      const m = (p as { metadata?: { billing_type?: string } }).metadata
-      return m?.billing_type === 'usage'
-    }) as { unitPriceNet?: string; totalNetAmount?: string; quantity?: string } | undefined
+      return (p as { billingType?: string }).billingType === 'usage'
+    }) as { unitPriceNet?: string; netAmount?: string; quantity?: string } | undefined
     expect(usageLine?.unitPriceNet).toBe('0.0010')
     expect(usageLine?.quantity).toBe('12000.0000')
-    expect(usageLine?.totalNetAmount).toBe('12.0000')
+    expect(usageLine?.netAmount).toBe('12.0000')
   })
 
   it('test mode: rates usage on draft but does NOT mark records as rated', async () => {
@@ -541,15 +548,15 @@ describe('runBillRun — orchestration', () => {
     await runBillRun(em as never, container as never, params({}))
 
     const lines = captured.persisted.filter((p) => {
-      const m = (p as { metadata?: { billing_type?: string } }).metadata
-      return m?.billing_type === 'recurring' || m?.billing_type === 'usage'
+      const type = (p as { billingType?: string }).billingType
+      return type === 'recurring' || type === 'usage'
     })
     expect(lines).toHaveLength(2)
     // Invoice header totalNet should be 49.99 (MRC) + 12.00 (usage) = 61.99
     const invoice = captured.persisted.find(
-      (p) => (p as { invoiceNumber?: string }).invoiceNumber,
-    ) as { grandTotalNetAmount?: string } | undefined
-    expect(invoice?.grandTotalNetAmount).toBe('61.9900')
+      (p) => (p as { documentType?: string }).documentType === 'invoice',
+    ) as { subtotalNet?: string } | undefined
+    expect(invoice?.subtotalNet).toBe('61.9900')
   })
 
   it('summary aggregates drafts_created / accounts_failed / accounts_with_warnings', async () => {
@@ -583,8 +590,10 @@ describe('runBillRun — Spec A cycles', () => {
   type Cycle = { bill_date: string; status: string; period_start: string | null; period_end: string | null; invoice_id: string | null }
   const cyclesOf = (outcome: { cycles?: unknown }) => (outcome.cycles ?? []) as Cycle[]
   const invoicesOf = (persisted: unknown[]) =>
-    persisted.filter((p) => (p as { invoiceNumber?: string }).invoiceNumber) as Array<{
-      invoiceNumber: string
+    persisted.filter((p) => (p as { documentType?: string }).documentType === 'invoice') as Array<{
+      number: string
+      billDate: Date
+      testRun: boolean
       metadata: Record<string, unknown>
     }>
 
@@ -609,7 +618,7 @@ describe('runBillRun — Spec A cycles', () => {
       ['2026-12-14', '2026-12-14', '2027-01-13', 'invoiced'],
       ['2027-01-14', '2027-01-14', '2027-02-13', 'invoiced'],
     ])
-    expect(invoicesOf(env.captured.persisted).map((i) => i.metadata.bill_date)).toEqual([
+    expect(invoicesOf(env.captured.persisted).map((i) => day(i.billDate))).toEqual([
       '2026-11-14',
       '2026-12-14',
       '2027-01-14',
@@ -639,7 +648,7 @@ describe('runBillRun — Spec A cycles', () => {
     expect(cyclesOf(outcomes[0]).map((c) => c.status)).toEqual(['invoiced', 'invoiced', 'invoiced'])
     const invoices = invoicesOf(env.captured.persisted)
     expect(invoices).toHaveLength(3)
-    expect(invoices.every((i) => i.invoiceNumber.startsWith('TEST-') && i.metadata.test_run === true)).toBe(true)
+    expect(invoices.every((i) => i.number.startsWith('TEST-') && i.testRun === true)).toBe(true)
     expect(day(account.nextBillDate)).toBe('2026-11-14')
     expect(item.billedToDate).toBeNull()
     expect(env.numberGenerator.generate).not.toHaveBeenCalled()
@@ -721,8 +730,8 @@ describe('runBillRun — Spec A cycles', () => {
 
     const { outcomes } = await runBillRun(env.em as never, env.container as never, params({}))
 
-    const lines = env.captured.persisted.filter((p) => (p as { metadata?: { billing_type?: string } }).metadata?.billing_type === 'recurring') as Array<{ metadata: Record<string, unknown> }>
-    expect(lines.map((l) => [l.metadata.billing_item_id, l.metadata.service_period_start, l.metadata.service_period_end])).toEqual([
+    const lines = env.captured.persisted.filter((p) => (p as { billingType?: string }).billingType === 'recurring') as Array<{ billingItemId: string; servicePeriodStart: Date; servicePeriodEnd: Date }>
+    expect(lines.map((l) => [l.billingItemId, day(l.servicePeriodStart), day(l.servicePeriodEnd)])).toEqual([
       ['adv', '2026-06-01', '2026-06-30'],
       ['arr', '2026-05-01', '2026-05-31'],
     ])
@@ -744,8 +753,8 @@ describe('runBillRun — Spec A cycles', () => {
       params({ asOfDate: new Date('2026-07-01T00:00:00Z') }),
     )
 
-    const line = env.captured.persisted.find((p) => (p as { metadata?: { credit_for?: string } }).metadata?.credit_for) as { totalNetAmount: string; description: string }
-    expect(line.totalNetAmount).toBe('-15.0000')
+    const line = env.captured.persisted.find((p) => (p as { metadata?: { credit_for?: string } | null }).metadata?.credit_for) as { netAmount: string; description: string }
+    expect(line.netAmount).toBe('-15.0000')
     expect(line.description).toBe('MRC · 2026-06-16 – 2026-06-30')
     expect(day(item.billedToDate)).toBe('2026-06-15')
     expect(outcomes[0].status).toBe('success_with_warnings')

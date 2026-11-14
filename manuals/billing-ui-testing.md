@@ -137,8 +137,14 @@ przebieg rozliczeniowy) — zwykłe faktury sprzedaży się tu nie pokazują.
 1. Kliknij **Billing → Billing Invoices** — zobaczysz **3 faktury
    robocze** (status `draft`).
 2. Kolumny: *Number*, *Status*, *Period*, *Total*, *Outstanding*,
-   *Issued*.
-3. Kliknij **Filters** → *Status* = `draft`.
+   *Issued*. Faktury robocze mają numer tymczasowy `DRAFT-…`; prawdziwy
+   numer (np. `INV/2026/11/0001`) nadawany jest dopiero przy
+   zaksięgowaniu, więc usunięta wersja robocza nie zostawia dziury w
+   numeracji.
+3. Kliknij **Filters** → *Status* = `draft`. Filtr *Document type* pozwala
+   pokazać faktury albo paragony doładowań (prepaid).
+4. Faktury billingowe **nie pojawiają się** w module Sales — billing ma
+   własne dokumenty.
 
 ### 3b. Szczegóły i edycja pozycji faktury
 1. Kliknij wiersz faktury → strona szczegółów.
@@ -156,6 +162,18 @@ przebieg rozliczeniowy) — zwykłe faktury sprzedaży się tu nie pokazują.
 1. Na stronie szczegółów faktury roboczej kliknij **Post invoice**.
 2. Status zmienia się z `draft` na `posted` i pojawia się komunikat
    potwierdzający.
+
+### 3d. Ustawienia rozliczeń (numeracja, prepaid)
+1. Otwórz **Settings → Billing** (`/backend/config/billing`).
+2. *Document numbering* — maska numeru dla faktur, faktur korygujących i
+   paragonów. Tokeny: `{YYYY}` `{YY}` `{MM}` `{DD}` oraz jeden licznik:
+   `{SEQUENCE_NUM}` (nigdy się nie zeruje), `{SEQUENCE_NUM_YEAR}` (co rok),
+   `{SEQUENCE_NUM_MONTH}` (co miesiąc); `:4` dopełnia zerami. Pod polem
+   widać podgląd następnego numeru albo błąd (np. licznik miesięczny bez
+   `{MM}`).
+3. *Prepaid defaults* — próg niskiego salda, bufor limitu, VAT na
+   paragonach doładowań, dostawca płatności, generowanie zestawień.
+4. **Save** (albo `Ctrl/Cmd + Enter`; `Esc` cofa zmiany).
 
 ## 4. Przebiegi rozliczeniowe (Bill Runs)
 
@@ -506,8 +524,7 @@ Jeśli chcesz wyczyścić billing i wgrać dane od nowa, w terminalu:
 ```bash
 # 1. wyczyść tabele billingu
 docker exec dainamite-core-postgres-1 psql -U postgres -d open-mercato -c "
-DELETE FROM sales_invoice_lines WHERE invoice_id IN (SELECT id FROM sales_invoices WHERE jsonb_exists(metadata,'bill_run_id'));
-DELETE FROM sales_invoices WHERE jsonb_exists(metadata,'bill_run_id');
+DELETE FROM billing_invoice_lines; DELETE FROM billing_invoices; DELETE FROM billing_document_sequences;
 DELETE FROM billing_run_outcomes; DELETE FROM billing_runs;
 DELETE FROM billing_account_usage; DELETE FROM billing_items; DELETE FROM billing_accounts;"
 

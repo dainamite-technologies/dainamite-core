@@ -4,7 +4,7 @@
  * Models the subset of operations `balanceLedger` / `prepaidConsume` /
  * `accountStatus` touch: the raw `INSERT … ON CONFLICT` + `UPDATE … RETURNING`
  * balance statements, the `SUM(amount)` reconciliation query, the postpaid
- * `SUM(outstanding_amount)` query, plus findOne/find/create/persist/flush.
+ * `SUM(outstanding)` query on `billing_invoices`, plus findOne/find/create/persist/flush.
  *
  * The balance math reuses the real `money` helpers so the mock's rounding
  * matches production exactly — that is the whole point of the reconciliation
@@ -31,9 +31,9 @@ export type MockEmOptions = {
   existingStatement?: Row | null
   /** A PRIOR BillingStatement (periodEnd < periodStart) for opening-chaining tests. */
   priorStatement?: Row | null
-  /** Module config values keyed by name (e.g. { 'prepaid.topup_tax_rate': 23 }). */
+  /** Billing settings by legacy config name (e.g. { 'prepaid.topup_tax_rate': 23 }), served as a BillingSettings row. */
   configs?: Record<string, unknown>
-  /** Postpaid outstanding total returned by the SUM(outstanding_amount) query. */
+  /** Postpaid outstanding total returned by the SUM(outstanding) query on billing_invoices. */
   postpaidOutstanding?: string | number
 }
 
@@ -50,6 +50,8 @@ export type MockEm = {
   persist: jest.Mock
   flush: jest.Mock
   execute: jest.Mock
+  /** Series names of document numbers claimed (Spec 0). */
+  sequenceClaims: string[]
   nativeUpdate: jest.Mock
   transactional: jest.Mock
   fork: () => MockEm
@@ -80,6 +82,7 @@ export function createPrepaidMockEm(options: MockEmOptions = {}): MockEm {
     usages,
     balances,
     persisted,
+    sequenceClaims: [] as string[],
   } as MockEm
 
   em.create = jest.fn((entity: unknown, data: Row) => {
@@ -146,14 +149,22 @@ export function createPrepaidMockEm(options: MockEmOptions = {}): MockEm {
       }
       return options.existingStatement ?? null
     }
-    // resolveInvoiceStatusEntryId looks up Dictionary then DictionaryEntry.
-    if (ctor === 'Dictionary') return { id: 'dict-invoice-status' }
-    if (ctor === 'DictionaryEntry') return { id: `status-${(where.value as string) ?? 'x'}` }
-    if (ctor === 'ModuleConfig') {
-      const name = where.name as string
+    // Spec 0: prepaid settings live on the per-org BillingSettings row. The
+    // `configs` option keeps the old config names so tests stay readable.
+    if (ctor === 'BillingSettings') {
       const configs = options.configs ?? {}
-      if (name in configs) return { moduleId: 'billing', name, valueJson: configs[name] }
-      return null
+      const pick = (name: string, fallback: unknown) => (name in configs ? configs[name] : fallback)
+      return {
+        id: 'settings-1',
+        tenantId: where.tenantId,
+        organizationId: where.organizationId,
+        lowBalanceThresholdDefault: String(pick('prepaid.low_balance_threshold_default', '0')),
+        nearLimitBufferDefault: String(pick('credit.near_limit_buffer_default', '0')),
+        statementEnabled: pick('prepaid.statement_enabled', true),
+        topupTaxRate: String(pick('prepaid.topup_tax_rate', '0')),
+        topupProvider: pick('prepaid.topup_provider', 'stripe'),
+        numberMasks: null,
+      }
     }
     return null
   }) as never
@@ -165,6 +176,11 @@ export function createPrepaidMockEm(options: MockEmOptions = {}): MockEm {
   }) as never
 
   em.execute = jest.fn(async (sql: string, params: unknown[] = []) => {
+    // Spec 0 numbering: claimDocumentNumber's sequence upsert.
+    if (sql.includes('billing_document_sequences')) {
+      em.sequenceClaims.push(params[2] as string)
+      return [{ seq: 42 }]
+    }
     if (sql.includes('INSERT INTO billing_account_balances')) {
       // params: [org, tenant, acct, ccy, now, now]
       const [organizationId, tenantId, billAccountId, currencyCode] = params as string[]
@@ -221,7 +237,7 @@ export function createPrepaidMockEm(options: MockEmOptions = {}): MockEm {
       const sum = transactions.reduce((acc, t) => addMoney(acc, (t.amount as string) ?? '0'), '0')
       return [{ sum_amount: sum }]
     }
-    if (sql.includes('SUM(outstanding_amount)')) {
+    if (sql.includes('SUM(outstanding)') && sql.includes('billing_invoices')) {
       return [{ total: String(options.postpaidOutstanding ?? '0') }]
     }
     return []

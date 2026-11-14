@@ -1,464 +1,321 @@
 /**
- * Unit tests for the Phase 4a + 4b invoice commands.
+ * Unit tests for the billing invoice commands (Spec 0 — billing-owned
+ * `billing_invoices`): post (number claimed at post, snapshots, refusals),
+ * draft line edit / add / remove (audit + totals), and the test wipe.
  *
- * These exercise the *command contract* — refusal on non-draft,
- * audit-row writing, totals recompute — via a thin mocked EM. Real
- * end-to-end persistence is covered by the integration suite once
- * Phase 4c admin UI lands and Playwright can drive the flow.
- *
- * The mock EM models the subset of operations the commands touch:
- *   findOne / find / create / persist / flush / remove / execute.
- * `create` returns a shallow copy with a synthetic id so the
- * command's `emit / return` path can read `result.id` immediately.
+ * The mock EM models the subset the commands touch, keyed by entity class:
+ * findOne / find / create / persist / flush / remove / execute /
+ * transactional / fork.
  */
 
 import {
-  __resetInvoiceStatusCacheForTests,
-} from '../../lib/invoiceStatus'
-import {
   addDraftLineCommand,
+  buildBuyerSnapshot,
   editDraftLineCommand,
   postInvoiceCommand,
   removeDraftLineCommand,
   wipeTestInvoicesCommand,
 } from '../../commands/invoices'
 import {
+  BillingAccount,
   BillingDraftInvoiceEdit,
+  BillingInvoice,
+  BillingInvoiceLine,
+  BillingSettings,
 } from '../../data/entities'
-
-type FakeInvoice = {
-  id: string
-  status: string
-  statusEntryId: string | null
-  tenantId: string
-  organizationId: string
-  invoiceNumber: string
-  currencyCode: string
-  metadata: Record<string, unknown> | null
-  subtotalNetAmount: string
-  subtotalGrossAmount: string
-  grandTotalNetAmount: string
-  grandTotalGrossAmount: string
-  outstandingAmount: string
-  paidTotalAmount: string
-  updatedAt: Date
-  deletedAt: Date | null
-}
-
-type FakeLine = {
-  id: string
-  invoice: FakeInvoice
-  tenantId: string
-  organizationId: string
-  description: string | null
-  quantity: string
-  normalizedQuantity: string
-  unitPriceNet: string
-  unitPriceGross: string
-  totalNetAmount: string
-  totalGrossAmount: string
-  metadata: Record<string, unknown> | null
-  lineNumber: number
-}
 
 const TENANT = '11111111-1111-4111-8111-111111111111'
 const ORG = '22222222-2222-4222-8222-222222222222'
 const INVOICE_ID = '33333333-3333-4333-8333-333333333333'
 const LINE_ID = '44444444-4444-4444-8444-444444444444'
+const ACCOUNT_ID = '55555555-5555-4555-8555-555555555555'
 
-function makeInvoice(overrides: Partial<FakeInvoice> = {}): FakeInvoice {
+type Row = Record<string, unknown>
+
+function makeInvoice(overrides: Row = {}): Row {
   return {
-    id: overrides.id ?? INVOICE_ID,
-    status: overrides.status ?? 'draft',
-    statusEntryId: overrides.statusEntryId ?? 'status-draft',
-    tenantId: overrides.tenantId ?? TENANT,
-    organizationId: overrides.organizationId ?? ORG,
-    invoiceNumber: overrides.invoiceNumber ?? 'INV-2026-0000001',
-    currencyCode: overrides.currencyCode ?? 'EUR',
-    metadata: overrides.metadata ?? {},
-    subtotalNetAmount: overrides.subtotalNetAmount ?? '100.0000',
-    subtotalGrossAmount: overrides.subtotalGrossAmount ?? '100.0000',
-    grandTotalNetAmount: overrides.grandTotalNetAmount ?? '100.0000',
-    grandTotalGrossAmount: overrides.grandTotalGrossAmount ?? '100.0000',
-    outstandingAmount: overrides.outstandingAmount ?? '100.0000',
-    paidTotalAmount: overrides.paidTotalAmount ?? '0',
-    updatedAt: overrides.updatedAt ?? new Date(),
-    deletedAt: overrides.deletedAt ?? null,
+    id: INVOICE_ID,
+    tenantId: TENANT,
+    organizationId: ORG,
+    billAccountId: ACCOUNT_ID,
+    documentType: 'invoice',
+    number: 'DRAFT-ABCDEF12',
+    series: null,
+    status: 'draft',
+    testRun: false,
+    currencyCode: 'EUR',
+    subtotalNet: '100.0000',
+    taxTotal: '0.0000',
+    totalGross: '100.0000',
+    paidTotal: '0',
+    outstanding: '100.0000',
+    billDate: new Date('2026-12-01T00:00:00Z'),
+    periodStart: new Date('2026-12-01T00:00:00Z'),
+    periodEnd: new Date('2026-12-31T00:00:00Z'),
+    deletedAt: null,
+    ...overrides,
   }
 }
 
-function makeLine(invoice: FakeInvoice, overrides: Partial<FakeLine> = {}): FakeLine {
+function makeLine(overrides: Row = {}): Row {
   return {
-    id: overrides.id ?? LINE_ID,
-    invoice,
-    tenantId: invoice.tenantId,
-    organizationId: invoice.organizationId,
-    description: overrides.description ?? 'MRC',
-    quantity: overrides.quantity ?? '1.0000',
-    normalizedQuantity: overrides.normalizedQuantity ?? '1.0000',
-    unitPriceNet: overrides.unitPriceNet ?? '100.0000',
-    unitPriceGross: overrides.unitPriceGross ?? '100.0000',
-    totalNetAmount: overrides.totalNetAmount ?? '100.0000',
-    totalGrossAmount: overrides.totalGrossAmount ?? '100.0000',
-    metadata: overrides.metadata ?? { billing_type: 'recurring' },
-    lineNumber: overrides.lineNumber ?? 1,
+    id: LINE_ID,
+    invoiceId: INVOICE_ID,
+    tenantId: TENANT,
+    organizationId: ORG,
+    lineNumber: 1,
+    billingItemId: null,
+    billingType: 'recurring',
+    description: 'MRC',
+    quantity: '1.0000',
+    unitPriceNet: '100.0000',
+    taxRate: '0',
+    netAmount: '100.0000',
+    taxAmount: '0.0000',
+    grossAmount: '100.0000',
+    metadata: null,
+    deletedAt: null,
+    ...overrides,
   }
 }
 
-type Env = {
-  ctx: { container: { resolve: jest.MockedFunction<(name: string) => unknown> }; auth: { sub?: string; tenantId?: string; orgId?: string } | null }
-  em: {
-    findOne: jest.MockedFunction<(entity: unknown, where: unknown) => Promise<unknown>>
-    find: jest.MockedFunction<(entity: unknown, where: unknown) => Promise<unknown[]>>
-    create: jest.MockedFunction<(entity: unknown, data: Record<string, unknown>) => unknown>
-    persist: jest.MockedFunction<(entity: unknown) => unknown>
-    flush: jest.MockedFunction<() => Promise<void>>
-    remove: jest.MockedFunction<(entity: unknown) => unknown>
-    execute: jest.MockedFunction<(sql: string, params?: unknown[]) => Promise<unknown>>
-    fork: jest.MockedFunction<() => Env['em']>
-  }
-  persistedEntities: unknown[]
-  removedEntities: unknown[]
-}
-
-let auditIdCounter = 0
-
-function createEnv(
-  options: {
-    invoice?: FakeInvoice | null
-    line?: FakeLine | null
-    statusEntryDraft?: string | null
-    statusEntryPosted?: string | null
-    initialLines?: FakeLine[]
-    invoiceFinalLines?: FakeLine[]
-    auth?: { sub?: string; tenantId?: string; orgId?: string } | null
-    testInvoiceRows?: Array<{ id: string }>
-  } = {},
-): Env {
-  const persistedEntities: unknown[] = []
-  const removedEntities: unknown[] = []
-  let lineSequence = (options.initialLines ?? []).length
-
-  const em: Env['em'] = {
-    findOne: jest.fn(async (entity: unknown, _where: unknown) => {
-      // Distinguish by entity reference. Order of priority:
-      // SalesInvoice → Dictionary / DictionaryEntry (via invoiceStatus
-      // resolver — returns dict then entry) → SalesInvoiceLine.
-      const constructorName = (entity as { name?: string }).name ?? ''
-      if (constructorName === 'SalesInvoice') return options.invoice ?? null
-      if (constructorName === 'SalesInvoiceLine') return options.line ?? null
-      if (constructorName === 'Dictionary') return { id: 'dict-1' }
-      if (constructorName === 'DictionaryEntry') {
-        // The status resolver looks up by value; assume posted for the
-        // post test (the only one that exercises this path).
-        return { id: options.statusEntryPosted ?? 'entry-posted' }
-      }
-      return null
-    }) as never,
-    find: jest.fn(async (entity: unknown, _where: unknown) => {
-      const constructorName = (entity as { name?: string }).name ?? ''
-      if (constructorName === 'SalesInvoiceLine') {
-        // For add-line: return initialLines so lineNumber is computed.
-        // For recomputeInvoiceTotals: return invoiceFinalLines after edit.
-        if (options.invoiceFinalLines) return options.invoiceFinalLines
-        return options.initialLines ?? []
-      }
-      return []
-    }) as never,
-    create: jest.fn((entity: unknown, data: Record<string, unknown>) => {
-      const ctor = (entity as { name?: string }).name ?? ''
-      if (ctor === 'BillingDraftInvoiceEdit') {
-        auditIdCounter += 1
-        return { ...data, id: `audit-${auditIdCounter}` }
-      }
-      if (ctor === 'SalesInvoiceLine') {
-        lineSequence += 1
-        return { ...data, id: `new-line-${lineSequence}` }
-      }
-      return { ...data, id: 'generated-id' }
-    }) as never,
-    persist: jest.fn((entity: unknown) => {
-      persistedEntities.push(entity)
-    }) as never,
-    flush: jest.fn(async () => undefined) as never,
-    remove: jest.fn((entity: unknown) => {
-      removedEntities.push(entity)
-    }) as never,
-    execute: jest.fn(async () => options.testInvoiceRows ?? []) as never,
-    fork: jest.fn() as never,
-  }
-  em.fork = jest.fn(() => em) as never
-
-  const container = {
-    resolve: jest.fn((name: string) => {
-      if (name === 'em') return em
-      return null
-    }) as never,
-  }
-
-  return {
-    ctx: {
-      container,
-      auth: options.auth ?? { sub: '99999999-9999-4999-8999-999999999999', tenantId: TENANT, orgId: ORG },
-    },
-    em,
-    persistedEntities,
-    removedEntities,
-  }
-}
-
-beforeEach(() => {
-  __resetInvoiceStatusCacheForTests()
-  auditIdCounter = 0
-})
-
-const baseInput = {
+const account = {
+  id: ACCOUNT_ID,
   tenantId: TENANT,
   organizationId: ORG,
-  invoiceId: INVOICE_ID,
+  name: 'Jan Kowalski',
+  customerId: 'cust-1',
+  customerKind: 'person',
+  taxId: null,
+  invoiceEmail: 'jan@example.test',
+  invoiceLanguage: 'pl',
+  invoiceAddress: { line1: 'ul. Testowa 1', city: 'Warszawa', postal_code: '00-001', country: 'PL' },
+  creditLimit: '0',
+  currencyCode: 'EUR',
+  billingMode: 'postpaid',
 }
 
+function createEnv(options: {
+  invoice?: Row | null
+  line?: Row | null
+  lines?: Row[]
+  testInvoiceIds?: string[]
+  seq?: number
+  claimThrows?: Error
+} = {}) {
+  const persisted: unknown[] = []
+  const removed: unknown[] = []
+  const executed: Array<{ sql: string; params: unknown[] }> = []
+  let created = 0
+  const lines = options.lines ?? (options.line ? [options.line] : [])
+
+  const em = {
+    findOne: jest.fn(async (entity: unknown) => {
+      if (entity === BillingInvoice) return options.invoice ?? null
+      if (entity === BillingInvoiceLine) return options.line ?? null
+      if (entity === BillingAccount) return account
+      if (entity === BillingSettings) return { id: 'settings-1', numberMasks: null }
+      return null
+    }),
+    find: jest.fn(async (entity: unknown) => (entity === BillingInvoiceLine ? lines : [])),
+    create: jest.fn((entity: unknown, data: Row) => {
+      created += 1
+      const prefix = entity === BillingDraftInvoiceEdit ? 'audit' : entity === BillingInvoiceLine ? 'new-line' : 'gen'
+      return { ...data, id: `${prefix}-${created}` }
+    }),
+    persist: jest.fn((entity: unknown) => {
+      persisted.push(entity)
+    }),
+    flush: jest.fn(async () => undefined),
+    remove: jest.fn((entity: unknown) => {
+      removed.push(entity)
+    }),
+    execute: jest.fn(async (sql: string, params: unknown[] = []) => {
+      executed.push({ sql, params })
+      if (sql.includes('billing_document_sequences')) {
+        if (options.claimThrows) throw options.claimThrows
+        return [{ seq: options.seq ?? 1 }]
+      }
+      if (sql.includes('SUM(outstanding)')) return [{ total: '0' }]
+      if (sql.startsWith('SELECT id FROM billing_invoices')) return (options.testInvoiceIds ?? []).map((id) => ({ id }))
+      return []
+    }),
+    transactional: jest.fn(),
+    fork: jest.fn(),
+  }
+  // Nested transactions / forks reuse the same mock EM.
+  em.transactional.mockImplementation(async (fn: (tem: unknown) => Promise<unknown>) => fn(em))
+  em.fork.mockReturnValue(em)
+
+  const ctx = {
+    container: { resolve: jest.fn((name: string) => (name === 'em' ? em : null)) },
+    auth: { sub: '99999999-9999-4999-8999-999999999999', tenantId: TENANT, orgId: ORG },
+  }
+  return { em, ctx, persisted, removed, executed }
+}
+
+const baseInput = { tenantId: TENANT, organizationId: ORG, invoiceId: INVOICE_ID }
+
 describe('postInvoiceCommand', () => {
-  it('refuses non-draft invoices with 409 + not_draft code', async () => {
+  it('claims the series number at post and freezes the buyer snapshot', async () => {
+    const invoice = makeInvoice()
+    const env = createEnv({ invoice, lines: [makeLine()], seq: 7 })
+    const result = await postInvoiceCommand.execute(baseInput, env.ctx as never)
+
+    expect(result).toMatchObject({ status: 'posted', lineCount: 1 })
+    expect(result.invoiceNumber).toMatch(/^INV\/\d{4}\/\d{2}\/0007$/)
+    expect(invoice).toMatchObject({
+      status: 'posted',
+      series: 'invoice',
+      number: result.invoiceNumber,
+      outstanding: '100.0000',
+      paidTotal: '0',
+    })
+    expect(invoice.issueDate).toBeInstanceOf(Date)
+    expect(invoice.buyerSnapshot).toMatchObject({ name: 'Jan Kowalski', customer_kind: 'person', invoice_language: 'pl' })
+    const claim = env.executed.find((e) => e.sql.includes('billing_document_sequences'))
+    expect(claim?.params.slice(0, 3)).toEqual([TENANT, ORG, 'invoice'])
+  })
+
+  it('refuses non-draft invoices with 409 not_draft', async () => {
     const env = createEnv({ invoice: makeInvoice({ status: 'posted' }) })
-    await expect(
-      postInvoiceCommand.execute(baseInput, env.ctx as never),
-    ).rejects.toMatchObject({
+    await expect(postInvoiceCommand.execute(baseInput, env.ctx as never)).rejects.toMatchObject({
       status: 409,
       body: expect.objectContaining({ code: 'billing.invoice.not_draft' }),
     })
   })
 
-  it('refuses test_run=true invoices with 409 + test_run code', async () => {
-    const env = createEnv({
-      invoice: makeInvoice({ status: 'draft', metadata: { test_run: true } }),
-    })
-    await expect(
-      postInvoiceCommand.execute(baseInput, env.ctx as never),
-    ).rejects.toMatchObject({
+  it('refuses test-run drafts with 409 test_run and never claims a number', async () => {
+    const env = createEnv({ invoice: makeInvoice({ testRun: true, number: 'TEST-1' }) })
+    await expect(postInvoiceCommand.execute(baseInput, env.ctx as never)).rejects.toMatchObject({
       status: 409,
       body: expect.objectContaining({ code: 'billing.invoice.test_run' }),
     })
+    expect(env.executed.some((e) => e.sql.includes('billing_document_sequences'))).toBe(false)
   })
 
-  it('happy path: draft → posted, status_entry_id resolved', async () => {
-    const invoice = makeInvoice({ status: 'draft' })
-    const env = createEnv({ invoice, initialLines: [makeLine(invoice)] })
-    const result = await postInvoiceCommand.execute(baseInput, env.ctx as never)
-    expect(result.status).toBe('posted')
-    expect(invoice.status).toBe('posted')
-    expect(result.lineCount).toBe(1)
+  it('leaves the draft untouched when the number claim fails (transaction rolls back)', async () => {
+    const invoice = makeInvoice()
+    const env = createEnv({ invoice, claimThrows: new Error('db down') })
+    await expect(postInvoiceCommand.execute(baseInput, env.ctx as never)).rejects.toThrow('db down')
+    expect(invoice).toMatchObject({ status: 'draft', number: 'DRAFT-ABCDEF12', series: null })
   })
 
   it('throws 404 when the invoice does not exist for this scope', async () => {
     const env = createEnv({ invoice: null })
-    await expect(
-      postInvoiceCommand.execute(baseInput, env.ctx as never),
-    ).rejects.toMatchObject({ status: 404 })
+    await expect(postInvoiceCommand.execute(baseInput, env.ctx as never)).rejects.toMatchObject({ status: 404 })
+  })
+
+  it('builds a buyer snapshot from the account', () => {
+    expect(buildBuyerSnapshot(account as never)).toEqual({
+      bill_account_id: ACCOUNT_ID,
+      name: 'Jan Kowalski',
+      customer_id: 'cust-1',
+      customer_kind: 'person',
+      tax_id: null,
+      invoice_email: 'jan@example.test',
+      invoice_language: 'pl',
+      invoice_address: account.invoiceAddress,
+    })
   })
 })
 
 describe('editDraftLineCommand', () => {
+  const input = { ...baseInput, invoiceLineId: LINE_ID }
+
   it('refuses non-draft invoices', async () => {
-    const invoice = makeInvoice({ status: 'posted' })
-    const env = createEnv({ invoice })
+    const env = createEnv({ invoice: makeInvoice({ status: 'posted' }), line: makeLine() })
     await expect(
-      editDraftLineCommand.execute(
-        { ...baseInput, invoiceLineId: LINE_ID, changes: { description: 'x' } },
-        env.ctx as never,
-      ),
-    ).rejects.toMatchObject({
-      status: 409,
-      body: expect.objectContaining({ code: 'billing.invoice.not_draft' }),
-    })
+      editDraftLineCommand.execute({ ...input, changes: { description: 'x' } }, env.ctx as never),
+    ).rejects.toMatchObject({ status: 409 })
   })
 
-  it('updates description + recomputes line total from unit_price × quantity', async () => {
-    const invoice = makeInvoice({ status: 'draft' })
-    const line = makeLine(invoice, {
-      quantity: '1.0000',
-      unitPriceNet: '50.0000',
-      totalNetAmount: '50.0000',
-    })
-    const env = createEnv({
-      invoice,
-      line,
-      invoiceFinalLines: [line],
-    })
-
-    await editDraftLineCommand.execute(
-      {
-        ...baseInput,
-        invoiceLineId: LINE_ID,
-        changes: { quantity: 3, unitPriceNet: 60 },
-      },
-      env.ctx as never,
-    )
-
-    expect(line.quantity).toBe('3.0000')
-    expect(line.unitPriceNet).toBe('60.0000')
-    // 3 × 60 = 180
-    expect(line.totalNetAmount).toBe('180.0000')
-    // Invoice totals match the new line sum.
-    expect(invoice.grandTotalNetAmount).toBe('180.0000')
+  it('recomputes the line from unit price × quantity and the invoice totals', async () => {
+    const invoice = makeInvoice()
+    const line = makeLine()
+    const env = createEnv({ invoice, line })
+    await editDraftLineCommand.execute({ ...input, changes: { quantity: 3, description: 'MRC ×3' } }, env.ctx as never)
+    expect(line).toMatchObject({ description: 'MRC ×3', quantity: '3.0000', netAmount: '300.0000', grossAmount: '300.0000' })
+    expect(invoice).toMatchObject({ subtotalNet: '300.0000', totalGross: '300.0000', outstanding: '300.0000' })
   })
 
-  it('honours explicit totalNetAmount override (operator manual fix)', async () => {
-    const invoice = makeInvoice({ status: 'draft' })
-    const line = makeLine(invoice, { quantity: '1.0000', unitPriceNet: '50.0000' })
-    const env = createEnv({ invoice, line, invoiceFinalLines: [line] })
-    await editDraftLineCommand.execute(
-      {
-        ...baseInput,
-        invoiceLineId: LINE_ID,
-        changes: { totalNetAmount: 999.99 },
-      },
+  it('honours an explicit totalNetAmount override and writes an audit row', async () => {
+    const line = makeLine()
+    const env = createEnv({ invoice: makeInvoice(), line })
+    const result = await editDraftLineCommand.execute(
+      { ...input, changes: { totalNetAmount: 42.5 } },
       env.ctx as never,
     )
-    expect(line.totalNetAmount).toBe('999.9900')
-  })
-
-  it('persists a BillingDraftInvoiceEdit audit row with before+after snapshots', async () => {
-    const invoice = makeInvoice({ status: 'draft' })
-    const line = makeLine(invoice, {
-      description: 'Old',
-      totalNetAmount: '50.0000',
-    })
-    const env = createEnv({ invoice, line, invoiceFinalLines: [line] })
-
-    await editDraftLineCommand.execute(
-      {
-        ...baseInput,
-        invoiceLineId: LINE_ID,
-        changes: { description: 'New' },
-      },
-      env.ctx as never,
-    )
-
-    const audit = env.persistedEntities.find(
-      (e) => (e as { action?: string }).action === 'line_edited',
-    ) as Record<string, unknown> | undefined
-    expect(audit).toBeDefined()
-    expect((audit?.beforeJson as { description: string }).description).toBe('Old')
-    expect((audit?.afterJson as { description: string }).description).toBe('New')
+    expect(line.netAmount).toBe('42.5000')
+    const audit = env.persisted.find((p) => (p as Row).action === 'line_edited') as Row
+    expect(audit).toMatchObject({ id: result.auditId, invoiceId: INVOICE_ID, invoiceLineId: LINE_ID })
+    expect((audit.beforeJson as Row).netAmount).toBe('100.0000')
+    expect((audit.afterJson as Row).netAmount).toBe('42.5000')
   })
 
   it('returns 404 when the line is not on the invoice', async () => {
-    const invoice = makeInvoice({ status: 'draft' })
-    const env = createEnv({ invoice, line: null })
+    const env = createEnv({ invoice: makeInvoice(), line: null })
     await expect(
-      editDraftLineCommand.execute(
-        { ...baseInput, invoiceLineId: LINE_ID, changes: { description: 'x' } },
-        env.ctx as never,
-      ),
+      editDraftLineCommand.execute({ ...input, changes: { description: 'x' } }, env.ctx as never),
     ).rejects.toMatchObject({ status: 404 })
   })
 })
 
 describe('addDraftLineCommand', () => {
-  it('appends a line with the next lineNumber and writes a line_added audit', async () => {
-    const invoice = makeInvoice({ status: 'draft' })
-    const existing = [makeLine(invoice), makeLine(invoice, { id: 'l2' })]
-    const env = createEnv({
-      invoice,
-      initialLines: existing,
-      invoiceFinalLines: [...existing],
-    })
-
+  it('appends a manual line after the highest line number and audits it', async () => {
+    const env = createEnv({ invoice: makeInvoice(), lines: [makeLine({ lineNumber: 4 })] })
     const result = await addDraftLineCommand.execute(
-      {
-        ...baseInput,
-        description: 'Manual adjustment',
-        quantity: 2,
-        unitPriceNet: 25,
-      },
+      { ...baseInput, description: 'Setup fee', quantity: 2, unitPriceNet: 25 },
       env.ctx as never,
     )
-    expect(result.invoiceLineId).toBe('new-line-3')
-    const audit = env.persistedEntities.find(
-      (e) => (e as { action?: string }).action === 'line_added',
-    ) as Record<string, unknown> | undefined
-    expect(audit).toBeDefined()
-    expect(audit?.beforeJson).toBeNull()
-    expect(audit?.afterJson).toBeDefined()
+    const line = env.persisted.find((p) => (p as Row).id === result.invoiceLineId) as Row
+    expect(line).toMatchObject({ lineNumber: 5, billingType: 'manual', netAmount: '50.0000', grossAmount: '50.0000' })
+    expect(env.persisted.some((p) => (p as Row).action === 'line_added')).toBe(true)
   })
 
   it('refuses non-draft invoices', async () => {
     const env = createEnv({ invoice: makeInvoice({ status: 'paid' }) })
     await expect(
-      addDraftLineCommand.execute(
-        {
-          ...baseInput,
-          description: 'x',
-          quantity: 1,
-          unitPriceNet: 1,
-        },
-        env.ctx as never,
-      ),
+      addDraftLineCommand.execute({ ...baseInput, description: 'x', quantity: 1, unitPriceNet: 1 }, env.ctx as never),
     ).rejects.toMatchObject({ status: 409 })
   })
 })
 
 describe('removeDraftLineCommand', () => {
-  it('removes the line and writes a line_removed audit with before snapshot', async () => {
-    const invoice = makeInvoice({ status: 'draft' })
-    const line = makeLine(invoice, { description: 'Going away' })
-    const env = createEnv({ invoice, line, invoiceFinalLines: [] })
-
-    await removeDraftLineCommand.execute(
-      { ...baseInput, invoiceLineId: LINE_ID },
-      env.ctx as never,
-    )
-
-    expect(env.removedEntities).toContain(line)
-    const audit = env.persistedEntities.find(
-      (e) => (e as { action?: string }).action === 'line_removed',
-    ) as Record<string, unknown> | undefined
-    expect(audit).toBeDefined()
-    expect((audit?.beforeJson as { description: string }).description).toBe('Going away')
-    expect(audit?.afterJson).toBeNull()
-    expect(audit?.invoiceLineId).toBeNull()
-    // Invoice total reset to zero (no lines left).
-    expect(invoice.grandTotalNetAmount).toBe('0.0000')
+  it('removes the line and writes a line_removed audit with the before snapshot', async () => {
+    const line = makeLine()
+    const env = createEnv({ invoice: makeInvoice(), line })
+    await removeDraftLineCommand.execute({ ...baseInput, invoiceLineId: LINE_ID }, env.ctx as never)
+    expect(env.removed).toContain(line)
+    const audit = env.persisted.find((p) => (p as Row).action === 'line_removed') as Row
+    expect(audit.afterJson).toBeNull()
+    expect((audit.beforeJson as Row).id).toBe(LINE_ID)
   })
 })
 
 describe('wipeTestInvoicesCommand', () => {
   it('returns 0 when no test invoices match', async () => {
-    const env = createEnv({ testInvoiceRows: [] })
-    const result = await wipeTestInvoicesCommand.execute(
-      { tenantId: TENANT, organizationId: ORG },
-      env.ctx as never,
-    )
-    expect(result.invoicesRemoved).toBe(0)
+    const env = createEnv({ testInvoiceIds: [] })
+    expect(await wipeTestInvoicesCommand.execute({ tenantId: TENANT, organizationId: ORG }, env.ctx as never)).toEqual({
+      invoicesRemoved: 0,
+    })
   })
 
-  it('deletes lines then invoices when matches exist', async () => {
-    const env = createEnv({
-      testInvoiceRows: [{ id: 'test-inv-1' }, { id: 'test-inv-2' }],
-    })
-    const result = await wipeTestInvoicesCommand.execute(
-      { tenantId: TENANT, organizationId: ORG },
-      env.ctx as never,
-    )
-    expect(result.invoicesRemoved).toBe(2)
-    // 1 SELECT + 1 DELETE lines + 1 DELETE invoices
-    expect(env.em.execute).toHaveBeenCalledTimes(3)
+  it('deletes lines, then invoices, from the billing tables only', async () => {
+    const env = createEnv({ testInvoiceIds: ['a', 'b'] })
+    const res = await wipeTestInvoicesCommand.execute({ tenantId: TENANT, organizationId: ORG }, env.ctx as never)
+    expect(res.invoicesRemoved).toBe(2)
+    const deletes = env.executed.filter((e) => e.sql.startsWith('DELETE'))
+    expect(deletes.map((d) => d.sql.split(' ')[2])).toEqual(['billing_invoice_lines', 'billing_invoices'])
+    expect(env.executed.some((e) => e.sql.includes('sales_invoices'))).toBe(false)
   })
 
   it('scopes by billRunId when provided', async () => {
-    const env = createEnv({ testInvoiceRows: [{ id: 'test-1' }] })
-    await wipeTestInvoicesCommand.execute(
-      { tenantId: TENANT, organizationId: ORG, billRunId: INVOICE_ID },
-      env.ctx as never,
-    )
-    const selectCall = env.em.execute.mock.calls[0]
-    expect(selectCall[0]).toContain("metadata->>'bill_run_id' = ?")
-    expect(selectCall[1]).toContain(INVOICE_ID)
+    const runId = '66666666-6666-4666-8666-666666666666'
+    const env = createEnv({ testInvoiceIds: [] })
+    await wipeTestInvoicesCommand.execute({ tenantId: TENANT, organizationId: ORG, billRunId: runId }, env.ctx as never)
+    const select = env.executed[0]
+    expect(select.sql).toContain('bill_run_id = ?')
+    expect(select.params).toContain(runId)
   })
 })
-
-// Suppress unused-import warning — BillingDraftInvoiceEdit is needed by the
-// mock's discriminator path but not directly referenced by name in
-// individual assertions.
-void BillingDraftInvoiceEdit

@@ -1,8 +1,10 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
 import type { AwilixContainer } from 'awilix'
+import { UniqueConstraintViolationException } from '@mikro-orm/core'
 import {
   BillingAccount,
   BillingAccountUsage,
+  BillingInvoice,
   BillingItem,
   BillingRun,
   BillingRunOutcome,
@@ -470,7 +472,7 @@ async function processPostpaidAccount(
     if (existing) {
       cycles.push({ ...record, status: 'skipped_existing', invoice_id: existing })
     } else if (lines.length > 0) {
-      const written = await writeDraftInvoice(em, container, {
+      const written = await writeDraftOnce(em, {
         mode: params.mode,
         account,
         billDate,
@@ -478,6 +480,26 @@ async function processPostpaidAccount(
         billRunId: billRun.id,
         lines,
       })
+      if (written === 'conflict') {
+        // Unique (account, bill_date, test_run) backstop fired: a concurrent
+        // writer got there first. Same semantics as the dedupe check above.
+        cycles.push({ ...record, status: 'skipped_existing' })
+        if (params.mode === 'real') {
+          return {
+            status: 'skipped_existing_draft',
+            warnings: finalizeWarnings(warnings, skippedItems),
+            draftInvoiceId: lastDraftInvoiceId,
+            cyclesEmitted: cycles.filter((c) => c.status === 'invoiced').length,
+            usageRecordsRated,
+            cycles,
+          }
+        }
+        billDate = nextBillDate
+        for (const [itemId, date] of watermarkUpdates) watermarks.set(itemId, date)
+        for (const it of oneTimesThisCycle) billedOneTimes.add(it.id)
+        usageCountedThrough = arrearsPeriod.periodEnd
+        continue
+      }
       if (written.invoiceId) lastDraftInvoiceId = written.invoiceId
       if (Number.parseFloat(written.totalNet) < 0) addWarning('negative_total_bill_dates', [record.bill_date])
       cycles.push({
@@ -564,9 +586,11 @@ function hasRealWarnings(warnings: AccountWarnings): boolean {
 }
 
 /**
- * Open draft for `(account, bill_date, test_run)`. Test drafts never block
- * real drafts and vice versa. *(Spec 0 replaces this lookup with a unique
- * index on the billing-owned invoice table.)*
+ * Existing invoice for `(account, bill_date, test_run)` in ANY status — a
+ * posted invoice for the same bill date also blocks re-billing (e.g. after
+ * an operator moved `next_bill_date` back). Test drafts never block real
+ * drafts and vice versa. The partial unique index
+ * `billing_invoices_bill_date_uq` is the backstop (see `writeDraftOnce`).
  */
 async function findExistingDraftForBillDate(
   em: EntityManager,
@@ -574,20 +598,37 @@ async function findExistingDraftForBillDate(
   billDate: Date,
   testRun: boolean,
 ): Promise<string | null> {
-  const rows = (await em.execute(
-    `SELECT id FROM sales_invoices
-     WHERE tenant_id = ?
-       AND organization_id = ?
-       AND deleted_at IS NULL
-       AND status = 'draft'
-       AND metadata->>'bill_account_id' = ?
-       AND metadata->>'bill_date' = ?
-       AND coalesce(metadata->>'test_run', 'false') = ?
-     LIMIT 1`,
-    [account.tenantId, account.organizationId, account.id, isoDate(billDate), testRun ? 'true' : 'false'],
-  )) as unknown as Array<{ id: string }> | undefined
-  if (!rows || rows.length === 0) return null
-  return rows[0].id ?? null
+  const existing = await em.findOne(
+    BillingInvoice,
+    {
+      tenantId: account.tenantId,
+      organizationId: account.organizationId,
+      billAccountId: account.id,
+      billDate,
+      testRun,
+      documentType: 'invoice',
+      deletedAt: null,
+    } as never,
+  )
+  return existing?.id ?? null
+}
+
+/**
+ * Writes the draft inside its own savepoint so a unique-index conflict
+ * (concurrent writer for the same bill date) doesn't abort the account's
+ * transaction — it is reported as 'conflict' and handled like a dedupe hit.
+ */
+async function writeDraftOnce(
+  em: EntityManager,
+  params: Parameters<typeof writeDraftInvoice>[1],
+): Promise<Awaited<ReturnType<typeof writeDraftInvoice>> | 'conflict'> {
+  if (params.mode === 'dry') return writeDraftInvoice(em, params)
+  try {
+    return await em.transactional((tem) => writeDraftInvoice(tem as EntityManager, params))
+  } catch (err) {
+    if (err instanceof UniqueConstraintViolationException) return 'conflict'
+    throw err
+  }
 }
 
 function computeFinalRunStatus(

@@ -958,3 +958,332 @@ export type BillRun = BillingRun
 export type BillRunOutcome = BillingRunOutcome
 /** @deprecated Renamed to {@link BillingDraftInvoiceEdit} in 0.20.0. */
 export type DraftInvoiceEdit = BillingDraftInvoiceEdit
+
+// ─── Spec 0 — standalone invoice ledger ─────────────────────────
+//
+// Billing owns its documents end to end: invoices, credit / debit memos and
+// prepaid top-up receipts live here, NOT in core `sales_invoices`. FK
+// columns are plain strings (the package guard forbids ORM relations).
+// Partial unique indexes (dedupe per bill date, unique posted number) are
+// created in the migration — decorators can't express their WHERE clause.
+
+@Entity({ tableName: 'billing_invoices' })
+@Index({
+  name: 'billing_invoices_status_idx',
+  properties: ['tenantId', 'organizationId', 'status'],
+})
+@Index({
+  name: 'billing_invoices_account_idx',
+  properties: ['billAccountId', 'status', 'dueDate'],
+})
+@Index({ name: 'billing_invoices_run_idx', properties: ['billRunId'] })
+@Index({ name: 'billing_invoices_corrects_idx', properties: ['correctsInvoiceId'] })
+@Index({ name: 'billing_invoices_topup_idx', properties: ['topupId'] })
+export class BillingInvoice {
+  [OptionalProps]?:
+    | 'documentType'
+    | 'series'
+    | 'status'
+    | 'testRun'
+    | 'billRunId'
+    | 'billDate'
+    | 'periodStart'
+    | 'periodEnd'
+    | 'issueDate'
+    | 'dueDate'
+    | 'subtotalNet'
+    | 'taxTotal'
+    | 'totalGross'
+    | 'paidTotal'
+    | 'creditedTotal'
+    | 'outstanding'
+    | 'correctsInvoiceId'
+    | 'correctionReason'
+    | 'buyerSnapshot'
+    | 'sellerSnapshot'
+    | 'pdfAttachmentId'
+    | 'topupId'
+    | 'postedAt'
+    | 'metadata'
+    | 'createdAt'
+    | 'updatedAt'
+    | 'deletedAt'
+
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @Property({ name: 'organization_id', type: 'uuid' })
+  organizationId!: string
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  @Property({ name: 'bill_account_id', type: 'uuid' })
+  billAccountId!: string
+
+  // 'invoice' | 'credit_memo' | 'debit_memo' | 'receipt'.
+  @Property({ name: 'document_type', type: 'text', default: 'invoice' })
+  documentType: string = 'invoice'
+
+  // DRAFT-… / TEST-… until posted, then the series number (Spec 0 numbering).
+  @Property({ type: 'text' })
+  number!: string
+
+  // Numbering series the posted number came from; null while draft.
+  @Property({ type: 'text', nullable: true })
+  series?: string | null
+
+  // 'draft' | 'posted' | 'partially_paid' | 'paid' | 'credited'. No 'void'.
+  @Property({ type: 'text', default: 'draft' })
+  status: string = 'draft'
+
+  @Property({ name: 'test_run', type: 'boolean', default: false })
+  testRun: boolean = false
+
+  @Property({ name: 'bill_run_id', type: 'uuid', nullable: true })
+  billRunId?: string | null
+
+  // Spec A: the bill date this invoice is for (dedupe key).
+  @Property({ name: 'bill_date', type: 'date', columnType: 'date', nullable: true })
+  billDate?: Date | null
+
+  // Display period = min/max of the line service periods.
+  @Property({ name: 'period_start', type: 'date', columnType: 'date', nullable: true })
+  periodStart?: Date | null
+
+  @Property({ name: 'period_end', type: 'date', columnType: 'date', nullable: true })
+  periodEnd?: Date | null
+
+  @Property({ name: 'issue_date', type: 'date', columnType: 'date', nullable: true })
+  issueDate?: Date | null
+
+  @Property({ name: 'due_date', type: 'date', columnType: 'date', nullable: true })
+  dueDate?: Date | null
+
+  @Property({ name: 'currency_code', type: 'text' })
+  currencyCode!: string
+
+  @Property({ name: 'subtotal_net', type: 'numeric', columnType: 'numeric(18, 4)', default: '0' })
+  subtotalNet: string = '0'
+
+  @Property({ name: 'tax_total', type: 'numeric', columnType: 'numeric(18, 4)', default: '0' })
+  taxTotal: string = '0'
+
+  @Property({ name: 'total_gross', type: 'numeric', columnType: 'numeric(18, 4)', default: '0' })
+  totalGross: string = '0'
+
+  @Property({ name: 'paid_total', type: 'numeric', columnType: 'numeric(18, 4)', default: '0' })
+  paidTotal: string = '0'
+
+  @Property({ name: 'credited_total', type: 'numeric', columnType: 'numeric(18, 4)', default: '0' })
+  creditedTotal: string = '0'
+
+  @Property({ type: 'numeric', columnType: 'numeric(18, 4)', default: '0' })
+  outstanding: string = '0'
+
+  // Spec D groundwork: the document a credit / debit memo corrects.
+  @Property({ name: 'corrects_invoice_id', type: 'uuid', nullable: true })
+  correctsInvoiceId?: string | null
+
+  @Property({ name: 'correction_reason', type: 'text', nullable: true })
+  correctionReason?: string | null
+
+  // Frozen at post: who the document was issued to / by.
+  @Property({ name: 'buyer_snapshot', type: 'jsonb', nullable: true })
+  buyerSnapshot?: Record<string, unknown> | null
+
+  @Property({ name: 'seller_snapshot', type: 'jsonb', nullable: true })
+  sellerSnapshot?: Record<string, unknown> | null
+
+  @Property({ name: 'pdf_attachment_id', type: 'uuid', nullable: true })
+  pdfAttachmentId?: string | null
+
+  // Receipts: the BillingTopup this receipt was issued for.
+  @Property({ name: 'topup_id', type: 'uuid', nullable: true })
+  topupId?: string | null
+
+  @Property({ name: 'posted_at', type: Date, nullable: true })
+  postedAt?: Date | null
+
+  // Free-form extras only (delivery log, …) — never a query key.
+  @Property({ type: 'jsonb', nullable: true })
+  metadata?: Record<string, unknown> | null
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+
+  @Property({ name: 'updated_at', type: Date, onUpdate: () => new Date() })
+  updatedAt: Date = new Date()
+
+  @Property({ name: 'deleted_at', type: Date, nullable: true })
+  deletedAt?: Date | null
+}
+
+@Entity({ tableName: 'billing_invoice_lines' })
+@Index({ name: 'billing_invoice_lines_invoice_idx', properties: ['invoiceId', 'lineNumber'] })
+export class BillingInvoiceLine {
+  [OptionalProps]?:
+    | 'billingItemId'
+    | 'taxRate'
+    | 'taxAmount'
+    | 'servicePeriodStart'
+    | 'servicePeriodEnd'
+    | 'correctsLineId'
+    | 'metadata'
+    | 'createdAt'
+    | 'updatedAt'
+    | 'deletedAt'
+
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @Property({ name: 'organization_id', type: 'uuid' })
+  organizationId!: string
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  @Property({ name: 'invoice_id', type: 'uuid' })
+  invoiceId!: string
+
+  @Property({ name: 'line_number', type: 'integer' })
+  lineNumber!: number
+
+  @Property({ name: 'billing_item_id', type: 'uuid', nullable: true })
+  billingItemId?: string | null
+
+  // 'one_time' | 'recurring' | 'usage' | 'manual' | 'receipt'.
+  @Property({ name: 'billing_type', type: 'text' })
+  billingType!: string
+
+  @Property({ type: 'text' })
+  description!: string
+
+  @Property({ type: 'numeric', columnType: 'numeric(18, 4)' })
+  quantity!: string
+
+  @Property({ name: 'unit_price_net', type: 'numeric', columnType: 'numeric(18, 4)' })
+  unitPriceNet!: string
+
+  @Property({ name: 'tax_rate', type: 'numeric', columnType: 'numeric(7, 4)', default: '0' })
+  taxRate: string = '0'
+
+  @Property({ name: 'net_amount', type: 'numeric', columnType: 'numeric(18, 4)' })
+  netAmount!: string
+
+  @Property({ name: 'tax_amount', type: 'numeric', columnType: 'numeric(18, 4)', default: '0' })
+  taxAmount: string = '0'
+
+  @Property({ name: 'gross_amount', type: 'numeric', columnType: 'numeric(18, 4)' })
+  grossAmount!: string
+
+  @Property({ name: 'service_period_start', type: 'date', columnType: 'date', nullable: true })
+  servicePeriodStart?: Date | null
+
+  @Property({ name: 'service_period_end', type: 'date', columnType: 'date', nullable: true })
+  servicePeriodEnd?: Date | null
+
+  // Spec D groundwork: the original line a memo line corrects.
+  @Property({ name: 'corrects_line_id', type: 'uuid', nullable: true })
+  correctsLineId?: string | null
+
+  // Proration / credit / usage tier breakdown / charge timing.
+  @Property({ type: 'jsonb', nullable: true })
+  metadata?: Record<string, unknown> | null
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+
+  @Property({ name: 'updated_at', type: Date, onUpdate: () => new Date() })
+  updatedAt: Date = new Date()
+
+  @Property({ name: 'deleted_at', type: Date, nullable: true })
+  deletedAt?: Date | null
+}
+
+@Entity({ tableName: 'billing_document_sequences' })
+@Unique({
+  name: 'billing_document_sequences_scope_uq',
+  properties: ['tenantId', 'organizationId', 'series', 'scopeKey'],
+})
+export class BillingDocumentSequence {
+  [OptionalProps]?: 'scopeKey' | 'nextValue' | 'createdAt' | 'updatedAt'
+
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @Property({ name: 'organization_id', type: 'uuid' })
+  organizationId!: string
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  // 'invoice' | 'credit_memo' | 'receipt'.
+  @Property({ type: 'text' })
+  series!: string
+
+  // '' (never resets), 'YYYY' (yearly) or 'YYYY-MM' (monthly) — from the mask.
+  @Property({ name: 'scope_key', type: 'text', default: '' })
+  scopeKey: string = ''
+
+  @Property({ name: 'next_value', type: 'bigint', default: 1 })
+  nextValue: number = 1
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+
+  @Property({ name: 'updated_at', type: Date, onUpdate: () => new Date() })
+  updatedAt: Date = new Date()
+}
+
+@Entity({ tableName: 'billing_settings' })
+export class BillingSettings {
+  [OptionalProps]?:
+    | 'lowBalanceThresholdDefault'
+    | 'nearLimitBufferDefault'
+    | 'statementEnabled'
+    | 'topupTaxRate'
+    | 'topupProvider'
+    | 'numberMasks'
+    | 'createdAt'
+    | 'updatedAt'
+    | 'deletedAt'
+
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @Property({ name: 'organization_id', type: 'uuid' })
+  organizationId!: string
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  // Prepaid defaults (moved from core `configs`, E-D2).
+  @Property({ name: 'low_balance_threshold_default', type: 'numeric', columnType: 'numeric(18, 4)', default: '0' })
+  lowBalanceThresholdDefault: string = '0'
+
+  @Property({ name: 'near_limit_buffer_default', type: 'numeric', columnType: 'numeric(18, 4)', default: '0' })
+  nearLimitBufferDefault: string = '0'
+
+  @Property({ name: 'statement_enabled', type: 'boolean', default: true })
+  statementEnabled: boolean = true
+
+  @Property({ name: 'topup_tax_rate', type: 'numeric', columnType: 'numeric(7, 4)', default: '0' })
+  topupTaxRate: string = '0'
+
+  @Property({ name: 'topup_provider', type: 'text', default: 'stripe' })
+  topupProvider: string = 'stripe'
+
+  // { invoice, credit_memo, receipt } number masks (Spec 0 numbering).
+  @Property({ name: 'number_masks', type: 'jsonb', nullable: true })
+  numberMasks?: Record<string, string> | null
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+
+  @Property({ name: 'updated_at', type: Date, onUpdate: () => new Date() })
+  updatedAt: Date = new Date()
+
+  @Property({ name: 'deleted_at', type: Date, nullable: true })
+  deletedAt?: Date | null
+}

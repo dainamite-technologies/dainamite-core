@@ -8,7 +8,7 @@ import { DataTable } from '@open-mercato/ui/backend/DataTable'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { flash } from '@open-mercato/ui/backend/FlashMessages'
-import { apiCallOrThrow, readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
+import { apiCall, apiCallOrThrow, readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
 import { normalizeCrudServerError } from '@open-mercato/ui/backend/utils/serverErrors'
 import { StatCard, Stat } from './DetailFields'
 
@@ -89,6 +89,17 @@ export function PrepaidPanel({
   const [adjAmount, setAdjAmount] = React.useState('')
   const [adjReason, setAdjReason] = React.useState('')
   const [adjSubmitting, setAdjSubmitting] = React.useState(false)
+  // Spec 0 (E-D1): online top-ups need the optional payment gateways module.
+  const [gatewayTopups, setGatewayTopups] = React.useState(false)
+  React.useEffect(() => {
+    let cancelled = false
+    void apiCall<{ capabilities?: { gatewayTopups?: boolean } }>('/api/billing/settings').then((call) => {
+      if (!cancelled) setGatewayTopups(call.ok && call.result?.capabilities?.gatewayTopups === true)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
   const pageSize = 10
 
   const loadStatus = React.useCallback(async () => {
@@ -286,10 +297,12 @@ export function PrepaidPanel({
       <div className="flex flex-wrap items-center gap-2">
         {!topupOpen && !adjustOpen ? (
           <>
-            <Button type="button" onClick={() => setTopupOpen(true)}>
-              <Plus size={16} />
-              {t('billing.prepaid.topup.action', 'Top up')}
-            </Button>
+            {gatewayTopups ? (
+              <Button type="button" onClick={() => setTopupOpen(true)}>
+                <Plus size={16} />
+                {t('billing.prepaid.topup.action', 'Top up')}
+              </Button>
+            ) : null}
             <Button type="button" variant="outline" onClick={() => setAdjustOpen(true)}>
               <SlidersHorizontal size={16} />
               {t('billing.prepaid.adjust.action', 'Adjust')}

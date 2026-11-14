@@ -19,6 +19,9 @@ export const features = [
   { id: 'billing.statement.view', title: 'View Consumption Statements', module: 'billing' },
   { id: 'billing.statement.generate', title: 'Generate Consumption Statement', module: 'billing' },
   { id: 'billing.credit.view', title: 'View Account Credit Status', module: 'billing' },
+  // ─── Billing settings (Spec 0) ───────────────────────────────
+  { id: 'billing.settings.view', title: 'View Billing Settings', module: 'billing' },
+  { id: 'billing.settings.manage', title: 'Manage Billing Settings', module: 'billing' },
 ] as const
 
 export default features

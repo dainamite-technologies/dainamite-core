@@ -1,9 +1,8 @@
 import { z } from 'zod'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import type { AwilixContainer } from 'awilix'
-import { SalesInvoice } from '@open-mercato/core/modules/sales/data/entities'
 import { makeCrudRoute } from '@open-mercato/shared/lib/crud/factory'
-import { BillingAccount, BillingRunOutcome } from '../../data/entities'
+import { BillingAccount, BillingRunOutcome, BillingInvoice } from '../../data/entities'
 import { billingEntityIds } from '../../data/entityIds'
 import {
   BILL_RUN_OUTCOME_STATUSES,
@@ -139,14 +138,14 @@ const crud = makeCrudRoute({
           ? em.find(BillingAccount, { id: { $in: accountIds } })
           : [],
         invoiceIds.length
-          ? em.find(SalesInvoice, { id: { $in: invoiceIds } })
+          ? em.find(BillingInvoice, { id: { $in: invoiceIds } })
           : [],
       ])
       const accountName = new Map(
         accounts.map((a) => [String(a.id), a.name] as [string, unknown]),
       )
       const invoiceNumber = new Map(
-        invoices.map((i) => [String(i.id), i.invoiceNumber] as [string, unknown]),
+        invoices.map((i) => [String(i.id), i.number] as [string, unknown]),
       )
       for (const row of items) {
         row.bill_account_name = accountName.get(String(row.bill_account_id)) ?? null

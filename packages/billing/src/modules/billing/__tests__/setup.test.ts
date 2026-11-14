@@ -16,9 +16,17 @@ import setup from '../setup'
 const featureIds = new Set<string>(features.map((f) => f.id))
 
 describe('billing setup — contract', () => {
-  it('exports onTenantCreated and seedDefaults hooks', () => {
-    expect(typeof setup.onTenantCreated).toBe('function')
+  it('exports a seedDefaults hook (billing settings) and no core-config tenant hook', () => {
     expect(typeof setup.seedDefaults).toBe('function')
+    expect(setup.onTenantCreated).toBeUndefined()
+  })
+
+  it('seedDefaults warms up the organization billing settings row', async () => {
+    const row = { id: 's-1' }
+    const em = { findOne: jest.fn(async () => row), execute: jest.fn() }
+    await setup.seedDefaults!({ em, tenantId: 't-1', organizationId: 'o-1' } as never)
+    expect(em.findOne).toHaveBeenCalledTimes(1)
+    expect(em.execute).not.toHaveBeenCalled()
   })
 
   it('does not declare seedExamples (billing ships no demo data)', () => {
@@ -77,8 +85,8 @@ describe('billing setup — contract', () => {
 })
 
 describe('billing acl — surface', () => {
-  it('exports exactly 19 features (12 Phase 0 + 7 SPEC-002 prepaid)', () => {
-    expect(features).toHaveLength(19)
+  it('exports exactly 21 features (12 Phase 0 + 7 SPEC-002 prepaid + 2 Spec 0 settings)', () => {
+    expect(features).toHaveLength(21)
   })
 
   it('all feature IDs are prefixed `billing.` (no leaking module boundary)', () => {

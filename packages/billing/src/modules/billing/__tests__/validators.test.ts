@@ -294,9 +294,6 @@ describe('exported enums', () => {
     ])
   })
 
-  it('INVOICE_STATUSES matches the dictionary entries seeded by setup', () => {
-    expect([...INVOICE_STATUSES]).toEqual(['draft', 'posted', 'paid', 'void'])
-  })
 })
 
 // ─── Phase 1 — CRUD payload schemas ────────────────────────────────
@@ -308,6 +305,8 @@ import {
   billingItemBulkCreateSchema,
   billingRunTriggerSchema,
   CHARGE_TIMING_RECURRING_ONLY_MESSAGE,
+  billingInvoiceListQuerySchema,
+  billingSettingsUpdateSchema,
   billingItemCreateSchema,
   billingItemListQuerySchema,
   billingItemUpdateSchema,
@@ -703,5 +702,32 @@ describe('Spec A validators', () => {
     const parsed = billingRunTriggerSchema.parse({ tenantId: TENANT, organizationId: ORG, catchUp: true })
     expect(parsed).not.toHaveProperty('catchUp')
     expect(parsed.mode).toBe('real')
+  })
+})
+
+// ─── Spec 0 — ledger validators ──────────────────────────────────
+
+describe('Spec 0 validators', () => {
+  it('invoice statuses drop void and add partially_paid / credited', () => {
+    expect(INVOICE_STATUSES).toEqual(['draft', 'posted', 'partially_paid', 'paid', 'credited'])
+  })
+
+  it('parses testRun literally (false stays false)', () => {
+    expect(billingInvoiceListQuerySchema.parse({ testRun: 'false' }).testRun).toBe(false)
+    expect(billingInvoiceListQuerySchema.parse({ testRun: 'true' }).testRun).toBe(true)
+    expect(billingInvoiceListQuerySchema.parse({}).testRun).toBeUndefined()
+    expect(() => billingInvoiceListQuerySchema.parse({ status: 'void' })).toThrow()
+  })
+
+  it('validates number masks on settings update', () => {
+    const base = { tenantId: TENANT, organizationId: ORG }
+    expect(
+      billingSettingsUpdateSchema.parse({ ...base, numberMasks: { invoice: 'FV/{YYYY}/{SEQUENCE_NUM_YEAR:5}' } }).numberMasks,
+    ).toEqual({ invoice: 'FV/{YYYY}/{SEQUENCE_NUM_YEAR:5}' })
+    expect(() => billingSettingsUpdateSchema.parse({ ...base, numberMasks: { invoice: 'FV/{SEQUENCE_NUM_MONTH}' } })).toThrow(
+      'mask_month_scope_needs_year_and_month',
+    )
+    expect(() => billingSettingsUpdateSchema.parse({ ...base, numberMasks: { bogus: 'X{SEQUENCE_NUM}' } })).toThrow()
+    expect(() => billingSettingsUpdateSchema.parse({ ...base, topupTaxRate: 120 })).toThrow()
   })
 })

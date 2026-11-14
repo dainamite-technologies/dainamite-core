@@ -1,5 +1,4 @@
 import { captureTopup } from '../../lib/topupCapture'
-import { __resetInvoiceStatusCacheForTests } from '../../lib/invoiceStatus'
 import { createPrepaidMockEm } from '../helpers/prepaidMockEm'
 
 const ACCOUNT = {
@@ -7,22 +6,6 @@ const ACCOUNT = {
   organizationId: 'org-1',
   tenantId: 'ten-1',
   currencyCode: 'EUR',
-}
-
-function makeDeps() {
-  return {
-    numberGenerator: {
-      generate: jest.fn(async () => ({ number: 'FV/2026/06/0042', format: 'x', sequence: 42 })),
-    },
-    taxService: {
-      calculateUnitAmounts: jest.fn(async (input: { amount: number }) => ({
-        netAmount: input.amount,
-        grossAmount: input.amount,
-        taxAmount: 0,
-        taxRate: 0,
-      })),
-    },
-  }
 }
 
 function makeTopup(overrides: Record<string, unknown> = {}) {
@@ -39,10 +22,6 @@ function makeTopup(overrides: Record<string, unknown> = {}) {
   }
 }
 
-beforeEach(() => {
-  __resetInvoiceStatusCacheForTests()
-})
-
 describe('captureTopup', () => {
   it('credits the balance, issues a receipt, and flips the top-up to captured', async () => {
     const topup = makeTopup()
@@ -50,7 +29,7 @@ describe('captureTopup', () => {
       topup,
       balance: { tenantId: 'ten-1', billAccountId: 'acct-1', balance: '0.0000' },
     })
-    const result = await captureTopup(em as never, makeDeps(), {
+    const result = await captureTopup(em as never, {
       topup: topup as never,
       account: ACCOUNT,
       taxRate: 0,
@@ -61,7 +40,7 @@ describe('captureTopup', () => {
     expect(result.balanceAfter).toBe('100.0000')
     expect(result.transactionId).toBeTruthy()
     expect(result.receiptInvoiceId).toBeTruthy()
-    expect(result.invoiceNumber).toBe('FV/2026/06/0042')
+    expect(result.invoiceNumber).toMatch(/^RC\/\d{4}\/\d{2}\/0042$/)
 
     // The credit transaction carries the deterministic source_ref.
     expect(em.transactions).toHaveLength(1)
@@ -81,7 +60,7 @@ describe('captureTopup', () => {
       topup,
       balance: { tenantId: 'ten-1', billAccountId: 'acct-1', balance: '100.0000' },
     })
-    const result = await captureTopup(em as never, makeDeps(), {
+    const result = await captureTopup(em as never, {
       topup: topup as never,
       account: ACCOUNT,
       taxRate: 0,
@@ -107,8 +86,7 @@ describe('captureTopup', () => {
       billAccountId: 'acct-1',
       createdAt: new Date('2026-06-10'),
     })
-    const deps = makeDeps()
-    const result = await captureTopup(em as never, deps, {
+    const result = await captureTopup(em as never, {
       topup: topup as never,
       account: ACCOUNT,
       taxRate: 0,
@@ -117,7 +95,7 @@ describe('captureTopup', () => {
     expect(result.balanceAfter).toBe('100.0000') // unchanged — dedup hit
     expect(result.receiptInvoiceId).toBe('inv-prior') // returns the existing receipt
     expect(em.transactions).toHaveLength(1) // no new credit transaction
-    // No second fiscal document: the number generator was never called.
-    expect(deps.numberGenerator.generate).not.toHaveBeenCalled()
+    // No second fiscal document: no receipt number was claimed.
+    expect(em.sequenceClaims).toEqual([])
   })
 })

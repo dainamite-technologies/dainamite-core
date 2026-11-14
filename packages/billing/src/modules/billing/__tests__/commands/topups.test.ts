@@ -25,6 +25,8 @@ function makeCtx(em: MockEm, gateway: unknown) {
   return {
     auth: { sub: '99999999-9999-4999-8999-999999999999', tenantId: TENANT, orgId: ORG },
     container: {
+      // E-D1: the gateway is optional — registered only when one is passed.
+      hasRegistration: jest.fn((name: string) => name !== 'paymentGatewayService' || gateway != null),
       resolve: jest.fn((name: string) => {
         if (name === 'em') return em
         if (name === 'dataEngine') return dataEngine
@@ -100,5 +102,14 @@ describe('createTopupCommand', () => {
     expect(result.topupId).toBe('topup-prior')
     expect(result.redirectUrl).toBe('https://pay.example/prior')
     expect(gateway.createPaymentSession).not.toHaveBeenCalled()
+  })
+
+  it('returns 501 gateway_unavailable without persisting when payment_gateways is not installed', async () => {
+    const em = createPrepaidMockEm({ account: prepaidAccount(), topup: null })
+    await expect(createTopupCommand.execute(baseInput, makeCtx(em, null) as never)).rejects.toMatchObject({
+      status: 501,
+      body: expect.objectContaining({ code: 'billing.topup.gateway_unavailable' }),
+    })
+    expect(em.persisted.some((e) => (e as { status?: string }).status === 'pending')).toBe(false)
   })
 })

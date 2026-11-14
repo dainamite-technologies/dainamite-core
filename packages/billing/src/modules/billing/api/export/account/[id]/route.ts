@@ -154,18 +154,18 @@ export async function GET(
       ),
     ])
 
-    // Invoices created in the window. The `metadata->>'bill_account_id'`
-    // predicate keeps non-billing core/sales invoices out.
+    // Billing documents created in the window (Spec 0: billing_invoices).
     const invoiceRows = (await em.execute(
-      `SELECT id, invoice_number, status, status_entry_id, issue_date, due_date,
-              currency_code, subtotal_net_amount, grand_total_net_amount,
-              grand_total_gross_amount, paid_total_amount, outstanding_amount,
-              metadata, created_at, updated_at, deleted_at
-       FROM sales_invoices
+      `SELECT id, number, document_type, series, status, test_run, bill_run_id, bill_date,
+              period_start, period_end, issue_date, due_date, posted_at, currency_code,
+              subtotal_net, tax_total, total_gross, paid_total, credited_total, outstanding,
+              corrects_invoice_id, correction_reason, topup_id, buyer_snapshot, seller_snapshot,
+              metadata, created_at, updated_at
+       FROM billing_invoices
        WHERE tenant_id = ?
          AND organization_id = ?
          AND deleted_at IS NULL
-         AND metadata->>'bill_account_id' = ?
+         AND bill_account_id = ?
          AND created_at >= ?
          AND created_at <= ?
        ORDER BY created_at DESC
@@ -190,7 +190,8 @@ export async function GET(
     return NextResponse.json({
       exportedAt: new Date().toISOString(),
       // v2 adds prepaid balance / transactions / top-ups / statements (SPEC-002).
-      schemaVersion: 2,
+      // v3 (Spec 0): invoices come from billing_invoices with billing field names.
+      schemaVersion: 3,
       tenantId,
       organizationId,
       window: {

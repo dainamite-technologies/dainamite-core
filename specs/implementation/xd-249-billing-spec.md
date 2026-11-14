@@ -1,5 +1,11 @@
 # XD-249: Billing Module — Implementation Spec
 
+> **Erratum (0.21.0):** invoices are no longer written to core `sales`. Billing owns
+> its documents (`billing_invoices`), numbering and statuses. See
+> [Spec 0 — standalone invoice ledger](../../.ai/specs/2026-11-14-billing-standalone-invoice-ledger.md).
+> Sections below that describe `core/sales` invoices, the `sales.invoice_status`
+> dictionary or core numbering are historical.
+
 ## Summary
 
 Implement `@dainamite/billing` — a **lightweight recurring-billing

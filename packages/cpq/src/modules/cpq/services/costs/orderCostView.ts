@@ -1,5 +1,7 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
-import { CpqOrderConfiguration, CpqOrderLineConfiguration, CpqOrderLineCost } from '../../data/entities'
+import { CpqOrderConfiguration, CpqOrderLineConfiguration, CpqOrderLineCost, CpqQuoteConfiguration } from '../../data/entities'
+import { isArcTerminationLine } from '../arcLineRemoval'
+import { isArcMirrorLine } from '../arcPriceFreeze'
 import { QuotingError } from '../cpqQuotingService'
 import type { ResolvedCharge, TenantScope } from '../types'
 import { computeQuoteMargin, type MarginCost, type MarginLine, type QuoteMargin } from './quoteMargin'
@@ -49,7 +51,7 @@ export type OrderCostsRead = {
   margin?: QuoteMargin
 }
 
-/** The order (by CPQ order id or sales order id), its lines and its costs: 3 queries, all tenant scoped. */
+/** The order (by CPQ order id or sales order id), its lines and its costs: 4 queries, all tenant scoped. */
 export async function readOrderCosts(em: EntityManager, orderId: string, scope: TenantScope, canViewCosts: boolean): Promise<OrderCostsRead> {
   const config = (await em.findOne(CpqOrderConfiguration, { id: orderId, ...scoped(scope) }))
     ?? (await em.findOne(CpqOrderConfiguration, { orderId, ...scoped(scope) }))
@@ -58,6 +60,12 @@ export async function readOrderCosts(em: EntityManager, orderId: string, scope: 
     em.find(CpqOrderLineConfiguration, { orderConfigurationId: config.id, organizationId: scope.organizationId, tenantId: scope.tenantId, deletedAt: null }),
     em.find(CpqOrderLineCost, { orderConfigurationId: config.id, ...scoped(scope) }),
   ])
+  // Same line predicate as the quote margin (`quoteCostView`): the source quote's type decides which lines are
+  // ARC mirror lines (left out of the deal) and which are termination lines (their costs never count).
+  const sourceQuote = config.sourceQuoteId
+    ? await em.findOne(CpqQuoteConfiguration, { id: config.sourceQuoteId, ...scoped(scope) })
+    : null
+  const quoteType = sourceQuote?.quoteType ?? 'new'
   const ordered = [...costs].sort((a, b) => a.orderLineId.localeCompare(b.orderLineId) || a.costKey.localeCompare(b.costKey))
   const project = canViewCosts ? fullOrderCostView : redactedOrderCostView
   const groups = new Map<string, Array<ReturnType<typeof project>>>()
@@ -69,10 +77,11 @@ export async function readOrderCosts(em: EntityManager, orderId: string, scope: 
     parentLineId: line.parentLineId ?? null,
     quantity: Number(line.quantity),
     termMonths: line.termMonths ?? null,
-    includeInDeal: line.action !== 'cancel',
+    includeInDeal: !isArcMirrorLine(line.configuration, quoteType),
     charges: ((line.charges ?? []) as unknown as ResolvedCharge[]).map((charge) => ({ chargeCode: charge.chargeCode, chargeType: charge.chargeType, totalPrice: charge.totalPrice ?? null })),
   }))
-  const lineIds = new Set(marginLines.map((line) => line.lineId))
+  const terminationIds = new Set(lines.filter((line) => isArcTerminationLine(line, quoteType)).map((line) => line.orderLineId))
+  const lineIds = new Set(marginLines.map((line) => line.lineId).filter((id) => !terminationIds.has(id)))
   const marginCosts: MarginCost[] = ordered.filter((row) => lineIds.has(row.orderLineId)).map((row) => ({
     quoteLineId: row.orderLineId, chargeCode: row.chargeCode ?? null, costKey: row.costKey, role: row.role, costType: row.costType,
     valueStatus: row.valueStatus, instanceAmount: row.instanceAmount, currencyCode: row.currencyCode, fxRate: row.fxRate, validUntil: row.validUntil,

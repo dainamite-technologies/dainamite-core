@@ -1,4 +1,4 @@
-import { CpqOrderLineConfiguration } from '../../data/entities'
+import { CpqOrderLineConfiguration, CpqOrderLineCost } from '../../data/entities'
 import { DefaultCpqOrderService, OrderError } from '../cpqOrderService'
 import * as eventsModule from '../../events'
 import type { TenantScope } from '../types'
@@ -958,5 +958,76 @@ describe('activateOrder transaction boundary', () => {
     h.em.isInTransaction.mockReturnValue(true)
     await expect(h.service.activateOrder('oc-1', ACTIVATION_SCOPE)).rejects.toThrow(/existing transaction/)
     expect(h.em.fork).not.toHaveBeenCalled()
+  })
+})
+
+describe('conversion copies quote costs to order line costs (MODIFIED by step 4)', () => {
+  const charges = [{ chargeCode: 'fee', chargeType: 'mrc', pricingMethod: 'cost_plus', quantity: 1, unitPrice: 80, totalPrice: 80,
+    listUnitPrice: 80, listTotalPrice: 80, standardUnitPrice: 80, standardTotalPrice: 80, currencyCode: 'USD', adjustmentErrors: [] }]
+  const quoteLine = (id: string, over: Record<string, unknown> = {}) => ({ quoteLineId: id, quantity: 2, action: 'add', nrcTotal: '10', mrcTotal: '80', charges,
+    configuration: {}, offeringId: null, productId: 'prod', specId: null, startDate: null, endDate: null, termMonths: 12, ...over })
+  const quoteCost = (over: Record<string, unknown>) => ({ id: 'qc-1', quoteLineId: 'line', costKey: 'tail', chargeCode: 'fee', origin: 'catalog', name: 'Tail', role: 'price_basis',
+    costType: 'mrc', source: 'table', costModel: 'flat', valueStatus: 'confirmed', validUntil: '2999-01-01', unitAmount: '50', instanceAmount: '135', supplierName: 'Carrier X', ...over })
+
+  async function convert(lines: Array<Record<string, unknown>>, costs: Array<Record<string, unknown>>) {
+    const { em, service } = createService()
+    em.findOne.mockResolvedValueOnce({ id: 'quote', quoteId: 'sales', cpqStatus: 'accepted', currencyCode: 'USD', customerId: 'customer', pricingSummary: { nrcTotal: 10, mrcTotal: 80 } })
+      .mockResolvedValueOnce(null)
+    // finds in order: quote lines, guard (price-basis costs), copy (all quote costs)
+    em.find.mockResolvedValueOnce(lines as never).mockResolvedValueOnce(costs.filter((row) => row.role === 'price_basis') as never).mockResolvedValueOnce(costs as never)
+    em.create.mockImplementation((_entity, values: Record<string, unknown>) => ({ createdAt: new Date(), ...values }))
+    return { em, run: () => service.convertQuoteToOrder('quote', SCOPE) }
+  }
+  const costCreates = (em: ReturnType<typeof createService>['em']) => em.create.mock.calls.filter(([entity]) => entity === CpqOrderLineCost).map(([, values]) => values)
+
+  it('copies every cost line to an order line cost on the mapped order line, keeping keys and values and total_amount = instance x quantity', async () => {
+    const { em, run } = await convert([quoteLine('line')], [
+      quoteCost({}), quoteCost({ id: 'qc-2', costKey: 'install', role: 'margin_only', costType: 'nrc', instanceAmount: '1500', valueStatus: 'estimated', validUntil: null }),
+    ])
+    await run()
+    const orderLineId = (em.create.mock.calls.find(([entity]) => entity === CpqOrderLineConfiguration)?.[1] as { orderLineId: string }).orderLineId
+    const copies = costCreates(em)
+    expect(copies).toHaveLength(2)
+    // the copy reads the quote's costs ordered by cost key
+    expect(copies[0]).toMatchObject({ orderLineId, sourceQuoteLineCostId: 'qc-2', costKey: 'install', totalAmount: '3000', valueStatus: 'estimated' })
+    expect(copies[1]).toMatchObject({ orderLineId, sourceQuoteLineCostId: 'qc-1', costKey: 'tail', instanceAmount: '135', totalAmount: '270', supplierName: 'Carrier X', valueStatus: 'confirmed' })
+    const config = em.create.mock.calls.find(([entity]) => (entity as { name: string }).name === 'CpqOrderConfiguration')?.[1] as { id: string }
+    expect(copies.every((copy) => (copy as { orderConfigurationId: string }).orderConfigurationId === config.id)).toBe(true)
+    // costs are persisted before the flush that commits the order lines (same transaction)
+    expect(em.persist.mock.calls.filter(([row]) => (row as { sourceQuoteLineCostId?: string }).sourceQuoteLineCostId)).toHaveLength(2)
+  })
+
+  it('skips cost lines of a quote line that has no order line (deleted line)', async () => {
+    const { em, run } = await convert([quoteLine('line')], [quoteCost({}), quoteCost({ id: 'qc-x', quoteLineId: 'deleted-line' })])
+    await run()
+    expect(costCreates(em).map((row) => (row as { sourceQuoteLineCostId: string }).sourceQuoteLineCostId)).toEqual(['qc-1'])
+  })
+
+  it('leaves the order and order line payloads identical to a conversion without costs', async () => {
+    const plain = await convert([quoteLine('line')], [])
+    await plain.run()
+    const costed = await convert([quoteLine('line')], [quoteCost({})])
+    await costed.run()
+    const strip = (em: ReturnType<typeof createService>['em']) => JSON.stringify(em.create.mock.calls.filter(([entity]) => entity !== CpqOrderLineCost).map(([, v]) => v))
+      .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, '<uuid>').replace(/\d{4}-\d\d-\d\dT[\d:.]+Z/g, '<ts>')
+    expect(strip(costed.em)).toBe(strip(plain.em))
+  })
+
+  it('a guard failure writes nothing: no order, order line or order line cost is created', async () => {
+    const { em, run } = await convert([quoteLine('line')], [quoteCost({ valueStatus: 'estimated' })])
+    await expect(run()).rejects.toMatchObject({ status: 422, message: 'COSTS_NOT_CONFIRMED' })
+    expect(em.create).not.toHaveBeenCalled()
+    expect(em.persist).not.toHaveBeenCalled()
+  })
+
+  it('a copy failure aborts the conversion transaction before the order lines are committed', async () => {
+    const { em, run } = await convert([quoteLine('line')], [quoteCost({})])
+    em.create.mockImplementation((entity, values: Record<string, unknown>) => {
+      if (entity === CpqOrderLineCost) throw new Error('copy failed')
+      return { createdAt: new Date(), ...values }
+    })
+    await expect(run()).rejects.toThrow('copy failed')
+    // only the pricing-revision phase flushed; the order lines were never flushed, so the transaction rolls back
+    expect(em.flush).toHaveBeenCalledTimes(1)
   })
 })

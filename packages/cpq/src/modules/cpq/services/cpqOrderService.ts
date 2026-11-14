@@ -1,5 +1,6 @@
 import { storedAdjustmentFailure } from './priceAdjustments/storedAdjustmentFailure'
 import { loadConversionCostBlockers } from './costs/conversionGuard'
+import { copyQuoteCostsToOrder } from './costs/orderCostCopy'
 import { withQuotePricingWrite } from './priceAdjustments/quotePricingWrite'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { SalesOrder, SalesOrderLine } from '@open-mercato/core/modules/sales/data/entities'
@@ -319,6 +320,12 @@ export class DefaultCpqOrderService {
       })
       em.persist(orderLineConfig)
     }
+
+    // Costs ride the conversion transaction: one order line cost per quote cost line, never touching a price.
+    await copyQuoteCostsToOrder(
+      em, cpqConfig, cpqOrderConfig.id, quoteLineIdToOrderLineId,
+      new Map(quoteLines.map((line) => [line.quoteLineId, Number(line.quantity)])), scope,
+    )
 
     await em.flush()
 

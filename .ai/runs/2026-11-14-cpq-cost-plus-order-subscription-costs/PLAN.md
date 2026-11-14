@@ -15,7 +15,7 @@ Engine: om-auto-create-pr-loop (steps: 21, --loop: no)
 | A | 1 | Characterization tests | group:A | done | |
 | B | 2 | Order line cost and inventory cost entities | group:B1 | done | |
 | B | 3 | Atomic activation | group:B1 | done | |
-| B | 4 | Conversion copy | group:B2 | todo | |
+| B | 4 | Conversion copy | group:B2 | done | |
 | B | 5 | Item cost sync and activation write | group:B2 | todo | |
 | B | 6 | Subscription snapshots carry costs | group:B3 | todo | |
 | B | 7 | cost_changed event | group:B3 | todo | |

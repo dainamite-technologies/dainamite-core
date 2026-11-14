@@ -5,7 +5,7 @@
  * positive control (the sentinel IS visible where it is meant to be) so a dead fixture cannot pass silently.
  */
 import {
-  CpqOrderConfiguration, CpqPriceRule, CpqProductCharge, CpqQuoteConfiguration, CpqQuoteLineConfiguration, CpqQuoteLineCost, CpqQuoteMarkupOverride,
+  CpqOrderConfiguration, CpqOrderLineCost, CpqPriceRule, CpqProductCharge, CpqQuoteConfiguration, CpqQuoteLineConfiguration, CpqQuoteLineCost, CpqQuoteMarkupOverride,
 } from '../../data/entities'
 import { DefaultCpqPricingService } from '../cpqPricingService'
 import { DefaultCpqQuotingService } from '../cpqQuotingService'
@@ -121,7 +121,13 @@ describe('pricing output (quote lines, orders, calculate-price)', () => {
     const result = await service.convertQuoteToOrder(ids.quote, SCOPE)
     expect(em.create).toHaveBeenCalled()
     expectClean(result)
-    expectClean(em.create.mock.calls)
+    // MODIFIED by step 4: conversion now stores the quote's costs as order line costs (the sensitive, cost-guarded
+    // records, so they DO hold the sentinels). Every other created record (order, order lines) stays clean.
+    const created = em.create.mock.calls as Array<[{ name: string }, Row]>
+    const costRecords = created.filter(([entity]) => entity === CpqOrderLineCost)
+    expect(costRecords).toHaveLength(2)
+    expect(leaked(costRecords.map(([, values]) => values))).toEqual(expect.arrayContaining(['7777.77']))
+    expectClean(created.filter(([entity]) => entity !== CpqOrderLineCost))
   })
 
   it('the calculate-price route returns no cost, supplier or markup for a cost-plus charge', async () => {

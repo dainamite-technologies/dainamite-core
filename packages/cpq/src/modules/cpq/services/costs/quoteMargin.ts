@@ -111,7 +111,18 @@ function finalize(acc: Acc): MarginFigures {
   }
 }
 
-const isKnown = (cost: MarginCost) => cost.valueStatus !== 'none' && cost.instanceAmount !== null && cost.instanceAmount !== undefined
+const isKnown = (cost: Pick<MarginCost, 'valueStatus' | 'instanceAmount'>) => cost.valueStatus !== 'none' && cost.instanceAmount !== null && cost.instanceAmount !== undefined
+
+/**
+ * Cost total of ONE cost line in the document currency: the per-instance amount (cost model applied) ×
+ * line quantity, the exact figure `computeQuoteMargin` accumulates. `null` for an unknown cost (status
+ * `none` or no amount): it contributes 0 to the margin and leaves its charge uncovered. Order line costs
+ * and inventory costs store this as `total_amount`, so an order shows the margin its quote showed.
+ */
+export function costLineTotal(cost: Pick<MarginCost, 'valueStatus' | 'instanceAmount'>, quantity: number): number | null {
+  if (!isKnown(cost)) return null
+  return R(Number(cost.instanceAmount) * quantity)
+}
 
 /** Flags of the PRICE-BASIS cost lines only ("indicative" semantics: what the price, not the margin, rests on). */
 export type PriceBasisFlags = { hasPendingCosts: boolean; hasEstimatedCosts: boolean }

@@ -154,6 +154,8 @@ export type AnswerClassificationInput = {
     currencyCode: string | null
     /** A stored proposal's ref (a locked-quote proposal keeps the line's own `supplierQuoteRef`). */
     proposedAnswer?: { supplierQuoteRef?: string | null } | null
+    /** `margin_only` costs are exempt from the cost lock (App Spec R11): their answers apply even on a locked quote. */
+    role?: string | null
   }
   /** The cost element still exists and is active (manual / carried lines pass `true`). */
   elementActive: boolean
@@ -165,7 +167,8 @@ const sameAmount = (a: string | number | null, b: string | number | null): boole
 /**
  * The defined check order (all refusals write nothing): stale request id or inactive element -> superseded;
  * same ref + same hash -> noop; same ref + different hash -> conflict; request not open -> not_open; then the
- * value: unlocked -> applied; locked with the same amount + currency -> confirmed_unchanged; else proposed.
+ * value: unlocked (or a margin-only cost, lock-exempt per App Spec R11) -> applied; locked with the same amount +
+ * currency -> confirmed_unchanged; else proposed. A missing `role` is treated as price-basis (the safe side).
  */
 export function classifyAnswer(input: AnswerClassificationInput): AnswerVerdict {
   const { answer, cost } = input
@@ -177,7 +180,7 @@ export function classifyAnswer(input: AnswerClassificationInput): AnswerVerdict 
     return cost.lastAnswerHash === hashAnswer(normalized) ? 'noop' : 'conflict'
   }
   if (cost.sourcingStatus !== 'requested') return 'not_open'
-  if (!input.locked) return 'applied'
+  if (!input.locked || cost.role === 'margin_only') return 'applied'
   return sameAmount(cost.unitAmount, normalized.unitAmount) && (cost.currencyCode ?? '').toUpperCase() === normalized.currencyCode
     ? 'confirmed_unchanged'
     : 'proposed'
@@ -192,9 +195,10 @@ export type DeclineEffect = {
   note: string | null
 }
 
-export function declineEffect(cost: { unitAmount: string | number | null; valueStatus: string; note: string | null }, locked: boolean): DeclineEffect {
+export function declineEffect(cost: { unitAmount: string | number | null; valueStatus: string; note: string | null; role?: string | null }, locked: boolean): DeclineEffect {
   const hasAmount = cost.unitAmount !== null && cost.unitAmount !== undefined
-  if (locked) return { valueStatus: hasAmount ? 'estimated' : 'none', clearAmount: false, note: cost.note }
+  // A margin-only cost never moves a price, so it is lock-exempt (App Spec R11): the unlocked rule (R10a) applies.
+  if (locked && cost.role !== 'margin_only') return { valueStatus: hasAmount ? 'estimated' : 'none', clearAmount: false, note: cost.note }
   if (!hasAmount) return { valueStatus: 'none', clearAmount: false, note: cost.note }
   const moved = `estimate ${Number(cost.unitAmount)} discarded: declined`
   const note = cost.note && cost.note.trim() ? `${cost.note.trim()} | ${moved}` : moved

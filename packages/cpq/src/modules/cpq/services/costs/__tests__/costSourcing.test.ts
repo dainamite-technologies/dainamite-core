@@ -128,6 +128,8 @@ describe('classifyAnswer (defined check order)', () => {
     ['locked with the same amount in another currency is a proposal', input({ locked: true, cost: { unitAmount: '280', currencyCode: 'USD' } }), 'proposed'],
     ['locked with a different amount is a proposal', input({ locked: true }), 'proposed'],
     ['locked without a value is a proposal', input({ locked: true, cost: { unitAmount: null, currencyCode: null } }), 'proposed'],
+    ['locked margin-only cost is lock-exempt (R11): a different value is applied', input({ locked: true, cost: { role: 'margin_only' } }), 'applied'],
+    ['locked price-basis cost with an explicit role is a proposal', input({ locked: true, cost: { role: 'price_basis' } }), 'proposed'],
     ['stale request id', input({ cost: { costRequestId: 'req-2' } }), 'superseded'],
     ['no request id at all', input({ cost: { costRequestId: null } }), 'superseded'],
     ['inactive element', input({ elementActive: false }), 'superseded'],
@@ -163,6 +165,10 @@ describe('declineEffect (Q3)', () => {
     expect(declineEffect({ unitAmount: '276.0000', valueStatus: 'confirmed', note: 'n' }, true))
       .toEqual({ valueStatus: 'estimated', clearAmount: false, note: 'n' })
     expect(declineEffect({ unitAmount: null, valueStatus: 'none', note: null }, true).valueStatus).toBe('none')
+  })
+  it('locked margin-only cost is lock-exempt (R11): the unlocked rule applies', () => {
+    expect(declineEffect({ unitAmount: '1500.0000', valueStatus: 'estimated', note: null, role: 'margin_only' }, true))
+      .toEqual({ valueStatus: 'none', clearAmount: true, note: 'estimate 1500 discarded: declined' })
   })
 })
 

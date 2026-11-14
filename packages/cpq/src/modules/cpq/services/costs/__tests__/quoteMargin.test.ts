@@ -1,4 +1,4 @@
-import { computeQuoteMargin, type MarginCost, type MarginLine } from '../quoteMargin'
+import { computeQuoteMargin, priceBasisCostFlags, type MarginCost, type MarginLine } from '../quoteMargin'
 
 const TODAY = '2026-11-13'
 const line = (lineId: string, over: Partial<MarginLine> = {}, mrc = 100, nrc = 0): MarginLine => ({
@@ -114,5 +114,29 @@ describe('marginHash', () => {
     expect(hash(25)).not.toBe(hash(null))
     expect(hash(25)).not.toBe(hash(30))
     expect(hash(25)).toBe(hash(25))
+  })
+
+  it('changes when a line term changes (contract margin depends on it); an unset term hashes as its 12-month horizon', () => {
+    const costs = [cost('l1'), cost('l1', { costKey: 'k2', instanceAmount: '5', valueStatus: 'estimated' })]
+    const term = (termMonths: number | null) => margin([line('l1', { termMonths })], costs)
+    expect(term(36).marginHash).not.toBe(term(12).marginHash)
+    expect(term(36).contractMargin).not.toBe(term(12).contractMargin)
+    expect(term(null).marginHash).toBe(term(12).marginHash)
+  })
+})
+
+describe('priceBasisCostFlags (status_changed, indicative semantics)', () => {
+  it('ignores margin-only costs: a margin-only estimate leaves the price final', () => {
+    const marginOnly = [cost('l1'), cost('l1', { costKey: 'noc', chargeCode: null, role: 'margin_only', valueStatus: 'estimated' }),
+      cost('l1', { costKey: 'x', chargeCode: null, role: 'margin_only', valueStatus: 'none', instanceAmount: null })]
+    expect(priceBasisCostFlags(marginOnly)).toEqual({ hasPendingCosts: false, hasEstimatedCosts: false })
+    // ...while the margin flags still report them
+    expect(margin([line('l1')], marginOnly)).toMatchObject({ hasPendingCosts: true, hasEstimatedCosts: true })
+  })
+
+  it('flags an estimated or pending price-basis cost', () => {
+    expect(priceBasisCostFlags([cost('l1', { valueStatus: 'estimated' })])).toEqual({ hasPendingCosts: false, hasEstimatedCosts: true })
+    expect(priceBasisCostFlags([cost('l1', { valueStatus: 'none', instanceAmount: null })])).toEqual({ hasPendingCosts: true, hasEstimatedCosts: false })
+    expect(priceBasisCostFlags([])).toEqual({ hasPendingCosts: false, hasEstimatedCosts: false })
   })
 })

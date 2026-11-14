@@ -247,13 +247,19 @@ describe('events', () => {
     expect(declared.find((e) => e.id === 'cpq.quote.margin_changed')?.clientBroadcast).toBe(false)
   })
 
+  it('declares previousMarginHash as optional (null when a write creates the first cost lines)', () => {
+    const fields = (declared.find((e) => e.id === 'cpq.quote.margin_changed')?.payloadSchema?.fields ?? []) as Array<{ path: string; optional?: boolean }>
+    expect(fields.find((f) => f.path === 'previousMarginHash')).toMatchObject({ optional: true })
+    expect(fields.find((f) => f.path === 'marginHash')?.optional).toBeUndefined()
+  })
+
   it('broadcast payloads emitted for a quote with sentinel costs carry no sentinel; margin_changed has quote-level keys only', async () => {
     const emitted: Array<[string, Record<string, unknown>]> = []
     const quote = { id: 'q', quoteId: 's', tenantId: 'tenant', organizationId: 'org', cpqStatus: 'in_approval', currencyCode: 'USD', pricingRevision: 3,
       pricingSummary: { snapshotHash: 'b', dealValue: { list: 1, standard: 1, offer: 1 }, discountDepth: {}, hasTimeBasedAdjustments: false } }
     await emitQuoteWriteEvents({ snapshotHash: 'a', cpqStatus: 'ready' }, quote as never, { pricingCause: 'cost', statusCause: 'manual' }, async (id, payload) => { emitted.push([id, payload]) }, {
       previousMarginHash: 'm0', marginHash: 'm1', approvalInvalidated: true, contractMargin: 12.5, marginPercent: 5, costCoverage: 100,
-      hasPendingCosts: false, hasEstimatedCosts: true, hasExpiredCosts: false,
+      hasPendingCosts: false, hasEstimatedCosts: true, hasExpiredCosts: false, priceBasis: { hasPendingCosts: false, hasEstimatedCosts: true },
     })
     expect(emitted.map(([id]) => id)).toEqual(['cpq.quote.pricing_changed', 'cpq.quote.status_changed', 'cpq.quote.margin_changed'])
     for (const [id, payload] of emitted) {

@@ -126,3 +126,6 @@
 
 ## 2026-11-14T04:14:06Z — review1-f (money minors)
 - Decision: a row in the quote currency that lacks the cost column is `TABLE_NO_MATCH`; `CURRENCY_NO_RATE` stays reserved for "no row in the quote currency, but another currency prices it". `markup_absolute` amounts: the charge's own markup is in the charge currency (mismatch → unpriced, `CURRENCY_NO_RATE`), a markup override is in the quote currency (no check). Not changed: the pricing-table xlsx import still stores a blank cell as 0 (pre-existing, all table purposes) — a blank cost cell imported from a spreadsheet therefore remains a confirmed 0; follow-up candidate.
+
+## 2026-11-14T04:20:27Z — review1-g (signal minors)
+- Decision: only `status_changed`'s `hasPendingCosts` / `hasEstimatedCosts` changed to PRICE-BASIS semantics (= the UI's indicative chip). The margin card and `margin_changed` keep the margin flags (every cost line, margin-only included). The flags are still present only on quotes that carry costs (unchanged; spec says "SHALL carry" — always emitting `false` is left as a follow-up). The margin hash adds each line's effective horizon (`termMonths ?? 12`), so existing hashes move once on the next write after deploy (unreleased feature). `previousMarginHash` uses the framework's `optional: true` (it covers "absent or null"; there is no `nullable` option).

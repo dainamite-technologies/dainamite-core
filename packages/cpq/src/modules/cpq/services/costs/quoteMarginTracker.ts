@@ -2,7 +2,8 @@ import type { EntityManager } from '@mikro-orm/postgresql'
 import { CpqOrderConfiguration, CpqQuoteLineCost, type CpqQuoteConfiguration } from '../../data/entities'
 import { ADJUSTMENT_MUTABLE_STATUSES } from '../../data/price-adjustments'
 import type { TenantScope } from '../types'
-import { loadQuoteMargin } from './quoteCostView'
+import type { PriceBasisFlags } from './quoteMargin'
+import { loadQuoteMarginState } from './quoteCostView'
 
 /**
  * Margin signal of one quote write (App Spec R8, feature spec "Quote margin event").
@@ -17,9 +18,12 @@ export interface MarginSignal {
   contractMargin: number
   marginPercent: number | null
   costCoverage: number
+  /** Margin flags: any cost line (margin-only included) — what the margin card and `margin_changed` show. */
   hasPendingCosts: boolean
   hasEstimatedCosts: boolean
   hasExpiredCosts: boolean
+  /** PRICE-BASIS cost lines only ("indicative" semantics) — what `status_changed` carries. */
+  priceBasis: PriceBasisFlags
 }
 
 /** Hooks `withQuotePricingWrite` runs inside the write transaction. `after` returns null when nothing was tracked. */
@@ -57,12 +61,12 @@ export function createMarginTracker(options: MarginTrackerOptions): MarginTracke
         if (!(await hasCostLines(tx, quote))) { state = 'none_before'; return }
       }
       state = 'tracked'
-      previous = (await loadQuoteMargin(tx, quote, scope)).marginHash
+      previous = (await loadQuoteMarginState(tx, quote, scope)).margin.marginHash
     },
     async after(tx, quote) {
       if (state === 'off') return null
       if (state === 'none_before' && !(await hasCostLines(tx, quote))) return null
-      const margin = await loadQuoteMargin(tx, quote, scope)
+      const { margin, priceBasis } = await loadQuoteMarginState(tx, quote, scope)
       const changed = margin.marginHash !== previous
       let approvalInvalidated = false
       if (changed && !(ADJUSTMENT_MUTABLE_STATUSES as readonly string[]).includes(quote.cpqStatus)) {
@@ -73,6 +77,7 @@ export function createMarginTracker(options: MarginTrackerOptions): MarginTracke
         previousMarginHash: previous, marginHash: margin.marginHash, approvalInvalidated,
         contractMargin: margin.contractMargin, marginPercent: margin.marginPercent, costCoverage: margin.costCoverage,
         hasPendingCosts: margin.hasPendingCosts, hasEstimatedCosts: margin.hasEstimatedCosts, hasExpiredCosts: margin.hasExpiredCosts,
+        priceBasis,
       }
     },
   }

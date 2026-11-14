@@ -113,6 +113,21 @@ function finalize(acc: Acc): MarginFigures {
 
 const isKnown = (cost: MarginCost) => cost.valueStatus !== 'none' && cost.instanceAmount !== null && cost.instanceAmount !== undefined
 
+/** Flags of the PRICE-BASIS cost lines only ("indicative" semantics: what the price, not the margin, rests on). */
+export type PriceBasisFlags = { hasPendingCosts: boolean; hasEstimatedCosts: boolean }
+
+/**
+ * Whether the quote's price still rests on an unknown (pending) or estimated price-basis cost. A margin-only
+ * estimate leaves the price final, so it never sets these (unlike the margin flags of `MarginFigures`).
+ */
+export function priceBasisCostFlags(costs: MarginCost[]): PriceBasisFlags {
+  const basis = costs.filter((cost) => cost.role === 'price_basis')
+  return {
+    hasPendingCosts: basis.some((cost) => !isKnown(cost)),
+    hasEstimatedCosts: basis.some((cost) => isKnown(cost) && cost.valueStatus === 'estimated'),
+  }
+}
+
 /** Cost lines → accumulator (cost side only), × line quantity, over the contract horizon. */
 function costAcc(costs: MarginCost[], line: MarginLine, today: string): Acc {
   const acc = emptyAcc()
@@ -205,9 +220,10 @@ export function computeQuoteMargin(input: {
 const canonicalNumber = (value: string | number | null | undefined) => (value === null || value === undefined || value === '' ? null : R(Number(value)))
 
 /**
- * Hash over cost values, markups and offers ONLY. Statuses are excluded, so
- * confirming an unchanged value (or any status-only change) keeps the hash and
- * never invalidates a margin approval.
+ * Hash over cost values, markups, offers and each line's contract horizon ONLY. Statuses are excluded, so
+ * confirming an unchanged value (or any status-only change) keeps the hash and never invalidates a margin
+ * approval. The horizon (`termMonths`, 12 when unset — what the contract figures use) is included because
+ * shortening a term moves the contract margin.
  */
 export function computeMarginHash(input: { currencyCode: string; lines: MarginLine[]; costs: MarginCost[]; markups?: MarginMarkup[] }): string {
   const sortKey = (...parts: Array<string | null | undefined>) => parts.map((part) => part ?? '').join('\u0000')
@@ -225,6 +241,9 @@ export function computeMarginHash(input: { currencyCode: string; lines: MarginLi
     offers: input.lines
       .flatMap((line) => line.charges.map((charge) => ({ line: line.lineId, quantity: line.quantity, charge: charge.chargeCode, type: charge.chargeType, total: canonicalNumber(charge.totalPrice) })))
       .sort((a, b) => sortKey(a.line, a.charge, a.type).localeCompare(sortKey(b.line, b.charge, b.type))),
+    terms: input.lines
+      .map((line) => ({ line: line.lineId, months: line.termMonths ?? 12 }))
+      .sort((a, b) => a.line.localeCompare(b.line)),
   }
   return createHash('sha256').update(JSON.stringify(payload)).digest('hex')
 }

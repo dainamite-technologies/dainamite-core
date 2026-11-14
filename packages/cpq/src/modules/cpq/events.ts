@@ -102,8 +102,9 @@ const events = [
         { path: 'toStatus', type: 'text' },
         { path: 'cause', type: 'select' },
         { path: 'actorUserId', type: 'text', optional: true },
-        { path: 'hasPendingCosts', type: 'boolean', optional: true },
-        { path: 'hasEstimatedCosts', type: 'boolean', optional: true },
+        // Price-basis cost lines only (the price is indicative); present on quotes that carry costs.
+        { path: 'hasPendingCosts', type: 'boolean', optional: true, label: 'A price-basis cost is pending' },
+        { path: 'hasEstimatedCosts', type: 'boolean', optional: true, label: 'A price-basis cost is estimated (indicative price)' },
       ],
     },
   },
@@ -123,12 +124,14 @@ const events = [
         { path: 'cpqStatus', type: 'text', label: 'Status' },
         { path: 'currencyCode', type: 'text' },
         { path: 'pricingRevision', type: 'number' },
-        { path: 'previousMarginHash', type: 'text' },
+        // Null when the write created the quote's first cost lines (there was no margin before).
+        { path: 'previousMarginHash', type: 'text', optional: true },
         { path: 'marginHash', type: 'text' },
         { path: 'approvalInvalidated', type: 'boolean' },
         { path: 'contractMargin', type: 'number' },
         { path: 'marginPercent', type: 'number', optional: true },
         { path: 'costCoverage', type: 'number' },
+        // Margin flags: every cost line, margin-only included (status_changed's flags are price-basis only).
         { path: 'hasPendingCosts', type: 'boolean' },
         { path: 'hasEstimatedCosts', type: 'boolean' },
         { path: 'hasExpiredCosts', type: 'boolean' },

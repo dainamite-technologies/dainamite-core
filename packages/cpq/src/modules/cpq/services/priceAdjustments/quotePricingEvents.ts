@@ -84,8 +84,9 @@ export async function emitQuoteWriteEvents(
     pending.push(['cpq.quote.status_changed', {
       ...base, fromStatus: before.cpqStatus, toStatus: after.cpqStatus,
       cause: options.statusCause ?? 'auto', actorUserId: options.actorUserId ?? null,
-      // Only quotes that carry costs get the flags, so every other payload stays as before.
-      ...(margin ? { hasPendingCosts: margin.hasPendingCosts, hasEstimatedCosts: margin.hasEstimatedCosts } : {}),
+      // Only quotes that carry costs get the flags, so every other payload stays as before. Price-basis cost
+      // lines only: "indicative" means the PRICE rests on an estimate (a margin-only estimate leaves it final).
+      ...(margin ? { hasPendingCosts: margin.priceBasis.hasPendingCosts, hasEstimatedCosts: margin.priceBasis.hasEstimatedCosts } : {}),
     }])
   }
   // Non-broadcast; quote-level margin aggregates only. A confirmation or status-only change leaves the hash alone.

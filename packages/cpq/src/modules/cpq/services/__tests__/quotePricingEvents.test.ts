@@ -168,7 +168,8 @@ describe('withQuotePricingWrite events', () => {
 describe('margin signals', () => {
   const signal = (overrides: Record<string, unknown> = {}) => ({
     previousMarginHash: 'm-0', marginHash: 'm-1', approvalInvalidated: false, contractMargin: 120.5, marginPercent: 12.05,
-    costCoverage: 80, hasPendingCosts: false, hasEstimatedCosts: true, hasExpiredCosts: false, ...overrides,
+    costCoverage: 80, hasPendingCosts: false, hasEstimatedCosts: true, hasExpiredCosts: false,
+    priceBasis: { hasPendingCosts: false, hasEstimatedCosts: true }, ...overrides,
   })
 
   it('emits margin_changed once, quote-level only, when the margin hash moved', async () => {
@@ -188,12 +189,26 @@ describe('margin signals', () => {
 
   it('adds the cost flags to status_changed only when the quote carries costs', async () => {
     await emitQuoteWriteEvents({ snapshotHash: 'hash-a', cpqStatus: 'ready' }, quote({ cpqStatus: 'with_customer' }),
-      { pricingCause: 'recalculate', statusCause: 'manual' }, emitCpqEvent, signal({ marginHash: 'm-0', hasPendingCosts: true }))
+      { pricingCause: 'recalculate', statusCause: 'manual' }, emitCpqEvent, signal({ marginHash: 'm-0', priceBasis: { hasPendingCosts: true, hasEstimatedCosts: true } }))
     expect(emitCpqEvent.mock.calls[0][1]).toMatchObject({ hasPendingCosts: true, hasEstimatedCosts: true })
     expect(Object.keys(emitCpqEvent.mock.calls[0][1])).not.toContain('contractMargin')
     emitCpqEvent.mockClear()
     await emitQuoteWriteEvents({ snapshotHash: 'hash-a', cpqStatus: 'ready' }, quote({ cpqStatus: 'with_customer' }), { pricingCause: 'recalculate' }, emitCpqEvent)
     expect(emitCpqEvent.mock.calls[0][1]).not.toHaveProperty('hasPendingCosts')
+  })
+
+  it('status_changed flags come from price-basis costs only: a margin-only estimate does not make the quote indicative', async () => {
+    const onlyMarginOnlyEstimate = signal({ marginHash: 'm-0', hasPendingCosts: true, hasEstimatedCosts: true, priceBasis: { hasPendingCosts: false, hasEstimatedCosts: false } })
+    await emitQuoteWriteEvents({ snapshotHash: 'hash-a', cpqStatus: 'ready' }, quote({ cpqStatus: 'with_customer' }),
+      { pricingCause: 'recalculate', statusCause: 'manual' }, emitCpqEvent, onlyMarginOnlyEstimate)
+    expect(emitted()).toEqual(['cpq.quote.status_changed'])
+    expect(emitCpqEvent.mock.calls[0][1]).toMatchObject({ hasPendingCosts: false, hasEstimatedCosts: false })
+  })
+
+  it('margin_changed keeps the margin flags (every cost line) next to a nullable previousMarginHash', async () => {
+    await emitQuoteWriteEvents(captureQuoteEventState(quote()), quote(), { pricingCause: 'cost' }, emitCpqEvent,
+      signal({ previousMarginHash: null, priceBasis: { hasPendingCosts: false, hasEstimatedCosts: false } }))
+    expect(emitCpqEvent.mock.calls[0][1]).toMatchObject({ previousMarginHash: null, hasEstimatedCosts: true })
   })
 
   it('emits margin_changed after the commit through withQuotePricingWrite, and swallows a failing dispatch', async () => {

@@ -7,7 +7,7 @@ import {
 } from '../../data/entities'
 import { isArcMirrorLine } from '../arcPriceFreeze'
 import type { ResolvedCharge, TenantScope } from '../types'
-import { computeQuoteMargin, type MarginCost, type MarginLine, type MarginMarkup, type QuoteMargin } from './quoteMargin'
+import { computeQuoteMargin, priceBasisCostFlags, type MarginCost, type MarginLine, type MarginMarkup, type PriceBasisFlags, type QuoteMargin } from './quoteMargin'
 
 /** Loads and shapes quote cost data for the read API and the write results. */
 
@@ -29,6 +29,11 @@ export async function loadQuoteMarkupOverrides(em: EntityManager, quoteConfigura
 
 /** Margin of the stored quote (App Spec R8): computed on read, never stored. */
 export async function loadQuoteMargin(em: EntityManager, quote: CpqQuoteConfiguration, scope: TenantScope): Promise<QuoteMargin> {
+  return (await loadQuoteMarginState(em, quote, scope)).margin
+}
+
+/** The margin plus the price-basis flags the status signal carries, from one load. */
+export async function loadQuoteMarginState(em: EntityManager, quote: CpqQuoteConfiguration, scope: TenantScope): Promise<{ margin: QuoteMargin; priceBasis: PriceBasisFlags }> {
   const [lineConfigs, costs, overrides] = await Promise.all([
     em.find(CpqQuoteLineConfiguration, { quoteConfigurationId: quote.id, ...scoped(scope) }),
     loadQuoteCosts(em, quote.id, scope),
@@ -53,7 +58,10 @@ export async function loadQuoteMargin(em: EntityManager, quote: CpqQuoteConfigur
   const markups: MarginMarkup[] = overrides.map((row) => ({
     quoteLineId: row.quoteLineId, chargeCode: row.chargeCode, markupRule: row.markupRule, markupValue: row.markupValue,
   }))
-  return computeQuoteMargin({ currencyCode: quote.currencyCode, lines, costs: marginCosts, markups, today: today() })
+  return {
+    margin: computeQuoteMargin({ currencyCode: quote.currencyCode, lines, costs: marginCosts, markups, today: today() }),
+    priceBasis: priceBasisCostFlags(marginCosts),
+  }
 }
 
 /**

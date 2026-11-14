@@ -403,7 +403,10 @@ export class DefaultCpqQuotingService {
       throw new QuotingError(409, 'This subscription item is marked for removal — restore it before changing it')
     }
     // Values compared, not "a field was sent": the quote page always resubmits the full configuration.
-    if (arcPricingInputsChanged({ configuration: lineConfig.configuration, quantity: lineConfig.quantity }, { configuration: update.configuration, quantity: update.quantity })) {
+    // `term_months` feeds the merged configuration (applicability, cost-table dimensions, driver hash), so a
+    // term change is a pricing input for cost-plus lines too.
+    const termChanged = update.termMonths !== undefined && update.termMonths !== (lineConfig.termMonths ?? undefined)
+    if (termChanged || arcPricingInputsChanged({ configuration: lineConfig.configuration, quantity: lineConfig.quantity }, { configuration: update.configuration, quantity: update.quantity })) {
       await this.assertCostPlusLineWritable(em, cpqConfig, lineConfig, scope)
     }
 
@@ -672,6 +675,8 @@ export class DefaultCpqQuotingService {
       }
       return { line, item }
     })
+    // Removal soft-deleted the line's cost rows; on a cost-locked quote nothing could re-create them.
+    for (const { line } of restores) await this.assertCostPlusLineWritable(em, cpqConfig, line, scope)
     const arcType = cpqConfig.quoteType as 'amend' | 'renew'
     await withAtomicFlush(em, [() => {
       for (const { line, item } of restores) {

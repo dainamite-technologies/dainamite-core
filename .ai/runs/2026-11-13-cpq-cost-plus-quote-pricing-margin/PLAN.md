@@ -52,6 +52,9 @@ Engine: om-auto-create-pr-loop (steps: 24, --loop: no)
 | E | review1-h | Docs for review fixes a–g (manual, MIGRATION, changeset, capabilities) | dispatch | done | |
 | E | review1-i | Quote cost dialog: enter/confirm on_request values, send value only when changed | dispatch | done | |
 | E | review1-j | Manuals: pricing-table purpose, calculate-price cost-plus fields | dispatch | done | |
+| E | review1-k | Locked-quote edits: restore runs the cost-plus lock check; term change counts | dispatch | done | |
+| E | review1-l | Cost semantics: estimated status on none rows, openQuotes counts accepted unconverted, ARC termination lines out of cost flags | dispatch | done | |
+| E | review1-m | Docs: pricingMethod gains cost_plus, indicative wording | dispatch | done | |
 
 ## Goal
 

@@ -2,6 +2,7 @@ import { DefaultCpqQuotingService } from '../cpqQuotingService'
 import { createMockEm, TEST_SCOPE as SCOPE } from './_helpers/mockEm'
 import { SalesQuote, SalesQuoteLine } from '@open-mercato/core/modules/sales/data/entities'
 import {
+  CpqInventorySubscriptionItem,
   CpqOrderConfiguration,
   CpqProductCharge,
   CpqProductOffering,
@@ -472,11 +473,38 @@ describe('cost-locked quotes refuse adding / reconfiguring a cost-plus line (COS
 
   it.each([
     ['an unchanged resubmission', { configuration: { port_size: '1G' }, quantity: 1 }],
-    ['a term-only change', { configuration: { port_size: '1G' }, quantity: 1, termMonths: 24 }],
+    ['an unchanged term', { configuration: { port_size: '1G' }, quantity: 1, termMonths: undefined }],
   ])('accepts %s on a cost-locked quote', async (_label, update) => {
     const { em, service } = costLockedFixture()
     await service.updateQuoteItem('cpq-1', 'ql-1', update, SCOPE)
     expect(em.count).not.toHaveBeenCalledWith(CpqProductCharge, expect.anything())
+  })
+
+  it('refuses a term change on a cost-locked quote (term_months feeds cost applicability and tables)', async () => {
+    const { pricingService, service } = costLockedFixture()
+    await expect(service.updateQuoteItem('cpq-1', 'ql-1', { configuration: { port_size: '1G' }, quantity: 1, termMonths: 24 }, SCOPE))
+      .rejects.toMatchObject({ status: 409, message: 'COST_LOCKED' })
+    expect(pricingService.resolveProductCharges).not.toHaveBeenCalled()
+  })
+
+  it('a term change on a line without a cost-plus charge stays open', async () => {
+    const { pricingService, service } = costLockedFixture({ costPlusCharges: 0 })
+    await service.updateQuoteItem('cpq-1', 'ql-1', { configuration: { port_size: '1G' }, quantity: 1, termMonths: 24 }, SCOPE)
+    expect(pricingService.resolveProductCharges).toHaveBeenCalled()
+  })
+
+  it('refuses restoring a removed Renew mirror line on a cost-locked quote (its cost rows are gone)', async () => {
+    const { em, service, lineConfig } = costLockedFixture({
+      quoteType: 'renew', configuration: { port_size: '1G', _arcMirroredFromItemId: 'item-1', _arcMirroredName: 'GIX Access Port' },
+    })
+    lineConfig.action = 'cancel'
+    em.find.mockImplementation(async (entity: unknown) => {
+      if (entity === CpqQuoteLineConfiguration) return [lineConfig]
+      if (entity === CpqInventorySubscriptionItem) return [{ id: 'item-1', status: 'active', quantity: 1, mrcAmount: 100, nrcAmount: 0, configuration: {} }]
+      return []
+    })
+    await expect(service.restoreQuoteItem('cpq-1', 'ql-1', SCOPE)).rejects.toMatchObject({ status: 409, message: 'COST_LOCKED' })
+    expect(lineConfig.action).toBe('cancel')
   })
 
   it('leaves ARC flows alone: a frozen Amend mirror line resubmitted unchanged on a locked Amend quote', async () => {

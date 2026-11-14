@@ -15,6 +15,8 @@ import {
   type ImportDiff,
 } from './xlsxImport'
 import { ImportPreview } from './ImportPreview'
+import { useCostPlusAccess } from '../../../../components/costPlus/useCostPlusAccess'
+import { costErrorMessage } from '../../../../lib/costPlusView'
 
 type Dimension = { key: string; label: string }
 type PriceColumn = { key: string; label: string }
@@ -23,6 +25,8 @@ type PricingTable = {
   id: string
   code: string
   name: string
+  /** `cost` tables are readable only with `cpq.costs.view`. */
+  purpose: 'price' | 'cost'
   dimensions: Dimension[]
   priceColumns: PriceColumn[]
   currencyCodeList: string[]
@@ -33,6 +37,7 @@ const EMPTY_TABLE: PricingTable = {
   id: '',
   code: '',
   name: '',
+  purpose: 'price',
   dimensions: [],
   priceColumns: [],
   currencyCodeList: ['USD'],
@@ -55,6 +60,9 @@ export default function PricingTableDetailPage(props: { params?: { id?: string }
   const [mode, setMode] = React.useState<'view' | 'edit'>(isNew ? 'edit' : 'view')
   const [draft, setDraft] = React.useState<PricingTable>(EMPTY_TABLE)
   const [saving, setSaving] = React.useState(false)
+  const { canView: canViewCosts } = useCostPlusAccess()
+  // The API answers 422 PURPOSE_LOCKED once a charge or cost element references the table.
+  const [purposeLocked, setPurposeLocked] = React.useState(false)
 
   // Import state
   const fileInputRef = React.useRef<HTMLInputElement>(null)
@@ -82,6 +90,7 @@ export default function PricingTableDetailPage(props: { params?: { id?: string }
         id: data.id,
         code: data.code,
         name: data.name,
+        purpose: data.purpose === 'cost' ? 'cost' : 'price',
         dimensions: data.dimensions ?? [],
         priceColumns: data.priceColumns ?? [],
         currencyCodeList: data.currencyCodeList ?? ['USD'],
@@ -151,6 +160,7 @@ export default function PricingTableDetailPage(props: { params?: { id?: string }
       const payload = {
         code: draft.code,
         name: draft.name,
+        ...(isNew || draft.purpose !== table.purpose ? { purpose: draft.purpose } : {}),
         dimensions: draft.dimensions,
         priceColumns: draft.priceColumns,
         currencyCodeList: draft.currencyCodeList,
@@ -163,7 +173,13 @@ export default function PricingTableDetailPage(props: { params?: { id?: string }
       })
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
-        setError(body.error ?? `Failed to ${isNew ? 'create' : 'save'} pricing table`)
+        if (body.error === 'PURPOSE_LOCKED') {
+          setPurposeLocked(true)
+          setDraft((prev) => ({ ...prev, purpose: table.purpose }))
+          setError(t('cpq.pricing.errors.PURPOSE_LOCKED', costErrorMessage('PURPOSE_LOCKED')))
+          return
+        }
+        setError(costErrorMessage(body.error, `Failed to ${isNew ? 'create' : 'save'} pricing table`))
         return
       }
       const saved = await res.json()
@@ -363,6 +379,29 @@ export default function PricingTableDetailPage(props: { params?: { id?: string }
               />
             ) : (
               <span className="font-medium text-sm">{view.name}</span>
+            )}
+          </ConfigField>
+          <ConfigField label={t('cpq.pricing.purpose', 'Purpose')} required>
+            {editing ? (
+              <div>
+                <select
+                  aria-label={t('cpq.pricing.purpose', 'Purpose')}
+                  className="w-full rounded-md border bg-background px-2 py-1.5 text-sm"
+                  value={view.purpose}
+                  disabled={purposeLocked}
+                  onChange={(e) => setDraft({ ...draft, purpose: e.target.value === 'cost' ? 'cost' : 'price' })}
+                >
+                  <option value="price">{t('cpq.pricing.purposes.price', 'Price (sell side)')}</option>
+                  {(canViewCosts || view.purpose === 'cost') && <option value="cost" disabled={!canViewCosts}>{t('cpq.pricing.purposes.cost', 'Cost (confidential)')}</option>}
+                </select>
+                {purposeLocked && (
+                  <p className="mt-0.5 text-xs text-muted-foreground">{t('cpq.pricing.purposeLocked', 'Read-only: a charge or cost element references this table.')}</p>
+                )}
+              </div>
+            ) : (
+              <Tag variant={view.purpose === 'cost' ? 'warning' : 'neutral'}>
+                {view.purpose === 'cost' ? t('cpq.pricing.purposes.cost', 'Cost (confidential)') : t('cpq.pricing.purposes.price', 'Price (sell side)')}
+              </Tag>
             )}
           </ConfigField>
           <ConfigField label="Currencies (comma-separated)" required>

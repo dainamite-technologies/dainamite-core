@@ -18,3 +18,18 @@ The system SHALL keep an engine-priced mirror line on an Amend quote at the sour
 - THEN the line stays frozen
 
 Source: .ai/specs/2026-11-10-cpq-quote-pricing-integrity.md
+
+## Requirement: Costs on ARC lines
+The system SHALL let a pricing manager enter and confirm the cost values of non-frozen mirror lines (Renew mirrors re-priced at today's standard, reconfigured Amend mirrors), so their price-basis costs can be confirmed before conversion. It SHALL refuse manual costs and markup overrides on mirror lines, and every cost write on frozen Amend mirror lines and ARC cancel lines (`422 LINE_NOT_ELIGIBLE`). Removing an item on an Amend / Renew quote SHALL delete its line's cost lines, and ARC cancel lines SHALL never block conversion.
+
+### Scenario: Renew mirror line with an estimated cost
+- WHEN a Renew quote mirrors an item whose offering has an on-request tail cost (estimated 300)
+- THEN a pricing manager can confirm it, and the quote converts once every price-basis cost is confirmed
+
+### Scenario: Removed item
+- WHEN the rep removes that item instead
+- THEN its cost lines are deleted and conversion is not blocked by them
+
+Frozen by: `packages/cpq/src/modules/cpq/services/__tests__/cpqOrderService.test.ts`, `packages/cpq/src/modules/cpq/services/__tests__/cpqQuotingService.arc.test.ts`
+
+Source: .ai/specs/2026-11-12-cpq-cost-plus-quote-pricing-margin.md

@@ -4,6 +4,7 @@ import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { CpqQuoteConfiguration } from '../../data/entities'
 import type { TenantScope } from '../types'
+import type { MarginSignal, MarginTracker } from '../costs/quoteMarginTracker'
 import { captureQuoteEventState, emitQuoteWriteEvents, type QuoteEventState, type QuoteWriteEvents } from './quotePricingEvents'
 
 /** Every pricing write and conversion locks the same scoped aggregate row. */
@@ -16,6 +17,7 @@ export async function withQuotePricingWrite<T>(
   expectedRevision?: number,
   validate?: (quote: CpqQuoteConfiguration) => void,
   events: QuoteWriteEvents = { pricingCause: 'recalculate' },
+  marginTracker?: MarginTracker,
 ): Promise<T> {
   // Do not inherit managed objects/pending writes or propagate committed state
   // back into the caller's identity map. The returned DTO is authoritative;
@@ -25,7 +27,7 @@ export async function withQuotePricingWrite<T>(
   // would block forever on a row lock that transaction holds — fail fast.
   if (em.isInTransaction?.()) throw new Error('withQuotePricingWrite must not run inside an existing transaction')
   const isolated = em.fork({ clear: true, useContext: false })
-  const committed: { quote?: CpqQuoteConfiguration; before?: QuoteEventState } = {}
+  const committed: { quote?: CpqQuoteConfiguration; before?: QuoteEventState; margin?: MarginSignal | null } = {}
   const result = await isolated.transactional(async (transaction) => {
     const scoped = { organizationId: scope.organizationId, tenantId: scope.tenantId, deletedAt: null }
     const options = { lockMode: LockMode.PESSIMISTIC_WRITE, refresh: true }
@@ -36,6 +38,7 @@ export async function withQuotePricingWrite<T>(
     if (expectedRevision !== undefined && expectedRevision !== revision) throw makeError(409, 'STALE_REVISION')
     validate?.(quote)
     committed.quote = quote
+    await marginTracker?.before(transaction, quote)
     committed.before = captureQuoteEventState(quote)
     // This scalar update and every later flush are inside the same DB transaction.
     let written!: T
@@ -43,9 +46,10 @@ export async function withQuotePricingWrite<T>(
       () => { quote.pricingRevision = revision + 1 },
       async () => { written = await execute(transaction, quote) },
     ])
+    committed.margin = (await marginTracker?.after(transaction, quote)) ?? null
     return written
   }, { clear: true })
   // `transactional` resolved, so the write is committed; a rolled-back write never reaches here.
-  if (committed.quote && committed.before) await emitQuoteWriteEvents(committed.before, committed.quote, events)
+  if (committed.quote && committed.before) await emitQuoteWriteEvents(committed.before, committed.quote, events, undefined, committed.margin ?? null)
   return result
 }

@@ -634,3 +634,153 @@ describe('conversion stored-adjustment baseline', () => {
     expect(orderLine?.configuration).not.toHaveProperty('_arcRepriced')
   })
 })
+
+describe('conversion output shape (characterization before cost-plus guard)', () => {
+  it('pins the created sales order, order configuration and order line payloads', async () => {
+    const { em, service } = createService()
+    const charges = [{ chargeCode: 'fee', chargeType: 'mrc', pricingMethod: 'flat', quantity: 1, unitPrice: 80, totalPrice: 80,
+      listUnitPrice: 120, listTotalPrice: 120, standardUnitPrice: 100, standardTotalPrice: 100, currencyCode: 'USD', adjustmentErrors: [] }]
+    em.findOne.mockResolvedValueOnce({ id: 'quote', quoteId: 'sales', cpqStatus: 'accepted', currencyCode: 'USD', customerId: 'customer',
+      pricingSummary: { nrcTotal: 10, mrcTotal: 80 } }).mockResolvedValueOnce(null)
+    em.find.mockResolvedValueOnce([{ quoteLineId: 'line', quantity: 2, action: 'add', nrcTotal: '10', mrcTotal: '80', charges,
+      configuration: { a: 1 }, offeringId: null, productId: 'prod', specId: null, startDate: null, endDate: null, termMonths: 12 }]).mockResolvedValueOnce([])
+    em.create.mockImplementation((_entity, values: Record<string, unknown>) => ({ createdAt: new Date(), ...values }))
+    await service.convertQuoteToOrder('quote', SCOPE)
+    const created = (entityName: string) => em.create.mock.calls.find(([entity]) => (entity as { name: string }).name === entityName)?.[1]
+    expect(created('SalesOrder')).toMatchObject({
+      orderNumber: 'ORD-0001', customerEntityId: 'customer', currencyCode: 'USD', status: 'draft',
+      subtotalNetAmount: '90', grandTotalNetAmount: '90', grandTotalGrossAmount: '90', lineItemCount: 1,
+      discountTotalAmount: '0', taxTotalAmount: '0', metadata: { sourceQuoteId: 'quote' },
+    })
+    expect(created('CpqOrderConfiguration')).toMatchObject({
+      sourceQuoteId: 'quote', customerId: 'customer', cpqStatus: 'draft', currencyCode: 'USD',
+      pricingSummary: { nrcTotal: 10, mrcTotal: 80, currencyCode: 'USD' },
+    })
+    expect(created('SalesOrderLine')).toMatchObject({
+      lineNumber: 1, kind: 'product', quantity: '2', unitPriceNet: '45', totalNetAmount: '90',
+      configuration: { offeringId: null, action: 'add', nrcTotal: 10, mrcTotal: 80, parentLineId: null },
+    })
+    expect(created('CpqOrderLineConfiguration')).toMatchObject({
+      action: 'add', quantity: 2, charges, nrcTotal: '10', mrcTotal: '80', sourceQuoteLineId: 'line', termMonths: 12,
+      configuration: { a: 1, offeringName: expect.any(String) },
+    })
+  })
+
+  it('checks status, then existing order, then lines, then stored adjustments (guard order)', async () => {
+    const { em, service } = createService()
+    em.findOne.mockResolvedValueOnce({ id: 'quote', cpqStatus: 'ready', currencyCode: 'USD', pricingSummary: {} })
+      .mockResolvedValueOnce({ orderId: 'existing' })
+    await expect(service.convertQuoteToOrder('quote', SCOPE)).rejects.toMatchObject({ status: 409, message: 'Quote has already been converted to order existing' })
+    expect(em.find).not.toHaveBeenCalled()
+  })
+})
+
+
+describe('conversion cost guard (COSTS_NOT_CONFIRMED)', () => {
+  const charges = [{ chargeCode: 'fee', chargeType: 'mrc', pricingMethod: 'cost_plus', quantity: 1, unitPrice: 80, totalPrice: 80,
+    listUnitPrice: 80, listTotalPrice: 80, standardUnitPrice: 80, standardTotalPrice: 80, currencyCode: 'USD', adjustmentErrors: [] }]
+  const lines = () => [{ quoteLineId: 'line', quantity: 1, action: 'add', nrcTotal: '0', mrcTotal: '80', charges, configuration: {}, offeringId: null }]
+  const cost = (over: Record<string, unknown>) => ({ quoteLineId: 'line', costKey: 'tail', role: 'price_basis', valueStatus: 'confirmed', validUntil: null, ...over })
+
+  async function convert(costs: Array<Record<string, unknown>>) {
+    const { em, service } = createService()
+    em.findOne.mockResolvedValueOnce({ id: 'quote', quoteId: 'sales', cpqStatus: 'accepted', currencyCode: 'USD', customerId: 'customer', pricingSummary: { nrcTotal: 0, mrcTotal: 80 } })
+      .mockResolvedValueOnce(null)
+    em.find.mockResolvedValueOnce(lines() as never).mockResolvedValueOnce(costs as never)
+    em.create.mockImplementation((_entity, values: Record<string, unknown>) => ({ createdAt: new Date(), ...values }))
+    return { em, run: () => service.convertQuoteToOrder('quote', SCOPE) }
+  }
+
+  it('refuses an estimated price-basis cost and names the line and key, creating nothing', async () => {
+    const { em, run } = await convert([cost({ valueStatus: 'estimated' }), cost({ costKey: 'ok' })])
+    await expect(run()).rejects.toMatchObject({ status: 422, message: 'COSTS_NOT_CONFIRMED', details: { lines: [{ quoteLineId: 'line', costKeys: ['tail'] }] } })
+    expect(em.create).not.toHaveBeenCalled()
+  })
+
+  it('refuses an unpriced (none) price-basis cost and an expired confirmed one', async () => {
+    const none = await convert([cost({ valueStatus: 'none' })])
+    await expect(none.run()).rejects.toMatchObject({ message: 'COSTS_NOT_CONFIRMED' })
+    const expired = await convert([cost({ validUntil: '2000-01-01' })])
+    await expect(expired.run()).rejects.toMatchObject({ message: 'COSTS_NOT_CONFIRMED', details: { lines: [{ quoteLineId: 'line', costKeys: ['tail'] }] } })
+  })
+
+  it('converts when every price-basis cost is confirmed and valid, margin-only costs never block', async () => {
+    const { em, run } = await convert([cost({ validUntil: '2999-01-01' }), cost({ costKey: 'overhead', role: 'margin_only', valueStatus: 'estimated' })])
+    await run()
+    expect(em.create).toHaveBeenCalledWith(CpqOrderLineConfiguration, expect.anything())
+  })
+
+  async function convertArc(quoteType: string, quoteLines: Array<Record<string, unknown>>, costs: Array<Record<string, unknown>>) {
+    const { em, service } = createService()
+    em.findOne.mockResolvedValueOnce({ id: 'quote', quoteId: 'sales', cpqStatus: 'accepted', quoteType, currencyCode: 'USD', customerId: 'customer', pricingSummary: { nrcTotal: 0, mrcTotal: 80 } })
+      .mockResolvedValueOnce(null)
+    em.find.mockResolvedValueOnce(quoteLines as never).mockResolvedValueOnce(costs as never)
+    em.create.mockImplementation((_entity, values: Record<string, unknown>) => ({ createdAt: new Date(), ...values }))
+    return { em, run: () => service.convertQuoteToOrder('quote', SCOPE) }
+  }
+  const mirror = (over: Record<string, unknown> = {}) => ({ ...lines()[0], action: 'modify', offeringId: 'off', configuration: { _arcMirroredFromItemId: 'item-1' }, ...over })
+
+  it('a Renew mirror line binds: its estimated price-basis cost blocks, once confirmed the quote converts', async () => {
+    const estimated = await convertArc('renew', [mirror()], [cost({ valueStatus: 'estimated' })])
+    await expect(estimated.run()).rejects.toMatchObject({ status: 422, message: 'COSTS_NOT_CONFIRMED', details: { lines: [{ quoteLineId: 'line', costKeys: ['tail'] }] } })
+    const confirmed = await convertArc('renew', [mirror()], [cost({ valueStatus: 'confirmed' })])
+    await confirmed.run()
+    expect(confirmed.em.create).toHaveBeenCalledWith(CpqOrderLineConfiguration, expect.anything())
+  })
+
+  it.each([
+    ['an item removed on Renew', 'renew'],
+    ['an item removed on Amend', 'amend'],
+    ['a Cancel-quote line', 'cancel'],
+  ])('ignores the costs of %s (an ARC cancel line sells nothing)', async (_label, quoteType) => {
+    const kept = mirror({ quoteLineId: 'kept' })
+    const removed = mirror({ action: 'cancel', charges: [], mrcTotal: '0' })
+    const { em, run } = await convertArc(quoteType, quoteType === 'cancel' ? [removed] : [kept, removed],
+      [cost({ valueStatus: 'estimated' }), cost({ quoteLineId: 'kept' })])
+    await run()
+    expect(em.create).toHaveBeenCalledWith(CpqOrderLineConfiguration, expect.anything())
+  })
+
+  // R7 never relies on cost rows existing: a cost-plus charge stored without a price blocks by itself.
+  const unpriced = { ...charges[0], unitPrice: null, totalPrice: null, listUnitPrice: null, listTotalPrice: null, standardUnitPrice: null, standardTotalPrice: null }
+  it.each([
+    ['the toggle is off (stored unpriced as COST_PLUS_DISABLED, no cost lines)', [] as Array<Record<string, unknown>>],
+    ['no price-basis element is applicable (NO_PRICE_BASIS_COST)', [cost({ costKey: 'noc', role: 'margin_only', valueStatus: 'confirmed' })]],
+    ['the line was added to a cost-locked quote (never got cost lines)', [] as Array<Record<string, unknown>>],
+  ])('refuses an unpriced cost-plus charge when %s', async (_label, costs) => {
+    const { em, service } = createService()
+    em.findOne.mockResolvedValueOnce({ id: 'quote', quoteId: 'sales', cpqStatus: 'accepted', currencyCode: 'USD', customerId: 'customer', pricingSummary: { nrcTotal: 0, mrcTotal: 0 } })
+      .mockResolvedValueOnce(null)
+    em.find.mockResolvedValueOnce([{ ...lines()[0], mrcTotal: '0', charges: [unpriced, { ...charges[0], chargeCode: 'setup', pricingMethod: 'flat' }] }] as never)
+      .mockResolvedValueOnce(costs as never)
+    await expect(service.convertQuoteToOrder('quote', SCOPE)).rejects.toMatchObject({
+      status: 422, message: 'COSTS_NOT_CONFIRMED', details: { lines: [{ quoteLineId: 'line', costKeys: [], chargeCodes: ['fee'] }] },
+    })
+    expect(em.create).not.toHaveBeenCalled()
+  })
+
+  it('merges unconfirmed cost keys and unpriced charge codes per line, sorted by line', async () => {
+    const { em, service } = createService()
+    em.findOne.mockResolvedValueOnce({ id: 'quote', quoteId: 'sales', cpqStatus: 'accepted', currencyCode: 'USD', customerId: 'customer', pricingSummary: { nrcTotal: 0, mrcTotal: 80 } })
+      .mockResolvedValueOnce(null)
+    em.find.mockResolvedValueOnce([
+      { ...lines()[0], quoteLineId: 'line-b', charges: [unpriced] },
+      { ...lines()[0], quoteLineId: 'line-a' },
+    ] as never).mockResolvedValueOnce([cost({ quoteLineId: 'line-b', valueStatus: 'estimated' }), cost({ quoteLineId: 'line-a', costKey: 'xc', valueStatus: 'none' })] as never)
+    await expect(service.convertQuoteToOrder('quote', SCOPE)).rejects.toMatchObject({
+      details: { lines: [{ quoteLineId: 'line-a', costKeys: ['xc'], chargeCodes: [] }, { quoteLineId: 'line-b', costKeys: ['tail'], chargeCodes: ['fee'] }] },
+    })
+  })
+
+  it('an unpriced cost-plus charge on an ARC cancel line does not block', async () => {
+    const { em, run } = await convertArc('renew', [mirror({ quoteLineId: 'kept' }), mirror({ action: 'cancel', charges: [unpriced] })], [cost({ quoteLineId: 'kept' })])
+    await run()
+    expect(em.create).toHaveBeenCalledWith(CpqOrderLineConfiguration, expect.anything())
+  })
+
+  it('only reads price-basis lines of the quote (margin-only rows are filtered out in the query)', async () => {
+    const { em, run } = await convert([])
+    await run()
+    expect(em.find).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ quoteConfigurationId: 'quote', role: 'price_basis' }))
+  })
+})

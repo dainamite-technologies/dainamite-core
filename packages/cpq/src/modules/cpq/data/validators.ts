@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { normalizeChargePricing } from './charge-pricing'
+import { PRICING_TABLE_PURPOSES } from './costs'
 
 // ─── Product Specification ───────────────────────────────────────
 
@@ -147,8 +148,14 @@ export const cpqProductAttributeUpdateSchema = cpqProductAttributeCreateSchema.p
 // (flat | per_unit | tiered); normalizeChargePricing() collapses both to a
 // canonical {model, source} that the route persists.
 const cpqChargeModelEnum = z.enum(['flat', 'per_unit', 'volume', 'tiered'])
-// New sources (fixed | table) plus the legacy combined values for back-compat.
-const cpqChargePricingMethodEnum = z.enum(['fixed', 'table', 'flat', 'tiered', 'per_unit'])
+// New sources (fixed | table | cost_plus) plus the legacy combined values for back-compat.
+const cpqChargePricingMethodEnum = z.enum(['fixed', 'table', 'cost_plus', 'flat', 'tiered', 'per_unit'])
+// Cost-plus markup (App Spec §1.4.3): percent → C × (1 + m), target margin →
+// C ÷ (1 − m) with m < 100, absolute → C + a per instance in the charge currency.
+export const cpqMarkupRuleEnum = z.enum(['markup_percent', 'target_margin_percent', 'markup_absolute'])
+// numeric(18,4): never silently round the entered value.
+export const cpqMarkupValueSchema = z.union([z.number(), z.string().trim().min(1).transform(Number)])
+  .pipe(z.number().finite().min(0).max(99_999_999_999_999).multipleOf(0.0001))
 
 const requireField = (
   ctx: z.RefinementCtx,
@@ -189,6 +196,8 @@ const cpqProductChargeBase = z.object({
   fixedPrice: z.union([z.string(), z.number().transform(String)]).nullish(),
   currencyCode: z.string().nullish(),
   quantityAttributeCode: z.string().nullish(),
+  markupRule: cpqMarkupRuleEnum.nullish(),
+  markupValue: cpqMarkupValueSchema.nullish(),
   applicabilityCondition: z.record(z.string(), z.unknown()).nullish(),
   sortOrder: z.number().int().optional().default(0),
   isActive: z.boolean().optional().default(true),
@@ -200,19 +209,59 @@ const cpqProductChargeBase = z.object({
 //           volume / tiered + fixed is not a valid combination.
 //  table  → pricingTableId + priceColumnKey required; fixedPrice forbidden.
 //           flat: no quantity attr; per_unit / volume / tiered: quantity attr required.
-const refineChargePricingShape = (
-  ctx: z.RefinementCtx,
-  charge: {
-    chargeModel?: 'flat' | 'per_unit' | 'volume' | 'tiered'
-    pricingMethod?: 'fixed' | 'table' | 'flat' | 'tiered' | 'per_unit'
-    pricingTableId?: string | null
-    priceColumnKey?: string | null
-    fixedPrice?: string | null
-    currencyCode?: string | null
-    quantityAttributeCode?: string | null
-  },
-) => {
+//  cost_plus → chargeType nrc | mrc; model flat | per_unit (per_unit needs a
+//           quantity attr, flat forbids it); markupRule + markupValue required,
+//           target margin < 100; table fields forbidden; fixedPrice is the
+//           optional fallback indicative price (R5). currencyCode is required
+//           with a fallback price or an absolute markup.
+//  markupRule / markupValue are forbidden on every other method.
+export type ChargePricingShapeInput = {
+  chargeType?: string | null
+  chargeModel?: string | null
+  pricingMethod?: string | null
+  pricingTableId?: string | null
+  priceColumnKey?: string | null
+  fixedPrice?: string | null
+  currencyCode?: string | null
+  quantityAttributeCode?: string | null
+  markupRule?: string | null
+  markupValue?: number | string | null
+}
+
+const refineCostPlusShape = (ctx: z.RefinementCtx, charge: ChargePricingShapeInput) => {
+  const issue = (path: string, message: string) => ctx.addIssue({ code: z.ZodIssueCode.custom, path: [path], message })
+  if (charge.chargeType != null && charge.chargeType !== 'nrc' && charge.chargeType !== 'mrc') {
+    issue('chargeType', 'V-CHG-1: cost-plus pricing is only available for NRC and MRC charges')
+  }
+  const model = charge.chargeModel ?? 'flat'
+  if (model !== 'flat' && model !== 'per_unit') {
+    issue('chargeModel', `V-CHG-1: cost-plus pricing supports flat and per-unit charges, not ${model}`)
+  } else if (model === 'per_unit') {
+    requireField(ctx, charge.quantityAttributeCode, 'quantityAttributeCode', 'V-CHG-1: quantityAttributeCode is required for per-unit pricing')
+  } else {
+    forbidField(ctx, charge.quantityAttributeCode, 'quantityAttributeCode', 'V-CHG-1: quantityAttributeCode must be empty for a flat cost-plus price')
+  }
+  forbidField(ctx, charge.pricingTableId, 'pricingTableId', 'V-CHG-1: pricingTableId must be empty for cost-plus — the price comes from costs')
+  forbidField(ctx, charge.priceColumnKey, 'priceColumnKey', 'V-CHG-1: priceColumnKey must be empty for cost-plus — the price comes from costs')
+  requireField(ctx, charge.markupRule, 'markupRule', 'V-CHG-1: markupRule is required for cost-plus pricing')
+  requireField(ctx, charge.markupValue, 'markupValue', 'V-CHG-1: markupValue is required for cost-plus pricing')
+  if (charge.markupRule === 'target_margin_percent' && charge.markupValue != null && Number(charge.markupValue) >= 100) {
+    issue('markupValue', 'V-CHG-1: a target margin must be below 100%')
+  }
+  const hasFallback = charge.fixedPrice !== undefined && charge.fixedPrice !== null && charge.fixedPrice !== ''
+  if (hasFallback || charge.markupRule === 'markup_absolute') {
+    requireField(ctx, charge.currencyCode, 'currencyCode', 'V-CHG-1: currencyCode is required for an absolute markup or a fallback price')
+  }
+}
+
+const refineChargePricingShape = (ctx: z.RefinementCtx, charge: ChargePricingShapeInput) => {
   if (charge.pricingMethod === undefined && charge.chargeModel === undefined) return
+  if (charge.pricingMethod === 'cost_plus') {
+    refineCostPlusShape(ctx, charge)
+    return
+  }
+  forbidField(ctx, charge.markupRule, 'markupRule', 'V-CHG-1: markupRule is only allowed on cost-plus charges')
+  forbidField(ctx, charge.markupValue, 'markupValue', 'V-CHG-1: markupValue is only allowed on cost-plus charges')
   const { model, source } = normalizeChargePricing(charge)
 
   if (source === 'fixed') {
@@ -250,6 +299,17 @@ const refineChargePricingShape = (
 export const cpqProductChargeCreateSchema = cpqProductChargeBase.superRefine((data, ctx) => {
   refineChargePricingShape(ctx, data)
 })
+
+/**
+ * V-CHG-1 issues for a full (merged) charge. Routes use it on partial updates,
+ * whose own refinement only sees the patched fields.
+ */
+export function chargePricingShapeIssues(charge: ChargePricingShapeInput): z.ZodIssue[] {
+  const result = z.custom<ChargePricingShapeInput>(() => true)
+    .superRefine((value, ctx) => refineChargePricingShape(ctx, value))
+    .safeParse(charge)
+  return result.success ? [] : result.error.issues
+}
 
 export const cpqProductChargeUpdateSchema = cpqProductChargeBase.partial().extend({
   id: z.string().uuid(),
@@ -313,6 +373,8 @@ export const cpqPricingTableCreateSchema = z.object({
   dimensions: z.array(keyLabelItem).superRefine(uniqueKeys('dimension')),
   priceColumns: z.array(keyLabelItem).superRefine(uniqueKeys('price column')),
   currencyCodeList: z.array(z.string().min(1)).min(1),
+  // `cost` tables feed cost elements and are confidential (cpq.costs.view).
+  purpose: z.enum(PRICING_TABLE_PURPOSES).optional().default('price'),
   isActive: z.boolean().optional().default(true),
 })
 
@@ -493,6 +555,8 @@ export const cpqRecalculateSchema = z.object({
 
 export const cpqTransitionStatusSchema = z.object({
   targetStatus: z.string().min(1),
+  /** The `pricingRevision` the caller last saw; a different stored revision answers `409 STALE_REVISION`. */
+  expectedRevision: z.number().int().min(0).optional(),
 })
 
 export const cpqValidateRelationshipsSchema = z.object({

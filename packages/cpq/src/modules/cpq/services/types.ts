@@ -232,20 +232,27 @@ export interface ResolvedCharge {
   chargeName: string
   chargeType: 'nrc' | 'mrc' | 'usage'
   // Display axis — the charge model (flat | per_unit | volume | tiered).
-  pricingMethod: ChargeModel
-  unitPrice: number
+  // Cost-plus charges carry the additive marker 'cost_plus' instead.
+  pricingMethod: ChargeModel | 'cost_plus'
+  // null = unpriced cost-plus charge (pending / missing price-basis cost, or toggle off).
+  unitPrice: number | null
   quantity: number | null
   totalPrice: number | null
   currencyCode: string
   /** Additive waterfall fields; absent on snapshots saved before negotiated pricing. */
   adjustmentErrors?: import('../data/price-adjustments').AdjustmentError[]
-  listUnitPrice?: number
+  listUnitPrice?: number | null
   listTotalPrice?: number | null
-  standardUnitPrice?: number
+  standardUnitPrice?: number | null
   standardTotalPrice?: number | null
   breakdown?: TierBreakdown | null
   note?: string | null
   adjustments?: RuleAdjustment[] | null
+  /**
+   * Unpriced cost-plus charges only: the charge's fallback indicative price (App Spec §1.4.3 / R5),
+   * shown as "≈" while costs are unknown. Display only — never a list price, never in totals.
+   */
+  fallbackPrice?: number | null
 }
 
 // ─── Inventory status constants ──────────────────────────────────

@@ -102,6 +102,41 @@ const events = [
         { path: 'toStatus', type: 'text' },
         { path: 'cause', type: 'select' },
         { path: 'actorUserId', type: 'text', optional: true },
+        // Price-basis cost lines only (the price is indicative); present on quotes that carry costs.
+        { path: 'hasPendingCosts', type: 'boolean', optional: true, label: 'A price-basis cost is pending' },
+        { path: 'hasEstimatedCosts', type: 'boolean', optional: true, label: 'A price-basis cost is estimated (indicative price)' },
+      ],
+    },
+  },
+  // Margin signal. NOT broadcast to the browser: it carries the quote-level margin. Visible to whoever can read
+  // workflow definitions / instances (see the cost-plus manual). Never a per-line amount, cost or markup.
+  {
+    id: 'cpq.quote.margin_changed',
+    label: 'Quote Margin Changed',
+    entity: 'quote',
+    category: 'custom',
+    clientBroadcast: false,
+    payloadSchema: {
+      fields: [
+        { path: 'tenantId', type: 'text' },
+        { path: 'organizationId', type: 'text' },
+        { path: 'quoteId', type: 'text', label: 'CPQ quote id' },
+        { path: 'cpqStatus', type: 'text', label: 'Status' },
+        { path: 'currencyCode', type: 'text' },
+        { path: 'pricingRevision', type: 'number' },
+        // Null when the write created the quote's first cost lines (there was no margin before).
+        { path: 'previousMarginHash', type: 'text', optional: true },
+        { path: 'marginHash', type: 'text' },
+        { path: 'approvalInvalidated', type: 'boolean' },
+        { path: 'contractMargin', type: 'number' },
+        { path: 'marginPercent', type: 'number', optional: true },
+        { path: 'costCoverage', type: 'number' },
+        // Margin flags: every cost line, margin-only included (status_changed's flags are price-basis only).
+        { path: 'hasPendingCosts', type: 'boolean' },
+        { path: 'hasEstimatedCosts', type: 'boolean' },
+        { path: 'hasExpiredCosts', type: 'boolean' },
+        { path: 'cause', type: 'select' },
+        { path: 'occurredAt', type: 'date' },
       ],
     },
   },

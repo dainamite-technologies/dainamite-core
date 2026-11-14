@@ -1,6 +1,7 @@
 import { isArcMirrorLine } from '../arcPriceFreeze'
 import { ADJUSTMENT_TOGGLE, REASON_DICTIONARY } from '../../data/price-adjustments'
-export { ADJUSTMENT_TOGGLE, REASON_DICTIONARY } from '../../data/price-adjustments'
+export { ADJUSTMENT_TOGGLE, REASON_DICTIONARY, ADJUSTMENT_MUTABLE_STATUSES } from '../../data/price-adjustments'
+import { ADJUSTMENT_MUTABLE_STATUSES } from '../../data/price-adjustments'
 import { loadQuoteAdjustments } from './loadQuoteAdjustments'
 import { randomUUID } from 'node:crypto'
 import type { EntityManager } from '@mikro-orm/postgresql'
@@ -13,15 +14,17 @@ import { cpqPriceAdjustmentInputSchema, cpqPriceAdjustmentPatchSchema, type Pric
 import { QuotingError, type DefaultCpqQuotingService } from '../cpqQuotingService'
 import { TERMINAL_STATUSES, type CpqStatus, type QuoteResult, type TenantScope } from '../types'
 import { withQuotePricingWrite } from './quotePricingWrite'
+import type { CpqCostService } from '../costs/costService'
+import { createMarginTracker } from '../costs/quoteMarginTracker'
 
-/** Quote statuses in which reps may still add / edit / delete manual adjustments. */
-const ADJUSTMENT_MUTABLE_STATUSES: readonly CpqStatus[] = ['new', 'incomplete', 'ready']
 
 
 type Dependencies = {
   em: EntityManager
   quotingService: DefaultCpqQuotingService
   featureTogglesService: Pick<FeatureTogglesService, 'getBoolConfig'>
+  /** Cost-plus toggle for the margin signal; absent = no margin tracking on adjustment writes. */
+  costService?: Pick<CpqCostService, 'enabled'>
 }
 
 export function adjustmentInput(row: CpqQuotePriceAdjustment): PriceAdjustmentInput {
@@ -187,7 +190,8 @@ export class CpqAdjustmentService {
   }
 
   private write<T>(quoteId: string, scope: TenantScope, revision: number | undefined, execute: (em: EntityManager, quote: CpqQuoteConfiguration) => Promise<T>) {
-    return withQuotePricingWrite(this.deps.em, quoteId, scope, execute, (status, message) => new QuotingError(status, message), revision, undefined, { pricingCause: 'adjustment' })
+    return withQuotePricingWrite(this.deps.em, quoteId, scope, execute, (status, message) => new QuotingError(status, message), revision, undefined, { pricingCause: 'adjustment' },
+      this.deps.costService ? createMarginTracker({ scope, isEnabled: (tenantId) => this.deps.costService!.enabled(tenantId) }) : undefined)
   }
 
   private async save(em: EntityManager, quote: CpqQuoteConfiguration, row: CpqQuotePriceAdjustment, before: AdjustmentSnapshot | null, scope: TenantScope, rejectInvalid: boolean): Promise<AdjustmentWriteResult> {

@@ -8,11 +8,16 @@ import { Tag } from '@open-mercato/ui/primitives/tag'
 import { DepthBadge, PriceWaterfall } from './PriceWaterfall'
 import { ADJUSTMENT_ERROR_FALLBACKS, type WaterfallChargeInput } from '../lib/priceAdjustmentView'
 import { formatMoney } from '../lib/formatMoney'
+import { isUnpricedCostPlus, unpricedChargeLabel } from '../lib/quoteCostView'
 
 type TierBreakdownEntry = { tier: number; from: number; to: number; pricePerUnit: number; quantity: number; subtotal: number }
 
 /** One priced charge as stored on a quote or order line. */
-export type ChargeRowView = WaterfallChargeInput & {
+export type ChargeRowView = Omit<WaterfallChargeInput, 'unitPrice'> & {
+  /** null = unpriced cost-plus charge (cost pending / missing / toggle off). */
+  unitPrice: number | null
+  /** Indicative fallback price shown as "≈" while the costs are unknown; never a list price. */
+  fallbackPrice?: number | null
   chargeName: string
   quantity?: number | null
   note?: string | null
@@ -84,9 +89,29 @@ export function ChargeBreakdownTable<C extends ChargeRowView>({
         {charges.map((c, i) => {
           const hasDetail = !!(c.breakdown?.tiers?.length || c.adjustments?.length)
           const isDetailOpen = openDetailIndex === i
-          const listUnit = c.listUnitPrice ?? c.unitPrice
-          const standardUnit = c.standardUnitPrice ?? c.unitPrice
           const errors = c.adjustmentErrors ?? []
+          if (isUnpricedCostPlus(c) || c.unitPrice === null) {
+            const label = unpricedChargeLabel(c)
+            return (
+              <tr key={i} className="border-t border-dashed border-border/50" data-testid="cpq-charge-unpriced">
+                <td className="py-1">{c.chargeName}</td>
+                <td className="py-1 uppercase">{c.chargeType}</td>
+                <td className="py-1 text-right font-mono text-muted-foreground">—</td>
+                <td className="py-1 text-right font-mono text-muted-foreground">—</td>
+                <td className="py-1 text-right font-mono text-muted-foreground">—</td>
+                <td className="py-1 text-right font-mono">{c.quantity ?? '—'}</td>
+                <td className="py-1 text-right font-mono" title={t('cpq.quoteCosts.unpricedHint', 'Cost-plus price: waiting for a cost, so no price can be shown yet.')}>
+                  {label.kind === 'approx'
+                    ? `≈ ${formatMoney(label.amount, currency)}`
+                    : t('cpq.quoteCosts.priceOnRequest', 'Price on request')}
+                </td>
+                <td />
+              </tr>
+            )
+          }
+          const unitPrice: number = c.unitPrice
+          const listUnit = c.listUnitPrice ?? unitPrice
+          const standardUnit = c.standardUnitPrice ?? unitPrice
           return (
             <React.Fragment key={i}>
               <tr className="border-t border-dashed border-border/50">
@@ -103,8 +128,8 @@ export function ChargeBreakdownTable<C extends ChargeRowView>({
                 <td className="py-1 text-right font-mono text-muted-foreground">{formatMoney(standardUnit, currency)}</td>
                 <td className="py-1 text-right font-mono">
                   <span className="inline-flex items-center gap-1">
-                    <DepthBadge before={listUnit} after={c.unitPrice} />
-                    {formatMoney(c.unitPrice, currency)}
+                    <DepthBadge before={listUnit} after={unitPrice} />
+                    {formatMoney(unitPrice, currency)}
                   </span>
                 </td>
                 <td className="py-1 text-right font-mono">{c.quantity ?? '—'}</td>
@@ -189,7 +214,7 @@ function ChargePricingDetail({ charge: c, currency, reasonLabels, renderManualAc
 
       <div>
         <div className="font-medium text-muted-foreground mb-1">{t('cpq.priceAdjustments.waterfall.title', 'Price waterfall')}</div>
-        <PriceWaterfall charge={c} currency={currency} reasonLabels={reasonLabels} renderManualActions={renderManualActions} />
+        <PriceWaterfall charge={c as WaterfallChargeInput} currency={currency} reasonLabels={reasonLabels} renderManualActions={renderManualActions} />
       </div>
 
       <div className="flex items-center justify-between pt-1 border-t text-sm font-semibold">

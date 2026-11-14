@@ -32,7 +32,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ quoteId
     if (!guard.ok) return guard.response
 
     const service = resolveQuotingService(ctx)
-    const result = await service.transitionStatus(quoteId, body.targetStatus, scope, resolveAuditActor(ctx.auth))
+    const result = await service.transitionStatus(quoteId, body.targetStatus, scope, resolveAuditActor(ctx.auth), body.expectedRevision)
     await guard.runAfterSuccess()
     return NextResponse.json(result)
   } catch (err) {
@@ -54,7 +54,7 @@ export const openApi: OpenApiRouteDoc = {
       errors: [
         cpqErrorDoc(400, 'Validation error'),
         cpqErrorDoc(404, 'Quote not found'),
-        cpqErrorDoc(409, 'Transition not allowed'),
+        cpqErrorDoc(409, 'Transition not allowed, or STALE_REVISION when expectedRevision differs from the quote pricing revision'),
         cpqErrorDoc(422, 'ARC validation failed or blocked by a mutation guard'),
       ],
     },

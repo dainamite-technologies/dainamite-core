@@ -20,12 +20,13 @@ jest.mock('../../../../_helpers/quoteMutationGuard', () => ({
 }))
 
 import { POST } from '../route'
+import { QuotingError } from '../../../../../services/cpqQuotingService'
 
-function postStatus(targetStatus: string): Request {
+function postStatus(targetStatus: string, extra: Record<string, unknown> = {}): Request {
   return new Request('http://localhost/api/cpq/quotes/cpq-1/status', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ targetStatus }),
+    body: JSON.stringify({ targetStatus, ...extra }),
   })
 }
 
@@ -55,7 +56,7 @@ describe('POST /api/cpq/quotes/{quoteId}/status — mutation guards', () => {
         mutationPayload: { action: 'transition_status', targetStatus: 'with_customer' },
       },
     )
-    expect(transitionStatus).toHaveBeenCalledWith('cpq-1', 'with_customer', { organizationId: 'org-1', tenantId: 't-1' }, '77777777-7777-4777-8777-777777777777')
+    expect(transitionStatus).toHaveBeenCalledWith('cpq-1', 'with_customer', { organizationId: 'org-1', tenantId: 't-1' }, '77777777-7777-4777-8777-777777777777', undefined)
     expect(runAfterSuccess).toHaveBeenCalledTimes(1)
   })
 
@@ -69,6 +70,36 @@ describe('POST /api/cpq/quotes/{quoteId}/status — mutation guards', () => {
 
     expect(res.status).toBe(422)
     expect(await res.json()).toEqual({ error: 'Discount above 15% needs approval' })
+    expect(transitionStatus).not.toHaveBeenCalled()
+  })
+})
+
+describe('POST /api/cpq/quotes/{quoteId}/status — expectedRevision', () => {
+  beforeEach(() => {
+    transitionStatus.mockReset()
+    runCpqMutationGuards.mockReset()
+    runCpqMutationGuards.mockResolvedValue({ ok: true, runAfterSuccess })
+  })
+
+  it('passes the revision through to the transition', async () => {
+    transitionStatus.mockResolvedValue({ id: 'cpq-1' })
+    const res = await POST(postStatus('with_customer', { expectedRevision: 7 }), params)
+    expect(res.status).toBe(200)
+    expect(transitionStatus).toHaveBeenCalledWith('cpq-1', 'with_customer', { organizationId: 'org-1', tenantId: 't-1' }, '77777777-7777-4777-8777-777777777777', 7)
+  })
+
+  it('answers 409 STALE_REVISION when the quote moved on, without running the after-success hooks', async () => {
+    runAfterSuccess.mockReset()
+    transitionStatus.mockRejectedValue(new QuotingError(409, 'STALE_REVISION'))
+    const res = await POST(postStatus('with_customer', { expectedRevision: 7 }), params)
+    expect(res.status).toBe(409)
+    expect(await res.json()).toMatchObject({ error: 'STALE_REVISION' })
+    expect(runAfterSuccess).not.toHaveBeenCalled()
+  })
+
+  it('rejects a malformed revision as a validation error', async () => {
+    const res = await POST(postStatus('with_customer', { expectedRevision: -1 }), params)
+    expect(res.status).toBe(400)
     expect(transitionStatus).not.toHaveBeenCalled()
   })
 })

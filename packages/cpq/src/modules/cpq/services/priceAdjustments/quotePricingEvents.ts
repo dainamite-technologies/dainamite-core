@@ -1,8 +1,9 @@
 import { emitCpqEvent } from '../../events'
 import type { CpqQuoteConfiguration } from '../../data/entities'
 import type { PricingWaterfallSummary } from '../types'
+import type { MarginSignal } from '../costs/quoteMarginTracker'
 
-export type QuotePricingCause = 'adjustment' | 'line' | 'recalculate' | 'clone'
+export type QuotePricingCause = 'adjustment' | 'line' | 'recalculate' | 'clone' | 'cost'
 export type QuoteStatusCause = 'manual' | 'auto'
 
 /** Describes the write so its committed effect can be named in the events. */
@@ -71,6 +72,7 @@ export async function emitQuoteWriteEvents(
   quote: SnapshotSource,
   options: QuoteWriteEvents,
   emit: Emit = emitCpqEvent as unknown as Emit,
+  margin: MarginSignal | null = null,
 ): Promise<void> {
   const after = captureQuoteEventState(quote)
   const base = { tenantId: quote.tenantId, organizationId: quote.organizationId, ...buildQuotePricingSnapshot(quote), occurredAt: new Date().toISOString() }
@@ -82,6 +84,20 @@ export async function emitQuoteWriteEvents(
     pending.push(['cpq.quote.status_changed', {
       ...base, fromStatus: before.cpqStatus, toStatus: after.cpqStatus,
       cause: options.statusCause ?? 'auto', actorUserId: options.actorUserId ?? null,
+      // Only quotes that carry costs get the flags, so every other payload stays as before. Price-basis cost
+      // lines only: "indicative" means the PRICE rests on an estimate (a margin-only estimate leaves it final).
+      ...(margin ? { hasPendingCosts: margin.priceBasis.hasPendingCosts, hasEstimatedCosts: margin.priceBasis.hasEstimatedCosts } : {}),
+    }])
+  }
+  // Non-broadcast; quote-level margin aggregates only. A confirmation or status-only change leaves the hash alone.
+  if (margin && margin.marginHash !== margin.previousMarginHash) {
+    pending.push(['cpq.quote.margin_changed', {
+      tenantId: quote.tenantId, organizationId: quote.organizationId, quoteId: quote.id, cpqStatus: quote.cpqStatus,
+      currencyCode: quote.currencyCode, pricingRevision: quote.pricingRevision ?? 0,
+      previousMarginHash: margin.previousMarginHash, marginHash: margin.marginHash, approvalInvalidated: margin.approvalInvalidated,
+      contractMargin: margin.contractMargin, marginPercent: margin.marginPercent, costCoverage: margin.costCoverage,
+      hasPendingCosts: margin.hasPendingCosts, hasEstimatedCosts: margin.hasEstimatedCosts, hasExpiredCosts: margin.hasExpiredCosts,
+      cause: options.pricingCause, occurredAt: base.occurredAt,
     }])
   }
   for (const [eventId, payload] of pending) {

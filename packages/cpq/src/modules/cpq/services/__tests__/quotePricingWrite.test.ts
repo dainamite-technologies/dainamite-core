@@ -72,3 +72,67 @@ it('refuses to run inside an ambient transaction instead of deadlocking on its o
   expect(root.fork).not.toHaveBeenCalled()
   expect(write).not.toHaveBeenCalled()
 })
+
+describe('createMarginTracker skip rules', () => {
+  const { createMarginTracker } = jest.requireActual('../costs/quoteMarginTracker') as typeof import('../costs/quoteMarginTracker')
+  const quoteView = jest.requireActual('../costs/quoteCostView') as typeof import('../costs/quoteCostView')
+  const margin = { marginHash: 'h1', contractMargin: 1, marginPercent: 1, costCoverage: 1, hasPendingCosts: false, hasEstimatedCosts: true, hasExpiredCosts: false }
+  const priceBasis = { hasPendingCosts: false, hasEstimatedCosts: false }
+  let loadMargin: jest.SpyInstance
+  // The tracker reads the margin and the price-basis flags in one load.
+  beforeEach(() => { loadMargin = jest.spyOn(quoteView, 'loadQuoteMarginState').mockResolvedValue({ margin, priceBasis } as never) })
+  afterEach(() => loadMargin.mockRestore())
+  const tx = (existing: unknown) => ({ findOne: jest.fn().mockResolvedValue(existing), count: jest.fn().mockResolvedValue(0) }) as unknown as EntityManager & { findOne: jest.Mock }
+  const quote = { id: 'q', cpqStatus: 'ready' } as never
+
+  it('is skipped without any query when the toggle is off', async () => {
+    const em = tx({ id: 'c' })
+    const tracker = createMarginTracker({ scope, isEnabled: async () => false })
+    await tracker.before(em, quote)
+    expect(await tracker.after(em, quote)).toBeNull()
+    expect(em.findOne).not.toHaveBeenCalled()
+    expect(loadMargin).not.toHaveBeenCalled()
+  })
+
+  it('computes no margin for a quote without costs before or after the write (one existence query each side)', async () => {
+    const em = tx(null)
+    const tracker = createMarginTracker({ scope, isEnabled: async () => true })
+    await tracker.before(em, quote)
+    expect(await tracker.after(em, quote)).toBeNull()
+    expect(em.findOne).toHaveBeenCalledTimes(2)
+    expect(loadMargin).not.toHaveBeenCalled()
+  })
+
+  it('reports the margin of a write that creates the quote\'s first cost lines (no previous hash)', async () => {
+    const em = tx(null)
+    const tracker = createMarginTracker({ scope, isEnabled: async () => true })
+    await tracker.before(em, quote)
+    em.findOne.mockResolvedValue({ id: 'c' })
+    expect(await tracker.after(em, quote)).toMatchObject({ previousMarginHash: null, marginHash: 'h1', approvalInvalidated: false })
+    expect(loadMargin).toHaveBeenCalledTimes(1)
+  })
+
+  it('computes the before and after hashes for a quote with costs and flags no invalidation while ready', async () => {
+    const em = tx({ id: 'c' })
+    const tracker = createMarginTracker({ scope, isEnabled: async () => true })
+    await tracker.before(em, quote)
+    loadMargin.mockResolvedValue({ margin: { ...margin, marginHash: 'h2' }, priceBasis } as never)
+    expect(await tracker.after(em, quote)).toMatchObject({ previousMarginHash: 'h1', marginHash: 'h2', approvalInvalidated: false })
+  })
+
+  it('carries the margin flags and, separately, the price-basis flags status_changed uses', async () => {
+    const em = tx({ id: 'c' })
+    const tracker = createMarginTracker({ scope, isEnabled: async () => true })
+    await tracker.before(em, quote)
+    expect(await tracker.after(em, quote)).toMatchObject({ hasEstimatedCosts: true, priceBasis: { hasPendingCosts: false, hasEstimatedCosts: false } })
+  })
+
+  it('invalidates an approval when the margin moves past ready and no order exists', async () => {
+    const em = tx({ id: 'c' })
+    const tracker = createMarginTracker({ scope, isEnabled: async () => true, force: true })
+    await tracker.before(em, { id: 'q', cpqStatus: 'in_approval' } as never)
+    loadMargin.mockResolvedValue({ margin: { ...margin, marginHash: 'h2' }, priceBasis } as never)
+    expect(await tracker.after(em, { id: 'q', cpqStatus: 'in_approval' } as never)).toMatchObject({ approvalInvalidated: true })
+    expect(em.findOne).not.toHaveBeenCalled()
+  })
+})

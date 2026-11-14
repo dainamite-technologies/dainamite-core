@@ -386,7 +386,7 @@ export class CpqProductAttribute {
 @Index({ name: 'cpq_pricing_tables_scope_idx', properties: ['organizationId', 'tenantId'] })
 @Unique({ name: 'cpq_pricing_tables_code_unique', properties: ['organizationId', 'tenantId', 'code'] })
 export class CpqPricingTable {
-  [OptionalProps]?: 'isActive' | 'createdAt' | 'updatedAt' | 'deletedAt'
+  [OptionalProps]?: 'purpose' | 'isActive' | 'createdAt' | 'updatedAt' | 'deletedAt'
 
   @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
   id!: string
@@ -411,6 +411,12 @@ export class CpqPricingTable {
 
   @Property({ name: 'currency_code_list', type: 'jsonb' })
   currencyCodeList!: string[]
+
+  // `price` (charge list prices) | `cost` (cost-element lookups). Cost tables and
+  // their entries are confidential: readable only with `cpq.costs.view`.
+  // Immutable while referenced by a charge or cost element (PURPOSE_LOCKED).
+  @Property({ type: 'text', default: 'price' })
+  purpose: string = 'price'
 
   @Property({ name: 'is_active', type: 'boolean', default: true })
   isActive: boolean = true
@@ -543,6 +549,15 @@ export class CpqProductCharge {
   @Property({ name: 'quantity_attribute_code', type: 'text', nullable: true })
   quantityAttributeCode?: string | null
 
+  // Cost-plus (`pricingMethod = 'cost_plus'`): list = markup(Σ price-basis costs).
+  // Confidential — returned only to `cpq.costs.view` holders (lib/chargeView.ts).
+  //   markupRule: markup_percent | target_margin_percent | markup_absolute
+  @Property({ name: 'markup_rule', type: 'text', nullable: true })
+  markupRule?: string | null
+
+  @Property({ name: 'markup_value', type: 'numeric', columnType: 'numeric(18, 4)', nullable: true })
+  markupValue?: string | null
+
   @Property({ name: 'applicability_condition', type: 'jsonb', nullable: true })
   applicabilityCondition?: Record<string, unknown> | null
 
@@ -560,6 +575,100 @@ export class CpqProductCharge {
 
   @Property({ name: 'deleted_at', type: Date, nullable: true })
   deletedAt?: Date | null
+}
+
+// ─── CpqChargeCostElement ────────────────────────────────────────
+// Catalog default cost of one product charge (App Spec §1.4.4). `code` is the
+// cost key carried by quote / order / inventory costs: unique per charge among
+// non-deleted rows (partial unique index in the migration) and immutable.
+// Confidential: served only to `cpq.costs.view` holders, not registered in ce.ts.
+
+@Entity({ tableName: 'cpq_charge_cost_elements' })
+@Index({ name: 'cpq_charge_cost_elements_scope_idx', properties: ['organizationId', 'tenantId', 'productChargeId'] })
+@Index({ name: 'cpq_charge_cost_elements_table_idx', properties: ['organizationId', 'tenantId', 'costTableId'] })
+export class CpqChargeCostElement {
+  [OptionalProps]?: 'requiresSourcing' | 'sortOrder' | 'isActive' | 'createdAt' | 'updatedAt' | 'deletedAt'
+
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @Property({ name: 'organization_id', type: 'uuid' })
+  organizationId!: string
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  @Property({ name: 'product_charge_id', type: 'uuid' })
+  productChargeId!: string
+
+  @Property({ type: 'text' })
+  code!: string
+
+  @Property({ type: 'text' })
+  name!: string
+
+  /** price_basis | margin_only */
+  @Property({ type: 'text' })
+  role!: string
+
+  /** nrc | mrc */
+  @Property({ name: 'cost_type', type: 'text' })
+  costType!: string
+
+  /** fixed | table | on_request (index arrives with the index-costs feature) */
+  @Property({ type: 'text' })
+  source!: string
+
+  /** flat | per_unit | tiered | volume */
+  @Property({ name: 'cost_model', type: 'text' })
+  costModel!: string
+
+  @Property({ type: 'numeric', columnType: 'numeric(18, 4)', nullable: true })
+  amount: string | null = null
+
+  @Property({ name: 'currency_code', type: 'text', nullable: true })
+  currencyCode: string | null = null
+
+  @Property({ name: 'cost_table_id', type: 'uuid', nullable: true })
+  costTableId: string | null = null
+
+  @Property({ name: 'cost_column_key', type: 'text', nullable: true })
+  costColumnKey: string | null = null
+
+  @Property({ name: 'estimate_amount', type: 'numeric', columnType: 'numeric(18, 4)', nullable: true })
+  estimateAmount: string | null = null
+
+  /** FK string to a customers company used as supplier. */
+  @Property({ name: 'default_supplier_id', type: 'uuid', nullable: true })
+  defaultSupplierId: string | null = null
+
+  @Property({ name: 'default_supplier_name', type: 'text', nullable: true })
+  defaultSupplierName: string | null = null
+
+  @Property({ name: 'default_validity_days', type: 'integer', nullable: true })
+  defaultValidityDays: number | null = null
+
+  /** Stored now; a no-op until the supplier-sourcing feature ships. */
+  @Property({ name: 'requires_sourcing', type: 'boolean', default: false })
+  requiresSourcing: boolean = false
+
+  @Property({ name: 'applicability_condition', type: 'jsonb', nullable: true })
+  applicabilityCondition: Record<string, unknown> | null = null
+
+  @Property({ name: 'sort_order', type: 'integer', default: 0 })
+  sortOrder: number = 0
+
+  @Property({ name: 'is_active', type: 'boolean', default: true })
+  isActive: boolean = true
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+
+  @Property({ name: 'updated_at', type: Date, onUpdate: () => new Date() })
+  updatedAt: Date = new Date()
+
+  @Property({ name: 'deleted_at', type: Date, nullable: true })
+  deletedAt: Date | null = null
 }
 
 // ─── CpqPriceRule ─────────────────────────────────────────────────
@@ -1548,6 +1657,232 @@ export class CpqQuotePriceAdjustment {
 
   @Property({ name: 'is_active', type: 'boolean', default: true })
   isActive: boolean = true
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+
+  @Property({ name: 'updated_at', type: Date, onUpdate: () => new Date() })
+  updatedAt: Date = new Date()
+
+  @Property({ name: 'deleted_at', type: Date, nullable: true })
+  deletedAt: Date | null = null
+}
+
+// ─── CpqQuoteLineCost ────────────────────────────────────────────
+// One cost of a quote line (App Spec §1.4.6). `cost_key` is unique per line among
+// non-deleted rows (partial unique index in the migration). Sourcing, FX, index and
+// carried columns are created now (nullable) and stay unused until their features
+// ship, so this hot table is migrated once. FK strings only; confidential, so it is
+// not registered in ce.ts and never serialised without `cpq.costs.view`.
+
+@Entity({ tableName: 'cpq_quote_line_costs' })
+@Index({ name: 'cpq_quote_line_costs_config_idx', properties: ['organizationId', 'tenantId', 'quoteConfigurationId'] })
+@Index({ name: 'cpq_quote_line_costs_line_idx', properties: ['organizationId', 'tenantId', 'quoteLineId'] })
+export class CpqQuoteLineCost {
+  [OptionalProps]?: 'sourcingStatus' | 'createdAt' | 'updatedAt' | 'deletedAt'
+
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @Property({ name: 'organization_id', type: 'uuid' })
+  organizationId!: string
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  @Property({ name: 'quote_configuration_id', type: 'uuid' })
+  quoteConfigurationId!: string
+
+  @Property({ name: 'quote_id', type: 'uuid' })
+  quoteId!: string
+
+  @Property({ name: 'quote_line_id', type: 'uuid' })
+  quoteLineId!: string
+
+  @Property({ name: 'cost_key', type: 'text' })
+  costKey!: string
+
+  /** Null = a line-level margin_only cost. */
+  @Property({ name: 'charge_code', type: 'text', nullable: true })
+  chargeCode: string | null = null
+
+  /** catalog | manual (carried arrives with the ARC feature) */
+  @Property({ type: 'text' })
+  origin!: string
+
+  @Property({ name: 'cost_element_id', type: 'uuid', nullable: true })
+  costElementId: string | null = null
+
+  @Property({ name: 'carried_from_item_cost_id', type: 'uuid', nullable: true })
+  carriedFromItemCostId: string | null = null
+
+  @Property({ name: 'carried_from_hash', type: 'text', nullable: true })
+  carriedFromHash: string | null = null
+
+  @Property({ type: 'text' })
+  name!: string
+
+  /** price_basis | margin_only */
+  @Property({ type: 'text' })
+  role!: string
+
+  /** nrc | mrc */
+  @Property({ name: 'cost_type', type: 'text' })
+  costType!: string
+
+  /** fixed | table | on_request (manual lines: fixed | on_request) */
+  @Property({ type: 'text' })
+  source!: string
+
+  /** flat | per_unit | tiered | volume */
+  @Property({ name: 'cost_model', type: 'text' })
+  costModel!: string
+
+  /** none | estimated | confirmed */
+  @Property({ name: 'value_status', type: 'text' })
+  valueStatus!: string
+
+  /** catalog | manual (supplier / carried arrive later) */
+  @Property({ name: 'value_origin', type: 'text', nullable: true })
+  valueOrigin: string | null = null
+
+  @Property({ name: 'unit_amount', type: 'numeric', columnType: 'numeric(18, 4)', nullable: true })
+  unitAmount: string | null = null
+
+  /** Per-instance amount after the cost model, stored for display. */
+  @Property({ name: 'instance_amount', type: 'numeric', columnType: 'numeric(18, 4)', nullable: true })
+  instanceAmount: string | null = null
+
+  @Property({ name: 'currency_code', type: 'text', nullable: true })
+  currencyCode: string | null = null
+
+  @Property({ name: 'fx_rate', type: 'numeric', columnType: 'numeric(18, 8)', nullable: true })
+  fxRate: string | null = null
+
+  @Property({ name: 'fx_rate_date', type: 'date', nullable: true })
+  fxRateDate: string | null = null
+
+  /**
+   * Hash of the configuration attributes that drive this cost (applicability
+   * condition + table dimensions) when the value was last resolved; R1b resets an
+   * `on_request` value when it changes.
+   */
+  @Property({ name: 'driver_hash', type: 'text', nullable: true })
+  driverHash: string | null = null
+
+  @Property({ name: 'index_snapshot', type: 'jsonb', nullable: true })
+  indexSnapshot: Record<string, unknown> | null = null
+
+  /** not_requested | requested | answered | declined | cancelled (unused until the sourcing feature) */
+  @Property({ name: 'sourcing_status', type: 'text', default: 'not_requested' })
+  sourcingStatus: string = 'not_requested'
+
+  @Property({ name: 'cost_request_id', type: 'uuid', nullable: true })
+  costRequestId: string | null = null
+
+  @Property({ name: 'request_seq', type: 'integer', nullable: true })
+  requestSeq: number | null = null
+
+  @Property({ name: 'requested_at', type: Date, nullable: true })
+  requestedAt: Date | null = null
+
+  @Property({ name: 'requested_by_user_id', type: 'uuid', nullable: true })
+  requestedByUserId: string | null = null
+
+  @Property({ name: 'answered_at', type: Date, nullable: true })
+  answeredAt: Date | null = null
+
+  @Property({ name: 'answered_by_user_id', type: 'uuid', nullable: true })
+  answeredByUserId: string | null = null
+
+  @Property({ name: 'decline_reason', type: 'text', nullable: true })
+  declineReason: string | null = null
+
+  @Property({ name: 'proposed_amount', type: 'numeric', columnType: 'numeric(18, 4)', nullable: true })
+  proposedAmount: string | null = null
+
+  @Property({ name: 'supplier_id', type: 'uuid', nullable: true })
+  supplierId: string | null = null
+
+  @Property({ name: 'supplier_name', type: 'text', nullable: true })
+  supplierName: string | null = null
+
+  @Property({ name: 'supplier_quote_ref', type: 'text', nullable: true })
+  supplierQuoteRef: string | null = null
+
+  @Property({ name: 'valid_until', type: 'date', nullable: true })
+  validUntil: string | null = null
+
+  @Property({ name: 'supplier_term_end', type: 'date', nullable: true })
+  supplierTermEnd: string | null = null
+
+  @Property({ name: 'supplier_min_term_months', type: 'integer', nullable: true })
+  supplierMinTermMonths: number | null = null
+
+  @Property({ type: 'text', nullable: true })
+  note: string | null = null
+
+  /** TABLE_NO_MATCH | CURRENCY_NO_RATE | INDEX_NO_VALUE | CHARGE_NOT_FOUND | COST_PLUS_DISABLED */
+  @Property({ name: 'error_code', type: 'text', nullable: true })
+  errorCode: string | null = null
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+
+  @Property({ name: 'updated_at', type: Date, onUpdate: () => new Date() })
+  updatedAt: Date = new Date()
+
+  @Property({ name: 'deleted_at', type: Date, nullable: true })
+  deletedAt: Date | null = null
+}
+
+// ─── CpqQuoteMarkupOverride ──────────────────────────────────────
+// A pricing manager's markup for one cost-plus charge on one quote line (feature
+// spec §Data Model). Unique per (line, charge) among non-deleted rows (partial
+// unique index in the migration). Confidential; not registered in ce.ts.
+
+@Entity({ tableName: 'cpq_quote_markup_overrides' })
+@Index({ name: 'cpq_quote_markup_overrides_config_idx', properties: ['organizationId', 'tenantId', 'quoteConfigurationId'] })
+@Index({ name: 'cpq_quote_markup_overrides_line_idx', properties: ['organizationId', 'tenantId', 'quoteLineId'] })
+export class CpqQuoteMarkupOverride {
+  [OptionalProps]?: 'createdByUserId' | 'updatedByUserId' | 'createdAt' | 'updatedAt' | 'deletedAt'
+
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @Property({ name: 'organization_id', type: 'uuid' })
+  organizationId!: string
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  @Property({ name: 'quote_configuration_id', type: 'uuid' })
+  quoteConfigurationId!: string
+
+  @Property({ name: 'quote_id', type: 'uuid' })
+  quoteId!: string
+
+  @Property({ name: 'quote_line_id', type: 'uuid' })
+  quoteLineId!: string
+
+  @Property({ name: 'charge_code', type: 'text' })
+  chargeCode!: string
+
+  /** markup_percent | target_margin_percent | markup_absolute */
+  @Property({ name: 'markup_rule', type: 'text' })
+  markupRule!: string
+
+  @Property({ name: 'markup_value', type: 'numeric', columnType: 'numeric(18, 4)' })
+  markupValue!: string
+
+  @Property({ type: 'text' })
+  note!: string
+
+  @Property({ name: 'created_by_user_id', type: 'uuid', nullable: true })
+  createdByUserId: string | null = null
+
+  @Property({ name: 'updated_by_user_id', type: 'uuid', nullable: true })
+  updatedByUserId: string | null = null
 
   @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
   createdAt: Date = new Date()

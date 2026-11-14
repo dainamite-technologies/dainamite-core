@@ -1,10 +1,11 @@
-import { cloneQuoteAdjustments, removeQuoteLineTree } from './priceAdjustments/quoteAdjustmentLifecycle'
+import { cloneQuoteAdjustments, loadLineCostRows, removeQuoteLineTree } from './priceAdjustments/quoteAdjustmentLifecycle'
 import type { PriceAdjustment } from '../data/price-adjustments'
 import { withAtomicFlush } from '@open-mercato/shared/lib/commands/flush'
 import { loadQuoteAdjustments } from './priceAdjustments/loadQuoteAdjustments'
 import { resolveManualAdjustments } from './priceAdjustments/resolveManualAdjustments'
 import { withChargeWaterfall } from './priceAdjustments/chargeWaterfall'
 import { withQuotePricingWrite } from './priceAdjustments/quotePricingWrite'
+import { createMarginTracker } from './costs/quoteMarginTracker'
 import { emitQuoteWriteEvents, type QuoteWriteEvents } from './priceAdjustments/quotePricingEvents'
 import { computeWaterfallSummary } from './priceAdjustments/pricingSnapshot'
 import type { EntityManager } from '@mikro-orm/postgresql'
@@ -18,10 +19,11 @@ import {
   CpqInventorySubscription,
   CpqInventorySubscriptionItem,
   CpqOrderConfiguration,
+  CpqProductCharge,
   CpqProductOffering,
   CpqProductSpecification,
 } from '../data/entities'
-import type { DefaultCpqPricingService } from './cpqPricingService'
+import type { CostPlusLineContext, DefaultCpqPricingService } from './cpqPricingService'
 import type { DefaultCpqValidationService } from './cpqValidationService'
 import type { DefaultCpqProductService } from './cpqProductService'
 import type {
@@ -55,7 +57,9 @@ import {
   stripArcMarkers,
   stripQuoteOnlyArcMarkers,
 } from './arcPriceFreeze'
-import { isArcCancelledLine, planArcLineRemoval, planArcLineRestore, removalCancelsItem } from './arcLineRemoval'
+import type { CpqCostService } from './costs/costService'
+import { isQuoteCostLocked, resolveCostPlusInputs } from './costs/costResolution'
+import { isArcCancelledLine, isArcTerminationLine, planArcLineRemoval, planArcLineRestore, removalCancelsItem } from './arcLineRemoval'
 
 interface QuotingServiceDeps {
   em: EntityManager
@@ -63,6 +67,8 @@ interface QuotingServiceDeps {
   cpqValidationService: DefaultCpqValidationService
   cpqProductService: DefaultCpqProductService
   salesDocumentNumberGenerator: SalesDocumentNumberGenerator
+  /** Cost-plus toggle check (R14); absent in tests / hosts without cost-plus, which disables cost resolution. */
+  cpqCostService?: Pick<CpqCostService, 'enabled'>
 }
 
 export class DefaultCpqQuotingService {
@@ -71,6 +77,7 @@ export class DefaultCpqQuotingService {
   private validationService: DefaultCpqValidationService
   private productService: DefaultCpqProductService
   private numberGenerator: SalesDocumentNumberGenerator
+  private costService?: Pick<CpqCostService, 'enabled'>
 
   constructor(deps: QuotingServiceDeps) {
     this.em = deps.em
@@ -78,6 +85,7 @@ export class DefaultCpqQuotingService {
     this.validationService = deps.cpqValidationService
     this.productService = deps.cpqProductService
     this.numberGenerator = deps.salesDocumentNumberGenerator
+    this.costService = deps.cpqCostService
   }
 
   // ─── Create Quote ──────────────────────────────────────────────
@@ -217,6 +225,7 @@ export class DefaultCpqQuotingService {
 
     // Resolve offering -> spec -> product
     const { offering, spec } = await this.resolveOffering(em, item, scope)
+    await this.assertCostPlusLineWritable(em, cpqConfig, { offeringId: offering?.id, productId: item.productId ?? spec?.productId }, scope)
 
     // Merge context: quoteContext + designTimeValues + user configuration
     const mergedConfig = {
@@ -393,6 +402,13 @@ export class DefaultCpqQuotingService {
     if (isArcCancelledLine(lineConfig, cpqConfig.quoteType)) {
       throw new QuotingError(409, 'This subscription item is marked for removal — restore it before changing it')
     }
+    // Values compared, not "a field was sent": the quote page always resubmits the full configuration.
+    // `term_months` feeds the merged configuration (applicability, cost-table dimensions, driver hash), so a
+    // term change is a pricing input for cost-plus lines too.
+    const termChanged = update.termMonths !== undefined && update.termMonths !== (lineConfig.termMonths ?? undefined)
+    if (termChanged || arcPricingInputsChanged({ configuration: lineConfig.configuration, quantity: lineConfig.quantity }, { configuration: update.configuration, quantity: update.quantity })) {
+      await this.assertCostPlusLineWritable(em, cpqConfig, lineConfig, scope)
+    }
 
     const quoteLine = await em.findOne(SalesQuoteLine, {
       id: lineId,
@@ -533,6 +549,29 @@ export class DefaultCpqQuotingService {
     return this.recalculateInternal(em, cpqConfig, salesQuote, scope, true)
   }
 
+  /**
+   * R4 / R11: a cost-locked quote keeps its stored cost values, so a line priced from costs (its offering /
+   * product has an ACTIVE cost-plus charge) can be neither added nor reconfigured there: the stored per-unit
+   * instance amounts and table lookups would no longer match the configuration, and a line added while locked
+   * never gets cost lines. `409 COST_LOCKED` (costs that change the price are locked — move the quote back to
+   * Ready). Toggle off: cost-plus charges are not priced at all (R7 refuses them), nothing to protect here.
+   */
+  private async assertCostPlusLineWritable(
+    em: EntityManager,
+    cpqConfig: CpqQuoteConfiguration,
+    owner: { offeringId?: string | null; productId?: string | null },
+    scope: TenantScope,
+  ): Promise<void> {
+    const costService = this.costService
+    if (!costService || !(owner.offeringId || owner.productId)) return
+    if (!(await costService.enabled(scope.tenantId))) return
+    const costPlusCharges = await em.count(CpqProductCharge, {
+      organizationId: scope.organizationId, tenantId: scope.tenantId, deletedAt: null, isActive: true, pricingMethod: 'cost_plus',
+      ...(owner.offeringId ? { offeringId: owner.offeringId } : { productId: owner.productId }),
+    })
+    if (costPlusCharges > 0 && await isQuoteCostLocked(em, cpqConfig, scope)) throw new QuotingError(409, 'COST_LOCKED')
+  }
+
   // ─── Remove Quote Item ─────────────────────────────────────────
 
   async removeQuoteItem(quoteId: string, lineId: string, scope: TenantScope): Promise<QuoteResult> {
@@ -565,7 +604,15 @@ export class DefaultCpqQuotingService {
       }
       const plan = planArcLineRemoval(lineConfig, await loadLines(em, cpqConfig.id, scope), cpqConfig.quoteType)
       for (const root of plan.removeRoots) await removeQuoteLineTree(em, cpqConfig.id, root, scope)
+      // A cancel line sells nothing: its cost lines (catalog and manual) go now, whatever the
+      // toggle or the cost lock, so they can never block conversion or reappear in the margin.
+      const cancelledCosts: Awaited<ReturnType<typeof loadLineCostRows>> = []
+      for (let index = 0; index < plan.cancel.length; index += 500) {
+        cancelledCosts.push(...await loadLineCostRows(em, cpqConfig.id, plan.cancel.slice(index, index + 500).map((line) => line.quoteLineId), scope))
+      }
       await withAtomicFlush(em, [() => {
+        const now = new Date()
+        for (const row of cancelledCosts) row.deletedAt = now
         for (const line of plan.cancel) {
           line.action = 'cancel'
           line.charges = []
@@ -628,6 +675,8 @@ export class DefaultCpqQuotingService {
       }
       return { line, item }
     })
+    // Removal soft-deleted the line's cost rows; on a cost-locked quote nothing could re-create them.
+    for (const { line } of restores) await this.assertCostPlusLineWritable(em, cpqConfig, line, scope)
     const arcType = cpqConfig.quoteType as 'amend' | 'renew'
     await withAtomicFlush(em, [() => {
       for (const { line, item } of restores) {
@@ -860,9 +909,9 @@ export class DefaultCpqQuotingService {
 
   // ─── Transition Status ─────────────────────────────────────────
 
-  async transitionStatus(quoteId: string, targetStatus: string, scope: TenantScope, actorUserId: string | null = null): Promise<QuoteResult> {
+  async transitionStatus(quoteId: string, targetStatus: string, scope: TenantScope, actorUserId: string | null = null, expectedRevision?: number): Promise<QuoteResult> {
     return this.writeQuote(quoteId, scope, (em, quote) => this.transitionStatusInTransaction(quoteId, targetStatus, scope, em, quote),
-      undefined, undefined, { pricingCause: 'recalculate', statusCause: 'manual', actorUserId })
+      expectedRevision, undefined, { pricingCause: 'recalculate', statusCause: 'manual', actorUserId })
   }
 
   private async transitionStatusInTransaction(quoteId: string, targetStatus: string, scope: TenantScope, em: EntityManager, cpqConfig: CpqQuoteConfiguration): Promise<QuoteResult> {
@@ -918,8 +967,12 @@ export class DefaultCpqQuotingService {
     validate?: (quote: CpqQuoteConfiguration) => void,
     events: QuoteWriteEvents = { pricingCause: 'recalculate' },
   ): Promise<QuoteResult> {
+    // The copy of a clone keeps its own baseline; the original is only locked, never repriced.
+    const costService = this.costService
+    const marginTracker = events.pricingCause === 'clone' || !costService ? undefined
+      : createMarginTracker({ scope, isEnabled: (tenantId) => costService.enabled(tenantId) })
     return withQuotePricingWrite(this.em, quoteId, scope, execute,
-      (status, message) => new QuotingError(status, message), expectedRevision, validate, events)
+      (status, message) => new QuotingError(status, message), expectedRevision, validate, events, marginTracker)
   }
 
   /** Called by adjustment commands that already own the quote lock/revision. */
@@ -951,6 +1004,7 @@ export class DefaultCpqQuotingService {
 
     let allValid = true
     const allErrors: ValidationError[] = []
+    const offeringDesignTimeValues = new Map<string, Record<string, unknown>>()
 
     // Collect freshly computed data for each line (used for response regardless of save)
     const computedLines: Array<{
@@ -964,6 +1018,8 @@ export class DefaultCpqQuotingService {
       isConfigured: boolean
     }> = []
 
+    // Pass 1: offering context per line (cost resolution must run before any charge is priced).
+    const prepared: Array<{ lineConfig: CpqQuoteLineConfiguration; offering: CpqProductOffering | null; mergedConfig: Record<string, unknown> }> = []
     for (const lineConfig of lineConfigs) {
       let offering: CpqProductOffering | null = null
       if (lineConfig.offeringId) {
@@ -975,7 +1031,8 @@ export class DefaultCpqQuotingService {
         })
       }
 
-      const mergedConfig = {
+      offeringDesignTimeValues.set(lineConfig.quoteLineId, offering?.designTimeValues ?? {})
+      const mergedConfig: Record<string, unknown> = {
         ...(cpqConfig.quoteContext ?? {}),
         ...(offering?.designTimeValues ?? {}),
         ...lineConfig.configuration,
@@ -984,7 +1041,21 @@ export class DefaultCpqQuotingService {
       if (lineConfig.termMonths) {
         mergedConfig.term_months = lineConfig.termMonths
       }
+      prepared.push({ lineConfig, offering, mergedConfig })
+    }
 
+    // Cost inputs of cost-plus pricing (steps 8-9). Saved recalculations persist the catalog cost lines
+    // (never `charges` or a price); previews compute the same values in memory; locked quotes read the
+    // stored lines. Resolution always runs BEFORE pricing so both see the same values.
+    const costService = this.costService
+    const costInputs = costService
+      ? await resolveCostPlusInputs({
+        em, quote: cpqConfig, scope, save, isEnabled: (tenantId) => costService.enabled(tenantId),
+        lines: prepared.map(({ lineConfig, mergedConfig }) => ({ lineConfig, mergedConfig })),
+      })
+      : null
+
+    for (const { lineConfig, offering, mergedConfig } of prepared) {
       let validationErrors: ValidationError[] = []
       if (lineConfig.offeringId && !isArcCancelledLine(lineConfig, cpqConfig.quoteType)) {
         const validation = await this.validationService.validateOfferingConfiguration({
@@ -1013,13 +1084,27 @@ export class DefaultCpqQuotingService {
         // nothing to the quote (its current price is shown via `arcSource`).
         charges = []
       } else if ((lineConfig.offeringId || lineConfig.productId) && !isFrozen) {
+        const costPlus: CostPlusLineContext = {
+          enabled: costInputs?.enabled ?? false,
+          costs: costInputs?.costsByLine.get(lineConfig.quoteLineId) ?? [],
+          overrides: new Map([...(costInputs?.overrides ?? [])]
+            .filter(([key]) => key.startsWith(`${lineConfig.quoteLineId}\u0000`))
+            .map(([key, value]) => [key.slice(lineConfig.quoteLineId.length + 1), value])),
+          errors: [],
+        }
         charges = await this.pricingService.resolveProductCharges({
           offeringId: lineConfig.offeringId ?? undefined,
           productId: lineConfig.productId ?? undefined,
           configuration: mergedConfig,
           currencyCode: cpqConfig.currencyCode,
           ...scope,
+          costPlus,
         })
+        // An unpriced cost-plus charge makes the line (and so the quote) not ready.
+        // Termination lines (Cancel-quote lines) accept no cost writes and never bind conversion: no readiness error.
+        for (const error of isArcTerminationLine(lineConfig, cpqConfig.quoteType) ? [] : costPlus.errors) {
+          validationErrors.push({ message: error.code, attribute: error.chargeCode, lineId: lineConfig.quoteLineId })
+        }
       } else {
         charges = (lineConfig.charges ?? []) as unknown as ResolvedCharge[]
       }
@@ -1548,7 +1633,7 @@ function computePricingSummary(lineConfigs: CpqQuoteLineConfiguration[], currenc
         usageCharges.push({
           chargeCode: charge.chargeCode,
           chargeName: charge.chargeName,
-          unitPrice: charge.unitPrice,
+          unitPrice: charge.unitPrice ?? 0,
           note: charge.note ?? null,
         })
       }
@@ -1598,7 +1683,7 @@ function computePricingSummaryFromComputed(
         usageCharges.push({
           chargeCode: charge.chargeCode,
           chargeName: charge.chargeName,
-          unitPrice: charge.unitPrice,
+          unitPrice: charge.unitPrice ?? 0,
           note: charge.note ?? null,
         })
       }

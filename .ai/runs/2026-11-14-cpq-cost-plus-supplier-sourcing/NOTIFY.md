@@ -17,3 +17,6 @@
 ## 2026-11-14T20:20:00Z — step 6 (B1)
 - Decision: a clone's first saved recalculation auto-opens requests like any saved recalculation (Q12; the clone route threads the cloning user as requester, Q5). The clone's cost lines still start `not_requested` (SOURCING_RESET); the open request appears only after that recalculation. Reversible by not passing the sourcing context from `cloneQuoteInTransaction`.
 - Decision: R1b cancels on any driver change of an `on_request` / entered cost (also when the value was already `none`), not only when the reset note is written, so a request never survives a reconfiguration it was not made for.
+
+## 2026-11-14T19:47:01Z — 6-review-fix
+- A clone's first saved recalculation no longer auto-opens requests (spec "Clone": the cloned tail is `not_requested`, R16; open requests are never copied). New `autoOpen` option on cost resolution (default true); the clone path passes `false`. A later saved recalculation of the clone may still auto-open per Q12.

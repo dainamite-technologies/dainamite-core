@@ -82,7 +82,7 @@ interface QuotingServiceDeps {
  * Who is behind a saved recalculation and where it reports opened / cancelled cost requests (Q5, Q12). Every
  * `writeQuote` owns one: signals are collected inside the transaction and published only after it committed.
  */
-export type RecalcSourcingContext = { actorUserId?: string | null; signals?: SourcingSignal[] }
+export type RecalcSourcingContext = { actorUserId?: string | null; signals?: SourcingSignal[]; autoOpen?: boolean }
 
 export class DefaultCpqQuotingService {
   private em: EntityManager
@@ -929,8 +929,9 @@ export class DefaultCpqQuotingService {
     await cloneQuoteAdjustments(em, original.id, newCpqConfig, lineIdMap, scope)
     await em.flush()
 
-    // The copy's first saved recalculation may open requests (Q12); the requester is the cloning user (Q5).
-    return this.recalculateInternal(em, newCpqConfig, newSalesQuote, scope, true, undefined, sourcing)
+    // The copy's first saved recalculation re-resolves catalog costs but opens NO request: open requests are not
+    // copied and the clone's sourcing starts at `not_requested` (spec "Clone", R16); the rep requests explicitly.
+    return this.recalculateInternal(em, newCpqConfig, newSalesQuote, scope, true, undefined, { ...sourcing, autoOpen: false })
   }
 
   // ─── Transition Status ─────────────────────────────────────────
@@ -1085,7 +1086,7 @@ export class DefaultCpqQuotingService {
     const costInputs = costService
       ? await resolveCostPlusInputs({
         em, quote: cpqConfig, scope, save, isEnabled: (tenantId) => costService.enabled(tenantId),
-        actorUserId: sourcing?.actorUserId ?? null, signals: sourcing?.signals,
+        actorUserId: sourcing?.actorUserId ?? null, signals: sourcing?.signals, autoOpen: sourcing?.autoOpen,
         lines: prepared.map(({ lineConfig, mergedConfig }) => ({ lineConfig, mergedConfig })),
       })
       : null

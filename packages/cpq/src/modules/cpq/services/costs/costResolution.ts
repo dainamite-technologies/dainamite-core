@@ -159,6 +159,11 @@ export type CostResolutionParams = {
   actorUserId?: string | null
   /** Receives one signal per request opened / cancelled by a SAVED recalculation (seam of the sourcing events, step 12). */
   signals?: SourcingSignal[]
+  /**
+   * Q12 auto-open on this saved recalculation (default true). A clone's first recalculation passes `false`: the copy
+   * re-resolves its catalog costs but opens no request (spec "Clone": the cloned tail is `not_requested`, R16).
+   */
+  autoOpen?: boolean
 }
 
 /** What cost-plus pricing reads from a cost line (plain values, safe to hand around without persisting). */
@@ -383,7 +388,7 @@ async function planQuoteCosts(params: CostResolutionParams & { save?: boolean })
           costType: element.costType, source: element.source, costModel: element.costModel,
         }
 
-        const autoOpen = (state: { sourcingStatus: string; valueStatus: string }, reset: boolean) => saved && shouldAutoOpenRequest({
+        const autoOpen = (state: { sourcingStatus: string; valueStatus: string }, reset: boolean) => saved && params.autoOpen !== false && shouldAutoOpenRequest({
           enabled: true, saved, locked: false, quoteType: quote.quoteType, line: lineConfig,
           cost: { origin: 'catalog', role: element.role, source: element.source, ...state },
           requiresSourcing: element.requiresSourcing === true, resetByReconfiguration: reset,

@@ -43,10 +43,10 @@ const catalogCost = (over: Row = {}) => ({ id: 'c-1', ...SCOPE, deletedAt: null,
   origin: 'catalog', valueStatus: 'confirmed', valueOrigin: 'catalog', unitAmount: '100', instanceAmount: '100', currencyCode: 'USD',
   note: null, driverHash: null, errorCode: null, ...over })
 
-const run = (s: ReturnType<typeof store>, opts: { enabled?: boolean; config?: Row; quoteOver?: Row; lines?: Array<{ lineConfig: never; mergedConfig: Row }>; actorUserId?: string | null; signals?: SourcingSignal[] } = {}) =>
+const run = (s: ReturnType<typeof store>, opts: { enabled?: boolean; config?: Row; quoteOver?: Row; lines?: Array<{ lineConfig: never; mergedConfig: Row }>; actorUserId?: string | null; signals?: SourcingSignal[]; autoOpen?: boolean } = {}) =>
   resolveQuoteCosts({
     em: s.em as never, quote: quote(opts.quoteOver), scope: SCOPE,
-    isEnabled: async () => opts.enabled ?? true, actorUserId: opts.actorUserId, signals: opts.signals,
+    isEnabled: async () => opts.enabled ?? true, actorUserId: opts.actorUserId, signals: opts.signals, autoOpen: opts.autoOpen,
     lines: opts.lines ?? [{ lineConfig: lineConfig(), mergedConfig: opts.config ?? {} }],
   })
 
@@ -545,6 +545,15 @@ describe('cost requests on saved recalculations (Q12, R1a, R1b)', () => {
       expect(signals).toEqual([expect.objectContaining({
         kind: 'requested', auto: true, requestSeq: 1, costLineId: s.costs[0].id, costRequestId: s.costs[0].costRequestId, supplierId: 'sup-9', costKey: 'tail',
       })])
+    })
+
+    it('autoOpen: false (a clone\'s first recalculation) resolves the cost but opens no request (spec "Clone", R16)', async () => {
+      const s = store({ charges: [charge()], elements: [tail()] })
+      const signals: SourcingSignal[] = []
+      await run(s, { actorUserId: ACTOR, signals, autoOpen: false })
+      expect(s.costs[0]).toMatchObject({ sourcingStatus: 'not_requested', valueStatus: 'estimated' })
+      expect(s.costs[0].costRequestId ?? null).toBeNull()
+      expect(signals).toEqual([])
     })
 
     it('an actor-less recalculation opens it with no requester (no notification recipient, Q5)', async () => {

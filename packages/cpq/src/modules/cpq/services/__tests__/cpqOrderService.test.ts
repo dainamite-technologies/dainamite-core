@@ -1,6 +1,7 @@
 import { CpqOrderLineConfiguration } from '../../data/entities'
 import { DefaultCpqOrderService, OrderError } from '../cpqOrderService'
 import type { TenantScope } from '../types'
+import { ACTIVATION_SCOPE, createActivationHarness } from './_helpers/activationHarness'
 
 interface MockEm {
   fork: jest.MockedFunction<() => MockEm>
@@ -782,5 +783,115 @@ describe('conversion cost guard (COSTS_NOT_CONFIRMED)', () => {
     const { em, run } = await convert([])
     await run()
     expect(em.find).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ quoteConfigurationId: 'quote', role: 'price_basis' }))
+  })
+})
+
+
+describe('conversion output for a costed quote (characterization: cost lines never alter order lines)', () => {
+  const charges = [{ chargeCode: 'fee', chargeType: 'mrc', pricingMethod: 'cost_plus', quantity: 1, unitPrice: 80, totalPrice: 80,
+    listUnitPrice: 80, listTotalPrice: 80, standardUnitPrice: 80, standardTotalPrice: 80, currencyCode: 'USD', adjustmentErrors: [] }]
+  const quoteLine = () => ({ quoteLineId: 'line', quantity: 2, action: 'add', nrcTotal: '10', mrcTotal: '80', charges, configuration: { a: 1 },
+    offeringId: null, productId: 'prod', specId: null, startDate: null, endDate: null, termMonths: 12 })
+  const cost = (over: Record<string, unknown>) => ({ quoteLineId: 'line', costKey: 'tail', role: 'price_basis', valueStatus: 'confirmed',
+    validUntil: '2999-01-01', unitAmount: '50', instanceAmount: '100', ...over })
+
+  async function convertWith(costs: Array<Record<string, unknown>>) {
+    const { em, service } = createService()
+    em.findOne.mockResolvedValueOnce({ id: 'quote', quoteId: 'sales', cpqStatus: 'accepted', currencyCode: 'USD', customerId: 'customer',
+      pricingSummary: { nrcTotal: 10, mrcTotal: 80 } }).mockResolvedValueOnce(null)
+    em.find.mockResolvedValueOnce([quoteLine()] as never).mockResolvedValueOnce(costs as never)
+    em.create.mockImplementation((_entity, values: Record<string, unknown>) => ({ createdAt: new Date('2026-01-01T00:00:00.000Z'), ...values }))
+    await service.convertQuoteToOrder('quote', SCOPE)
+    // generated ids and timestamps differ per run; normalize them away
+    const normalize = (value: unknown) => JSON.parse(JSON.stringify(value)
+      .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, '<uuid>')
+      .replace(/\d{4}-\d\d-\d\dT[\d:.]+Z/g, '<ts>')) as Array<Record<string, unknown>>
+    const strip = (entity: { name: string }) => normalize(em.create.mock.calls
+      .filter(([created]) => (created as { name: string }).name === entity.name)
+      .map(([, values]) => values))
+    return {
+      em,
+      salesOrderLines: strip({ name: 'SalesOrderLine' }),
+      orderLineConfigs: strip(CpqOrderLineConfiguration),
+      createdEntityNames: em.create.mock.calls.map(([created]) => (created as { name: string }).name),
+    }
+  }
+
+  it('creates the same order and order lines with or without cost lines on the quote, and writes no cost entity', async () => {
+    const plain = await convertWith([])
+    const costed = await convertWith([cost({}), cost({ costKey: 'overhead', role: 'margin_only', valueStatus: 'estimated', validUntil: null })])
+    expect(costed.salesOrderLines).toEqual(plain.salesOrderLines)
+    expect(costed.orderLineConfigs).toEqual(plain.orderLineConfigs)
+    expect(costed.createdEntityNames).toEqual(plain.createdEntityNames)
+    expect(costed.createdEntityNames.filter((name) => /Cost/.test(name))).toEqual([])
+    // the order line carries prices and charges only; no cost keys leak into it
+    expect(JSON.stringify(costed.orderLineConfigs)).not.toMatch(/instanceAmount|unitAmount|costKey|margin/i)
+  })
+})
+
+describe('activateOrder persistence sequence on the request EM (characterization: the non-atomic boundary)', () => {
+  const line = (over: Record<string, unknown>) => ({ orderConfigurationId: 'oc-1', quantity: 1, configuration: {}, charges: [], parentLineId: null,
+    startDate: null, termMonths: null, offeringId: null, productId: null, specId: null, sourceQuoteLineId: null, nrcTotal: '0', mrcTotal: '0', ...over })
+
+  it('new sale: createSubscription, a flush for the item parent links, createAsset for each assetizable line, then one final flush', async () => {
+    const h = createActivationHarness({
+      quoteType: 'new',
+      orderLines: [
+        line({ orderLineId: 'ol-1', mrcTotal: '100', nrcTotal: '10', configuration: { offeringName: 'Hosting' } }),
+        line({ orderLineId: 'ol-2', specId: 'spec-asset', nrcTotal: '500', parentLineId: 'ol-1', configuration: { offeringName: 'Server' } }),
+      ],
+      specs: [{ id: 'spec-asset', isAssetizable: true }],
+      subscriptionItems: [{ id: 'item-1' }],
+    })
+
+    const result = await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+
+    // Nothing is atomic today: every step flushes the request EM directly. The order status only changes
+    // after the inventory work has been flushed, and the final flush is the only one that sees it.
+    expect(h.trace).toEqual([
+      'createSubscription',
+      'flush[order=draft]',
+      'createAsset',
+      'flush[order=active]',
+    ])
+    expect(h.em.fork).not.toHaveBeenCalled()
+    expect(h.em.transactional).not.toHaveBeenCalled()
+    expect(h.inventory.createAsset).toHaveBeenCalledWith(
+      expect.objectContaining({ subscriptionId: 'sub-1', subscriptionItemId: 'item-1', purchasePrice: 500 }), ACTIVATION_SCOPE,
+    )
+    expect(h.salesOrder.status).toBe('active')
+    expect(result.cpqStatus).toBe('active')
+  })
+
+  it.each([
+    ['amend', 'applyAmendment', { mergeAction: 'standalone' }],
+    ['cancel', 'applyCancel', { mergeAction: 'standalone' }],
+    ['renew', 'applyRenewal', { mergeAction: 'standalone', newTermStart: '2027-01-01', newTermEnd: '2028-01-01', newTermMonths: 12 }],
+  ] as const)('%s: the inventory primitive runs first (it flushes inside), then one final flush on the request EM', async (quoteType, primitive, targetExtra) => {
+    const changeLog = { effectiveAt: new Date('2026-06-01T00:00:00.000Z'), afterSnapshot: { items: [] }, lineChanges: [] }
+    const result = { changeLog, subscription: { id: 'sub-1', customerId: 'cust-1', currentTermStart: new Date('2027-01-01'), currentTermEnd: new Date('2028-01-01') } }
+    const h = createActivationHarness({
+      quoteType,
+      targets: [{ subscriptionId: 'sub-1', ...targetExtra }],
+      quoteLines: [],
+      inventory: { [primitive]: result },
+    })
+
+    await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+
+    expect(h.trace).toEqual([primitive, 'flush[order=active]'])
+    expect(h.em.fork).not.toHaveBeenCalled()
+    expect(h.em.transactional).not.toHaveBeenCalled()
+  })
+
+  it('merge renew: applyMergeRenewal then one final flush', async () => {
+    const h = createActivationHarness({
+      quoteType: 'renew',
+      quoteOver: { arcMergeNewTermStart: '2027-01-01', arcMergeNewTermEnd: '2028-01-01', arcMergeNewTermMonths: 12 },
+      targets: [{ subscriptionId: 'sub-a', mergeAction: 'absorb' }, { subscriptionId: 'sub-b', mergeAction: 'absorb' }],
+      inventory: { applyMergeRenewal: { mergedSubscription: { id: 'sub-m', currentTermStart: new Date('2027-01-01') }, mergeResultChangeLog: {}, sourceChangeLogs: [] } },
+    })
+    await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+    expect(h.trace).toEqual(['applyMergeRenewal', 'flush[order=active]'])
   })
 })

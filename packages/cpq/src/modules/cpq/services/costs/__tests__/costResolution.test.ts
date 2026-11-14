@@ -247,6 +247,43 @@ describe('resolveQuoteCosts', () => {
   })
 })
 
+describe('mirror-line cost lines as built by feature 1 (characterization; steps 10-11 narrow this)', () => {
+  const mirrorCfg = (extra: Row = {}) => lineConfig({ configuration: { _arcMirroredFromItemId: 'item-1', ...extra } })
+  const resolve = async (quoteType: string, lineConfigs: never[]) => {
+    const s = store({ charges: [charge()], elements: [element()] })
+    await run(s, { quoteOver: { quoteType }, lines: lineConfigs.map((cfg) => ({ lineConfig: cfg, mergedConfig: {} })) })
+    return s.costs
+  }
+
+  it('a frozen Amend mirror gets no catalog cost line', async () => {
+    expect(await resolve('amend', [mirrorCfg({ _arcPriceFrozen: true })])).toHaveLength(0)
+  })
+
+  it('an Amend / Renew removal (cancel) line gets no catalog cost line', async () => {
+    for (const quoteType of ['amend', 'renew']) {
+      const cancelLine = lineConfig({ action: 'cancel', configuration: { _arcMirroredFromItemId: 'item-1' } })
+      expect(await resolve(quoteType, [cancelLine])).toHaveLength(0)
+    }
+  })
+
+  it('a Cancel-quote line is NOT skipped by cost resolution as built (the conversion guard ignores it instead)', async () => {
+    const cancelLine = lineConfig({ action: 'cancel', configuration: { _arcMirroredFromItemId: 'item-1' } })
+    expect(await resolve('cancel', [cancelLine])).toHaveLength(1)
+  })
+
+  it('a non-frozen Renew mirror (re-priced at the current standard) gets catalog cost lines', async () => {
+    expect(await resolve('renew', [mirrorCfg()])).toEqual([expect.objectContaining({ costKey: 'tail', origin: 'catalog' })])
+  })
+
+  it('a reconfigured (unfrozen) Amend mirror gets catalog cost lines', async () => {
+    expect(await resolve('amend', [mirrorCfg()])).toEqual([expect.objectContaining({ costKey: 'tail', origin: 'catalog' })])
+  })
+
+  it('a frozen marker on a Renew mirror does not exempt it (the freeze is honoured on Amend quotes only)', async () => {
+    expect(await resolve('renew', [mirrorCfg({ _arcPriceFrozen: true })])).toHaveLength(1)
+  })
+})
+
 describe('recalculateInternal wiring', () => {
   function service(enabled: jest.Mock) {
     const em: Record<string, jest.Mock> = {

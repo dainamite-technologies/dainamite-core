@@ -139,3 +139,21 @@ describe('stripQuoteOnlyArcMarkers', () => {
     expect(stripQuoteOnlyArcMarkers(null)).toBeNull()
   })
 })
+
+describe('freeze matrix (characterization: only Amend mirrors are frozen today)', () => {
+  it.each([
+    ['amend', true],
+    ['renew', false],
+    ['cancel', false],
+  ] as const)('%s mirror configuration frozen=%s, and only an Amend quote honours the marker', (quoteType, frozen) => {
+    const cfg = buildArcMirrorConfiguration({ port_size: '1G' }, ITEM, quoteType)
+    expect(isArcPriceFrozen(cfg)).toBe(frozen)
+    expect(isFrozenAmendMirrorLine(cfg, quoteType)).toBe(frozen)
+    // the freeze marker is quote-only: it never reaches an order / subscription configuration
+    expect(stripQuoteOnlyArcMarkers(cfg)).not.toHaveProperty(ARC_PRICE_FROZEN_KEY)
+  })
+
+  it('a Renew line carrying the marker is still not a frozen mirror line', () => {
+    expect(isFrozenAmendMirrorLine({ _arcMirroredFromItemId: 'item-1', [ARC_PRICE_FROZEN_KEY]: true }, 'renew')).toBe(false)
+  })
+})

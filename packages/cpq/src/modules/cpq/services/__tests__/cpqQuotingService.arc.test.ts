@@ -276,6 +276,31 @@ describe('recalculate → Amend mirror lines', () => {
   })
 })
 
+describe('recalculate → Renew mirror lines (characterization, before the cost-plus Renew freeze)', () => {
+  // Today only Amend mirrors are frozen. A Renew mirror line is re-priced at
+  // today's standard price on every recalculation, even when the line carries
+  // a freeze marker (the marker is honoured on Amend quotes only).
+  it.each([
+    ['unmarked', {}],
+    ['carrying a stray freeze marker', { _arcPriceFrozen: true }],
+  ])('re-prices a Renew mirror line %s at the current standard price', async (_label, marker) => {
+    const { em, pricingService, service } = makePricedService()
+    const { cpqConfig, lineConfig } = amendFixture({
+      port_size: '1G',
+      _arcMirroredFromItemId: 'item-1',
+      _arcMirroredName: 'GIX Access Port',
+      ...marker,
+    })
+    routeEm(em, { ...cpqConfig, quoteType: 'renew' }, lineConfig)
+    pricingService.resolveProductCharges.mockResolvedValue([mrcCharge(120)])
+
+    await service.recalculate('cpq-1', { save: true }, SCOPE)
+
+    expect(pricingService.resolveProductCharges).toHaveBeenCalledTimes(1)
+    expect(lineConfig.mrcTotal).toBe('120')
+  })
+})
+
 describe('recalculate → Cancel-quote lines carry no cost readiness errors', () => {
   it.each([
     ['cancel', 'cancel', true],

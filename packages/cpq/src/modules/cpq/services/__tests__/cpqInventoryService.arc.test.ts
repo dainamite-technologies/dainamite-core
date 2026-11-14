@@ -1,5 +1,13 @@
 import { DefaultCpqInventoryService, type ArcLineChange } from '../cpqInventoryService'
+import {
+  CpqInventoryAsset,
+  CpqInventorySubscription,
+  CpqInventorySubscriptionItem,
+  CpqProductSpecification,
+  CpqSubscriptionChangeLog,
+} from '../../data/entities'
 import { createMockEm, TEST_SCOPE as SCOPE } from './_helpers/mockEm'
+import { createStatefulEm } from './_helpers/statefulEm'
 
 // XD-250 ARC unit tests for cpqInventoryService.apply* primitives.
 // Shared mock EM in `_helpers/mockEm.ts` is also consumed by
@@ -353,5 +361,236 @@ describe('DefaultCpqInventoryService.applyMergeRenewal', () => {
       status: 400,
       error: expect.stringContaining('share customer'),
     })
+  })
+})
+
+// ─── Snapshot shapes per change type (characterization) ─────────────────
+//
+// Freezes today's `before_snapshot` / `after_snapshot` shapes. Uncosted
+// snapshots must stay byte-identical after the cost-plus carry-through
+// (steps 6 and 13 only ADD `costs` keys on costed rows).
+
+describe('change-log snapshot shapes per change type (characterization)', () => {
+  let uuidCounter = 0
+  beforeEach(() => {
+    uuidCounter = 0
+    jest.spyOn(globalThis.crypto, 'randomUUID').mockImplementation(
+      () => `00000000-0000-4000-8000-${String(++uuidCounter).padStart(12, '0')}` as `${string}-${string}-${string}-${string}-${string}`,
+    )
+  })
+  afterEach(() => jest.restoreAllMocks())
+
+  const T = { organizationId: SCOPE.organizationId, tenantId: SCOPE.tenantId, deletedAt: null }
+  const itemRow = (over: Record<string, unknown> = {}) => ({ ...fakeItem(over) })
+  const logsOf = (em: ReturnType<typeof createStatefulEm>) => em.rows(CpqSubscriptionChangeLog)
+
+  const SUB_KEYS = [
+    'id', 'code', 'name', 'status', 'billingCycle', 'currencyCode', 'mrcAmount', 'nrcAmount', 'currentTermStart',
+    'currentTermEnd', 'termMonths', 'version', 'items', 'assets',
+  ]
+  const ITEM_KEYS = [
+    'id', 'productId', 'offeringId', 'specId', 'name', 'status', 'configuration', 'mrcAmount', 'nrcAmount',
+    'currencyCode', 'quantity', 'sourceQuoteLineId',
+  ]
+  const ASSET_KEYS = ['id', 'code', 'name', 'status', 'subscriptionItemId', 'productId']
+  const keysOf = (value: unknown) => Object.keys(value as object).sort()
+
+  it('created: no before snapshot; the after snapshot lists the new items and an empty assets array (assets are created afterwards)', async () => {
+    const em = createStatefulEm()
+    const service = new DefaultCpqInventoryService(em as unknown as never)
+
+    const sub = await service.createSubscription(
+      {
+        customerId: 'cust-1',
+        name: 'New sale',
+        code: 'SUB-NEW',
+        currencyCode: 'USD',
+        sourceQuoteId: 'q-1',
+        sourceOrderId: 'o-1',
+        items: [{ name: 'Server', specId: 'spec-asset', mrcAmount: 10, nrcAmount: 5, sourceQuoteLineId: 'ql-1' }],
+      },
+      SCOPE,
+    )
+
+    const [log] = logsOf(em)
+    expect(logsOf(em)).toHaveLength(1)
+    expect(log.changeType).toBe('created')
+    expect(log.beforeSnapshot).toBeNull()
+    const after = log.afterSnapshot as Record<string, unknown>
+    expect(keysOf(after)).toEqual([...SUB_KEYS].sort())
+    expect(after).toMatchObject({ code: 'SUB-NEW', status: 'pending', mrcAmount: '10', nrcAmount: '5', assets: [] })
+    const items = after.items as Array<Record<string, unknown>>
+    expect(items).toHaveLength(1)
+    expect(keysOf(items[0])).toEqual([...ITEM_KEYS].sort())
+    expect(items[0]).toMatchObject({ name: 'Server', status: 'pending', sourceQuoteLineId: 'ql-1' })
+    expect(log.lineChanges).toEqual([
+      { action: 'add', itemId: items[0].id, sourceQuoteLineId: 'ql-1', mrcAmount: 10, nrcAmount: 5, quantity: 1 },
+    ])
+    expect(sub.lastChangeLogId).toBe(log.id)
+
+    // The asset of an assetizable line is created AFTER the created snapshot, by a separate call.
+    await service.createAsset(
+      { customerId: 'cust-1', subscriptionId: sub.id, subscriptionItemId: items[0].id as string, name: 'Server', assetType: 'one_time', currencyCode: 'USD', specId: 'spec-asset' } as never,
+      SCOPE,
+    )
+    expect((logsOf(em)[0].afterSnapshot as { assets: unknown[] }).assets).toEqual([])
+    expect(logsOf(em)).toHaveLength(1)
+  })
+
+  it('amend: before and after snapshots with add (assetizable), modify and cancel line changes', async () => {
+    const em = createStatefulEm()
+    const service = new DefaultCpqInventoryService(em as unknown as never)
+    em.seed(CpqInventorySubscription, [fakeSub()])
+    em.seed(CpqInventorySubscriptionItem, [
+      itemRow({ id: 'item-modify', mrcAmount: '50', sortOrder: 0 }),
+      itemRow({ id: 'item-cancel', mrcAmount: '50', sortOrder: 1 }),
+    ])
+    em.seed(CpqProductSpecification, [{ ...T, id: 'spec-asset', isAssetizable: true }])
+    em.seed(CpqInventoryAsset, [
+      { ...T, id: 'asset-old', code: 'AST-OLD', name: 'Old asset', status: 'active', subscriptionId: 'sub-1', subscriptionItemId: 'item-cancel', productId: null },
+    ])
+
+    const result = await service.applyAmendment(
+      {
+        subscriptionId: 'sub-1',
+        sourceQuoteId: 'q-arc',
+        sourceOrderId: 'o-arc',
+        performedByUserId: null,
+        lineChanges: [
+          { action: 'modify', quoteLineId: 'ql-m', sourceSubscriptionItemId: 'item-modify', modifyPatch: { mrcAmount: 80 } },
+          { action: 'cancel', quoteLineId: 'ql-c', sourceSubscriptionItemId: 'item-cancel' },
+          { action: 'add', quoteLineId: 'ql-a', itemInput: { name: 'New server', specId: 'spec-asset', mrcAmount: 20, nrcAmount: 0 } },
+        ],
+      },
+      SCOPE,
+    )
+
+    expect(result.changeLog.changeType).toBe('amend')
+    const before = result.changeLog.beforeSnapshot as Record<string, unknown>
+    const after = result.changeLog.afterSnapshot as Record<string, unknown>
+    expect(keysOf(before)).toEqual([...SUB_KEYS].sort())
+    expect(keysOf(after)).toEqual([...SUB_KEYS].sort())
+    const beforeItems = before.items as Array<Record<string, unknown>>
+    const afterItems = after.items as Array<Record<string, unknown>>
+    expect(beforeItems.map((i) => [i.id, i.status, i.mrcAmount])).toEqual([['item-modify', 'active', '50'], ['item-cancel', 'active', '50']])
+    expect(afterItems.map((i) => [i.id, i.status, i.mrcAmount])).toEqual([
+      ['item-modify', 'active', '80'], ['item-cancel', 'terminated', '50'], ['00000000-0000-4000-8000-000000000001', 'active', '20'],
+    ])
+    for (const item of [...beforeItems, ...afterItems]) expect(keysOf(item)).toEqual([...ITEM_KEYS].sort())
+    // assets: the cancelled item's asset flips to cancelled; the add line materializes a pending asset
+    expect(before.assets).toEqual([
+      { id: 'asset-old', code: 'AST-OLD', name: 'Old asset', status: 'active', subscriptionItemId: 'item-cancel', productId: null },
+    ])
+    const afterAssets = after.assets as Array<Record<string, unknown>>
+    expect(afterAssets.map((a) => [a.id, a.status, a.subscriptionItemId])).toEqual([
+      ['asset-old', 'cancelled', 'item-cancel'], ['gen-1', 'pending', '00000000-0000-4000-8000-000000000001'],
+    ])
+    for (const asset of afterAssets) expect(keysOf(asset)).toEqual([...ASSET_KEYS].sort())
+    expect(result.changeLog.lineChanges).toEqual([
+      { action: 'modify', itemId: 'item-modify', quoteLineId: 'ql-m', mrcDelta: 30 },
+      { action: 'cancel', itemId: 'item-cancel', quoteLineId: 'ql-c', mrcDelta: -50 },
+      { action: 'add', itemId: '00000000-0000-4000-8000-000000000001', quoteLineId: 'ql-a', mrcAmount: 20, nrcAmount: 0, quantity: 1 },
+    ])
+    expect(after).toMatchObject({ mrcAmount: '100' })
+  })
+
+  it('renew: snapshots carry the old and the new term; the log carries a termChange', async () => {
+    const em = createStatefulEm()
+    const service = new DefaultCpqInventoryService(em as unknown as never)
+    em.seed(CpqInventorySubscription, [fakeSub()])
+    em.seed(CpqInventorySubscriptionItem, [itemRow({ id: 'item-1', mrcAmount: '50' })])
+
+    const result = await service.applyRenewal(
+      {
+        subscriptionId: 'sub-1',
+        sourceQuoteId: 'q-arc',
+        sourceOrderId: 'o-arc',
+        performedByUserId: null,
+        term: { newTermStart: '2027-01-01', newTermEnd: '2028-01-01', newTermMonths: 12 },
+        lineChanges: [{ action: 'modify', quoteLineId: 'ql-m', sourceSubscriptionItemId: 'item-1', modifyPatch: { mrcAmount: 60 } }],
+      },
+      SCOPE,
+    )
+
+    const before = result.changeLog.beforeSnapshot as Record<string, unknown>
+    const after = result.changeLog.afterSnapshot as Record<string, unknown>
+    expect(result.changeLog.changeType).toBe('renew')
+    expect(before).toMatchObject({ currentTermStart: '2026-01-01T00:00:00.000Z', currentTermEnd: '2027-01-01T00:00:00.000Z', mrcAmount: '100' })
+    expect(after).toMatchObject({ currentTermStart: '2027-01-01T00:00:00.000Z', currentTermEnd: '2028-01-01T00:00:00.000Z', mrcAmount: '60' })
+    expect(keysOf(after)).toEqual([...SUB_KEYS].sort())
+    expect(result.changeLog.termChange).toEqual({
+      oldTermStart: '2026-01-01T00:00:00.000Z', newTermStart: '2027-01-01T00:00:00.000Z',
+      oldTermEnd: '2027-01-01T00:00:00.000Z', newTermEnd: '2028-01-01T00:00:00.000Z', oldTermMonths: 12, newTermMonths: 12,
+    })
+  })
+
+  it('cancel: the after snapshot shows the terminated subscription with terminated items and cancelled assets', async () => {
+    const em = createStatefulEm()
+    const service = new DefaultCpqInventoryService(em as unknown as never)
+    em.seed(CpqInventorySubscription, [fakeSub()])
+    em.seed(CpqInventorySubscriptionItem, [itemRow({ id: 'item-1' })])
+    em.seed(CpqInventoryAsset, [
+      { ...T, id: 'asset-1', code: 'AST-1', name: 'Asset', status: 'active', subscriptionId: 'sub-1', subscriptionItemId: 'item-1', productId: null },
+    ])
+
+    const result = await service.applyCancel(
+      { subscriptionId: 'sub-1', sourceQuoteId: 'q-arc', sourceOrderId: 'o-arc', performedByUserId: null, reasonCode: 'churn' } as never,
+      SCOPE,
+    )
+
+    const before = result.changeLog.beforeSnapshot as { status: string; items: Array<{ status: string }>; assets: Array<{ status: string }> }
+    const after = result.changeLog.afterSnapshot as typeof before
+    expect(result.changeLog.changeType).toBe('cancel')
+    expect([before.status, before.items[0].status, before.assets[0].status]).toEqual(['active', 'active', 'active'])
+    expect([after.status, after.items[0].status, after.assets[0].status]).toEqual(['terminated', 'terminated', 'cancelled'])
+    expect(result.changeLog.lineChanges).toBeNull()
+    expect(keysOf(after)).toEqual([...SUB_KEYS].sort())
+  })
+
+  it('merge: source logs carry a before snapshot only; the merge-result log carries the after snapshot of M with cloned items', async () => {
+    const em = createStatefulEm()
+    const service = new DefaultCpqInventoryService(em as unknown as never)
+    em.seed(CpqInventorySubscription, [fakeSub({ id: 'sub-a', code: 'SUB-A' }), fakeSub({ id: 'sub-b', code: 'SUB-B' })].map((s) => ({ ...s, ...T })))
+    em.seed(CpqInventorySubscriptionItem, [
+      itemRow({ id: 'item-a', subscriptionId: 'sub-a', name: 'A item' }),
+      itemRow({ id: 'item-b', subscriptionId: 'sub-b', name: 'B item' }),
+    ])
+    em.seed(CpqInventoryAsset, [
+      { ...T, id: 'asset-a', code: 'AST-A', name: 'Asset A', status: 'active', subscriptionId: 'sub-a', subscriptionItemId: 'item-a', productId: null },
+    ])
+
+    const merge = await service.applyMergeRenewal(
+      {
+        sourceIds: ['sub-a', 'sub-b'],
+        sourceQuoteId: 'q-arc',
+        sourceOrderId: 'o-arc',
+        performedByUserId: null,
+        term: { newTermStart: '2027-01-01', newTermEnd: '2028-01-01', newTermMonths: 12 },
+        mergeMeta: { newSubCode: 'SUB-M', newSubName: 'Merged' },
+        lineChanges: [],
+      },
+      SCOPE,
+    )
+
+    const result = merge.mergeResultChangeLog
+    expect(result.changeType).toBe('merge-result')
+    expect(result.beforeSnapshot).toBeNull()
+    const after = result.afterSnapshot as { id: string; code: string; items: Array<Record<string, unknown>>; assets: Array<Record<string, unknown>> }
+    expect(after.code).toBe('SUB-M')
+    expect(after.items.map((i) => i.name)).toEqual(['A item', 'B item'])
+    for (const item of after.items) {
+      expect(keysOf(item)).toEqual([...ITEM_KEYS].sort())
+      expect(item.sourceQuoteLineId).toBeNull() // carry-over marker
+    }
+    expect(after.items.map((i) => i.id)).not.toContain('item-a')
+    expect(after.assets).toHaveLength(1)
+    expect(after.assets[0].subscriptionItemId).toBe(after.items[0].id) // asset re-pointed to the cloned item
+    expect(merge.sourceChangeLogs.map((l) => [l.changeType, l.afterSnapshot, l.mergedIntoSubscriptionId])).toEqual([
+      ['merge-source', null, after.id], ['merge-source', null, after.id],
+    ])
+    for (const log of merge.sourceChangeLogs) {
+      expect(keysOf(log.beforeSnapshot)).toEqual([...SUB_KEYS].sort())
+    }
+    expect(result.mergedFromSubscriptionIds).toEqual(['sub-a', 'sub-b'])
   })
 })

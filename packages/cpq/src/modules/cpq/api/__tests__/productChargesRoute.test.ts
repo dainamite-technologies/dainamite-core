@@ -3,15 +3,18 @@ const assertCostPlusChargeWritable = jest.fn()
 const assertCostPlusChargeHasPriceBasis = jest.fn()
 const deactivatePriceBasisElements = jest.fn()
 const deleteChargeElements = jest.fn()
-const costService = { assertCostPlusChargeWritable, assertCostPlusChargeHasPriceBasis, deactivatePriceBasisElements, deleteChargeElements }
+const inChargeLock = jest.fn()
+const costService = { assertCostPlusChargeWritable, assertCostPlusChargeHasPriceBasis, deactivatePriceBasisElements, deleteChargeElements, inChargeLock }
 const em = { findAndCount: jest.fn(), find: jest.fn(), findOne: jest.fn(), create: jest.fn(), assign: jest.fn(), flush: jest.fn() }
+/** The locked transaction's EM handed to the PUT body by `inChargeLock`. */
+const tx = { findOne: jest.fn(), assign: jest.fn(), flush: jest.fn() }
 const ctx = {
   auth: { sub: 'user-1', tenantId: 'tenant' }, tenantId: 'tenant', organizationId: 'org', organizationScope: null, em,
   container: { resolve: (name: string) => name === 'rbacService' ? { userHasAllFeatures } : costService },
 }
 jest.mock('../context', () => ({ resolveCpqRouteContext: jest.fn(async () => ctx) }))
 
-import { GET, POST, PUT, openApi } from '../product-charges/route'
+import { DELETE, GET, POST, PUT, openApi } from '../product-charges/route'
 import { GET as GET_OFFERINGS } from '../product-offerings/route'
 import { QuotingError } from '../../services/cpqQuotingService'
 
@@ -35,7 +38,13 @@ beforeEach(() => {
   em.flush.mockResolvedValue(undefined)
   em.create.mockImplementation((_entity: unknown, data: Record<string, unknown>) => ({ id: chargeId, createdAt: new Date(0), updatedAt: new Date(0), ...data }))
   em.assign.mockImplementation((entity: Record<string, unknown>, data: Record<string, unknown>) => Object.assign(entity, data))
+  tx.flush.mockResolvedValue(undefined)
+  tx.assign.mockImplementation((entity: Record<string, unknown>, data: Record<string, unknown>) => Object.assign(entity, data))
+  // The real lock re-reads the charge under PESSIMISTIC_WRITE; here it hands over the same row.
+  inChargeLock.mockImplementation(async (_id: string, _scope: unknown, run: (lockTx: unknown, charge: unknown) => Promise<unknown>) => run(tx, await em.findOne()))
   assertCostPlusChargeWritable.mockResolvedValue(undefined)
+  assertCostPlusChargeHasPriceBasis.mockResolvedValue(undefined)
+  userHasAllFeatures.mockResolvedValue(true)
 })
 
 describe('GET /api/cpq/product-charges markup redaction', () => {
@@ -116,32 +125,122 @@ describe('POST /api/cpq/product-charges cost-plus gate', () => {
     const response = await POST(request('POST', { productId, code: 'fee', name: 'Fee', chargeType: 'nrc', pricingMethod: 'fixed', fixedPrice: '10', currencyCode: 'EUR', markupValue: 5 }))
     expect(response.status).toBe(400)
   })
+
+  it('answers 403 before validating a malformed cost-plus payload', async () => {
+    userHasAllFeatures.mockResolvedValue(false)
+    const response = await POST(request('POST', { ...body, markupRule: 'target_margin_percent', markupValue: 150 }))
+    expect(response.status).toBe(403)
+    expect(await response.json()).toEqual({ error: 'COSTS_VIEW_REQUIRED' })
+  })
+
+  it('returns the markup of a created cost-plus charge from the RBAC answer (one lookup)', async () => {
+    const response = await POST(request('POST', { ...body, isActive: false }))
+    expect(response.status).toBe(201)
+    expect(await response.json()).toMatchObject({ pricingMethod: 'cost_plus', markupRule: 'markup_percent', markupValue: '25' })
+    expect(userHasAllFeatures).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('PUT /api/cpq/product-charges cost-plus gate', () => {
   it('refuses switching a fixed charge to cost-plus while pricing is unavailable', async () => {
     em.findOne.mockResolvedValue(charge({ pricingMethod: 'fixed', fixedPrice: '10', markupRule: null, markupValue: null }))
-    userHasAllFeatures.mockResolvedValue(true)
     assertCostPlusChargeWritable.mockRejectedValue(new QuotingError(422, 'COST_PLUS_NOT_AVAILABLE'))
     const response = await PUT(request('PUT', { id: chargeId, pricingMethod: 'cost_plus', markupRule: 'markup_percent', markupValue: 25 }))
     expect(response.status).toBe(422)
-    expect(em.flush).not.toHaveBeenCalled()
+    expect(tx.flush).not.toHaveBeenCalled()
   })
 
   it('validates a markup-only patch against the merged charge', async () => {
     em.findOne.mockResolvedValue(charge({ pricingMethod: 'fixed', fixedPrice: '10', markupRule: null, markupValue: null }))
     const response = await PUT(request('PUT', { id: chargeId, markupValue: 30 }))
     expect(response.status).toBe(400)
-    expect(em.flush).not.toHaveBeenCalled()
+    expect(await response.json()).toMatchObject({ error: 'Validation error' })
+    expect(tx.flush).not.toHaveBeenCalled()
   })
 
-  it('clears markup when a charge leaves cost-plus', async () => {
+  // I-4 / R15: the merged-charge validation would answer questions about the
+  // stored markup, so authorization must come first.
+  it.each([
+    ['markupValue 150 on a target-margin charge', { markupRule: 'target_margin_percent', markupValue: '20.0000' }, { markupValue: 150 }],
+    ['currencyCode null on an absolute-markup charge', { markupRule: 'markup_absolute', markupValue: '50.0000' }, { currencyCode: null }],
+  ])('answers 403 before the 400 a costs viewer would get (%s)', async (_label, stored, patch) => {
+    em.findOne.mockResolvedValue(charge(stored))
+    const viewer = await PUT(request('PUT', { id: chargeId, ...patch }))
+    expect(viewer.status).toBe(400)
+
+    userHasAllFeatures.mockResolvedValue(false)
+    const response = await PUT(request('PUT', { id: chargeId, ...patch }))
+    expect(response.status).toBe(403)
+    expect(await response.json()).toEqual({ error: 'COSTS_VIEW_REQUIRED' })
+    expect(tx.flush).not.toHaveBeenCalled()
+  })
+
+  it('refuses to switch a cost-plus charge away without cpq.costs.view', async () => {
+    const entity = charge()
+    em.findOne.mockResolvedValue(entity)
+    userHasAllFeatures.mockResolvedValue(false)
+    const response = await PUT(request('PUT', { id: chargeId, pricingMethod: 'fixed', fixedPrice: '99', currencyCode: 'EUR' }))
+    expect(response.status).toBe(403)
+    expect(await response.json()).toEqual({ error: 'COSTS_VIEW_REQUIRED' })
+    expect(deactivatePriceBasisElements).not.toHaveBeenCalled()
+    expect(inChargeLock).not.toHaveBeenCalled()
+    expect(entity).toMatchObject({ pricingMethod: 'cost_plus', markupRule: 'markup_percent' })
+  })
+
+  it('clears markup and deactivates price-basis elements when a charge leaves cost-plus', async () => {
     const entity = charge()
     em.findOne.mockResolvedValue(entity)
     const response = await PUT(request('PUT', { id: chargeId, pricingMethod: 'fixed', fixedPrice: '99', currencyCode: 'EUR' }))
     expect(response.status).toBe(200)
     expect(entity).toMatchObject({ pricingMethod: 'fixed', markupRule: null, markupValue: null, fixedPrice: '99' })
     expect(assertCostPlusChargeWritable).not.toHaveBeenCalled()
+    expect(deactivatePriceBasisElements).toHaveBeenCalledWith(tx, chargeId, expect.objectContaining({ organizationId: 'org', tenantId: 'tenant' }))
+    expect(tx.flush).toHaveBeenCalled()
+  })
+
+  it('checks the price basis of an activated cost-plus charge under the charge-row lock', async () => {
+    em.findOne.mockResolvedValue(charge({ isActive: false }))
+    assertCostPlusChargeHasPriceBasis.mockImplementation(async (lockTx: unknown) => {
+      // The count must run on the locked transaction, not on the request EM.
+      expect(lockTx).toBe(tx)
+      expect(inChargeLock).toHaveBeenCalledWith(chargeId, expect.objectContaining({ organizationId: 'org', tenantId: 'tenant' }), expect.any(Function))
+      throw new QuotingError(422, 'NO_PRICE_BASIS_ELEMENT')
+    })
+    const response = await PUT(request('PUT', { id: chargeId, isActive: true }))
+    expect(response.status).toBe(422)
+    expect(await response.json()).toEqual({ error: 'NO_PRICE_BASIS_ELEMENT' })
+    expect(assertCostPlusChargeHasPriceBasis).toHaveBeenCalledWith(tx, { id: chargeId, pricingMethod: 'cost_plus', isActive: true }, expect.anything())
+    expect(tx.flush).not.toHaveBeenCalled()
+  })
+
+  it('serializes markup from the RBAC answer after a cost-plus write', async () => {
+    em.findOne.mockResolvedValue(charge())
+    const response = await PUT(request('PUT', { id: chargeId, markupValue: 30 }))
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ markupRule: 'markup_percent', markupValue: '30' })
+    expect(userHasAllFeatures).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('DELETE /api/cpq/product-charges', () => {
+  it('soft-deletes the charge and cascades to its cost elements in the same flush', async () => {
+    const entity: Record<string, unknown> = charge({ pricingMethod: 'fixed', fixedPrice: '10', markupRule: null, markupValue: null })
+    em.findOne.mockResolvedValue(entity)
+    const response = await DELETE(request('DELETE', { id: chargeId }))
+    expect(response.status).toBe(200)
+    expect(entity.deletedAt).toBeInstanceOf(Date)
+    expect(deleteChargeElements).toHaveBeenCalledWith(em, chargeId, { organizationId: 'org', tenantId: 'tenant', deletedAt: null })
+    expect(em.flush).toHaveBeenCalled()
+  })
+
+  it('refuses to delete a cost-plus charge without cpq.costs.view', async () => {
+    const entity = charge()
+    em.findOne.mockResolvedValue(entity)
+    userHasAllFeatures.mockResolvedValue(false)
+    const response = await DELETE(request('DELETE', { id: chargeId }))
+    expect(response.status).toBe(403)
+    expect(entity).not.toHaveProperty('deletedAt')
+    expect(deleteChargeElements).not.toHaveBeenCalled()
   })
 })
 

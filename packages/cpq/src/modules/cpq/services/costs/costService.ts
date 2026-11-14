@@ -211,10 +211,6 @@ export class CpqCostService {
   }
 
   /**
-   * Element writes serialize on the owning charge row (PESSIMISTIC_WRITE), so
-   * two concurrent deactivations cannot both pass the last-price-basis rule.
-   */
-  /**
    * Charges a quote line prices together, mirroring `resolveProductCharges`: the
    * offering's charges for an offering charge, the product's charges otherwise.
    * Inactive charges count too — they can be reactivated. Concurrent creates on two
@@ -229,7 +225,14 @@ export class CpqCostService {
     return [...new Set([charge.id, ...siblings.map((sibling) => sibling.id)])]
   }
 
-  private async inChargeLock<T>(chargeId: string, scope: TenantScope, execute: (tx: EntityManager, charge: CpqProductCharge) => Promise<T>): Promise<T> {
+  /**
+   * Runs `execute` in a transaction holding a PESSIMISTIC_WRITE lock on the charge
+   * row (re-read under the lock). Element writes and charge writes (activation,
+   * leaving cost-plus) both serialize here, so two concurrent writes cannot each
+   * pass the last-price-basis rule on their own snapshot. `404 Charge not found`
+   * when the charge is gone.
+   */
+  async inChargeLock<T>(chargeId: string, scope: TenantScope, execute: (tx: EntityManager, charge: CpqProductCharge) => Promise<T>): Promise<T> {
     const em = this.deps.em.fork({ clear: true, useContext: false })
     return em.transactional(async (tx) => {
       const charge = await tx.findOne(CpqProductCharge, { ...scoped(scope), id: chargeId }, { lockMode: LockMode.PESSIMISTIC_WRITE })

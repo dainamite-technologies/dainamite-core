@@ -42,6 +42,7 @@ Engine: om-auto-create-pr-loop (steps: 24, --loop: no)
 | E | 24 | Archive the Delta | group:E2 | done | |
 | E | 24-review-fix | Smoke test creates its own customer | inline | done | |
 | E | 12-review-fix-2 | Accepted quotes keep the R11 cost exemptions | inline | done | |
+| E | review1-a | Product-charge writes: costs.view before validation, charge-row lock | dispatch | done | |
 
 ## Goal
 

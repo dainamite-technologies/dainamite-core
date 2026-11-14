@@ -48,12 +48,26 @@ function serializeCharge(item: CpqProductCharge, showCosts: boolean) {
   }
 }
 
+/** `cpq.costs.view` for this request, looked up at most once (one RBAC query). */
+function costsViewGate(ctx: CpqRouteContext) {
+  let pending: Promise<boolean> | null = null
+  const allowed = () => (pending ??= canViewCosts(ctx))
+  return {
+    allowed,
+    /** `403 COSTS_VIEW_REQUIRED` without the feature. */
+    async require(): Promise<void> {
+      if (!(await allowed())) throw new QuotingError(403, 'COSTS_VIEW_REQUIRED')
+    },
+  }
+}
+type CostsViewGate = ReturnType<typeof costsViewGate>
+
 /**
  * Cost-plus writes need `cpq.costs.view` (markup is confidential), the tenant
  * toggle, and an engine that can price them (CpqCostService gate).
  */
-async function assertCostPlusWrite(ctx: CpqRouteContext): Promise<void> {
-  if (!(await canViewCosts(ctx))) throw new QuotingError(403, 'COSTS_VIEW_REQUIRED')
+async function assertCostPlusWrite(ctx: CpqRouteContext, costsView: CostsViewGate): Promise<void> {
+  await costsView.require()
   await costService(ctx).assertCostPlusChargeWritable(ctx.tenantId)
 }
 
@@ -61,6 +75,18 @@ const costService = (ctx: CpqRouteContext) => ctx.container.resolve<CpqCostServi
 
 const touchesMarkup = (body: { markupRule?: unknown; markupValue?: unknown }) =>
   body.markupRule !== undefined || body.markupValue !== undefined
+
+/**
+ * Whether a raw request body asks for cost-plus or sets markup. Checked BEFORE
+ * any shape validation (I-4 / R15), so a caller without `cpq.costs.view` gets
+ * 403, never a 400 that depends on the payload's or the stored markup. Clearing
+ * markup (`null`) on a non-cost-plus charge reveals nothing and stays open.
+ */
+function requestsCostPlus(raw: unknown): boolean {
+  if (!raw || typeof raw !== 'object') return false
+  const body = raw as Record<string, unknown>
+  return body.pricingMethod === COST_PLUS || body.markupRule != null || body.markupValue != null
+}
 
 const markupColumn = (value: number | null | undefined) =>
   value === undefined ? undefined : value === null ? null : String(value)
@@ -114,11 +140,14 @@ export async function POST(req: Request) {
     const ctx = await resolveCpqRouteContext(req)
     if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-    const body = cpqProductChargeCreateSchema.parse(await req.json())
+    const raw: unknown = await req.json()
+    const costsView = costsViewGate(ctx)
+    if (requestsCostPlus(raw)) await costsView.require()
+    const body = cpqProductChargeCreateSchema.parse(raw)
     const scope = { organizationId: ctx.organizationId, tenantId: ctx.tenantId }
     const isCostPlus = body.pricingMethod === COST_PLUS
     if (isCostPlus) {
-      await assertCostPlusWrite(ctx)
+      await assertCostPlusWrite(ctx, costsView)
       // A new charge has no cost elements yet: an active cost-plus charge is
       // refused (NO_PRICE_BASIS_ELEMENT) — create it inactive, add elements, activate.
       await costService(ctx).assertCostPlusChargeHasPriceBasis(ctx.em, { pricingMethod: COST_PLUS, isActive: body.isActive }, scope)
@@ -151,7 +180,9 @@ export async function POST(req: Request) {
     })
     await ctx.em.flush()
 
-    return NextResponse.json(serializeCharge(entity, isCostPlus), { status: 201 })
+    // Markup is shown from the RBAC answer itself, never inferred from the method.
+    const showCosts = anyChargeHasMarkup([entity]) && await costsView.allowed()
+    return NextResponse.json(serializeCharge(entity, showCosts), { status: 201 })
   } catch (err) {
     return handleArcError(err, 'cpq/product-charges.POST')
   }
@@ -162,59 +193,76 @@ export async function PUT(req: Request) {
     const ctx = await resolveCpqRouteContext(req)
     if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-    const body = cpqProductChargeUpdateSchema.parse(await req.json())
+    // Authorization precedes every shape check (I-4 / R15): with a 400 first, the
+    // merged-charge validation below would answer questions about the STORED
+    // markup (e.g. "markupValue 150 is invalid" iff the rule is target_margin).
+    const raw: unknown = await req.json()
+    const costsView = costsViewGate(ctx)
+    if (requestsCostPlus(raw)) await costsView.require()
+    const body = cpqProductChargeUpdateSchema.parse(raw)
     const { id, ...updates } = body
     const scope = { organizationId: ctx.organizationId, tenantId: ctx.tenantId, deletedAt: null }
 
-    const entity = await ctx.em.findOne(CpqProductCharge, { id, ...scope })
-    if (!entity) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+    const found = await ctx.em.findOne(CpqProductCharge, { id, ...scope })
+    if (!found) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+    // Any write on a cost-plus charge — including switching it away, which
+    // wipes its markup and deactivates its price-basis cost elements — needs
+    // cpq.costs.view (App Spec RBAC: cost-plus charges are cost data).
+    if (found.pricingMethod === COST_PLUS) await costsView.require()
 
-    const pricingChanged = updates.pricingMethod !== undefined || updates.chargeModel !== undefined
-    const nextMethod = updates.pricingMethod ?? entity.pricingMethod
-    const toCostPlus = nextMethod === COST_PLUS
-    const markupChanged = touchesMarkup(updates)
+    // The write runs under the charge-row lock the cost-element writes take, so
+    // the "active cost-plus charge needs an active price-basis element" check
+    // and an element deactivation cannot both pass on their own snapshots.
+    const saved = await costService(ctx).inChargeLock(found.id, scope, async (tx, entity) => {
+      if (entity.pricingMethod === COST_PLUS) await costsView.require()
+      const pricingChanged = updates.pricingMethod !== undefined || updates.chargeModel !== undefined
+      const nextMethod = updates.pricingMethod ?? entity.pricingMethod
+      const toCostPlus = nextMethod === COST_PLUS
+      const markupChanged = touchesMarkup(updates)
 
-    // Re-derive the canonical split shape when pricing fields are being changed,
-    // and clear the opposite axis' fields so a partial PATCH can't leave a
-    // stale pricingTableId on a fixed charge (or a stale fixedPrice on a table
-    // charge, or a stale markup on a non-cost-plus charge) that the patch-only
-    // validator never sees.
-    const normalizedUpdates: Record<string, unknown> = { ...updates, markupValue: markupColumn(updates.markupValue) }
-    if (normalizedUpdates.markupValue === undefined) delete normalizedUpdates.markupValue
-    if (pricingChanged) {
-      const { model, source } = normalizeChargePricing({ ...entity, ...updates })
-      const sideCleared = toCostPlus
-        ? { pricingTableId: null, priceColumnKey: null }
-        : source === 'fixed'
-          ? { pricingTableId: null, priceColumnKey: null, markupRule: null, markupValue: null }
-          : { fixedPrice: null, markupRule: null, markupValue: null }
-      Object.assign(normalizedUpdates, { chargeModel: model, pricingMethod: toCostPlus ? COST_PLUS : source, ...sideCleared })
-    }
+      // Re-derive the canonical split shape when pricing fields are being changed,
+      // and clear the opposite axis' fields so a partial PATCH can't leave a
+      // stale pricingTableId on a fixed charge (or a stale fixedPrice on a table
+      // charge, or a stale markup on a non-cost-plus charge) that the patch-only
+      // validator never sees.
+      const normalizedUpdates: Record<string, unknown> = { ...updates, markupValue: markupColumn(updates.markupValue) }
+      if (normalizedUpdates.markupValue === undefined) delete normalizedUpdates.markupValue
+      if (pricingChanged) {
+        const { model, source } = normalizeChargePricing({ ...entity, ...updates })
+        const sideCleared = toCostPlus
+          ? { pricingTableId: null, priceColumnKey: null }
+          : source === 'fixed'
+            ? { pricingTableId: null, priceColumnKey: null, markupRule: null, markupValue: null }
+            : { fixedPrice: null, markupRule: null, markupValue: null }
+        Object.assign(normalizedUpdates, { chargeModel: model, pricingMethod: toCostPlus ? COST_PLUS : source, ...sideCleared })
+      }
 
-    // A partial update only refines the patched fields; validate the merged
-    // charge whenever it is (or becomes) cost-plus or its markup changes.
-    if (toCostPlus || markupChanged) {
-      const issues = chargePricingShapeIssues({ ...entity, ...normalizedUpdates } as Parameters<typeof chargePricingShapeIssues>[0])
-      if (issues.length) return NextResponse.json({ error: 'Validation error', details: issues }, { status: 400 })
-    }
-    const activating = updates.isActive === true && !entity.isActive
-    if (toCostPlus && (updates.pricingMethod === COST_PLUS || markupChanged || activating)) {
-      await assertCostPlusWrite(ctx)
-      await costService(ctx).assertCostPlusChargeHasPriceBasis(ctx.em,
-        { id: entity.id, pricingMethod: COST_PLUS, isActive: updates.isActive ?? entity.isActive }, scope)
-    }
-    if (updates.pricingTableId && updates.pricingTableId !== entity.pricingTableId) {
-      await assertPriceTable(ctx.em, updates.pricingTableId, { organizationId: ctx.organizationId, tenantId: ctx.tenantId })
-    }
+      // A partial update only refines the patched fields; validate the merged
+      // charge whenever it is (or becomes) cost-plus or its markup changes.
+      if (toCostPlus || markupChanged) {
+        const issues = chargePricingShapeIssues({ ...entity, ...normalizedUpdates } as Parameters<typeof chargePricingShapeIssues>[0])
+        if (issues.length) throw new z.ZodError(issues)
+      }
+      const activating = updates.isActive === true && !entity.isActive
+      if (toCostPlus && (updates.pricingMethod === COST_PLUS || markupChanged || activating)) {
+        await assertCostPlusWrite(ctx, costsView)
+        await costService(ctx).assertCostPlusChargeHasPriceBasis(tx,
+          { id: entity.id, pricingMethod: COST_PLUS, isActive: updates.isActive ?? entity.isActive }, scope)
+      }
+      if (updates.pricingTableId && updates.pricingTableId !== entity.pricingTableId) {
+        await assertPriceTable(tx, updates.pricingTableId, { organizationId: ctx.organizationId, tenantId: ctx.tenantId })
+      }
 
-    // Leaving cost-plus: `price_basis` is only valid on cost-plus charges, so
-    // its price-basis elements are deactivated in the same flush.
-    if (entity.pricingMethod === COST_PLUS && !toCostPlus) await costService(ctx).deactivatePriceBasisElements(ctx.em, entity.id, scope)
-    ctx.em.assign(entity, normalizedUpdates)
-    await ctx.em.flush()
+      // Leaving cost-plus: `price_basis` is only valid on cost-plus charges, so
+      // its price-basis elements are deactivated in the same flush.
+      if (entity.pricingMethod === COST_PLUS && !toCostPlus) await costService(ctx).deactivatePriceBasisElements(tx, entity.id, scope)
+      tx.assign(entity, normalizedUpdates)
+      await tx.flush()
+      return entity
+    })
 
-    const showCosts = anyChargeHasMarkup([entity]) && await canViewCosts(ctx)
-    return NextResponse.json(serializeCharge(entity, showCosts))
+    const showCosts = anyChargeHasMarkup([saved]) && await costsView.allowed()
+    return NextResponse.json(serializeCharge(saved, showCosts))
   } catch (err) {
     return handleArcError(err, 'cpq/product-charges.PUT')
   }
@@ -231,6 +279,9 @@ export async function DELETE(req: Request) {
     const scope = { organizationId: ctx.organizationId, tenantId: ctx.tenantId, deletedAt: null }
     const entity = await ctx.em.findOne(CpqProductCharge, { id, ...scope })
     if (!entity) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+    // Deleting a cost-plus charge destroys its markup and cost elements: same
+    // cpq.costs.view rule as editing it.
+    if (entity.pricingMethod === COST_PLUS) await costsViewGate(ctx).require()
 
     entity.deletedAt = new Date()
     await costService(ctx).deleteChargeElements(ctx.em, entity.id, scope)
@@ -263,7 +314,7 @@ const chargeResponseSchema = z.object({
 }).passthrough()
 const writeErrors = [
   cpqErrorDoc(400, 'Validation error (V-CHG-1)'),
-  cpqErrorDoc(403, 'COSTS_VIEW_REQUIRED — cost-plus pricing and markup need cpq.costs.view'),
+  cpqErrorDoc(403, 'COSTS_VIEW_REQUIRED — creating or editing a cost-plus charge (incl. switching it to another method), and setting markup, need cpq.costs.view; checked before any validation'),
   cpqErrorDoc(404, 'Charge not found'),
   cpqErrorDoc(422, 'COST_PLUS_DISABLED (tenant toggle off), COST_PLUS_NOT_AVAILABLE, NO_PRICE_BASIS_ELEMENT (activating a cost-plus charge without an active price-basis cost element), or WRONG_TABLE_PURPOSE (a price charge referencing a cost table)'),
 ]
@@ -294,7 +345,7 @@ export const openApi: OpenApiRouteDoc = {
       summary: 'Soft-delete a product charge',
       requestBody: { schema: z.object({ id: z.string().uuid() }) },
       responses: [{ status: 200, description: 'Deleted', schema: z.object({ success: z.boolean() }) }],
-      errors: [cpqErrorDoc(400, 'Missing id'), cpqErrorDoc(404, 'Charge not found')],
+      errors: [cpqErrorDoc(400, 'Missing id'), cpqErrorDoc(403, 'COSTS_VIEW_REQUIRED — deleting a cost-plus charge needs cpq.costs.view'), cpqErrorDoc(404, 'Charge not found')],
     },
   },
 }

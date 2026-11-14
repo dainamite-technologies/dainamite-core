@@ -48,17 +48,19 @@ import {
   getBaseCurrencyCode,
 } from './types'
 import {
+  ARC_COST_PLUS_FROZEN_KEY,
   ARC_PRICE_FROZEN_KEY,
   ARC_REPRICED_KEY,
   arcPricingInputsChanged,
   buildArcMirrorConfiguration,
-  isFrozenAmendMirrorLine,
+  isFrozenMirrorLine,
   isArcMirrorLine,
   stripArcMarkers,
   stripQuoteOnlyArcMarkers,
 } from './arcPriceFreeze'
 import type { CpqCostService } from './costs/costService'
 import { isQuoteCostLocked, resolveCostPlusInputs } from './costs/costResolution'
+import { isCostPlusItem } from './costs/costPlusItem'
 import { isArcCancelledLine, isArcTerminationLine, planArcLineRemoval, planArcLineRestore, removalCancelsItem } from './arcLineRemoval'
 
 interface QuotingServiceDeps {
@@ -463,10 +465,10 @@ export class DefaultCpqQuotingService {
     if (existingCfg?._arcMirroredName !== undefined) {
       arcMarkers._arcMirroredName = existingCfg._arcMirroredName
     }
-    // A frozen Amend mirror line keeps the subscription's stored price until
-    // a pricing input changes; then it is unfrozen, marked re-priced and
-    // priced as usual.
-    const wasFrozen = isFrozenAmendMirrorLine(existingCfg, cpqConfig.quoteType)
+    // A frozen mirror line (Amend, or the Renew line of a cost-plus item) keeps
+    // the subscription's stored price until a pricing input changes; then it is
+    // unfrozen, marked re-priced and priced as usual.
+    const wasFrozen = isFrozenMirrorLine(existingCfg, cpqConfig.quoteType)
     const pricingInputsChanged =
       wasFrozen &&
       arcPricingInputsChanged(
@@ -481,7 +483,10 @@ export class DefaultCpqQuotingService {
         update,
       )
     const staysFrozen = wasFrozen && !pricingInputsChanged
-    if (staysFrozen) arcMarkers[ARC_PRICE_FROZEN_KEY] = true
+    if (staysFrozen) {
+      arcMarkers[ARC_PRICE_FROZEN_KEY] = true
+      if (existingCfg?.[ARC_COST_PLUS_FROZEN_KEY] === true) arcMarkers[ARC_COST_PLUS_FROZEN_KEY] = true
+    }
     if (pricingInputsChanged || existingCfg?.[ARC_REPRICED_KEY] === true) arcMarkers[ARC_REPRICED_KEY] = true
     update.configuration = { ...update.configuration, ...arcMarkers }
     mergedConfig._arcMirroredFromItemId = arcMarkers._arcMirroredFromItemId
@@ -681,7 +686,7 @@ export class DefaultCpqQuotingService {
     await withAtomicFlush(em, [() => {
       for (const { line, item } of restores) {
         line.action = 'modify'
-        line.configuration = buildArcMirrorConfiguration(item.configuration, item, arcType)
+        line.configuration = buildArcMirrorConfiguration(item.configuration, item, arcType, { costPlus: isCostPlusItem(item) })
         line.charges = pickArcMirrorCharges(item, cpqConfig.currencyCode)
         line.quantity = item.quantity
         line.nrcTotal = String(item.nrcAmount ?? 0)
@@ -1077,7 +1082,7 @@ export class DefaultCpqQuotingService {
       // Frozen Amend mirror lines keep the subscription item's stored charges
       // (see arcPriceFreeze.ts) — re-pricing them would silently move the
       // contracted price of items the amendment does not touch.
-      const isFrozen = isFrozenAmendMirrorLine(cfgRecord, cpqConfig.quoteType)
+      const isFrozen = isFrozenMirrorLine(cfgRecord, cpqConfig.quoteType)
       let charges: ResolvedCharge[]
       if (isArcCancelledLine(lineConfig, cpqConfig.quoteType)) {
         // Item marked for removal: it leaves the subscription, so it adds
@@ -2874,7 +2879,7 @@ async function mirrorTargetSubscriptionItems(
       startDate: null,
       termMonths: null,
       endDate: null,
-      configuration: buildArcMirrorConfiguration(item.configuration, item, quoteType),
+      configuration: buildArcMirrorConfiguration(item.configuration, item, quoteType, { costPlus: isCostPlusItem(item) }),
       quantity: item.quantity,
       charges: pickArcMirrorCharges(item, sub.currencyCode),
       nrcTotal: String(item.nrcAmount ?? 0),

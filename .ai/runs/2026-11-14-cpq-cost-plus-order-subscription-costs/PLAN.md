@@ -21,7 +21,7 @@ Engine: om-auto-create-pr-loop (steps: 21, --loop: no)
 | B | 7 | cost_changed event | group:B3 | done | 0091fd9 |
 | B | 8 | Read APIs and redaction | group:B4 | done | 7ff047f |
 | B | 9 | Confidentiality sweep extension | group:B4 | done | cdcb3e2 |
-| C | 10 | Renew freeze | group:C1 | todo | |
+| C | 10 | Renew freeze | group:C1 | done | |
 | C | 11 | Reconfigured mirrors get cost lines | group:C1 | todo | |
 | C | 12 | Renew banner | group:C2 | todo | |
 | C | 13 | Write-back for Amend / Renew / Cancel | group:C2 | todo | |

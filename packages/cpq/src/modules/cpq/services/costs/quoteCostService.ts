@@ -18,7 +18,7 @@ import {
 import { MANUAL_COST_KEY_PREFIX, cpqCostPreviewSchema, cpqQuoteLineCostCreateSchema, cpqQuoteLineCostUpdateSchema, cpqQuoteMarkupOverrideSetSchema, type CostPreviewInput, type QuoteLineCostCreate, type QuoteLineCostUpdate, type QuoteMarkupOverrideSet } from '../../data/quote-costs'
 import { ASSET_NOT_LIVE_STATUSES, ITEM_NOT_LIVE_STATUSES } from '../../data/costs'
 import { isArcTerminationLine } from '../arcLineRemoval'
-import { isArcMirrorLine, isFrozenAmendMirrorLine } from '../arcPriceFreeze'
+import { isArcMirrorLine, isFrozenMirrorLine } from '../arcPriceFreeze'
 import { evaluateApplicability } from '../cpqPricingService'
 import { QuotingError, type DefaultCpqQuotingService } from '../cpqQuotingService'
 import { withQuotePricingWrite } from '../priceAdjustments/quotePricingWrite'
@@ -417,7 +417,7 @@ export class CpqQuoteCostService {
    * `structure` (a manual cost, a markup override): only lines the quote itself prices — never an
    * ARC mirror or cancel line. `value` (entering / confirming a stored cost): also a non-frozen ARC
    * mirror line (a Renew mirror re-priced at today's standard, a reconfigured Amend mirror), whose
-   * catalog cost lines bind at conversion (R7) — but never a cancel line or a frozen Amend mirror.
+   * catalog cost lines bind at conversion (R7) — but never a cancel line or a frozen mirror.
    */
   private async requireLine(em: EntityManager, quote: CpqQuoteConfiguration, quoteLineId: string, scope: TenantScope, mode: 'structure' | 'value') {
     const line = await em.findOne(CpqQuoteLineConfiguration, { ...scoped(scope), quoteConfigurationId: quote.id, quoteLineId })
@@ -425,7 +425,7 @@ export class CpqQuoteCostService {
     const eligible = (line.offeringId || line.productId)
       && !isArcTerminationLine(line, quote.quoteType)
       && (mode === 'value'
-        ? !isFrozenAmendMirrorLine(line.configuration, quote.quoteType)
+        ? !isFrozenMirrorLine(line.configuration, quote.quoteType)
         : !isArcMirrorLine(line.configuration, quote.quoteType))
     if (!eligible) throw new QuotingError(422, 'LINE_NOT_ELIGIBLE')
     return line

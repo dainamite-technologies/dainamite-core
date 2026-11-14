@@ -14,7 +14,7 @@ import {
   type CpqQuoteLineConfiguration,
 } from '../../data/entities'
 import { isArcCancelledLine } from '../arcLineRemoval'
-import { isFrozenAmendMirrorLine } from '../arcPriceFreeze'
+import { isFrozenMirrorLine } from '../arcPriceFreeze'
 import { evaluateApplicability } from '../cpqPricingService'
 import { ADJUSTMENT_MUTABLE_STATUSES } from '../../data/price-adjustments'
 import type { TenantScope } from '../types'
@@ -269,10 +269,10 @@ async function planQuoteCosts(params: CostResolutionParams): Promise<CostPlan> {
   const { em, quote, scope } = params
   const stats: CostResolutionStats = { skipped: null, created: 0, updated: 0, dropped: 0 }
 
-  // R1c: cancelled lines and frozen Amend mirror lines (unreconfigured) are never re-instantiated from the catalog.
+  // R1c: cancelled lines and frozen mirror lines (unreconfigured) are never re-instantiated from the catalog.
   const lines = params.lines.filter(({ lineConfig }) => (lineConfig.offeringId || lineConfig.productId)
     && !isArcCancelledLine(lineConfig, quote.quoteType)
-    && !isFrozenAmendMirrorLine(lineConfig.configuration, quote.quoteType))
+    && !isFrozenMirrorLine(lineConfig.configuration, quote.quoteType))
   // An item removed on an Amend / Renew quote leaves the subscription: its line keeps no cost
   // (catalog or manual). Line removal already drops them; this also cleans rows stored before.
   const cancelledLineIds = new Set(params.lines

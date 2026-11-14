@@ -276,10 +276,10 @@ describe('recalculate → Amend mirror lines', () => {
   })
 })
 
-describe('recalculate → Renew mirror lines (characterization, before the cost-plus Renew freeze)', () => {
-  // Today only Amend mirrors are frozen. A Renew mirror line is re-priced at
-  // today's standard price on every recalculation, even when the line carries
-  // a freeze marker (the marker is honoured on Amend quotes only).
+describe('recalculate → Renew mirror lines of non-cost-plus items (unchanged)', () => {
+  // A Renew mirror line without `_arcCostPlusFrozen` is re-priced at today's
+  // standard price on every recalculation, even when the line carries a stray
+  // `_arcPriceFrozen` (Renew honours the freeze for cost-plus items only).
   it.each([
     ['unmarked', {}],
     ['carrying a stray freeze marker', { _arcPriceFrozen: true }],
@@ -343,6 +343,82 @@ describe('removeQuoteItem → ARC mirror line becomes a cancel line', () => {
     expect(lineConfig.action).toBe('cancel')
     expect(costs.map((row) => row.deletedAt)).toEqual([expect.any(Date), expect.any(Date)])
     expect(em.find).toHaveBeenCalledWith(CpqQuoteLineCost, expect.objectContaining({ quoteConfigurationId: 'cpq-1', quoteLineId: { $in: ['ql-1'] }, deletedAt: null }), expect.anything())
+  })
+})
+
+describe('Renew mirror lines of cost-plus items (Q4)', () => {
+  const COST_PLUS_FROZEN = {
+    port_size: '1G',
+    _arcMirroredFromItemId: 'item-1',
+    _arcMirroredName: 'GIX Access Port',
+    _arcPriceFrozen: true,
+    _arcCostPlusFrozen: true,
+  }
+  const renew = (cfg: Record<string, unknown>) => {
+    const fixture = amendFixture(cfg)
+    return { cpqConfig: { ...fixture.cpqConfig, quoteType: 'renew' }, lineConfig: fixture.lineConfig }
+  }
+
+  it('keeps a frozen cost-plus Renew line at its stored price without calling the pricing engine', async () => {
+    const { em, pricingService, service } = makePricedService()
+    const { cpqConfig, lineConfig } = renew({ ...COST_PLUS_FROZEN })
+    routeEm(em, cpqConfig, lineConfig)
+    pricingService.resolveProductCharges.mockResolvedValue([mrcCharge(120)])
+
+    await service.recalculate('cpq-1', { save: true }, SCOPE)
+
+    expect(pricingService.resolveProductCharges).not.toHaveBeenCalled()
+    expect(lineConfig.mrcTotal).toBe('100')
+  })
+
+  it('stays frozen (both markers) when the UI resubmits an unchanged configuration', async () => {
+    const { em, pricingService, service } = makePricedService()
+    const { cpqConfig, lineConfig } = renew({ ...COST_PLUS_FROZEN })
+    routeEm(em, cpqConfig, lineConfig)
+
+    await service.updateQuoteItem('cpq-1', 'ql-1', { configuration: { port_size: '1G' }, quantity: 1 }, SCOPE)
+
+    expect(pricingService.resolveProductCharges).not.toHaveBeenCalled()
+    expect(lineConfig.configuration).toMatchObject({ _arcPriceFrozen: true, _arcCostPlusFrozen: true })
+  })
+
+  it('unfreezes both markers and re-prices when a pricing input changes', async () => {
+    const { em, pricingService, service } = makePricedService()
+    const { cpqConfig, lineConfig } = renew({ ...COST_PLUS_FROZEN })
+    routeEm(em, cpqConfig, lineConfig)
+    pricingService.resolveProductCharges.mockResolvedValue([mrcCharge(150)])
+
+    await service.updateQuoteItem('cpq-1', 'ql-1', { configuration: { port_size: '10G' } }, SCOPE)
+
+    const stored = lineConfig.configuration as Record<string, unknown>
+    expect(pricingService.resolveProductCharges).toHaveBeenCalled()
+    expect(stored._arcPriceFrozen).toBeUndefined()
+    expect(stored._arcCostPlusFrozen).toBeUndefined()
+    expect(lineConfig.mrcTotal).toBe('150')
+  })
+
+  it('never lets a client set the cost-plus freeze marker', async () => {
+    const { em, pricingService, service } = makePricedService()
+    const { cpqConfig, lineConfig } = renew({ port_size: '1G', _arcMirroredFromItemId: 'item-1', _arcMirroredName: 'GIX Access Port' })
+    routeEm(em, cpqConfig, lineConfig)
+    pricingService.resolveProductCharges.mockResolvedValue([mrcCharge(120)])
+
+    await service.updateQuoteItem('cpq-1', 'ql-1', { configuration: { port_size: '1G', _arcPriceFrozen: true, _arcCostPlusFrozen: true } }, SCOPE)
+
+    expect(pricingService.resolveProductCharges).toHaveBeenCalled()
+    expect((lineConfig.configuration as Record<string, unknown>)._arcCostPlusFrozen).toBeUndefined()
+  })
+
+  it('an offering switched to cost-plus after the sale does not freeze: an unmarked Renew mirror is re-priced from the current offering', async () => {
+    // Q4: only the item's stored charges decide the freeze. The mirror builder saw flat charges, so no marker.
+    const { em, pricingService, service } = makePricedService()
+    const { cpqConfig, lineConfig } = renew({ port_size: '1G', _arcMirroredFromItemId: 'item-1', _arcMirroredName: 'GIX Access Port' })
+    routeEm(em, cpqConfig, lineConfig)
+    pricingService.resolveProductCharges.mockResolvedValue([{ ...mrcCharge(0), pricingMethod: 'cost_plus', unitPrice: null, totalPrice: 0 }])
+
+    await service.recalculate('cpq-1', { save: true }, SCOPE)
+
+    expect(pricingService.resolveProductCharges).toHaveBeenCalledTimes(1)
   })
 })
 

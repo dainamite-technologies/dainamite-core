@@ -23,8 +23,21 @@ export const ARC_PRICE_FROZEN_KEY = '_arcPriceFrozen'
  */
 export const ARC_REPRICED_KEY = '_arcRepriced'
 
+/**
+ * Set on a Renew mirror line of a cost-plus item (feature spec Q4) beside `_arcPriceFrozen`: the frozen
+ * Renew line keeps its contracted charges until the rep reconfigures it.
+ */
+export const ARC_COST_PLUS_FROZEN_KEY = '_arcCostPlusFrozen'
+
+/**
+ * Set when a mirror line's pricing inputs change (Amend or Renew; un-freezing an Amend or cost-plus Renew
+ * line sets it too). Only a mirror line carrying it gets catalog cost lines (Q13) and writes costs back at
+ * activation (Q5).
+ */
+export const ARC_RECONFIGURED_KEY = '_arcReconfigured'
+
 /** Markers that describe quote-time pricing state and never leave the quote. */
-const QUOTE_ONLY_ARC_KEYS = [ARC_PRICE_FROZEN_KEY, ARC_REPRICED_KEY] as const
+const QUOTE_ONLY_ARC_KEYS = [ARC_PRICE_FROZEN_KEY, ARC_REPRICED_KEY, ARC_COST_PLUS_FROZEN_KEY, ARC_RECONFIGURED_KEY] as const
 
 const ARC_MARKER_PREFIX = '_arc'
 
@@ -44,26 +57,34 @@ export function isArcMirrorLine(configuration: Record<string, unknown> | null | 
   return (quoteType === 'amend' || quoteType === 'renew' || quoteType === 'cancel') && typeof configuration?._arcMirroredFromItemId === 'string'
 }
 
-export function isFrozenAmendMirrorLine(
+/**
+ * A mirror line that keeps the item's stored charges: an Amend mirror line carrying `_arcPriceFrozen`, or a
+ * Renew mirror line carrying both `_arcPriceFrozen` and `_arcCostPlusFrozen` (a cost-plus item, Q4).
+ */
+export function isFrozenMirrorLine(
   configuration: Record<string, unknown> | null | undefined,
   quoteType: string | null | undefined,
 ): boolean {
-  return (
-    quoteType === 'amend' &&
-    typeof configuration?._arcMirroredFromItemId === 'string' &&
-    isArcPriceFrozen(configuration)
-  )
+  if (typeof configuration?._arcMirroredFromItemId !== 'string' || !isArcPriceFrozen(configuration)) return false
+  return quoteType === 'amend' || (quoteType === 'renew' && configuration?.[ARC_COST_PLUS_FROZEN_KEY] === true)
+}
+
+/** Whether a mirror line was reconfigured (a pricing input changed): the only mirror line kind with catalog cost lines. */
+export function isArcReconfigured(configuration: Record<string, unknown> | null | undefined): boolean {
+  return configuration?.[ARC_RECONFIGURED_KEY] === true
 }
 
 /**
  * Configuration for a mirror line: the item's configuration plus the ARC
- * markers. Only Amend lines are frozen — Renew re-prices by product decision
- * and Cancel lines are not priced.
+ * markers. Amend lines are frozen; Renew lines are frozen only for a cost-plus
+ * item (`options.costPlus`, feature spec Q4), otherwise Renew re-prices by
+ * product decision. Cancel lines are not priced.
  */
 export function buildArcMirrorConfiguration(
   itemConfiguration: Record<string, unknown> | null | undefined,
   item: { id: string; name: string },
   quoteType: ArcMirrorQuoteType,
+  options: { costPlus?: boolean } = {},
 ): Record<string, unknown> {
   return {
     // An item's configuration can carry markers from an earlier ARC quote
@@ -72,6 +93,9 @@ export function buildArcMirrorConfiguration(
     _arcMirroredFromItemId: item.id,
     _arcMirroredName: item.name,
     ...(quoteType === 'amend' ? { [ARC_PRICE_FROZEN_KEY]: true } : {}),
+    ...(quoteType === 'renew' && options.costPlus === true
+      ? { [ARC_PRICE_FROZEN_KEY]: true, [ARC_COST_PLUS_FROZEN_KEY]: true }
+      : {}),
   }
 }
 

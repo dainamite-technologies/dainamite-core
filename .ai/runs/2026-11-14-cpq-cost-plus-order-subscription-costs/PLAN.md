@@ -21,13 +21,13 @@ Engine: om-auto-create-pr-loop (steps: 21, --loop: no)
 | B | 7 | cost_changed event | group:B3 | done | 0091fd9 |
 | B | 8 | Read APIs and redaction | group:B4 | done | 7ff047f |
 | B | 9 | Confidentiality sweep extension | group:B4 | done | cdcb3e2 |
-| C | 10 | Renew freeze | group:C1 | done | |
-| C | 11 | Reconfigured mirrors get cost lines | group:C1 | done | |
-| C | 12 | Renew banner | group:C2 | done | |
-| C | 13 | Write-back for Amend / Renew / Cancel | group:C2 | done | |
-| C | 14 | Merge re-point | group:C3 | done | |
-| C | 15 | Scrub CLI | group:C3 | done | |
-| C | 16 | MIGRATION.md and changeset | group:C3 | done | |
+| C | 10 | Renew freeze | group:C1 | done | cc67ea5 |
+| C | 11 | Reconfigured mirrors get cost lines | group:C1 | done | 7831f1d |
+| C | 12 | Renew banner | group:C2 | done | b1e3da8 |
+| C | 13 | Write-back for Amend / Renew / Cancel | group:C2 | done | 0f3a170 |
+| C | 14 | Merge re-point | group:C3 | done | a382317 |
+| C | 15 | Scrub CLI | group:C3 | done | a1dc794 |
+| C | 16 | MIGRATION.md and changeset | group:C3 | done | 5fbeb65 |
 | D | 17 | Order page costs and margin | group:D1 | todo | |
 | D | 18 | Subscription and asset pages costs | group:D1 | todo | |
 | D | 19 | Change History cost diffs | group:D2 | todo | |

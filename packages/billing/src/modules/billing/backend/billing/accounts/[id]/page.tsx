@@ -21,6 +21,9 @@ import { normalizeCrudServerError } from '@open-mercato/ui/backend/utils/serverE
 import { AccountForm, type AccountFormValues } from '../../../../components/AccountForm'
 import { DetailCard, DetailField } from '../../../../components/DetailFields'
 import { PrepaidPanel } from '../../../../components/PrepaidPanel'
+import { CustomerLabel } from '../../../../components/CustomerLabel'
+import { fetchCustomerNames } from '../../../../components/customerNames'
+import { SUPPORTED_INVOICE_LANGUAGES } from '../../../../lib/invoiceLanguages'
 
 /**
  * `/backend/billing/accounts/[id]` — Billing Account detail.
@@ -39,6 +42,7 @@ import { PrepaidPanel } from '../../../../components/PrepaidPanel'
 type AccountRow = {
   id: string
   customer_id: string
+  customer_kind: 'company' | 'person'
   name: string
   currency_code: string
   bill_cycle: 'weekly' | 'monthly' | 'quarterly' | 'annually'
@@ -95,6 +99,7 @@ function formatDate(value: string | null | undefined): string {
 function toFormValues(row: AccountRow): AccountFormValues {
   return {
     customerId: row.customer_id,
+    customerKind: row.customer_kind ?? 'company',
     name: row.name,
     currencyCode: row.currency_code,
     billCycle: row.bill_cycle,
@@ -123,6 +128,20 @@ function toFormValues(row: AccountRow): AccountFormValues {
 
 function AccountView({ row }: { row: AccountRow }) {
   const t = useT()
+  const customerKind = row.customer_kind ?? 'company'
+  const [customerName, setCustomerName] = React.useState<string | null>(null)
+  React.useEffect(() => {
+    let cancelled = false
+    void fetchCustomerNames([{ customerId: row.customer_id, customerKind }]).then((names) => {
+      if (!cancelled) setCustomerName(names[row.customer_id]?.name ?? null)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [row.customer_id, customerKind])
+  const languageLabel =
+    SUPPORTED_INVOICE_LANGUAGES.find((language) => language.code === row.invoice_language)?.label ??
+    row.invoice_language
   const addr = row.invoice_address
   const addressText = addr
     ? [
@@ -137,8 +156,13 @@ function AccountView({ row }: { row: AccountRow }) {
     : ''
   return (
     <DetailCard>
-      <DetailField label={t('billing.accounts.form.customer_id', 'Customer ID')}>
-        <span className="font-mono text-xs">{row.customer_id}</span>
+      <DetailField label={t('billing.accounts.columns.customer', 'Customer')}>
+        <CustomerLabel
+          customerId={row.customer_id}
+          customerKind={customerKind}
+          name={customerName}
+          linkToCustomer
+        />
       </DetailField>
       <DetailField label={t('billing.accounts.columns.currency', 'Currency')}>
         {row.currency_code}
@@ -170,7 +194,7 @@ function AccountView({ row }: { row: AccountRow }) {
         {row.invoice_email}
       </DetailField>
       <DetailField label={t('billing.accounts.form.invoice_language', 'Invoice language')}>
-        {row.invoice_language}
+        {languageLabel}
       </DetailField>
       <DetailField label={t('billing.accounts.form.tax_id', 'Tax ID')}>
         {row.tax_id || '—'}

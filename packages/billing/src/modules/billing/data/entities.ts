@@ -30,6 +30,7 @@ import { Entity, Index, PrimaryKey, Property, Unique } from '@mikro-orm/decorato
 })
 export class BillingAccount {
   [OptionalProps]?:
+    | 'customerKind'
     | 'taxId'
     | 'lastBillDate'
     | 'billingMode'
@@ -53,6 +54,12 @@ export class BillingAccount {
   // module — see SPEC-001 cross-package data rule.
   @Property({ name: 'customer_id', type: 'text' })
   customerId!: string
+
+  // Spec E (B2C): which customers collection `customer_id` points into —
+  // 'company' | 'person'. Drives the lookup + label only; immutable after
+  // create, like `customer_id`.
+  @Property({ name: 'customer_kind', type: 'text', default: 'company' })
+  customerKind: 'company' | 'person' = 'company'
 
   @Property({ type: 'text' })
   name!: string

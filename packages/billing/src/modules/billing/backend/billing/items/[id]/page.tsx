@@ -2,7 +2,7 @@
 import * as React from 'react'
 import Link from 'next/link'
 import { Pencil } from 'lucide-react'
-import { useParams, useRouter } from 'next/navigation'
+import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { Page, PageBody, PageHeader } from '@open-mercato/ui/backend/Page'
 import { FormHeader } from '@open-mercato/ui/backend/forms'
@@ -22,6 +22,7 @@ import {
   type ItemFormValues,
 } from '../../../../components/ItemForm'
 import { DetailCard, DetailField } from '../../../../components/DetailFields'
+import { resolveItemReturnTarget } from '../../../../lib/navigation'
 
 /**
  * `/backend/billing/items/[id]` — Billing Item detail.
@@ -189,6 +190,10 @@ export default function BillingItemDetailPage(props: { params?: { id?: string } 
   // `[id]` segment arrives as a page prop; `useParams()` is the fallback.
   const urlParams = useParams<{ id: string }>()
   const itemId = (props.params?.id ?? urlParams?.id ?? '') as string
+  // Spec E (D23): back / after-delete return to the owning account, unless
+  // the item was opened from the global Items list (`?from=items`).
+  const searchParams = useSearchParams()
+  const from = searchParams?.get('from') ?? null
 
   const [row, setRow] = React.useState<BillingItemRow | null>(null)
   const [loading, setLoading] = React.useState(true)
@@ -283,13 +288,13 @@ export default function BillingItemDetailPage(props: { params?: { id?: string } 
         body: JSON.stringify({ id: row.id }),
       })
       flash(t('billing.items.detail.delete.success', 'Item deleted'), 'success')
-      router.push('/backend/billing/items')
+      router.push(resolveItemReturnTarget({ from, billAccountId: row.bill_account_id }))
     } catch (err) {
       const { message } = normalizeCrudServerError(err)
       flash(message || t('billing.items.detail.delete.error', 'Delete failed'), 'error')
       setDeleting(false)
     }
-  }, [confirm, router, row, t])
+  }, [confirm, from, router, row, t])
 
   if (error) {
     return (
@@ -316,7 +321,7 @@ export default function BillingItemDetailPage(props: { params?: { id?: string } 
     <Page>
       <FormHeader
         mode="detail"
-        backHref="/backend/billing/items"
+        backHref={resolveItemReturnTarget({ from, billAccountId: row.bill_account_id })}
         entityTypeLabel={t('billing.items.detail.title', 'Billing Item')}
         title={row.description}
         statusBadge={

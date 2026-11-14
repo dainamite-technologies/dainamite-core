@@ -36,6 +36,8 @@ export type Scope = {
 
 export type AccountSeed = {
   customerId: string
+  /** 'company' (default when omitted) | 'person' — B2C accounts (billing Spec E). */
+  customerKind?: 'company' | 'person'
   name: string
   currencyCode: string
   billCycle: 'monthly' | 'quarterly' | 'annually' | 'weekly'

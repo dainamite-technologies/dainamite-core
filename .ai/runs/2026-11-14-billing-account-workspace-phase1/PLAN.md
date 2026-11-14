@@ -9,18 +9,18 @@ Packages: `@dainamite/billing`, `@dainamite/cpq-billing-connector`
 
 | Phase | Step | Title | Status |
 |-------|------|-------|--------|
-| 1 | 1.1 | Invoice-language registry + validators | todo |
-| 1 | 1.2 | `customer_kind` on BillingAccount (entity, migration, validators, command, API) | todo |
-| 1 | 1.3 | Connector passes `customerKind` | todo |
-| 2 | 2.1 | Customer lookup + prefill helpers (pure) | todo |
-| 2 | 2.2 | AccountForm: Company/Person switch, prefill, language select | todo |
-| 2 | 2.3 | Customer name + kind on account list and detail | todo |
-| 3 | 3.1 | Return-target resolver (pure) | todo |
-| 3 | 3.2 | Item create/detail/delete navigation | todo |
-| 4 | 4.1 | i18n (en, pl) | todo |
-| 4 | 4.2 | Demo seed: one person account | todo |
-| 4 | 4.3 | Integration test TC-BILL-004 | todo |
-| 4 | 4.4 | Docs, CHANGELOG, validation gate | todo |
+| 1 | 1.1 | Invoice-language registry + validators | done |
+| 1 | 1.2 | `customer_kind` on BillingAccount (entity, migration, validators, command, API) | done |
+| 1 | 1.3 | Connector passes `customerKind` | done |
+| 2 | 2.1 | Customer lookup + prefill helpers (pure) | done |
+| 2 | 2.2 | AccountForm: Company/Person switch, prefill, language select | done |
+| 2 | 2.3 | Customer name + kind on account list and detail | done |
+| 3 | 3.1 | Return-target resolver (pure) | done |
+| 3 | 3.2 | Item create/detail/delete navigation | done |
+| 4 | 4.1 | i18n (en, pl) | done |
+| 4 | 4.2 | Demo seed: one person account | done |
+| 4 | 4.3 | Integration test TC-BILL-004 | written, not run (needs migration applied) |
+| 4 | 4.4 | Docs, CHANGELOG, validation gate | done |
 
 ## Goal
 

@@ -1,5 +1,7 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { BillingAccount, BillingItem, BillingAccountUsage } from '../../data/entities'
+import type { CustomerKind } from '../../data/validators'
+import type { InvoiceLanguageCode } from '../invoiceLanguages'
 
 /**
  * Self-contained billing test-data seed.
@@ -32,8 +34,10 @@ const ACCOUNT_NAME_PREFIX = 'Demo — '
 type DemoAccountSpec = {
   name: string
   customerId: string
+  // Spec E: 'person' = a B2C account. Omitted → 'company'.
+  customerKind?: CustomerKind
   currencyCode: string
-  invoiceLanguage: string
+  invoiceLanguage: InvoiceLanguageCode
 }
 
 type DemoItemSpec = {
@@ -80,6 +84,20 @@ const ACCOUNTS: Array<{
     },
     items: [
       { ref: `${SRC}-gx-rec`, type: 'recurring', description: 'Cloud plan (monthly)', unitPrice: 49 },
+    ],
+    usage: [],
+  },
+  {
+    // B2C: a private person on a flat monthly internet plan, invoiced in Polish.
+    account: {
+      name: `${ACCOUNT_NAME_PREFIX}Jan Kowalski`,
+      customerId: 'demo-cust-jan-kowalski',
+      customerKind: 'person',
+      currencyCode: 'PLN',
+      invoiceLanguage: 'pl',
+    },
+    items: [
+      { ref: `${SRC}-jk-rec`, type: 'recurring', description: 'Internet 300 Mb/s (miesięcznie)', unitPrice: 79 },
     ],
     usage: [],
   },
@@ -130,6 +148,7 @@ export async function seedBillingDemo(
       account = em.create(BillingAccount, {
         ...scope,
         customerId: spec.account.customerId,
+        customerKind: spec.account.customerKind ?? 'company',
         name: spec.account.name,
         currencyCode: spec.account.currencyCode,
         billCycle: 'monthly',

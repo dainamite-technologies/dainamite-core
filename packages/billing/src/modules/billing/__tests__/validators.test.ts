@@ -20,6 +20,7 @@ import {
   rateJsonUsageVolume,
   validateRateJson,
 } from '../data/validators'
+import { DEFAULT_INVOICE_LANGUAGE, SUPPORTED_INVOICE_LANGUAGES } from '../lib/invoiceLanguages'
 
 describe('rate_json — one_time', () => {
   it('accepts a positive amount', () => {
@@ -367,6 +368,45 @@ describe('billingAccountCreateSchema', () => {
     expect(() => billingAccountCreateSchema.parse(withoutTenant)).toThrow()
     void tenantId
   })
+  // Spec E — B2C accounts + invoice-language picklist.
+  it('defaults customerKind to company', () => {
+    expect(billingAccountCreateSchema.parse(validAccountCreate).customerKind).toBe('company')
+  })
+
+  it('accepts customerKind person', () => {
+    const parsed = billingAccountCreateSchema.parse({ ...validAccountCreate, customerKind: 'person' })
+    expect(parsed.customerKind).toBe('person')
+  })
+
+  it('rejects an unknown customerKind', () => {
+    expect(() =>
+      billingAccountCreateSchema.parse({ ...validAccountCreate, customerKind: 'household' }),
+    ).toThrow()
+  })
+
+  it('accepts every template-supported invoice language, case/space tolerant', () => {
+    for (const { code } of SUPPORTED_INVOICE_LANGUAGES) {
+      const parsed = billingAccountCreateSchema.parse({
+        ...validAccountCreate,
+        invoiceLanguage: ` ${code.toUpperCase()} `,
+      })
+      expect(parsed.invoiceLanguage).toBe(code)
+    }
+  })
+
+  it('rejects an invoice language the template does not support', () => {
+    expect(() =>
+      billingAccountCreateSchema.parse({ ...validAccountCreate, invoiceLanguage: 'de' }),
+    ).toThrow()
+  })
+
+  it('defaults invoiceLanguage when omitted', () => {
+    const { invoiceLanguage, ...withoutLanguage } = validAccountCreate
+    void invoiceLanguage
+    expect(billingAccountCreateSchema.parse(withoutLanguage).invoiceLanguage).toBe(
+      DEFAULT_INVOICE_LANGUAGE,
+    )
+  })
 })
 
 describe('billingAccountUpdateSchema', () => {
@@ -397,6 +437,16 @@ describe('billingAccountUpdateSchema', () => {
   it('does not declare customerId (immutable per spec)', () => {
     expect('customerId' in billingAccountUpdateSchema.shape).toBe(false)
   })
+
+  it('does not declare customerKind (immutable per spec)', () => {
+    expect('customerKind' in billingAccountUpdateSchema.shape).toBe(false)
+  })
+
+  it('validates invoiceLanguage against supported languages', () => {
+    const base = { tenantId: TENANT, organizationId: ORG, id: ACCOUNT }
+    expect(billingAccountUpdateSchema.parse({ ...base, invoiceLanguage: 'PL' }).invoiceLanguage).toBe('pl')
+    expect(() => billingAccountUpdateSchema.parse({ ...base, invoiceLanguage: 'fr' })).toThrow()
+  })
 })
 
 describe('billingAccountListQuerySchema', () => {
@@ -414,6 +464,11 @@ describe('billingAccountListQuerySchema', () => {
     const parsed = billingAccountListQuerySchema.parse({})
     expect(parsed.page).toBe(1)
     expect(parsed.pageSize).toBe(50)
+  })
+
+  it('accepts a customerKind filter and rejects unknown kinds', () => {
+    expect(billingAccountListQuerySchema.parse({ customerKind: 'person' }).customerKind).toBe('person')
+    expect(() => billingAccountListQuerySchema.parse({ customerKind: 'robot' })).toThrow()
   })
 })
 

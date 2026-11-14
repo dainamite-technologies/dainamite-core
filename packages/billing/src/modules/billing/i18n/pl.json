@@ -63,7 +63,7 @@
   "billing.accounts.form.error.name_required": "Nazwa jest wymagana",
   "billing.accounts.form.error.next_bill_date_required": "Data następnego rozliczenia jest wymagana",
   "billing.accounts.form.invoice_email": "E-mail do faktur",
-  "billing.accounts.form.invoice_language": "Język faktury (ISO 639-1)",
+  "billing.accounts.form.invoice_language": "Język faktury",
   "billing.accounts.form.mode.locked": "Niezmienne — ustalane przy tworzeniu konta.",
   "billing.accounts.form.mode.title": "Tryb rozliczeń i kredyt",
   "billing.accounts.form.name": "Nazwa",
@@ -440,5 +440,13 @@
   "billing.usage.form.uom_code.help": "Musi dokładnie odpowiadać jednostce na pozycji billingowej typu usage dla tego konta — bez konwersji.",
   "billing.usage.form.uom_code.placeholder": "api_request, gb, seat, …",
   "billing.usage.rated.no": "Nierozliczone",
-  "billing.usage.rated.yes": "Rozliczone"
+  "billing.usage.rated.yes": "Rozliczone",
+  "billing.accounts.form.customer_kind": "Typ klienta",
+  "billing.accounts.kind.company": "Firma",
+  "billing.accounts.kind.person": "Osoba",
+  "billing.accounts.form.customer.company": "Firma",
+  "billing.accounts.form.customer.person": "Osoba",
+  "billing.accounts.form.customer.placeholder_person": "Szukaj osób po nazwisku lub e-mailu…",
+  "billing.accounts.form.customer.prefill_hint": "Nazwa, e-mail do faktur i adres są uzupełniane z karty klienta, jeśli pola są puste.",
+  "billing.accounts.filters.customer_kind": "Typ klienta"
 }

@@ -2,6 +2,10 @@ import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import { BillingApiClient, type Scope, type AccountSeed } from '../lib/billingApiClient'
 import { mapSubscriptionItemsToBillingItems } from '../lib/chargeMapper'
 import type { CpqSubscriptionItem } from '../lib/chargeMapper'
+import {
+  DEFAULT_INVOICE_LANGUAGE,
+  isSupportedInvoiceLanguage,
+} from '@dainamite/billing/modules/billing/lib/invoiceLanguages'
 
 /**
  * Subscriber: `cpq.subscription.activated` → billing onboarding.
@@ -31,11 +35,13 @@ export const metadata = {
   id: 'cpq-billing-connector:subscription-activated',
 }
 
-type ActivatedPayload = {
+export type ActivatedPayload = {
   tenantId: string
   organizationId: string
   subscriptionId: string
   customerId: string
+  /** 'company' | 'person'. Omitted → billing defaults to 'company'. */
+  customerKind?: 'company' | 'person'
   currencyCode: string
   /** Optional richer customer fields — used when present, otherwise placeholders. */
   customerName?: string
@@ -68,16 +74,28 @@ function todayIsoDate(): string {
   return new Date().toISOString().slice(0, 10)
 }
 
-function buildAccountSeed(payload: ActivatedPayload): AccountSeed {
+/**
+ * Billing only accepts invoice languages its document template supports.
+ * An unsupported code from upstream must not fail onboarding (the persistent
+ * queue would retry forever), so it falls back to billing's default — the
+ * operator can change it on the account afterwards.
+ */
+function resolveInvoiceLanguage(raw: string | undefined): string {
+  const code = (raw ?? '').trim().toLowerCase()
+  return isSupportedInvoiceLanguage(code) ? code : DEFAULT_INVOICE_LANGUAGE
+}
+
+export function buildAccountSeed(payload: ActivatedPayload): AccountSeed {
   return {
     customerId: payload.customerId,
+    ...(payload.customerKind ? { customerKind: payload.customerKind } : {}),
     name: payload.customerName ?? `Customer ${payload.customerId}`,
     currencyCode: payload.currencyCode,
     billCycle: payload.billCycle ?? 'monthly',
     billCycleAnchor: payload.billCycleAnchor ?? '1',
     invoiceEmail:
       payload.invoiceEmail ?? `billing+${payload.customerId}@invalid.local`,
-    invoiceLanguage: payload.invoiceLanguage ?? 'en',
+    invoiceLanguage: resolveInvoiceLanguage(payload.invoiceLanguage),
     invoiceAddress: payload.invoiceAddress ?? {
       line1: 'TBD',
       city: 'TBD',

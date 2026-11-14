@@ -10,10 +10,24 @@ import {
   SelectValue,
 } from '@open-mercato/ui/primitives/select'
 import { Switch } from '@open-mercato/ui/primitives/switch'
+import { SegmentedControl, SegmentedControlItem } from '@open-mercato/ui/primitives/segmented-control'
+import { Building2, User } from 'lucide-react'
 import { Kbd, KbdShortcut } from '@open-mercato/ui/primitives/kbd'
 import { ComboboxInput, type ComboboxOption } from '@open-mercato/ui/backend/inputs'
 import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
+import type { CustomerKind } from '../data/validators'
+import {
+  applyCustomerPrefill,
+  customerEndpoint,
+  extractItems,
+  mapPrimaryAddress,
+  toCustomerSummary,
+  type CustomerSummary,
+  type PrefillAddress,
+} from '../lib/customerLookup'
+import { DEFAULT_INVOICE_LANGUAGE, SUPPORTED_INVOICE_LANGUAGES } from '../lib/invoiceLanguages'
+import { fetchCustomerAddressRows } from './customerNames'
 
 /**
  * Shared form for Billing Account create + edit.
@@ -33,10 +47,17 @@ import { useT } from '@open-mercato/shared/lib/i18n/context'
  * disables `customerId` and `currencyCode` per the spec
  * ("immutable per spec — create a new account if the customer FK
  * changes" — see `billingAccountUpdateSchema`).
+ *
+ * Spec E (B2C): the customer can be a company or a person
+ * (`customerKind`, immutable after create). Picking a customer prefills
+ * name / invoice email / invoice address — only into empty fields, and a
+ * prefill that the operator has not touched is rolled back when they pick a
+ * different customer or switch kind.
  */
 
 export type AccountFormValues = {
   customerId: string
+  customerKind: CustomerKind
   name: string
   currencyCode: string
   billCycle: 'weekly' | 'monthly' | 'quarterly' | 'annually'
@@ -70,12 +91,13 @@ export type AccountFormProps = {
 
 const EMPTY_VALUES: AccountFormValues = {
   customerId: '',
+  customerKind: 'company',
   name: '',
   currencyCode: 'EUR',
   billCycle: 'monthly',
   billCycleAnchor: '1',
   invoiceEmail: '',
-  invoiceLanguage: 'en',
+  invoiceLanguage: DEFAULT_INVOICE_LANGUAGE,
   taxId: '',
   invoiceAddress: {
     line1: '',
@@ -120,47 +142,93 @@ export function AccountForm({
   const [error, setError] = React.useState<string | null>(null)
   const isEdit = mode === 'edit'
 
-  // Label cache for the customer combobox — populated as the user searches,
-  // so the picker can render "Acme Telecom" after selection instead of the
-  // raw UUID we send to the API.
-  const customerLabelCacheRef = React.useRef<Map<string, ComboboxOption>>(new Map())
+  // Customer cache for the combobox — populated as the user searches, so the
+  // picker can render "Acme Telecom" after selection instead of the raw UUID
+  // we send to the API, and so prefill has the name + email at hand.
+  const customerCacheRef = React.useRef<Map<string, CustomerSummary>>(new Map())
+  // What the last prefill wrote — used to roll it back (only where the
+  // operator has not edited it since) when the customer or kind changes.
+  const prefilledRef = React.useRef<{ name?: string; invoiceEmail?: string; address?: PrefillAddress }>({})
 
   const loadCustomerOptions = React.useCallback(
     async (query?: string): Promise<ComboboxOption[]> => {
       const params = new URLSearchParams({ page: '1', pageSize: '20' })
       const q = (query ?? '').trim()
       if (q) params.set('search', q)
-      const call = await apiCall<unknown>(`/api/customers/companies?${params.toString()}`)
+      const call = await apiCall<unknown>(`${customerEndpoint(values.customerKind)}?${params.toString()}`)
       if (!call.ok || call.result == null) return []
-      const raw = call.result as { items?: unknown } | unknown[]
-      const items: Array<Record<string, unknown>> = Array.isArray(raw)
-        ? (raw as Array<Record<string, unknown>>)
-        : Array.isArray((raw as { items?: unknown }).items)
-          ? ((raw as { items: unknown[] }).items as Array<Record<string, unknown>>)
-          : []
       const options: ComboboxOption[] = []
-      for (const c of items) {
-        const id = typeof c.id === 'string' ? c.id : c.id != null ? String(c.id) : ''
-        if (!id) continue
-        const label = String(c.display_name ?? c.displayName ?? c.name ?? id)
-        const emailRaw = c.primary_email ?? c.email
-        const description = typeof emailRaw === 'string' && emailRaw ? emailRaw : null
-        const opt: ComboboxOption = { value: id, label, description }
-        customerLabelCacheRef.current.set(id, opt)
-        options.push(opt)
+      for (const raw of extractItems(call.result)) {
+        const summary = toCustomerSummary(raw)
+        if (!summary) continue
+        customerCacheRef.current.set(summary.id, summary)
+        options.push({ value: summary.id, label: summary.name, description: summary.email })
       }
       return options
     },
-    [],
+    [values.customerKind],
   )
 
   const resolveCustomerLabel = React.useCallback(
-    (id: string) => customerLabelCacheRef.current.get(id)?.label ?? id,
+    (id: string) => customerCacheRef.current.get(id)?.name ?? id,
     [],
   )
   const resolveCustomerDescription = React.useCallback(
-    (id: string) => customerLabelCacheRef.current.get(id)?.description ?? null,
+    (id: string) => customerCacheRef.current.get(id)?.email ?? null,
     [],
+  )
+
+  // Pure: strip fields that still hold the last prefill (untouched by the
+  // operator). Kept free of side effects so it is safe inside state updaters.
+  const withoutUntouchedPrefill = React.useCallback((prev: AccountFormValues): AccountFormValues => {
+    const filled = prefilledRef.current
+    let next = prev
+    if (filled.name !== undefined && prev.name === filled.name) next = { ...next, name: '' }
+    if (filled.invoiceEmail !== undefined && prev.invoiceEmail === filled.invoiceEmail) {
+      next = { ...next, invoiceEmail: '' }
+    }
+    if (filled.address && JSON.stringify(prev.invoiceAddress) === JSON.stringify(filled.address)) {
+      next = { ...next, invoiceAddress: { ...EMPTY_VALUES.invoiceAddress } }
+    }
+    return next
+  }, [])
+
+  const handleKindChange = React.useCallback(
+    (next: string) => {
+      const kind: CustomerKind = next === 'person' ? 'person' : 'company'
+      if (values.customerKind === kind) return
+      const reset = { ...withoutUntouchedPrefill(values), customerKind: kind, customerId: '' }
+      prefilledRef.current = {}
+      setValues(reset)
+    },
+    [values, withoutUntouchedPrefill],
+  )
+
+  const handleCustomerChange = React.useCallback(
+    (customerId: string) => {
+      const summary = customerCacheRef.current.get(customerId) ?? null
+      const base = { ...withoutUntouchedPrefill(values), customerId }
+      const filled = applyCustomerPrefill(base, summary, null)
+      prefilledRef.current = {
+        ...(filled.name !== base.name ? { name: filled.name } : {}),
+        ...(filled.invoiceEmail !== base.invoiceEmail ? { invoiceEmail: filled.invoiceEmail } : {}),
+      }
+      setValues(filled)
+      if (!customerId) return
+      void fetchCustomerAddressRows(customerId).then((rows) => {
+        const address = mapPrimaryAddress(rows)
+        if (!address) return
+        setValues((prev) => {
+          // Ignore a late response for a customer the operator already left.
+          if (prev.customerId !== customerId) return prev
+          return applyCustomerPrefill(prev, null, address)
+        })
+        // Record what we wrote; harmless if the updater above skipped (the
+        // rollback compares values, so a non-matching address is kept).
+        prefilledRef.current = { ...prefilledRef.current, address }
+      })
+    },
+    [values, withoutUntouchedPrefill],
   )
 
   // Reset when the parent swaps `initial` (e.g. after loading the edit row).
@@ -245,48 +313,73 @@ export function AccountForm({
       if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
         event.preventDefault()
         void handleSubmit()
+      } else if (event.key === 'Escape') {
+        event.preventDefault()
+        onCancel()
       }
     },
-    [handleSubmit],
+    [handleSubmit, onCancel],
   )
 
   return (
     <div className="rounded-lg border border-border bg-card p-6" onKeyDown={handleKeyDown}>
       <div className="grid grid-cols-2 gap-4">
+        <div className="flex flex-col gap-1 text-sm col-span-2">
+          <span className="text-muted-foreground">
+            {t('billing.accounts.form.customer_kind', 'Customer type')}
+          </span>
+          {isEdit ? (
+            <span className="inline-flex items-center gap-2">
+              {values.customerKind === 'person' ? <User size={16} /> : <Building2 size={16} />}
+              {values.customerKind === 'person'
+                ? t('billing.accounts.kind.person', 'Person')
+                : t('billing.accounts.kind.company', 'Company')}
+            </span>
+          ) : (
+            <SegmentedControl
+              value={values.customerKind}
+              onValueChange={handleKindChange}
+              aria-label={t('billing.accounts.form.customer_kind', 'Customer type')}
+              className="self-start"
+            >
+              <SegmentedControlItem value="company">
+                <Building2 size={14} />
+                {t('billing.accounts.kind.company', 'Company')}
+              </SegmentedControlItem>
+              <SegmentedControlItem value="person">
+                <User size={14} />
+                {t('billing.accounts.kind.person', 'Person')}
+              </SegmentedControlItem>
+            </SegmentedControl>
+          )}
+        </div>
+
         <label className="flex flex-col gap-1 text-sm">
           <span className="text-muted-foreground">
             {isEdit
               ? t('billing.accounts.form.customer_id', 'Customer ID')
-              : t('billing.accounts.form.customer', 'Customer')}
+              : values.customerKind === 'person'
+                ? t('billing.accounts.form.customer.person', 'Person')
+                : t('billing.accounts.form.customer.company', 'Company')}
             {!isEdit ? <span className="text-destructive"> *</span> : null}
           </span>
           {isEdit ? (
             <Input value={values.customerId} disabled />
           ) : (
             <ComboboxInput
+              // Re-mount on kind switch so cached suggestions from the other
+              // collection never leak into this one.
+              key={values.customerKind}
               value={values.customerId}
-              onChange={(next) => {
-                setValues((prev) => {
-                  const customerLabel = customerLabelCacheRef.current.get(next)?.label ?? ''
-                  // Auto-fill Name with the customer's display name on the first
-                  // pick. We leave it alone if the operator has already typed
-                  // something — one customer can have multiple billing accounts
-                  // (e.g. "Acme — production" / "Acme — staging").
-                  const shouldFillName = customerLabel && !prev.name.trim()
-                  return {
-                    ...prev,
-                    customerId: next,
-                    name: shouldFillName ? customerLabel : prev.name,
-                  }
-                })
-              }}
+              onChange={handleCustomerChange}
               loadSuggestions={loadCustomerOptions}
               resolveLabel={resolveCustomerLabel}
               resolveDescription={resolveCustomerDescription}
-              placeholder={t(
-                'billing.accounts.form.customer.placeholder',
-                'Search customers by name or email…',
-              )}
+              placeholder={
+                values.customerKind === 'person'
+                  ? t('billing.accounts.form.customer.placeholder_person', 'Search people by name or email…')
+                  : t('billing.accounts.form.customer.placeholder', 'Search customers by name or email…')
+              }
               allowCustomValues={false}
             />
           )}
@@ -294,7 +387,14 @@ export function AccountForm({
             <span className="text-xs text-muted-foreground">
               {t('billing.accounts.form.customer_id.locked', 'Immutable — create a new account to re-link the customer.')}
             </span>
-          ) : null}
+          ) : (
+            <span className="text-xs text-muted-foreground">
+              {t(
+                'billing.accounts.form.customer.prefill_hint',
+                'Name, invoice email and address are prefilled from the customer record when empty.',
+              )}
+            </span>
+          )}
         </label>
 
         <label className="flex flex-col gap-1 text-sm">
@@ -399,15 +499,23 @@ export function AccountForm({
 
         <label className="flex flex-col gap-1 text-sm">
           <span className="text-muted-foreground">
-            {t('billing.accounts.form.invoice_language', 'Invoice language (ISO 639-1)')}
+            {t('billing.accounts.form.invoice_language', 'Invoice language')}
           </span>
-          <Input
+          <Select
             value={values.invoiceLanguage}
-            maxLength={5}
-            onChange={(event) =>
-              set('invoiceLanguage', event.currentTarget.value.toLowerCase())
-            }
-          />
+            onValueChange={(next) => set('invoiceLanguage', next)}
+          >
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {SUPPORTED_INVOICE_LANGUAGES.map((language) => (
+                <SelectItem key={language.code} value={language.code}>
+                  {language.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </label>
 
         <label className="flex flex-col gap-1 text-sm col-span-2">

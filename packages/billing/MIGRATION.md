@@ -12,6 +12,25 @@ billing data.
 
 ---
 
+## Spec E Phase 1 — B2C billing accounts
+
+**Migration:** `Migration20261114000000_billing_customer_kind.ts`
+
+Additive only. Adds `billing_accounts.customer_kind text not null default
+'company'`. Every existing account becomes `company`, which is what it was:
+the account form could only pick companies before this release.
+
+### Notes
+
+- Hand-written like the earlier billing migrations: `yarn mercato db
+  generate` only diffs `@app` modules, so it does not reach this package
+  module. The column mirrors `data/entities.ts` 1:1.
+- **API behaviour change:** `invoiceLanguage` is now validated against the
+  languages the invoice template supports (`en`, `pl`). Before upgrading, check
+  that no integration sends other codes. The CPQ connector falls back to `en`.
+
+---
+
 ## SPEC-002 — Prepaid balance billing (XD-304)
 
 **Migration:** `Migration20260619000000_billing_prepaid.ts`

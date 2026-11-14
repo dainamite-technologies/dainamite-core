@@ -33,6 +33,7 @@ export const metadata = routeMetadata
 const billingAccountListItemSchema = z.object({
   id: z.string().uuid(),
   customer_id: z.string(),
+  customer_kind: z.enum(['company', 'person']),
   name: z.string(),
   currency_code: z.string(),
   bill_cycle: z.string(),
@@ -71,6 +72,7 @@ const crud = makeCrudRoute({
     fields: [
       'id',
       'customer_id',
+      'customer_kind',
       'name',
       'currency_code',
       'bill_cycle',
@@ -104,6 +106,9 @@ const crud = makeCrudRoute({
       }
       if (typeof query.customerId === 'string' && query.customerId) {
         filters.customer_id = { $eq: query.customerId }
+      }
+      if (typeof query.customerKind === 'string' && query.customerKind) {
+        filters.customer_kind = { $eq: query.customerKind }
       }
       if (typeof query.currencyCode === 'string' && query.currencyCode) {
         filters.currency_code = { $eq: query.currencyCode.toUpperCase() }
@@ -190,12 +195,15 @@ export const openApi = createBillingCrudOpenApi({
   create: {
     schema: billingAccountCreateSchema,
     responseSchema: defaultCreateResponseSchema,
-    description: 'Creates a new billing account for a customer.',
+    description:
+      'Creates a new billing account for a customer — a company or a person (`customerKind`, default `company`). ' +
+      '`invoiceLanguage` must be a language supported by the invoice template (`en`, `pl`; default `en`).',
   },
   update: {
     schema: billingAccountUpdateSchema,
     responseSchema: defaultOkResponseSchema,
-    description: 'Updates a billing account. `currencyCode` and `customerId` are immutable.',
+    description:
+      'Updates a billing account. `currencyCode`, `customerId` and `customerKind` are immutable.',
   },
   del: {
     schema: z.object({ id: z.string().uuid() }),

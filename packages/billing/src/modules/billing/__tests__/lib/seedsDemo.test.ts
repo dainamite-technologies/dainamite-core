@@ -49,7 +49,21 @@ describe('seedBillingDemo', () => {
     const em = makeMockEm()
     const res = await seedBillingDemo(em, SCOPE, { now: NOW })
 
-    expect(res).toEqual({ accountsCreated: 2, itemsCreated: 3, usageCreated: 1 })
+    expect(res).toEqual({ accountsCreated: 3, itemsCreated: 4, usageCreated: 1 })
+  })
+
+  it('seeds a B2C person account invoiced in Polish next to the company accounts', async () => {
+    const em = makeMockEm()
+    await seedBillingDemo(em, SCOPE, { now: NOW })
+
+    const person = em.store.find((r) => r.name === 'Demo — Jan Kowalski') as
+      | { customerKind: string; invoiceLanguage: string }
+      | undefined
+    const company = em.store.find((r) => r.name === 'Demo — Northwind Telecom') as
+      | { customerKind: string }
+      | undefined
+    expect(person).toMatchObject({ customerKind: 'person', invoiceLanguage: 'pl' })
+    expect(company?.customerKind).toBe('company')
   })
 
   it('is idempotent — a second run creates nothing', async () => {

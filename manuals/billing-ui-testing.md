@@ -54,17 +54,27 @@ cache'owane).
 
 ### 1b. Tworzenie konta
 1. Kliknij **New account** (prawy górny róg).
-2. W polu *Customer* zacznij wpisywać nazwę klienta (np. `Acme`) — pod
-   spodem pojawi się lista pasujących firm pobrana z modułu Customers.
-   Wybierz właściwego klienta strzałkami / kliknięciem (Enter zatwierdza).
-3. *Name* uzupełni się automatycznie nazwą wybranego klienta. Zostaw tak
-   albo nadpisz, jeśli jeden klient ma kilka kont billingowych
-   (np. „Acme — produkcja" / „Acme — testy").
-4. Wypełnij pozostałe pola: *Currency* (np. `PLN`), *Bill cycle*,
-   *Cycle anchor* (`1`), *Invoice email*, adres faktury (*Line 1* + *City*
-   + *Postal code* + *Country*) oraz *Next bill date*.
-5. Kliknij **Create account** (albo wciśnij `Ctrl/Cmd + Enter`).
-6. Wracasz na listę — nowe konto jest na niej widoczne.
+2. W przełączniku *Customer type* wybierz **Company** (firma, B2B) albo
+   **Person** (osoba prywatna, B2C). Od tego zależy, w której liście
+   modułu Customers szukamy klienta.
+3. W polu *Company* / *Person* zacznij wpisywać nazwę klienta (np. `Acme`
+   albo `Kowalski`) — pod spodem pojawi się lista pasujących klientów.
+   Wybierz właściwego strzałkami / kliknięciem (Enter zatwierdza).
+4. Puste pola uzupełnią się z karty klienta: *Name* (nazwa klienta),
+   *Invoice email* (główny e-mail) i adres faktury (adres główny klienta).
+   Pola, które już wpisałeś, **nie są nadpisywane**. Zmiana klienta albo
+   typu cofa tylko te uzupełnienia, których nie edytowałeś.
+5. *Name* zostaw albo nadpisz, jeśli jeden klient ma kilka kont
+   billingowych (np. „Acme — produkcja" / „Acme — testy").
+6. *Invoice language* wybierz z listy (**English** / **Polski**) — to
+   języki, w których potrafi drukować szablon faktury.
+7. Uzupełnij resztę: *Currency* (np. `PLN`), *Bill cycle*, *Cycle anchor*
+   (`1`), brakujące pola adresu oraz *Next bill date*. *Tax ID* jest
+   opcjonalne (osoby prywatne zwykle go nie mają).
+8. Kliknij **Create account** (albo `Ctrl/Cmd + Enter`; `Esc` anuluje).
+9. Wracasz na listę — nowe konto jest widoczne, w kolumnie *Customer*
+   nazwa klienta z ikoną budynku (firma) albo sylwetki (osoba). Filtr **Customer type**
+   zawęża listę do firm albo osób.
 
 ### 1c. Szczegóły, edycja, usuwanie
 1. Kliknij wiersz konta **Acme Telecom** (albo link **Open** po prawej).
@@ -75,8 +85,13 @@ cache'owane).
 4. Kliknij **View items** — przejdziesz do listy pozycji odfiltrowanej
    do tego konta.
 5. Wróć (strzałka ← w nagłówku) i kliknij **Add item** — otworzy się
-   formularz nowej pozycji z już wybranym kontem.
-6. Wróć i kliknij **Soft delete** → potwierdź w oknie dialogowym →
+   formularz nowej pozycji z już wybranym kontem. Po **Create item**
+   (albo **Cancel**) wracasz **na stronę tego konta**, nie na listę pozycji.
+6. Na stronie konta kliknij pozycję w tabeli *Items* — strzałka ← w
+   nagłówku pozycji, a także usunięcie pozycji, prowadzą z powrotem
+   **do konta**. W polu *Customer* nazwa klienta jest linkiem do jego
+   karty w module Customers.
+7. Wróć i kliknij **Soft delete** → potwierdź w oknie dialogowym →
    konto znika z listy (jego pozycje zostają w bazie do audytu).
 
 ## 2. Pozycje rozliczeniowe (Billing Items)
@@ -101,7 +116,9 @@ cache'owane).
 5. Kliknij **Create item**.
 
 ### 2c. Szczegóły pozycji
-1. Kliknij wiersz pozycji (lub **Open**) → strona szczegółów.
+1. Kliknij wiersz pozycji (lub **Open**) → strona szczegółów. Pozycja
+   otwarta **z tej listy** wraca strzałką ← na listę pozycji; otwarta
+   **ze strony konta** — wraca do konta.
 2. W nagłówku opis pozycji i tagi (typ, ewentualnie „Currency
    mismatch" albo „Billed through…").
 3. Zmień stawkę lub opis i kliknij **Save changes**.

@@ -11,6 +11,7 @@ import {
 } from '@open-mercato/ui/backend/utils/apiCall'
 import { normalizeCrudServerError } from '@open-mercato/ui/backend/utils/serverErrors'
 import { ItemForm, type AccountOption, type AssembledItemPayload } from '../../../../components/ItemForm'
+import { ITEMS_LIST_HREF, accountHref, itemDetailHref } from '../../../../lib/navigation'
 
 /**
  * `/backend/billing/items/create` — create a Billing Item.
@@ -19,8 +20,10 @@ import { ItemForm, type AccountOption, type AssembledItemPayload } from '../../.
  * Supports `?billAccountId=<id>` deep-link so the parent account
  * page (when we add an "Add item" CTA there) can pre-select.
  *
- * POSTs `/api/billing/items`. On success, navigates to the item's
- * detail page so the operator can edit further if needed.
+ * POSTs `/api/billing/items`. Navigation (Spec E, D23): opened from an
+ * account (`?billAccountId=`) → save and cancel both return to that
+ * account; opened standalone → save goes to the new item, cancel to the
+ * Items list.
  */
 export default function CreateBillingItemPage() {
   const t = useT()
@@ -62,10 +65,12 @@ export default function CreateBillingItemPage() {
         )
         const id = call.result?.id
         flash(t('billing.items.create.success', 'Billing item created'), 'success')
-        if (id) {
-          router.push(`/backend/billing/items/${id}`)
+        if (preselectedAccountId) {
+          router.push(accountHref(preselectedAccountId))
+        } else if (id) {
+          router.push(itemDetailHref(id, { fromItemsList: true }))
         } else {
-          router.push('/backend/billing/items')
+          router.push(ITEMS_LIST_HREF)
         }
       } catch (err) {
         const { message } = normalizeCrudServerError(err)
@@ -77,12 +82,12 @@ export default function CreateBillingItemPage() {
         setSubmitting(false)
       }
     },
-    [router, t],
+    [preselectedAccountId, router, t],
   )
 
   const handleCancel = React.useCallback(() => {
-    router.push('/backend/billing/items')
-  }, [router])
+    router.push(preselectedAccountId ? accountHref(preselectedAccountId) : ITEMS_LIST_HREF)
+  }, [preselectedAccountId, router])
 
   return (
     <Page>

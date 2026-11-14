@@ -66,6 +66,7 @@ const createAccountCommand: CommandHandler<BillingAccountCreateInput, { id: stri
       organizationId: parsed.organizationId,
       tenantId: parsed.tenantId,
       customerId: parsed.customerId,
+      customerKind: parsed.customerKind,
       name: parsed.name,
       currencyCode: parsed.currencyCode,
       billCycle: parsed.billCycle,

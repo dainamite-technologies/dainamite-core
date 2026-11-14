@@ -27,6 +27,7 @@ export default function CreateBillingAccountPage() {
       try {
         const payload: Record<string, unknown> = {
           customerId: values.customerId.trim(),
+          customerKind: values.customerKind,
           name: values.name.trim(),
           currencyCode: values.currencyCode.trim().toUpperCase(),
           billCycle: values.billCycle,

@@ -63,7 +63,7 @@
   "billing.accounts.form.error.name_required": "Name is required",
   "billing.accounts.form.error.next_bill_date_required": "Next bill date is required",
   "billing.accounts.form.invoice_email": "Invoice email",
-  "billing.accounts.form.invoice_language": "Invoice language (ISO 639-1)",
+  "billing.accounts.form.invoice_language": "Invoice language",
   "billing.accounts.form.mode.locked": "Immutable — frozen at account create time.",
   "billing.accounts.form.mode.title": "Billing mode & credit",
   "billing.accounts.form.name": "Name",
@@ -440,5 +440,13 @@
   "billing.usage.form.uom_code.help": "Must exactly match the UoM on a usage Billing Item for this account — no conversion.",
   "billing.usage.form.uom_code.placeholder": "api_request, gb, seat, …",
   "billing.usage.rated.no": "Unrated",
-  "billing.usage.rated.yes": "Rated"
+  "billing.usage.rated.yes": "Rated",
+  "billing.accounts.form.customer_kind": "Customer type",
+  "billing.accounts.kind.company": "Company",
+  "billing.accounts.kind.person": "Person",
+  "billing.accounts.form.customer.company": "Company",
+  "billing.accounts.form.customer.person": "Person",
+  "billing.accounts.form.customer.placeholder_person": "Search people by name or email…",
+  "billing.accounts.form.customer.prefill_hint": "Name, invoice email and address are prefilled from the customer record when empty.",
+  "billing.accounts.filters.customer_kind": "Customer type"
 }

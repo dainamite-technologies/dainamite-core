@@ -11,6 +11,7 @@ import { DataTable } from '@open-mercato/ui/backend/DataTable'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
+import { itemDetailHref } from '../../../lib/navigation'
 
 /**
  * Billing Items admin list.
@@ -250,7 +251,7 @@ export default function BillingItemsListPage() {
           perspective={{ tableId: 'billing-items' }}
           columns={columns}
           data={rows}
-          onRowClick={(row) => router.push(`/backend/billing/items/${row.id}`)}
+          onRowClick={(row) => router.push(itemDetailHref(row.id, { fromItemsList: true }))}
           isLoading={loading}
           pagination={{
             page,

@@ -154,3 +154,24 @@ Invoices tab with Spec 0/B. Payments tab + Record payment with Spec C. Memos in 
 - 2026-11-14 — Draft from user requests: account workspace UI, B2C person accounts, invoice language picklist, return-to-account navigation.
 - 2026-11-14 — E2-Q1..E2-Q3 resolved: keep "Billing Account", prefill name/email/primary address, "Run billing" per account.
 - 2026-11-14 — Phase 1 plan: `.ai/runs/2026-11-14-billing-account-workspace-phase1/PLAN.md`. Tax-ID prefill dropped (no core field). Breadcrumbs stay static.
+
+## Implementation Status
+
+| Phase | Status | Date | Notes |
+|-------|--------|------|-------|
+| Phase 1 — Quick wins (B2C, language picklist, navigation) | Done | 2026-11-14 | Unit tests + typecheck + build green. TC-BILL-004 written, run pending the migration. |
+| Phase 2 — Workspace shell | Not Started | — | — |
+| Phase 3 — Tabs per spec | Not Started | — | Lands with Specs 0 / A / B / C / D |
+
+### Phase 1 — Detailed Progress
+- [x] `lib/invoiceLanguages.ts` registry. `invoiceLanguage` validated against it (create defaults to `en`).
+- [x] `BillingAccount.customer_kind` (entity, hand-written migration `Migration20261114000000_billing_customer_kind`, validators, create command, list field + `customerKind` filter, OpenAPI).
+- [x] Connector: optional `customerKind` passthrough. Unsupported `invoiceLanguage` falls back to `en`.
+- [x] `lib/customerLookup.ts` (pure, tested) + `components/customerNames.ts` (batched, failure-tolerant lookups).
+- [x] AccountForm: Company/Person switch, prefill (name, email, primary address) into empty fields with rollback of untouched prefill, language select, `Esc` cancels.
+- [x] Account list: customer name + kind icon, Customer type filter. Account detail: customer name linked to the customer record, language label.
+- [x] `lib/navigation.ts` resolver. Item detail back/delete and item create save/cancel return to the account. Global Items list tags `?from=items`.
+- [x] i18n en/pl, demo seed (B2C "Jan Kowalski", `pl`), manual `billing-ui-testing.md` §1b/1c/2c, `MIGRATION.md`, changeset.
+- [ ] Run `__integration__/TC-BILL-004.spec.ts` after `yarn mercato db migrate`.
+
+**Deviations:** the migration is hand-written (the generator only diffs `@app` modules; same as earlier billing migrations). Tax ID is not prefilled (core customers have no tax-ID field). Breadcrumbs stay static.

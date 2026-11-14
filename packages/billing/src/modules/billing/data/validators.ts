@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { DEFAULT_INVOICE_LANGUAGE, INVOICE_LANGUAGE_CODES } from '../lib/invoiceLanguages'
 
 // ─── Enums ───────────────────────────────────────────────────────
 
@@ -54,6 +55,13 @@ export const TOPUP_STATUSES = [
   'cancelled',
 ] as const
 export type TopupStatus = (typeof TOPUP_STATUSES)[number]
+
+// Spec E (B2C): a billing account belongs to a company or a person. Both
+// live in the customers module under one `customer_entities` id space, so
+// `customer_id` is kind-agnostic — `customer_kind` only drives the lookup
+// and the label.
+export const CUSTOMER_KINDS = ['company', 'person'] as const
+export type CustomerKind = (typeof CUSTOMER_KINDS)[number]
 
 export const STATEMENT_STATUSES = ['generated', 'sent'] as const
 export type StatementStatus = (typeof STATEMENT_STATUSES)[number]
@@ -255,14 +263,21 @@ const listPaginationBase = {
 // 4dp string at persist time.
 const moneyNonNegative = z.number().finite().nonnegative()
 
+// Invoice language must be one the document template supports (Spec E, D22).
+// Case/whitespace-tolerant on input, canonical lowercase code on output.
+const invoiceLanguageSchema = z.string().trim().toLowerCase().pipe(z.enum(INVOICE_LANGUAGE_CODES))
+
 export const billingAccountCreateSchema = scopedSchema.extend({
   customerId: z.string().min(1).max(255),
+  // Immutable after create (like customerId). Default 'company' keeps
+  // existing callers (CPQ connector, seeds) unaffected.
+  customerKind: z.enum(CUSTOMER_KINDS).default('company'),
   name: z.string().trim().min(1).max(255),
   currencyCode: z.string().trim().toUpperCase().length(3),
   billCycle: z.enum(BILL_CYCLES),
   billCycleAnchor: billCycleAnchorSchema,
   invoiceEmail: z.string().trim().email().max(320),
-  invoiceLanguage: z.string().trim().toLowerCase().min(2).max(5),
+  invoiceLanguage: invoiceLanguageSchema.default(DEFAULT_INVOICE_LANGUAGE),
   // Nullable + optional — consistent with the update schema, and the
   // cpq-billing-connector's shell-account seed sends `taxId: null`
   // for customers with no tax id.
@@ -289,7 +304,7 @@ export const billingAccountUpdateSchema = scopedSchema.extend({
   billCycle: z.enum(BILL_CYCLES).optional(),
   billCycleAnchor: billCycleAnchorSchema.optional(),
   invoiceEmail: z.string().trim().email().max(320).optional(),
-  invoiceLanguage: z.string().trim().toLowerCase().min(2).max(5).optional(),
+  invoiceLanguage: invoiceLanguageSchema.optional(),
   taxId: z.string().trim().max(64).nullable().optional(),
   invoiceAddress: invoiceAddressSchema.optional(),
   nextBillDate: z.coerce.date().optional(),
@@ -305,7 +320,8 @@ export const billingAccountUpdateSchema = scopedSchema.extend({
   // `currencyCode` is intentionally NOT updatable — currency is frozen at
   // account create time so historical invoices keep their currency context.
   // `customerId` is also immutable; create a new account if the customer
-  // FK changes.
+  // FK changes. `customerKind` follows `customerId` and is likewise not
+  // updatable.
 })
 
 export type BillingAccountUpdateInput = z.infer<typeof billingAccountUpdateSchema>
@@ -321,6 +337,7 @@ export const billingAccountListQuerySchema = z
     ...listPaginationBase,
     id: z.string().uuid().optional(),
     customerId: z.string().optional(),
+    customerKind: z.enum(CUSTOMER_KINDS).optional(),
     currencyCode: z.string().optional(),
     billCycle: z.enum(BILL_CYCLES).optional(),
     billingMode: z.enum(BILLING_MODES).optional(),

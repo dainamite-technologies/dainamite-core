@@ -11,6 +11,9 @@ import { DataTable } from '@open-mercato/ui/backend/DataTable'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
+import { CustomerLabel } from '../../../components/CustomerLabel'
+import { fetchCustomerNames } from '../../../components/customerNames'
+import type { CustomerSummary } from '../../../lib/customerLookup'
 
 /**
  * Billing Accounts admin list.
@@ -25,6 +28,7 @@ import { readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
 type BillingAccountRow = {
   id: string
   customer_id: string
+  customer_kind: 'company' | 'person'
   name: string
   currency_code: string
   bill_cycle: 'monthly' | 'quarterly' | 'annually' | 'weekly'
@@ -60,6 +64,7 @@ export default function BillingAccountsListPage() {
   const [total, setTotal] = React.useState(0)
   const [totalPages, setTotalPages] = React.useState(1)
   const [loading, setLoading] = React.useState(true)
+  const [customerNames, setCustomerNames] = React.useState<Record<string, CustomerSummary>>({})
 
   const filterDefs = React.useMemo<FilterDef[]>(
     () => [
@@ -78,6 +83,15 @@ export default function BillingAccountsListPage() {
         id: 'currencyCode',
         label: t('billing.accounts.filters.currency', 'Currency'),
         type: 'text',
+      },
+      {
+        id: 'customerKind',
+        label: t('billing.accounts.filters.customer_kind', 'Customer type'),
+        type: 'select',
+        options: [
+          { value: 'company', label: t('billing.accounts.kind.company', 'Company') },
+          { value: 'person', label: t('billing.accounts.kind.person', 'Person') },
+        ],
       },
       {
         id: 'billingMode',
@@ -120,14 +134,23 @@ export default function BillingAccountsListPage() {
       if (typeof filters.billingMode === 'string' && filters.billingMode) {
         params.set('billingMode', filters.billingMode)
       }
+      if (typeof filters.customerKind === 'string' && filters.customerKind) {
+        params.set('customerKind', filters.customerKind)
+      }
       if (filters.isActive === 'true') params.set('isActive', 'true')
       if (filters.isActive === 'false') params.set('isActive', 'false')
       const result = await readApiResultOrThrow<ListResponse>(
         `/api/billing/accounts?${params.toString()}`,
       )
-      setRows(result.items ?? [])
+      const items = result.items ?? []
+      setRows(items)
       setTotal(result.total ?? 0)
       setTotalPages(result.totalPages ?? 1)
+      // One batched lookup per customer kind for the whole page (no N+1).
+      // Names arrive after the rows; until then the raw id is shown.
+      void fetchCustomerNames(
+        items.map((row) => ({ customerId: row.customer_id, customerKind: row.customer_kind })),
+      ).then(setCustomerNames)
     } finally {
       setLoading(false)
     }
@@ -135,6 +158,7 @@ export default function BillingAccountsListPage() {
     filters.billCycle,
     filters.currencyCode,
     filters.billingMode,
+    filters.customerKind,
     filters.isActive,
     page,
     pageSize,
@@ -158,7 +182,11 @@ export default function BillingAccountsListPage() {
         accessorKey: 'customer_id',
         header: t('billing.accounts.columns.customer', 'Customer'),
         cell: ({ row }) => (
-          <span className="font-mono text-xs">{row.original.customer_id}</span>
+          <CustomerLabel
+            customerId={row.original.customer_id}
+            customerKind={row.original.customer_kind ?? 'company'}
+            name={customerNames[row.original.customer_id]?.name}
+          />
         ),
       },
       {
@@ -206,7 +234,7 @@ export default function BillingAccountsListPage() {
           ),
       },
     ],
-    [t],
+    [customerNames, t],
   )
 
   return (

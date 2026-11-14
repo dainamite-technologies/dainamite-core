@@ -15,6 +15,7 @@ import { StatusPath } from '../../../../components/StatusPath'
 import { ChargeBreakdownTable, type ChargeRowView } from '../../../../components/ChargeBreakdownTable'
 import { PricingSummaryCard, type PricingSummaryView } from '../../../../components/PricingSummaryCard'
 import { ArcLineDiff, LineActionBadge } from '../../../../components/ArcLineDiff'
+import { OrderCostsPanel } from '../../../../components/costs/OrderCostsPanel'
 import { arcRecurringDelta } from '../../../../lib/quoteSummaryView'
 import { isArcCancelledLine } from '../../../../services/arcLineRemoval'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
@@ -426,6 +427,15 @@ export default function CpqOrderDetailPage(props: { params?: { id?: string } }) 
         arcDelta={order.quoteType === 'amend' || order.quoteType === 'renew'
           ? arcRecurringDelta(order.lines.map((l) => ({ ...l, action: l.action as 'add' | 'modify' | 'cancel' })))
           : null}
+      />
+
+      {/* Costs (cost-plus): status chips for everyone, costs and Order margin for `cpq.costs.view` holders. Nothing while the toggle is off. */}
+      <OrderCostsPanel
+        orderId={order.id}
+        lines={order.lines.map((l) => ({ lineId: l.lineId, name: l.offeringName, isBundle: l.offeringType === 'bundle' }))}
+        currency={currency}
+        subscriptionIds={linkedSubscriptions.map((sub) => sub.id)}
+        refreshKey={`${order.cpqStatus}:${order.activatedAt ?? ''}`}
       />
 
       {/* Order Lines */}

@@ -26,21 +26,24 @@ function Figure({ label, value, testId }: { label: string; value: string; testId
  * Quote margin (cost-plus). Rendered only for `cpq.costs.view` holders; the
  * caller decides. `margin` is the `margin` object of `GET …/costs`.
  */
-export function MarginCard({ margin, hasCosts, currency, bundleParents }: {
+export function MarginCard({ margin, hasCosts, currency, bundleParents, title: titleOverride, emptyText }: {
   margin: QuoteMargin | undefined
   /** False when no line carries a cost: the card shows its empty state. */
   hasCosts: boolean
   currency: string
   bundleParents: ReadonlyArray<{ lineId: string; name: string }>
+  /** The order page reuses the card as "Order margin". */
+  title?: string
+  emptyText?: string
 }) {
   const t = useT()
-  const title = t('cpq.margin.title', 'Margin')
+  const title = titleOverride ?? t('cpq.margin.title', 'Margin')
   if (!hasCosts || !margin) {
     return (
       <section className="rounded-lg border bg-card p-4" data-testid="cpq-margin-card" aria-label={title}>
         <h3 className="text-sm font-medium">{title}</h3>
         <p className="mt-1 text-xs text-muted-foreground" data-testid="cpq-margin-empty">
-          {t('cpq.margin.empty', 'No costs on this quote yet. Margin is tracked once a line carries costs.')}
+          {emptyText ?? t('cpq.margin.empty', 'No costs on this quote yet. Margin is tracked once a line carries costs.')}
         </p>
       </section>
     )

@@ -17,10 +17,10 @@ Engine: om-auto-create-pr-loop (steps: 21, --loop: no)
 | B | 3 | Atomic activation | group:B1 | done | be31f71 |
 | B | 4 | Conversion copy | group:B2 | done | a6e8f50 |
 | B | 5 | Item cost sync and activation write | group:B2 | done | f02d114 |
-| B | 6 | Subscription snapshots carry costs | group:B3 | done | |
-| B | 7 | cost_changed event | group:B3 | done | |
-| B | 8 | Read APIs and redaction | group:B4 | done | |
-| B | 9 | Confidentiality sweep extension | group:B4 | done | |
+| B | 6 | Subscription snapshots carry costs | group:B3 | done | e7ed015 |
+| B | 7 | cost_changed event | group:B3 | done | 0091fd9 |
+| B | 8 | Read APIs and redaction | group:B4 | done | 7ff047f |
+| B | 9 | Confidentiality sweep extension | group:B4 | done | cdcb3e2 |
 | C | 10 | Renew freeze | group:C1 | todo | |
 | C | 11 | Reconfigured mirrors get cost lines | group:C1 | todo | |
 | C | 12 | Renew banner | group:C2 | todo | |

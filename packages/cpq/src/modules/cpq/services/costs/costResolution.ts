@@ -14,7 +14,7 @@ import {
   type CpqQuoteLineConfiguration,
 } from '../../data/entities'
 import { isArcCancelledLine } from '../arcLineRemoval'
-import { isFrozenMirrorLine } from '../arcPriceFreeze'
+import { isArcMirrorLine, isArcReconfigured } from '../arcPriceFreeze'
 import { evaluateApplicability } from '../cpqPricingService'
 import { ADJUSTMENT_MUTABLE_STATUSES } from '../../data/price-adjustments'
 import type { TenantScope } from '../types'
@@ -269,14 +269,17 @@ async function planQuoteCosts(params: CostResolutionParams): Promise<CostPlan> {
   const { em, quote, scope } = params
   const stats: CostResolutionStats = { skipped: null, created: 0, updated: 0, dropped: 0 }
 
-  // R1c: cancelled lines and frozen mirror lines (unreconfigured) are never re-instantiated from the catalog.
+  // R1c: cancelled lines and unreconfigured ARC mirror lines (frozen or not, Q13) never get catalog cost lines.
   const lines = params.lines.filter(({ lineConfig }) => (lineConfig.offeringId || lineConfig.productId)
     && !isArcCancelledLine(lineConfig, quote.quoteType)
-    && !isFrozenMirrorLine(lineConfig.configuration, quote.quoteType))
+    && (!isArcMirrorLine(lineConfig.configuration, quote.quoteType) || isArcReconfigured(lineConfig.configuration)))
   // An item removed on an Amend / Renew quote leaves the subscription: its line keeps no cost
   // (catalog or manual). Line removal already drops them; this also cleans rows stored before.
+  // Rows stored on an unreconfigured mirror line before Q13 (a Renew mirror re-priced at standard) are dropped
+  // too: nothing could confirm them (cost PATCH refuses such a line), so they would block conversion forever.
   const cancelledLineIds = new Set(params.lines
-    .filter(({ lineConfig }) => isArcCancelledLine(lineConfig, quote.quoteType))
+    .filter(({ lineConfig }) => isArcCancelledLine(lineConfig, quote.quoteType)
+      || (isArcMirrorLine(lineConfig.configuration, quote.quoteType) && !isArcReconfigured(lineConfig.configuration)))
     .map(({ lineConfig }) => lineConfig.quoteLineId))
 
   // ── Reads first (no mutation before the last query) ──

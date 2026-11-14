@@ -510,6 +510,54 @@ describe('updateQuoteItem → frozen Amend mirror lines', () => {
   })
 })
 
+describe('updateQuoteItem → _arcReconfigured marker (Q13)', () => {
+  const MIRROR = { port_size: '1G', _arcMirroredFromItemId: 'item-1', _arcMirroredName: 'GIX Access Port' }
+  const setup = (quoteType: string, cfg: Record<string, unknown>) => {
+    const made = makePricedService()
+    const fixture = amendFixture({ ...cfg })
+    routeEm(made.em, { ...fixture.cpqConfig, quoteType }, fixture.lineConfig)
+    made.pricingService.resolveProductCharges.mockResolvedValue([mrcCharge(150)])
+    return { ...made, lineConfig: fixture.lineConfig }
+  }
+  const markers = (lineConfig: { configuration: unknown }) => lineConfig.configuration as Record<string, unknown>
+
+  it('marks a non-frozen Renew mirror line reconfigured when a pricing input changes', async () => {
+    const { service, lineConfig } = setup('renew', MIRROR)
+    await service.updateQuoteItem('cpq-1', 'ql-1', { configuration: { port_size: '10G' } }, SCOPE)
+    expect(markers(lineConfig)._arcReconfigured).toBe(true)
+    expect(markers(lineConfig)._arcRepriced).toBeUndefined()
+  })
+
+  it('does not mark an unchanged resubmission, and keeps an existing marker sticky', async () => {
+    const unchanged = setup('renew', MIRROR)
+    await unchanged.service.updateQuoteItem('cpq-1', 'ql-1', { configuration: { port_size: '1G' }, quantity: 1 }, SCOPE)
+    expect(markers(unchanged.lineConfig)._arcReconfigured).toBeUndefined()
+    const sticky = setup('renew', { ...MIRROR, _arcReconfigured: true })
+    await sticky.service.updateQuoteItem('cpq-1', 'ql-1', { configuration: { port_size: '1G' }, quantity: 1 }, SCOPE)
+    expect(markers(sticky.lineConfig)._arcReconfigured).toBe(true)
+  })
+
+  it('un-freezing an Amend line and a cost-plus Renew line both set the marker', async () => {
+    const amend = setup('amend', { ...MIRROR, _arcPriceFrozen: true })
+    await amend.service.updateQuoteItem('cpq-1', 'ql-1', { configuration: { port_size: '10G' } }, SCOPE)
+    expect(markers(amend.lineConfig)).toMatchObject({ _arcReconfigured: true, _arcRepriced: true })
+    expect(markers(amend.lineConfig)._arcPriceFrozen).toBeUndefined()
+    const renew = setup('renew', { ...MIRROR, _arcPriceFrozen: true, _arcCostPlusFrozen: true })
+    await renew.service.updateQuoteItem('cpq-1', 'ql-1', { configuration: { port_size: '10G' }, quantity: 2 }, SCOPE)
+    expect(markers(renew.lineConfig)._arcReconfigured).toBe(true)
+    expect(markers(renew.lineConfig)._arcCostPlusFrozen).toBeUndefined()
+  })
+
+  it('never lets a client set the marker, and never marks a line that is not a mirror line', async () => {
+    const client = setup('renew', MIRROR)
+    await client.service.updateQuoteItem('cpq-1', 'ql-1', { configuration: { port_size: '1G', _arcReconfigured: true }, quantity: 1 }, SCOPE)
+    expect(markers(client.lineConfig)._arcReconfigured).toBeUndefined()
+    const plain = setup('renew', { port_size: '1G' })
+    await plain.service.updateQuoteItem('cpq-1', 'ql-1', { configuration: { port_size: '10G' } }, SCOPE)
+    expect(markers(plain.lineConfig)._arcReconfigured).toBeUndefined()
+  })
+})
+
 describe('recalculate → freeze marker outside Amend mirror lines', () => {
   it('ignores the freeze marker on a line of a new (non-ARC) quote', async () => {
     const { em, pricingService, service } = makePricedService()

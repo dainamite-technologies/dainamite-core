@@ -50,6 +50,8 @@ import {
 import {
   ARC_COST_PLUS_FROZEN_KEY,
   ARC_PRICE_FROZEN_KEY,
+  ARC_RECONFIGURED_KEY,
+  isArcReconfigured,
   ARC_REPRICED_KEY,
   arcPricingInputsChanged,
   buildArcMirrorConfiguration,
@@ -469,8 +471,12 @@ export class DefaultCpqQuotingService {
     // the subscription's stored price until a pricing input changes; then it is
     // unfrozen, marked re-priced and priced as usual.
     const wasFrozen = isFrozenMirrorLine(existingCfg, cpqConfig.quoteType)
-    const pricingInputsChanged =
-      wasFrozen &&
+    // Any Amend / Renew mirror line whose pricing inputs change is "reconfigured" (Q13): it alone gets catalog
+    // cost lines and, at activation, writes its costs back. The marker is sticky and quote-only.
+    const isReconfigurable = (cpqConfig.quoteType === 'amend' || cpqConfig.quoteType === 'renew')
+      && typeof existingCfg?._arcMirroredFromItemId === 'string'
+    const inputsChanged =
+      isReconfigurable &&
       arcPricingInputsChanged(
         {
           configuration: existingCfg,
@@ -482,12 +488,14 @@ export class DefaultCpqQuotingService {
         },
         update,
       )
+    const pricingInputsChanged = wasFrozen && inputsChanged
     const staysFrozen = wasFrozen && !pricingInputsChanged
     if (staysFrozen) {
       arcMarkers[ARC_PRICE_FROZEN_KEY] = true
       if (existingCfg?.[ARC_COST_PLUS_FROZEN_KEY] === true) arcMarkers[ARC_COST_PLUS_FROZEN_KEY] = true
     }
     if (pricingInputsChanged || existingCfg?.[ARC_REPRICED_KEY] === true) arcMarkers[ARC_REPRICED_KEY] = true
+    if (isReconfigurable && (inputsChanged || isArcReconfigured(existingCfg))) arcMarkers[ARC_RECONFIGURED_KEY] = true
     update.configuration = { ...update.configuration, ...arcMarkers }
     mergedConfig._arcMirroredFromItemId = arcMarkers._arcMirroredFromItemId
     mergedConfig._arcMirroredName = arcMarkers._arcMirroredName

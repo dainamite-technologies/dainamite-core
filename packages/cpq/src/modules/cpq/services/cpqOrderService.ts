@@ -527,6 +527,14 @@ export class DefaultCpqOrderService {
       const orderLineId = orderLineIdByQuoteLine.get(quoteLineId)
       return (orderLineId ? costsByOrderLine.get(orderLineId) ?? [] : []).map(costSeedFromOrderLineCost)
     }
+    // Link every order line cost to the inventory cost an ARC step created / updated (like the new-sale branch).
+    const costById = new Map(orderLineCosts.map((cost) => [cost.id, cost]))
+    const linkCosts = (links: ReadonlyArray<{ orderLineCostId: string; inventoryCostId: string }> | undefined) => {
+      for (const link of links ?? []) {
+        const orderLineCost = costById.get(link.orderLineCostId)
+        if (orderLineCost) orderLineCost.inventoryCostId = link.inventoryCostId
+      }
+    }
     const arcChange = (line: CpqQuoteLineConfiguration) => buildArcLineChange(line, specMap, seedsForQuoteLine)
     const costChanges: InventoryCostChange[] = []
 
@@ -551,6 +559,7 @@ export class DefaultCpqOrderService {
           },
           scope,
         )
+        linkCosts(result.inventoryCostLinks)
         costChanges.push(...result.inventoryCostChanges.map((change) => ({ ...change, cause: 'amend' as const })))
         events.push(() => emitAmendedEvent(result, eventBaseEnvelope))
       }
@@ -600,6 +609,7 @@ export class DefaultCpqOrderService {
             },
             scope,
           )
+          linkCosts(result.inventoryCostLinks)
           costChanges.push(...result.inventoryCostChanges.map((change) => ({ ...change, cause: 'renew' as const })))
           events.push(() => emitRenewedEvent(result, eventBaseEnvelope))
         }
@@ -632,6 +642,7 @@ export class DefaultCpqOrderService {
           scope,
         )
 
+        linkCosts(merge.inventoryCostLinks)
         costChanges.push(...(merge.inventoryCostChanges ?? []).map((change) => ({ ...change, cause: 'merge' as const })))
 
         // One event per source (`superseded`) + one for M (`merged`).

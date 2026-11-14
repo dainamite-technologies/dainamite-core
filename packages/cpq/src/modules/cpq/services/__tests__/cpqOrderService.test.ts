@@ -1268,6 +1268,38 @@ describe('ARC write-back wiring in activateOrder (step 13)', () => {
     expect(h.trace.at(-1)).toBe('tx:commit')
   })
 
+  describe('links order line costs to the inventory costs the ARC step created / updated (review1-a)', () => {
+    const links = [{ orderLineCostId: 'c-re', inventoryCostId: 'ic-re' }, { orderLineCostId: 'c-add', inventoryCostId: 'ic-add' }]
+    const withLinks = (primitive: string, quoteType: 'amend' | 'renew') => {
+      const f = fixture(quoteType, primitive, [])
+      f.inventory[primitive] = { ...f.inventory[primitive], inventoryCostLinks: links } as never
+      return f
+    }
+    const linked = (f: ReturnType<typeof fixture>) => Object.fromEntries(f.orderLineCosts.map((row) => [row.id, (row as { inventoryCostId?: string }).inventoryCostId ?? null]))
+
+    it.each([['amend', 'applyAmendment'], ['renew', 'applyRenewal']] as const)('%s: reconfigured mirror line (replace) and add line get inventory_cost_id; untouched lines stay unlinked', async (quoteType, primitive) => {
+      const f = withLinks(primitive, quoteType)
+      const h = createActivationHarness(f)
+      await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+      expect(linked(f)).toEqual({ 'c-re': 'ic-re', 'c-plain': null, 'c-add': 'ic-add' })
+    })
+
+    it('merge renew: operator-edit costs on M are linked', async () => {
+      const f = {
+        quoteType: 'renew' as const,
+        quoteOver: { arcMergeNewTermStart: '2027-01-01', arcMergeNewTermEnd: '2028-01-01', arcMergeNewTermMonths: 12 },
+        targets: [{ subscriptionId: 'sub-a', mergeAction: 'absorb' }, { subscriptionId: 'sub-b', mergeAction: 'absorb' }],
+        orderLines: [orderLine('ol-add', 'ql-add')],
+        orderLineCosts: [olc('c-add', 'ol-add', 'tail')],
+        quoteLines: [quoteLine('ql-add', 'add', {}, { sourceSubscriptionItemId: null, targetSubscriptionId: null })],
+        inventory: { applyMergeRenewal: { mergedSubscription: { id: 'sub-m', currentTermStart: new Date('2027-01-01') }, mergeResultChangeLog: { id: 'log-m' }, sourceChangeLogs: [], inventoryCostChanges: [], inventoryCostLinks: [links[1]] } },
+      }
+      const h = createActivationHarness(f)
+      await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+      expect(linked(f as never)).toEqual({ 'c-add': 'ic-add' })
+    })
+  })
+
   it('emits no cost_changed when the ARC step wrote nothing (frozen / no-op)', async () => {
     const h = createActivationHarness(fixture('renew', 'applyRenewal', []))
     const emitSpy = jest.spyOn(eventsModule, 'emitCpqEvent').mockResolvedValue(undefined as never)

@@ -122,7 +122,7 @@ export function createActivationHarness(fixture: ActivationFixture) {
       return result
     })
   const inv = fixture.inventory ?? {}
-  const withNoCostChanges = (result: unknown) => (result && typeof result === 'object' ? { inventoryCostChanges: [], ...result } : result)
+  const withNoCostChanges = (result: unknown) => (result && typeof result === 'object' ? { inventoryCostChanges: [], inventoryCostLinks: [], ...result } : result)
   const createSubscription = inventoryCall('createSubscription', inv.createSubscription ?? { id: 'sub-1' }, ['subscription', 'item', 'itemCost', 'assetAndCosts', 'changeLog'])
   const inventory: Record<string, jest.Mock> = {
     withEntityManager: jest.fn((bound: unknown): unknown => {

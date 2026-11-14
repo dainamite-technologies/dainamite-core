@@ -819,6 +819,24 @@ describe('ARC inventory cost write-back', () => {
     expect(result.inventoryCostChanges).toEqual([expect.objectContaining({ kind: 'created', ownerType: 'subscription_item' })])
   })
 
+  it('returns order line cost -> inventory cost links for add (created) and reconfigured mirror (updated and unchanged rows)', async () => {
+    const { em, service } = setup()
+    em.seed(CpqInventoryCost, [
+      costRow('ic-1', { subscriptionItemId: 'item-1' }, 'tail', '270'),
+      costRow('ic-2', { subscriptionItemId: 'item-1' }, 'install', '10'),
+    ])
+    const result = await amend(service, [
+      { action: 'modify', quoteLineId: 'ql-1', sourceSubscriptionItemId: 'item-1', modifyPatch: { mrcAmount: 50 }, costSync: { mode: 'replace', seeds: [seed('tail', '300'), seed('install', '10')] } },
+      { action: 'add', quoteLineId: 'ql-new', itemInput: { name: 'New', mrcAmount: 20, nrcAmount: 0 }, costSync: { mode: 'create', seeds: [seed('fresh', '99')] } },
+    ])
+    const created = em.rows(CpqInventoryCost).find((r) => r.costKey === 'fresh')
+    expect([...result.inventoryCostLinks].sort((a, b) => a.orderLineCostId.localeCompare(b.orderLineCostId))).toEqual([
+      { orderLineCostId: 'olc-fresh', inventoryCostId: created?.id },
+      { orderLineCostId: 'olc-install', inventoryCostId: 'ic-2' },
+      { orderLineCostId: 'olc-tail', inventoryCostId: 'ic-1' },
+    ])
+  })
+
   it('a cancel line ends the item costs and the costs of the assets it cancels, not those of other owners', async () => {
     const { em, service } = setup()
     em.seed(CpqInventorySubscriptionItem, [fakeItem({ id: 'item-2', sortOrder: 1 })])
@@ -904,6 +922,13 @@ describe('ARC inventory cost write-back', () => {
       const row = em.rows(CpqInventoryCost).find((r) => r.id === 'ic-a')
       expect(row).toMatchObject({ status: 'ended', subscriptionId: result.mergedSubscription.id })
       expect(result.inventoryCostChanges.filter((c) => c.inventoryCostId === 'ic-a').map((c) => c.kind)).toEqual(['ended'])
+    })
+
+    it('operator-added line on M reports its cost link', async () => {
+      const { em, merge } = mergeSetup()
+      const result = await merge([{ action: 'add', quoteLineId: 'ql-new', itemInput: { name: 'New', mrcAmount: 20, nrcAmount: 0 }, costSync: { mode: 'create', seeds: [seed('fresh', '99')] } }])
+      const created = em.rows(CpqInventoryCost).find((r) => r.costKey === 'fresh')
+      expect(result.inventoryCostLinks).toEqual([{ orderLineCostId: 'olc-fresh', inventoryCostId: created?.id }])
     })
 
     it('an uncosted merge reports no cost changes', async () => {

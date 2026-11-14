@@ -160,6 +160,8 @@ export interface ApplyArcResult {
   subscription: CpqInventorySubscription
   /** Real inventory cost changes of this ARC step (no-op rows excluded), each carrying its change-log row. */
   inventoryCostChanges: InventoryCostChange[]
+  /** Order line cost -> inventory cost it created or updated (also for unchanged rows); the order links them. */
+  inventoryCostLinks: InventoryCostLink[]
 }
 
 export interface ApplyMergeRenewalResult {
@@ -171,6 +173,8 @@ export interface ApplyMergeRenewalResult {
   sourceChangeLogs: CpqSubscriptionChangeLog[]
   /** Re-pointed and operator-edit cost changes, each carrying the merge-result row (no-op rows excluded). */
   inventoryCostChanges: InventoryCostChange[]
+  /** Order line cost -> inventory cost it created or updated (operator edits on M). */
+  inventoryCostLinks: InventoryCostLink[]
 }
 
 export interface CreateSubscriptionInput {
@@ -1163,7 +1167,7 @@ export class DefaultCpqInventoryService {
     )
     if (idempotent) {
       const sub = await this.requireSubscription(input.subscriptionId, scope)
-      return { changeLog: idempotent, subscription: sub, inventoryCostChanges: [] }
+      return { changeLog: idempotent, subscription: sub, inventoryCostChanges: [], inventoryCostLinks: [] }
     }
 
     const sub = await this.requireSubscription(input.subscriptionId, scope)
@@ -1203,7 +1207,7 @@ export class DefaultCpqInventoryService {
     const inventoryCostChanges = this.settleCostWrites(costWrites, log)
     await this.em.flush()
 
-    return { changeLog: log, subscription: sub, inventoryCostChanges }
+    return { changeLog: log, subscription: sub, inventoryCostChanges, inventoryCostLinks: costWrites.links }
   }
 
   async applyRenewal(input: ApplyRenewalInput, scope: TenantScope): Promise<ApplyArcResult> {
@@ -1214,7 +1218,7 @@ export class DefaultCpqInventoryService {
     )
     if (idempotent) {
       const sub = await this.requireSubscription(input.subscriptionId, scope)
-      return { changeLog: idempotent, subscription: sub, inventoryCostChanges: [] }
+      return { changeLog: idempotent, subscription: sub, inventoryCostChanges: [], inventoryCostLinks: [] }
     }
 
     const sub = await this.requireSubscription(input.subscriptionId, scope)
@@ -1270,7 +1274,7 @@ export class DefaultCpqInventoryService {
     const inventoryCostChanges = this.settleCostWrites(costWrites, log)
     await this.em.flush()
 
-    return { changeLog: log, subscription: sub, inventoryCostChanges }
+    return { changeLog: log, subscription: sub, inventoryCostChanges, inventoryCostLinks: costWrites.links }
   }
 
   async applyMergeRenewal(
@@ -1306,6 +1310,7 @@ export class DefaultCpqInventoryService {
           mergeResultChangeLog: mergeResult,
           sourceChangeLogs: existingSourceLogs,
           inventoryCostChanges: [],
+          inventoryCostLinks: [],
         }
       }
     }
@@ -1437,7 +1442,7 @@ export class DefaultCpqInventoryService {
     // Costs follow the clones (Q2, Q5): open item costs move to the cloned items, same ids.
     const effectiveAt = new Date()
     const costCtx = { scope, startedAt: isoDay(effectiveAt), endedAt: isoDay(effectiveAt) }
-    const costWrites: CostWrites = { rows: [], changes: [] }
+    const costWrites: CostWrites = { rows: [], changes: [], links: [] }
     const repointedItems = await repointItemCosts(this.em, sourceItemToNewItem, m.id, costCtx)
     costWrites.rows.push(...repointedItems.rows)
     costWrites.changes.push(...repointedItems.changes)
@@ -1497,6 +1502,7 @@ export class DefaultCpqInventoryService {
     // Step 13's rules on M (cancel ends, add creates, reconfigured mirror replaces), after the re-point.
     const operatorWrites = await this.writeBackLineCosts(translatedChanges, applied, m, scope, effectiveAt)
     costWrites.rows.push(...operatorWrites.rows)
+    costWrites.links.push(...operatorWrites.links)
     // One change per inventory cost: an operator edit of a re-pointed row supersedes its `repointed` entry.
     const operatorIds = new Set(operatorWrites.changes.map((change) => change.inventoryCostId))
     costWrites.changes = [
@@ -1574,6 +1580,7 @@ export class DefaultCpqInventoryService {
       mergeResultChangeLog: mergeResultLog,
       sourceChangeLogs: sourceLogs,
       inventoryCostChanges,
+      inventoryCostLinks: costWrites.links,
     }
   }
 
@@ -1585,7 +1592,7 @@ export class DefaultCpqInventoryService {
     )
     if (idempotent) {
       const sub = await this.requireSubscription(input.subscriptionId, scope)
-      return { changeLog: idempotent, subscription: sub, inventoryCostChanges: [] }
+      return { changeLog: idempotent, subscription: sub, inventoryCostChanges: [], inventoryCostLinks: [] }
     }
 
     const sub = await this.requireSubscription(input.subscriptionId, scope)
@@ -1630,7 +1637,7 @@ export class DefaultCpqInventoryService {
     const inventoryCostChanges = this.settleCostWrites(costWrites, log)
     await this.em.flush()
 
-    return { changeLog: log, subscription: reload, inventoryCostChanges }
+    return { changeLog: log, subscription: reload, inventoryCostChanges, inventoryCostLinks: [] }
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -2000,9 +2007,11 @@ export class DefaultCpqInventoryService {
     const ctx = { scope, startedAt: isoDay(effectiveAt), endedAt: isoDay(effectiveAt) }
     const rows: CpqInventoryCost[] = []
     const changes: InventoryCostChange[] = []
+    const links: InventoryCostLink[] = []
     const collect = (result: InventoryCostSyncResult) => {
       rows.push(...result.rows)
       changes.push(...result.changes)
+      links.push(...result.links)
     }
     const owners = (mode: 'create' | 'replace') => lineChanges
       .filter((lc) => lc.costSync?.mode === mode && lc.quoteLineId && applied.itemIdByQuoteLineId.has(lc.quoteLineId))
@@ -2015,7 +2024,7 @@ export class DefaultCpqInventoryService {
     collect(await endAssetCosts(this.em, applied.cancelledAssetIds, ctx))
     collect(await createItemCosts(this.em, owners('create'), ctx))
     collect(await replaceItemCosts(this.em, owners('replace'), ctx))
-    return { rows, changes }
+    return { rows, changes, links }
   }
 
   /** Points the rows a step really changed at its change-log row (Q12) and tags each change with that row. */
@@ -2183,6 +2192,7 @@ interface AppliedLineChanges {
 interface CostWrites {
   rows: CpqInventoryCost[]
   changes: InventoryCostChange[]
+  links: InventoryCostLink[]
 }
 
 const isoDay = (value: Date): string => value.toISOString().slice(0, 10)

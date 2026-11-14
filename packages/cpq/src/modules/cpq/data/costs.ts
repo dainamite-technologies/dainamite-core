@@ -30,6 +30,18 @@ export const COST_LINE_ERROR_CODES = ['TABLE_NO_MATCH', 'CURRENCY_NO_RATE', 'IND
 export type CostValueStatus = (typeof COST_VALUE_STATUSES)[number]
 export type CostLineErrorCode = (typeof COST_LINE_ERROR_CODES)[number]
 
+// ─── Order line and inventory costs (feature 2, App Spec §1.4.6) ─
+
+/**
+ * `CpqInventoryCost.status`. A cost is *open* when it is `active` and its owner
+ * is live (feature spec Q6); `ended` is set by Cancel / item removal (Q8).
+ */
+export const INVENTORY_COST_STATUSES = ['active', 'ended'] as const
+export type InventoryCostStatus = (typeof INVENTORY_COST_STATUSES)[number]
+/** The record that owns an inventory cost: exactly one of `subscription_item_id` / `asset_id` (Q2). */
+export const INVENTORY_COST_OWNER_TYPES = ['subscription_item', 'asset'] as const
+export type InventoryCostOwnerType = (typeof INVENTORY_COST_OWNER_TYPES)[number]
+
 // ─── Charge cost elements (App Spec §1.4.4) ─────────────────────
 
 export const COST_ROLES = ['price_basis', 'margin_only'] as const

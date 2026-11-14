@@ -13,7 +13,7 @@ Engine: om-auto-create-pr-loop (steps: 21, --loop: no)
 | Phase | Step | Title | Exec | Status | Commit |
 |-------|------|-------|------|--------|--------|
 | A | 1 | Characterization tests | group:A | done | |
-| B | 2 | Order line cost and inventory cost entities | group:B1 | todo | |
+| B | 2 | Order line cost and inventory cost entities | group:B1 | done | |
 | B | 3 | Atomic activation | group:B1 | todo | |
 | B | 4 | Conversion copy | group:B2 | todo | |
 | B | 5 | Item cost sync and activation write | group:B2 | todo | |

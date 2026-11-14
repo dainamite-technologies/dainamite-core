@@ -1615,7 +1615,7 @@ export class DefaultCpqInventoryService {
     // A Cancel order ends every open item and asset cost of the subscription (Q8 `ended_at`), after the status
     // transition and before the after-snapshot, which shows them ended.
     const ended = await endSubscriptionCosts(this.em, reload.id, { scope, startedAt: isoDay(effectiveAt), endedAt: isoDay(effectiveAt) })
-    const costWrites: CostWrites = { rows: ended.rows, changes: ended.changes }
+    const costWrites: CostWrites = { rows: ended.rows, changes: ended.changes, links: [] }
     await this.em.flush()
     const afterSnapshot = await this.snapshotSubscription(reload, scope)
 

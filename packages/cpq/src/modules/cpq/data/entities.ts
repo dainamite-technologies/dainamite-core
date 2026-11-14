@@ -1678,8 +1678,11 @@ export class CpqQuotePriceAdjustment {
 @Entity({ tableName: 'cpq_quote_line_costs' })
 @Index({ name: 'cpq_quote_line_costs_config_idx', properties: ['organizationId', 'tenantId', 'quoteConfigurationId'] })
 @Index({ name: 'cpq_quote_line_costs_line_idx', properties: ['organizationId', 'tenantId', 'quoteLineId'] })
+// Sourcing queue (feature spec §Data Model) and request-id lookups.
+@Index({ name: 'cpq_quote_line_costs_sourcing_queue_idx', properties: ['organizationId', 'tenantId', 'sourcingStatus', 'requestedAt'] })
+@Index({ name: 'cpq_quote_line_costs_request_idx', properties: ['costRequestId'] })
 export class CpqQuoteLineCost {
-  [OptionalProps]?: 'sourcingStatus' | 'createdAt' | 'updatedAt' | 'deletedAt'
+  [OptionalProps]?: 'sourcingStatus' | 'requestHistory' | 'createdAt' | 'updatedAt' | 'deletedAt'
 
   @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
   id!: string
@@ -1800,6 +1803,29 @@ export class CpqQuoteLineCost {
 
   @Property({ name: 'proposed_amount', type: 'numeric', columnType: 'numeric(18, 4)', nullable: true })
   proposedAmount: string | null = null
+
+  /** Full payload of a different-value answer on a locked quote (present iff `proposedAmount` is). */
+  @Property({ name: 'proposed_answer', type: 'jsonb', nullable: true })
+  proposedAnswer: Record<string, unknown> | null = null
+
+  /** Closed requests, newest last, at most 50, never amounts. */
+  @Property({ name: 'request_history', type: 'jsonb', default: '[]' })
+  requestHistory: Array<Record<string, unknown>> = []
+
+  /** The supplier the open request targets; distinct from the answered `supplier_*`. */
+  @Property({ name: 'request_supplier_id', type: 'uuid', nullable: true })
+  requestSupplierId: string | null = null
+
+  @Property({ name: 'request_supplier_name', type: 'text', nullable: true })
+  requestSupplierName: string | null = null
+
+  /** SHA-256 (hex) of the normalized last applied / proposed answer, the idempotency key. */
+  @Property({ name: 'last_answer_hash', type: 'text', nullable: true })
+  lastAnswerHash: string | null = null
+
+  /** Reason of the last cancellation while `sourcingStatus = cancelled`. */
+  @Property({ name: 'cancel_reason', type: 'text', nullable: true })
+  cancelReason: string | null = null
 
   @Property({ name: 'supplier_id', type: 'uuid', nullable: true })
   supplierId: string | null = null

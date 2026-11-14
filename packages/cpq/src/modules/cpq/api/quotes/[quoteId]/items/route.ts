@@ -6,6 +6,7 @@ import { handleArcError } from '../../../_helpers/handleArcError'
 import { CPQ_QUOTE_LINE_RESOURCE_KIND, runCpqMutationGuards } from '../../../_helpers/quoteMutationGuard'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { CPQ_LINE_WRITE_ERRORS, cpqQuoteIdPathParams } from '../../../_helpers/quoteRouteOpenApi'
+import { resolveAuditActor } from '../../../../lib/auditActor'
 
 export const metadata = {
   POST: { requireAuth: true, requireFeatures: ['cpq.quotes.manage'] },
@@ -31,7 +32,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ quoteId
       : body
 
     const service = resolveQuotingService(ctx)
-    const result = await service.addQuoteItem(quoteId, effective, scope)
+    const result = await service.addQuoteItem(quoteId, effective, scope, resolveAuditActor(ctx.auth))
     await guard.runAfterSuccess()
     return NextResponse.json(result, { status: 201 })
   } catch (err) {

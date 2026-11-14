@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { withAtomicFlush } from '@open-mercato/shared/lib/commands/flush'
 import type { CostLineErrorCode } from '../../data/costs'
@@ -19,6 +19,9 @@ import { evaluateApplicability } from '../cpqPricingService'
 import { ADJUSTMENT_MUTABLE_STATUSES } from '../../data/price-adjustments'
 import type { TenantScope } from '../types'
 import { lookupTablePrice, type LookupEntry, type LookupModel } from './costLookup'
+import { shouldAutoOpenRequest, type CancelReason } from './costSourcing'
+import { cancelRequestPatch, isRequestOpen, openRequestPatch, type RequestRowState } from './costRequestState'
+import { sourcingCostRef, type SourcingSignal } from './sourcingSignals'
 
 /**
  * Catalog cost resolution on SAVED recalculations (App Spec §1.4.7 R1, R3, R4,
@@ -152,6 +155,15 @@ export type CostResolutionParams = {
   scope: TenantScope
   /** `CpqCostService.enabled` (R14). */
   isEnabled: (tenantId: string) => Promise<boolean>
+  /** The user behind a saved recalculation: recorded as `requested_by_user_id` of an auto-opened request (Q5). */
+  actorUserId?: string | null
+  /** Receives one signal per request opened / cancelled by a SAVED recalculation (seam of the sourcing events, step 12). */
+  signals?: SourcingSignal[]
+  /**
+   * Q12 auto-open on this saved recalculation (default true). A clone's first recalculation passes `false`: the copy
+   * re-resolves its catalog costs but opens no request (spec "Clone": the cloned tail is `not_requested`, R16).
+   */
+  autoOpen?: boolean
 }
 
 /** What cost-plus pricing reads from a cost line (plain values, safe to hand around without persisting). */
@@ -173,6 +185,10 @@ type CostPlan = {
   creates: Array<Record<string, unknown>>
   updates: Array<{ row: CpqQuoteLineCost; patch: RowPatch }>
   drops: CpqQuoteLineCost[]
+  /** Open requests cancelled by a drop (R1a / line removal), applied with the drop. */
+  dropCancels: Array<{ row: CpqQuoteLineCost; patch: RowPatch }>
+  /** Request opened / cancelled by this plan, published only when the plan is applied. */
+  signals: SourcingSignal[]
   existing: CpqQuoteLineCost[]
 }
 
@@ -192,8 +208,8 @@ export async function resolveQuoteCosts(params: CostResolutionParams): Promise<C
   if (!(await params.isEnabled(scope.tenantId))) return { skipped: 'disabled', created: 0, updated: 0, dropped: 0 }
   // R4 / R11: a locked quote keeps stored cost lines and values.
   if (await isQuoteCostLocked(em, quote, scope)) return { skipped: 'locked', created: 0, updated: 0, dropped: 0 }
-  const plan = await planQuoteCosts(params)
-  await applyCostPlan(em, plan)
+  const plan = await planQuoteCosts({ ...params, save: true })
+  await applyCostPlan(em, plan, params.signals)
   return plan.stats
 }
 
@@ -226,7 +242,7 @@ export async function resolveCostPlusInputs(params: CostResolutionParams & { sav
     for (const row of stored) add(toCostLineValue(row as unknown as Record<string, unknown>))
   } else {
     const plan = await planQuoteCosts(params)
-    if (params.save) await applyCostPlan(em, plan)
+    if (params.save) await applyCostPlan(em, plan, params.signals)
     const patchByRow = new Map(plan.updates.map(({ row, patch }) => [row, patch]))
     const dropped = new Set(plan.drops)
     for (const row of plan.existing) {
@@ -251,23 +267,36 @@ export async function previewCatalogCosts(params: Omit<CostResolutionParams, 'is
   return plan.creates
 }
 
-async function applyCostPlan(em: EntityManager, plan: CostPlan): Promise<void> {
-  const { creates, updates, drops } = plan
+async function applyCostPlan(em: EntityManager, plan: CostPlan, signals?: SourcingSignal[]): Promise<void> {
+  const { creates, updates, drops, dropCancels } = plan
   if (creates.length === 0 && updates.length === 0 && drops.length === 0) return
   const now = new Date()
   await withAtomicFlush(em, [
     () => {
       for (const data of creates) em.persist(em.create(CpqQuoteLineCost, data as never))
       for (const { row, patch } of updates) Object.assign(row, patch)
+      for (const { row, patch } of dropCancels) Object.assign(row, patch)
       for (const row of drops) row.deletedAt = now
     },
   ])
+  signals?.push(...plan.signals)
 }
 
 /** Reads and computes only: nothing is persisted or mutated here. */
-async function planQuoteCosts(params: CostResolutionParams): Promise<CostPlan> {
+async function planQuoteCosts(params: CostResolutionParams & { save?: boolean }): Promise<CostPlan> {
   const { em, quote, scope } = params
   const stats: CostResolutionStats = { skipped: null, created: 0, updated: 0, dropped: 0 }
+  // Sourcing requests are opened / cancelled by SAVED recalculations only (Q12); a preview computes values alone.
+  const saved = params.save === true
+  const now = new Date()
+  const actor = params.actorUserId ?? null
+  const signals: SourcingSignal[] = []
+  const dropCancels: CostPlan['dropCancels'] = []
+  const cancelOnDrop = (row: CpqQuoteLineCost, reason: CancelReason) => {
+    if (!saved || !isRequestOpen(row)) return
+    dropCancels.push({ row, patch: cancelRequestPatch(row, { reason, now, closedByUserId: actor }) })
+    signals.push({ ...sourcingCostRef(row), kind: 'request_cancelled', costRequestId: row.costRequestId as string, requestSeq: row.requestSeq ?? 1, reason })
+  }
 
   // R1c: cancelled lines and unreconfigured ARC mirror lines (frozen or not, Q13) never get catalog cost lines.
   const lines = params.lines.filter(({ lineConfig }) => (lineConfig.offeringId || lineConfig.productId)
@@ -286,7 +315,9 @@ async function planQuoteCosts(params: CostResolutionParams): Promise<CostPlan> {
   const existing = await em.find(CpqQuoteLineCost, { ...scoped(scope), quoteConfigurationId: quote.id })
   const cancelledDrops = existing.filter((row) => cancelledLineIds.has(row.quoteLineId))
   stats.dropped += cancelledDrops.length
-  if (lines.length === 0) return { stats, creates: [], updates: [], drops: cancelledDrops, existing }
+  // R1a, line removal: an ARC removal / unreconfigured mirror drops its cost lines with their open requests.
+  for (const row of cancelledDrops) cancelOnDrop(row, 'line_removed')
+  if (lines.length === 0) return { stats, creates: [], updates: [], drops: cancelledDrops, dropCancels, signals, existing }
   const existingByLine = new Map<string, CpqQuoteLineCost[]>()
   for (const row of existing) existingByLine.set(row.quoteLineId, [...(existingByLine.get(row.quoteLineId) ?? []), row])
 
@@ -303,6 +334,16 @@ async function planQuoteCosts(params: CostResolutionParams): Promise<CostPlan> {
   const elements = chargeIds.length
     ? await em.find(CpqChargeCostElement, { ...scoped(scope), isActive: true, productChargeId: { $in: chargeIds } }, { orderBy: { sortOrder: 'asc', code: 'asc' } })
     : []
+  // R1a reason: a dropped line whose element is inactive / deleted is `element_deactivated`, an element that merely
+  // stopped applying (the configuration changed) is `reconfigured`. Only needed for open requests, so one query at most.
+  const activeElementIds = new Set(elements.map((element) => element.id))
+  const droppedWithRequest = [...existingByLine.values()].flat()
+    .filter((row) => saved && row.origin === 'catalog' && isRequestOpen(row) && row.costElementId && !activeElementIds.has(row.costElementId))
+  const orphaned = droppedWithRequest.length
+    ? await em.find(CpqChargeCostElement, { ...scoped(scope), isActive: true, id: { $in: [...new Set(droppedWithRequest.map((row) => row.costElementId as string))] } })
+    : []
+  const stillActive = new Set(orphaned.map((element) => element.id))
+  const elementGone = new Set(droppedWithRequest.map((row) => row.costElementId as string).filter((id) => !stillActive.has(id)))
   const elementsByCharge = new Map<string, CpqChargeCostElement[]>()
   for (const element of elements) elementsByCharge.set(element.productChargeId, [...(elementsByCharge.get(element.productChargeId) ?? []), element])
 
@@ -347,11 +388,28 @@ async function planQuoteCosts(params: CostResolutionParams): Promise<CostPlan> {
           costType: element.costType, source: element.source, costModel: element.costModel,
         }
 
+        const autoOpen = (state: { sourcingStatus: string; valueStatus: string }, reset: boolean) => saved && params.autoOpen !== false && shouldAutoOpenRequest({
+          enabled: true, saved, locked: false, quoteType: quote.quoteType, line: lineConfig,
+          cost: { origin: 'catalog', role: element.role, source: element.source, ...state },
+          requiresSourcing: element.requiresSourcing === true, resetByReconfiguration: reset,
+        })
+
         if (!row) {
-          creates.push({
-            ...scope, quoteConfigurationId: quote.id, quoteId: quote.quoteId, quoteLineId: lineConfig.quoteLineId,
+          const data: Record<string, unknown> = {
+            id: randomUUID(), ...scope, quoteConfigurationId: quote.id, quoteId: quote.quoteId, quoteLineId: lineConfig.quoteLineId,
             costKey: element.code, origin: 'catalog', ...structure, ...toFields(resolved), driverHash: hash, sourcingStatus: 'not_requested',
-          })
+          }
+          // Q12: a new on_request cost of a requires_sourcing element opens its request with the line.
+          if (autoOpen({ sourcingStatus: 'not_requested', valueStatus: resolved.valueStatus }, false)) {
+            Object.assign(data, openRequestPatch({ requestSeq: null }, {
+              now, requestedByUserId: actor, supplierId: element.defaultSupplierId, supplierName: element.defaultSupplierName,
+            }))
+            signals.push({
+              ...sourcingCostRef(data as never), kind: 'requested', costRequestId: data.costRequestId as string, requestSeq: 1,
+              supplierId: (data.requestSupplierId as string | null) ?? null, requestedByUserId: actor, auto: true,
+            })
+          }
+          creates.push(data)
           stats.created += 1
           continue
         }
@@ -372,6 +430,24 @@ async function planQuoteCosts(params: CostResolutionParams): Promise<CostPlan> {
           patch.instanceAmount = money(element.costModel === 'per_unit' ? unit * quantityOf(charge, mergedConfig) : unit)
         }
         patch.driverHash = hash
+        // R1b (sourcing part): a reconfiguration that resets an on_request / entered value makes the open request
+        // meaningless: cancel it in this write and, per Q12, open a fresh one for requires_sourcing elements.
+        const reset = driversChanged && (element.source === 'on_request' || row.valueOrigin === 'manual')
+        let state: RequestRowState = row
+        if (saved && reset && isRequestOpen(row)) {
+          const cancel = cancelRequestPatch(row, { reason: 'reconfigured', now, closedByUserId: actor })
+          Object.assign(patch, cancel)
+          state = { ...row, ...cancel } as RequestRowState
+          signals.push({ ...sourcingCostRef(row), kind: 'request_cancelled', costRequestId: row.costRequestId as string, requestSeq: row.requestSeq ?? 1, reason: 'reconfigured' })
+        }
+        if (autoOpen({ sourcingStatus: state.sourcingStatus, valueStatus: String(patch.valueStatus ?? row.valueStatus) }, reset)) {
+          const open = openRequestPatch(state, { now, requestedByUserId: actor, supplierId: element.defaultSupplierId, supplierName: element.defaultSupplierName })
+          Object.assign(patch, open)
+          signals.push({
+            ...sourcingCostRef(row), kind: 'requested', costRequestId: open.costRequestId as string, requestSeq: open.requestSeq as number,
+            supplierId: (open.requestSupplierId as string | null) ?? null, requestedByUserId: actor, auto: true,
+          })
+        }
         updates.push({ row, patch })
         stats.updated += 1
       }
@@ -381,6 +457,7 @@ async function planQuoteCosts(params: CostResolutionParams): Promise<CostPlan> {
     for (const row of rows) {
       if (row.origin !== 'catalog' || desiredKeys.has(row.costKey)) continue
       drops.push(row)
+      cancelOnDrop(row, elementGone.has(row.costElementId ?? '') ? 'element_deactivated' : 'reconfigured')
       stats.dropped += 1
     }
 
@@ -396,7 +473,7 @@ async function planQuoteCosts(params: CostResolutionParams): Promise<CostPlan> {
       stats.updated += 1
     }
   }
-  return { stats, creates, updates, drops, existing }
+  return { stats, creates, updates, drops, dropCancels, signals, existing }
 }
 
 function toFields(value: ResolvedValue) {

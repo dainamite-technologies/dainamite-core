@@ -390,3 +390,41 @@ describe('markup overrides', () => {
     await expect(service.clearMarkupOverride(ids.quote, ids.line, 'tail', ACTOR, SCOPE)).rejects.toMatchObject({ status: 404 })
   })
 })
+
+// Characterization (supplier-sourcing step 1): a manual value write leaves the sourcing columns alone today.
+describe('manual value writes and the sourcing columns (characterization)', () => {
+  const SOURCING = { sourcingStatus: 'requested', costRequestId: 'req-1', requestSeq: 2, requestedAt: new Date('2026-01-01'), requestedByUserId: 'u1',
+    answeredAt: null, answeredByUserId: null, declineReason: null, proposedAmount: '70.0000' }
+  const sourcingOf = (row: Row) => Object.fromEntries(Object.keys(SOURCING).map((key) => [key, row[key]]))
+
+  it('a created manual cost starts not_requested with no request data', async () => {
+    const { service, costs } = setup()
+    await service.createCost(ids.quote, create, ACTOR, SCOPE)
+    expect(costs[0].sourcingStatus).toBe('not_requested')
+    for (const key of ['costRequestId', 'requestSeq', 'requestedAt', 'answeredAt', 'proposedAmount', 'declineReason']) expect(costs[0][key] ?? null).toBeNull()
+  })
+
+  it('entering or overwriting a value does not cancel, answer or clear an open request', async () => {
+    const row = catalogRow({ valueStatus: 'none', valueOrigin: null, unitAmount: null, instanceAmount: null, currencyCode: null, ...SOURCING })
+    const { service } = setup({ costs: [row] })
+    await service.updateCost(ids.quote, ids.cost, { unitAmount: 280, valueStatus: 'confirmed', note: 'phone quote' }, ACTOR, SCOPE)
+    expect(row).toMatchObject({ unitAmount: '280', valueOrigin: 'manual', valueStatus: 'confirmed' })
+    expect(sourcingOf(row)).toEqual(SOURCING)
+  })
+
+  it('a note-only edit and a supplier-data edit leave the sourcing columns untouched', async () => {
+    const row = manualRow(SOURCING)
+    const { service } = setup({ costs: [row] })
+    await service.updateCost(ids.quote, ids.cost, { note: 'n', supplierName: 'Other' }, ACTOR, SCOPE)
+    expect(row).toMatchObject({ note: 'n', supplierName: 'Other' })
+    expect(sourcingOf(row)).toEqual(SOURCING)
+  })
+
+  it('deleting a manual line only soft-deletes it', async () => {
+    const row = manualRow(SOURCING)
+    const { service } = setup({ costs: [row] })
+    await service.deleteCost(ids.quote, ids.cost, ACTOR, SCOPE)
+    expect(row.deletedAt).toBeInstanceOf(Date)
+    expect(sourcingOf(row)).toEqual(SOURCING)
+  })
+})

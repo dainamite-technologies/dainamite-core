@@ -1,6 +1,6 @@
 import { FeatureToggle } from '@open-mercato/core/modules/feature_toggles/data/entities'
 import { seedCostPlusDefaults } from '../costPlusDefaults'
-import { COST_PLUS_TOGGLE } from '../../data/costs'
+import { COST_PLUS_TOGGLE, COST_REQUEST_OVERDUE_TOGGLE } from '../../data/costs'
 import { CpqCostService } from '../../services/costs/costService'
 import { setup } from '../../setup'
 import { features } from '../../acl'
@@ -28,6 +28,19 @@ describe('seedCostPlusDefaults', () => {
     expect(rows.get(COST_PLUS_TOGGLE)).toMatchObject({ defaultValue: false })
   })
 
+  it('registers the numeric overdue toggle at 5 working days, never overwriting a tenant-tuned default', async () => {
+    const { rows, em } = toggleStore()
+    await seedCostPlusDefaults(em as never)
+    expect(COST_REQUEST_OVERDUE_TOGGLE).toBe('cpq.cost_requests.overdue_working_days')
+    expect(em.upsert).toHaveBeenCalledWith(FeatureToggle,
+      expect.objectContaining({ identifier: 'cpq.cost_requests.overdue_working_days', type: 'number', defaultValue: 5, category: 'CPQ', createdAt: expect.any(Date), updatedAt: expect.any(Date) }),
+      { onConflictFields: ['identifier'], onConflictAction: 'ignore' })
+    rows.get(COST_REQUEST_OVERDUE_TOGGLE)!.defaultValue = 3
+    await seedCostPlusDefaults(em as never)
+    expect(rows.get(COST_REQUEST_OVERDUE_TOGGLE)).toMatchObject({ defaultValue: 3 })
+    expect(rows.size).toBe(2)
+  })
+
   it('is idempotent and never overwrites an operator-changed toggle', async () => {
     const { rows, em } = toggleStore()
     await seedCostPlusDefaults(em as never)
@@ -35,7 +48,7 @@ describe('seedCostPlusDefaults', () => {
     rows.get(COST_PLUS_TOGGLE)!.name = 'Renamed by operator'
     await seedCostPlusDefaults(em as never)
     await seedCostPlusDefaults(em as never)
-    expect(rows.size).toBe(1)
+    expect(rows.size).toBe(2)
     expect(rows.get(COST_PLUS_TOGGLE)).toMatchObject({ defaultValue: true, name: 'Renamed by operator' })
   })
 

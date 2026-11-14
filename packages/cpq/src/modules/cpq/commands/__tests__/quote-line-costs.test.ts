@@ -60,3 +60,17 @@ it('rejects invalid input shapes before reaching the service', async () => {
   await expect(createQuoteLineCostCommand.execute({ quoteId, cost: { ...cost, source: 'table' } } as never, ctx)).rejects.toThrow()
   expect(service.createCost).not.toHaveBeenCalled()
 })
+
+// Characterization (supplier-sourcing step 1): the manual value write command is a thin pass-through today.
+it('a manual value write forwards exactly the value patch and carries no sourcing fields in the command schema or the log', async () => {
+  const { ctx, service } = setup()
+  const patch = { unitAmount: 280, valueStatus: 'confirmed' as const, note: 'phone quote' }
+  await updateQuoteLineCostCommand.execute({ quoteId, costId, patch }, ctx)
+  expect(service.updateCost).toHaveBeenCalledWith(quoteId, costId, patch, actor, { tenantId, organizationId })
+  // the patch schema is strict: sourcing columns are not writable through the value command today
+  await expect(updateQuoteLineCostCommand.execute({ quoteId, costId, patch: { sourcingStatus: 'cancelled' } } as never, ctx)).rejects.toThrow()
+  expect(service.updateCost).toHaveBeenCalledTimes(1)
+  const result = { cost: { id: costId }, margin: null, pricingRevision: 1, audit: { before: null, after: { id: costId, quoteLineId: lineId, costKey: 'manual:ab12cd34', role: 'margin_only', origin: 'manual', valueStatus: 'confirmed', valueOrigin: 'manual' } } }
+  const log = await updateQuoteLineCostCommand.buildLog!({ input: { quoteId, costId, patch }, result, ctx, snapshots: {} } as never)
+  expect(JSON.stringify(log)).not.toMatch(/sourcing|costRequest|proposed/i)
+})

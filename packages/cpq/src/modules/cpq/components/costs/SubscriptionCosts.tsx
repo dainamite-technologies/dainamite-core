@@ -3,11 +3,23 @@
 import * as React from 'react'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { Button } from '@open-mercato/ui/primitives/button'
+import { ErrorMessage } from '@open-mercato/ui/backend/detail'
+import type { CostsReadState } from './useCostsRead'
 import { hasCostAccess, type SubscriptionCostsResponse } from '../../lib/orderInventoryCostView'
 import { CostChips } from './CostRowsTable'
 import { AssetMarginFigures, InventoryCostsBlock, ItemMarginFigures } from './InventoryCostsBlock'
 
 export const todayIso = (): string => new Date().toISOString().slice(0, 10)
+
+/**
+ * Costs section placeholder for a failed read: the standard ErrorMessage on a non-404 failure (like the order and
+ * asset panels). `off` (404: toggle off) and every other state render nothing.
+ */
+export function SubscriptionCostsReadError({ state }: { state: CostsReadState }) {
+  const t = useT()
+  if (state !== 'error') return null
+  return <ErrorMessage label={t('cpq.inventoryCosts.error', 'Costs could not be loaded.')} />
+}
 
 /** Status chips of one subscription item, for the item row (everyone). */
 export function SubscriptionItemCostChips({ response, itemId }: { response: SubscriptionCostsResponse | null; itemId: string }) {

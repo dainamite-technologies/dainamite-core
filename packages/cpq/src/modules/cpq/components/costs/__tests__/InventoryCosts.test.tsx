@@ -1,7 +1,7 @@
 import * as React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { I18nProvider } from '@open-mercato/shared/lib/i18n/context'
-import { SubscriptionCostsSection, SubscriptionItemCosts, SubscriptionItemCostChips } from '../SubscriptionCosts'
+import { SubscriptionCostsReadError, SubscriptionCostsSection, SubscriptionItemCosts, SubscriptionItemCostChips } from '../SubscriptionCosts'
 import { AssetCostsSectionView, ASSET_COSTS_SPOT_ID } from '../AssetCostsPanel'
 import type { AssetCostsResponse, FullCostRow, SubscriptionCostsResponse } from '../../../lib/orderInventoryCostView'
 
@@ -79,6 +79,16 @@ describe('subscription costs', () => {
     expect(html).not.toContain('cpq-subscription-margin')
     expect(html).toContain('cpq-subscription-no-asset-costs')
     expect(html).toContain('aria-pressed="false"')
+  })
+})
+
+describe('SubscriptionCostsReadError (review1-f)', () => {
+  it('renders the standard error message on a failed (non-404) read', () => {
+    expect(text(wrap(<SubscriptionCostsReadError state="error" />))).toContain('Costs could not be loaded.')
+  })
+
+  it.each(['off', 'loading', 'ready'] as const)('renders nothing for state %s (off = 404 = toggle off)', (state) => {
+    expect(wrap(<SubscriptionCostsReadError state={state} />)).toBe('')
   })
 })
 

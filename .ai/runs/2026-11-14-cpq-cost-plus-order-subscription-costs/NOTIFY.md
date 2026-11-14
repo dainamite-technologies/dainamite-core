@@ -11,3 +11,4 @@
 - 2026-11-14 review1-c: order margin now uses the quote margin's line predicate (isArcMirrorLine on the source quote type; termination-line costs excluded).
 - 2026-11-14 review1-d: activateOrder loads the order config with PESSIMISTIC_WRITE inside the transaction, so a concurrent second activation gets the existing 409.
 - 2026-11-14 review1-e: billing golden now also asserts emitted lifecycle payloads are equal with vs without order line costs and with the toggle on/off (committed fixture untouched).
+- 2026-11-14 review1-f: subscription page Costs section renders the standard ErrorMessage on a non-404 read failure (404 still renders nothing).

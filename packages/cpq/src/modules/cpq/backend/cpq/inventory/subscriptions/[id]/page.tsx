@@ -18,7 +18,7 @@ import { parseStoredCharge } from '../../../../../lib/priceAdjustmentView'
 import { includeEndedQuery, type SubscriptionCostsResponse } from '../../../../../lib/orderInventoryCostView'
 import { costDiffValueText, diffOwners, diffSnapshotCosts, type CostDiffEntry, type SnapshotCost } from './costDiff'
 import { useCostsRead } from '../../../../../components/costs/useCostsRead'
-import { SubscriptionCostsSection, SubscriptionItemCostChips, SubscriptionItemCosts } from '../../../../../components/costs/SubscriptionCosts'
+import { SubscriptionCostsReadError, SubscriptionCostsSection, SubscriptionItemCostChips, SubscriptionItemCosts } from '../../../../../components/costs/SubscriptionCosts'
 
 // XD-250 — ARC integration on subscription detail.
 //   • header buttons (Amend / Renew / Cancel) call /from-subscription
@@ -769,6 +769,7 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
         )}
       </div>
 
+      <SubscriptionCostsReadError state={costsRead.state} />
       {costs && (
         <SubscriptionCostsSection
           response={costs}

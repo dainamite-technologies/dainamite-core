@@ -65,8 +65,8 @@ describe('MarginCard', () => {
 })
 
 const catalogCost: FullQuoteCost = {
-  id: 'c1', costKey: 'transport', name: 'Transport', role: 'price_basis', valueStatus: 'estimated', expired: false,
-  quoteLineId: 'l1', chargeCode: 'fee', origin: 'catalog', costType: 'mrc', source: 'fixed', costModel: 'flat',
+  id: 'c1', costKey: 'transport', name: 'Transport', role: 'price_basis', valueStatus: 'confirmed', expired: false,
+  quoteLineId: 'l1', chargeCode: 'fee', origin: 'catalog', valueOrigin: 'catalog', costType: 'mrc', source: 'fixed', costModel: 'flat',
   unitAmount: '100.0000', instanceAmount: '100.0000', currencyCode: 'EUR', supplierName: null, supplierQuoteRef: null,
   validUntil: null, supplierTermEnd: null, supplierMinTermMonths: null, note: 'Catalog default',
 }
@@ -79,6 +79,15 @@ describe('CostFormBody', () => {
     const content = text(wrap(body({ mode: 'edit', existing: catalogCost, form: costFormFromCost(catalogCost, 'EUR', false) })))
     expect(content).toContain('This value comes from the catalog')
     expect(content).toContain('Current note: Catalog default')
+  })
+
+  it('renders the Value and Currency fields for an on_request cost, and for fixed', () => {
+    const tail: FullQuoteCost = { ...catalogCost, source: 'on_request', valueStatus: 'estimated', unitAmount: '300.0000' }
+    const html = wrap(body({ mode: 'confirm', existing: tail, form: costFormFromCost(tail, 'EUR', true) }))
+    expect(text(html)).toContain('Value')
+    expect(text(html)).toContain('Currency')
+    expect(html).toContain('value="300.0000"')
+    expect(text(wrap(body({ form: { ...emptyCostForm('EUR'), source: 'on_request' } })))).toContain('Value')
   })
 
   it('marks the note required and explains the missing note', () => {
@@ -153,7 +162,7 @@ describe('cost actions', () => {
   })
 
   it('offers Confirm and Edit on a catalog cost, Delete only on a manual one', () => {
-    const catalog = render({ ...base, actions }, <CostRowActions cost={catalogCost} line={line} />)
+    const catalog = render({ ...base, actions }, <CostRowActions cost={{ ...catalogCost, source: 'on_request', valueStatus: 'estimated' }} line={line} />)
     expect(catalog).toContain('cpq-cost-confirm')
     expect(catalog).toContain('cpq-cost-edit')
     expect(catalog).not.toContain('cpq-cost-delete')

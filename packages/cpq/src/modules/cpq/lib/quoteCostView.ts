@@ -27,6 +27,8 @@ export type FullQuoteCost = RedactedQuoteCost & {
   costType: 'nrc' | 'mrc' | string
   source: 'fixed' | 'table' | 'on_request' | string
   costModel: string
+  /** Where the stored value came from; a `catalog` value needs a note to be overwritten. */
+  valueOrigin?: 'catalog' | 'manual' | string | null
   unitAmount: string | null
   instanceAmount: string | null
   currencyCode: string | null
@@ -255,15 +257,15 @@ export function costFormIssues(form: CostForm, existing: FullQuoteCost | null): 
   if (!existing || existing.origin === 'manual') {
     if (!form.name.trim()) issues.push('NAME_REQUIRED')
   }
-  const amount = form.source === 'fixed' ? parseAmount(form.unitAmount) : null
+  const amount = parseAmount(form.unitAmount)
   if (Number.isNaN(amount)) issues.push('AMOUNT_INVALID')
   if (form.currencyCode && !/^[A-Z]{3}$/.test(form.currencyCode.trim())) issues.push('CURRENCY_INVALID')
   if ((form.validUntil && !ISO_DATE.test(form.validUntil)) || (form.supplierTermEnd && !ISO_DATE.test(form.supplierTermEnd))) issues.push('DATE_INVALID')
   if (form.supplierMinTermMonths && !/^\d+$/.test(form.supplierMinTermMonths.trim())) issues.push('TERM_INVALID')
   if (existing) {
     const next = Number.isNaN(amount) ? null : amount
-    const valueChanged = !sameAmount(existing.unitAmount, next) || (existing.currencyCode ?? '') !== form.currencyCode.trim()
-    if (existing.origin === 'catalog' && valueChanged && !note) issues.push('NOTE_REQUIRED')
+    const valueChanged = !sameAmount(existing.unitAmount, next) || (existing.currencyCode !== null && existing.currencyCode !== form.currencyCode.trim())
+    if (existing.valueOrigin === 'catalog' && valueChanged && !note) issues.push('NOTE_REQUIRED')
     const extended = (form.validUntil && (!existing.validUntil || form.validUntil > existing.validUntil))
       || (form.supplierTermEnd && (!existing.supplierTermEnd || form.supplierTermEnd > existing.supplierTermEnd))
     const newRef = form.supplierQuoteRef.trim()
@@ -286,7 +288,7 @@ const text = (value: string): string | null => (value.trim() === '' ? null : val
 
 /** `POST /costs` body. Amount only for a fixed source; status only alongside an amount. */
 export function buildCostCreateBody(form: CostForm, quoteLineId: string, expectedRevision: number): Record<string, unknown> {
-  const amount = form.source === 'fixed' ? parseAmount(form.unitAmount) : null
+  const amount = parseAmount(form.unitAmount)
   return {
     quoteLineId,
     chargeCode: text(form.chargeCode),
@@ -318,12 +320,17 @@ export function buildCostPatch(form: CostForm, existing: FullQuoteCost, confirm:
     if (form.costModel !== existing.costModel) patch.costModel = form.costModel
     if (text(form.chargeCode) !== existing.chargeCode) patch.chargeCode = text(form.chargeCode)
   }
-  const amount = form.source === 'fixed' ? parseAmount(form.unitAmount) : null
+  const amount = parseAmount(form.unitAmount)
   const nextAmount = amount === null || Number.isNaN(amount) ? null : amount
-  if (!sameAmount(existing.unitAmount, nextAmount)) patch.unitAmount = nextAmount
-  if (text(form.currencyCode) !== existing.currencyCode && text(form.currencyCode)) patch.currencyCode = form.currencyCode.trim()
+  // The value is sent only when the user changed it: an untouched value (or the quote-currency default shown for a
+  // cost that has no value yet) must never be written back, and a supplier-ref-only edit must never clear it.
+  const amountChanged = !sameAmount(existing.unitAmount, nextAmount)
+  if (amountChanged) patch.unitAmount = nextAmount
+  const currency = text(form.currencyCode)
+  if (currency && (existing.currencyCode !== null ? currency !== existing.currencyCode : amountChanged && nextAmount !== null)) patch.currencyCode = currency
+  const baselineStatus = existing.valueStatus === 'none' ? 'estimated' : existing.valueStatus
   if (confirm) patch.valueStatus = 'confirmed'
-  else if (nextAmount !== null && form.valueStatus !== existing.valueStatus && existing.valueStatus !== 'none') patch.valueStatus = form.valueStatus
+  else if (nextAmount !== null && form.valueStatus !== baselineStatus) patch.valueStatus = form.valueStatus
   if (text(form.supplierName) !== existing.supplierName) patch.supplierName = text(form.supplierName)
   if (text(form.supplierQuoteRef) !== existing.supplierQuoteRef) patch.supplierQuoteRef = text(form.supplierQuoteRef)
   if (text(form.validUntil) !== existing.validUntil) patch.validUntil = text(form.validUntil)

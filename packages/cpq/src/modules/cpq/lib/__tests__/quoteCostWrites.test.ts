@@ -25,12 +25,12 @@ const figures = (patch: Partial<MarginFigures> = {}): MarginFigures => ({
   marginPercent: 41.2, markupPercent: null, costCoverage: 80, hasPendingCosts: false, hasEstimatedCosts: false, hasExpiredCosts: false, ...patch,
 })
 const catalogCost: FullQuoteCost = {
-  id: 'c1', costKey: 'transport', name: 'Transport', role: 'price_basis', valueStatus: 'estimated', expired: false,
-  quoteLineId: 'l1', chargeCode: 'fee', origin: 'catalog', costType: 'mrc', source: 'fixed', costModel: 'flat',
+  id: 'c1', costKey: 'transport', name: 'Transport', role: 'price_basis', valueStatus: 'confirmed', expired: false,
+  quoteLineId: 'l1', chargeCode: 'fee', origin: 'catalog', valueOrigin: 'catalog', costType: 'mrc', source: 'fixed', costModel: 'flat',
   unitAmount: '100.0000', instanceAmount: '100.0000', currencyCode: 'EUR', supplierName: 'Acme', supplierQuoteRef: 'Q-1',
   validUntil: '2026-12-31', supplierTermEnd: null, supplierMinTermMonths: null, note: null,
 }
-const manualCost: FullQuoteCost = { ...catalogCost, id: 'c2', origin: 'manual', costKey: 'manual:x' }
+const manualCost: FullQuoteCost = { ...catalogCost, id: 'c2', origin: 'manual', valueOrigin: 'manual', costKey: 'manual:x' }
 
 describe('margin view', () => {
   it('formats money and renders null percentages as a dash', () => {
@@ -102,7 +102,8 @@ describe('cost form', () => {
       unitAmount: 40, valueStatus: 'estimated', currencyCode: 'EUR', note: 'quote 7', expectedRevision: 7,
     })
     const onRequest = buildCostCreateBody({ ...emptyCostForm('EUR'), name: 'X', source: 'on_request', unitAmount: '9' }, 'l1', 0)
-    expect(onRequest).not.toHaveProperty('unitAmount')
+    expect(onRequest).toMatchObject({ unitAmount: 9, valueStatus: 'estimated' })
+    expect(buildCostCreateBody({ ...emptyCostForm('EUR'), name: 'X', source: 'on_request' }, 'l1', 0)).not.toHaveProperty('unitAmount')
     expect(onRequest.chargeCode).toBeNull()
     expect(onRequest.expectedRevision).toBe(0)
   })
@@ -142,6 +143,48 @@ describe('cost form', () => {
     expect(buildCostPatch(rename, manualCost, false, 1)).toMatchObject({ name: 'Renamed', role: 'margin_only' })
     const same = { ...costFormFromCost(catalogCost, 'EUR', false), name: 'Renamed' }
     expect(buildCostPatch(same, catalogCost, false, 1)).not.toHaveProperty('name')
+  })
+})
+
+describe('on_request catalog cost (estimated tail)', () => {
+  const tail: FullQuoteCost = {
+    ...catalogCost, id: 'c3', costKey: 'tail', name: 'Tail', source: 'on_request', valueStatus: 'estimated', valueOrigin: 'catalog',
+    unitAmount: '300.0000', instanceAmount: '300.0000', currencyCode: 'EUR', supplierQuoteRef: null, validUntil: null, supplierName: null,
+  }
+  const unpriced: FullQuoteCost = { ...tail, id: 'c4', valueStatus: 'none', valueOrigin: null, unitAmount: null, instanceAmount: null, currencyCode: null }
+
+  it('confirming an unchanged estimate sends only the status and the revision, with no note needed', () => {
+    const form = costFormFromCost(tail, 'EUR', true)
+    expect(form.unitAmount).toBe('300.0000')
+    expect(costFormIssues(form, tail)).toEqual([])
+    expect(buildCostPatch(form, tail, true, 5)).toEqual({ valueStatus: 'confirmed', expectedRevision: 5 })
+  })
+
+  it('a supplier-ref-only edit never sends or clears the value', () => {
+    const form = { ...costFormFromCost(tail, 'EUR', false), supplierQuoteRef: 'Q-9' }
+    const patch = buildCostPatch(form, tail, false, 5)
+    expect(patch).toEqual({ supplierQuoteRef: 'Q-9', expectedRevision: 5 })
+    expect(patch).not.toHaveProperty('unitAmount')
+    expect(patch).not.toHaveProperty('currencyCode')
+  })
+
+  it('entering 280 EUR confirmed with a supplier ref overwrites the catalog value and needs a note', () => {
+    const form = { ...costFormFromCost(tail, 'EUR', false), unitAmount: '280', valueStatus: 'confirmed' as const, supplierQuoteRef: 'SQ-1' }
+    expect(costFormIssues(form, tail)).toEqual(['NOTE_REQUIRED'])
+    const withNote = { ...form, note: 'supplier quoted 280' }
+    expect(costFormIssues(withNote, tail)).toEqual([])
+    expect(buildCostPatch(withNote, tail, false, 6)).toEqual({
+      unitAmount: 280, valueStatus: 'confirmed', supplierQuoteRef: 'SQ-1', note: 'supplier quoted 280', expectedRevision: 6,
+    })
+  })
+
+  it('a cost with no value yet takes a value without a note and carries the currency', () => {
+    const base = costFormFromCost(unpriced, 'EUR', false)
+    expect(buildCostPatch(base, unpriced, false, 1)).toEqual({ expectedRevision: 1 })
+    expect(costFormIssues(base, unpriced)).toEqual([])
+    const entered = { ...base, unitAmount: '280', valueStatus: 'confirmed' as const, supplierQuoteRef: 'SQ-1' }
+    expect(costFormIssues(entered, unpriced)).toEqual([])
+    expect(buildCostPatch(entered, unpriced, false, 2)).toEqual({ unitAmount: 280, currencyCode: 'EUR', valueStatus: 'confirmed', supplierQuoteRef: 'SQ-1', expectedRevision: 2 })
   })
 })
 

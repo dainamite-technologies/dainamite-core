@@ -96,7 +96,7 @@ export function CostFormBody({ form, onChange, mode, existing, charges, issues, 
           </SelectContent>
         </Select>
       </Field>
-      {form.source === 'fixed' && (
+      {(form.source === 'fixed' || form.source === 'on_request') && (
         <div className="grid grid-cols-3 gap-3">
           <div className="col-span-2">
             <Field label={t('cpq.quoteCosts.value', 'Value')}>
@@ -108,7 +108,7 @@ export function CostFormBody({ form, onChange, mode, existing, charges, issues, 
           </Field>
         </div>
       )}
-      {form.source === 'fixed' && mode !== 'confirm' && form.unitAmount.trim() !== '' && (
+      {mode !== 'confirm' && form.unitAmount.trim() !== '' && (
         <Field label={t('cpq.quoteCosts.status', 'Status')}>
           <Choice value={form.valueStatus} onChange={(value) => set('valueStatus', value)}
             options={[['estimated', t('cpq.quoteCosts.statuses.estimated', 'Estimated')], ['confirmed', t('cpq.quoteCosts.statuses.confirmed', 'Confirmed')]]} />

@@ -12,11 +12,11 @@ Engine: om-auto-create-pr-loop (steps: 21, --loop: no)
 
 | Phase | Step | Title | Exec | Status | Commit |
 |-------|------|-------|------|--------|--------|
-| A | 1 | Characterization tests | group:A | done | |
-| B | 2 | Order line cost and inventory cost entities | group:B1 | done | |
-| B | 3 | Atomic activation | group:B1 | done | |
-| B | 4 | Conversion copy | group:B2 | done | |
-| B | 5 | Item cost sync and activation write | group:B2 | done | |
+| A | 1 | Characterization tests | group:A | done |5f93d4d |
+| B | 2 | Order line cost and inventory cost entities | group:B1 | done |d14f36a |
+| B | 3 | Atomic activation | group:B1 | done |be31f71 |
+| B | 4 | Conversion copy | group:B2 | done |a6e8f50 |
+| B | 5 | Item cost sync and activation write | group:B2 | done |f02d114 |
 | B | 6 | Subscription snapshots carry costs | group:B3 | todo | |
 | B | 7 | cost_changed event | group:B3 | todo | |
 | B | 8 | Read APIs and redaction | group:B4 | todo | |

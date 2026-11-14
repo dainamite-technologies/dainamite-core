@@ -8,6 +8,10 @@ import { z } from 'zod'
 /** Tenant feature toggle (R14): boolean, default off, per-tenant override. */
 export const COST_PLUS_TOGGLE = 'cpq.cost_plus'
 
+/** Numeric tenant toggle (sourcing Q10): working days (Mon–Fri) before an open cost request counts as overdue. */
+export const COST_REQUEST_OVERDUE_TOGGLE = 'cpq.cost_requests.overdue_working_days'
+export const COST_REQUEST_OVERDUE_DEFAULT_DAYS = 5
+
 /** See cost values, suppliers, markup and margin (App Spec §1.4.10). */
 export const COSTS_VIEW_FEATURE = 'cpq.costs.view'
 /** Add / edit manual costs, enter or confirm costs, markup overrides. */

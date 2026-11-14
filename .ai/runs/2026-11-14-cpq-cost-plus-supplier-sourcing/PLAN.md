@@ -17,7 +17,7 @@ Engine: om-auto-create-pr-loop (steps: 20, --loop: no)
 | A | 3 | Entity, migration and overdue toggle | group:A2 | done | |
 | A | 4 | Pure sourcing rules | group:A2 | done | |
 | B | 5 | Sourcing service, request / cancel commands and routes | group:B1 | done | |
-| B | 6 | Auto-open and R1b / R1a cancellation | group:B1 | todo | |
+| B | 6 | Auto-open and R1b / R1a cancellation | group:B1 | done | |
 | B | 7 | Answer and decline | group:B2 | todo | |
 | B | 8 | Apply answer route | group:B2 | todo | |
 | B | 9 | Cancellation on close | group:B3 | todo | |

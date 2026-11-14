@@ -1085,6 +1085,7 @@ export class DefaultCpqQuotingService {
     const costInputs = costService
       ? await resolveCostPlusInputs({
         em, quote: cpqConfig, scope, save, isEnabled: (tenantId) => costService.enabled(tenantId),
+        actorUserId: sourcing?.actorUserId ?? null, signals: sourcing?.signals,
         lines: prepared.map(({ lineConfig, mergedConfig }) => ({ lineConfig, mergedConfig })),
       })
       : null

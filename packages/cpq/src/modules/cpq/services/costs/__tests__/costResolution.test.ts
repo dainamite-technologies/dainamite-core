@@ -4,6 +4,7 @@ import {
 } from '../../../data/entities'
 import { DefaultCpqQuotingService } from '../../cpqQuotingService'
 import { isQuoteCostLocked, resolveCostPlusInputs, resolveQuoteCosts } from '../costResolution'
+import type { SourcingSignal } from '../sourcingSignals'
 
 const SCOPE = { organizationId: 'org', tenantId: 'tenant' }
 const QUOTE_ID = 'quote-cfg'
@@ -42,10 +43,10 @@ const catalogCost = (over: Row = {}) => ({ id: 'c-1', ...SCOPE, deletedAt: null,
   origin: 'catalog', valueStatus: 'confirmed', valueOrigin: 'catalog', unitAmount: '100', instanceAmount: '100', currencyCode: 'USD',
   note: null, driverHash: null, errorCode: null, ...over })
 
-const run = (s: ReturnType<typeof store>, opts: { enabled?: boolean; config?: Row; quoteOver?: Row; lines?: Array<{ lineConfig: never; mergedConfig: Row }> } = {}) =>
+const run = (s: ReturnType<typeof store>, opts: { enabled?: boolean; config?: Row; quoteOver?: Row; lines?: Array<{ lineConfig: never; mergedConfig: Row }>; actorUserId?: string | null; signals?: SourcingSignal[] } = {}) =>
   resolveQuoteCosts({
     em: s.em as never, quote: quote(opts.quoteOver), scope: SCOPE,
-    isEnabled: async () => opts.enabled ?? true,
+    isEnabled: async () => opts.enabled ?? true, actorUserId: opts.actorUserId, signals: opts.signals,
     lines: opts.lines ?? [{ lineConfig: lineConfig(), mergedConfig: opts.config ?? {} }],
   })
 
@@ -415,55 +416,230 @@ describe('resolveCostPlusInputs', () => {
   })
 })
 
-// Characterization (supplier-sourcing step 1): today the resolver never reads or writes the sourcing columns of
-// feature 1. Step 9 turns the R1a drop and the R1b reset into scenarios that also cancel an open cost request.
-describe('sourcing columns stay untouched by the resolver (characterization)', () => {
+// Supplier sourcing step 6 (feature spec Q12, R1a / R1b): the resolver now owns the request side of a SAVED recalculation.
+// MODIFIED from the step-1 characterization (which pinned "the resolver never touches the sourcing columns"):
+//  - R1b reset: the open request is cancelled `reconfigured` in the same write (and a fresh one opens for requires_sourcing);
+//  - R1a drop: the dropped line's open request is cancelled (`element_deactivated` / `reconfigured`);
+//  - ARC removal: every dropped line's open request is cancelled `line_removed`;
+//  - a new catalog line opens its request when the element requires sourcing (unchanged: otherwise it starts not_requested);
+//  - a driver-unchanged re-resolve leaves an open request alone (unchanged).
+describe('cost requests on saved recalculations (Q12, R1a, R1b)', () => {
   const SOURCING = { sourcingStatus: 'requested', costRequestId: 'req-1', requestSeq: 3, requestedAt: new Date('2026-01-01'), requestedByUserId: 'u1',
     answeredAt: null, answeredByUserId: null, declineReason: null, proposedAmount: '70.0000', supplierId: 'sup-1', supplierName: 'Acme',
     supplierQuoteRef: 'Q-1', validUntil: '2999-01-01', supplierTermEnd: null, supplierMinTermMonths: null }
-  const sourcingOf = (row: Row) => Object.fromEntries(Object.keys(SOURCING).map((key) => [key, row[key]]))
-
-  it('R1b reset: moves the previous value into the note (appended to an existing one) and leaves the sourcing columns as they were', async () => {
-    const el = element({ source: 'on_request', amount: null, estimateAmount: '55', applicabilityCondition: { attribute: 'speed', operator: 'neq', value: 'never' } })
-    const s = store({ charges: [charge()], elements: [el] })
+  const ACTOR = '44444444-4444-4444-8444-444444444444'
+  const driven = (over: Row = {}) => element({ source: 'on_request', amount: null, estimateAmount: '55', applicabilityCondition: { attribute: 'speed', operator: 'neq', value: 'never' }, ...over })
+  const cancelledEntry = (reason: string) => ({
+    costRequestId: 'req-1', requestSeq: 3, requestedAt: '2026-01-01T00:00:00.000Z', requestedByUserId: 'u1',
+    closedAt: expect.any(String), closedByUserId: ACTOR, outcome: 'cancelled', reason,
+  })
+  const seeded = async (over: Row = {}) => {
+    const s = store({ charges: [charge()], elements: [driven(over)] })
     await run(s, { config: { speed: '1G' } })
     Object.assign(s.costs[0], { valueOrigin: 'manual', valueStatus: 'confirmed', unitAmount: '80', instanceAmount: '80', note: 'carrier call', ...SOURCING })
-    await run(s, { config: { speed: '10G' } })
-    expect(s.costs[0]).toMatchObject({ valueStatus: 'estimated', valueOrigin: 'catalog', unitAmount: '55' })
-    expect(String(s.costs[0].note)).toContain('80 USD')
-    expect(String(s.costs[0].note)).toContain('carrier call')
-    expect(sourcingOf(s.costs[0])).toEqual(SOURCING)
+    return s
+  }
+
+  describe('R1b reset', () => {
+    it('cancels the open request (reconfigured) in the same write and keeps the previous value in the note', async () => {
+      const s = await seeded()
+      const signals: SourcingSignal[] = []
+      await run(s, { config: { speed: '10G' }, actorUserId: ACTOR, signals })
+      expect(s.costs[0]).toMatchObject({
+        valueStatus: 'estimated', valueOrigin: 'catalog', unitAmount: '55', sourcingStatus: 'cancelled', cancelReason: 'reconfigured',
+        costRequestId: 'req-1', requestSeq: 3, proposedAmount: null, proposedAnswer: null, lastAnswerHash: null,
+      })
+      expect(String(s.costs[0].note)).toContain('80 USD')
+      expect(String(s.costs[0].note)).toContain('carrier call')
+      expect(s.costs[0].requestHistory).toEqual([cancelledEntry('reconfigured')])
+      expect(signals).toEqual([expect.objectContaining({ kind: 'request_cancelled', reason: 'reconfigured', costRequestId: 'req-1', requestSeq: 3, costLineId: s.costs[0].id })])
+    })
+
+    it('opens a fresh request for a requires_sourcing element (seq + 1, requester = the actor, supplier from the element default)', async () => {
+      const s = await seeded({ requiresSourcing: true, defaultSupplierId: 'sup-9', defaultSupplierName: 'Default Carrier' })
+      const signals: SourcingSignal[] = []
+      await run(s, { config: { speed: '10G' }, actorUserId: ACTOR, signals })
+      expect(s.costs[0]).toMatchObject({
+        sourcingStatus: 'requested', requestSeq: 4, requestedByUserId: ACTOR, requestSupplierId: 'sup-9', requestSupplierName: 'Default Carrier',
+        valueStatus: 'estimated', cancelReason: null, answeredAt: null,
+      })
+      expect(s.costs[0].costRequestId).not.toBe('req-1')
+      expect(s.costs[0].requestedAt).toBeInstanceOf(Date)
+      expect(s.costs[0].requestHistory).toEqual([{ ...cancelledEntry('reconfigured'), supplierId: 'sup-9' }])
+      expect(signals.map((signal) => signal.kind)).toEqual(['request_cancelled', 'requested'])
+      expect(signals[1]).toMatchObject({ kind: 'requested', requestSeq: 4, auto: true, supplierId: 'sup-9', requestedByUserId: ACTOR, costRequestId: s.costs[0].costRequestId })
+    })
+
+    it('a reset of an answered request opens a fresh one for a requires_sourcing element without cancelling anything', async () => {
+      const s = await seeded({ requiresSourcing: true })
+      Object.assign(s.costs[0], { sourcingStatus: 'answered', answeredAt: new Date(), requestHistory: [] })
+      const signals: SourcingSignal[] = []
+      await run(s, { config: { speed: '10G' }, actorUserId: ACTOR, signals })
+      expect(s.costs[0]).toMatchObject({ sourcingStatus: 'requested', requestSeq: 4, proposedAmount: null })
+      expect(signals.map((signal) => signal.kind)).toEqual(['requested'])
+    })
+
+    it('leaves the sourcing columns alone while the driving attribute is unchanged', async () => {
+      const s = await seeded({ requiresSourcing: true })
+      const signals: SourcingSignal[] = []
+      await run(s, { config: { speed: '1G' }, signals })
+      expect(s.costs[0]).toMatchObject({ sourcingStatus: 'requested', costRequestId: 'req-1', requestSeq: 3, proposedAmount: '70.0000' })
+      expect(signals).toEqual([])
+    })
+
+    it('records the cancellation of a request on a non-sourcing element but opens none', async () => {
+      const s = await seeded({ requiresSourcing: false })
+      await run(s, { config: { speed: '10G' }, actorUserId: ACTOR })
+      expect(s.costs[0]).toMatchObject({ sourcingStatus: 'cancelled', cancelReason: 'reconfigured' })
+    })
   })
 
-  it('R1a drop: soft-deletes the catalog line only; the sourcing columns are not cancelled or cleared', async () => {
-    const s = store({ charges: [charge()], elements: [element({ isActive: false })], costs: [catalogCost(SOURCING)] })
-    const stats = await run(s)
-    expect(stats.dropped).toBe(1)
-    expect(s.costs[0].deletedAt).toBeInstanceOf(Date)
-    expect(sourcingOf(s.costs[0])).toEqual(SOURCING)
+  describe('R1a drop', () => {
+    it('cancels the request of a line whose element was deactivated (element_deactivated) and soft-deletes it', async () => {
+      const s = store({ charges: [charge()], elements: [element({ isActive: false })], costs: [catalogCost({ costElementId: 'el-1', ...SOURCING })] })
+      const signals: SourcingSignal[] = []
+      const stats = await run(s, { actorUserId: ACTOR, signals })
+      expect(stats.dropped).toBe(1)
+      expect(s.costs[0].deletedAt).toBeInstanceOf(Date)
+      expect(s.costs[0]).toMatchObject({ sourcingStatus: 'cancelled', cancelReason: 'element_deactivated', proposedAmount: null })
+      expect(s.costs[0].requestHistory).toEqual([cancelledEntry('element_deactivated')])
+      expect(signals).toEqual([expect.objectContaining({ kind: 'request_cancelled', reason: 'element_deactivated' })])
+    })
+
+    it('an element that is still active but no longer applies is reconfigured', async () => {
+      const el = element({ source: 'on_request', amount: null, applicabilityCondition: { attribute: 'speed', operator: 'eq', value: '1G' } })
+      const s = store({ charges: [charge()], elements: [el], costs: [catalogCost(SOURCING)] })
+      await run(s, { config: { speed: '10G' }, actorUserId: ACTOR })
+      expect(s.costs[0].deletedAt).toBeInstanceOf(Date)
+      expect(s.costs[0]).toMatchObject({ sourcingStatus: 'cancelled', cancelReason: 'reconfigured' })
+    })
+
+    it('a closed request is not cancelled again; the line is just dropped', async () => {
+      const s = store({ charges: [charge()], elements: [element({ isActive: false })], costs: [catalogCost({ ...SOURCING, sourcingStatus: 'answered' })] })
+      const signals: SourcingSignal[] = []
+      await run(s, { signals })
+      expect(s.costs[0]).toMatchObject({ sourcingStatus: 'answered', deletedAt: expect.any(Date) })
+      expect(signals).toEqual([])
+    })
   })
 
-  it('an ARC removal drops every cost line without touching its sourcing columns', async () => {
+  it('an ARC removal drops every cost line and cancels their open requests (line_removed)', async () => {
     const manual = catalogCost({ id: 'c-2', costKey: 'manual:abcd1234', origin: 'manual', valueOrigin: 'manual', ...SOURCING })
     const s = store({ charges: [charge()], elements: [element()], costs: [catalogCost(SOURCING), manual] })
     const removed = lineConfig({ action: 'cancel', configuration: { _arcMirroredFromItemId: 'item-1' } })
-    await run(s, { quoteOver: { quoteType: 'renew' }, lines: [{ lineConfig: removed, mergedConfig: {} }] })
-    for (const row of s.costs) { expect(row.deletedAt).toBeInstanceOf(Date); expect(sourcingOf(row)).toEqual(SOURCING) }
+    const signals: SourcingSignal[] = []
+    await run(s, { quoteOver: { quoteType: 'renew' }, lines: [{ lineConfig: removed, mergedConfig: {} }], actorUserId: ACTOR, signals })
+    for (const row of s.costs) expect(row).toMatchObject({ deletedAt: expect.any(Date), sourcingStatus: 'cancelled', cancelReason: 'line_removed' })
+    expect(signals.map((signal) => signal.kind)).toEqual(['request_cancelled', 'request_cancelled'])
   })
 
-  it('a new catalog line starts not_requested with no request, answer or proposal data', async () => {
+  describe('auto-open (Q12)', () => {
+    const tail = (over: Row = {}) => element({ source: 'on_request', amount: null, estimateAmount: '300', requiresSourcing: true, defaultSupplierId: 'sup-9', ...over })
+
+    it('opens a request for a new on_request cost of a requires_sourcing element (seq 1, requester = the actor)', async () => {
+      const s = store({ charges: [charge()], elements: [tail()] })
+      const signals: SourcingSignal[] = []
+      await run(s, { actorUserId: ACTOR, signals })
+      expect(s.costs[0]).toMatchObject({ sourcingStatus: 'requested', requestSeq: 1, requestedByUserId: ACTOR, requestSupplierId: 'sup-9', valueStatus: 'estimated' })
+      expect(s.costs[0].costRequestId).toEqual(expect.any(String))
+      expect(signals).toEqual([expect.objectContaining({
+        kind: 'requested', auto: true, requestSeq: 1, costLineId: s.costs[0].id, costRequestId: s.costs[0].costRequestId, supplierId: 'sup-9', costKey: 'tail',
+      })])
+    })
+
+    it('an actor-less recalculation opens it with no requester (no notification recipient, Q5)', async () => {
+      const s = store({ charges: [charge()], elements: [tail()] })
+      await run(s)
+      expect(s.costs[0]).toMatchObject({ sourcingStatus: 'requested', requestedByUserId: null })
+    })
+
+    it('opens nothing for elements that do not require sourcing, nor for fixed / table costs', async () => {
+      const s = store({ charges: [charge()], elements: [tail({ requiresSourcing: false }), element({ id: 'el-2', code: 'fixed', requiresSourcing: true })] })
+      const signals: SourcingSignal[] = []
+      await run(s, { signals })
+      expect(s.costs.map((row) => row.sourcingStatus)).toEqual(['not_requested', 'not_requested'])
+      expect(signals).toEqual([])
+    })
+
+    it('opens a request for an existing never-requested on_request cost line, once (repeated saves never duplicate)', async () => {
+      const s = store({ charges: [charge()], elements: [tail()] })
+      await run(s)
+      Object.assign(s.costs[0], { sourcingStatus: 'not_requested', costRequestId: null, requestSeq: null, requestedAt: null })
+      await run(s, { actorUserId: ACTOR })
+      const id = s.costs[0].costRequestId
+      expect(s.costs[0]).toMatchObject({ sourcingStatus: 'requested', requestSeq: 1 })
+      await run(s, { actorUserId: ACTOR })
+      expect(s.costs[0]).toMatchObject({ costRequestId: id, requestSeq: 1 })
+    })
+
+    it('never re-opens a request that was cancelled, declined or answered', async () => {
+      for (const status of ['cancelled', 'declined', 'answered']) {
+        const s = store({ charges: [charge()], elements: [tail()] })
+        await run(s)
+        Object.assign(s.costs[0], { sourcingStatus: status })
+        await run(s, { actorUserId: ACTOR })
+        expect(s.costs[0].sourcingStatus).toBe(status)
+      }
+    })
+
+    it('does not open for a confirmed value', async () => {
+      const s = store({ charges: [charge()], elements: [tail()] })
+      await run(s)
+      Object.assign(s.costs[0], { sourcingStatus: 'not_requested', costRequestId: null, valueOrigin: 'manual', valueStatus: 'confirmed', unitAmount: '280', instanceAmount: '280' })
+      await run(s)
+      expect(s.costs[0].sourcingStatus).toBe('not_requested')
+    })
+
+    it('never opens with the toggle off, on a locked quote or on an unreconfigured mirror', async () => {
+      const off = store({ charges: [charge()], elements: [tail()] })
+      await run(off, { enabled: false })
+      expect(off.costs).toHaveLength(0)
+      const locked = store({ charges: [charge()], elements: [tail()], costs: [catalogCost({ valueStatus: 'estimated', sourcingStatus: 'not_requested', valueOrigin: 'catalog' })] })
+      await run(locked, { quoteOver: { cpqStatus: 'with_customer' } })
+      expect(locked.costs[0].sourcingStatus).toBe('not_requested')
+      const mirror = store({ charges: [charge()], elements: [tail()] })
+      await run(mirror, { quoteOver: { quoteType: 'amend' }, lines: [{ lineConfig: lineConfig({ configuration: { _arcMirroredFromItemId: 'item-1' } }), mergedConfig: {} }] })
+      expect(mirror.costs).toHaveLength(0)
+    })
+
+    it('opens for a reconfigured mirror line (it is priced by the quote)', async () => {
+      const s = store({ charges: [charge()], elements: [tail()] })
+      await run(s, { quoteOver: { quoteType: 'amend' }, lines: [{ lineConfig: lineConfig({ configuration: { _arcMirroredFromItemId: 'item-1', _arcReconfigured: true } }), mergedConfig: {} }], actorUserId: ACTOR })
+      expect(s.costs[0]).toMatchObject({ sourcingStatus: 'requested', requestSeq: 1 })
+    })
+
+    it('a preview opens and cancels nothing and collects no signal', async () => {
+      const s = store({ charges: [charge()], elements: [tail()], costs: [catalogCost({ ...SOURCING, valueStatus: 'estimated', valueOrigin: 'manual', unitAmount: '80',
+        driverHash: 'stale' })] })
+      const signals: SourcingSignal[] = []
+      const inputs = await resolveCostPlusInputs({
+        em: s.em as never, quote: quote(), scope: SCOPE, isEnabled: async () => true, save: false, signals, actorUserId: ACTOR,
+        lines: [{ lineConfig: lineConfig(), mergedConfig: {} }],
+      })
+      expect(inputs.enabled).toBe(true)
+      expect(signals).toEqual([])
+      expect(s.costs[0]).toMatchObject({ sourcingStatus: 'requested', costRequestId: 'req-1', requestSeq: 3 })
+      expect(s.em.persist).not.toHaveBeenCalled()
+      const fresh = store({ charges: [charge()], elements: [tail()] })
+      await resolveCostPlusInputs({ em: fresh.em as never, quote: quote(), scope: SCOPE, isEnabled: async () => true, save: false, lines: [{ lineConfig: lineConfig(), mergedConfig: {} }] })
+      expect(fresh.costs).toHaveLength(0)
+    })
+
+    it('a saved recalculation through resolveCostPlusInputs collects the signals', async () => {
+      const s = store({ charges: [charge()], elements: [tail()] })
+      const signals: SourcingSignal[] = []
+      await resolveCostPlusInputs({
+        em: s.em as never, quote: quote(), scope: SCOPE, isEnabled: async () => true, save: true, signals, actorUserId: ACTOR,
+        lines: [{ lineConfig: lineConfig(), mergedConfig: {} }],
+      })
+      expect(signals).toEqual([expect.objectContaining({ kind: 'requested', auto: true, requestedByUserId: ACTOR })])
+    })
+  })
+
+  it('a new catalog line starts not_requested with no request, answer or proposal data (no sourcing element)', async () => {
     const s = store({ charges: [charge()], elements: [element()] })
     await run(s)
     expect(s.costs[0].sourcingStatus).toBe('not_requested')
     for (const key of ['costRequestId', 'requestSeq', 'requestedAt', 'answeredAt', 'declineReason', 'proposedAmount']) expect(s.costs[0][key] ?? null).toBeNull()
-  })
-
-  it('a driver-unchanged re-resolve leaves an open request on the line alone', async () => {
-    const el = element({ source: 'on_request', amount: null, estimateAmount: '55', applicabilityCondition: { attribute: 'speed', operator: 'neq', value: 'never' } })
-    const s = store({ charges: [charge()], elements: [el] })
-    await run(s, { config: { speed: '1G' } })
-    Object.assign(s.costs[0], SOURCING)
-    await run(s, { config: { speed: '1G' } })
-    expect(sourcingOf(s.costs[0])).toEqual(SOURCING)
   })
 })

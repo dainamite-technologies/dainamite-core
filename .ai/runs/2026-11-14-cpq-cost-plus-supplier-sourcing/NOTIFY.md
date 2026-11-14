@@ -13,3 +13,7 @@
 ## 2026-11-14T20:00:00Z — step 5 (B1)
 - Decision: `note` on `POST …/request` is validated (≤ 500) but not persisted: the spec gives it no column and the sourcing events / history carry no free text. Reversible (a `request_note` column or an event field can be added without changing the route).
 - Seam for step 12: `services/costs/sourcingSignals.ts` (`SourcingSignal`, `SourcingSignalPublisher`). Every producer pushes amount-free signals during its transaction; `CpqCostSourcingService` (dep `publisher`) and `DefaultCpqQuotingService` (dep `sourcingPublisher`) hand them to the publisher in `withQuotePricingWrite({ afterCommit })`. Step 12 only has to implement the publisher and wire it in `di.ts`; nothing is emitted today.
+
+## 2026-11-14T20:20:00Z — step 6 (B1)
+- Decision: a clone's first saved recalculation auto-opens requests like any saved recalculation (Q12; the clone route threads the cloning user as requester, Q5). The clone's cost lines still start `not_requested` (SOURCING_RESET); the open request appears only after that recalculation. Reversible by not passing the sourcing context from `cloneQuoteInTransaction`.
+- Decision: R1b cancels on any driver change of an `on_request` / entered cost (also when the value was already `none`), not only when the reset note is written, so a request never survives a reconfiguration it was not made for.

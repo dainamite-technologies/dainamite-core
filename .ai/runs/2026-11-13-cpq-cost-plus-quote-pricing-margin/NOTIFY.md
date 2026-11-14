@@ -129,3 +129,7 @@
 
 ## 2026-11-14T04:20:27Z — review1-g (signal minors)
 - Decision: only `status_changed`'s `hasPendingCosts` / `hasEstimatedCosts` changed to PRICE-BASIS semantics (= the UI's indicative chip). The margin card and `margin_changed` keep the margin flags (every cost line, margin-only included). The flags are still present only on quotes that carry costs (unchanged; spec says "SHALL carry" — always emitting `false` is left as a follow-up). The margin hash adds each line's effective horizon (`termMonths ?? 12`), so existing hashes move once on the next write after deploy (unreleased feature). `previousMarginHash` uses the framework's `optional: true` (it covers "absent or null"; there is no `nullable` option).
+
+## 2026-11-14T09:58:01Z — run complete
+- Re-review of the fix range: no blocker / major; 5 minors + 1 nit fixed as review1-k (restore + term on cost-locked cost-plus lines → COST_LOCKED), review1-l (entered value keeps the chosen status on a valueless row; usage openQuotes counts accepted unconverted quotes; ARC termination lines excluded from cost flags, margin cost input and readiness errors), review1-m (xd-187 / openApi wording). The re-reviewer was cut off twice by provider limits after recording its findings.
+- Final gate at 6b9f877: generate ✅ typecheck ✅ build ✅ `yarn test` 124 / 1871 ✅; CI unit + integration ✅ (run 43581975527). Style pass skipped (no lint tooling). Status → complete; PR #93 marked ready.

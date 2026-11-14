@@ -1,28 +1,22 @@
 # Handoff — 2026-11-13-cpq-cost-plus-quote-pricing-margin
 
-**Last updated:** 2026-11-13T17:51:24Z
-**Branch:** feat/cpq-cost-plus-quote-pricing-margin (local worktree branch `cez/fdfb25fb`, push with `git push origin HEAD:feat/cpq-cost-plus-quote-pricing-margin`)
-**PR:** #93 (draft) https://github.com/dainamite-technologies/dainamite-core/pull/93
-**Current phase/step:** Phase D closed (checkpoint 6); paused at the ~20-Step safety checkpoint; next Phase E Step 21
-**Last commit:** b42681c — Step 20 (+ this checkpoint commit)
+**Last updated:** 2026-11-14T09:58:01Z
+**Branch:** feat/cpq-cost-plus-quote-pricing-margin (local worktree branch `cez/fdfb25fb`)
+**PR:** #93 — ready for review https://github.com/dainamite-technologies/dainamite-core/pull/93
+**Current phase/step:** complete — all 24 plan steps + review fixes done; final gate green
+**Last commit:** 6b9f877 (code) + the final run-record commit
 
 ## What just happened
-- UI landed: charge editor (cost-plus, cost elements, preview), pricing-table purpose, quote page badges / Costs panel / Margin card / cost dialogs / stale-price banner; unpriced cost-plus charges carry the fallback price. Full suite green (1775 tests). This resume landed 22 Steps (4 → 20 incl. 5 review fixes) and stopped at the skill's ~20-Step safety checkpoint for a user review.
+- Phase E, review 1 (6 majors, 9 minors, inherited bot feedback) and the re-review fixes landed. Local gate and CI (unit + integration incl. the cost-plus smoke test on Postgres) are green.
 
 ## Next concrete action
-- After the user's go-ahead: Phase E — Step 21 calculate-price (cost-plus without a quote, indicative, priceOnRequest, totals exclusion, toggle-off, Puffin proxy check), Step 22 clone / removal / toggle-off, Step 23 demo seed + manual + MIGRATION.md + changeset + Playwright smoke, Step 24 archive the Delta. Then the final gate and the review pass; then PR 2 of 6 (order & subscription costs).
+- None on this PR beyond human review + browser QA. The next feature (order & subscription costs) stacks on this branch as its own PR.
 
 ## Blockers / open questions
-- Safety checkpoint (~20 consecutive Steps): waiting for the user to review before Phase E.
-- Browser QA of the new UI is still owed (app not runnable here).
+- none (follow-ups listed in final-gate-checks.md)
 
 ## Environment caveats
-- Dev runtime runnable: no (no Postgres; Docker socket denied)
-- Browser / UI checks: skipped — no runnable app environment
-- Migrations generated DB-less (`TMPDIR=/tmp node_modules/.bin/tsx node_modules/.cache/cpq-tools/gen-cpq-migration.mts`), never applied
-- Demo tests import CPQ's `dist`: run `yarn workspace @dainamite/cpq build` before the full `yarn test`
-- Tasks-table `Commit` cells are filled with real SHAs at each checkpoint
-- Step 23: record in MIGRATION.md that `ResolvedCharge.unitPrice` / `listUnitPrice` are now `number | null`
+- No Postgres / Docker / browser locally; integration runs in CI only; migrations generated DB-less but applied in CI.
 
 ## Worktree
 - Path: /home/ubuntu/cezar/projects/dainamite-core/.ai/cezar/worktrees/fdfb25fb-8422-4d50-a8df-fb197d1b558d

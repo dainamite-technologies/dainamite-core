@@ -35,26 +35,26 @@ Engine: om-auto-create-pr-loop (steps: 24, --loop: no)
 | D | 19 | Quote page: badges, Costs panel | group:D | done | ac914b8 |
 | D | 19-review-fix | Unpriced cost-plus charges carry the fallback price | inline | done | 9870e69 |
 | D | 20 | Quote page: Margin card and dialogs | group:D | done | b42681c |
-| E | 21 | Calculate-price | group:E1 | done | |
-| E | 22 | Clone, removal, toggle-off | group:E1 | done | |
-| E | 23 | Demo seed and docs | group:E2 | done | |
-| E | 23-review-fix | Demo pricing manager also holds the employee role | inline | done | |
-| E | 24 | Archive the Delta | group:E2 | done | |
-| E | 24-review-fix | Smoke test creates its own customer | inline | done | |
-| E | 12-review-fix-2 | Accepted quotes keep the R11 cost exemptions | inline | done | |
-| E | review1-a | Product-charge writes: costs.view before validation, charge-row lock | dispatch | done | |
-| E | review1-b | Cost-plus usage counts in SQL (no hydration, no bound id list) | dispatch | done | |
-| E | review1-c | ARC lines: mirror-line cost confirmation, cancel lines drop costs and never bind | dispatch | done | |
-| E | review1-d | R7 refuses unpriced cost-plus charges (chargeCodes) | dispatch | done | |
-| E | review1-e | Cost-locked quotes refuse adding / reconfiguring cost-plus lines | dispatch | done | |
-| E | review1-f | Missing cost column is TABLE_NO_MATCH; markup_absolute currency rule | dispatch | done | |
-| E | review1-g | status_changed price-basis flags, term in margin hash, nullable previousMarginHash | dispatch | done | |
-| E | review1-h | Docs for review fixes a–g (manual, MIGRATION, changeset, capabilities) | dispatch | done | |
-| E | review1-i | Quote cost dialog: enter/confirm on_request values, send value only when changed | dispatch | done | |
-| E | review1-j | Manuals: pricing-table purpose, calculate-price cost-plus fields | dispatch | done | |
-| E | review1-k | Locked-quote edits: restore runs the cost-plus lock check; term change counts | dispatch | done | |
-| E | review1-l | Cost semantics: estimated status on none rows, openQuotes counts accepted unconverted, ARC termination lines out of cost flags | dispatch | done | |
-| E | review1-m | Docs: pricingMethod gains cost_plus, indicative wording | dispatch | done | |
+| E | 21 | Calculate-price | group:E1 | done | 05b3644 |
+| E | 22 | Clone, removal, toggle-off | group:E1 | done | a19e17b |
+| E | 23 | Demo seed and docs | group:E2 | done | 3c88398 |
+| E | 23-review-fix | Demo pricing manager also holds the employee role | inline | done | e4db511 |
+| E | 24 | Archive the Delta | group:E2 | done | 83fe072 |
+| E | 24-review-fix | Smoke test creates its own customer | inline | done | 5056e2a |
+| E | 12-review-fix-2 | Accepted quotes keep the R11 cost exemptions | inline | done | 58b11b3 |
+| E | review1-a | Product-charge writes: costs.view before validation, charge-row lock | dispatch | done | ae0b675 |
+| E | review1-b | Cost-plus usage counts in SQL (no hydration, no bound id list) | dispatch | done | 66c83bd |
+| E | review1-c | ARC lines: mirror-line cost confirmation, cancel lines drop costs and never bind | dispatch | done | 3b9053b |
+| E | review1-d | R7 refuses unpriced cost-plus charges (chargeCodes) | dispatch | done | 8e13382 |
+| E | review1-e | Cost-locked quotes refuse adding / reconfiguring cost-plus lines | dispatch | done | ade6fee |
+| E | review1-f | Missing cost column is TABLE_NO_MATCH; markup_absolute currency rule | dispatch | done | 9bc82b4 |
+| E | review1-g | status_changed price-basis flags, term in margin hash, nullable previousMarginHash | dispatch | done | 44475ee |
+| E | review1-h | Docs for review fixes a–g (manual, MIGRATION, changeset, capabilities) | dispatch | done | 137c108 |
+| E | review1-i | Quote cost dialog: enter/confirm on_request values, send value only when changed | dispatch | done | a5446e5 |
+| E | review1-j | Manuals: pricing-table purpose, calculate-price cost-plus fields | dispatch | done | 7293878 |
+| E | review1-k | Locked-quote edits: restore runs the cost-plus lock check; term change counts | dispatch | done | c6b3fb9 |
+| E | review1-l | Cost semantics: estimated status on none rows, openQuotes counts accepted unconverted, ARC termination lines out of cost flags | dispatch | done | 6e9fd15 |
+| E | review1-m | Docs: pricingMethod gains cost_plus, indicative wording | dispatch | done | 6b9f877 |
 
 ## Goal
 

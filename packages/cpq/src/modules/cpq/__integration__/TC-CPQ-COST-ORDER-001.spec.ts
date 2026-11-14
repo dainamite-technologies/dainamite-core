@@ -237,9 +237,11 @@ test.describe('TC-CPQ-COST-ORDER-001 — order and subscription costs', () => {
       // 7. Cancel: a cancel quote, converted and activated, ends every cost (history kept, nothing open).
       // A freshly activated subscription is `pending`; ARC (Cancel) needs it `active` (as the ARC fixtures do).
       await post(request, token, '/api/cpq/inventory/subscriptions/status', { id: subId, targetStatus: 'active' }, 'subscription → active')
-      const cancelQuote = await post<{ id: string }>(request, token, '/api/cpq/quotes/from-subscription', { subscriptionId: subId, type: 'cancel' }, 'cancel quote')
-      await post(request, token, `/api/cpq/quotes/${cancelQuote.id}/cancel-meta`, { reasonCode: 'non-payment' }, 'cancel meta')
-      await convertAndActivate(request, token, cancelQuote.id)
+      // `from-subscription` answers `{ quoteId, cpqConfigId }` (not a QuoteResult); quote routes take either id.
+      const cancelQuote = await post<{ quoteId: string; cpqConfigId: string }>(request, token, '/api/cpq/quotes/from-subscription', { subscriptionId: subId, type: 'cancel' }, 'cancel quote')
+      expect(cancelQuote.quoteId, 'from-subscription returned no quoteId').toBeTruthy()
+      await post(request, token, `/api/cpq/quotes/${cancelQuote.quoteId}/cancel-meta`, { reasonCode: 'non-payment' }, 'cancel meta')
+      await convertAndActivate(request, token, cancelQuote.quoteId)
 
       const open = await getJson<SubscriptionCosts>(request, token, `/api/cpq/inventory/subscriptions/${subId}/costs`)
       expect([...open.items, ...open.assets].flatMap((o) => o.costs)).toHaveLength(0)

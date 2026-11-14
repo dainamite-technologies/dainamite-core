@@ -1,5 +1,5 @@
 import {
-  CpqInventoryCost, CpqInventorySubscription, CpqOrderConfiguration, CpqProductCharge, CpqQuoteConfiguration, CpqQuoteLineConfiguration, CpqQuoteLineCost, CpqQuoteMarkupOverride,
+  CpqInventoryAsset, CpqInventoryCost, CpqInventorySubscription, CpqInventorySubscriptionItem, CpqOrderConfiguration, CpqProductCharge, CpqQuoteConfiguration, CpqQuoteLineConfiguration, CpqQuoteLineCost, CpqQuoteMarkupOverride,
 } from '../../../data/entities'
 
 jest.mock('../../priceAdjustments/quotePricingWrite', () => ({
@@ -113,7 +113,15 @@ describe('reads', () => {
     expect(subWhere).toMatchObject({ ...SCOPE, deletedAt: null, status: { $nin: ['terminated', 'expired', 'superseded'] } })
     expect(subWhere.id.$in).toBe(subquery)
     expect(em.createQueryBuilder).toHaveBeenCalledWith(CpqInventoryCost, 'ic')
-    expect(subquery.where).toHaveBeenCalledWith({ ...SCOPE, deletedAt: null, status: 'active' })
+    // Q6: a cost is open only while its owner is live (item not terminated / expired / superseded, asset not cancelled / returned).
+    expect(subquery.where).toHaveBeenCalledWith({
+      ...SCOPE, deletedAt: null, status: 'active',
+      $or: [{ subscriptionItemId: { $in: subquery } }, { assetId: { $in: subquery } }],
+    })
+    expect(em.createQueryBuilder).toHaveBeenCalledWith(CpqInventorySubscriptionItem, 'si')
+    expect(subquery.where).toHaveBeenCalledWith({ ...SCOPE, deletedAt: null, status: { $nin: ['terminated', 'expired', 'superseded'] } })
+    expect(em.createQueryBuilder).toHaveBeenCalledWith(CpqInventoryAsset, 'ia')
+    expect(subquery.where).toHaveBeenCalledWith({ ...SCOPE, deletedAt: null, status: { $nin: ['cancelled', 'returned'] } })
     expect(em.count).toHaveBeenCalledWith(CpqProductCharge, { ...SCOPE, deletedAt: null, pricingMethod: 'cost_plus', isActive: true })
     const quoteWhere = em.count.mock.calls.find(([entity]: unknown[]) => entity === CpqQuoteConfiguration)[1]
     expect(quoteWhere).toMatchObject({ ...SCOPE, deletedAt: null, cpqStatus: { $nin: [...COST_CLOSED_STATUSES] } })
@@ -123,7 +131,7 @@ describe('reads', () => {
     // Accepted-but-unconverted quotes are open; ordered quotes (NOT IN order sources) are not.
     expect(quoteWhere.cpqStatus.$nin).not.toContain('accepted')
     expect(quoteWhere.id.$nin).toBe(subquery)
-    expect(em.createQueryBuilder).toHaveBeenCalledTimes(3)
+    expect(em.createQueryBuilder).toHaveBeenCalledTimes(5)
     expect(em.createQueryBuilder).toHaveBeenCalledWith(CpqQuoteLineCost, 'qlc')
     expect(em.createQueryBuilder).toHaveBeenCalledWith(CpqOrderConfiguration, 'oc')
     expect(subquery.select).toHaveBeenCalledWith('oc.sourceQuoteId')

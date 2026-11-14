@@ -3,8 +3,10 @@ import type { EntityManager } from '@mikro-orm/postgresql'
 import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import { withAtomicFlush } from '@open-mercato/shared/lib/commands/flush'
 import {
+  CpqInventoryAsset,
   CpqInventoryCost,
   CpqInventorySubscription,
+  CpqInventorySubscriptionItem,
   CpqOrderConfiguration,
   CpqProductCharge,
   CpqProductOffering,
@@ -14,7 +16,7 @@ import {
   CpqQuoteMarkupOverride,
 } from '../../data/entities'
 import { MANUAL_COST_KEY_PREFIX, cpqCostPreviewSchema, cpqQuoteLineCostCreateSchema, cpqQuoteLineCostUpdateSchema, cpqQuoteMarkupOverrideSetSchema, type CostPreviewInput, type QuoteLineCostCreate, type QuoteLineCostUpdate, type QuoteMarkupOverrideSet } from '../../data/quote-costs'
-import { ITEM_NOT_LIVE_STATUSES } from '../../data/costs'
+import { ASSET_NOT_LIVE_STATUSES, ITEM_NOT_LIVE_STATUSES } from '../../data/costs'
 import { isArcTerminationLine } from '../arcLineRemoval'
 import { isArcMirrorLine, isFrozenAmendMirrorLine } from '../arcPriceFreeze'
 import { evaluateApplicability } from '../cpqPricingService'
@@ -167,8 +169,16 @@ export class CpqQuoteCostService {
     const openQuotes = await em.count(CpqQuoteConfiguration, {
       ...scoped(scope), cpqStatus: { $nin: [...COST_CLOSED_STATUSES] }, id: { $in: costedQuotes, $nin: orderedQuotes },
     })
-    // Live subscriptions carrying open costs: a semi-join on the active inventory cost rows (one count, no row hydrated).
-    const costedSubscriptions = em.createQueryBuilder(CpqInventoryCost, 'ic').select('ic.subscriptionId').where({ ...scoped(scope), status: 'active' })
+    // Live subscriptions carrying OPEN costs (Q6: status active AND the owning item / asset is live): nested
+    // semi-joins on the inventory cost rows and their owners (one count, no row hydrated, no bound id list).
+    const liveItems = em.createQueryBuilder(CpqInventorySubscriptionItem, 'si').select('si.id')
+      .where({ ...scoped(scope), status: { $nin: [...ITEM_NOT_LIVE_STATUSES] } })
+    const liveAssets = em.createQueryBuilder(CpqInventoryAsset, 'ia').select('ia.id')
+      .where({ ...scoped(scope), status: { $nin: [...ASSET_NOT_LIVE_STATUSES] } })
+    const costedSubscriptions = em.createQueryBuilder(CpqInventoryCost, 'ic').select('ic.subscriptionId').where({
+      ...scoped(scope), status: 'active',
+      $or: [{ subscriptionItemId: { $in: liveItems } }, { assetId: { $in: liveAssets } }],
+    })
     const liveSubscriptions = await em.count(CpqInventorySubscription, {
       ...scoped(scope), status: { $nin: [...ITEM_NOT_LIVE_STATUSES] }, id: { $in: costedSubscriptions },
     })

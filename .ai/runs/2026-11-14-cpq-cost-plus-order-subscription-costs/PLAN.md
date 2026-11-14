@@ -17,7 +17,7 @@ Engine: om-auto-create-pr-loop (steps: 21, --loop: no)
 | B | 3 | Atomic activation | group:B1 | done | be31f71 |
 | B | 4 | Conversion copy | group:B2 | done | a6e8f50 |
 | B | 5 | Item cost sync and activation write | group:B2 | done | f02d114 |
-| B | 6 | Subscription snapshots carry costs | group:B3 | todo | |
+| B | 6 | Subscription snapshots carry costs | group:B3 | done | |
 | B | 7 | cost_changed event | group:B3 | todo | |
 | B | 8 | Read APIs and redaction | group:B4 | todo | |
 | B | 9 | Confidentiality sweep extension | group:B4 | todo | |

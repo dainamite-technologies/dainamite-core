@@ -3,6 +3,7 @@ import {
   CpqInventorySubscription,
   CpqInventorySubscriptionItem,
   CpqInventoryAsset,
+  CpqInventoryCost,
   CpqProductSpecification,
   CpqSubscriptionChangeLog,
 } from '../data/entities'
@@ -13,6 +14,7 @@ import {
   type InventoryCostChange,
   type InventoryCostLink,
 } from './costs/inventoryCostSync'
+import { costsEntry, groupInventoryCostSnapshots } from './costs/inventoryCostSnapshot'
 import {
   INVENTORY_SUBSCRIPTION_TRANSITIONS,
   INVENTORY_ASSET_TRANSITIONS,
@@ -1638,6 +1640,14 @@ export class DefaultCpqInventoryService {
       tenantId: scope.tenantId,
       deletedAt: null,
     })) ?? []
+    // Inventory costs of the items and assets: ONE query per snapshot (no N+1), skipped when there are no owners.
+    const costRows = items.length + assets.length === 0 ? [] : (await this.em.find(CpqInventoryCost, {
+      subscriptionId: sub.id,
+      organizationId: scope.organizationId,
+      tenantId: scope.tenantId,
+      deletedAt: null,
+    })) ?? []
+    const { byItem, byAsset } = groupInventoryCostSnapshots(costRows)
     return {
       id: sub.id,
       code: sub.code,
@@ -1664,6 +1674,7 @@ export class DefaultCpqInventoryService {
         currencyCode: i.currencyCode,
         quantity: i.quantity,
         sourceQuoteLineId: i.sourceQuoteLineId,
+        ...costsEntry(byItem.get(i.id)),
       })),
       assets: assets.map((a) => ({
         id: a.id,
@@ -1672,6 +1683,7 @@ export class DefaultCpqInventoryService {
         status: a.status,
         subscriptionItemId: a.subscriptionItemId,
         productId: a.productId,
+        ...costsEntry(byAsset.get(a.id)),
       })),
     }
   }

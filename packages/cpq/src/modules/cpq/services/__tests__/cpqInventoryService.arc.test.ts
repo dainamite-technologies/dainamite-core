@@ -1,6 +1,7 @@
 import { DefaultCpqInventoryService, type ArcLineChange } from '../cpqInventoryService'
 import {
   CpqInventoryAsset,
+  CpqInventoryCost,
   CpqInventorySubscription,
   CpqInventorySubscriptionItem,
   CpqProductSpecification,
@@ -98,6 +99,7 @@ describe('DefaultCpqInventoryService.applyAmendment', () => {
     // snapshotSubscription: items + assets BEFORE
     em.find.mockResolvedValueOnce([item, cancelTarget])
     em.find.mockResolvedValueOnce([])
+    em.find.mockResolvedValueOnce([]) // inventory costs (one query per snapshot)
     // applyLineChanges 'cancel' lookup
     em.findOne.mockResolvedValueOnce(cancelTarget)
     // assets attached to cancelled item (none)
@@ -107,6 +109,7 @@ describe('DefaultCpqInventoryService.applyAmendment', () => {
     // snapshotSubscription AFTER: items + assets
     em.find.mockResolvedValueOnce([item, cancelTarget])
     em.find.mockResolvedValueOnce([])
+    em.find.mockResolvedValueOnce([]) // inventory costs
 
     const lineChanges: ArcLineChange[] = [
       {
@@ -592,5 +595,65 @@ describe('change-log snapshot shapes per change type (characterization)', () => 
       expect(keysOf(log.beforeSnapshot)).toEqual([...SUB_KEYS].sort())
     }
     expect(result.mergedFromSubscriptionIds).toEqual(['sub-a', 'sub-b'])
+  })
+})
+
+// ─── Costs in snapshots (step 6) ────────────────────────────────────────
+
+describe('change-log snapshots carry inventory costs', () => {
+  const seed = (costKey: string, over: Record<string, unknown> = {}) => ({
+    orderLineCostId: `olc-${costKey}`, costKey, chargeCode: null, origin: 'catalog', costElementId: null,
+    name: `Cost ${costKey}`, role: 'price_basis', costType: 'one_off', source: 'supplier', costModel: 'fixed',
+    valueStatus: 'known', valueOrigin: null, unitAmount: '270.0000', instanceAmount: '270.0000', totalAmount: '270.0000',
+    currencyCode: 'EUR', fxRate: null, fxRateDate: null, indexSnapshot: null, supplierId: 'sup-1', supplierName: 'Acme',
+    supplierQuoteRef: 'Q-9', validUntil: null, supplierTermEnd: null, supplierMinTermMonths: null, note: null,
+    ...over,
+  })
+
+  it('created row: costed items and assets carry costs (sorted by key); uncosted owners have no costs key; one cost query', async () => {
+    const em = createStatefulEm()
+    const service = new DefaultCpqInventoryService(em as unknown as never)
+    await service.createSubscription(
+      {
+        customerId: 'cust-1', name: 'Costed', code: 'SUB-C', currencyCode: 'EUR',
+        items: [
+          { name: 'Line A', mrcAmount: 10, costs: [seed('tail'), seed('base', { totalAmount: null, unitAmount: null })] },
+          { name: 'Line B', mrcAmount: 5 },
+        ],
+        assets: [{ name: 'Server', costs: [seed('licence')] }],
+      } as never,
+      SCOPE,
+    )
+    const after = em.rows(CpqSubscriptionChangeLog)[0].afterSnapshot as {
+      items: Array<{ name: string; costs?: Array<Record<string, unknown>> }>
+      assets: Array<{ costs?: Array<Record<string, unknown>> }>
+    }
+    const [a, b] = after.items
+    expect(a.costs?.map((c) => c.costKey)).toEqual(['base', 'tail'])
+    expect(a.costs?.[1]).toMatchObject({
+      costKey: 'tail', unitAmount: '270.0000', totalAmount: '270.0000', status: 'active', currencyCode: 'EUR',
+      supplierId: 'sup-1', supplierQuoteRef: 'Q-9', role: 'price_basis', endedAt: null,
+    })
+    expect(Object.keys(b)).not.toContain('costs')
+    expect(after.assets[0].costs?.map((c) => c.costKey)).toEqual(['licence'])
+    const costFinds = em.find.mock.calls.filter(([entity]) => (entity as { name?: string }).name === 'CpqInventoryCost')
+    // One per snapshot: the cost write's own existing-rows reads (items, assets) plus the single snapshot query.
+    expect(costFinds.length - 2).toBe(1)
+  })
+
+  it('ended costs stay in the snapshot with status ended', async () => {
+    const em = createStatefulEm()
+    const service = new DefaultCpqInventoryService(em as unknown as never)
+    await service.createSubscription(
+      { customerId: 'cust-1', name: 'S', code: 'SUB-E', currencyCode: 'EUR', items: [{ name: 'Line A', mrcAmount: 1, costs: [seed('tail')] }] } as never,
+      SCOPE,
+    )
+    const row = em.rows(CpqInventoryCost)[0]
+    row.status = 'ended'
+    row.endedAt = '2026-11-14'
+    const sub = em.rows(CpqInventorySubscription)[0]
+    const snap = await (service as unknown as { snapshotSubscription: (s: unknown, sc: unknown) => Promise<{ items: Array<{ costs: unknown[] }> }> })
+      .snapshotSubscription(sub, SCOPE)
+    expect(snap.items[0].costs).toEqual([expect.objectContaining({ status: 'ended', endedAt: '2026-11-14' })])
   })
 })

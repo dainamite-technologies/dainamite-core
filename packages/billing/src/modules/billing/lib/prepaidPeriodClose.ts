@@ -57,20 +57,23 @@ export type PrepaidAccountResult =
     }
   | { status: 'failed'; errorMessage: string }
 
-const SCHEDULED_CYCLE_LIMIT = 1
 const CATCH_UP_HARD_CAP = 60
 
 export type ProcessPrepaidParams = {
   asOfDate: Date
   mode: PrepaidCloseMode
   triggeredBy: 'schedule' | 'manual'
-  catchUp?: boolean
 }
 
 /**
- * Multi-cycle prepaid account processing (mirrors the postpaid engine's
- * catch-up loop). One statement + one set of recurring debits per missed
- * period — never combined.
+ * Multi-cycle prepaid account processing. One statement + one set of
+ * recurring debits per missed period — never combined.
+ *
+ * Spec A (A-D1): real runs on every trigger catch up on all due periods
+ * (no catch-up flag). Everything else is unchanged for prepaid: recurring
+ * items are charged in arrears for full cycles (`charge_timing` / `prorate`
+ * are not honoured yet), and test / dry still close a single period because
+ * the statement math chains on persisted balances.
  */
 export async function processPrepaidAccount(
   em: EntityManager,
@@ -78,10 +81,7 @@ export async function processPrepaidAccount(
   billRun: BillingRun,
   params: ProcessPrepaidParams,
 ): Promise<PrepaidAccountResult> {
-  const maxCycles =
-    params.triggeredBy === 'schedule' || !params.catchUp
-      ? SCHEDULED_CYCLE_LIMIT
-      : CATCH_UP_HARD_CAP
+  const maxCycles = CATCH_UP_HARD_CAP
 
   const statementEnabled = await getStatementEnabled(em)
   // Resolve the crossing thresholds once — they don't change during the run.

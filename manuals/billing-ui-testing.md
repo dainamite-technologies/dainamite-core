@@ -108,7 +108,12 @@ cache'owane).
 2. Wybierz **Billing Account** z listy.
 3. Wybierz **Type** — od tego zależą kolejne pola:
    - **One-time charge** → pole *Amount*.
-   - **Recurring (per cycle)** → pole *Unit price per cycle*.
+   - **Recurring (per cycle)** → pole *Unit price per cycle*, a także
+     *Charge timing* (**In advance** — w dniu rozliczenia naliczany jest
+     nadchodzący okres, domyślnie; **In arrears** — okres, który właśnie
+     minął) i przełącznik *Prorate partial periods* (domyślnie włączony:
+     niepełny okres przy starcie / końcu pozycji liczony proporcjonalnie
+     do dni; przy zakończeniu po naliczeniu z góry — korekta ujemna).
    - **Usage (metered)** → pole *UoM code* (np. `gb`, `api_request`)
      oraz *Rate model*: `Simple flat rate` (jedna stawka) lub
      `Tiered` (JSON progowy — volume / graduated / flat).
@@ -177,14 +182,25 @@ należnych pozycji faktury robocze.
      „co by się zafakturowało".
    - **Test** — tworzy faktury oznaczone do późniejszego usunięcia
      (przydatne na środowisku QA/demo).
-3. **As-of date** — domyślnie dzisiaj. Konta z `next_bill_date` ≤ tej
-   daty zostaną wybrane.
+3. **As-of date** — domyślnie dzisiaj. Przebieg rozlicza **wszystkie
+   zaległe cykle** do tej daty — **jedna faktura na każdą datę
+   rozliczenia**. Konto z `next_bill_date` = 14.11 i datą 1.02 następnego
+   roku dostaje 3 faktury (14.11–13.12, 14.12–13.01, 14.01–13.02).
+   Tryby **Test** i **Dry-run** symulują te same cykle, nie zmieniając
+   konta (Test zapisuje 3 faktury testowe, Dry-run tylko podgląd).
+   Jeśli chcesz rozliczyć mniej — wybierz wcześniejszą datę.
 4. **Run now** (albo `Ctrl/Cmd + Enter`) — po sukcesie przeskakujesz na
    stronę szczegółów nowo utworzonego przebiegu.
+5. Na stronie szczegółów, pod *Per-account outcomes*, tabela **Cycles**
+   pokazuje każdą datę rozliczenia osobno: okres usługi, status
+   (*Invoiced* / *Preview* / *Nothing to bill* / *Skipped — draft
+   exists*), liczbę pozycji, sumę netto i link do faktury. Tabela
+   **Skipped items** wyjaśnia, czemu jakaś pozycja nie została naliczona
+   (np. niepełny okres przy wyłączonej proporcji).
 
 Harmonogram cron uruchamia analogiczny przebieg co noc w trybie
-`real`. Przycisk **New run** to ten sam endpoint, tylko z trigger
-`manual`.
+`real` — też rozlicza wszystkie zaległe cykle. Przycisk **New run** to
+ten sam endpoint, tylko z trigger `manual`.
 
 ## 5. Szybki scenariusz end-to-end (~5 minut)
 

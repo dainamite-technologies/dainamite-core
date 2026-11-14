@@ -93,7 +93,7 @@
     }
   },
   "peerDependencies": {
-    "@dainamite/billing": "^0.20.0",
+    "@dainamite/billing": "^0.21.0",
     "@dainamite/cpq": "^0.6.0",
     "@mikro-orm/core": "^7.1.14",
     "@mikro-orm/decorators": "^7.1.14",

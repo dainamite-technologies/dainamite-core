@@ -45,6 +45,21 @@ const billRunOutcomeListItemSchema = z.object({
   errorMessage: z.string().nullable(),
   warnings: z.record(z.string(), z.unknown()).nullable(),
   draftInvoiceId: z.string().uuid().nullable(),
+  // Spec A: one entry per bill date processed for the account (catch-up).
+  cycles: z
+    .array(
+      z.object({
+        bill_date: z.string(),
+        period_start: z.string().nullable(),
+        period_end: z.string().nullable(),
+        status: z.enum(['invoiced', 'previewed', 'empty', 'skipped_existing']),
+        line_count: z.number(),
+        total_net: z.string(),
+        invoice_id: z.string().uuid().nullable(),
+        invoice_number: z.string().nullable(),
+      }),
+    )
+    .nullable(),
   bill_account_name: z.string().nullable(),
   invoice_number: z.string().nullable(),
   organizationId: z.string().uuid(),
@@ -73,6 +88,7 @@ const crud = makeCrudRoute({
       'error_message',
       'warnings',
       'draft_invoice_id',
+      'cycles',
       'organization_id',
       'tenant_id',
       'created_at',
@@ -107,10 +123,14 @@ const crud = makeCrudRoute({
             .filter((v): v is string => typeof v === 'string' && v.length > 0),
         ),
       )
+      const cycleInvoiceIds = (row: Record<string, unknown>): unknown[] =>
+        Array.isArray(row.cycles)
+          ? (row.cycles as Array<Record<string, unknown>>).map((cycle) => cycle?.invoice_id)
+          : []
       const invoiceIds = Array.from(
         new Set(
           items
-            .map((row) => row.draft_invoice_id)
+            .flatMap((row) => [row.draft_invoice_id, ...cycleInvoiceIds(row)])
             .filter((v): v is string => typeof v === 'string' && v.length > 0),
         ),
       )
@@ -134,6 +154,13 @@ const crud = makeCrudRoute({
           typeof row.draft_invoice_id === 'string'
             ? invoiceNumber.get(row.draft_invoice_id) ?? null
             : null
+        if (Array.isArray(row.cycles)) {
+          row.cycles = (row.cycles as Array<Record<string, unknown>>).map((cycle) => ({
+            ...cycle,
+            invoice_number:
+              typeof cycle?.invoice_id === 'string' ? invoiceNumber.get(cycle.invoice_id) ?? null : null,
+          }))
+        }
       }
     },
   },

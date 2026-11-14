@@ -54,6 +54,8 @@ type BillingItemRow = {
   source_ref: string | null
   currency_mismatch: boolean
   billed_to_date: string | null
+  charge_timing: 'in_advance' | 'in_arrears'
+  prorate: boolean
   is_active: boolean
   created_at: string
   updated_at: string
@@ -98,6 +100,8 @@ function toFormValues(row: BillingItemRow): Partial<ItemFormValues> {
     subscriptionId: row.subscription_id ?? '',
     subscriptionItemId: row.subscription_item_id ?? '',
     isActive: row.is_active,
+    chargeTiming: row.charge_timing ?? 'in_advance',
+    prorate: row.prorate ?? true,
   }
   if (row.type === 'one_time' && typeof rate.amount === 'number') {
     out.oneTimeAmount = String(rate.amount)
@@ -159,6 +163,20 @@ function ItemView({ row }: { row: BillingItemRow }) {
           '—'
         )}
       </DetailField>
+      {row.type === 'recurring' ? (
+        <>
+          <DetailField label={t('billing.items.form.charge_timing', 'Charge timing')}>
+            <Tag variant="neutral">
+              {row.charge_timing === 'in_arrears'
+                ? t('billing.items.charge_timing.in_arrears', 'In arrears')
+                : t('billing.items.charge_timing.in_advance', 'In advance')}
+            </Tag>
+          </DetailField>
+          <DetailField label={t('billing.items.form.prorate', 'Prorate partial periods')}>
+            {row.prorate === false ? t('billing.common.no', 'No') : t('billing.common.yes', 'Yes')}
+          </DetailField>
+        </>
+      ) : null}
       <DetailField label={t('billing.items.detail.field.billed_to', 'Billed through')}>
         {row.billed_to_date ? formatDate(row.billed_to_date) : '—'}
       </DetailField>
@@ -249,6 +267,8 @@ export default function BillingItemDetailPage(props: { params?: { id?: string } 
         payload.uomCode = assembled.uomCode ?? null
         payload.subscriptionId = assembled.subscriptionId ?? null
         payload.subscriptionItemId = assembled.subscriptionItemId ?? null
+        if (assembled.chargeTiming !== undefined) payload.chargeTiming = assembled.chargeTiming
+        if (assembled.prorate !== undefined) payload.prorate = assembled.prorate
 
         await apiCallOrThrow('/api/billing/items', {
           method: 'PUT',

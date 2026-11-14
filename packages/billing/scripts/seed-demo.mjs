@@ -91,7 +91,8 @@ const ACCOUNTS = [
     taxId: '9876543210',
     items: [
       { type: 'recurring', description: 'Abonament flotowy — 50 kart SIM', rateJson: { unit_price: 2499.0 } },
-      { type: 'recurring', description: 'Pakiet roamingowy', rateJson: { unit_price: 149.0 } },
+      // Billed in arrears from the previous cycle (Spec A demo).
+      { type: 'recurring', description: 'Pakiet roamingowy', rateJson: { unit_price: 149.0 }, chargeTiming: 'in_arrears', billStartDate: '2026-04-15' },
     ],
   },
   {
@@ -156,7 +157,10 @@ async function main() {
     const itemPayload = items.map((it) => ({
       billAccountId: accountId,
       type: it.type,
-      billStartDate: '2026-04-01',
+      // Spec A: recurring items are billed in advance, so they start on the
+      // account's bill date (the first run bills the coming period).
+      billStartDate: it.billStartDate ?? acc.nextBillDate,
+      ...(it.chargeTiming ? { chargeTiming: it.chargeTiming } : {}),
       description: it.description,
       rateJson: it.rateJson,
       ...(it.uomCode ? { uomCode: it.uomCode } : {}),

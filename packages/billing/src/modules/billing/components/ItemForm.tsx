@@ -52,6 +52,9 @@ export type ItemFormValues = {
   subscriptionId: string
   subscriptionItemId: string
   isActive: boolean
+  // Spec A — recurring only.
+  chargeTiming: 'in_advance' | 'in_arrears'
+  prorate: boolean
 }
 
 // The accounts list API (`/api/billing/accounts`) returns snake_case
@@ -62,6 +65,7 @@ export type AccountOption = {
   name: string
   customer_id: string
   currency_code: string
+  billing_mode?: 'postpaid' | 'prepaid'
 }
 
 export type ItemFormProps = {
@@ -69,6 +73,8 @@ export type ItemFormProps = {
   /** For create mode: full list of accounts the operator can attach to. */
   accountOptions?: AccountOption[]
   initial?: Partial<ItemFormValues>
+  /** Edit mode: the item's account mode, for the prepaid timing hint (A-D1). */
+  accountBillingMode?: 'postpaid' | 'prepaid'
   submitting?: boolean
   /** Returns the assembled payload (with rate_json built). */
   onSubmit: (assembled: AssembledItemPayload) => Promise<void> | void
@@ -86,6 +92,8 @@ export type AssembledItemPayload = {
   subscriptionId?: string
   subscriptionItemId?: string
   isActive?: boolean
+  chargeTiming?: 'in_advance' | 'in_arrears'
+  prorate?: boolean
 }
 
 const EMPTY_VALUES: ItemFormValues = {
@@ -103,6 +111,8 @@ const EMPTY_VALUES: ItemFormValues = {
   subscriptionId: '',
   subscriptionItemId: '',
   isActive: true,
+  chargeTiming: 'in_advance',
+  prorate: true,
 }
 
 function todayIso(): string {
@@ -127,12 +137,16 @@ export function ItemForm({
   mode,
   accountOptions,
   initial,
+  accountBillingMode,
   submitting = false,
   onSubmit,
   onCancel,
 }: ItemFormProps) {
   const t = useT()
   const [values, setValues] = React.useState<ItemFormValues>(() => mergeInitial(initial))
+  const isPrepaidAccount =
+    accountBillingMode === 'prepaid' ||
+    accountOptions?.find((option) => option.id === values.billAccountId)?.billing_mode === 'prepaid'
   const [error, setError] = React.useState<string | null>(null)
   const isEdit = mode === 'edit'
 
@@ -257,6 +271,10 @@ export function ItemForm({
     if (values.subscriptionId.trim()) payload.subscriptionId = values.subscriptionId.trim()
     if (values.subscriptionItemId.trim()) {
       payload.subscriptionItemId = values.subscriptionItemId.trim()
+    }
+    if (values.type === 'recurring') {
+      payload.chargeTiming = values.chargeTiming
+      payload.prorate = values.prorate
     }
     if (isEdit) payload.isActive = values.isActive
     await onSubmit(payload)
@@ -407,6 +425,60 @@ export function ItemForm({
               onChange={(event) => set('recurringUnitPrice', event.currentTarget.value)}
             />
           </label>
+        ) : null}
+
+        {values.type === 'recurring' ? (
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="text-muted-foreground">
+              {t('billing.items.form.charge_timing', 'Charge timing')}
+            </span>
+            <Select
+              value={values.chargeTiming}
+              onValueChange={(next) => set('chargeTiming', next === 'in_arrears' ? 'in_arrears' : 'in_advance')}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="in_advance">
+                  {t('billing.items.charge_timing.in_advance', 'In advance')}
+                </SelectItem>
+                <SelectItem value="in_arrears">
+                  {t('billing.items.charge_timing.in_arrears', 'In arrears')}
+                </SelectItem>
+              </SelectContent>
+            </Select>
+            <span className="text-xs text-muted-foreground">
+              {values.chargeTiming === 'in_arrears'
+                ? t('billing.items.form.charge_timing.help_arrears', 'Each bill date charges the period that just ended.')
+                : t('billing.items.form.charge_timing.help_advance', 'Each bill date charges the coming period.')}
+            </span>
+            {isPrepaidAccount ? (
+              <span className="text-xs text-muted-foreground">
+                {t(
+                  'billing.items.form.charge_timing.prepaid_hint',
+                  'Prepaid accounts currently charge recurring items at period end.',
+                )}
+              </span>
+            ) : null}
+          </label>
+        ) : null}
+
+        {values.type === 'recurring' ? (
+          <div className="flex items-center justify-between gap-3 text-sm">
+            <div>
+              <div className="font-medium">
+                {t('billing.items.form.prorate', 'Prorate partial periods')}
+              </div>
+              <div className="text-xs text-muted-foreground">
+                {t(
+                  'billing.items.form.prorate.help',
+                  'Charge by calendar days when the item starts or ends mid-period, and credit unused days if it ends after being billed in advance.',
+                )}
+              </div>
+            </div>
+            <Switch checked={values.prorate} onCheckedChange={(next) => set('prorate', next)} />
+          </div>
         ) : null}
 
         {values.type === 'usage' ? (

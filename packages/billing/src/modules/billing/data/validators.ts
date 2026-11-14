@@ -9,6 +9,11 @@ export type BillingItemType = (typeof BILLING_ITEM_TYPES)[number]
 export const BILL_CYCLES = ['weekly', 'monthly', 'quarterly', 'annually'] as const
 export type BillCycle = (typeof BILL_CYCLES)[number]
 
+// Spec A: when a recurring item is charged relative to the bill date —
+// for the coming period (in advance, default) or the period just ended.
+export const CHARGE_TIMINGS = ['in_advance', 'in_arrears'] as const
+export type ChargeTiming = (typeof CHARGE_TIMINGS)[number]
+
 export const BILL_RUN_TRIGGERS = ['schedule', 'manual'] as const
 export type BillRunTrigger = (typeof BILL_RUN_TRIGGERS)[number]
 
@@ -350,6 +355,30 @@ export type BillingAccountListQuery = z.infer<typeof billingAccountListQuerySche
 
 // ─── BillingItem payloads ────────────────────────────────────────
 
+// Spec A: `chargeTiming` / `prorate` only mean something for recurring
+// items. Omitted → the command applies the defaults (in_advance, true).
+// Setting a non-default value on another type is a client mistake.
+const chargeTimingFields = {
+  chargeTiming: z.enum(CHARGE_TIMINGS).optional(),
+  prorate: z.boolean().optional(),
+}
+
+export const CHARGE_TIMING_RECURRING_ONLY_MESSAGE =
+  'chargeTiming / prorate can only be set on recurring items'
+
+function refineChargeTiming(
+  val: { type: BillingItemType; chargeTiming?: ChargeTiming; prorate?: boolean },
+  ctx: z.RefinementCtx,
+): void {
+  if (val.type === 'recurring') return
+  if (val.chargeTiming !== undefined && val.chargeTiming !== 'in_advance') {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['chargeTiming'], message: CHARGE_TIMING_RECURRING_ONLY_MESSAGE })
+  }
+  if (val.prorate === false) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['prorate'], message: CHARGE_TIMING_RECURRING_ONLY_MESSAGE })
+  }
+}
+
 const ratePayloadByType = z
   .object({
     type: z.enum(BILLING_ITEM_TYPES),
@@ -380,10 +409,12 @@ export const billingItemCreateSchema = scopedSchema
     subscriptionItemId: z.string().trim().max(255).optional(),
     // `source_ref` is the idempotency key. NULL → no dedup, always create.
     sourceRef: z.string().trim().min(1).max(255).optional(),
+    ...chargeTimingFields,
     // currency_mismatch and billed_to_date are system-managed, never set by
     // clients on create.
   })
   .superRefine((val, ctx) => {
+    refineChargeTiming(val, ctx)
     try {
       validateRateJson(val.type, val.rateJson)
     } catch (err) {
@@ -420,8 +451,10 @@ const billingItemBulkEntrySchema = z
     subscriptionId: z.string().trim().max(255).optional(),
     subscriptionItemId: z.string().trim().max(255).optional(),
     sourceRef: z.string().trim().min(1).max(255).optional(),
+    ...chargeTimingFields,
   })
   .superRefine((val, ctx) => {
+    refineChargeTiming(val, ctx)
     try {
       validateRateJson(val.type, val.rateJson)
     } catch (err) {
@@ -462,6 +495,10 @@ export const billingItemUpdateSchema = scopedSchema.extend({
   subscriptionItemId: z.string().trim().max(255).nullable().optional(),
   // `source_ref` immutable — it's the idempotency identity of the item.
   isActive: z.boolean().optional(),
+  // Recurring only (enforced by the command, which knows the item type).
+  // Safe to change after billing: the `billed_to_date` watermark prevents
+  // any day from being billed twice.
+  ...chargeTimingFields,
 })
 
 export type BillingItemUpdateInput = z.infer<typeof billingItemUpdateSchema>
@@ -541,7 +578,9 @@ export const billingRunTriggerSchema = scopedSchema.extend({
   mode: z.enum(BILL_RUN_MODES).default('real'),
   asOfDate: z.coerce.date().optional(),
   scopedAccountIds: z.array(z.string().uuid()).optional(),
-  catchUp: z.boolean().optional(),
+  // Spec A: there is no `catchUp` flag — every run bills all due cycles up
+  // to `asOfDate`. Old clients still sending it are not rejected: the
+  // object schema strips unknown keys.
 })
 
 export type BillingRunTriggerInput = z.infer<typeof billingRunTriggerSchema>

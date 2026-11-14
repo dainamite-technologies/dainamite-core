@@ -29,4 +29,15 @@ describe('buildAccountSeed', () => {
     expect(buildAccountSeed(payload({ invoiceLanguage: 'de' })).invoiceLanguage).toBe('en')
     expect(buildAccountSeed(payload()).invoiceLanguage).toBe('en')
   })
+
+  it('starts billing on the activation date (billed in advance), not a month later', () => {
+    expect(buildAccountSeed(payload({ activationDate: '2026-11-14' })).nextBillDate.toISOString().slice(0, 10)).toBe(
+      '2026-11-14',
+    )
+    expect(
+      buildAccountSeed(payload({ activationDate: '2026-11-14', nextBillDate: '2026-12-01' })).nextBillDate
+        .toISOString()
+        .slice(0, 10),
+    ).toBe('2026-12-01')
+  })
 })

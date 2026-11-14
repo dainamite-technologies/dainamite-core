@@ -26,7 +26,6 @@ const realParams = {
   asOfDate: new Date('2026-06-01'),
   mode: 'real' as const,
   triggeredBy: 'manual' as const,
-  catchUp: false,
 }
 
 function recurringItem() {
@@ -64,6 +63,33 @@ function seedWindowActivity(em: MockEm) {
 }
 
 describe('processPrepaidAccount — period close (spec story step 6)', () => {
+  it('Spec A: a scheduled real run catches up on every due period (no catch-up flag)', async () => {
+    const account = prepaidAccount()
+    const item = recurringItem()
+    const em = createPrepaidMockEm({
+      account,
+      balance: { tenantId: TENANT, billAccountId: ACCT, balance: '0.0000' },
+      items: [item],
+      existingStatement: null,
+    })
+
+    const result = await processPrepaidAccount(em as never, account as never, billRun as never, {
+      ...realParams,
+      triggeredBy: 'schedule',
+      asOfDate: new Date('2026-08-01'),
+    })
+
+    if (result.status === 'failed') throw new Error('unexpected failure')
+    expect(result.cyclesEmitted).toBe(3)
+    expect((account.nextBillDate as Date).toISOString().slice(0, 10)).toBe('2026-09-01')
+    // Prepaid keeps in-arrears, full-cycle charging (A-D1).
+    expect(em.transactions.filter((t) => t.type === 'recurring').map((t) => t.sourceRef)).toEqual([
+      'recurring-item-rec-2026-05-31',
+      'recurring-item-rec-2026-06-30',
+      'recurring-item-rec-2026-07-31',
+    ])
+  })
+
   it('charges recurring to the balance and builds the statement', async () => {
     const account = prepaidAccount()
     const item = recurringItem()

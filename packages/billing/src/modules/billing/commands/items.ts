@@ -19,6 +19,7 @@ import {
   billingItemCreateSchema,
   billingItemDeleteSchema,
   billingItemUpdateSchema,
+  CHARGE_TIMING_RECURRING_ONLY_MESSAGE,
   validateRateJson,
   type BillingItemBulkCreateInput,
   type BillingItemCreateInput,
@@ -112,6 +113,9 @@ const createItemCommand: CommandHandler<
       subscriptionId: parsed.subscriptionId ?? null,
       subscriptionItemId: parsed.subscriptionItemId ?? null,
       sourceRef: parsed.sourceRef ?? null,
+      // Spec A defaults: bill in advance, prorate partial periods.
+      chargeTiming: parsed.chargeTiming ?? 'in_advance',
+      prorate: parsed.prorate ?? true,
       // `currency_mismatch` is set by Phase 2 / connectors when the
       // posted value's currency differs from the account's. Stays
       // false on create (operator opts in to flagging).
@@ -178,6 +182,21 @@ const updateItemCommand: CommandHandler<BillingItemUpdateInput, { id: string }> 
       record.subscriptionItemId = parsed.subscriptionItemId
     }
     if (parsed.isActive !== undefined) record.isActive = parsed.isActive
+    if (parsed.chargeTiming !== undefined || parsed.prorate !== undefined) {
+      // Timing / proration only apply to recurring items (validators can't
+      // check this on update — the item type isn't in the payload).
+      const nonDefault =
+        (parsed.chargeTiming !== undefined && parsed.chargeTiming !== 'in_advance') ||
+        parsed.prorate === false
+      if (record.type !== 'recurring' && nonDefault) {
+        throw new CrudHttpError(400, {
+          error: CHARGE_TIMING_RECURRING_ONLY_MESSAGE,
+          code: 'billing.item.charge_timing_recurring_only',
+        })
+      }
+      if (parsed.chargeTiming !== undefined) record.chargeTiming = parsed.chargeTiming
+      if (parsed.prorate !== undefined) record.prorate = parsed.prorate
+    }
 
     record.updatedAt = new Date()
     await em.flush()
@@ -370,6 +389,8 @@ const bulkCreateItemsCommand: CommandHandler<
         subscriptionId: entry.subscriptionId ?? null,
         subscriptionItemId: entry.subscriptionItemId ?? null,
         sourceRef: entry.sourceRef ?? null,
+        chargeTiming: entry.chargeTiming ?? 'in_advance',
+        prorate: entry.prorate ?? true,
         currencyMismatch: false,
         billedToDate: null,
         isActive: true,

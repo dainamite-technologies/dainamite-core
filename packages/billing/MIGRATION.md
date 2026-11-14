@@ -12,6 +12,33 @@ billing data.
 
 ---
 
+## Spec A — Billing cycle semantics
+
+**Migration:** `Migration20261114100000_billing_cycle_semantics.ts`
+
+- Adds `billing_items.charge_timing` (`in_advance` default) and
+  `billing_items.prorate` (default `true`), plus `billing_run_outcomes.cycles`.
+- **Drops `billing_runs.catch_up`.** Every run now catches up on all due cycles.
+
+### Behaviour changes — reseed or review existing data
+
+- **Recurring items are billed in advance by default.** An account's
+  `next_bill_date` now marks the START of the period billed in advance (it
+  used to mark the day after the period billed in arrears). On existing data,
+  the first run after upgrading bills the coming period. Items created before
+  the upgrade get `in_advance` too. Per the billing improvements decision D14,
+  instances are reseeded instead of migrated.
+- **Every run catches up**, whether manual or scheduled, in real, test or dry
+  mode: one draft per due bill date up to `asOfDate`, capped at 60 per account.
+  `catchUp` is gone from the API; if a client still sends it, it is ignored.
+- **Partial periods are prorated, not skipped.** An in-advance item that ends
+  after it was billed gets a credit line on the next invoice.
+- **Release with `@dainamite/cpq-billing-connector`.** The connector stops
+  posting `one_time` proration items. An older connector next to this billing
+  version would double-charge mid-cycle additions.
+
+---
+
 ## Spec E Phase 1 — B2C billing accounts
 
 **Migration:** `Migration20261114000000_billing_customer_kind.ts`

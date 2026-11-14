@@ -16,21 +16,21 @@ The agreed build order was **Spec 0 (standalone invoice ledger) → Spec A**. Th
 
 | Phase | Step | Title | Status |
 |-------|------|-------|--------|
-| 1 | 1.1 | `lib/servicePeriods.ts`: recurring line computation (pure) | todo |
-| 1 | 1.2 | Unit tests: worked examples + edge cases | todo |
-| 2 | 2.1 | Entity + hand-written migration (`charge_timing`, `prorate`, outcome `cycles`, drop `catch_up`) | todo |
-| 2 | 2.2 | Validators + item commands/routes (create, update, bulk) + OpenAPI | todo |
-| 2 | 2.3 | Remove `catchUp` from run validator, command, retry, routes | todo |
-| 3 | 3.1 | Engine loop rewrite over in-memory cycle state (real / test / dry) | todo |
-| 3 | 3.2 | Writer: bill-date metadata, service periods, proration/credit lines | todo |
-| 3 | 3.3 | Dedupe by `bill_date` + `test_run`; outcome `cycles` + summary | todo |
-| 3 | 3.4 | Prepaid: drop the `catchUp` gate only (A-D1) | todo |
-| 3 | 3.5 | Engine + prepaid tests | todo |
-| 4 | 4.1 | Connector: `next_bill_date` = start date; stop posting proration lines | todo |
-| 4 | 4.2 | Demo seeds: in-advance items, one in-arrears, one mid-cycle add | todo |
-| 5 | 5.1 | UI: ItemForm / item detail / items list fields | todo |
-| 5 | 5.2 | UI: run trigger help, run detail cycles + skipped items, remove catch-up tag | todo |
-| 5 | 5.3 | i18n, integration test TC-BILL-005, manuals, MIGRATION.md, changeset, gate | todo |
+| 1 | 1.1 | `lib/servicePeriods.ts`: recurring line computation (pure) | done |
+| 1 | 1.2 | Unit tests: worked examples + edge cases | done |
+| 2 | 2.1 | Entity + hand-written migration (`charge_timing`, `prorate`, outcome `cycles`, drop `catch_up`) | done |
+| 2 | 2.2 | Validators + item commands/routes (create, update, bulk) + OpenAPI | done |
+| 2 | 2.3 | Remove `catchUp` from run validator, command, retry, routes | done |
+| 3 | 3.1 | Engine loop rewrite over in-memory cycle state (real / test / dry) | done |
+| 3 | 3.2 | Writer: bill-date metadata, service periods, proration/credit lines | done |
+| 3 | 3.3 | Dedupe by `bill_date` + `test_run`; outcome `cycles` + summary | done |
+| 3 | 3.4 | Prepaid: drop the `catchUp` gate only (A-D1) | done |
+| 3 | 3.5 | Engine + prepaid tests | done |
+| 4 | 4.1 | Connector: `next_bill_date` = start date; stop posting proration lines | done |
+| 4 | 4.2 | Demo seeds: in-advance items, one in-arrears, one mid-cycle add | done |
+| 5 | 5.1 | UI: ItemForm / item detail / items list fields | done |
+| 5 | 5.2 | UI: run trigger help, run detail cycles + skipped items, remove catch-up tag | done |
+| 5 | 5.3 | i18n, integration test TC-BILL-005, manuals, MIGRATION.md, changeset, gate | done (TC-BILL-005 written, not run: needs migration) |
 
 ## Goal
 

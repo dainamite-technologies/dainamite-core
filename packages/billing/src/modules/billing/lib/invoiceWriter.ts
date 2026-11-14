@@ -7,6 +7,7 @@ import {
 import type { SalesDocumentNumberGenerator } from '@open-mercato/core/modules/sales/services/salesDocumentNumberGenerator'
 import type { BillingAccount, BillingItem } from '../data/entities'
 import type { BillPeriod } from './billPeriod'
+import type { RecurringLine } from './servicePeriods'
 import {
   __resetInvoiceStatusCacheForTests,
   resolveInvoiceStatusEntryId,
@@ -52,11 +53,20 @@ export type InvoiceLineDescriptor = {
   totalNetAmount: string
   /** Optional per-line metadata extension — e.g. usage tier breakdown. */
   metadataExtra?: Record<string, unknown>
+  /**
+   * Spec A: inclusive service period the line covers (recurring + usage).
+   * Written to line metadata and used for the invoice's display period.
+   */
+  servicePeriodStart?: Date
+  servicePeriodEnd?: Date
 }
 
 export type WriteInvoiceParams = {
   mode: WriteMode
   account: BillingAccount
+  /** Spec A: the bill date this invoice is for — the dedupe key. */
+  billDate: Date
+  /** Display period: min/max of the line service periods (see `displayPeriod`). */
   period: BillPeriod
   billRunId: string
   lines: InvoiceLineDescriptor[]
@@ -167,6 +177,7 @@ export async function writeDraftInvoice(
     metadata: {
       bill_run_id: billRunId,
       bill_account_id: account.id,
+      bill_date: isoDate(params.billDate),
       bill_period_start: period.periodStart.toISOString().slice(0, 10),
       bill_period_end: period.periodEnd.toISOString().slice(0, 10),
       test_run: mode === 'test' ? true : undefined,
@@ -199,6 +210,8 @@ export async function writeDraftInvoice(
       metadata: {
         billing_item_id: line.billingItemId,
         billing_type: line.billingType,
+        ...(line.servicePeriodStart ? { service_period_start: isoDate(line.servicePeriodStart) } : {}),
+        ...(line.servicePeriodEnd ? { service_period_end: isoDate(line.servicePeriodEnd) } : {}),
         ...(line.metadataExtra ?? {}),
       },
     })
@@ -257,4 +270,59 @@ export function buildInvoiceLinesFromItems(
     }
   }
   return lines
+}
+
+function isoDate(date: Date): string {
+  return new Date(date).toISOString().slice(0, 10)
+}
+
+/**
+ * Display period of an invoice: min start / max end over the lines' service
+ * periods, falling back to `fallback` (the arrears window) when no line
+ * carries one (e.g. a one_time-only invoice).
+ */
+export function displayPeriod(lines: readonly InvoiceLineDescriptor[], fallback: BillPeriod): BillPeriod {
+  let start: Date | null = null
+  let end: Date | null = null
+  for (const line of lines) {
+    if (line.servicePeriodStart && (!start || line.servicePeriodStart < start)) start = line.servicePeriodStart
+    if (line.servicePeriodEnd && (!end || line.servicePeriodEnd > end)) end = line.servicePeriodEnd
+  }
+  return { periodStart: start ?? fallback.periodStart, periodEnd: end ?? fallback.periodEnd }
+}
+
+/**
+ * Spec A: invoice lines for computed recurring service periods (charges and
+ * credits). Full-period charges keep the bare item description; partial
+ * periods and credits append the covered dates so the line is
+ * self-explanatory on any document (language-neutral — the PDF renders
+ * localized labels later).
+ */
+export function buildRecurringLineDescriptors(
+  item: Pick<BillingItem, 'id' | 'description' | 'chargeTiming'>,
+  lines: readonly RecurringLine[],
+): InvoiceLineDescriptor[] {
+  return lines.map((line) => {
+    const amount = format4dp(line.amount)
+    const dated = line.proration !== null || line.kind === 'credit'
+    return {
+      billingItemId: item.id,
+      billingType: 'recurring' as const,
+      description: dated
+        ? `${item.description} · ${isoDate(line.servicePeriodStart)} – ${isoDate(line.servicePeriodEnd)}`
+        : item.description,
+      unitPriceNet: amount,
+      quantity: '1',
+      totalNetAmount: amount,
+      servicePeriodStart: line.servicePeriodStart,
+      servicePeriodEnd: line.servicePeriodEnd,
+      metadataExtra: {
+        charge_timing: item.chargeTiming,
+        ...(line.proration
+          ? { proration: { active_days: line.proration.activeDays, period_days: line.proration.periodDays } }
+          : {}),
+        ...(line.kind === 'credit' ? { credit_for: item.id } : {}),
+      },
+    }
+  })
 }

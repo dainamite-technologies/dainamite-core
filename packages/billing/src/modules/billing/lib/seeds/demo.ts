@@ -12,9 +12,13 @@ import type { InvoiceLanguageCode } from '../invoiceLanguages'
  * so re-running is a no-op rather than a duplicate.
  *
  * The accounts are dated so they are immediately billable: `next_bill_date`
- * is the 1st of the current month, which makes a Bill Run with the default
- * (today's) as-of date produce an invoice for the previous month — the usage
- * record is seeded into exactly that period.
+ * is the 1st of the current month. A Bill Run with the default (today's)
+ * as-of date then shows every Spec A behaviour on one invoice per account:
+ *   - recurring items billed IN ADVANCE for this month (the default);
+ *   - Globex's in-arrears item billed for last month;
+ *   - Northwind's mid-cycle add-on: a prorated stub for the second half of
+ *     last month plus this month;
+ *   - usage (always in arrears) for last month.
  *
  * Drives `mercato billing seed`. Kept free of any customer-specific data so
  * it ships with `@dainamite/billing`.
@@ -46,6 +50,14 @@ type DemoItemSpec = {
   description: string
   unitPrice: number
   uomCode?: string
+  // Spec A. Default 'in_advance'.
+  chargeTiming?: 'in_advance' | 'in_arrears'
+  // When the item starts, relative to the seeded bill date:
+  //   'billDate' (default) — 1st of this month, billed in advance from day one;
+  //   'prevMonth'          — 1st of last month (in-arrears items bill it now);
+  //   'prevMonthMid'       — 15th of last month: an add-on bought mid-cycle,
+  //                          so the first run shows a prorated stub line.
+  start?: 'billDate' | 'prevMonth' | 'prevMonthMid'
 }
 
 type DemoUsageSpec = {
@@ -69,7 +81,14 @@ const ACCOUNTS: Array<{
     },
     items: [
       { ref: `${SRC}-nw-rec`, type: 'recurring', description: 'Platform subscription (monthly)', unitPrice: 199 },
-      { ref: `${SRC}-nw-usg`, type: 'usage', description: 'Data transfer (per GB)', unitPrice: 0.5, uomCode: 'gb' },
+      {
+        ref: `${SRC}-nw-addon`,
+        type: 'recurring',
+        description: 'Priority support add-on (monthly)',
+        unitPrice: 60,
+        start: 'prevMonthMid',
+      },
+      { ref: `${SRC}-nw-usg`, type: 'usage', description: 'Data transfer (per GB)', unitPrice: 0.5, uomCode: 'gb', start: 'prevMonth' },
     ],
     usage: [
       { ref: `${SRC}-nw-usage`, uomCode: 'gb', quantity: 120, lineDescription: 'Data transfer (prev. month)' },
@@ -84,6 +103,14 @@ const ACCOUNTS: Array<{
     },
     items: [
       { ref: `${SRC}-gx-rec`, type: 'recurring', description: 'Cloud plan (monthly)', unitPrice: 49 },
+      {
+        ref: `${SRC}-gx-arr`,
+        type: 'recurring',
+        description: 'Managed backups (billed in arrears)',
+        unitPrice: 15,
+        chargeTiming: 'in_arrears',
+        start: 'prevMonth',
+      },
     ],
     usage: [],
   },
@@ -134,6 +161,9 @@ export async function seedBillingDemo(
   const nextBillDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1))
   const prevMonthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1))
   const prevMonthEnd = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 0))
+  const prevMonthMid = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 15))
+  const startFor = (item: DemoItemSpec): Date =>
+    item.start === 'prevMonth' ? prevMonthStart : item.start === 'prevMonthMid' ? prevMonthMid : nextBillDate
 
   const result: BillingDemoResult = { accountsCreated: 0, itemsCreated: 0, usageCreated: 0 }
 
@@ -175,8 +205,10 @@ export async function seedBillingDemo(
           ...scope,
           billAccountId: account.id,
           type: item.type,
-          billStartDate: prevMonthStart,
+          billStartDate: startFor(item),
           billEndDate: null,
+          chargeTiming: item.chargeTiming ?? 'in_advance',
+          prorate: true,
           description: item.description,
           rateJson: { unit_price: item.unitPrice },
           uomCode: item.uomCode ?? null,

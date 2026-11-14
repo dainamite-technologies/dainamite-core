@@ -20,7 +20,10 @@ import type { BillPeriod } from './billPeriod'
  *      `billed_to_date IS NULL` AND the item's `[bill_start_date,
  *      bill_end_date]` window overlaps the bill period.
  *
- *   `recurring` — one line per full cycle. Eligible only when:
+ *   `recurring` — used by PREPAID period close only (Spec A, A-D1). The
+ *      postpaid engine prices recurring items with `servicePeriods`
+ *      (in advance / in arrears, proration, credits). Here: one line per
+ *      full cycle. Eligible only when:
  *      - `bill_start_date <= bill_period_start`
  *      - AND (`bill_end_date IS NULL` OR `bill_end_date >= bill_period_end`)
  *      - AND (`billed_to_date IS NULL` OR `billed_to_date < bill_period_end`)

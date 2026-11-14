@@ -138,7 +138,7 @@ for account in accounts where next_bill_date <= asOfDate:
 ### BillingRun (changed)
 - `catch_up` column dropped (D14: reseed everything, no compatibility needed).
 
-Migration generated via `yarn mercato db generate` in `packages/billing`.
+Migration hand-written (`Migration20261114100000_billing_cycle_semantics`): `yarn mercato db generate` only diffs `@app` modules.
 
 ---
 
@@ -201,3 +201,20 @@ Breaking changes are noted in `packages/billing/CHANGELOG.md` (0.21.0).
 - 2026-11-14 — A-Q1..A-Q3 resolved → A-D1..A-D3. Prepaid in-advance recorded as a follow-up.
 - 2026-11-14 — Amended by Spec 0 (billing-owned invoice ledger).
 - 2026-11-14 — Execution plan: `.ai/runs/2026-11-14-billing-cycle-semantics/PLAN.md`. Runs **before** Spec 0 at the user's request; storage-specific code is isolated in the writer + dedupe helper. Prepaid test/dry stay single-cycle (A-D1).
+
+## Implementation Status
+
+| Phase | Status | Date | Notes |
+|-------|--------|------|-------|
+| Phase 1 — Pure period math | Done | 2026-11-14 | `lib/servicePeriods.ts`, 19 unit tests (all worked examples) |
+| Phase 2 — Entity + validators | Done | 2026-11-14 | Hand-written migration. `catchUp` removed (stripped if sent). |
+| Phase 3 — Engine | Done | 2026-11-14 | In-memory cycle loop for real/test/dry, `bill_date` dedupe, outcome `cycles`, prepaid gate removed |
+| Phase 4 — Connector + seeds | Done | 2026-11-14 | Proration posting removed, first bill date = activation, seeds show advance/arrears/proration |
+| Phase 5 — UI + docs | Done | 2026-11-14 | ItemForm/detail/list, run Cycles + Skipped tables, i18n, manuals, changeset. TC-BILL-005 written, run pending the migration. |
+
+### Deviations from the plan
+- `itemSelector`'s recurring branch is **kept**: prepaid period close still uses it (A-D1). Postpaid no longer does.
+- Usage aggregation gained an exclusive lower bound for multi-cycle test/dry runs (`after`). Without it, simulated cycles re-counted unmarked usage.
+- Run detail shows cycles as a separate flattened table: DataTable's expansion only nests rows of the same type.
+- Item edit form doesn't show the prepaid timing hint (the items API doesn't return the account mode). Create form does.
+- Bug fixed on the way: an amend with only removals no longer calls bulk-create with an empty list (schema `min(1)` would reject it).

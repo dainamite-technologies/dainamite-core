@@ -49,7 +49,20 @@ describe('seedBillingDemo', () => {
     const em = makeMockEm()
     const res = await seedBillingDemo(em, SCOPE, { now: NOW })
 
-    expect(res).toEqual({ accountsCreated: 3, itemsCreated: 4, usageCreated: 1 })
+    expect(res).toEqual({ accountsCreated: 3, itemsCreated: 6, usageCreated: 1 })
+  })
+
+  it('dates items to demo in-advance, in-arrears and mid-cycle proration (Spec A)', async () => {
+    const em = makeMockEm()
+    await seedBillingDemo(em, SCOPE, { now: NOW })
+    const byRef = (ref: string) =>
+      em.store.find((r) => r.sourceRef === ref) as { billStartDate: Date; chargeTiming: string } | undefined
+    const day = (d?: Date) => d?.toISOString().slice(0, 10)
+    expect(day(byRef('demo-billing-nw-rec')?.billStartDate)).toBe('2026-06-01')
+    expect(byRef('demo-billing-nw-rec')?.chargeTiming).toBe('in_advance')
+    expect(day(byRef('demo-billing-nw-addon')?.billStartDate)).toBe('2026-05-15')
+    expect(byRef('demo-billing-gx-arr')).toMatchObject({ chargeTiming: 'in_arrears' })
+    expect(day(byRef('demo-billing-gx-arr')?.billStartDate)).toBe('2026-05-01')
   })
 
   it('seeds a B2C person account invoiced in Polish next to the company accounts', async () => {

@@ -35,6 +35,7 @@ type BillingItemRow = {
   uom_code: string | null
   subscription_id: string | null
   source_ref: string | null
+  charge_timing: 'in_advance' | 'in_arrears'
   is_active: boolean
   created_at: string
 }
@@ -186,6 +187,20 @@ export default function BillingItemsListPage() {
         cell: ({ row }) => (
           <Tag variant={typeVariant(row.original.type)}>{row.original.type}</Tag>
         ),
+      },
+      {
+        accessorKey: 'charge_timing',
+        header: t('billing.items.columns.timing', 'Timing'),
+        cell: ({ row }) =>
+          row.original.type === 'recurring' ? (
+            <span className="text-sm">
+              {row.original.charge_timing === 'in_arrears'
+                ? t('billing.items.charge_timing.in_arrears', 'In arrears')
+                : t('billing.items.charge_timing.in_advance', 'In advance')}
+            </span>
+          ) : (
+            <span className="text-muted-foreground">—</span>
+          ),
       },
       {
         accessorKey: 'bill_account_id',

@@ -54,7 +54,6 @@ type BillRunRow = {
   parent_run_id: string | null
   dry_run: boolean
   test_mode: boolean
-  catch_up: boolean
   as_of_date: string
   started_at: string | null
   finished_at: string | null
@@ -391,7 +390,7 @@ export default function BillRunsListPage() {
                 <span className="text-xs text-muted-foreground">
                   {t(
                     'billing.runs.trigger.dialog.as_of_date.help',
-                    'Accounts whose next bill date is on or before this date will be billed.',
+                    'Bills every due cycle up to this date — one draft per bill date. Test and dry-run simulate them without changing accounts.',
                   )}
                 </span>
               </label>

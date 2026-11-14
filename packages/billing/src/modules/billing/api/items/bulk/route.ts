@@ -87,6 +87,7 @@ export const openApi = createBillingCrudOpenApi({
       'Idempotent per `sourceRef` (one batched existence check). ' +
       'Returns `{ created, deduplicated, items: [{ sourceRef, id, ' +
       'deduplicated }] }`. Always HTTP 200 — duplicates are reported ' +
-      'in the body, never an error.',
+      'in the body, never an error. Entries accept `chargeTiming` / `prorate` ' +
+      '(recurring only; defaults `in_advance` / true).',
   },
 })

@@ -103,7 +103,13 @@ async function fetchUsageAggregate(
   em: EntityManager,
   account: BillingAccount,
   period: BillPeriod,
+  after: Date | null,
 ): Promise<UsageAggregateRow[]> {
+  // `after` (Spec A): exclusive lower bound for multi-cycle test / dry runs,
+  // which never mark records as rated — without it every simulated cycle
+  // would re-count the usage an earlier simulated cycle already billed.
+  const params: unknown[] = [account.tenantId, account.organizationId, account.id, period.periodEnd]
+  if (after) params.push(after)
   const rows = (await em.execute(
     `SELECT uom_code,
             SUM(quantity)::text AS total_quantity,
@@ -115,8 +121,9 @@ async function fetchUsageAggregate(
        AND deleted_at IS NULL
        AND rated_in_bill_run_id IS NULL
        AND period_end <= ?
+       ${after ? 'AND period_end > ?' : ''}
      GROUP BY uom_code`,
-    [account.tenantId, account.organizationId, account.id, period.periodEnd],
+    params,
   )) as unknown as UsageAggregateRow[] | undefined
   return rows ?? []
 }
@@ -126,8 +133,9 @@ export async function processUsageForAccount(
   account: BillingAccount,
   period: BillPeriod,
   usageItems: readonly BillingItem[],
+  options: { after?: Date | null } = {},
 ): Promise<UsageRunResult> {
-  const aggregateRows = await fetchUsageAggregate(em, account, period)
+  const aggregateRows = await fetchUsageAggregate(em, account, period, options.after ?? null)
   if (aggregateRows.length === 0) return EMPTY_RESULT
 
   const itemByUom = nonNullUomItems(usageItems)

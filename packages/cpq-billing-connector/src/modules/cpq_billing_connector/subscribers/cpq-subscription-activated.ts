@@ -17,8 +17,10 @@ import {
  *   1. Get-or-create the Billing Account for `(tenant, org, customerId)`.
  *      Missing account → shell account with placeholders (operator
  *      must configure before billing fires). `nextBillDate` defaults
- *      to today + one month so the Bill Run won't bill an under-
- *      configured account until the operator advances it.
+ *      to the activation date: recurring items are billed in advance
+ *      (billing Spec A), so the first period is billed from day one.
+ *      An EXISTING account keeps its bill date — billing prorates the
+ *      new subscription's partial first period.
  *   2. For every charge on every CPQ subscription item, create a
  *      Billing Item via `billing.items.create`. `source_ref` is the
  *      deterministic `cpq-<subId>-<subItemId>-<chargeType>` key, so
@@ -57,19 +59,6 @@ export type ActivatedPayload = {
   activationDate?: string
 }
 
-function isoDateAddMonths(months: number): string {
-  // Clamp the day to the last valid day of the target month so Jan 31 + 1
-  // month → Feb 28/29 (not Mar 3, which is what `setUTCMonth` alone would
-  // produce by overflowing into the next month).
-  const d = new Date()
-  const targetYear = d.getUTCFullYear()
-  const targetMonth = d.getUTCMonth() + months
-  const lastDayOfTargetMonth = new Date(Date.UTC(targetYear, targetMonth + 1, 0)).getUTCDate()
-  d.setUTCDate(Math.min(d.getUTCDate(), lastDayOfTargetMonth))
-  d.setUTCMonth(targetMonth)
-  return d.toISOString().slice(0, 10)
-}
-
 function todayIsoDate(): string {
   return new Date().toISOString().slice(0, 10)
 }
@@ -102,9 +91,10 @@ export function buildAccountSeed(payload: ActivatedPayload): AccountSeed {
       postal_code: 'TBD',
       country: 'XX',
     },
-    nextBillDate: payload.nextBillDate
-      ? new Date(payload.nextBillDate)
-      : new Date(isoDateAddMonths(1)),
+    // Billing Spec A: recurring items are billed in advance, so the first
+    // bill date is the subscription start — billing the first period on
+    // activation. (Was "today + 1 month", which skipped that period.)
+    nextBillDate: new Date(payload.nextBillDate ?? payload.activationDate ?? todayIsoDate()),
     taxId: payload.taxId ?? null,
   }
 }

@@ -44,6 +44,8 @@ const billingItemListItemSchema = z.object({
   source_ref: z.string().nullable(),
   currency_mismatch: z.boolean(),
   billed_to_date: z.string().nullable(),
+  charge_timing: z.enum(['in_advance', 'in_arrears']),
+  prorate: z.boolean(),
   is_active: z.boolean(),
   organization_id: z.string().uuid(),
   tenant_id: z.string().uuid(),
@@ -87,6 +89,8 @@ const crud = makeCrudRoute({
       'source_ref',
       'currency_mismatch',
       'billed_to_date',
+      'charge_timing',
+      'prorate',
       'is_active',
       'organization_id',
       'tenant_id',
@@ -238,14 +242,18 @@ export const openApi = createBillingCrudOpenApi({
       'Creates a billing item. Idempotent via `sourceRef`: re-POSTing the same ' +
       '`(tenantId, billAccountId, sourceRef)` returns the existing row with ' +
       '`deduplicated: true` instead of creating a duplicate. The unique index ' +
-      'on `(tenant_id, bill_account_id, source_ref)` is the correctness gate.',
+      'on `(tenant_id, bill_account_id, source_ref)` is the correctness gate. ' +
+      'Recurring items accept `chargeTiming` (`in_advance` default | `in_arrears`) and ' +
+      '`prorate` (default true); other types reject non-default values (400).',
   },
   update: {
     schema: billingItemUpdateSchema,
     responseSchema: defaultOkResponseSchema,
     description:
       'Updates a billing item. `type` and `sourceRef` are immutable — to change ' +
-      'either, soft-delete the item and create a new one.',
+      'either, soft-delete the item and create a new one. `chargeTiming` / `prorate` ' +
+      'may change at any time on recurring items — billing resumes from `billed_to_date`, ' +
+      'so no day is billed twice.',
   },
   del: {
     schema: z.object({ id: z.string().uuid() }),

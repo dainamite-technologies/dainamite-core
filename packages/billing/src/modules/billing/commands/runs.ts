@@ -71,7 +71,6 @@ const triggerRunCommand: CommandHandler<BillingRunTriggerInput, TriggerResult> =
         triggeredBy: 'manual',
         mode: parsed.mode,
         scopedAccountIds: parsed.scopedAccountIds,
-        catchUp: parsed.catchUp,
       })
       return {
         billRunId: billRun.id,
@@ -139,7 +138,6 @@ const retryFailedCommand: CommandHandler<BillingRunRetryFailedInput, TriggerResu
         mode: parsed.mode,
         scopedAccountIds,
         parentRunId: parentRun.id,
-        catchUp: parentRun.catchUp,
       })
       return {
         billRunId: billRun.id,

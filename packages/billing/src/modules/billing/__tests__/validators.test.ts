@@ -305,6 +305,9 @@ import {
   billingAccountCreateSchema,
   billingAccountListQuerySchema,
   billingAccountUpdateSchema,
+  billingItemBulkCreateSchema,
+  billingRunTriggerSchema,
+  CHARGE_TIMING_RECURRING_ONLY_MESSAGE,
   billingItemCreateSchema,
   billingItemListQuerySchema,
   billingItemUpdateSchema,
@@ -645,5 +648,60 @@ describe('billingUsageListQuerySchema', () => {
 
   it('caps pageSize at 100', () => {
     expect(() => billingUsageListQuerySchema.parse({ pageSize: '101' })).toThrow()
+  })
+})
+
+// ─── Spec A — charge timing, proration, no catch-up flag ─────────
+
+describe('Spec A validators', () => {
+  const recurring = {
+    tenantId: TENANT,
+    organizationId: ORG,
+    billAccountId: ACCOUNT,
+    type: 'recurring' as const,
+    billStartDate: '2026-11-14',
+    description: 'Internet 300',
+    rateJson: { unit_price: 79 },
+  }
+
+  it('accepts chargeTiming / prorate on recurring items and leaves defaults to the command', () => {
+    expect(billingItemCreateSchema.parse(recurring)).not.toHaveProperty('chargeTiming')
+    const parsed = billingItemCreateSchema.parse({ ...recurring, chargeTiming: 'in_arrears', prorate: false })
+    expect(parsed).toMatchObject({ chargeTiming: 'in_arrears', prorate: false })
+  })
+
+  it('rejects an unknown charge timing', () => {
+    expect(() => billingItemCreateSchema.parse({ ...recurring, chargeTiming: 'whenever' })).toThrow()
+  })
+
+  it('rejects non-default timing / proration on non-recurring items', () => {
+    const oneTime = { ...recurring, type: 'one_time' as const, rateJson: { amount: 10 } }
+    expect(billingItemCreateSchema.parse({ ...oneTime, chargeTiming: 'in_advance', prorate: true })).toBeTruthy()
+    expect(() => billingItemCreateSchema.parse({ ...oneTime, chargeTiming: 'in_arrears' })).toThrow(
+      CHARGE_TIMING_RECURRING_ONLY_MESSAGE,
+    )
+    expect(() => billingItemCreateSchema.parse({ ...oneTime, prorate: false })).toThrow(
+      CHARGE_TIMING_RECURRING_ONLY_MESSAGE,
+    )
+  })
+
+  it('applies the same rule to bulk entries and allows both on update', () => {
+    const { tenantId, organizationId, ...entry } = recurring
+    expect(() =>
+      billingItemBulkCreateSchema.parse({
+        tenantId,
+        organizationId,
+        items: [{ ...entry, type: 'usage', uomCode: 'gb', rateJson: { unit_price: 1 }, prorate: false }],
+      }),
+    ).toThrow()
+    expect(
+      billingItemUpdateSchema.parse({ tenantId, organizationId, id: ACCOUNT, chargeTiming: 'in_arrears', prorate: false }),
+    ).toMatchObject({ chargeTiming: 'in_arrears', prorate: false })
+  })
+
+  it('strips a legacy catchUp flag from the run trigger', () => {
+    const parsed = billingRunTriggerSchema.parse({ tenantId: TENANT, organizationId: ORG, catchUp: true })
+    expect(parsed).not.toHaveProperty('catchUp')
+    expect(parsed.mode).toBe('real')
   })
 })

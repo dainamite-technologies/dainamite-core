@@ -167,6 +167,8 @@ export class BillingItem {
     | 'sourceRef'
     | 'currencyMismatch'
     | 'billedToDate'
+    | 'chargeTiming'
+    | 'prorate'
     | 'isActive'
     | 'createdAt'
     | 'updatedAt'
@@ -232,6 +234,17 @@ export class BillingItem {
   // "Why two anti-duplicate guards".
   @Property({ name: 'billed_to_date', type: 'date', columnType: 'date', nullable: true })
   billedToDate?: Date | null
+
+  // Spec A — recurring items only. 'in_advance' (default) bills the coming
+  // period on the bill date; 'in_arrears' bills the period just ended.
+  @Property({ name: 'charge_timing', type: 'text', default: 'in_advance' })
+  chargeTiming: 'in_advance' | 'in_arrears' = 'in_advance'
+
+  // Spec A — recurring items only. Prorate partial periods (item starts /
+  // ends mid-period) by calendar days, and credit unused days when an item
+  // billed in advance ends early. False = skip partial periods.
+  @Property({ name: 'prorate', type: 'boolean', default: true })
+  prorate: boolean = true
 
   @Property({ name: 'is_active', type: 'boolean', default: true })
   isActive: boolean = true
@@ -354,7 +367,6 @@ export class BillingRun {
     | 'parentRunId'
     | 'dryRun'
     | 'testMode'
-    | 'catchUp'
     | 'scopedAccountIds'
     | 'startedAt'
     | 'finishedAt'
@@ -388,10 +400,6 @@ export class BillingRun {
   // True → persist drafts flagged as test, but do not advance state.
   @Property({ name: 'test_mode', type: 'boolean', default: false })
   testMode: boolean = false
-
-  // True → loop missed cycles per account in one run (manual only).
-  @Property({ name: 'catch_up', type: 'boolean', default: false })
-  catchUp: boolean = false
 
   // Optional — run processes only these accounts when set. JSONB
   // (Postgres arrays would work too, but jsonb keeps tooling uniform
@@ -452,6 +460,7 @@ export class BillingRunOutcome {
     | 'warnings'
     | 'draftInvoiceId'
     | 'statementId'
+    | 'cycles'
     | 'isActive'
     | 'createdAt'
     | 'updatedAt'
@@ -493,6 +502,13 @@ export class BillingRunOutcome {
   // at period close, so this is the prepaid analogue of `draft_invoice_id`.
   @Property({ name: 'statement_id', type: 'uuid', nullable: true })
   statementId?: string | null
+
+  // Spec A — one entry per bill date the run processed for this account
+  // (catch-up emits several): `[{ bill_date, period_start, period_end,
+  // status, line_count, total_net, invoice_id }]`. `draft_invoice_id` keeps
+  // pointing at the last invoice for backward compatibility.
+  @Property({ type: 'jsonb', nullable: true })
+  cycles?: Array<Record<string, unknown>> | null
 
   @Property({ name: 'is_active', type: 'boolean', default: true })
   isActive: boolean = true

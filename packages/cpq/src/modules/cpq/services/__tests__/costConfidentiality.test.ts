@@ -5,6 +5,7 @@
  * positive control (the sentinel IS visible where it is meant to be) so a dead fixture cannot pass silently.
  */
 import {
+  CpqInventoryAsset, CpqInventoryCost, CpqInventorySubscription, CpqInventorySubscriptionItem, CpqOrderLineConfiguration,
   CpqOrderConfiguration, CpqOrderLineCost, CpqPriceRule, CpqProductCharge, CpqQuoteConfiguration, CpqQuoteLineConfiguration, CpqQuoteLineCost, CpqQuoteMarkupOverride,
 } from '../../data/entities'
 import { DefaultCpqPricingService } from '../cpqPricingService'
@@ -17,6 +18,9 @@ import { emitQuoteWriteEvents } from '../priceAdjustments/quotePricingEvents'
 import { eventsConfig } from '../../events'
 import ceEntities from '../../ce'
 import { createQuoteLineCostCommand, updateQuoteLineCostCommand, deleteQuoteLineCostCommand } from '../../commands/quote-line-costs'
+import { stripSnapshotCosts } from '../costs/inventoryCostSnapshot'
+import { DefaultCpqInventoryService } from '../cpqInventoryService'
+import { ACTIVATION_SCOPE, createActivationHarness } from './_helpers/activationHarness'
 import { setMarkupOverrideCommand, clearMarkupOverrideCommand } from '../../commands/markup-overrides'
 
 const mockCanView = jest.fn()
@@ -294,5 +298,204 @@ describe('ce.ts registrations (App Spec Q7)', () => {
       expect(spec.fields).toEqual([])
     }
     expect(list.map((s) => s.id)).toEqual(expect.arrayContaining(['cpq:cpq_product_charge', 'cpq:cpq_pricing_table', 'cpq:cpq_pricing_table_entry']))
+  })
+})
+
+/**
+ * Feature 2 extension (feature spec §Risks): the order and inventory surfaces. Order line costs and inventory costs
+ * carrying the sentinel are made reachable from EVERY query of a poisoned EM, so a surface that wrongly loaded them
+ * would leak them. For a caller without `cpq.costs.view`, cost routes return only ids, cost keys, names, roles, types
+ * and statuses: no sentinel, no supplier name, and none of the keys below. Each surface has a positive control.
+ */
+const FORBIDDEN_KEYS = /"(unitAmount|instanceAmount|totalAmount|fxRate|fxRateDate|supplier\w*|margin\w*|mrcCost|nrcCost)"/
+const expectNoCostKeys = (value: unknown) => expect(JSON.stringify(value) ?? '').not.toMatch(FORBIDDEN_KEYS)
+/** Cost routes without the feature also drop the currency (it is part of the value fields). */
+const expectStatusOnly = (value: unknown) => { expectNoCostKeys(value); expect(JSON.stringify(value) ?? '').not.toContain('currencyCode') }
+
+const feat = {
+  sub: '55555555-5555-4555-8555-555555555555', item: '66666666-6666-4666-8666-666666666666', asset: '77777777-7777-4777-8777-777777777777',
+  order: '88888888-8888-4888-8888-888888888888', orderLine: '99999999-9999-4999-8999-999999999999',
+}
+const inventoryCostRow = (over: Row = {}): Row => ({
+  id: 'ic-1', ...SCOPE, subscriptionId: feat.sub, subscriptionItemId: feat.item, assetId: null, status: 'active', startedAt: '2026-11-01', endedAt: null, lastChangeId: 'log-1',
+  costKey: 'tail', chargeCode: 'tail', origin: 'catalog', name: 'Tail', role: 'price_basis', costType: 'mrc', source: 'fixed', costModel: 'flat', valueStatus: 'confirmed',
+  valueOrigin: 'catalog', unitAmount: COST, instanceAmount: COST, totalAmount: COST, currencyCode: 'USD', fxRate: '1.0000', supplierId: null, supplierName: SUPPLIER,
+  supplierQuoteRef: null, validUntil: null, supplierTermEnd: null, supplierMinTermMonths: null, note: NOTE, deletedAt: null, ...over,
+})
+const orderLineCostRow = (): Row => ({ ...costRow(), orderConfigurationId: feat.order, orderLineId: feat.orderLine, sourceQuoteLineCostId: ids.cost, inventoryCostId: 'ic-1', totalAmount: COST })
+const subscriptionRow: Row = { id: feat.sub, ...SCOPE, currencyCode: 'USD', status: 'active', code: 'S', name: 'S', customerId: 'cust', deletedAt: null }
+const itemRow: Row = { id: feat.item, ...SCOPE, subscriptionId: feat.sub, status: 'active', name: 'Item', mrcAmount: '100', nrcAmount: '0', quantity: 1, sortOrder: 0, charges: [{ chargeCode: 'tail', chargeType: 'mrc', totalPrice: 100 }], configuration: {}, deletedAt: null, parentItemId: null }
+const assetRow: Row = { id: feat.asset, ...SCOPE, subscriptionId: feat.sub, status: 'active', name: 'Box', code: 'A-1', purchasePrice: '500', currencyCode: 'USD', quantity: 1, sourceQuoteLineId: null, deletedAt: null }
+const orderConfigRow: Row = { id: feat.order, ...SCOPE, orderId: 'so-1', cpqStatus: 'active', customerId: 'cust', currencyCode: 'USD', pricingSummary: { nrcTotal: 0, mrcTotal: 100 }, sourceQuoteId: ids.quote, createdAt: new Date(), deletedAt: null }
+const orderLineRow: Row = { orderLineId: feat.orderLine, ...SCOPE, orderConfigurationId: feat.order, action: 'add', quantity: 1, parentLineId: null, termMonths: 12, configuration: {}, charges: [{ chargeCode: 'tail', chargeType: 'mrc', totalPrice: 100 }], nrcTotal: '0', mrcTotal: '100', deletedAt: null }
+
+/** Every cost-bearing entity is reachable from any query, whatever its filters. */
+function poisonedEm(): Row {
+  const rows = (entity: unknown): Row[] => entity === CpqOrderLineCost ? [orderLineCostRow()]
+    : entity === CpqInventoryCost ? [inventoryCostRow(), inventoryCostRow({ id: 'ic-2', subscriptionItemId: null, assetId: feat.asset, costKey: 'box', costType: 'nrc' })]
+      : entity === CpqOrderLineConfiguration ? [orderLineRow] : entity === CpqInventorySubscriptionItem ? [itemRow] : entity === CpqInventoryAsset ? [assetRow] : []
+  const em: Row = {
+    findOne: jest.fn(async (entity: unknown) => entity === CpqOrderConfiguration ? orderConfigRow : entity === CpqInventorySubscription ? subscriptionRow : entity === CpqInventoryAsset ? assetRow
+      : entity?.constructor?.name === 'SalesOrder' || (entity as { name?: string })?.name === 'SalesOrder' ? { id: 'so-1', orderNumber: 'ORD-1', status: 'draft', placedAt: null } : null),
+    find: jest.fn(async (entity: unknown, where: Row = {}) => rows(entity).filter((row) => (where.assetId === undefined || row.assetId === where.assetId))),
+    findAndCount: jest.fn(async (entity: unknown) => [entity === CpqOrderConfiguration ? [orderConfigRow] : [], 1]),
+    count: jest.fn(async () => 0),
+  }
+  em.fork = () => em
+  return em
+}
+const routeCtx = (em: Row, viewer: boolean, extra: Row = {}) => {
+  mockCanView.mockResolvedValue(viewer)
+  return { auth: { sub: 'user' }, tenantId: 'tenant', organizationId: 'org', organizationScope: null, em,
+    container: { resolve: (name: string) => ({ cpqCostService: { enabled: async () => true }, cpqOrderService: new DefaultCpqOrderService({ em: em as never, cpqInventoryService: {} as never, salesDocumentNumberGenerator: {} as never }),
+      cpqInventoryService: new DefaultCpqInventoryService(em as never), ...extra } as Record<string, unknown>)[name] } }
+}
+const useCtx = (ctx: Row) => (jest.requireMock('../../api/context') as { resolveCpqRouteContext: jest.Mock }).resolveCpqRouteContext.mockResolvedValue(ctx)
+const get = (url = 'http://localhost/x') => new Request(url)
+
+describe('order surfaces (feature 2)', () => {
+  it('order costs route: status-only without cpq.costs.view; the sentinels are visible with it (control)', async () => {
+    const { GET } = await import('../../api/orders/[orderId]/costs/route')
+    const params = { params: Promise.resolve({ orderId: feat.order }) }
+    useCtx(routeCtx(poisonedEm(), false))
+    const redacted = await (await GET(get(), params)).json()
+    expect(redacted.lines[0].costs).toEqual([{ id: ids.cost, costKey: 'tail', name: 'Tail', role: 'price_basis', costType: 'mrc', valueStatus: 'confirmed' }])
+    expectClean(redacted)
+    expectStatusOnly(redacted)
+    useCtx(routeCtx(poisonedEm(), true))
+    const full = await (await GET(get(), params)).json()
+    expect(leaked(full)).toEqual(expect.arrayContaining(['7777.77', SUPPLIER]))
+    expect(full.margin).toBeDefined()
+  })
+
+  it('order GET and the order list (data route of the order-cpq-tab widget) carry no cost data even for a cost holder', async () => {
+    const { GET: ORDER } = await import('../../api/orders/[orderId]/route')
+    const { GET: LIST } = await import('../../api/orders/route')
+    for (const viewer of [false, true]) {
+      useCtx(routeCtx(poisonedEm(), viewer))
+      const order = await ORDER(get(), { params: Promise.resolve({ orderId: feat.order }) })
+      expect(order.status).toBe(200)
+      const body = await order.json()
+      expect(body.lines).toHaveLength(1) // positive control: the order and its line were really built
+      expectClean(body)
+      expectNoCostKeys(body)
+      const list = await LIST(get('http://localhost/api/cpq/orders?salesOrderId=so-1&pageSize=50'))
+      expect(list.status).toBe(200)
+      const listBody = await list.json()
+      expect(JSON.stringify(listBody)).toContain(feat.order)
+      expectClean(listBody)
+      expectNoCostKeys(listBody)
+    }
+  })
+})
+
+describe('inventory surfaces (feature 2)', () => {
+  it('subscription costs route: status-only without cpq.costs.view; full with it (control)', async () => {
+    const { GET } = await import('../../api/inventory/subscriptions/[subscriptionId]/costs/route')
+    const params = { params: Promise.resolve({ subscriptionId: feat.sub }) }
+    useCtx(routeCtx(poisonedEm(), false))
+    const redacted = await (await GET(get('http://localhost/x?includeEnded=true'), params)).json()
+    expect(redacted.items[0].costs[0]).toEqual({ id: 'ic-1', costKey: 'tail', name: 'Tail', role: 'price_basis', costType: 'mrc', valueStatus: 'confirmed', status: 'active' })
+    expect(redacted.assets).toHaveLength(1)
+    expectClean(redacted)
+    expectStatusOnly(redacted)
+    useCtx(routeCtx(poisonedEm(), true))
+    const full = await (await GET(get(), params)).json()
+    expect(leaked(full)).toEqual(expect.arrayContaining(['7777.77', SUPPLIER]))
+    expect(full.margin).toBeDefined()
+  })
+
+  it('asset costs route: status-only without cpq.costs.view; full with it (control)', async () => {
+    const { GET } = await import('../../api/inventory/assets/[assetId]/costs/route')
+    const params = { params: Promise.resolve({ assetId: feat.asset }) }
+    useCtx(routeCtx(poisonedEm(), false))
+    const redacted = await (await GET(get(), params)).json()
+    expect(redacted.costs).toHaveLength(1)
+    expectClean(redacted)
+    expectStatusOnly(redacted)
+    useCtx(routeCtx(poisonedEm(), true))
+    expect(leaked(await (await GET(get(), params)).json())).toEqual(expect.arrayContaining(['7777.77', SUPPLIER]))
+  })
+
+  it('subscription, item and asset routes carry no cost data even for a cost holder', async () => {
+    const { GET: SUBSCRIPTION } = await import('../../api/inventory/subscriptions/route')
+    const { GET: ITEMS } = await import('../../api/inventory/subscription-items/route')
+    const { GET: ASSETS } = await import('../../api/inventory/assets/route')
+    for (const viewer of [false, true]) {
+      useCtx(routeCtx(poisonedEm(), viewer))
+      const subscription = await (await SUBSCRIPTION(get(`http://localhost/x?id=${feat.sub}`))).json()
+      expect(subscription.items).toHaveLength(1) // control: the tree was built
+      const items = await (await ITEMS(get(`http://localhost/x?subscriptionId=${feat.sub}`))).json()
+      expect(items).toHaveLength(1)
+      const asset = await (await ASSETS(get(`http://localhost/x?id=${feat.asset}`))).json()
+      expect(asset.id).toBe(feat.asset)
+      for (const body of [subscription, items, asset]) { expectClean(body); expectNoCostKeys(body); expect(JSON.stringify(body)).not.toContain('"costs"') }
+    }
+  })
+
+  it('cost routes answer 404 with the toggle off, reading nothing', async () => {
+    const { GET } = await import('../../api/inventory/subscriptions/[subscriptionId]/costs/route')
+    const em = poisonedEm()
+    useCtx(routeCtx(em, true, { cpqCostService: { enabled: async () => false } }))
+    expect((await GET(get(), { params: Promise.resolve({ subscriptionId: feat.sub }) })).status).toBe(404)
+    expect(em.find).not.toHaveBeenCalled()
+  })
+})
+
+describe('change log (feature 2, Q7)', () => {
+  const snapshot = () => ({
+    id: feat.sub, items: [{ id: feat.item, costs: [inventoryCostRow()] }], assets: [{ id: feat.asset, costs: [inventoryCostRow({ id: 'ic-2' })] }],
+  })
+  const log = () => ({ id: 'log-1', changeType: 'amend', beforeSnapshot: snapshot(), afterSnapshot: snapshot() })
+
+  it('the route strips every snapshot costs key without cpq.costs.view; the helper leaves no costs key anywhere', async () => {
+    const { GET } = await import('../../api/inventory/subscriptions/[subscriptionId]/change-log/route')
+    const listChangeLog = jest.fn(async () => ({ items: [log()], total: 1, page: 1, pageSize: 50, totalPages: 1 }))
+    useCtx(routeCtx(poisonedEm(), false, { cpqInventoryService: { listChangeLog } }))
+    const redacted = await (await GET(get(), { params: Promise.resolve({ subscriptionId: feat.sub }) })).json()
+    expectClean(redacted)
+    expectNoCostKeys(redacted)
+    for (const owner of [...redacted.items[0].afterSnapshot.items, ...redacted.items[0].afterSnapshot.assets, ...redacted.items[0].beforeSnapshot.items]) expect(owner).not.toHaveProperty('costs')
+    expect(JSON.stringify(stripSnapshotCosts(snapshot()))).not.toContain('"costs"')
+    useCtx(routeCtx(poisonedEm(), true, { cpqInventoryService: { listChangeLog } }))
+    expect(leaked(await (await GET(get(), { params: Promise.resolve({ subscriptionId: feat.sub }) })).json())).toEqual(expect.arrayContaining(['7777.77', SUPPLIER]))
+  })
+})
+
+describe('subscription lifecycle events (feature 2)', () => {
+  const lifecycle = ['activated', 'amended', 'renewed', 'merged', 'cancelled', 'superseded'].map((name) => `cpq.subscription.${name}`)
+
+  it('all six lifecycle payloads and cost_changed carry no sentinel, supplier, amount or margin key, with sentinel costs in play', async () => {
+    const eventsModule = jest.requireActual('../../events') as typeof import('../../events')
+    const emitSpy = jest.spyOn(eventsModule, 'emitCpqEvent').mockResolvedValue(undefined as never)
+    const sentinelCost = { ...orderLineCostRow(), orderLineId: 'ol-1' }
+    const changes = [{ inventoryCostId: 'ic-1', subscriptionId: 'sub-1', ownerType: 'subscription_item', subscriptionItemId: 'item-1', assetId: null, costKey: 'tail', supplierId: 'sup-1', kind: 'created' }]
+    const run = async (fixture: Parameters<typeof createActivationHarness>[0]) => {
+      const h = createActivationHarness({ orderLineCosts: [sentinelCost], ...fixture })
+      await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+    }
+    const changeLog = { id: 'log-1', subscriptionId: 'sub-1', effectiveAt: new Date('2026-06-01T10:00:00.000Z'), afterSnapshot: { items: [] }, lineChanges: [] }
+    const subscription = { id: 'sub-1', customerId: 'cust-1', currentTermStart: new Date('2027-01-01'), currentTermEnd: new Date('2028-01-01') }
+    const target = { subscriptionId: 'sub-1', mergeAction: 'standalone', newTermStart: '2027-01-01', newTermEnd: '2028-01-01', newTermMonths: 12 }
+    try {
+      await run({ quoteType: 'new', orderLines: [{ orderLineId: 'ol-1', orderConfigurationId: 'oc-1', quantity: 1, configuration: { offeringName: 'H' }, charges: [], mrcTotal: '100', nrcTotal: '0' }], subscriptionItems: [{ id: 'item-1' }], inventory: { createSubscription: { id: 'sub-1' } }, createdCosts: { inventoryCostChanges: changes } })
+      await run({ quoteType: 'amend', targets: [target], inventory: { applyAmendment: { changeLog, subscription } } })
+      await run({ quoteType: 'renew', targets: [target], inventory: { applyRenewal: { changeLog, subscription } } })
+      await run({ quoteType: 'cancel', targets: [target], inventory: { applyCancel: { changeLog, subscription } } })
+      await run({
+        quoteType: 'renew', quoteOver: { arcMergeNewTermStart: '2027-01-01', arcMergeNewTermEnd: '2028-01-01', arcMergeNewTermMonths: 12 },
+        targets: [{ subscriptionId: 'sub-a', mergeAction: 'absorb' }, { subscriptionId: 'sub-b', mergeAction: 'absorb' }],
+        inventory: { applyMergeRenewal: { mergedSubscription: { id: 'sub-m', currentTermStart: new Date('2027-01-01') }, mergeResultChangeLog: { id: 'log-m' }, sourceChangeLogs: [{ id: 'log-a', subscriptionId: 'sub-a' }, { id: 'log-b', subscriptionId: 'sub-b' }] } },
+      })
+      const emitted = emitSpy.mock.calls.map(([id, payload]) => ({ id: id as string, payload: payload as Record<string, unknown> }))
+      expect([...new Set(emitted.map((e) => e.id))].sort()).toEqual([...lifecycle, 'cpq.subscription.cost_changed'].sort())
+      for (const { id, payload } of emitted) {
+        expectClean(payload)
+        expect(JSON.stringify(payload)).not.toMatch(/amount|margin|supplierName|fxRate|"costs"/i)
+        if (id === 'cpq.subscription.cost_changed') expect(Object.keys(payload).sort()).toEqual([
+          'assetId', 'cause', 'changeLogId', 'costKey', 'effectiveDate', 'inventoryCostId', 'kind', 'organizationId', 'ownerType', 'sourceOrderId', 'subscriptionId', 'subscriptionItemId', 'supplierId', 'tenantId',
+        ])
+      }
+    } finally { emitSpy.mockRestore() }
   })
 })

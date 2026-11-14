@@ -20,7 +20,7 @@ Engine: om-auto-create-pr-loop (steps: 21, --loop: no)
 | B | 6 | Subscription snapshots carry costs | group:B3 | done | |
 | B | 7 | cost_changed event | group:B3 | done | |
 | B | 8 | Read APIs and redaction | group:B4 | done | |
-| B | 9 | Confidentiality sweep extension | group:B4 | todo | |
+| B | 9 | Confidentiality sweep extension | group:B4 | done | |
 | C | 10 | Renew freeze | group:C1 | todo | |
 | C | 11 | Reconfigured mirrors get cost lines | group:C1 | todo | |
 | C | 12 | Renew banner | group:C2 | todo | |

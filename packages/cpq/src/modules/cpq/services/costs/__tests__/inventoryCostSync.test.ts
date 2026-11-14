@@ -259,7 +259,8 @@ describe('createSubscriptionWithCosts: write ordering, assets inside, last_chang
     expect(store.get(CpqInventoryCost)).toBeUndefined()
     expect(trace.filter((step) => step === 'flush')).toHaveLength(2)
     expect(result.inventoryCostChanges).toEqual([])
-    expect(trace.filter((step) => step === 'find:CpqInventoryCost')).toEqual([])
+    // MODIFIED by step 6: no cost write read; only the snapshot's single cost query remains.
+    expect(trace.filter((step) => step === 'find:CpqInventoryCost')).toEqual(['find:CpqInventoryCost'])
   })
 
   it('createSubscription still returns the subscription entity alone (nothing cost-related leaks into the route response)', async () => {

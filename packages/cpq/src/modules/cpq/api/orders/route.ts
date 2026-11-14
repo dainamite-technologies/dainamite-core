@@ -104,7 +104,7 @@ export const openApi: OpenApiRouteDoc = {
         cpqErrorDoc(400, 'Validation error'),
         cpqErrorDoc(404, 'Quote not found'),
         cpqErrorDoc(409, 'Quote cannot be converted in its status or is already converted'),
-        cpqErrorDoc(422, 'Quote has no lines, has invalid stored adjustments, or COSTS_NOT_CONFIRMED (a price-basis cost is not confirmed or has expired; body lists the lines and cost keys), or blocked by a mutation guard'),
+        cpqErrorDoc(422, 'Quote has no lines, has invalid stored adjustments, or COSTS_NOT_CONFIRMED (a price-basis cost is not confirmed or has expired, or a cost-plus charge has no price; body `lines: [{ quoteLineId, costKeys, chargeCodes }]` names the blocking cost keys and the unpriced cost-plus charge codes per line, either list may be empty; ARC cancel lines never block), or blocked by a mutation guard'),
       ],
     },
     GET: {

@@ -1,5 +1,5 @@
 import { storedAdjustmentFailure } from './priceAdjustments/storedAdjustmentFailure'
-import { loadUnconfirmedPriceBasisCosts } from './costs/conversionGuard'
+import { loadConversionCostBlockers } from './costs/conversionGuard'
 import { withQuotePricingWrite } from './priceAdjustments/quotePricingWrite'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { SalesOrder, SalesOrderLine } from '@open-mercato/core/modules/sales/data/entities'
@@ -179,10 +179,11 @@ export class DefaultCpqOrderService {
     const invalidAdjustment = storedAdjustmentFailure(cpqConfig, quoteLines)
     if (invalidAdjustment) throw new OrderError(422, 'ADJUSTMENT_INVALID', invalidAdjustment)
 
-    // Price-basis costs still estimated / unpriced / past their validity mean the price is indicative: no order yet.
+    // R7: price-basis costs still estimated / unpriced / past their validity, or a cost-plus charge stored
+    // without a price, mean the price is indicative: no order yet (whatever the toggle).
     // ARC cancel lines (an item removed on Amend / Renew, every Cancel-quote line) sell nothing, so they never bind.
     const bindingLines = quoteLines.filter((line) => !isArcTerminationLine(line, cpqConfig.quoteType))
-    const unconfirmed = await loadUnconfirmedPriceBasisCosts(em, cpqConfig.id, bindingLines.map((line) => line.quoteLineId), scope)
+    const unconfirmed = await loadConversionCostBlockers(em, cpqConfig.id, bindingLines, scope)
     if (unconfirmed.length > 0) throw new OrderError(422, 'COSTS_NOT_CONFIRMED', { lines: unconfirmed })
 
     const { number: orderNumber } = await this.numberGenerator.generate({

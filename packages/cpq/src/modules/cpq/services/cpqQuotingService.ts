@@ -63,6 +63,7 @@ import {
 import type { CpqCostService } from './costs/costService'
 import { isQuoteCostLocked, resolveCostPlusInputs } from './costs/costResolution'
 import { isCostPlusItem } from './costs/costPlusItem'
+import type { SourcingSignal, SourcingSignalPublisher } from './costs/sourcingSignals'
 import { isArcCancelledLine, isArcTerminationLine, planArcLineRemoval, planArcLineRestore, removalCancelsItem } from './arcLineRemoval'
 
 interface QuotingServiceDeps {
@@ -73,7 +74,15 @@ interface QuotingServiceDeps {
   salesDocumentNumberGenerator: SalesDocumentNumberGenerator
   /** Cost-plus toggle check (R14); absent in tests / hosts without cost-plus, which disables cost resolution. */
   cpqCostService?: Pick<CpqCostService, 'enabled'>
+  /** Publishes the sourcing signals (requests opened / cancelled) of a committed quote write; wired by the sourcing events (step 12). */
+  sourcingPublisher?: SourcingSignalPublisher
 }
+
+/**
+ * Who is behind a saved recalculation and where it reports opened / cancelled cost requests (Q5, Q12). Every
+ * `writeQuote` owns one: signals are collected inside the transaction and published only after it committed.
+ */
+export type RecalcSourcingContext = { actorUserId?: string | null; signals?: SourcingSignal[] }
 
 export class DefaultCpqQuotingService {
   private em: EntityManager
@@ -82,6 +91,7 @@ export class DefaultCpqQuotingService {
   private productService: DefaultCpqProductService
   private numberGenerator: SalesDocumentNumberGenerator
   private costService?: Pick<CpqCostService, 'enabled'>
+  private sourcingPublisher?: SourcingSignalPublisher
 
   constructor(deps: QuotingServiceDeps) {
     this.em = deps.em
@@ -90,6 +100,7 @@ export class DefaultCpqQuotingService {
     this.productService = deps.cpqProductService
     this.numberGenerator = deps.salesDocumentNumberGenerator
     this.costService = deps.cpqCostService
+    this.sourcingPublisher = deps.sourcingPublisher
   }
 
   // ─── Create Quote ──────────────────────────────────────────────
@@ -200,11 +211,11 @@ export class DefaultCpqQuotingService {
 
   // ─── Add Quote Item ────────────────────────────────────────────
 
-  async addQuoteItem(quoteId: string, item: QuoteItemInput, scope: TenantScope): Promise<QuoteResult> {
-    return this.writeQuote(quoteId, scope, (em, quote) => this.addQuoteItemInTransaction(quoteId, item, scope, em, quote), undefined, undefined, LINE_EVENTS)
+  async addQuoteItem(quoteId: string, item: QuoteItemInput, scope: TenantScope, actorUserId: string | null = null): Promise<QuoteResult> {
+    return this.writeQuote(quoteId, scope, (em, quote, sourcing) => this.addQuoteItemInTransaction(quoteId, item, scope, em, quote, sourcing), undefined, undefined, { ...LINE_EVENTS, actorUserId })
   }
 
-  private async addQuoteItemInTransaction(quoteId: string, item: QuoteItemInput, scope: TenantScope, em: EntityManager, cpqConfig: CpqQuoteConfiguration): Promise<QuoteResult> {
+  private async addQuoteItemInTransaction(quoteId: string, item: QuoteItemInput, scope: TenantScope, em: EntityManager, cpqConfig: CpqQuoteConfiguration, sourcing?: RecalcSourcingContext): Promise<QuoteResult> {
     // ARC markers (`_arc*`) are server-owned — never accept them from callers.
     item = { ...item, configuration: stripArcMarkers(item.configuration) }
 
@@ -367,7 +378,7 @@ export class DefaultCpqQuotingService {
     await em.flush()
 
     // Recalculate quote-level totals
-    return this.recalculateInternal(em, cpqConfig, salesQuote, scope, true)
+    return this.recalculateInternal(em, cpqConfig, salesQuote, scope, true, undefined, sourcing)
   }
 
   // ─── Update Quote Item ─────────────────────────────────────────
@@ -375,15 +386,15 @@ export class DefaultCpqQuotingService {
   async updateQuoteItem(quoteId: string,
     lineId: string,
     update: { configuration: Record<string, unknown>; quantity?: number; usageEstimates?: Array<{ chargeCode: string; estimatedQuantity: number }>; startDate?: string; termMonths?: number; endDate?: string },
-    scope: TenantScope): Promise<QuoteResult> {
-    return this.writeQuote(quoteId, scope, (em, quote) => this.updateQuoteItemInTransaction(quoteId, lineId, update, scope, em, quote), undefined, undefined, LINE_EVENTS)
+    scope: TenantScope, actorUserId: string | null = null): Promise<QuoteResult> {
+    return this.writeQuote(quoteId, scope, (em, quote, sourcing) => this.updateQuoteItemInTransaction(quoteId, lineId, update, scope, em, quote, sourcing), undefined, undefined, { ...LINE_EVENTS, actorUserId })
   }
 
   private async updateQuoteItemInTransaction(
     quoteId: string,
     lineId: string,
     update: { configuration: Record<string, unknown>; quantity?: number; usageEstimates?: Array<{ chargeCode: string; estimatedQuantity: number }>; startDate?: string; termMonths?: number; endDate?: string },
-    scope: TenantScope, em: EntityManager, cpqConfig: CpqQuoteConfiguration): Promise<QuoteResult> {
+    scope: TenantScope, em: EntityManager, cpqConfig: CpqQuoteConfiguration, sourcing?: RecalcSourcingContext): Promise<QuoteResult> {
     // ARC markers (`_arc*`) are server-owned: the quote page echoes the line's
     // stored configuration (markers included) back, so drop them here and
     // re-apply the server's own markers below.
@@ -559,7 +570,7 @@ export class DefaultCpqQuotingService {
 
     await em.flush()
 
-    return this.recalculateInternal(em, cpqConfig, salesQuote, scope, true)
+    return this.recalculateInternal(em, cpqConfig, salesQuote, scope, true, undefined, sourcing)
   }
 
   /**
@@ -587,11 +598,11 @@ export class DefaultCpqQuotingService {
 
   // ─── Remove Quote Item ─────────────────────────────────────────
 
-  async removeQuoteItem(quoteId: string, lineId: string, scope: TenantScope): Promise<QuoteResult> {
-    return this.writeQuote(quoteId, scope, (em, quote) => this.removeQuoteItemInTransaction(quoteId, lineId, scope, em, quote), undefined, undefined, LINE_EVENTS)
+  async removeQuoteItem(quoteId: string, lineId: string, scope: TenantScope, actorUserId: string | null = null): Promise<QuoteResult> {
+    return this.writeQuote(quoteId, scope, (em, quote, sourcing) => this.removeQuoteItemInTransaction(quoteId, lineId, scope, em, quote, sourcing), undefined, undefined, { ...LINE_EVENTS, actorUserId })
   }
 
-  private async removeQuoteItemInTransaction(quoteId: string, lineId: string, scope: TenantScope, em: EntityManager, cpqConfig: CpqQuoteConfiguration): Promise<QuoteResult> {
+  private async removeQuoteItemInTransaction(quoteId: string, lineId: string, scope: TenantScope, em: EntityManager, cpqConfig: CpqQuoteConfiguration, sourcing?: RecalcSourcingContext): Promise<QuoteResult> {
 
     const salesQuote = await this.loadSalesQuote(em, cpqConfig.quoteId, scope)
 
@@ -639,16 +650,16 @@ export class DefaultCpqQuotingService {
       await removeQuoteLineTree(em, cpqConfig.id, lineConfig, scope)
     }
 
-    return this.recalculateInternal(em, cpqConfig, salesQuote, scope, true)
+    return this.recalculateInternal(em, cpqConfig, salesQuote, scope, true, undefined, sourcing)
   }
 
   // ─── Restore a removed subscription item (Amend / Renew) ───────
 
-  async restoreQuoteItem(quoteId: string, lineId: string, scope: TenantScope): Promise<QuoteResult> {
-    return this.writeQuote(quoteId, scope, (em, quote) => this.restoreQuoteItemInTransaction(lineId, scope, em, quote), undefined, undefined, LINE_EVENTS)
+  async restoreQuoteItem(quoteId: string, lineId: string, scope: TenantScope, actorUserId: string | null = null): Promise<QuoteResult> {
+    return this.writeQuote(quoteId, scope, (em, quote, sourcing) => this.restoreQuoteItemInTransaction(lineId, scope, em, quote, sourcing), undefined, undefined, { ...LINE_EVENTS, actorUserId })
   }
 
-  private async restoreQuoteItemInTransaction(lineId: string, scope: TenantScope, em: EntityManager, cpqConfig: CpqQuoteConfiguration): Promise<QuoteResult> {
+  private async restoreQuoteItemInTransaction(lineId: string, scope: TenantScope, em: EntityManager, cpqConfig: CpqQuoteConfiguration, sourcing?: RecalcSourcingContext): Promise<QuoteResult> {
     const salesQuote = await this.loadSalesQuote(em, cpqConfig.quoteId, scope)
 
     if (TERMINAL_STATUSES.includes(cpqConfig.cpqStatus as CpqStatus)) {
@@ -706,7 +717,7 @@ export class DefaultCpqQuotingService {
       }
     }])
 
-    return this.recalculateInternal(em, cpqConfig, salesQuote, scope, true)
+    return this.recalculateInternal(em, cpqConfig, salesQuote, scope, true, undefined, sourcing)
   }
 
   // ─── Get Quote (read from DB, no recalculation) ────────────────
@@ -729,18 +740,18 @@ export class DefaultCpqQuotingService {
 
   // ─── Recalculate ───────────────────────────────────────────────
 
-  async recalculate(quoteId: string, options: { save: boolean }, scope: TenantScope): Promise<QuoteResult> {
+  async recalculate(quoteId: string, options: { save: boolean }, scope: TenantScope, actorUserId: string | null = null): Promise<QuoteResult> {
     if (options.save) {
-      return this.writeQuote(quoteId, scope, (em, quote) => this.recalculateFromConfig(em, quote, scope, true), undefined,
+      return this.writeQuote(quoteId, scope, (em, quote, sourcing) => this.recalculateFromConfig(em, quote, scope, true, sourcing), undefined,
         (quote) => {
           if (TERMINAL_STATUSES.includes(quote.cpqStatus as CpqStatus)) throw new QuotingError(409, `Cannot recalculate quote in '${quote.cpqStatus}' status`)
-        })
+        }, { pricingCause: 'recalculate', actorUserId })
     }
     const cpqConfig = await this.loadCpqConfig(this.em, quoteId, scope)
     return this.recalculateFromConfig(this.em, { ...cpqConfig } as CpqQuoteConfiguration, scope, false)
   }
 
-  private async recalculateFromConfig(em: EntityManager, cpqConfig: CpqQuoteConfiguration, scope: TenantScope, save: boolean): Promise<QuoteResult> {
+  private async recalculateFromConfig(em: EntityManager, cpqConfig: CpqQuoteConfiguration, scope: TenantScope, save: boolean, sourcing?: RecalcSourcingContext): Promise<QuoteResult> {
 
     // A terminal quote's stored prices are final (accepted quotes are the
     // basis for order conversion) — a saved recalculation must not move them.
@@ -750,16 +761,16 @@ export class DefaultCpqQuotingService {
 
     const salesQuote = await this.loadSalesQuote(em, cpqConfig.quoteId, scope)
 
-    return this.recalculateInternal(em, cpqConfig, salesQuote, scope, save)
+    return this.recalculateInternal(em, cpqConfig, salesQuote, scope, save, undefined, sourcing)
   }
 
   // ─── Clone Quote ───────────────────────────────────────────────
 
-  async cloneQuote(quoteId: string, scope: TenantScope): Promise<QuoteResult> {
+  async cloneQuote(quoteId: string, scope: TenantScope, actorUserId: string | null = null): Promise<QuoteResult> {
     const created: { quote?: CpqQuoteConfiguration } = {}
     const result = await this.writeQuote(quoteId, scope,
-      (em, quote) => this.cloneQuoteInTransaction(quoteId, scope, em, quote, created),
-      undefined, undefined, { pricingCause: 'clone' })
+      (em, quote, sourcing) => this.cloneQuoteInTransaction(quoteId, scope, em, quote, created, sourcing),
+      undefined, undefined, { pricingCause: 'clone', actorUserId })
     // The copy is a new aggregate: its first committed snapshot is a pricing signal.
     if (created.quote) await emitQuoteWriteEvents(null, created.quote, { pricingCause: 'clone' })
     return result
@@ -768,6 +779,7 @@ export class DefaultCpqQuotingService {
   private async cloneQuoteInTransaction(
     quoteId: string, scope: TenantScope, em: EntityManager, original: CpqQuoteConfiguration,
     created: { quote?: CpqQuoteConfiguration } = {},
+    sourcing?: RecalcSourcingContext,
   ): Promise<QuoteResult> {
 
     const originalQuote = await this.loadSalesQuote(em, original.quoteId, scope)
@@ -917,7 +929,8 @@ export class DefaultCpqQuotingService {
     await cloneQuoteAdjustments(em, original.id, newCpqConfig, lineIdMap, scope)
     await em.flush()
 
-    return this.recalculateInternal(em, newCpqConfig, newSalesQuote, scope, true)
+    // The copy's first saved recalculation may open requests (Q12); the requester is the cloning user (Q5).
+    return this.recalculateInternal(em, newCpqConfig, newSalesQuote, scope, true, undefined, sourcing)
   }
 
   // ─── Transition Status ─────────────────────────────────────────
@@ -975,27 +988,34 @@ export class DefaultCpqQuotingService {
   private async writeQuote(
     quoteId: string,
     scope: TenantScope,
-    execute: (em: EntityManager, quote: CpqQuoteConfiguration) => Promise<QuoteResult>,
+    execute: (em: EntityManager, quote: CpqQuoteConfiguration, sourcing: RecalcSourcingContext) => Promise<QuoteResult>,
     expectedRevision?: number,
     validate?: (quote: CpqQuoteConfiguration) => void,
     events: QuoteWriteEvents = { pricingCause: 'recalculate' },
   ): Promise<QuoteResult> {
+    // Cost requests opened / cancelled inside this write are collected here and published after it committed.
+    const signals: SourcingSignal[] = []
+    const sourcing: RecalcSourcingContext = { actorUserId: events.actorUserId ?? null, signals }
     // The copy of a clone keeps its own baseline; the original is only locked, never repriced.
     const costService = this.costService
     const marginTracker = events.pricingCause === 'clone' || !costService ? undefined
       : createMarginTracker({ scope, isEnabled: (tenantId) => costService.enabled(tenantId) })
-    return withQuotePricingWrite(this.em, quoteId, scope, execute,
-      (status, message) => new QuotingError(status, message), expectedRevision, validate, events, marginTracker)
+    const publisher = this.sourcingPublisher
+    return withQuotePricingWrite(this.em, quoteId, scope, (em, quote) => execute(em, quote, sourcing),
+      (status, message) => new QuotingError(status, message), {
+        expectedRevision, validate, events, marginTracker,
+        afterCommit: publisher ? async (_result, quote) => { if (signals.length > 0) await publisher(signals, quote) } : undefined,
+      })
   }
 
   /** Called by adjustment commands that already own the quote lock/revision. */
   async recalculateLockedQuote(
     em: EntityManager, quote: CpqQuoteConfiguration, scope: TenantScope,
-    save = true, adjustments?: PriceAdjustment[],
+    save = true, adjustments?: PriceAdjustment[], sourcing?: RecalcSourcingContext,
   ): Promise<QuoteResult> {
     const salesQuote = await this.loadSalesQuote(em, quote.quoteId, scope)
     const config = save ? quote : { ...quote } as CpqQuoteConfiguration
-    return this.recalculateInternal(em, config, salesQuote, scope, save, adjustments)
+    return this.recalculateInternal(em, config, salesQuote, scope, save, adjustments, sourcing)
   }
 
   // ─── Internal: Recalculate ─────────────────────────────────────
@@ -1007,6 +1027,7 @@ export class DefaultCpqQuotingService {
     scope: TenantScope,
     save: boolean,
     draftAdjustments?: PriceAdjustment[],
+    sourcing?: RecalcSourcingContext,
   ): Promise<QuoteResult> {
     const lineConfigs = await em.find(CpqQuoteLineConfiguration, {
       quoteConfigurationId: cpqConfig.id,

@@ -7,6 +7,7 @@ import { resolveQuotingService } from '../../../../resolveQuotingService'
 import { CPQ_QUOTE_LINE_RESOURCE_KIND, runCpqMutationGuards } from '../../../../_helpers/quoteMutationGuard'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { CPQ_GUARDED_WRITE_ERRORS, CPQ_LINE_WRITE_ERRORS } from '../../../../_helpers/quoteRouteOpenApi'
+import { resolveAuditActor } from '../../../../../lib/auditActor'
 
 export const metadata = {
   PUT: { requireAuth: true, requireFeatures: ['cpq.quotes.manage'] },
@@ -34,7 +35,7 @@ export async function PUT(req: Request, { params }: { params: Promise<{ quoteId:
       : body
 
     const service = resolveQuotingService(ctx)
-    const result = await service.updateQuoteItem(quoteId, lineId, effective, scope)
+    const result = await service.updateQuoteItem(quoteId, lineId, effective, scope, resolveAuditActor(ctx.auth))
     await guard.runAfterSuccess()
     return NextResponse.json(result)
   } catch (err) {
@@ -66,7 +67,7 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ quote
     if (!guard.ok) return guard.response
 
     const service = resolveQuotingService(ctx)
-    const result = await service.removeQuoteItem(quoteId, lineId, scope)
+    const result = await service.removeQuoteItem(quoteId, lineId, scope, resolveAuditActor(ctx.auth))
     await guard.runAfterSuccess()
     return NextResponse.json(result)
   } catch (err) {

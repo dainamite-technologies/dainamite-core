@@ -133,6 +133,68 @@ describe('cpq.subscription.* event payloads (I-9 billing golden)', () => {
     expect(JSON.stringify(actual, null, 2)).toBe(JSON.stringify(expected, null, 2))
   })
 
+  // review1-e: the same activation with and without order line costs (and with the cost-plus toggle on / off) must
+  // emit identical lifecycle payloads. Compared on EMITTED payloads, never against the committed fixture.
+  describe('lifecycle payloads are identical with and without order line costs', () => {
+    const olc = (id: string, orderLineId: string) => ({ id, orderLineId, orderConfigurationId: 'oc-1', costKey: 'tail', chargeCode: 'mrc', origin: 'catalog', costElementId: null,
+      name: 'Tail', role: 'price_basis', costType: 'mrc', source: 'table', costModel: 'flat', valueStatus: 'confirmed', valueOrigin: 'catalog', unitAmount: '77', instanceAmount: '77',
+      totalAmount: '77', currencyCode: 'EUR', fxRate: null, fxRateDate: null, indexSnapshot: null, supplierId: 'sup-1', supplierName: 'SENTINEL-SUPPLIER', supplierQuoteRef: null,
+      validUntil: null, supplierTermEnd: null, supplierMinTermMonths: null, note: null, inventoryCostId: null })
+    const costChange = { inventoryCostId: 'ic-1', subscriptionId: 'sub-1', ownerType: 'subscription_item', subscriptionItemId: 'item-1', assetId: null, costKey: 'tail',
+      supplierId: 'sup-1', kind: 'created', changeLogId: 'log-1', effectiveDate: '2026-06-01' }
+    const lifecycle = (events: Emitted[]) => events.filter((e) => e.event !== 'cpq.subscription.cost_changed')
+
+    // Fresh fixture objects per run: the harness mutates order line costs (inventory_cost_id links).
+    async function runAll(costed: boolean, costPlusEnabled?: boolean) {
+      const extra = costed ? { inventoryCostChanges: [costChange], inventoryCostLinks: [{ orderLineCostId: 'olc-1', inventoryCostId: 'ic-1' }] } : {}
+      const toggle = costPlusEnabled === undefined ? {} : { costPlusEnabled }
+      const out: Emitted[][] = []
+      out.push(await activate({
+        quoteType: 'new', ...toggle,
+        orderLines: [
+          line({ orderLineId: 'ol-1', mrcTotal: '100', nrcTotal: '10', configuration: { offeringName: 'Hosting' } }),
+          line({ orderLineId: 'ol-4', specId: 'spec-asset', nrcTotal: '500', parentLineId: 'ol-1', configuration: { offeringName: 'Server' } }),
+        ],
+        specs: [{ id: 'spec-asset', isAssetizable: true }],
+        subscriptionItems: [{ id: 'item-1' }],
+        ...(costed ? { orderLineCosts: [olc('olc-1', 'ol-1')], createdCosts: extra } : {}),
+        inventory: { createSubscription: { id: 'sub-1' } },
+      }))
+      const arc = (quoteType: 'amend' | 'renew', primitive: 'applyAmendment' | 'applyRenewal') => activate({
+        quoteType, ...toggle,
+        targets: [{ subscriptionId: 'sub-1', mergeAction: 'standalone', newTermStart: '2027-01-01', newTermEnd: '2028-01-01', newTermMonths: 12 }],
+        quoteLines: [quoteLine({ quoteLineId: 'ql-1', action: 'add', mrcTotal: '120', nrcTotal: '30' }), quoteLine({ quoteLineId: 'ql-r', action: 'modify', sourceSubscriptionItemId: 'item-1', configuration: { _arcMirroredFromItemId: 'i', _arcReconfigured: true } })],
+        ...(costed ? { orderLines: [line({ orderLineId: 'ol-1', sourceQuoteLineId: 'ql-1' })], orderLineCosts: [olc('olc-1', 'ol-1')] } : {}),
+        inventory: { [primitive]: { changeLog: changeLog(), subscription, ...extra } },
+      })
+      out.push(await arc('amend', 'applyAmendment'))
+      out.push(await arc('renew', 'applyRenewal'))
+      out.push(await activate({
+        quoteType: 'renew', ...toggle,
+        quoteOver: { arcMergeNewTermStart: '2027-01-01', arcMergeNewTermEnd: '2028-01-01', arcMergeNewTermMonths: 12 },
+        targets: [{ subscriptionId: 'sub-a', mergeAction: 'absorb' }, { subscriptionId: 'sub-b', mergeAction: 'absorb' }],
+        inventory: { applyMergeRenewal: {
+          mergedSubscription: { id: 'sub-m', currentTermStart: new Date('2027-01-01T00:00:00.000Z') }, mergeResultChangeLog: { id: 'log-m' },
+          sourceChangeLogs: [{ id: 'log-a', subscriptionId: 'sub-a' }, { id: 'log-b', subscriptionId: 'sub-b' }], ...extra,
+        } },
+      }))
+      return out.map(lifecycle)
+    }
+
+    it('a costed activation emits the same lifecycle payloads as an uncosted one (new sale, amend, renew, merge)', async () => {
+      const plain = await runAll(false)
+      const costed = await runAll(true)
+      expect(plain.flat().length).toBeGreaterThanOrEqual(6)
+      expect(JSON.stringify(costed, null, 2)).toBe(JSON.stringify(plain, null, 2))
+      expect(JSON.stringify(costed)).not.toMatch(/SENTINEL-SUPPLIER|\b77\b|cost|margin/i)
+    })
+
+    it.each([true, false])('the payloads do not depend on the cost-plus toggle (toggle on=%s)', async (on) => {
+      const baseline = await runAll(false)
+      expect(JSON.stringify(await runAll(true, on), null, 2)).toBe(JSON.stringify(baseline, null, 2))
+    })
+  })
+
   it('carries no cost keys or amounts in any payload', async () => {
     const actual = JSON.stringify(
       JSON.parse(fs.readFileSync(FIXTURE, 'utf8')),

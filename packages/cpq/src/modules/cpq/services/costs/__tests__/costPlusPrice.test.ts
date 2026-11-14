@@ -45,6 +45,13 @@ describe('computeCostPlusPrice (R2)', () => {
       }
     })
 
+  it('markup_absolute in another currency than the quote is CURRENCY_NO_RATE (no 1:1 add, R3)', () => {
+    expect(price({ markupRule: 'markup_absolute', markupValue: 50, markupCurrencyCode: 'USD' })).toEqual({ ok: false, error: 'CURRENCY_NO_RATE' })
+    expect(price({ markupRule: 'markup_absolute', markupValue: 50, markupCurrencyCode: 'EUR' })).toMatchObject({ ok: true, listTotal: 450 })
+    // the markup currency only matters for the absolute rule
+    expect(price({ markupRule: 'markup_percent', markupValue: 25, markupCurrencyCode: 'USD' })).toMatchObject({ ok: true, listTotal: 500 })
+  })
+
   it('spec scenario: costs 300 + 100 at markup_percent 25 give 500.00', () => {
     expect(price()).toEqual({ ok: true, listTotal: 500, listUnit: 500, quantity: 1 })
   })
@@ -143,6 +150,17 @@ describe('cost-plus charge through the pricing service', () => {
     const costPlus = ctx({ overrides: new Map([['tail_mrc', { markupRule: 'markup_absolute', markupValue: '50' }]]) })
     const [charge] = await priced(costPlusCharge(), costPlus)
     expect(charge).toMatchObject({ totalPrice: 450 })
+  })
+
+  it('a charge markup_absolute in another currency leaves the charge unpriced (CURRENCY_NO_RATE); an override is in the quote currency', async () => {
+    const costPlus = ctx()
+    const [charge] = await priced(costPlusCharge({ markupRule: 'markup_absolute', markupValue: '50', currencyCode: 'USD' }), costPlus)
+    expect(charge).toMatchObject({ unitPrice: null, totalPrice: null })
+    expect(costPlus.errors).toEqual([{ chargeCode: 'tail_mrc', code: 'CURRENCY_NO_RATE' }])
+    const overridden = ctx({ overrides: new Map([['tail_mrc', { markupRule: 'markup_absolute', markupValue: '50' }]]) })
+    const [withOverride] = await priced(costPlusCharge({ markupRule: 'markup_absolute', markupValue: '50', currencyCode: 'USD' }), overridden)
+    expect(withOverride).toMatchObject({ totalPrice: 450 })
+    expect(overridden.errors).toEqual([])
   })
 
   it('target_margin_percent and per_unit: unit derived at 4 dp from the rounded total', async () => {

@@ -365,6 +365,8 @@ export class DefaultCpqPricingService {
       chargeModel: perUnit ? 'per_unit' : 'flat',
       quantity,
       currencyCode: base.currencyCode,
+      // The charge's absolute markup is in the charge currency; an override's is in the quote currency.
+      markupCurrencyCode: override ? null : charge.currencyCode,
     })
     if (!result.ok) return unpriced(result.error)
     return { ...base, pricingMethod: 'cost_plus', unitPrice: result.listUnit, quantity: result.quantity, totalPrice: result.listTotal }

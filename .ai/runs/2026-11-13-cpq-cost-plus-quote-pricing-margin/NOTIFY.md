@@ -123,3 +123,6 @@
 
 ## 2026-11-14T04:08:48Z — review1-e (locked-quote reconfiguration)
 - Decision: "changes configuration or quantity" compares values (ARC markers and key order ignored, via `arcPricingInputsChanged` restricted to configuration + quantity), because the quote page always resubmits the full line; term / dates / usage estimates stay editable on locked quotes (no cost-plus price depends on them). The check runs only with the toggle on and only when the line's offering (else product) has an ACTIVE cost-plus charge; ARC internal flows (mirroring, remove / restore) never call add / update.
+
+## 2026-11-14T04:14:06Z — review1-f (money minors)
+- Decision: a row in the quote currency that lacks the cost column is `TABLE_NO_MATCH`; `CURRENCY_NO_RATE` stays reserved for "no row in the quote currency, but another currency prices it". `markup_absolute` amounts: the charge's own markup is in the charge currency (mismatch → unpriced, `CURRENCY_NO_RATE`), a markup override is in the quote currency (no check). Not changed: the pricing-table xlsx import still stores a blank cell as 0 (pre-existing, all table purposes) — a blank cost cell imported from a spreadsheet therefore remains a confirmed 0; follow-up candidate.

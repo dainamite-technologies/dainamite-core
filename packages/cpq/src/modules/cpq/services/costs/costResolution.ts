@@ -111,10 +111,14 @@ function resolveValue(
     if (!table || !element.costColumnKey) return { ...NO_VALUE, errorCode: 'TABLE_NO_MATCH' }
     const lookupTable = { dimensions: table.dimensions, entries: table.entries as LookupEntry[] }
     const model = element.costModel as LookupModel
-    const inQuoteCurrency = lookupTablePrice(lookupTable, element.costColumnKey, model, configuration, quantity, quoteCurrency)
+    // R5: a matching row without the element's cost column is an unknown cost, never a confirmed 0.
+    const strict = { requireColumn: true }
+    const inQuoteCurrency = lookupTablePrice(lookupTable, element.costColumnKey, model, configuration, quantity, quoteCurrency, strict)
     if (inQuoteCurrency.outcome === 'miss') {
-      const anyCurrency = lookupTablePrice(lookupTable, element.costColumnKey, model, configuration, quantity)
-      return { ...NO_VALUE, errorCode: anyCurrency.outcome === 'miss' ? 'TABLE_NO_MATCH' : 'CURRENCY_NO_RATE' }
+      // CURRENCY_NO_RATE only when the quote currency has no matching row at all and another currency prices it.
+      const rowInQuoteCurrency = lookupTablePrice(lookupTable, element.costColumnKey, model, configuration, quantity, quoteCurrency).outcome !== 'miss'
+      const anyCurrency = rowInQuoteCurrency ? null : lookupTablePrice(lookupTable, element.costColumnKey, model, configuration, quantity, undefined, strict)
+      return { ...NO_VALUE, errorCode: !anyCurrency || anyCurrency.outcome === 'miss' ? 'TABLE_NO_MATCH' : 'CURRENCY_NO_RATE' }
     }
     if (inQuoteCurrency.outcome === 'zero_quantity') {
       return { valueStatus: 'confirmed', valueOrigin: 'catalog', unitAmount: money(0), instanceAmount: money(0), currencyCode: quoteCurrency, errorCode: null }

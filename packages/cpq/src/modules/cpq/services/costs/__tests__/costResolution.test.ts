@@ -179,6 +179,22 @@ describe('resolveQuoteCosts', () => {
     expect(gone.costs[0]).toMatchObject({ valueStatus: 'none', errorCode: 'TABLE_NO_MATCH' })
   })
 
+  it('a matching cost-table row without the element\'s cost column is TABLE_NO_MATCH, never a confirmed 0 (R5)', async () => {
+    const tables = [{ id: 'tbl', ...SCOPE, deletedAt: null, purpose: 'cost', dimensions: [{ key: 'dc' }] }]
+    const entries = [
+      { ...SCOPE, deletedAt: null, isActive: true, pricingTableId: 'tbl', dimensionValues: { dc: 'am1' }, prices: { nrc_cost: 500 }, currencyCode: 'USD' },
+      { ...SCOPE, deletedAt: null, isActive: true, pricingTableId: 'tbl', dimensionValues: { dc: 'fr2' }, prices: { mrc_cost: 70 }, currencyCode: 'EUR' },
+    ]
+    const el = element({ source: 'table', amount: null, currencyCode: null, costTableId: 'tbl', costColumnKey: 'mrc_cost' })
+    const s = store({ charges: [charge()], elements: [el], tables, entries })
+    await run(s, { config: { dc: 'am1' } })
+    expect(s.costs[0]).toMatchObject({ valueStatus: 'none', valueOrigin: null, unitAmount: null, instanceAmount: null, errorCode: 'TABLE_NO_MATCH' })
+    // a row priced only in another currency still reports CURRENCY_NO_RATE
+    const foreign = store({ charges: [charge()], elements: [el], tables, entries })
+    await run(foreign, { config: { dc: 'fr2' } })
+    expect(foreign.costs[0]).toMatchObject({ valueStatus: 'none', errorCode: 'CURRENCY_NO_RATE' })
+  })
+
   it('flags a fixed cost in another currency as CURRENCY_NO_RATE (no 1:1 conversion)', async () => {
     const s = store({ charges: [charge()], elements: [element({ currencyCode: 'EUR' })] })
     await run(s)

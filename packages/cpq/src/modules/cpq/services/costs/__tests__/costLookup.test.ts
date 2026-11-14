@@ -154,3 +154,30 @@ describe('lookupTablePrice — volume', () => {
     expect(lookupTablePrice(table, 'r', 'volume', { region: 'eu' }, 5, 'GBP')).toMatchObject({ unitPrice: 3, currencyCode: 'GBP' })
   })
 })
+
+describe('lookupTablePrice — requireColumn (cost lookups, R5)', () => {
+  const strict = { requireColumn: true }
+  it('a matched flat / per_unit entry without the column is a miss; price lookups keep pricing it at 0', () => {
+    expect(lookupTablePrice(dimTable, 'nrc', 'flat', { region: 'us', size: 'lg' }, 1, 'USD', strict)).toEqual({ outcome: 'miss' })
+    expect(lookupTablePrice(dimTable, 'nrc', 'per_unit', { region: 'us', size: 'lg' }, 3, 'USD', strict)).toEqual({ outcome: 'miss' })
+    expect(lookupTablePrice(dimTable, 'nrc', 'flat', { region: 'us', size: 'lg' }, 1, 'USD')).toMatchObject({ outcome: 'priced', unitPrice: 0 })
+    expect(lookupTablePrice(dimTable, 'nrc', 'flat', { region: 'eu', size: 'sm' }, 1, 'USD', strict)).toMatchObject({ outcome: 'priced', unitPrice: 100 })
+  })
+  it('volume: the chosen tier without the column is a miss', () => {
+    const table: LookupTable = { dimensions: [], entries: [
+      entry({ tierNumber: 0, rangeFrom: '0', rangeTo: '10', prices: { r: 5 } }),
+      entry({ tierNumber: 1, rangeFrom: '11', rangeTo: null, prices: {} }),
+    ] }
+    expect(lookupTablePrice(table, 'r', 'volume', {}, 20, 'USD', strict)).toEqual({ outcome: 'miss' })
+    expect(lookupTablePrice(table, 'r', 'volume', {}, 5, 'USD', strict)).toMatchObject({ outcome: 'priced', totalPrice: 25 })
+  })
+  it('tiered: a consumed tier without the column is a miss; an unconsumed one does not matter', () => {
+    const table: LookupTable = { dimensions: [], entries: [
+      entry({ tierNumber: 0, rangeTo: '10', prices: { r: 5 } }),
+      entry({ tierNumber: 1, rangeTo: null, prices: { other: 1 } }),
+    ] }
+    expect(lookupTablePrice(table, 'r', 'tiered', {}, 15, 'USD', strict)).toEqual({ outcome: 'miss' })
+    expect(lookupTablePrice(table, 'r', 'tiered', {}, 8, 'USD', strict)).toMatchObject({ outcome: 'priced', totalPrice: 40 })
+    expect(lookupTablePrice(table, 'r', 'tiered', {}, 0, 'USD', strict)).toEqual({ outcome: 'zero_quantity' })
+  })
+})

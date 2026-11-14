@@ -50,9 +50,24 @@ function entryMatchesDimensions(
 
 const byTier = (a: LookupEntry, b: LookupEntry) => (a.tierNumber ?? 0) - (b.tierNumber ?? 0)
 
+export interface LookupOptions {
+  /**
+   * Cost lookups: an entry the result would be priced from that has no value in `columnKey` makes the
+   * whole lookup a `miss` (an unknown cost is never a known 0, App Spec R5). Price-table lookups leave it
+   * off and keep pricing a missing column at 0.
+   */
+  requireColumn?: boolean
+}
+
+const hasColumn = (entry: LookupEntry, columnKey: string) => {
+  const value = entry.prices?.[columnKey] as unknown
+  return typeof value === 'number' && Number.isFinite(value)
+}
+
 /**
  * @param table      table dimensions + its (active) entries
  * @param columnKey  price column to read (`priceColumnKey` / `cost_column_key`); a missing column prices at 0
+ *                   unless `options.requireColumn`
  * @param model      flat | per_unit | tiered | volume
  * @param dimensions configured values keyed by dimension key (matched case-insensitively, exact otherwise)
  * @param quantity   billed quantity; ignored by `flat`
@@ -65,12 +80,14 @@ export function lookupTablePrice(
   dimensions: Record<string, unknown>,
   quantity: number,
   currency?: string | null,
+  options: LookupOptions = {},
 ): TableLookupResult {
   const entries = currency ? table.entries.filter((entry) => entry.currencyCode === currency) : table.entries
+  const missingColumn = (entry: LookupEntry) => options.requireColumn === true && !hasColumn(entry, columnKey)
 
   if (model === 'flat' || model === 'per_unit') {
     const entry = entries.find((candidate) => entryMatchesDimensions(candidate, table.dimensions, dimensions))
-    if (!entry) return { outcome: 'miss' }
+    if (!entry || missingColumn(entry)) return { outcome: 'miss' }
     const unitPrice = entry.prices[columnKey] ?? 0
     if (model === 'flat') {
       return { outcome: 'priced', unitPrice, quantity: 1, totalPrice: unitPrice, currencyCode: entry.currencyCode }
@@ -92,6 +109,7 @@ export function lookupTablePrice(
         const to = e.rangeTo != null ? Number(e.rangeTo) : Infinity
         return quantity >= from && quantity <= to
       }) ?? sorted[sorted.length - 1]
+    if (missingColumn(entry)) return { outcome: 'miss' }
     const unitPrice = entry.prices[columnKey] ?? 0
     return { outcome: 'priced', unitPrice, quantity, totalPrice: unitPrice * quantity, currencyCode: entry.currencyCode }
   }
@@ -107,6 +125,7 @@ export function lookupTablePrice(
     const tierCeil = to === Infinity ? quantity : Math.min(to, quantity)
     const qty = tierCeil - allocated
     if (qty <= 0) continue
+    if (missingColumn(entry)) return { outcome: 'miss' }
     const price = entry.prices[columnKey] ?? 0
     currencyCode = entry.currencyCode
     tiers.push({

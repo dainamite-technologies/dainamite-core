@@ -124,6 +124,7 @@ export class CpqQuoteCostService {
           costs: own as never, markupRule: (charge.markupRule ?? '') as MarkupRule, markupValue: charge.markupValue ?? 'NaN',
           chargeModel: charge.chargeModel === 'per_unit' ? 'per_unit' : 'flat',
           quantity: Number(configuration[charge.quantityAttributeCode ?? ''] ?? 0), currencyCode: currency,
+          markupCurrencyCode: charge.currencyCode,
         })
         if (priced.ok) listTotalPrice = priced.listTotal
         else error = priced.error

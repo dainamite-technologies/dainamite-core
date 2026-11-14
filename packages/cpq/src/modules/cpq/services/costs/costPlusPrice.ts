@@ -6,7 +6,9 @@ import type { CostValueStatus } from '../../data/costs'
  *   C = Σ per-instance amount of the charge's price-basis cost lines with a known value
  *   markup_percent        → C × (1 + m / 100)        (m = 25 means 25 %)
  *   target_margin_percent → C ÷ (1 − m / 100)        (m < 100)
- *   markup_absolute       → C + a                    (once per instance)
+ *   markup_absolute       → C + a                    (once per instance; a is in the charge currency, so a
+ *                                                     quote in another currency leaves the charge unpriced with
+ *                                                     CURRENCY_NO_RATE — never a silent 1:1 add, R3)
  *
  * C stays in full precision; the list total is rounded ONCE to the currency
  * precision. For `per_unit` charges the list unit is `total ÷ quantity` kept at
@@ -14,7 +16,7 @@ import type { CostValueStatus } from '../../data/costs'
  */
 
 export type MarkupRule = 'markup_percent' | 'target_margin_percent' | 'markup_absolute'
-export type CostPlusErrorCode = 'COST_PENDING' | 'NO_PRICE_BASIS_COST' | 'MARKUP_INVALID'
+export type CostPlusErrorCode = 'COST_PENDING' | 'NO_PRICE_BASIS_COST' | 'MARKUP_INVALID' | 'CURRENCY_NO_RATE'
 
 export type CostPlusCostInput = {
   role: string
@@ -31,6 +33,11 @@ export type CostPlusPriceInput = {
   /** Charge quantity (per_unit only). */
   quantity: number
   currencyCode: string
+  /**
+   * Currency of an absolute markup amount: the charge's `currencyCode` for the charge's own markup. A markup
+   * override is entered in the quote currency, so callers pass nothing for it. No FX before the FX feature.
+   */
+  markupCurrencyCode?: string | null
 }
 
 export type CostPlusPriceResult =
@@ -72,6 +79,9 @@ export function applyMarkup(cost: number, rule: string, value: number): number |
 export function computeCostPlusPrice(input: CostPlusPriceInput): CostPlusPriceResult {
   const summed = sumPriceBasisCosts(input.costs)
   if (!summed.ok) return summed
+  if (input.markupRule === 'markup_absolute' && input.markupCurrencyCode && input.markupCurrencyCode !== input.currencyCode) {
+    return { ok: false, error: 'CURRENCY_NO_RATE' }
+  }
   const marked = applyMarkup(summed.total, input.markupRule, Number(input.markupValue))
   if (marked === null) return { ok: false, error: 'MARKUP_INVALID' }
 

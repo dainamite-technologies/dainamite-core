@@ -12,12 +12,12 @@ Engine: om-auto-create-pr-loop (steps: 20, --loop: no)
 
 | Phase | Step | Title | Exec | Status | Commit |
 |-------|------|-------|------|--------|--------|
-| A | 1 | Characterization tests | group:A1 | done | |
-| A | 2 | withQuotePricingWrite options object | group:A2 | done | |
-| A | 3 | Entity, migration and overdue toggle | group:A2 | done | |
-| A | 4 | Pure sourcing rules | group:A2 | done | |
-| B | 5 | Sourcing service, request / cancel commands and routes | group:B1 | done | |
-| B | 6 | Auto-open and R1b / R1a cancellation | group:B1 | done | |
+| A | 1 | Characterization tests | group:A1 | done | 6a9af83 |
+| A | 2 | withQuotePricingWrite options object | group:A2 | done | 1dffc79 |
+| A | 3 | Entity, migration and overdue toggle | group:A2 | done | d6ce394 |
+| A | 4 | Pure sourcing rules | group:A2 | done | 69264a7 |
+| B | 5 | Sourcing service, request / cancel commands and routes | group:B1 | done | 5502969 |
+| B | 6 | Auto-open and R1b / R1a cancellation | group:B1 | done | 33168d6 |
 | B | 7 | Answer and decline | group:B2 | todo | |
 | B | 8 | Apply answer route | group:B2 | todo | |
 | B | 9 | Cancellation on close | group:B3 | todo | |

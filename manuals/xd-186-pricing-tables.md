@@ -243,3 +243,27 @@ console.log('Error:', data.error, 'Details:', data.details)
 ```
 
 **Expected**: Status `400`, `error: "Validation error"` with Zod issue details.
+
+---
+
+## Pricing-table purpose: price or cost (cost-plus pricing)
+
+Every pricing table has a `purpose`: `price` (default — what this manual tests)
+or `cost` (supplier / internal cost rates used by cost-plus charges). The
+rest of the table behaves identically; only the purpose, who sees it and what
+may reference it differ.
+
+- **Visibility.** Cost tables are hidden from users without `cpq.costs.view`:
+  they are missing from the list and the detail / entries endpoints answer
+  `404`. A cost table never appears in a price-table picker.
+- **Purpose is locked once referenced.** Changing `purpose` while a charge or a
+  cost element uses the table fails with `422 PURPOSE_LOCKED`. Unreference the
+  table first.
+- **Cost elements read cost tables.** A cost element with a table source names
+  the table's cost column through `cost_column_key`. A price table cannot be
+  used as a cost source, and a cost table cannot price an ordinary charge.
+- **Missing cost column.** If the matching row has no value in the element's
+  cost column (or no row matches), the cost line is pending with error
+  `TABLE_NO_MATCH` — never a confirmed 0.
+
+Full flow, roles and error codes: [`cpq-cost-plus-pricing.md`](cpq-cost-plus-pricing.md).

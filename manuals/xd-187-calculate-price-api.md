@@ -378,6 +378,29 @@ Navigate to: **Sidebar → Sales section → CPQ Quotes** → click **New Quote*
     - Overage Fee (Usage) with per-unit rate
 11. **Step 5 (Review)**: Verify the summary card shows NRC total, MRC total, and usage charges listed separately
 
+## Cost-plus charges in the response (additive)
+
+Each charge in `primaryCharges` / `childItems[].charges` carries three additive
+fields. Existing consumers can ignore them; nothing else changed.
+
+| Field | Meaning |
+|---|---|
+| `pricingMethod` | `fixed` (default) or `cost_plus`. |
+| `indicative` | `true` when a cost-plus price rests on an *estimated* on-request cost. |
+| `priceOnRequest` | `true` when the charge cannot be priced: cost pending, no price basis, or the `cpq.cost_plus` toggle is off. |
+
+A `priceOnRequest` charge has `unitPrice: null` and `totalPrice: null` and is
+**excluded from `totals`** (NRC / MRC / usage) — never read it as `0`. With the
+toggle off, every cost-plus charge is returned as `priceOnRequest`.
+
+No cost, markup, margin or supplier data is ever returned by this endpoint,
+for any caller (requirement R15), and the Puffin public proxy forwards nothing
+new.
+
+Details: [`cpq-cost-plus-pricing.md`](cpq-cost-plus-pricing.md) (section "Calculate-price").
+
+---
+
 ### Supporting data verification in UI
 
 After running the API tests, you can cross-check data in the UI:

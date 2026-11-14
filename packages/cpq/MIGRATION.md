@@ -166,6 +166,79 @@ the `@dainamite/cpq` package, per
 
 ## Schema / API changelog (track breaking changes here)
 
+### 2026-11-14 — Order and subscription costs (cost-plus pricing, feature 2, PR 1: backend)
+
+Spec: `.ai/specs/2026-11-12-cpq-cost-plus-order-subscription-costs.md`. Minor
+release of `@dainamite/cpq`. Requires feature 1 (cost-plus charges, quote costs).
+The UI, manual and E2E follow in PR 2; until then costs are visible through the
+APIs only.
+
+**Schema (additive).** Migration `Migration20261114101001`: new tables
+`cpq_order_line_costs` (conversion copy of the quote line costs, with
+`inventory_cost_id` set at activation) and `cpq_inventory_costs` (one row per
+subscription item or asset and `cost_key`, a stable id for the life of the
+purchase; owner is a subscription item XOR an asset; `status` active / ended;
+`last_change_id` points at the change-log row that last changed it). Both are
+tenant-scoped, soft-deleted, FK-string ids only; partial unique indexes and the
+owner CHECK are hand-added in the migration. No data migration: existing
+orders and subscriptions have no costs.
+
+**Behaviour changes.**
+- **Activation is one transaction (failure semantics change).** `activateOrder`
+  now runs the whole activation (inventory, costs, change log, order status) on a
+  forked EM in a single transaction. A late failure rolls back everything,
+  including the subscription and its change log; previously earlier steps could
+  stay persisted. `activateOrder` refuses to run inside an outer transaction
+  (`transactional` cannot nest). Events are emitted after the commit only.
+- **New-sale assets are created inside `createSubscription`**, before its
+  `created` snapshot, so the `created` `after_snapshot` now lists them (it did
+  not before). `CreateSubscriptionInput` gains `assets`; `CreateSubscriptionItemInput`
+  gains `costs`.
+- **Renew freeze.** Renew mirror lines of cost-plus items are frozen at the
+  contracted price (they have no catalog cost lines to re-derive it from) and
+  carry a banner. Quote-only configuration markers `_arcCostPlusFrozen` and
+  `_arcReconfigured` (never copied to inventory or the order) mark frozen and
+  reconfigured mirror lines; a reconfigured mirror line gets catalog cost lines.
+- **Write-back at ARC activation.** Amend / Renew / Cancel keep inventory costs
+  truthful: `cancel` lines and Cancel orders end costs (`ended_at` = the change
+  row's effective date), a reconfigured mirror line replaces its item's costs by
+  `cost_key` (same ids; unchanged rows are neither written nor reported), `add`
+  lines create them, and a merge re-points the open item costs to the cloned
+  items and the open asset costs to the merged subscription, without changing any
+  id. `ApplyMergeRenewalResult` and `ApplyArcResult` gain `inventoryCostChanges`.
+- **Change log.** `before_snapshot` / `after_snapshot` gain `items[].costs` and
+  `assets[].costs` (key omitted for uncosted owners). The change-log route
+  strips them without `cpq.costs.view` (or with `cpq.cost_plus` off).
+- `GET /api/cpq/cost-plus/usage` now fills `liveSubscriptions` (live
+  subscriptions with an open inventory cost).
+
+**New routes.** `GET /api/cpq/orders/{id}/costs`,
+`GET /api/cpq/inventory/subscriptions/{id}/costs`,
+`GET /api/cpq/inventory/assets/{id}/costs` (all `openApi`, gated by the read
+feature of the entity plus `cpq.costs.view`; status-only projection without it).
+
+**New event.** `cpq.subscription.cost_changed` (non-broadcast, no amounts): one
+per created / changed / ended / re-pointed inventory cost, emitted after commit;
+`cause` is `activation`, `amend`, `renew`, `cancel` or `merge`, `kind` is
+`created`, `changed`, `ended` or `repointed`. The existing subscription events
+(`activated`, `amended`, `renewed`, `cancelled`, `merged`, `superseded`) are
+byte-identical (golden test).
+
+**New CLI.** `yarn mercato cpq scrub-change-log-costs [--tenant <id>] [--dry-run]`
+removes `items[].costs` and `assets[].costs` from change-log snapshots;
+idempotent, paged, `--dry-run` only counts.
+
+**Rollback order: scrub, then code, then down-migration.**
+1. `yarn mercato cpq scrub-change-log-costs --dry-run`, then without `--dry-run`
+   (per tenant with `--tenant`). Snapshots written since the upgrade carry
+   `costs` keys, and the old change-log route would return them to every
+   `cpq.arc.changelog.view` holder. The scrub removes the cost history
+   permanently; the alternative is to keep the redaction in the rolled-back code.
+2. Roll the code back.
+3. Run the down-migration (drops `cpq_inventory_costs` and `cpq_order_line_costs`).
+Doing the steps in another order leaves cost data readable by users without
+`cpq.costs.view`, or snapshots that reference dropped tables.
+
 ### 2026-11-13 — Cost-plus charges, cost catalog and quote margin (cost-plus pricing, feature 1)
 
 Spec: `.ai/specs/2026-11-12-cpq-cost-plus-quote-pricing-margin.md`. Manual:

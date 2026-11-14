@@ -49,6 +49,7 @@ Engine: om-auto-create-pr-loop (steps: 24, --loop: no)
 | E | review1-e | Cost-locked quotes refuse adding / reconfiguring cost-plus lines | dispatch | done | |
 | E | review1-f | Missing cost column is TABLE_NO_MATCH; markup_absolute currency rule | dispatch | done | |
 | E | review1-g | status_changed price-basis flags, term in margin hash, nullable previousMarginHash | dispatch | done | |
+| E | review1-h | Docs for review fixes a–g (manual, MIGRATION, changeset, capabilities) | dispatch | done | |
 
 ## Goal
 

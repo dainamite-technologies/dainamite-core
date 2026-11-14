@@ -37,6 +37,11 @@ per-instance amounts (full precision). Then, with markup value `m`
 | `target_margin_percent` (m < 100) | `C ÷ (1 − m / 100)` |
 | `markup_absolute` | `C + a` (once per instance) |
 
+An absolute markup `a` is in the **charge** currency. On a quote in another
+currency the charge has no price (`CURRENCY_NO_RATE`) — it is never added 1:1
+before FX conversion ships. The absolute amount of a markup **override** is
+entered in the quote currency.
+
 The total is rounded **once**, to the currency precision. For per-unit charges
 the unit price is the total divided by the quantity, kept at 4 decimals. Price
 rules and negotiated adjustments then apply to the standard price derived from
@@ -49,8 +54,9 @@ offer is `450.00`; the margin on the offer is `450 − 400 = 50` (11.1 %).
 A cost-plus charge with an unknown (`none`) price-basis cost has **no price**:
 `unitPrice` / `totalPrice` are `null`, the line carries `COST_PENDING`, and the
 quote cannot reach **Ready**. With no applicable price-basis cost at all the
-error is `NO_PRICE_BASIS_COST`. An **estimated** cost does price the charge; the
-quote is then *indicative* (see below).
+error is `NO_PRICE_BASIS_COST`; an unusable markup gives `MARKUP_INVALID`, an
+absolute markup in a foreign currency `CURRENCY_NO_RATE`. An **estimated** cost
+does price the charge; the quote is then *indicative* (see below).
 
 ## Enabling the feature
 
@@ -95,6 +101,14 @@ broadcast events, action-log snapshots or search. They see only **cost status**
 pricing-table lists and `404` by id. `markupRule` / `markupValue` are stripped
 from product-charge responses; `pricingMethod: cost_plus` stays visible.
 
+Product-charge **writes** follow the same rule: creating a cost-plus charge,
+setting a markup, and **any** write on a stored cost-plus charge — including
+switching it to another pricing method (which wipes its markup and deactivates
+its price-basis elements) and deleting it — need `cpq.costs.view`
+(`403 COSTS_VIEW_REQUIRED`). The check runs before any validation, so a `400`
+never reveals the stored markup. Clearing markup (`null`) on a fixed or table
+charge needs nothing extra.
+
 One deliberate exception: the non-broadcast event `cpq.quote.margin_changed`
 carries **quote-level** aggregates (contract margin, margin %, coverage). It is
 readable by anyone who can view workflow definitions, instances and their stored
@@ -109,7 +123,9 @@ context. Grant those views accordingly.
    markup rule and value, optionally a fallback price (needs a currency). The
    charge needs at least one active price-basis element, so add the elements
    first (a new cost-plus charge is created inactive, given elements, then
-   activated).
+   activated). Activating the charge and deactivating its last price-basis
+   element take the same lock on the charge row, so two concurrent edits cannot
+   leave an active cost-plus charge without a price basis.
 3. **Cost elements** (`/api/cpq/charge-cost-elements`):
    - `fixed` — an amount and currency;
    - `table` — a cost table and column; tiered / volume models require a table;
@@ -133,10 +149,15 @@ each cost with its status badge:
 
 | Status | Price | Meaning |
 |---|---|---|
-| `none` — **pending** | no price | No value yet (no estimate, table has no match = `TABLE_NO_MATCH`, foreign currency = `CURRENCY_NO_RATE`). |
+| `none` — **pending** | no price | No value yet (no estimate; no matching table row, or the matching row has no value in the element's cost column = `TABLE_NO_MATCH` — never a confirmed 0; a row only in another currency = `CURRENCY_NO_RATE`). |
 | `estimated` | priced | A catalog estimate or an unconfirmed entry. The quote shows **Indicative — costs not confirmed**; it can reach Ready and *With customer*. |
 | `confirmed` | priced | Known cost. |
 | **expired** | priced | Supplier validity (`validUntil`) is in the past; blocks conversion until renewed. |
+
+> A cost-table row with **no value** in a cost column is an unknown cost. The
+> spreadsheet import of pricing tables stores a **blank cell as 0**, which is a
+> known zero cost: leave the column out of the row (edit it in the table) when the
+> cost is not known.
 
 Pricing managers (`cpq.costs.manage`) can:
 
@@ -174,6 +195,36 @@ write routes accept `expectedRevision` and answer `409 STALE_REVISION` on
 mismatch. Status transitions also accept an optional `expectedRevision`, which
 the quote page always sends, so a rep never sends a price they have not seen.
 
+**Lines priced from costs are frozen too.** With the toggle on, on a locked
+quote, adding a line whose offering (or product) has an active cost-plus charge,
+or changing the **configuration or quantity** of such a line, returns
+`409 COST_LOCKED`: the stored costs (per-unit amounts, table lookups) would no
+longer match the configuration, and a line added while locked never gets cost
+lines. Term and dates stay editable, and resubmitting an unchanged configuration
+is accepted. Lines without a cost-plus charge are not affected. Move the quote
+back to Ready to reconfigure.
+
+### ARC quotes (Amend / Renew / Cancel)
+
+Costs are not yet carried over from a subscription (see
+[later features](#coming-with-later-features)). On an ARC quote:
+
+- **Renew** mirror lines (re-priced at today's standard) and **reconfigured
+  Amend** mirror lines get catalog cost lines like any other line. A pricing
+  manager enters and confirms their values (`PATCH .../costs/{costId}`), so the
+  quote can convert. Manual costs and markup overrides are not available on
+  mirror lines (`422 LINE_NOT_ELIGIBLE`).
+- **Frozen Amend** mirror lines keep the subscription item's stored price: they
+  get no cost lines and accept no cost write (`422 LINE_NOT_ELIGIBLE`).
+- **Removing an item** on an Amend / Renew quote turns its line into a cancel
+  line: its cost lines (catalog and manual) and markup overrides are deleted
+  at once, whatever the toggle or the lock. Restoring the item brings the
+  catalog costs back on the next saved recalculation (Renew; a restored Amend
+  line is frozen again).
+- **Cancel-quote** lines keep the catalog costs their price is computed from
+  but accept no cost write.
+- Cancel lines (removed items, Cancel-quote lines) never block conversion.
+
 ## Margin
 
 Holders of `cpq.costs.view` see the **Margin card** on the quote page and
@@ -182,28 +233,44 @@ roll-up and quote — NRC / MRC cost and offer, margin, margin %, markup %,
 **contract margin** (NRC once plus MRC × term months, default 12) and **cost
 coverage** (the share of deal value that has cost lines; uncovered lines count
 as cost 0 — read low coverage as "margin overstated"). Flags: `hasPendingCosts`,
-`hasEstimatedCosts`, `hasExpiredCosts`. Margin is **computed, never stored**.
+`hasEstimatedCosts`, `hasExpiredCosts` — over **every** cost line, margin-only
+included. Margin is **computed, never stored**.
 Percentages are 0–100 numbers, `null` when undefined.
 
-`margin_hash` covers cost amounts, currency, FX, role, markups and offers —
-not statuses. When it changes after a write, CPQ emits `cpq.quote.margin_changed`
+`margin_hash` covers cost amounts, currency, FX, role, markups, offers and each
+line's **term** (months, 12 when unset — shortening a term moves the contract
+margin) — not statuses. When it changes after a write, CPQ emits `cpq.quote.margin_changed`
 (after commit, once per write, not broadcast to browsers):
 `marginHash`, `previousMarginHash` (`null` when the write created the quote's
 first costs), `approvalInvalidated` (true when the quote is past
 New / Incomplete / Ready and has no order), `contractMargin`, `marginPercent`,
-`costCoverage`, the three flags, `cause`. Confirming at the same value changes
-nothing and emits nothing. `cpq.quote.status_changed` also carries
-`hasPendingCosts` and `hasEstimatedCosts`; neither event carries a cost,
+`costCoverage`, the three margin flags, `cause`. Confirming at the same value
+changes nothing and emits nothing. `cpq.quote.status_changed` also carries
+`hasPendingCosts` and `hasEstimatedCosts` on quotes that carry costs — for
+**price-basis** cost lines only: they say the *price* is pending / indicative,
+so a margin-only estimate does not set them. Neither event carries a cost,
 markup or per-line margin.
 
 ## Conversion guard
 
 Converting a quote to an order (`POST /api/cpq/orders`) is refused with
-`422 COSTS_NOT_CONFIRMED` — listing the offending lines — while any
-**price-basis** cost line on a live line is not `confirmed` or has expired on the
-conversion date. The check runs regardless of the toggle. Margin-only costs never
-block. Confirm at the same value (or renew the supplier validity) and convert.
-After conversion the quote's costs are locked and no longer change prices.
+`422 COSTS_NOT_CONFIRMED` while, on any live line:
+
+- a **price-basis** cost line is not `confirmed`, or has expired on the
+  conversion date; or
+- a **cost-plus charge has no price** (stored `unitPrice: null`: a pending or
+  missing price-basis cost, no applicable price-basis element, an invalid or
+  foreign-currency markup, the toggle off). The guard never relies on cost
+  lines existing.
+
+The body names the offenders per line:
+`lines: [{ quoteLineId, costKeys, chargeCodes }]` — the blocking cost keys and
+the unpriced cost-plus charge codes; either list may be empty. The check runs
+regardless of the toggle. Margin-only costs never block, and ARC cancel lines
+are ignored. Confirm at the same value (or renew the supplier validity) and
+convert; for an unpriced charge move the quote back to Ready, resolve its costs,
+re-price and resend. After conversion the quote's costs are locked and no longer
+change prices.
 
 ## Calculate-price
 
@@ -276,9 +343,9 @@ Full contracts: the `openApi` export on each route.
 
 | Status | Code | Meaning |
 |---|---|---|
-| 403 | `COSTS_VIEW_REQUIRED` | Cost-plus catalog writes need `cpq.costs.view`. |
+| 403 | `COSTS_VIEW_REQUIRED` | Cost-plus catalog writes (create, edit, switch away from or delete a cost-plus charge, set markup) need `cpq.costs.view`; checked before validation. |
 | 404 | — | Cost endpoints with the toggle off; a cost table or entries without `cpq.costs.view`. |
-| 409 | `COST_LOCKED` | Price-basis cost or markup write on a locked quote. |
+| 409 | `COST_LOCKED` | Price-basis cost or markup write on a locked quote; or adding / reconfiguring (configuration, quantity) a line with an active cost-plus charge on a locked quote. |
 | 409 | `STALE_REVISION` | `expectedRevision` differs from the quote's `pricingRevision`. |
 | 422 | `COST_PLUS_DISABLED` | Toggle is off. |
 | 422 | `NO_PRICE_BASIS_ELEMENT` | Cost-plus charge without an active price-basis element. |
@@ -291,9 +358,9 @@ Full contracts: the `openApi` export on each route.
 | 422 | `PURPOSE_LOCKED` | Table purpose cannot change while referenced. |
 | 422 | `NOTE_REQUIRED` / `VALIDITY_EVIDENCE_REQUIRED` | Overwrite or validity extension without a reason. |
 | 422 | `CATALOG_COST_NOT_DELETABLE` / `LINE_NOT_ELIGIBLE` / `CHARGE_NOT_FOUND` / `CHARGE_NOT_COST_PLUS` | Wrong target of a cost or markup write. |
-| 422 | `CURRENCY_NO_RATE` | Cost in a currency other than the quote's (no FX before a later feature). |
-| 422 | `COSTS_NOT_CONFIRMED` | Conversion blocked by unconfirmed or expired price-basis costs. |
-| line error | `COST_PENDING` / `NO_PRICE_BASIS_COST` / `MARKUP_INVALID` / `TABLE_NO_MATCH` | On the charge or cost line; the line is not ready. |
+| 422 | `CURRENCY_NO_RATE` | Cost in a currency other than the quote's (no FX before a later feature). Also a line error on a cost line, and on a charge whose absolute markup is in another currency. |
+| 422 | `COSTS_NOT_CONFIRMED` | Conversion blocked by unconfirmed or expired price-basis costs, or an unpriced cost-plus charge (`lines[].costKeys` / `chargeCodes`). |
+| line error | `COST_PENDING` / `NO_PRICE_BASIS_COST` / `MARKUP_INVALID` / `TABLE_NO_MATCH` / `CURRENCY_NO_RATE` | On the charge or cost line; the line is not ready. |
 
 ## Coming with later features
 

@@ -94,7 +94,7 @@ The system SHALL report `ruleDiscountTotal` and `manualDiscountTotal` (both incl
 Source: .ai/specs/2026-11-10-cpq-manual-price-adjustments.md
 
 ## Requirement: Quote cost lines from catalog cost elements
-The system SHALL keep exactly one non-deleted catalog cost line per applicable active cost element on every configured, non-mirror quote line, matched by cost key. On every saved recalculation it SHALL resolve `fixed` and `table` values (a `table` or `fixed` value is `confirmed`, an `on_request` catalog estimate is `estimated`, otherwise `none`) and soft-delete cost lines whose element no longer applies. A value a pricing manager entered or confirmed (`value_origin = manual`) SHALL survive recalculation until a driving attribute changes.
+The system SHALL keep exactly one non-deleted catalog cost line per applicable active cost element on every configured quote line that the engine prices — new lines, Renew mirror lines, reconfigured Amend mirror lines and Cancel-quote lines; never frozen Amend mirror lines — matched by cost key. A line that becomes an ARC cancel line (an item removed on Amend / Renew) SHALL lose its cost lines (catalog and manual) and markup overrides at once, regardless of the toggle or the cost lock. On every saved recalculation it SHALL resolve `fixed` and `table` values (a `table` or `fixed` value is `confirmed`, an `on_request` catalog estimate is `estimated`, otherwise `none`) and soft-delete cost lines whose element no longer applies. A value a pricing manager entered or confirmed (`value_origin = manual`) SHALL survive recalculation until a driving attribute changes.
 
 ### Scenario: Add a costed product
 - WHEN a rep adds a product whose `tail_mrc` charge has a `table` element and an `on_request` element with estimate 300
@@ -108,14 +108,18 @@ The system SHALL keep exactly one non-deleted catalog cost line per applicable a
 - WHEN an Amend quote mirrors a subscription item and nothing on the line changes
 - THEN no catalog cost lines are created on the mirror line
 
+### Scenario: Removed ARC item
+- WHEN a rep removes a mirrored item with an estimated tail cost on a Renew quote
+- THEN the line becomes a cancel line and its cost lines are soft-deleted
+
 ### Scenario: Table without a matching entry
-- WHEN a table element's dimensions match no entry of the cost table
-- THEN the cost line is `none` with `TABLE_NO_MATCH` and the line is not ready
+- WHEN a table element's dimensions match no entry of the cost table, or the matching entry has no value in the element's cost column
+- THEN the cost line is `none` with `TABLE_NO_MATCH` (never a confirmed 0) and the line is not ready
 
 Source: .ai/specs/2026-11-12-cpq-cost-plus-quote-pricing-margin.md
 
 ## Requirement: Cost-plus list price
-The system SHALL price a cost-plus charge at list total = markup(Σ known price-basis costs per instance, converted to the quote currency), where `markup_percent` m gives C × (1 + m/100), `target_margin_percent` gives C ÷ (1 − m/100) and `markup_absolute` gives C + a, rounded once to the currency precision (per-unit: unit = total ÷ quantity at 4 dp). Price rules and manual adjustments SHALL then apply unchanged; percent price rules on a cost-plus charge SHALL scale the exact per-instance total, so no unit × quantity drift appears. A charge with an unknown price-basis cost (`COST_PENDING`), with no applicable one (`NO_PRICE_BASIS_COST`) or with an invalid markup (`MARKUP_INVALID`) SHALL have no price, and its line SHALL NOT be ready. `estimated` costs price the charge and make the quote indicative.
+The system SHALL price a cost-plus charge at list total = markup(Σ known price-basis costs per instance, converted to the quote currency), where `markup_percent` m gives C × (1 + m/100), `target_margin_percent` gives C ÷ (1 − m/100) and `markup_absolute` gives C + a, rounded once to the currency precision (per-unit: unit = total ÷ quantity at 4 dp). Price rules and manual adjustments SHALL then apply unchanged; percent price rules on a cost-plus charge SHALL scale the exact per-instance total, so no unit × quantity drift appears. An absolute markup is in the charge currency (a markup override's in the quote currency). A charge with an unknown price-basis cost (`COST_PENDING`), with no applicable one (`NO_PRICE_BASIS_COST`), with an invalid markup (`MARKUP_INVALID`) or with an absolute markup in a currency other than the quote's (`CURRENCY_NO_RATE`, never a 1:1 add) SHALL have no price, and its line SHALL NOT be ready. `estimated` costs price the charge and make the quote indicative.
 
 ### Scenario: Markup percent
 - WHEN price-basis costs are 300 and 100 per instance and the markup is `markup_percent` 25
@@ -128,6 +132,10 @@ The system SHALL price a cost-plus charge at list total = markup(Σ known price-
 ### Scenario: Foreign-currency cost before FX ships
 - WHEN a price-basis cost is in USD on a EUR quote
 - THEN the cost line is `none` with `CURRENCY_NO_RATE`, and the line is not ready
+
+### Scenario: Absolute markup in another currency
+- WHEN a charge with `markup_absolute` 50 EUR is quoted in USD
+- THEN the charge has no price and the line error is `CURRENCY_NO_RATE`
 
 ### Scenario: Percent rule on a per-unit cost-plus charge
 - WHEN a `per_unit` cost-plus charge of 3 units at 100.00 each has a 10% price rule
@@ -144,10 +152,10 @@ Source: .ai/specs/2026-11-12-cpq-cost-plus-quote-pricing-margin.md
 ## Requirement: Manual costs, cost confirmation and markup override
 The system SHALL let a user with `cpq.quotes.manage` and `cpq.costs.manage`:
 - add, edit and delete `manual` cost lines (cost key `manual:<8 hex>`; price-basis only on a cost-plus charge, otherwise margin-only; catalog lines cannot be deleted, `CATALOG_COST_NOT_DELETABLE`);
-- enter or confirm the value of any cost line (overwriting a catalog value needs a note, extending a validity or supplier term needs a new supplier quote reference or a note);
+- enter or confirm the value of any cost line, including those of non-frozen ARC mirror lines (overwriting a catalog value needs a note, extending a validity or supplier term needs a new supplier quote reference or a note);
 - override or clear a cost-plus charge's markup on one quote line (note required; unknown charge `CHARGE_NOT_FOUND`);
 
-all subject to the cost lock: price-basis cost lines and markup overrides can only change while the quote is `new`, `incomplete` or `ready` and no order exists (`409 COST_LOCKED` otherwise; terminal quotes refuse every cost write). Margin-only changes, confirming an unchanged value and extending validity or supplier term are always allowed in non-terminal statuses. Cost writes accept `expectedRevision` (`409 STALE_REVISION`), bump `pricingRevision`, are commands that are not undoable, and write snapshots without amounts.
+manual costs and markup overrides are refused on every ARC mirror line, and every cost write on ARC cancel lines and frozen Amend mirror lines (`422 LINE_NOT_ELIGIBLE`); all subject to the cost lock: price-basis cost lines and markup overrides can only change while the quote is `new`, `incomplete` or `ready` and no order exists (`409 COST_LOCKED` otherwise; terminal quotes refuse every cost write). With the toggle on, a cost-locked quote SHALL also refuse adding a line whose offering / product has an active cost-plus charge, and changing such a line's configuration or quantity (`409 COST_LOCKED`; term and dates stay editable). Margin-only changes, confirming an unchanged value and extending validity or supplier term are always allowed in non-terminal statuses. Cost writes accept `expectedRevision` (`409 STALE_REVISION`), bump `pricingRevision`, are commands that are not undoable, and write snapshots without amounts.
 
 ### Scenario: Enter a tail cost by hand
 - WHEN a pricing manager sets the `on_request` tail cost line to 280 EUR, `confirmed`, with a supplier quote ref
@@ -161,6 +169,14 @@ all subject to the cost lock: price-basis cost lines and markup overrides can on
 - WHEN a pricing manager changes a price-basis cost value, or a markup, on a quote in `with_customer`
 - THEN the API returns `409 COST_LOCKED` and nothing changes
 
+### Scenario: Reconfiguring a cost-plus line while locked
+- WHEN a rep changes the port count of a per-unit cost-plus line on a quote in `with_customer`
+- THEN the API returns `409 COST_LOCKED` and the line keeps its configuration and price
+
+### Scenario: Confirm a Renew mirror cost
+- WHEN a pricing manager confirms the estimated tail cost of a Renew mirror line
+- THEN the write is accepted, and once every price-basis cost is confirmed the quote converts
+
 ### Scenario: Manual per-unit cost follows the quantity
 - WHEN the charge quantity of a line with a manual `per_unit` cost changes in a saved recalculation
 - THEN the cost line's per-instance amount is refreshed from the new quantity; value, status, origin and note stay
@@ -170,8 +186,8 @@ Source: .ai/specs/2026-11-12-cpq-cost-plus-quote-pricing-margin.md
 ## Requirement: Quote margin
 The system SHALL compute margin for holders of `cpq.costs.view`:
 - per charge, line, bundle roll-up and quote: NRC / MRC cost, offer, margin, margin %, markup %, contract margin over the deal-value horizon (NRC once + MRC × term months, default 12; usage and non-deal lines excluded) — percentages are 0–100 numbers, `null` when undefined;
-- cost coverage and the flags `hasPendingCosts`, `hasEstimatedCosts`, `hasExpiredCosts`;
-- `margin_hash` over cost amounts, currency, FX, role, markups and offers (statuses excluded).
+- cost coverage and the flags `hasPendingCosts`, `hasEstimatedCosts`, `hasExpiredCosts` over every cost line (margin-only included);
+- `margin_hash` over cost amounts, currency, FX, role, markups, offers and each line's term (months, 12 when unset; statuses excluded).
 
 The system SHALL NOT store margin.
 

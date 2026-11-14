@@ -3,11 +3,19 @@
 What a charge costs us, kept in the catalog: cost-plus charges, their cost elements and confidential cost tables. Quote-side use of these costs lives in `cpq-quote-pricing`.
 
 ## Requirement: Cost-plus charge
-The system SHALL let a user with `cpq.products.manage` and `cpq.costs.view` set an NRC or MRC charge's pricing method to `cost_plus` (flat or per-unit), with a markup rule (`markup_percent`, `target_margin_percent` below 100, `markup_absolute`) and a value, when the tenant toggle `cpq.cost_plus` is on. The charge SHALL have at least one active price-basis cost element, and MAY carry a fixed price as a display-only fallback (indicative) price.
+The system SHALL let a user with `cpq.products.manage` and `cpq.costs.view` set an NRC or MRC charge's pricing method to `cost_plus` (flat or per-unit), with a markup rule (`markup_percent`, `target_margin_percent` below 100, `markup_absolute`) and a value, when the tenant toggle `cpq.cost_plus` is on. The charge SHALL have at least one active price-basis cost element, and MAY carry a fixed price as a display-only fallback (indicative) price. Any product-charge write that asks for `cost_plus`, sets a markup, or touches a stored cost-plus charge (including switching it to another pricing method and deleting it) SHALL require `cpq.costs.view` (`403 COSTS_VIEW_REQUIRED`) before any validation runs. Activating a cost-plus charge SHALL check its price basis under the same charge-row lock that cost-element writes take.
 
 ### Scenario: Make a charge cost-plus
 - WHEN a pricing admin saves charge `tail_mrc` with `pricing_method = cost_plus`, `markup_percent` 25 and one active `price_basis` cost element
 - THEN the charge is saved, and the cost preview for a sample configuration shows cost 400 and list price 500
+
+### Scenario: No markup oracle
+- WHEN a user with `cpq.products.manage` but without `cpq.costs.view` sends `markupValue: 150` to a cost-plus charge whose stored rule is `target_margin_percent`
+- THEN the API returns `403 COSTS_VIEW_REQUIRED`, never the `400` a costs viewer would get
+
+### Scenario: Switching away needs cost access
+- WHEN the same user switches a cost-plus charge to `fixed`
+- THEN the API returns `403 COSTS_VIEW_REQUIRED`, and the markup and price-basis elements are untouched
 
 ### Scenario: No price-basis element
 - WHEN the same charge is saved without an active price-basis element

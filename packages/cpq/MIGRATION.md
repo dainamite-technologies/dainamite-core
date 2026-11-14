@@ -192,7 +192,11 @@ cost-plus charges lose their price on re-pricing (`COST_PLUS_DISABLED`).
 **New ACL features.** `cpq.costs.view`, `cpq.costs.manage`. Users without
 `cpq.costs.view` never receive cost, supplier, markup or margin data; cost
 pricing tables are hidden from them and `markupRule` / `markupValue` are stripped
-from product-charge responses.
+from product-charge responses. Product-charge writes that create a cost-plus
+charge, set a markup, or touch a stored cost-plus charge in any way (including
+switching it to another pricing method, and `DELETE`) need `cpq.costs.view`
+(`403 COSTS_VIEW_REQUIRED`, checked before validation, so a `400` never depends
+on the stored markup).
 
 **New routes.** `/api/cpq/charge-cost-elements` (GET / POST / PUT / DELETE),
 `/api/cpq/cost-preview`, `/api/cpq/cost-plus/usage`,
@@ -204,23 +208,36 @@ tables accept and return `purpose`; product charges accept `pricingMethod:
 cost_plus` with `markupRule` / `markupValue`. Cost writes are commands
 (`cpq.quote_line_cost.*`, `cpq.quote_markup_override.*`), not undoable.
 `POST /api/cpq/quotes/{quoteId}/status` accepts an optional `expectedRevision`
-(`409 STALE_REVISION`).
+(`409 STALE_REVISION`). With the toggle on, `POST /api/cpq/quotes/{quoteId}/items`
+and `PUT /api/cpq/quotes/{quoteId}/items/{lineId}` answer `409 COST_LOCKED` when a
+cost-locked quote (status outside new / incomplete / ready, or an order exists)
+would get a new line, or a changed configuration or quantity, on an offering /
+product with an active cost-plus charge. On ARC quotes, cost values of non-frozen
+mirror lines (Renew, reconfigured Amend) can be entered and confirmed; removing
+an item on Amend / Renew deletes its cost lines.
 
 **Events.** New non-broadcast `cpq.quote.margin_changed` (`marginHash`,
-`previousMarginHash` — `null` when the write created the quote's first costs —
-`approvalInvalidated`, contract margin, margin %, coverage, flags).
+`previousMarginHash` — `null` when the write created the quote's first costs,
+declared `optional` in the payload schema — `approvalInvalidated`, contract
+margin, margin %, coverage, margin flags over every cost line). The margin hash
+covers cost amounts, markups, offers and each line's term (not statuses).
 `cpq.quote.status_changed` gains the booleans `hasPendingCosts` and
-`hasEstimatedCosts`. `pricing_changed` is unchanged.
+`hasEstimatedCosts` on quotes that carry costs, computed from **price-basis**
+cost lines only (indicative price). `pricing_changed` is unchanged.
 
 **New error codes.** `COST_PLUS_DISABLED`, `COST_PLUS_NOT_AVAILABLE`,
 `NO_PRICE_BASIS_ELEMENT`, `PRICE_BASIS_REQUIRES_COST_PLUS`, `COST_TYPE_MISMATCH`,
 `WRONG_TABLE_PURPOSE`, `PURPOSE_LOCKED`, `DUPLICATE_CODE` (unique across the
 charges priced together on one line, not only per charge), `COST_LOCKED`,
 `COSTS_VIEW_REQUIRED`, `CURRENCY_NO_RATE`, line errors `COST_PENDING`,
-`NO_PRICE_BASIS_COST`, `MARKUP_INVALID`, `TABLE_NO_MATCH`, and on conversion
-**`422 COSTS_NOT_CONFIRMED`**: a quote with an unconfirmed or expired price-basis
-cost can no longer be converted (margin-only costs never block). Manual cost keys
-are `manual:<8 hex>`.
+`NO_PRICE_BASIS_COST`, `MARKUP_INVALID`, `TABLE_NO_MATCH` (also when the matching
+cost-table row has no value in the element's cost column — never a confirmed 0),
+`CURRENCY_NO_RATE` (also for a `markup_absolute` charge quoted in another
+currency than the charge's), and on conversion **`422 COSTS_NOT_CONFIRMED`**: a
+quote with an unconfirmed or expired price-basis cost, or with a cost-plus charge
+stored without a price, can no longer be converted (margin-only costs and ARC
+cancel lines never block). Its body is `lines: [{ quoteLineId, costKeys,
+chargeCodes }]`; either list may be empty. Manual cost keys are `manual:<8 hex>`.
 
 **Calculate-price (additive).** `POST /api/cpq/quotes/price` charges gain
 optional `indicative` and `priceOnRequest`; an unpriceable cost-plus charge has
@@ -232,7 +249,9 @@ is ever returned.
 unpriced cost-plus charge has no price), plus an optional `fallbackPrice`
 (display-only indicative price). Code that reads these fields from
 `QuoteResult` / `ResolvedCharge` must handle `null`; runtime values for existing
-charges are unchanged.
+charges are unchanged. `CostPlusErrorCode` includes `CURRENCY_NO_RATE`;
+`lookupTablePrice` takes an optional `options` argument (`requireColumn`), whose
+default keeps price-table behaviour unchanged.
 
 ### 2026-11-10 — Manual price adjustments and price waterfall (price adjustments, Phase 1)
 

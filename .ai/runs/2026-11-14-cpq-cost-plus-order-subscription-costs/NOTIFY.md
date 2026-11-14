@@ -9,3 +9,4 @@
 - 2026-11-14 review1-a: ARC activation now links order line costs to the inventory costs they create/update (links returned via applyAmendment/applyRenewal/applyMergeRenewal).
 - 2026-11-14 review1-b: scope decision (spec Q5 + R14): replace ends only open catalog item costs absent from seeds (manual costs kept); with cpq.cost_plus off at activation a reconfigured mirror line is upsert-only (ends nothing). Toggle read once per ARC activation via optional cpqCostService.
 - 2026-11-14 review1-c: order margin now uses the quote margin's line predicate (isArcMirrorLine on the source quote type; termination-line costs excluded).
+- 2026-11-14 review1-d: activateOrder loads the order config with PESSIMISTIC_WRITE inside the transaction, so a concurrent second activation gets the existing 409.

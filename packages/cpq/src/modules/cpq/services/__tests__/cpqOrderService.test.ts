@@ -1,4 +1,5 @@
-import { CpqOrderLineConfiguration, CpqOrderLineCost } from '../../data/entities'
+import { LockMode } from '@mikro-orm/core'
+import { CpqOrderConfiguration, CpqOrderLineConfiguration, CpqOrderLineCost } from '../../data/entities'
 import { DefaultCpqOrderService, OrderError } from '../cpqOrderService'
 import * as eventsModule from '../../events'
 import type { TenantScope } from '../types'
@@ -959,6 +960,25 @@ describe('activateOrder transaction boundary', () => {
     expect(h.store.committed.filter((row) => row === 'subscription')).toHaveLength(1)
     expect(h.store.committedOrderStatus).toBe('active')
     jest.restoreAllMocks()
+  })
+
+  it('loads the order configuration with a pessimistic write lock on the tx EM (serializes concurrent activations)', async () => {
+    const h = createActivationHarness(newSaleFixture)
+    await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+    const orderCalls = (h.txEm.findOne.mock.calls as unknown as Array<[unknown, unknown, { lockMode?: number; refresh?: boolean } | undefined]>)
+      .filter(([entity]) => entity === CpqOrderConfiguration)
+    expect(orderCalls[0][2]).toMatchObject({ lockMode: LockMode.PESSIMISTIC_WRITE, refresh: true })
+    expect(h.em.findOne).not.toHaveBeenCalled()
+  })
+
+  it('a second activation that finds the order already active inside its transaction gets 409 and writes nothing', async () => {
+    const h = createActivationHarness(newSaleFixture)
+    // the first caller committed while this one waited on the lock: the re-read sees the committed status
+    h.orderConfig.cpqStatus = 'active'
+    await expect(h.service.activateOrder('oc-1', ACTIVATION_SCOPE)).rejects.toMatchObject({ status: 409, message: expect.stringMatching(/Cannot activate order/) })
+    expect(h.inventory.createSubscriptionWithCosts).not.toHaveBeenCalled()
+    expect(h.txEm.flush).not.toHaveBeenCalled()
+    expect(h.store.committed).toEqual([])
   })
 
   it('refuses to run inside an existing transaction (the isolated fork could not see its rows)', async () => {

@@ -3,6 +3,7 @@ import { loadConversionCostBlockers } from './costs/conversionGuard'
 import { copyQuoteCostsToOrder } from './costs/orderCostCopy'
 import { costSeedFromOrderLineCost, type CostSeed, type InventoryCostChange } from './costs/inventoryCostSync'
 import { withQuotePricingWrite } from './priceAdjustments/quotePricingWrite'
+import { LockMode } from '@mikro-orm/core'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { SalesOrder, SalesOrderLine } from '@open-mercato/core/modules/sales/data/entities'
 import type { SalesDocumentNumberGenerator } from '@open-mercato/core/modules/sales/services/salesDocumentNumberGenerator'
@@ -377,7 +378,9 @@ export class DefaultCpqOrderService {
     // later step (never inside the transaction).
     const inventoryCostChanges: InventoryCostChange[] = []
     const committed = await isolated.transactional(async (tx) => {
-      const orderConfig = await this.loadOrderConfig(tx, orderId, scope)
+      // Row lock first: a concurrent activation of the same order waits here, then re-reads the committed status
+      // below and gets the 409 instead of activating twice.
+      const orderConfig = await this.loadOrderConfig(tx, orderId, scope, true)
 
       const currentStatus = orderConfig.cpqStatus as CpqOrderStatus
       if (currentStatus !== 'draft' && currentStatus !== 'pending_activation') {
@@ -945,20 +948,22 @@ export class DefaultCpqOrderService {
 
   // ─── Helpers ────────────────────────────────────────────────
 
-  private async loadOrderConfig(em: EntityManager, orderId: string, scope: TenantScope): Promise<CpqOrderConfiguration> {
+  /** `lock`: row lock (inside a transaction), so a concurrent caller waits and then re-reads the committed status. */
+  private async loadOrderConfig(em: EntityManager, orderId: string, scope: TenantScope, lock = false): Promise<CpqOrderConfiguration> {
+    const options = lock ? { lockMode: LockMode.PESSIMISTIC_WRITE, refresh: true } : undefined
     let config = await em.findOne(CpqOrderConfiguration, {
       id: orderId,
       organizationId: scope.organizationId,
       tenantId: scope.tenantId,
       deletedAt: null,
-    })
+    }, options)
     if (!config) {
       config = await em.findOne(CpqOrderConfiguration, {
         orderId,
         organizationId: scope.organizationId,
         tenantId: scope.tenantId,
         deletedAt: null,
-      })
+      }, options)
     }
     if (!config) throw new OrderError(404, 'Order not found')
     return config

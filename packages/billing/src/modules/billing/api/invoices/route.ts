@@ -3,6 +3,7 @@ import type { EntityManager } from '@mikro-orm/postgresql'
 import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
 import { billingInvoiceListQuerySchema } from '../../data/validators'
+import { daysOverdueSql, isoDay, overdueSql } from '../../lib/overdue'
 
 /**
  * `GET /api/billing/invoices` — paginated list of billing documents
@@ -10,7 +11,9 @@ import { billingInvoiceListQuerySchema } from '../../data/validators'
  *
  * Filters (all on indexed columns): `status`, `documentType`, `billRunId`,
  * `billAccountId`, `testRun` (`true` / `false`), `id`, `search` (number).
- * Each row carries `bill_account_name` (one batched lookup per page).
+ * Spec B: `overdue=true` (computed, B-D6 — see `lib/overdue.ts`), `dueFrom` /
+ * `dueTo` (due-date window). Each row carries `bill_account_name` (joined)
+ * and `days_overdue` (0 when not overdue).
  *
  * Hand-written SQL instead of the CRUD factory: documents are written by the
  * bill-run engine without query-index side effects, so the factory's
@@ -42,6 +45,7 @@ type BillingInvoiceRow = {
   paid_total: string
   credited_total: string
   outstanding: string
+  days_overdue: number
   corrects_invoice_id: string | null
   topup_id: string | null
   created_at: string
@@ -83,6 +87,22 @@ export async function GET(req: Request) {
       whereClauses.push(clause)
       params.push(value)
     }
+    const today = isoDay(new Date())
+    if (query.overdue === true) {
+      whereClauses.push(overdueSql('i'))
+      params.push(today)
+    } else if (query.overdue === false) {
+      whereClauses.push(`NOT COALESCE(${overdueSql("i")}, false)`)
+      params.push(today)
+    }
+    if (query.dueFrom) {
+      whereClauses.push('i.due_date >= ?::date')
+      params.push(query.dueFrom)
+    }
+    if (query.dueTo) {
+      whereClauses.push('i.due_date <= ?::date')
+      params.push(query.dueTo)
+    }
     if (query.search) {
       whereClauses.push('i.number ILIKE ?')
       params.push(`%${query.search.replace(/[%_\\]/g, (m) => `\\${m}`)}%`)
@@ -101,13 +121,14 @@ export async function GET(req: Request) {
               a.name AS bill_account_name, i.bill_run_id, i.bill_date, i.period_start, i.period_end,
               i.issue_date, i.due_date, i.currency_code, i.subtotal_net, i.tax_total, i.total_gross,
               i.paid_total, i.credited_total, i.outstanding, i.corrects_invoice_id, i.topup_id,
+              ${daysOverdueSql('i')}::int AS days_overdue,
               i.created_at, i.updated_at
        FROM billing_invoices i
        LEFT JOIN billing_accounts a ON a.id = i.bill_account_id AND a.tenant_id = i.tenant_id
        WHERE ${whereSql}
        ORDER BY i.created_at DESC
        LIMIT ? OFFSET ?`,
-      [...params, query.pageSize, offset],
+      [today, today, ...params, query.pageSize, offset],
     )) as unknown as BillingInvoiceRow[]
 
     return NextResponse.json({
@@ -131,7 +152,9 @@ export const openApi = {
       description:
         'Paginated billing documents (invoices, credit / debit memos, top-up receipts) from ' +
         '`billing_invoices`. Filters: status, documentType, billRunId, billAccountId, testRun ' +
-        '(`true`/`false`), id, number search. Fields use billing names: `number`, `document_type`, ' +
+        '(`true`/`false`), id, number search, `overdue` (`true`/`false` — posted or partially paid, ' +
+        'past due, outstanding > 0), `dueFrom` / `dueTo` (YYYY-MM-DD). Each row adds `days_overdue`. ' +
+        'Fields use billing names: `number`, `document_type`, ' +
         '`total_gross`, `outstanding`, `bill_date`, `period_start/end`, `bill_account_name`, … ' +
         '(0.21.0 renamed them from the core-sales names — see MIGRATION.md).',
     },

@@ -29,3 +29,26 @@ export function itemDetailHref(itemId: string, opts: { fromItemsList?: boolean }
   const base = `${ITEMS_LIST_HREF}/${encodeURIComponent(itemId)}`
   return opts.fromItemsList ? `${base}?from=${FROM_ITEMS_LIST}` : base
 }
+
+/**
+ * Where an invoice detail page returns to (Spec B): the account it was
+ * opened from (`?from=account`), otherwise the global Invoices list.
+ */
+export const INVOICES_LIST_HREF = '/backend/billing/invoices'
+export const FROM_ACCOUNT = 'account'
+
+export function invoiceDetailHref(invoiceId: string, opts: { fromAccountId?: string | null } = {}): string {
+  const base = `${INVOICES_LIST_HREF}/${encodeURIComponent(invoiceId)}`
+  const accountId = (opts.fromAccountId ?? '').trim()
+  return accountId ? `${base}?from=${FROM_ACCOUNT}&accountId=${encodeURIComponent(accountId)}` : base
+}
+
+export function resolveInvoiceReturnTarget(params: { from?: string | null; accountId?: string | null }): string {
+  const accountId = (params.accountId ?? '').trim()
+  return params.from === FROM_ACCOUNT && accountId ? accountHref(accountId) : INVOICES_LIST_HREF
+}
+
+/** PDF of a billing document — frozen when posted, a watermarked preview otherwise. */
+export function invoicePdfHref(invoiceId: string): string {
+  return `/api/billing/invoices/${encodeURIComponent(invoiceId)}/pdf`
+}

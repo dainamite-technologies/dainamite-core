@@ -85,8 +85,8 @@ describe('billing setup — contract', () => {
 })
 
 describe('billing acl — surface', () => {
-  it('exports exactly 21 features (12 Phase 0 + 7 SPEC-002 prepaid + 2 Spec 0 settings)', () => {
-    expect(features).toHaveLength(21)
+  it('exports exactly 22 features (12 Phase 0 + 7 SPEC-002 prepaid + 2 Spec 0 settings + 1 Spec B send)', () => {
+    expect(features).toHaveLength(22)
   })
 
   it('all feature IDs are prefixed `billing.` (no leaking module boundary)', () => {

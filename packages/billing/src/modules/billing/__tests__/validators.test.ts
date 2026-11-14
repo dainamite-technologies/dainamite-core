@@ -731,3 +731,54 @@ describe('Spec 0 validators', () => {
     expect(() => billingSettingsUpdateSchema.parse({ ...base, topupTaxRate: 120 })).toThrow()
   })
 })
+
+describe('Spec B validators', () => {
+  const base = { tenantId: TENANT, organizationId: ORG }
+  const item = {
+    ...base,
+    billAccountId: ACCOUNT,
+    type: 'recurring' as const,
+    billStartDate: '2026-11-14',
+    description: 'Internet 300',
+    rateJson: { unit_price: 79 },
+  }
+
+  it('item taxRate is optional on create (the command fills the default) and bounded 0–100', () => {
+    expect(billingItemCreateSchema.parse(item)).not.toHaveProperty('taxRate')
+    expect(billingItemCreateSchema.parse({ ...item, taxRate: '8' }).taxRate).toBe(8)
+    expect(() => billingItemCreateSchema.parse({ ...item, taxRate: -1 })).toThrow()
+    expect(() => billingItemCreateSchema.parse({ ...item, taxRate: 101 })).toThrow()
+  })
+
+  it('normalizes and checksum-validates the seller IBAN; empty clears it', () => {
+    expect(billingSettingsUpdateSchema.parse({ ...base, iban: 'pl61 1090 1014 0000 0712 1981 2874' }).iban).toBe(
+      'PL61109010140000071219812874',
+    )
+    expect(billingSettingsUpdateSchema.parse({ ...base, iban: '' }).iban).toBeNull()
+    expect(() => billingSettingsUpdateSchema.parse({ ...base, iban: 'PL61109010140000071219812875' })).toThrow(
+      'billing.settings.error.iban_invalid',
+    )
+    expect(() => billingSettingsUpdateSchema.parse({ ...base, bic: 'XX' })).toThrow('billing.settings.error.bic_invalid')
+  })
+
+  it('validates seller address, terms and default rate', () => {
+    const parsed = billingSettingsUpdateSchema.parse({
+      ...base,
+      legalName: '  Seller  ',
+      taxId: '',
+      sellerAddress: { line1: 'ul. A 1', city: 'Kraków', postal_code: '30-001', country: 'PL' },
+      defaultPaymentTermsDays: '30',
+      defaultTaxRate: 23,
+    })
+    expect(parsed).toMatchObject({ legalName: 'Seller', taxId: null, defaultPaymentTermsDays: 30, defaultTaxRate: 23 })
+    expect(() => billingSettingsUpdateSchema.parse({ ...base, sellerAddress: { line1: 'x' } })).toThrow()
+    expect(() => billingSettingsUpdateSchema.parse({ ...base, defaultPaymentTermsDays: 400 })).toThrow()
+  })
+
+  it('accepts overdue / due-date filters on the invoice list', () => {
+    const parsed = billingInvoiceListQuerySchema.parse({ overdue: 'true', dueFrom: '2026-11-01', dueTo: '2026-11-30' })
+    expect(parsed).toMatchObject({ overdue: true, dueFrom: '2026-11-01', dueTo: '2026-11-30' })
+    expect(() => billingInvoiceListQuerySchema.parse({ dueFrom: '01.11.2026' })).toThrow()
+  })
+})
+

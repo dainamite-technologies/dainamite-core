@@ -24,6 +24,7 @@ type Env = {
   ctx: { container: { resolve: jest.MockedFunction<(name: string) => unknown> }; auth: null }
   em: {
     find: jest.MockedFunction<(entity: unknown, where: unknown) => Promise<unknown[]>>
+    findOne: jest.MockedFunction<(entity: unknown, where: unknown) => Promise<unknown>>
     create: jest.MockedFunction<(entity: unknown, data: Record<string, unknown>) => unknown>
     persist: jest.MockedFunction<(entity: unknown) => unknown>
     flush: jest.MockedFunction<() => Promise<void>>
@@ -68,6 +69,10 @@ function createEnv(
       }
       return []
     }) as never,
+    // Spec B: the org default VAT rate comes from BillingSettings.
+    findOne: jest.fn(async (entity: unknown) =>
+      (entity as { name?: string }).name === 'BillingSettings' ? { defaultTaxRate: '23' } : null,
+    ) as never,
     create: jest.fn((_entity: unknown, data: Record<string, unknown>) => {
       // Real MikroORM leaves the UUID PK unassigned until flush — the
       // mock mirrors that so id-before-flush bugs surface in tests.
@@ -275,6 +280,34 @@ describe('bulkCreateItemsCommand', () => {
     const where = accountFinds[0][1] as { id?: { $in?: string[] } }
     // Distinct — A appears twice in the payload but once in the query.
     expect(new Set(where.id?.$in)).toEqual(new Set([ACCOUNT_A, ACCOUNT_B]))
+  })
+
+  it('fills the org default VAT rate once for entries without one; explicit rates win (Spec B)', async () => {
+    const env = createEnv()
+    await bulkCreateItemsCommand.execute(
+      {
+        tenantId: TENANT,
+        organizationId: ORG,
+        items: [recurringEntry(ACCOUNT_A, 'ref-1'), { ...recurringEntry(ACCOUNT_A, 'ref-2'), taxRate: 8 }],
+      },
+      env.ctx as never,
+    )
+    const created = env.em.create.mock.calls.map(([, data]) => data.taxRate)
+    expect(created).toEqual(['23', '8'])
+    const settingsReads = env.em.findOne.mock.calls.filter(
+      ([entity]) => (entity as { name?: string }).name === 'BillingSettings',
+    )
+    expect(settingsReads).toHaveLength(1)
+  })
+
+  it('does not read settings when every entry carries a rate', async () => {
+    const env = createEnv()
+    await bulkCreateItemsCommand.execute(
+      { tenantId: TENANT, organizationId: ORG, items: [{ ...recurringEntry(ACCOUNT_A, 'ref-1'), taxRate: 0 }] },
+      env.ctx as never,
+    )
+    expect(env.em.findOne).not.toHaveBeenCalled()
+    expect(env.em.create.mock.calls[0][1].taxRate).toBe('0')
   })
 })
 

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
+import { daysOverdueSql, isoDay } from '../../../lib/overdue'
 
 /**
  * `GET /api/billing/invoices/[id]` — one billing document with its lines
@@ -37,17 +38,19 @@ export async function GET(
     const { id: invoiceId } = await params
     const em = (container.resolve('em') as EntityManager).fork()
 
+    const today = isoDay(new Date())
     const invoiceRows = (await em.execute(
       `SELECT i.id, i.number, i.document_type, i.series, i.status, i.test_run, i.bill_account_id,
               a.name AS bill_account_name, i.bill_run_id, i.bill_date, i.period_start, i.period_end,
               i.issue_date, i.due_date, i.posted_at, i.currency_code, i.subtotal_net, i.tax_total,
               i.total_gross, i.paid_total, i.credited_total, i.outstanding, i.corrects_invoice_id,
               i.correction_reason, i.buyer_snapshot, i.seller_snapshot, i.topup_id, i.metadata,
+              i.pdf_attachment_id, ${daysOverdueSql('i')}::int AS days_overdue,
               i.created_at, i.updated_at
        FROM billing_invoices i
        LEFT JOIN billing_accounts a ON a.id = i.bill_account_id AND a.tenant_id = i.tenant_id
        WHERE i.id = ? AND i.tenant_id = ? AND i.organization_id = ? AND i.deleted_at IS NULL`,
-      [invoiceId, auth.tenantId, organizationId],
+      [today, today, invoiceId, auth.tenantId, organizationId],
     )) as unknown as InvoiceRow[]
 
     if (!invoiceRows || invoiceRows.length === 0) {

@@ -9,7 +9,7 @@ import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
 import { BillingSettings } from '../../data/entities'
 import { billingEntityIds } from '../../data/entityIds'
 import { billingSettingsUpdateSchema } from '../../data/validators'
-import { getBillingSettings, serializeBillingSettings } from '../../lib/billingSettings'
+import { getBillingSettings, missingSellerFields, serializeBillingSettings } from '../../lib/billingSettings'
 import { isPaymentGatewayAvailable } from '../../lib/paymentGateway'
 
 /**
@@ -20,6 +20,9 @@ import { isPaymentGatewayAvailable } from '../../lib/paymentGateway'
  * Spec 0: prepaid defaults (moved from core `configs`) and document number
  * masks. `capabilities.gatewayTopups` tells the UI whether online top-ups
  * are available (the `payment_gateways` module is optional, E-D1).
+ * Spec B: seller / payment / document fields, plus `completeness` — posting
+ * is blocked until the printable minimum (legal name, address, tax id, IBAN)
+ * is filled.
  */
 
 const routeMetadata = {
@@ -42,9 +45,11 @@ export async function GET(req: Request) {
     }
     const em = (container.resolve('em') as EntityManager).fork()
     const settings = await getBillingSettings(em, { tenantId: auth.tenantId, organizationId })
+    const missing = missingSellerFields(settings)
     return NextResponse.json({
       settings: serializeBillingSettings(settings),
       capabilities: { gatewayTopups: isPaymentGatewayAvailable(container as never) },
+      completeness: { ready: missing.length === 0, missing },
     })
   } catch (err) {
     console.error('[billing/settings.GET]', err)
@@ -90,8 +95,10 @@ export const openApi = {
       tags: ['Billing'],
       summary: 'Get billing settings',
       description:
-        'Billing settings of the caller organization (prepaid defaults, number masks per series) ' +
-        'and `capabilities.gatewayTopups`. The row is created with defaults on first read.',
+        'Billing settings of the caller organization (prepaid defaults, number masks per series, ' +
+        'seller / bank / document fields, default payment terms and VAT rate), ' +
+        '`capabilities.gatewayTopups` and `completeness { ready, missing[] }` (posting needs ' +
+        '`legalName`, `sellerAddress`, `taxId`, `iban`). The row is created with defaults on first read.',
     },
     PUT: {
       tags: ['Billing'],
@@ -100,7 +107,8 @@ export const openApi = {
         'Partial update. Number masks use `{YYYY} {YY} {MM} {DD}` plus exactly one of ' +
         '`{SEQUENCE_NUM}` (never resets), `{SEQUENCE_NUM_YEAR}` (yearly — needs a year token) or ' +
         '`{SEQUENCE_NUM_MONTH}` (monthly — needs year + month), with an optional `:N` zero-pad. ' +
-        'Invalid masks → 400 with the mask error code.',
+        'Invalid masks → 400 with the mask error code. IBAN is normalised and mod-97 checked, ' +
+        'BIC must be 8 or 11 characters; an empty string clears a text field.',
       requestBody: { content: { 'application/json': { schema: billingSettingsUpdateSchema } } },
     },
   },

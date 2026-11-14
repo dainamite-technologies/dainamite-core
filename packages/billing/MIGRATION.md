@@ -12,6 +12,55 @@ billing data.
 
 ---
 
+## Spec B — Invoice documents (VAT, due date, PDF, email)
+
+**Migration:** `Migration20261116000000_billing_invoice_documents.ts` (additive)
+
+- `billing_items.tax_rate` (`numeric(7,4)`, default `0`). **Existing items get
+  0 %** — the migration never back-fills a rate, so live subscriptions are not
+  silently re-priced. New items take the organization default
+  (`billing_settings.default_tax_rate`, 23 % unless changed) when created
+  without `taxRate`, including items created by the CPQ connector. Set rates on
+  existing items, or reseed demo data.
+- `billing_accounts.payment_terms_days` (null = organization default) and
+  `auto_send_invoice` (default `false`).
+- `billing_settings`: `legal_name`, `seller_address`, `tax_id`, `bank_name`,
+  `iban`, `bic`, `invoice_footer`, `logo_attachment_id`,
+  `default_payment_terms_days` (14), `default_tax_rate` (23).
+
+### Behaviour changes
+
+- **Posting needs seller details.** `POST /api/billing/invoices/post` returns
+  409 `billing.settings.incomplete` (with `missing[]`) until legal name,
+  address, tax id and IBAN are filled on **Settings → Billing**. No number is
+  consumed. The demo seed fills them for demo organizations.
+- **VAT per line** from the item rate (drafts and dry / test runs included);
+  proration and credit lines inherit it. Manual lines accept `taxRate`.
+- **Post** also sets `due_date`, freezes the seller block in `seller_snapshot`
+  and keeps the replaced `DRAFT-…` number in `metadata.draft_number`.
+- **PDF:** `GET /api/billing/invoices/{id}/pdf`. Posted documents are frozen as
+  an attachment (`pdf_attachment_id`) right after the post; drafts are
+  watermarked previews. Labels follow the account's invoice language (en / pl).
+- **Email:** `POST /api/billing/invoices/{id}/send` (new feature
+  `billing.invoice.send`) and an auto-send subscriber for accounts with
+  `auto_send_invoice`. Attempts are logged in `metadata.deliveries`; events
+  `billing.invoice.sent` / `billing.invoice.send_failed`.
+- **Overdue** is computed: `GET /api/billing/invoices?overdue=true|false`,
+  `dueFrom`, `dueTo`; rows add `days_overdue`.
+  `GET /api/billing/accounts/{id}/summary` returns open / overdue amounts.
+- Account export moves to `schemaVersion: 4`.
+
+### Dependencies
+
+- `requires` adds **`attachments`** (platform module; stores frozen PDFs and
+  the logo).
+- New regular dependencies: `pdf-lib`, `@pdf-lib/fontkit`. The PDF font (Noto
+  Sans, SIL OFL 1.1, subset to Latin + Latin Extended-A) is embedded in
+  `lib/pdf/fonts/embeddedFonts.ts`; regenerate it with
+  `node scripts/embed-pdf-fonts.mjs` after changing the TTFs.
+
+---
+
 ## Spec 0 — Standalone invoice ledger (no core sales)
 
 **Migration:** `Migration20261115000000_billing_invoice_ledger.ts`

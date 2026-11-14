@@ -3,12 +3,12 @@ import type { CommandHandler, CommandRuntimeContext } from '@open-mercato/shared
 import { registerCommand } from '@open-mercato/shared/lib/commands'
 import { ensureOrganizationScope, ensureTenantScope } from '@open-mercato/shared/lib/commands/scope'
 import { billingSettingsUpdateSchema, type BillingSettingsUpdateInput } from '../data/validators'
-import { getBillingSettings, serializeBillingSettings } from '../lib/billingSettings'
+import { getBillingSettings, serializeBillingSettings, taxRateColumn } from '../lib/billingSettings'
 
 /**
  * `billing.settings.update` — edits the organization's billing settings
- * (Spec 0: prepaid defaults + document number masks; Spec B adds seller
- * fields). The row always exists (lazily created), so this is a partial
+ * (Spec 0: prepaid defaults + document number masks; Spec B: seller,
+ * payment and document fields). The row always exists (lazily created), so this is a partial
  * update of one row per organization. Masks are validated by the schema.
  */
 
@@ -48,6 +48,17 @@ const updateSettingsCommand: CommandHandler<
     if (parsed.numberMasks !== undefined) {
       settings.numberMasks = { ...(settings.numberMasks ?? {}), ...stripUndefined(parsed.numberMasks) }
     }
+    // Spec B — seller / payment / document fields. `null` clears a field.
+    if (parsed.legalName !== undefined) settings.legalName = parsed.legalName
+    if (parsed.sellerAddress !== undefined) settings.sellerAddress = parsed.sellerAddress
+    if (parsed.taxId !== undefined) settings.taxId = parsed.taxId
+    if (parsed.bankName !== undefined) settings.bankName = parsed.bankName
+    if (parsed.iban !== undefined) settings.iban = parsed.iban
+    if (parsed.bic !== undefined) settings.bic = parsed.bic
+    if (parsed.invoiceFooter !== undefined) settings.invoiceFooter = parsed.invoiceFooter
+    if (parsed.logoAttachmentId !== undefined) settings.logoAttachmentId = parsed.logoAttachmentId
+    if (parsed.defaultPaymentTermsDays !== undefined) settings.defaultPaymentTermsDays = parsed.defaultPaymentTermsDays
+    if (parsed.defaultTaxRate !== undefined) settings.defaultTaxRate = taxRateColumn(parsed.defaultTaxRate)
     settings.updatedAt = new Date()
     await em.flush()
     return serializeBillingSettings(settings)

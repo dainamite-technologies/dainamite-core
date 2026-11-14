@@ -1,7 +1,7 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { type BillingAccount, type BillingItem } from '../data/entities'
 import type { BillPeriod } from './billPeriod'
-import type { InvoiceLineDescriptor } from './invoiceWriter'
+import { itemTaxRate, type InvoiceLineDescriptor } from './invoiceWriter'
 import { format4dp, formatUnitPrice, rateUsageForItem, type UsageRate } from './usageRater'
 
 /**
@@ -178,6 +178,7 @@ export async function processUsageForAccount(
       unitPriceNet,
       quantity: format4dp(totalQuantity),
       totalNetAmount: rated.amount,
+      taxRate: itemTaxRate(item),
       metadataExtra: {
         uom_code: uom,
         usage_record_count: recordCount,

@@ -21,29 +21,29 @@ The spec's references to `sales_invoices`, `sales:sales_invoice`, `metadata.pdf_
 
 | Phase | Step | Title | Status |
 |-------|------|-------|--------|
-| 1 | 1.1 | `BillingItem.tax_rate` + `BillingSettings.default_tax_rate` + migration + validators | todo |
-| 1 | 1.2 | Item create/update fills the rate from settings (B-D1); bulk create too | todo |
-| 1 | 1.3 | Writer: per-line VAT from the item rate (recurring, proration/credit, usage, one-time) | todo |
-| 1 | 1.4 | Manual line add/edit accept `taxRate`; connector check; demo seeds with rates | todo |
-| 1 | 1.5 | Unit tests: rounding, mixed rates, 0 %, negative credit lines, default fill | todo |
-| 2 | 2.1 | Settings: seller block, bank, footer, logo, default terms + IBAN validation | todo |
-| 2 | 2.2 | `BillingAccount.payment_terms_days` + `auto_send_invoice`; account/item forms | todo |
-| 2 | 2.3 | Post: completeness guard (409), due date, seller snapshot, `metadata.draft_number` | todo |
-| 2 | 2.4 | Invoice list: overdue / due filters + columns (SQL), overdue predicate in `lib/overdue.ts` | todo |
-| 2 | 2.5 | `GET /api/billing/accounts/{id}/summary` (AR part) + Invoices section on the account page | todo |
-| 2 | 2.6 | Unit tests: due-date math, overdue predicate, settings validation, guard | todo |
-| 3 | 3.1 | Dependencies: `pdf-lib`, `@pdf-lib/fontkit`, Noto Sans TTF in the package | todo |
-| 3 | 3.2 | `lib/pdf/invoiceModel.ts` (pure document model) + `lib/pdf/invoiceTemplate.ts` (renderer) | todo |
-| 3 | 3.3 | Document i18n by `invoice_language` (en/pl) independent of the request locale | todo |
-| 3 | 3.4 | `GET /api/billing/invoices/{id}/pdf` (frozen vs. draft watermark) + freeze after post | todo |
-| 3 | 3.5 | Unit tests: model (en/pl, VAT summary, multi-page), render smoke, freeze/lazy fallback | todo |
-| 4 | 4.1 | `lib/invoiceDelivery.ts` + `POST /api/billing/invoices/{id}/send` + ACL `billing.invoice.send` | todo |
-| 4 | 4.2 | Auto-send subscriber on `billing.invoice.posted`; events `sent` / `send_failed` | todo |
-| 4 | 4.3 | Invoice detail: Download PDF / Send / Resend, delivery history; list PDF row action | todo |
-| 4 | 4.4 | Unit tests: delivery log, idempotent auto-send, placeholder email refusal | todo |
-| 5 | 5.1 | Integration tests: TC-BILL-007 (VAT + due date + PDF), TC-BILL-008 (send, email capture) | todo |
-| 5 | 5.2 | Docs: MIGRATION.md, changeset, manual §3e–3g, spec status | todo |
-| 5 | 5.3 | Gate: build:packages, generate, typecheck ×3, test, build | todo |
+| 1 | 1.1 | `BillingItem.tax_rate` + `BillingSettings.default_tax_rate` + migration + validators | done |
+| 1 | 1.2 | Item create/update fills the rate from settings (B-D1); bulk create too | done |
+| 1 | 1.3 | Writer: per-line VAT from the item rate (recurring, proration/credit, usage, one-time) | done |
+| 1 | 1.4 | Manual line add/edit accept `taxRate`; connector check; demo seeds with rates | done |
+| 1 | 1.5 | Unit tests: rounding, mixed rates, 0 %, negative credit lines, default fill | done |
+| 2 | 2.1 | Settings: seller block, bank, footer, logo, default terms + IBAN validation | done |
+| 2 | 2.2 | `BillingAccount.payment_terms_days` + `auto_send_invoice`; account/item forms | done |
+| 2 | 2.3 | Post: completeness guard (409), due date, seller snapshot, `metadata.draft_number` | done |
+| 2 | 2.4 | Invoice list: overdue / due filters + columns (SQL), overdue predicate in `lib/overdue.ts` | done |
+| 2 | 2.5 | `GET /api/billing/accounts/{id}/summary` (AR part) + Invoices section on the account page | done |
+| 2 | 2.6 | Unit tests: due-date math, overdue predicate, settings validation, guard | done |
+| 3 | 3.1 | Dependencies: `pdf-lib`, `@pdf-lib/fontkit`, Noto Sans TTF in the package | done |
+| 3 | 3.2 | `lib/pdf/invoiceModel.ts` (pure document model) + `lib/pdf/invoiceTemplate.ts` (renderer) | done |
+| 3 | 3.3 | Document i18n by `invoice_language` (en/pl) independent of the request locale | done |
+| 3 | 3.4 | `GET /api/billing/invoices/{id}/pdf` (frozen vs. draft watermark) + freeze after post | done |
+| 3 | 3.5 | Unit tests: model (en/pl, VAT summary, multi-page), render smoke, freeze/lazy fallback | done |
+| 4 | 4.1 | `lib/invoiceDelivery.ts` + `POST /api/billing/invoices/{id}/send` + ACL `billing.invoice.send` | done |
+| 4 | 4.2 | Auto-send subscriber on `billing.invoice.posted`; events `sent` / `send_failed` | done |
+| 4 | 4.3 | Invoice detail: Download PDF / Send / Resend, delivery history; list PDF row action | done |
+| 4 | 4.4 | Unit tests: delivery log, idempotent auto-send, placeholder email refusal | done |
+| 5 | 5.1 | Integration tests: TC-BILL-007 (VAT + due date + PDF), TC-BILL-008 (send, email capture) | done |
+| 5 | 5.2 | Docs: MIGRATION.md, changeset, manual §3e–3g, spec status | done |
+| 5 | 5.3 | Gate: build:packages, generate, typecheck ×3, test, build | done |
 
 ## Goal
 
@@ -201,3 +201,14 @@ Delivery log appended on success and failure, placeholder email → 422 with no 
 | Email transport not configured | Logged as a `failed` delivery, shown in the UI; posting unaffected. |
 | PDF render failure at post | Post stays committed; first download renders and freezes. |
 | Account page grows further | Invoices section and summary cards are separate components that Spec E's tabs reuse. |
+
+## Completion notes (2026-11-14)
+- All phases done. Gate green: build:packages, generate, typecheck (billing, connector, app), 1496 unit tests (107 suites), `yarn build` (OpenAPI bundle generates all 407 paths).
+- Not run: TC-BILL-006/007/008 integration tests — need the Spec E/A/0/B migrations applied (awaiting confirmation).
+- Deviations:
+  - Font: Noto Sans subset (≈27 KB per weight) embedded as base64 (`lib/pdf/fonts/embeddedFonts.ts`, regenerated by `scripts/embed-pdf-fonts.mjs`) so the renderer works identically from src, dist, Next bundles and Jest. Liberation Sans from pdfjs-dist was rejected (GPLv2 + font exception).
+  - Document labels load through the framework's `loadDictionary(locale)` (billing `i18n/en|pl.json`), independent of the operator locale.
+  - Emails are plain text + HTML (no React email component); `sendEmail` test capture records recipient + subject only.
+  - Invoice list became a shared `components/InvoicesTable.tsx` (global list + account section); invoice detail returns to the account when opened from it.
+  - The send route is a hand-written POST (path param) that runs the shared mutation guards and executes the `billing.invoices.send` command.
+  - Organization logo fallback is used only when `logo_url` points at one of our attachments (no server-side fetch of arbitrary URLs).

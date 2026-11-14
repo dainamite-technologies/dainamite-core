@@ -4,6 +4,7 @@ import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { Page, PageBody, PageHeader } from '@open-mercato/ui/backend/Page'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { Input } from '@open-mercato/ui/primitives/input'
+import { Textarea } from '@open-mercato/ui/primitives/textarea'
 import { Switch } from '@open-mercato/ui/primitives/switch'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { KbdShortcut } from '@open-mercato/ui/primitives/kbd'
@@ -18,20 +19,59 @@ import { DOCUMENT_SERIES, type DocumentSeries } from '../../../lib/numbering'
  *   - document number masks per series, with a live example of the next
  *     number and the counter scope (never / yearly / monthly reset);
  *   - prepaid defaults (moved from core `configs`);
- *   - read-only: whether online top-ups are available (optional gateway).
- * Spec B adds seller / document fields to this page.
+ *   - read-only: whether online top-ups are available (optional gateway);
+ *   - Spec B: seller block, payment instructions (bank / IBAN / BIC),
+ *     default payment terms and VAT rate, invoice footer and logo. Posting
+ *     is blocked until legal name, address, tax id and IBAN are filled — the
+ *     page shows what is missing.
  */
 
 type Settings = {
+  id: string
   lowBalanceThresholdDefault: number
   nearLimitBufferDefault: number
   statementEnabled: boolean
   topupTaxRate: number
   topupProvider: string
   numberMasks: Record<DocumentSeries, string>
+  legalName: string
+  sellerAddress: SellerAddress | null
+  taxId: string
+  bankName: string
+  iban: string
+  bic: string
+  invoiceFooter: string
+  logoAttachmentId: string | null
+  defaultPaymentTermsDays: number
+  defaultTaxRate: number
 }
 
-type SettingsResponse = { settings: Settings; capabilities: { gatewayTopups: boolean } }
+type SellerAddress = { line1: string; line2?: string; city: string; postal_code: string; country: string }
+
+const EMPTY_ADDRESS: SellerAddress = { line1: '', line2: '', city: '', postal_code: '', country: 'PL' }
+
+type SettingsResponse = {
+  settings: Settings
+  capabilities: { gatewayTopups: boolean }
+  completeness?: { ready: boolean; missing: string[] }
+}
+
+/** Address is sent only when the required parts are filled; all blank clears it. */
+function addressPayload(address: SellerAddress | null): SellerAddress | null | undefined {
+  if (!address) return null
+  const trimmed = {
+    line1: address.line1.trim(),
+    line2: (address.line2 ?? '').trim(),
+    city: address.city.trim(),
+    postal_code: address.postal_code.trim(),
+    country: address.country.trim().toUpperCase(),
+  }
+  if (!trimmed.line1 && !trimmed.city && !trimmed.postal_code) return null
+  const { line2, ...rest } = trimmed
+  return line2 ? { ...rest, line2 } : rest
+}
+
+const ATTACHMENT_ENTITY_ID = 'billing:billing_settings'
 
 type Preview = { valid: boolean; errors: string[]; example?: string; scopeKey?: string }
 
@@ -135,7 +175,7 @@ export default function BillingSettingsPage() {
       await apiCallOrThrow('/api/billing/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(values),
+        body: JSON.stringify({ ...values, sellerAddress: addressPayload(values.sellerAddress) }),
       })
       flash(t('billing.settings.saved', 'Billing settings saved'), 'success')
       await load()
@@ -145,6 +185,44 @@ export default function BillingSettingsPage() {
       setSaving(false)
     }
   }, [load, t, values])
+
+  const [uploading, setUploading] = React.useState(false)
+  const handleLogoUpload = React.useCallback(
+    async (file: File | null) => {
+      if (!file || !values) return
+      setUploading(true)
+      try {
+        const form = new FormData()
+        form.set('entityId', ATTACHMENT_ENTITY_ID)
+        form.set('recordId', loaded?.settings.id ?? 'settings')
+        form.set('file', file)
+        const call = await apiCall<{ item?: { id: string }; error?: string }>('/api/attachments', {
+          method: 'POST',
+          body: form,
+        })
+        if (!call.ok || !call.result?.item?.id) {
+          throw new Error(call.result?.error || t('billing.settings.logo.upload_failed', 'Logo upload failed'))
+        }
+        set('logoAttachmentId', call.result.item.id)
+      } catch (err) {
+        flash(err instanceof Error ? err.message : t('billing.settings.logo.upload_failed', 'Logo upload failed'), 'error')
+      } finally {
+        setUploading(false)
+      }
+    },
+    [loaded?.settings.id, t, values],
+  )
+
+  const address = values?.sellerAddress ?? EMPTY_ADDRESS
+  const setAddress = (key: keyof SellerAddress, value: string) =>
+    set('sellerAddress', { ...(values?.sellerAddress ?? EMPTY_ADDRESS), [key]: value })
+
+  const missingLabels: Record<string, string> = {
+    legalName: t('billing.settings.seller.legal_name', 'Legal name'),
+    sellerAddress: t('billing.settings.seller.address', 'Address'),
+    taxId: t('billing.settings.seller.tax_id', 'Tax ID'),
+    iban: t('billing.settings.payment.iban', 'IBAN'),
+  }
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
@@ -166,6 +244,128 @@ export default function BillingSettingsPage() {
           <LoadingMessage label={t('billing.settings.loading', 'Loading billing settings…')} />
         ) : (
           <div className="flex flex-col gap-6" onKeyDown={handleKeyDown}>
+            {loaded.completeness && !loaded.completeness.ready ? (
+              <div className="rounded-lg border border-status-warning-border bg-status-warning-bg p-4 text-sm">
+                <div className="font-medium">
+                  {t('billing.settings.incomplete.title', 'Invoices cannot be posted yet')}
+                </div>
+                <div className="text-muted-foreground">
+                  {t('billing.settings.incomplete.help', 'Fill in the seller details printed on every invoice:')}{' '}
+                  {loaded.completeness.missing.map((field) => missingLabels[field] ?? field).join(', ')}
+                </div>
+              </div>
+            ) : null}
+
+            <section className="rounded-lg border bg-card p-6 grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <h2 className="text-base font-semibold sm:col-span-2">{t('billing.settings.seller.title', 'Seller')}</h2>
+              <label className="flex flex-col gap-1 text-sm sm:col-span-2">
+                <span className="text-muted-foreground">{t('billing.settings.seller.legal_name', 'Legal name')} *</span>
+                <Input value={values.legalName} maxLength={255} onChange={(e) => set('legalName', e.currentTarget.value)} />
+              </label>
+              <label className="flex flex-col gap-1 text-sm sm:col-span-2">
+                <span className="text-muted-foreground">{t('billing.settings.seller.line1', 'Address line 1')} *</span>
+                <Input value={address.line1} onChange={(e) => setAddress('line1', e.currentTarget.value)} />
+              </label>
+              <label className="flex flex-col gap-1 text-sm sm:col-span-2">
+                <span className="text-muted-foreground">{t('billing.settings.seller.line2', 'Address line 2')}</span>
+                <Input value={address.line2 ?? ''} onChange={(e) => setAddress('line2', e.currentTarget.value)} />
+              </label>
+              <label className="flex flex-col gap-1 text-sm">
+                <span className="text-muted-foreground">{t('billing.settings.seller.postal_code', 'Postal code')} *</span>
+                <Input value={address.postal_code} onChange={(e) => setAddress('postal_code', e.currentTarget.value)} />
+              </label>
+              <label className="flex flex-col gap-1 text-sm">
+                <span className="text-muted-foreground">{t('billing.settings.seller.city', 'City')} *</span>
+                <Input value={address.city} onChange={(e) => setAddress('city', e.currentTarget.value)} />
+              </label>
+              <label className="flex flex-col gap-1 text-sm">
+                <span className="text-muted-foreground">{t('billing.settings.seller.country', 'Country (ISO code)')} *</span>
+                <Input value={address.country} maxLength={3} onChange={(e) => setAddress('country', e.currentTarget.value)} />
+              </label>
+              <label className="flex flex-col gap-1 text-sm">
+                <span className="text-muted-foreground">{t('billing.settings.seller.tax_id', 'Tax ID')} *</span>
+                <Input value={values.taxId} maxLength={64} onChange={(e) => set('taxId', e.currentTarget.value)} />
+              </label>
+            </section>
+
+            <section className="rounded-lg border bg-card p-6 grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <h2 className="text-base font-semibold sm:col-span-2">{t('billing.settings.payment.title', 'Payment and invoicing')}</h2>
+              <label className="flex flex-col gap-1 text-sm sm:col-span-2">
+                <span className="text-muted-foreground">{t('billing.settings.payment.bank_name', 'Bank name')}</span>
+                <Input value={values.bankName} maxLength={255} onChange={(e) => set('bankName', e.currentTarget.value)} />
+              </label>
+              <label className="flex flex-col gap-1 text-sm">
+                <span className="text-muted-foreground">{t('billing.settings.payment.iban', 'IBAN')} *</span>
+                <Input value={values.iban} className="font-mono" onChange={(e) => set('iban', e.currentTarget.value)} />
+              </label>
+              <label className="flex flex-col gap-1 text-sm">
+                <span className="text-muted-foreground">{t('billing.settings.payment.bic', 'BIC / SWIFT')}</span>
+                <Input value={values.bic} className="font-mono" maxLength={11} onChange={(e) => set('bic', e.currentTarget.value)} />
+              </label>
+              <label className="flex flex-col gap-1 text-sm">
+                <span className="text-muted-foreground">{t('billing.settings.payment.terms', 'Default payment terms (days)')}</span>
+                <Input
+                  type="number"
+                  min="0"
+                  max="365"
+                  step="1"
+                  value={String(values.defaultPaymentTermsDays)}
+                  onChange={(e) => set('defaultPaymentTermsDays', Number.parseInt(e.currentTarget.value, 10) || 0)}
+                />
+              </label>
+              <label className="flex flex-col gap-1 text-sm">
+                <span className="text-muted-foreground">{t('billing.settings.payment.tax_rate', 'Default VAT rate (%)')}</span>
+                <Input
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="0.01"
+                  value={String(values.defaultTaxRate)}
+                  onChange={(e) => set('defaultTaxRate', Number(e.currentTarget.value) || 0)}
+                />
+                <span className="text-xs text-muted-foreground">
+                  {t('billing.settings.payment.tax_rate.help', 'Applied to new billing items only; existing items keep their rate.')}
+                </span>
+              </label>
+              <label className="flex flex-col gap-1 text-sm sm:col-span-2">
+                <span className="text-muted-foreground">{t('billing.settings.document.footer', 'Invoice footer')}</span>
+                <Textarea
+                  rows={2}
+                  maxLength={2000}
+                  value={values.invoiceFooter}
+                  onChange={(e) => set('invoiceFooter', e.currentTarget.value)}
+                />
+                <span className="text-xs text-muted-foreground">
+                  {t('billing.settings.document.footer.help', 'Registration court, share capital and similar legal notes.')}
+                </span>
+              </label>
+              <div className="flex flex-col gap-2 text-sm sm:col-span-2">
+                <span className="text-muted-foreground">{t('billing.settings.document.logo', 'Logo (PNG or JPEG)')}</span>
+                {values.logoAttachmentId ? (
+                  <div className="flex items-center gap-3">
+                    <img
+                      src={`/api/attachments/file/${encodeURIComponent(values.logoAttachmentId)}`}
+                      alt={t('billing.settings.document.logo', 'Logo (PNG or JPEG)')}
+                      className="h-12 max-w-[200px] object-contain rounded border bg-background"
+                    />
+                    <Button type="button" variant="outline" size="sm" onClick={() => set('logoAttachmentId', null)}>
+                      {t('billing.settings.document.logo.remove', 'Remove')}
+                    </Button>
+                  </div>
+                ) : (
+                  <span className="text-xs text-muted-foreground">
+                    {t('billing.settings.document.logo.fallback', 'No logo — the organization logo is used when set.')}
+                  </span>
+                )}
+                <Input
+                  type="file"
+                  accept="image/png,image/jpeg"
+                  disabled={uploading}
+                  onChange={(e) => void handleLogoUpload(e.currentTarget.files?.[0] ?? null)}
+                />
+              </div>
+            </section>
+
             <section className="rounded-lg border bg-card p-6 flex flex-col gap-4">
               <div>
                 <h2 className="text-base font-semibold">{t('billing.settings.numbering.title', 'Document numbering')}</h2>

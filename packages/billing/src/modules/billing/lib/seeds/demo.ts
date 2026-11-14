@@ -2,6 +2,7 @@ import type { EntityManager } from '@mikro-orm/postgresql'
 import { BillingAccount, BillingItem, BillingAccountUsage } from '../../data/entities'
 import type { CustomerKind } from '../../data/validators'
 import type { InvoiceLanguageCode } from '../invoiceLanguages'
+import { getBillingSettings } from '../billingSettings'
 
 /**
  * Self-contained billing test-data seed.
@@ -50,6 +51,8 @@ type DemoItemSpec = {
   description: string
   unitPrice: number
   uomCode?: string
+  // Spec B: VAT %. Default 23 (PL standard rate).
+  taxRate?: string
   // Spec A. Default 'in_advance'.
   chargeTiming?: 'in_advance' | 'in_arrears'
   // When the item starts, relative to the seeded bill date:
@@ -86,6 +89,7 @@ const ACCOUNTS: Array<{
         type: 'recurring',
         description: 'Priority support add-on (monthly)',
         unitPrice: 60,
+        taxRate: '8',
         start: 'prevMonthMid',
       },
       { ref: `${SRC}-nw-usg`, type: 'usage', description: 'Data transfer (per GB)', unitPrice: 0.5, uomCode: 'gb', start: 'prevMonth' },
@@ -108,6 +112,8 @@ const ACCOUNTS: Array<{
         type: 'recurring',
         description: 'Managed backups (billed in arrears)',
         unitPrice: 15,
+        // 0 % — shows a mixed-rate VAT summary on the document.
+        taxRate: '0',
         chargeTiming: 'in_arrears',
         start: 'prevMonth',
       },
@@ -129,6 +135,16 @@ const ACCOUNTS: Array<{
     usage: [],
   },
 ]
+
+const DEMO_SELLER = {
+  legalName: 'Dainamite Demo sp. z o.o.',
+  sellerAddress: { line1: 'ul. Przykładowa 10', city: 'Kraków', postal_code: '30-001', country: 'PL' },
+  taxId: 'PL1234563218',
+  bankName: 'Demo Bank S.A.',
+  iban: 'PL61109010140000071219812874',
+  bic: 'WBKPPLPP',
+  invoiceFooter: 'Sąd Rejonowy dla Krakowa-Śródmieścia, KRS 0000000000. Kapitał zakładowy 5 000 zł.',
+} as const
 
 /** Delete every row this seed owns within the scope (reset before re-seed). */
 export async function resetBillingDemo(em: EntityManager, scope: BillingDemoScope): Promise<void> {
@@ -166,6 +182,16 @@ export async function seedBillingDemo(
     item.start === 'prevMonth' ? prevMonthStart : item.start === 'prevMonthMid' ? prevMonthMid : nextBillDate
 
   const result: BillingDemoResult = { accountsCreated: 0, itemsCreated: 0, usageCreated: 0 }
+
+  // ── Seller settings (Spec B: posting needs them). Only empty fields are
+  // filled, so an operator's real details are never overwritten. ──
+  const settings = await getBillingSettings(em, scope)
+  for (const [field, value] of Object.entries(DEMO_SELLER) as Array<[keyof typeof DEMO_SELLER, unknown]>) {
+    const current = settings[field]
+    if (current === null || current === undefined || current === '') {
+      Object.assign(settings, { [field]: value })
+    }
+  }
 
   for (const spec of ACCOUNTS) {
     // ── Account (idempotent by name within scope) ──
@@ -209,6 +235,7 @@ export async function seedBillingDemo(
           billEndDate: null,
           chargeTiming: item.chargeTiming ?? 'in_advance',
           prorate: true,
+          taxRate: item.taxRate ?? '23',
           description: item.description,
           rateJson: { unit_price: item.unitPrice },
           uomCode: item.uomCode ?? null,

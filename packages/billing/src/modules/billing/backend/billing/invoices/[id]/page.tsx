@@ -1,9 +1,9 @@
 "use client"
 import * as React from 'react'
 import Link from 'next/link'
-import { useParams } from 'next/navigation'
+import { useParams, useSearchParams } from 'next/navigation'
 import type { LegacyColumnDef as ColumnDef } from '@tanstack/react-table/legacy'
-import { Pencil, Plus, Trash2 } from 'lucide-react'
+import { FileDown, Mail, Pencil, Plus, Trash2 } from 'lucide-react'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { Page, PageBody, PageHeader } from '@open-mercato/ui/backend/Page'
 import { FormHeader } from '@open-mercato/ui/backend/forms'
@@ -27,6 +27,7 @@ import {
   StatCard,
 } from '../../../../components/DetailFields'
 import { billRunName } from '../../../../lib/billRunLabel'
+import { invoicePdfHref, resolveInvoiceReturnTarget } from '../../../../lib/navigation'
 
 // Spec 0: billing_invoices / billing_invoice_lines field names.
 type BillingInvoice = {
@@ -49,8 +50,21 @@ type BillingInvoice = {
   total_gross: string
   paid_total: string
   outstanding: string
+  days_overdue?: number
+  pdf_attachment_id?: string | null
+  buyer_snapshot?: { invoice_email?: string } | null
+  metadata?: { draft_number?: string; deliveries?: InvoiceDelivery[] } | null
   created_at: string
   updated_at: string
+}
+
+// Spec B: one entry per email attempt (metadata.deliveries).
+type InvoiceDelivery = {
+  at: string
+  to: string
+  status: 'sent' | 'failed'
+  error?: string | null
+  trigger: 'manual' | 'auto'
 }
 
 type InvoiceLine = {
@@ -61,7 +75,9 @@ type InvoiceLine = {
   quantity: string
   currency_code: string
   unit_price_net: string
+  tax_rate: string | number | null
   net_amount: string
+  tax_amount: string
   gross_amount: string
   service_period_start: string | null
   service_period_end: string | null
@@ -152,6 +168,12 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
   // Confirm flows: wipe-test + remove-line both use ConfirmDialog
   // (per UI AGENTS.md: NEVER `window.confirm`).
   const { confirm, ConfirmDialogElement } = useConfirmDialog()
+  const searchParams = useSearchParams()
+  const backHref = resolveInvoiceReturnTarget({
+    from: searchParams?.get('from'),
+    accountId: searchParams?.get('accountId'),
+  })
+  const [sending, setSending] = React.useState(false)
 
   const load = React.useCallback(async () => {
     if (!invoiceId) return
@@ -219,11 +241,55 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
       void load()
     } catch (err) {
       const { message } = normalizeCrudServerError(err)
-      flash(message || t('billing.invoices.post.error', 'Post failed'), 'error')
+      const code = (err as { body?: { code?: string } } | null)?.body?.code
+      flash(
+        code === 'billing.settings.incomplete'
+          ? t(
+              'billing.invoices.post.settings_incomplete',
+              'Fill in the seller details in Settings → Billing before posting invoices.',
+            )
+          : message || t('billing.invoices.post.error', 'Post failed'),
+        'error',
+      )
     } finally {
       setPosting(false)
     }
   }, [invoice, load, t])
+
+  const handleSend = React.useCallback(async () => {
+    if (!invoice) return
+    const recipient = invoice.buyer_snapshot?.invoice_email ?? ''
+    const alreadySent = (invoice.metadata?.deliveries ?? []).some((d) => d.status === 'sent')
+    const ok = await confirm({
+      title: alreadySent
+        ? t('billing.invoices.send.confirm.title_resend', 'Resend invoice?')
+        : t('billing.invoices.send.confirm.title', 'Send invoice?'),
+      text: t('billing.invoices.send.confirm.text', 'The PDF is emailed to {email}.').replace('{email}', recipient),
+      confirmText: t('billing.invoices.send.action', 'Send'),
+    })
+    if (!ok) return
+    setSending(true)
+    try {
+      const call = await apiCallOrThrow<{ status: 'sent' | 'failed'; error?: string | null }>(
+        `/api/billing/invoices/${encodeURIComponent(invoice.id)}/send`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' },
+      )
+      if (call.result?.status === 'sent') {
+        flash(t('billing.invoices.send.success', 'Invoice sent'), 'success')
+      } else {
+        flash(
+          `${t('billing.invoices.send.failed', 'Sending failed')}${call.result?.error ? `: ${call.result.error}` : ''}`,
+          'error',
+        )
+      }
+      void load()
+    } catch (err) {
+      const { message } = normalizeCrudServerError(err)
+      flash(message || t('billing.invoices.send.failed', 'Sending failed'), 'error')
+    } finally {
+      setSending(false)
+    }
+  }, [confirm, invoice, load, t])
 
   const handleWipeTest = React.useCallback(async () => {
     if (!invoice) return
@@ -281,6 +347,7 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
               description: values.description,
               quantity: values.quantity,
               unitPriceNet: values.unitPriceNet,
+              ...(values.taxRate !== undefined ? { taxRate: values.taxRate } : {}),
             }),
           })
           flash(t('billing.invoices.lines.add.success', 'Line added'), 'success')
@@ -298,6 +365,7 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
                 ...(values.totalNetAmount !== undefined
                   ? { totalNetAmount: values.totalNetAmount }
                   : {}),
+                ...(values.taxRate !== undefined ? { taxRate: values.taxRate } : {}),
               },
             }),
           })
@@ -350,6 +418,47 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
 
   const canEditLines = invoice?.status === 'draft'
 
+  // Newest first; deliveries are a short, append-only log on the invoice.
+  const deliveries = React.useMemo(
+    () => [...(invoice?.metadata?.deliveries ?? [])].reverse(),
+    [invoice?.metadata?.deliveries],
+  )
+  const deliveryColumns = React.useMemo<ColumnDef<InvoiceDelivery>[]>(
+    () => [
+      {
+        accessorKey: 'at',
+        header: t('billing.invoices.deliveries.columns.at', 'When'),
+        cell: ({ row }) => new Date(row.original.at).toLocaleString(),
+      },
+      { accessorKey: 'to', header: t('billing.invoices.deliveries.columns.to', 'Recipient') },
+      {
+        accessorKey: 'status',
+        header: t('billing.invoices.deliveries.columns.status', 'Status'),
+        cell: ({ row }) =>
+          row.original.status === 'sent' ? (
+            <Tag variant="success">{t('billing.invoices.deliveries.status.sent', 'Sent')}</Tag>
+          ) : (
+            <Tag variant="error">{t('billing.invoices.deliveries.status.failed', 'Failed')}</Tag>
+          ),
+      },
+      {
+        accessorKey: 'trigger',
+        header: t('billing.invoices.deliveries.columns.trigger', 'Trigger'),
+        cell: ({ row }) =>
+          row.original.trigger === 'auto'
+            ? t('billing.invoices.deliveries.trigger.auto', 'Automatic')
+            : t('billing.invoices.deliveries.trigger.manual', 'Manual'),
+      },
+      {
+        accessorKey: 'error',
+        header: t('billing.invoices.deliveries.columns.error', 'Error'),
+        cell: ({ row }) => row.original.error ?? '—',
+        meta: { truncate: true, maxWidth: '280px' },
+      },
+    ],
+    [t],
+  )
+
   const lineColumns = React.useMemo<ColumnDef<InvoiceLine>[]>(
     () => [
       {
@@ -394,6 +503,21 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
           formatMoney(row.original.net_amount, row.original.currency_code),
       },
       {
+        accessorKey: 'tax_rate',
+        header: t('billing.invoices.lines.columns.tax_rate', 'VAT %'),
+        cell: ({ row }) => (row.original.tax_rate != null ? `${Number(row.original.tax_rate)} %` : '—'),
+      },
+      {
+        accessorKey: 'tax_amount',
+        header: t('billing.invoices.lines.columns.tax_amount', 'VAT'),
+        cell: ({ row }) => formatMoney(row.original.tax_amount, row.original.currency_code),
+      },
+      {
+        accessorKey: 'gross_amount',
+        header: t('billing.invoices.lines.columns.gross', 'Gross'),
+        cell: ({ row }) => formatMoney(row.original.gross_amount, row.original.currency_code),
+      },
+      {
         id: 'actions',
         header: '',
         cell: ({ row }) => {
@@ -433,6 +557,7 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
       description: dialogTargetLine.description ?? '',
       quantity: Number.parseFloat(dialogTargetLine.quantity),
       unitPriceNet: Number.parseFloat(dialogTargetLine.unit_price_net),
+      taxRate: dialogTargetLine.tax_rate != null ? Number.parseFloat(String(dialogTargetLine.tax_rate)) : undefined,
     }
   }, [dialogMode, dialogTargetLine])
 
@@ -464,13 +589,18 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
     <Page>
       <FormHeader
         mode="detail"
-        backHref="/backend/billing/invoices"
+        backHref={backHref}
         entityTypeLabel={t('billing.invoices.detail.title', 'Billing Invoice')}
         title={invoice.number}
         statusBadge={
           <div className="flex items-center gap-2 flex-wrap">
             <Tag variant={statusVariant(invoice.status)}>{invoice.status}</Tag>
             {isTest ? <Tag variant="warning">TEST</Tag> : null}
+            {(invoice.days_overdue ?? 0) > 0 ? (
+              <Tag variant="error">
+                {t('billing.invoices.overdue_days', 'Overdue {days} d').replace('{days}', String(invoice.days_overdue))}
+              </Tag>
+            ) : null}
           </div>
         }
         actionsContent={
@@ -480,6 +610,24 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
                 {posting
                   ? t('billing.invoices.post.in_progress', 'Posting…')
                   : t('billing.invoices.post.action', 'Post invoice')}
+              </Button>
+            ) : null}
+            <Button type="button" variant="outline" asChild>
+              <a href={invoicePdfHref(invoice.id)} target="_blank" rel="noopener noreferrer">
+                <FileDown size={16} />
+                {isDraft
+                  ? t('billing.invoices.actions.pdf_preview', 'Preview PDF')
+                  : t('billing.invoices.actions.pdf', 'Download PDF')}
+              </a>
+            </Button>
+            {!isDraft && !isTest && invoice.document_type !== 'receipt' ? (
+              <Button type="button" variant="outline" onClick={() => void handleSend()} disabled={sending}>
+                <Mail size={16} />
+                {sending
+                  ? t('billing.invoices.send.in_progress', 'Sending…')
+                  : (invoice.metadata?.deliveries ?? []).some((d) => d.status === 'sent')
+                    ? t('billing.invoices.send.resend', 'Resend')
+                    : t('billing.invoices.send.action', 'Send')}
               </Button>
             ) : null}
             {isTest ? (
@@ -532,6 +680,14 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
             <DetailField label={t('billing.invoices.detail.field.issued', 'Issued')}>
               {invoice.issue_date?.slice(0, 10) ?? '—'}
             </DetailField>
+            <DetailField label={t('billing.invoices.detail.field.due', 'Due')}>
+              {invoice.due_date?.slice(0, 10) ?? '—'}
+            </DetailField>
+            {invoice.metadata?.draft_number ? (
+              <DetailField label={t('billing.invoices.detail.field.draft_number', 'Draft number')}>
+                <span className="font-mono text-xs">{invoice.metadata.draft_number}</span>
+              </DetailField>
+            ) : null}
             <DetailField label={t('billing.common.id', 'ID')}>
               <span className="font-mono text-xs">{invoice.id}</span>
             </DetailField>
@@ -588,6 +744,27 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
               }}
             />
           </div>
+
+          {!isDraft ? (
+            <div>
+              <h2 className="text-base font-semibold mb-2">
+                {t('billing.invoices.deliveries.title', 'Email deliveries')}
+              </h2>
+              <DataTable
+                columns={deliveryColumns}
+                data={deliveries}
+                isLoading={false}
+                emptyState={t('billing.invoices.deliveries.empty', 'Not sent yet.')}
+                pagination={{
+                  page: 1,
+                  pageSize: Math.max(deliveries.length, 1),
+                  total: deliveries.length,
+                  totalPages: 1,
+                  onPageChange: () => undefined,
+                }}
+              />
+            </div>
+          ) : null}
         </div>
 
         <LineFormDialog

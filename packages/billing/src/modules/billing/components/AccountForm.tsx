@@ -79,6 +79,9 @@ export type AccountFormValues = {
   creditLimit: string
   // Prepaid-only initial low-balance threshold for the balance row.
   lowBalanceThreshold: string
+  // Spec B — blank = organization default terms.
+  paymentTermsDays: string
+  autoSendInvoice: boolean
 }
 
 export type AccountFormProps = {
@@ -111,6 +114,8 @@ const EMPTY_VALUES: AccountFormValues = {
   billingMode: 'postpaid',
   creditLimit: '0',
   lowBalanceThreshold: '',
+  paymentTermsDays: '',
+  autoSendInvoice: false,
 }
 
 function todayIso(): string {
@@ -627,6 +632,39 @@ export function AccountForm({
             onChange={(event) => set('creditLimit', event.currentTarget.value)}
           />
         </label>
+
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="text-muted-foreground">
+            {t('billing.accounts.form.payment_terms', 'Payment terms (days)')}
+          </span>
+          <Input
+            type="number"
+            min="0"
+            max="365"
+            step="1"
+            value={values.paymentTermsDays}
+            placeholder={t('billing.accounts.form.payment_terms.hint', 'Blank = organization default')}
+            onChange={(event) => set('paymentTermsDays', event.currentTarget.value)}
+          />
+        </label>
+
+        <div className="flex items-center justify-between gap-3 col-span-2">
+          <div>
+            <div className="text-sm font-medium">
+              {t('billing.accounts.form.auto_send', 'Email invoices automatically')}
+            </div>
+            <div className="text-xs text-muted-foreground">
+              {t(
+                'billing.accounts.form.auto_send.help',
+                'Each posted invoice is emailed as a PDF to the invoice email.',
+              )}
+            </div>
+          </div>
+          <Switch
+            checked={values.autoSendInvoice}
+            onCheckedChange={(next) => set('autoSendInvoice', next)}
+          />
+        </div>
 
         {values.billingMode === 'prepaid' ? (
           <label className="flex flex-col gap-1 text-sm">

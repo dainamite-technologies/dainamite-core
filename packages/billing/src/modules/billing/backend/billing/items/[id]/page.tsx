@@ -56,6 +56,7 @@ type BillingItemRow = {
   billed_to_date: string | null
   charge_timing: 'in_advance' | 'in_arrears'
   prorate: boolean
+  tax_rate: string | number | null
   is_active: boolean
   created_at: string
   updated_at: string
@@ -102,6 +103,7 @@ function toFormValues(row: BillingItemRow): Partial<ItemFormValues> {
     isActive: row.is_active,
     chargeTiming: row.charge_timing ?? 'in_advance',
     prorate: row.prorate ?? true,
+    taxRate: row.tax_rate != null ? String(Number(row.tax_rate)) : '',
   }
   if (row.type === 'one_time' && typeof rate.amount === 'number') {
     out.oneTimeAmount = String(rate.amount)
@@ -162,6 +164,9 @@ function ItemView({ row }: { row: BillingItemRow }) {
         ) : (
           '—'
         )}
+      </DetailField>
+      <DetailField label={t('billing.items.form.tax_rate', 'VAT rate (%)')}>
+        {row.tax_rate != null ? `${Number(row.tax_rate)} %` : '—'}
       </DetailField>
       {row.type === 'recurring' ? (
         <>

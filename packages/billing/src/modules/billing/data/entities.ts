@@ -35,6 +35,8 @@ export class BillingAccount {
     | 'lastBillDate'
     | 'billingMode'
     | 'creditLimit'
+    | 'paymentTermsDays'
+    | 'autoSendInvoice'
     | 'isActive'
     | 'createdAt'
     | 'updatedAt'
@@ -116,6 +118,15 @@ export class BillingAccount {
   @Property({ name: 'credit_limit', type: 'numeric', columnType: 'numeric(18, 4)', default: '0' })
   creditLimit: string = '0'
 
+  // Spec B — payment terms in days for this account's invoices; null = the
+  // organization default (`billing_settings.default_payment_terms_days`).
+  @Property({ name: 'payment_terms_days', type: 'integer', nullable: true })
+  paymentTermsDays?: number | null
+
+  // Spec B — email each invoice to `invoice_email` automatically at post.
+  @Property({ name: 'auto_send_invoice', type: 'boolean', default: false })
+  autoSendInvoice: boolean = false
+
   @Property({ name: 'is_active', type: 'boolean', default: true })
   isActive: boolean = true
 
@@ -169,6 +180,7 @@ export class BillingItem {
     | 'billedToDate'
     | 'chargeTiming'
     | 'prorate'
+    | 'taxRate'
     | 'isActive'
     | 'createdAt'
     | 'updatedAt'
@@ -245,6 +257,12 @@ export class BillingItem {
   // billed in advance ends early. False = skip partial periods.
   @Property({ name: 'prorate', type: 'boolean', default: true })
   prorate: boolean = true
+
+  // Spec B (B-D1) — VAT rate in percent, snapshotted onto every invoice line.
+  // Filled from `billing_settings.default_tax_rate` at creation when omitted;
+  // never looked up live, so a default change never re-prices subscriptions.
+  @Property({ name: 'tax_rate', type: 'numeric', columnType: 'numeric(7, 4)', default: '0' })
+  taxRate: string = '0'
 
   @Property({ name: 'is_active', type: 'boolean', default: true })
   isActive: boolean = true
@@ -1245,6 +1263,16 @@ export class BillingSettings {
     | 'topupTaxRate'
     | 'topupProvider'
     | 'numberMasks'
+    | 'legalName'
+    | 'sellerAddress'
+    | 'taxId'
+    | 'bankName'
+    | 'iban'
+    | 'bic'
+    | 'invoiceFooter'
+    | 'logoAttachmentId'
+    | 'defaultPaymentTermsDays'
+    | 'defaultTaxRate'
     | 'createdAt'
     | 'updatedAt'
     | 'deletedAt'
@@ -1277,6 +1305,40 @@ export class BillingSettings {
   // { invoice, credit_memo, receipt } number masks (Spec 0 numbering).
   @Property({ name: 'number_masks', type: 'jsonb', nullable: true })
   numberMasks?: Record<string, string> | null
+
+  // Seller / payment / document fields (Spec B). Posting is blocked until
+  // legal_name, seller_address, tax_id and iban are filled.
+  @Property({ name: 'legal_name', type: 'text', nullable: true })
+  legalName?: string | null
+
+  // { line1, line2?, city, postal_code, country }
+  @Property({ name: 'seller_address', type: 'jsonb', nullable: true })
+  sellerAddress?: Record<string, unknown> | null
+
+  @Property({ name: 'tax_id', type: 'text', nullable: true })
+  taxId?: string | null
+
+  @Property({ name: 'bank_name', type: 'text', nullable: true })
+  bankName?: string | null
+
+  @Property({ name: 'iban', type: 'text', nullable: true })
+  iban?: string | null
+
+  @Property({ name: 'bic', type: 'text', nullable: true })
+  bic?: string | null
+
+  @Property({ name: 'invoice_footer', type: 'text', nullable: true })
+  invoiceFooter?: string | null
+
+  // Attachment id (core `attachments`) of the document logo.
+  @Property({ name: 'logo_attachment_id', type: 'uuid', nullable: true })
+  logoAttachmentId?: string | null
+
+  @Property({ name: 'default_payment_terms_days', type: 'integer', default: 14 })
+  defaultPaymentTermsDays: number = 14
+
+  @Property({ name: 'default_tax_rate', type: 'numeric', columnType: 'numeric(7, 4)', default: '23' })
+  defaultTaxRate: string = '23'
 
   @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
   createdAt: Date = new Date()

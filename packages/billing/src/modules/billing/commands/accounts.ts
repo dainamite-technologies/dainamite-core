@@ -80,6 +80,9 @@ const createAccountCommand: CommandHandler<BillingAccountCreateInput, { id: stri
       billingMode,
       creditLimit:
         parsed.creditLimit !== undefined ? formatMoney(parsed.creditLimit) : '0',
+      // Spec B: null = organization default terms.
+      paymentTermsDays: parsed.paymentTermsDays ?? null,
+      autoSendInvoice: parsed.autoSendInvoice ?? false,
       isActive: parsed.isActive ?? true,
       createdAt: now,
       updatedAt: now,
@@ -154,6 +157,8 @@ const updateAccountCommand: CommandHandler<BillingAccountUpdateInput, { id: stri
     if (parsed.isActive !== undefined) record.isActive = parsed.isActive
     // SPEC-002: credit_limit is editable in both modes (billing_mode is not).
     if (parsed.creditLimit !== undefined) record.creditLimit = formatMoney(parsed.creditLimit)
+    if (parsed.paymentTermsDays !== undefined) record.paymentTermsDays = parsed.paymentTermsDays
+    if (parsed.autoSendInvoice !== undefined) record.autoSendInvoice = parsed.autoSendInvoice
 
     record.updatedAt = new Date()
 

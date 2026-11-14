@@ -1,4 +1,12 @@
-import { BILLING_SETTINGS_DEFAULTS, getBillingSettings, numberMaskFor, serializeBillingSettings } from '../../lib/billingSettings'
+import {
+  BILLING_SETTINGS_DEFAULTS,
+  buildSellerSnapshot,
+  getBillingSettings,
+  missingSellerFields,
+  numberMaskFor,
+  serializeBillingSettings,
+  taxRateColumn,
+} from '../../lib/billingSettings'
 import { DEFAULT_NUMBER_MASKS } from '../../lib/numbering'
 import type { BillingSettings } from '../../data/entities'
 
@@ -51,3 +59,51 @@ describe('billingSettings', () => {
     })
   })
 })
+
+describe('billingSettings — Spec B seller fields', () => {
+  const complete = settingsRow({
+    legalName: 'Seller',
+    sellerAddress: { line1: 'ul. A 1', city: 'Kraków', postal_code: '30-001', country: 'PL' },
+    taxId: 'PL1',
+    iban: 'PL61109010140000071219812874',
+  })
+
+  it('reports no missing fields when the printable minimum is filled', () => {
+    expect(missingSellerFields(complete)).toEqual([])
+  })
+
+  it('reports empty, blank and missing fields in a stable order', () => {
+    expect(missingSellerFields(settingsRow())).toEqual(['legalName', 'sellerAddress', 'taxId', 'iban'])
+    expect(missingSellerFields({ ...complete, taxId: '  ', sellerAddress: {} } as BillingSettings)).toEqual([
+      'sellerAddress',
+      'taxId',
+    ])
+  })
+
+  it('freezes the seller block for the invoice snapshot', () => {
+    expect(buildSellerSnapshot(complete)).toMatchObject({
+      organization_id: 'o',
+      legal_name: 'Seller',
+      tax_id: 'PL1',
+      iban: 'PL61109010140000071219812874',
+      bic: null,
+      logo_attachment_id: null,
+    })
+  })
+
+  it('formats VAT rates for the numeric(7,4) column', () => {
+    expect(taxRateColumn(23)).toBe('23')
+    expect(taxRateColumn(5.5)).toBe('5.5')
+    expect(taxRateColumn(8.123456)).toBe('8.1235')
+  })
+
+  it('serializes seller fields with defaults for the settings page', () => {
+    expect(serializeBillingSettings(complete)).toMatchObject({
+      legalName: 'Seller',
+      bic: '',
+      defaultPaymentTermsDays: 14,
+      defaultTaxRate: 23,
+    })
+  })
+})
+

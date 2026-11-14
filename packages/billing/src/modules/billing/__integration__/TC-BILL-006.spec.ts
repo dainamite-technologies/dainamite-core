@@ -1,5 +1,6 @@
 import { test, expect, type APIRequestContext } from '@playwright/test'
 import { getAuthToken, apiRequest } from '@open-mercato/core/helpers/integration/api'
+import { ensureSellerSettings } from './sellerSettings'
 
 /**
  * TC-BILL-006: Billing-owned invoice ledger (Spec 0)
@@ -61,6 +62,8 @@ test.describe('TC-BILL-006: billing-owned invoice ledger', () => {
 
   test.beforeAll(async ({ request }) => {
     token = await getAuthToken(request, 'admin')
+    // Spec B: posting is blocked until the seller details are filled.
+    await ensureSellerSettings(request, token)
   })
 
   test('draft → post assigns the series number; the document never appears in core sales', async ({ request }) => {

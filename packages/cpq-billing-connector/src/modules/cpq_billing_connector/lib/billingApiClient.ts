@@ -60,6 +60,12 @@ export type ItemCreatePayload = {
   subscriptionId?: string
   subscriptionItemId?: string
   sourceRef?: string
+  /**
+   * Billing Spec B: VAT % of the charge. CPQ charges carry no tax rate yet,
+   * so the connector omits it and billing applies the organization default
+   * at creation. Set it once CPQ exposes a per-charge rate.
+   */
+  taxRate?: number
 }
 
 export type ItemUpdatePayload = {

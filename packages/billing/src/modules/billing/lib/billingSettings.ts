@@ -7,8 +7,9 @@ import { DEFAULT_NUMBER_MASKS, maskFor, type DocumentSeries } from './numbering'
  *
  * Replaces the tenant-wide core `configs` rows billing used to seed. One row
  * per (tenant, organization), created lazily with today's defaults on first
- * read so every caller can rely on it existing. Spec B extends the row with
- * seller / document fields.
+ * read so every caller can rely on it existing. Spec B adds the seller /
+ * payment / document fields (the INSERT below relies on their DB defaults:
+ * 14 days terms, 23 % VAT, seller fields empty).
  */
 
 export type SettingsScope = { tenantId: string; organizationId: string }
@@ -20,7 +21,47 @@ export const BILLING_SETTINGS_DEFAULTS = {
   topupTaxRate: '0',
   topupProvider: 'stripe',
   numberMasks: { ...DEFAULT_NUMBER_MASKS } as Record<string, string>,
+  defaultPaymentTermsDays: 14,
+  defaultTaxRate: '23',
 } as const
+
+/** numeric(7,4) column value for a VAT percentage. */
+export function taxRateColumn(ratePercent: number): string {
+  return (Math.round(ratePercent * 10000) / 10000).toString()
+}
+
+/** Seller fields a posted (printable) invoice requires — Spec B, P-D4. */
+export const REQUIRED_SELLER_FIELDS = ['legalName', 'sellerAddress', 'taxId', 'iban'] as const
+export type RequiredSellerField = (typeof REQUIRED_SELLER_FIELDS)[number]
+
+export function missingSellerFields(
+  settings: Pick<BillingSettings, RequiredSellerField>,
+): RequiredSellerField[] {
+  return REQUIRED_SELLER_FIELDS.filter((field) => {
+    const value = settings[field]
+    if (value === null || value === undefined) return true
+    if (typeof value === 'string') return value.trim() === ''
+    return Object.keys(value).length === 0
+  })
+}
+
+/**
+ * Seller block frozen onto an invoice at post, so later settings edits never
+ * change an issued document.
+ */
+export function buildSellerSnapshot(settings: BillingSettings): Record<string, unknown> {
+  return {
+    organization_id: settings.organizationId,
+    legal_name: settings.legalName ?? null,
+    address: settings.sellerAddress ?? null,
+    tax_id: settings.taxId ?? null,
+    bank_name: settings.bankName ?? null,
+    iban: settings.iban ?? null,
+    bic: settings.bic ?? null,
+    invoice_footer: settings.invoiceFooter ?? null,
+    logo_attachment_id: settings.logoAttachmentId ?? null,
+  }
+}
 
 export async function getBillingSettings(em: EntityManager, scope: SettingsScope): Promise<BillingSettings> {
   const where = { tenantId: scope.tenantId, organizationId: scope.organizationId, deletedAt: null }
@@ -77,5 +118,15 @@ export function serializeBillingSettings(settings: BillingSettings) {
       credit_memo: numberMaskFor(settings, 'credit_memo'),
       receipt: numberMaskFor(settings, 'receipt'),
     },
+    legalName: settings.legalName ?? '',
+    sellerAddress: settings.sellerAddress ?? null,
+    taxId: settings.taxId ?? '',
+    bankName: settings.bankName ?? '',
+    iban: settings.iban ?? '',
+    bic: settings.bic ?? '',
+    invoiceFooter: settings.invoiceFooter ?? '',
+    logoAttachmentId: settings.logoAttachmentId ?? null,
+    defaultPaymentTermsDays: settings.defaultPaymentTermsDays ?? BILLING_SETTINGS_DEFAULTS.defaultPaymentTermsDays,
+    defaultTaxRate: numberOr(settings.defaultTaxRate, 23),
   }
 }

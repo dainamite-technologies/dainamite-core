@@ -3,6 +3,10 @@ import {
   accountHref,
   itemDetailHref,
   resolveItemReturnTarget,
+  INVOICES_LIST_HREF,
+  invoiceDetailHref,
+  invoicePdfHref,
+  resolveInvoiceReturnTarget,
 } from '../../lib/navigation'
 
 describe('resolveItemReturnTarget', () => {
@@ -29,5 +33,24 @@ describe('itemDetailHref', () => {
   it('tags links from the items list', () => {
     expect(itemDetailHref('it-1')).toBe('/backend/billing/items/it-1')
     expect(itemDetailHref('it-1', { fromItemsList: true })).toBe('/backend/billing/items/it-1?from=items')
+  })
+})
+
+describe('invoice navigation (Spec B)', () => {
+  it('links to the invoice with a return-to-account marker when opened from an account', () => {
+    expect(invoiceDetailHref('inv-1')).toBe('/backend/billing/invoices/inv-1')
+    expect(invoiceDetailHref('inv-1', { fromAccountId: 'acc 1' })).toBe(
+      '/backend/billing/invoices/inv-1?from=account&accountId=acc%201',
+    )
+  })
+
+  it('returns to the account only when opened from it', () => {
+    expect(resolveInvoiceReturnTarget({ from: 'account', accountId: 'acc-1' })).toBe(accountHref('acc-1'))
+    expect(resolveInvoiceReturnTarget({ from: 'account', accountId: ' ' })).toBe(INVOICES_LIST_HREF)
+    expect(resolveInvoiceReturnTarget({ from: null, accountId: 'acc-1' })).toBe(INVOICES_LIST_HREF)
+  })
+
+  it('builds the PDF endpoint', () => {
+    expect(invoicePdfHref('inv-1')).toBe('/api/billing/invoices/inv-1/pdf')
   })
 })

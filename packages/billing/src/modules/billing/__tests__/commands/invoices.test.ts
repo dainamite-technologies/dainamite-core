@@ -8,6 +8,13 @@
  * transactional / fork.
  */
 
+jest.mock('../../lib/pdf/invoicePdf', () => ({
+  freezeInvoicePdf: jest.fn(async () => ({ attachmentId: 'pdf-1', bytes: null })),
+}))
+jest.mock('../../events', () => ({ emitBillingEvent: jest.fn(async () => undefined) }))
+
+import { freezeInvoicePdf } from '../../lib/pdf/invoicePdf'
+import { emitBillingEvent } from '../../events'
 import {
   addDraftLineCommand,
   buildBuyerSnapshot,
@@ -95,6 +102,23 @@ const account = {
   billingMode: 'postpaid',
 }
 
+// Spec B: seller details are complete, so posting is allowed.
+const completeSettings: Row = {
+  id: 'settings-1',
+  organizationId: ORG,
+  numberMasks: null,
+  legalName: 'Seller sp. z o.o.',
+  sellerAddress: { line1: 'ul. Sprzedawcy 1', city: 'Kraków', postal_code: '30-001', country: 'PL' },
+  taxId: 'PL1234563218',
+  bankName: 'Bank',
+  iban: 'PL61109010140000071219812874',
+  bic: 'WBKPPLPP',
+  invoiceFooter: 'KRS 0000000000',
+  logoAttachmentId: null,
+  defaultPaymentTermsDays: 14,
+  defaultTaxRate: '23',
+}
+
 function createEnv(options: {
   invoice?: Row | null
   line?: Row | null
@@ -102,7 +126,11 @@ function createEnv(options: {
   testInvoiceIds?: string[]
   seq?: number
   claimThrows?: Error
+  settings?: Row
+  account?: Row
 } = {}) {
+  const settings = { ...completeSettings, ...(options.settings ?? {}) }
+  const accountRow = { ...account, ...(options.account ?? {}) }
   const persisted: unknown[] = []
   const removed: unknown[] = []
   const executed: Array<{ sql: string; params: unknown[] }> = []
@@ -113,8 +141,8 @@ function createEnv(options: {
     findOne: jest.fn(async (entity: unknown) => {
       if (entity === BillingInvoice) return options.invoice ?? null
       if (entity === BillingInvoiceLine) return options.line ?? null
-      if (entity === BillingAccount) return account
-      if (entity === BillingSettings) return { id: 'settings-1', numberMasks: null }
+      if (entity === BillingAccount) return accountRow
+      if (entity === BillingSettings) return settings
       return null
     }),
     find: jest.fn(async (entity: unknown) => (entity === BillingInvoiceLine ? lines : [])),
@@ -201,6 +229,70 @@ describe('postInvoiceCommand', () => {
     expect(invoice).toMatchObject({ status: 'draft', number: 'DRAFT-ABCDEF12', series: null })
   })
 
+  it('sets due date = issue date + organization default terms, keeps the draft number, freezes the seller (Spec B)', async () => {
+    const invoice = makeInvoice()
+    const env = createEnv({ invoice, lines: [makeLine()] })
+    await postInvoiceCommand.execute(baseInput, env.ctx as never)
+    const issue = invoice.issueDate as Date
+    const due = invoice.dueDate as Date
+    expect(Math.round((due.getTime() - issue.getTime()) / 86_400_000)).toBe(14)
+    expect(invoice.metadata).toMatchObject({ draft_number: 'DRAFT-ABCDEF12' })
+    expect(invoice.sellerSnapshot).toMatchObject({
+      organization_id: ORG,
+      legal_name: 'Seller sp. z o.o.',
+      tax_id: 'PL1234563218',
+      iban: 'PL61109010140000071219812874',
+      address: expect.objectContaining({ city: 'Kraków' }),
+    })
+  })
+
+  it('uses the account payment terms over the organization default', async () => {
+    const invoice = makeInvoice()
+    const env = createEnv({ invoice, lines: [makeLine()], account: { paymentTermsDays: 0 } })
+    await postInvoiceCommand.execute(baseInput, env.ctx as never)
+    expect((invoice.dueDate as Date).getTime()).toBe((invoice.issueDate as Date).getTime())
+  })
+
+  it('refuses with 409 settings.incomplete, listing the missing fields, and claims no number', async () => {
+    const invoice = makeInvoice()
+    const env = createEnv({ invoice, settings: { legalName: '  ', iban: null } })
+    await expect(postInvoiceCommand.execute(baseInput, env.ctx as never)).rejects.toMatchObject({
+      status: 409,
+      body: expect.objectContaining({ code: 'billing.settings.incomplete', missing: ['legalName', 'iban'] }),
+    })
+    expect(env.executed.some((e) => e.sql.includes('billing_document_sequences'))).toBe(false)
+    expect(invoice).toMatchObject({ status: 'draft', number: 'DRAFT-ABCDEF12' })
+  })
+
+  it('freezes the PDF after the commit and before announcing the post (Spec B)', async () => {
+    const order: string[] = []
+    ;(freezeInvoicePdf as jest.Mock).mockImplementationOnce(async () => {
+      order.push('freeze')
+      return { attachmentId: 'pdf-1', bytes: null }
+    })
+    ;(emitBillingEvent as jest.Mock).mockImplementation(async (id: string) => {
+      order.push(id)
+    })
+    const invoice = makeInvoice()
+    const env = createEnv({ invoice, lines: [makeLine()] })
+    await postInvoiceCommand.execute(baseInput, env.ctx as never)
+    expect(freezeInvoicePdf).toHaveBeenCalledWith(env.em, invoice)
+    expect(order.slice(0, 2)).toEqual(['freeze', 'billing.invoice.posted'])
+    const posted = (emitBillingEvent as jest.Mock).mock.calls.find(([id]) => id === 'billing.invoice.posted')
+    expect(posted?.[1]).toMatchObject({ dueDate: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/) })
+  })
+
+  it('keeps the post when the PDF cannot be frozen', async () => {
+    ;(freezeInvoicePdf as jest.Mock).mockRejectedValueOnce(new Error('storage down'))
+    const spy = jest.spyOn(console, 'error').mockImplementation(() => undefined)
+    const invoice = makeInvoice()
+    const env = createEnv({ invoice, lines: [makeLine()] })
+    const result = await postInvoiceCommand.execute(baseInput, env.ctx as never)
+    expect(result.status).toBe('posted')
+    expect(invoice.status).toBe('posted')
+    spy.mockRestore()
+  })
+
   it('throws 404 when the invoice does not exist for this scope', async () => {
     const env = createEnv({ invoice: null })
     await expect(postInvoiceCommand.execute(baseInput, env.ctx as never)).rejects.toMatchObject({ status: 404 })
@@ -253,6 +345,15 @@ describe('editDraftLineCommand', () => {
     expect((audit.afterJson as Row).netAmount).toBe('42.5000')
   })
 
+  it('changes the VAT rate and recomputes tax and gross (Spec B)', async () => {
+    const invoice = makeInvoice()
+    const line = makeLine()
+    const env = createEnv({ invoice, line })
+    await editDraftLineCommand.execute({ ...input, changes: { taxRate: 23 } }, env.ctx as never)
+    expect(line).toMatchObject({ taxRate: '23', netAmount: '100.0000', taxAmount: '23.0000', grossAmount: '123.0000' })
+    expect(invoice).toMatchObject({ taxTotal: '23.0000', totalGross: '123.0000' })
+  })
+
   it('returns 404 when the line is not on the invoice', async () => {
     const env = createEnv({ invoice: makeInvoice(), line: null })
     await expect(
@@ -269,8 +370,26 @@ describe('addDraftLineCommand', () => {
       env.ctx as never,
     )
     const line = env.persisted.find((p) => (p as Row).id === result.invoiceLineId) as Row
-    expect(line).toMatchObject({ lineNumber: 5, billingType: 'manual', netAmount: '50.0000', grossAmount: '50.0000' })
+    // Spec B: no rate given → the organization default (23 %).
+    expect(line).toMatchObject({
+      lineNumber: 5,
+      billingType: 'manual',
+      taxRate: '23',
+      netAmount: '50.0000',
+      taxAmount: '11.5000',
+      grossAmount: '61.5000',
+    })
     expect(env.persisted.some((p) => (p as Row).action === 'line_added')).toBe(true)
+  })
+
+  it('uses an explicit VAT rate when given (Spec B)', async () => {
+    const env = createEnv({ invoice: makeInvoice(), lines: [] })
+    const result = await addDraftLineCommand.execute(
+      { ...baseInput, description: 'Book', quantity: 1, unitPriceNet: 40, taxRate: 5 },
+      env.ctx as never,
+    )
+    const line = env.persisted.find((p) => (p as Row).id === result.invoiceLineId) as Row
+    expect(line).toMatchObject({ taxRate: '5', taxAmount: '2.0000', grossAmount: '42.0000' })
   })
 
   it('refuses non-draft invoices', async () => {

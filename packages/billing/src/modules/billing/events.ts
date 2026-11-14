@@ -5,10 +5,13 @@ import { createModuleEvents } from '@open-mercato/shared/modules/events'
  *
  * Emission contract:
  *   - `billing.invoice.posted` fires once per posted draft AFTER the post
- *     transaction commits (sequence number assigned, status set to `posted`
- *     in core/sales). Consumed by mailers / accounting bridges / analytics.
+ *     transaction commits (series number, issue/due dates assigned, status
+ *     `posted` in `billing_invoices`) and after the PDF is frozen. Consumed by
+ *     the auto-send subscriber, accounting bridges, analytics.
+ *   - `billing.invoice.sent` / `billing.invoice.send_failed` fire once per
+ *     email delivery attempt (Spec B), manual or automatic.
  *   - `billing.invoice.line_posted` fires once per line on a posted invoice
- *     so analytics can aggregate without scanning core/sales lines directly.
+ *     so analytics can aggregate without scanning invoice lines directly.
  *   - `billing.run.completed` fires once per Bill Run after all per-account
  *     transactions finished (status is one of `completed` / `partial_failure`
  *     / `failed`). Useful for "did the nightly run go OK?" alerts.
@@ -43,6 +46,20 @@ const events = [
   {
     id: 'billing.invoice.posted',
     label: 'Billing Invoice Posted',
+    entity: 'invoice',
+    category: 'lifecycle',
+    clientBroadcast: true,
+  },
+  {
+    id: 'billing.invoice.sent',
+    label: 'Billing Invoice Sent',
+    entity: 'invoice',
+    category: 'lifecycle',
+    clientBroadcast: true,
+  },
+  {
+    id: 'billing.invoice.send_failed',
+    label: 'Billing Invoice Send Failed',
     entity: 'invoice',
     category: 'lifecycle',
     clientBroadcast: true,

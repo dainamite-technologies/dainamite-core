@@ -14,6 +14,7 @@ import type { DataEngine } from '@open-mercato/shared/lib/data/engine'
 import { BillingAccount, BillingItem } from '../data/entities'
 import { billingEntityIds } from '../data/entityIds'
 import { findBySourceRef } from '../lib/idempotency'
+import { getBillingSettings, taxRateColumn } from '../lib/billingSettings'
 import {
   billingItemBulkCreateSchema,
   billingItemCreateSchema,
@@ -99,6 +100,12 @@ const createItemCommand: CommandHandler<
     // the persistence layer.
     validateRateJson(parsed.type, parsed.rateJson)
 
+    // Spec B (B-D1): an omitted rate takes the org default, stored on the item.
+    const taxRate =
+      parsed.taxRate !== undefined
+        ? taxRateColumn(parsed.taxRate)
+        : (await getBillingSettings(em, parsed)).defaultTaxRate
+
     const now = new Date()
     const entity = em.create(BillingItem, {
       organizationId: parsed.organizationId,
@@ -116,6 +123,7 @@ const createItemCommand: CommandHandler<
       // Spec A defaults: bill in advance, prorate partial periods.
       chargeTiming: parsed.chargeTiming ?? 'in_advance',
       prorate: parsed.prorate ?? true,
+      taxRate,
       // `currency_mismatch` is set by Phase 2 / connectors when the
       // posted value's currency differs from the account's. Stays
       // false on create (operator opts in to flagging).
@@ -182,6 +190,7 @@ const updateItemCommand: CommandHandler<BillingItemUpdateInput, { id: string }> 
       record.subscriptionItemId = parsed.subscriptionItemId
     }
     if (parsed.isActive !== undefined) record.isActive = parsed.isActive
+    if (parsed.taxRate !== undefined) record.taxRate = taxRateColumn(parsed.taxRate)
     if (parsed.chargeTiming !== undefined || parsed.prorate !== undefined) {
       // Timing / proration only apply to recurring items (validators can't
       // check this on update — the item type isn't in the payload).
@@ -346,6 +355,11 @@ const bulkCreateItemsCommand: CommandHandler<
     // unique index would otherwise blow up the whole flush).
     const seenInBatch = new Set<string>()
 
+    // Spec B (B-D1): org default rate, read once and only when an entry omits it.
+    const defaultTaxRate = parsed.items.some((entry) => entry.taxRate === undefined)
+      ? (await getBillingSettings(em, parsed)).defaultTaxRate
+      : '0'
+
     for (const entry of parsed.items) {
       const sourceKey = entry.sourceRef
         ? `${entry.billAccountId}::${entry.sourceRef}`
@@ -391,6 +405,7 @@ const bulkCreateItemsCommand: CommandHandler<
         sourceRef: entry.sourceRef ?? null,
         chargeTiming: entry.chargeTiming ?? 'in_advance',
         prorate: entry.prorate ?? true,
+        taxRate: entry.taxRate !== undefined ? taxRateColumn(entry.taxRate) : defaultTaxRate,
         currencyMismatch: false,
         billedToDate: null,
         isActive: true,

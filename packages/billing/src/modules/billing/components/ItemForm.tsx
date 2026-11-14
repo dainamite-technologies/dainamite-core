@@ -13,6 +13,7 @@ import {
 import { Switch } from '@open-mercato/ui/primitives/switch'
 import { Kbd, KbdShortcut } from '@open-mercato/ui/primitives/kbd'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 
 /**
  * Shared form for Billing Item create + edit.
@@ -55,6 +56,8 @@ export type ItemFormValues = {
   // Spec A — recurring only.
   chargeTiming: 'in_advance' | 'in_arrears'
   prorate: boolean
+  // Spec B — VAT %. Empty on create → the organization default.
+  taxRate: string
 }
 
 // The accounts list API (`/api/billing/accounts`) returns snake_case
@@ -94,6 +97,7 @@ export type AssembledItemPayload = {
   isActive?: boolean
   chargeTiming?: 'in_advance' | 'in_arrears'
   prorate?: boolean
+  taxRate?: number
 }
 
 const EMPTY_VALUES: ItemFormValues = {
@@ -113,6 +117,7 @@ const EMPTY_VALUES: ItemFormValues = {
   isActive: true,
   chargeTiming: 'in_advance',
   prorate: true,
+  taxRate: '',
 }
 
 function todayIso(): string {
@@ -154,6 +159,22 @@ export function ItemForm({
   React.useEffect(() => {
     setValues(mergeInitial(initial))
   }, [initialKey, initial])
+
+  // Spec B: prefill the VAT rate with the organization default on create.
+  // Best effort — without settings access the server applies the default.
+  React.useEffect(() => {
+    if (isEdit) return
+    let cancelled = false
+    void apiCall<{ settings?: { defaultTaxRate?: number } }>('/api/billing/settings').then((call) => {
+      const rate = call.ok ? call.result?.settings?.defaultTaxRate : undefined
+      if (!cancelled && typeof rate === 'number') {
+        setValues((prev) => (prev.taxRate === '' ? { ...prev, taxRate: String(rate) } : prev))
+      }
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [isEdit])
 
   const set = React.useCallback(
     <K extends keyof ItemFormValues>(key: K, value: ItemFormValues[K]) => {
@@ -249,6 +270,11 @@ export function ItemForm({
       setError(t('billing.items.form.error.uom_required', 'UoM code is required for usage items'))
       return
     }
+    const taxRate = toNumber(values.taxRate)
+    if (values.taxRate.trim() !== '' && (taxRate == null || taxRate < 0 || taxRate > 100)) {
+      setError(t('billing.items.form.error.tax_rate_invalid', 'VAT rate must be between 0 and 100'))
+      return
+    }
     const rateJsonResult = buildRateJson()
     if (typeof rateJsonResult === 'string') {
       // builder returned an error message
@@ -276,6 +302,7 @@ export function ItemForm({
       payload.chargeTiming = values.chargeTiming
       payload.prorate = values.prorate
     }
+    if (taxRate != null) payload.taxRate = taxRate
     if (isEdit) payload.isActive = values.isActive
     await onSubmit(payload)
   }, [buildRateJson, isEdit, onSubmit, t, values])
@@ -426,6 +453,23 @@ export function ItemForm({
             />
           </label>
         ) : null}
+
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="text-muted-foreground">{t('billing.items.form.tax_rate', 'VAT rate (%)')}</span>
+          <Input
+            type="number"
+            min="0"
+            max="100"
+            step="0.01"
+            value={values.taxRate}
+            onChange={(event) => set('taxRate', event.currentTarget.value)}
+          />
+          <span className="text-xs text-muted-foreground">
+            {isEdit
+              ? t('billing.items.form.tax_rate.help_edit', 'Applies to future invoices; posted invoices keep their rate.')
+              : t('billing.items.form.tax_rate.help', 'Defaults to the organization VAT rate from billing settings.')}
+          </span>
+        </label>
 
         {values.type === 'recurring' ? (
           <label className="flex flex-col gap-1 text-sm">

@@ -11,6 +11,7 @@ export const features = [
   { id: 'billing.invoice.post', title: 'Post Draft Invoice', module: 'billing' },
   { id: 'billing.invoice.edit_draft', title: 'Edit Draft Invoice', module: 'billing' },
   { id: 'billing.invoice.view', title: 'View Billing Invoices', module: 'billing' },
+  { id: 'billing.invoice.send', title: 'Email Billing Invoices', module: 'billing' },
   // ─── Prepaid balance billing (SPEC-002) ──────────────────────
   { id: 'billing.balance.view', title: 'View Balance & Transactions', module: 'billing' },
   { id: 'billing.balance.adjust', title: 'Adjust Balance (manual credit/debit)', module: 'billing' },

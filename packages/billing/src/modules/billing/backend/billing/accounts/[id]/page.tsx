@@ -21,6 +21,7 @@ import { normalizeCrudServerError } from '@open-mercato/ui/backend/utils/serverE
 import { AccountForm, type AccountFormValues } from '../../../../components/AccountForm'
 import { DetailCard, DetailField } from '../../../../components/DetailFields'
 import { PrepaidPanel } from '../../../../components/PrepaidPanel'
+import { AccountInvoicesSection } from '../../../../components/AccountInvoicesSection'
 import { CustomerLabel } from '../../../../components/CustomerLabel'
 import { fetchCustomerNames } from '../../../../components/customerNames'
 import { SUPPORTED_INVOICE_LANGUAGES } from '../../../../lib/invoiceLanguages'
@@ -61,6 +62,8 @@ type AccountRow = {
   last_bill_date: string | null
   billing_mode: 'postpaid' | 'prepaid'
   credit_limit: string
+  payment_terms_days: number | null
+  auto_send_invoice: boolean
   is_active: boolean
   created_at: string
   updated_at: string
@@ -118,6 +121,8 @@ function toFormValues(row: AccountRow): AccountFormValues {
     isActive: row.is_active,
     billingMode: row.billing_mode,
     creditLimit: row.credit_limit ?? '0',
+    paymentTermsDays: row.payment_terms_days != null ? String(row.payment_terms_days) : '',
+    autoSendInvoice: row.auto_send_invoice ?? false,
     // The threshold lives on the balance row, not the account row — blank
     // means "leave unchanged" on save.
     lowBalanceThreshold: '',
@@ -176,6 +181,14 @@ function AccountView({ row }: { row: AccountRow }) {
       </DetailField>
       <DetailField label={t('billing.accounts.columns.credit_limit', 'Credit limit')}>
         <span className="font-mono tabular-nums">{row.credit_limit}</span>
+      </DetailField>
+      <DetailField label={t('billing.accounts.form.payment_terms', 'Payment terms (days)')}>
+        {row.payment_terms_days != null
+          ? String(row.payment_terms_days)
+          : t('billing.accounts.form.payment_terms.default', 'Organization default')}
+      </DetailField>
+      <DetailField label={t('billing.accounts.form.auto_send', 'Email invoices automatically')}>
+        {row.auto_send_invoice ? t('billing.common.yes', 'Yes') : t('billing.common.no', 'No')}
       </DetailField>
       <DetailField label={t('billing.common.id', 'ID')}>
         <span className="font-mono text-xs">{row.id}</span>
@@ -470,6 +483,10 @@ export default function BillingAccountDetailPage(props: { params?: { id?: string
         // billingMode is immutable on update; creditLimit + threshold are editable.
         const creditLimit = Number.parseFloat(values.creditLimit)
         if (Number.isFinite(creditLimit) && creditLimit >= 0) payload.creditLimit = creditLimit
+        const termsDays = Number.parseInt(values.paymentTermsDays, 10)
+        payload.paymentTermsDays =
+          values.paymentTermsDays.trim() && Number.isInteger(termsDays) && termsDays >= 0 ? termsDays : null
+        payload.autoSendInvoice = values.autoSendInvoice
         if (row.billing_mode === 'prepaid' && values.lowBalanceThreshold.trim()) {
           const threshold = Number.parseFloat(values.lowBalanceThreshold)
           if (Number.isFinite(threshold) && threshold >= 0) payload.lowBalanceThreshold = threshold
@@ -619,6 +636,7 @@ export default function BillingAccountDetailPage(props: { params?: { id?: string
         ) : null}
         <AccountItemsSection accountId={row.id} />
         <AccountUsageSection accountId={row.id} />
+        <AccountInvoicesSection accountId={row.id} />
         {ConfirmDialogElement}
       </PageBody>
     </Page>

@@ -198,3 +198,24 @@ Every route exports `openApi`. New ACL features are added in `acl.ts` and grante
 - 2026-11-14 — B-Q6 dropped: no customer-level tax treatment (B-D9).
 - 2026-11-14 — Amended by Spec 0 (billing-owned invoice ledger).
 - 2026-11-14 — B-D4 (draft numbers, real number at post) delivered by Spec 0 with configurable masks; Spec B keeps VAT, due date, PDF, email and seller settings.
+
+---
+
+## Implementation Status
+
+Plan: [`.ai/runs/2026-11-14-billing-invoice-documents/PLAN.md`](../runs/2026-11-14-billing-invoice-documents/PLAN.md)
+
+| Phase | Status | Date | Notes |
+|-------|--------|------|-------|
+| Phase 1 — VAT | Done | 2026-11-14 | Item `tax_rate` (default filled at create), per-line VAT in the writer / dry & test runs, manual lines, demo seeds |
+| Phase 2 — Settings, due date, overdue | Done | 2026-11-14 | Seller / bank / terms / VAT default on `/backend/config/billing`, post guard, due date, overdue filters, account summary + Invoices section |
+| Phase 3 — PDF | Done | 2026-11-14 | Pure document model + pdf-lib A4 template (Noto Sans subset, en / pl), frozen attachment at post, watermarked drafts |
+| Phase 4 — Email | Done | 2026-11-14 | Send command / route, auto-send subscriber, delivery log, events, invoice detail actions |
+
+Deviations from the text above (all agreed in the plan, P-D1..P-D5):
+- Billing-owned tables (Spec 0): `sales_invoices` → `billing_invoices`, `metadata.pdf_attachment_id` → column, attachment entity `billing:billing_invoice`; no dictionary seed (`partially_paid` is a status of the billing enum).
+- Settings live at `/backend/config/billing` (framework settings convention).
+- AR summary ships as Spec E's `GET /api/billing/accounts/{id}/summary`.
+- Email bodies are plain text + HTML built from billing i18n (no React email component).
+- Tests assert the pure document model plus a pdf-lib load / page-count smoke test instead of `pdfjs-dist` text extraction (not loadable in Jest).
+- Integration tests TC-BILL-007 / TC-BILL-008 are written but not run — the migration is not applied yet.

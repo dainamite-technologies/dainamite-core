@@ -15,9 +15,8 @@ import { lineAmountsFromNet, sumTotals } from './vat'
  *     claimed only at post (gap-free numbering — no number is burnt by a
  *     deleted draft).
  *   - Test drafts get `TEST-…` and `test_run = true`; they are never posted.
- *   - Lines carry tax rate 0 for now (item tax rates arrive with Spec B);
- *     totals go through `vat.ts` so the gross/tax columns are already right
- *     once rates exist.
+ *   - Spec B (B-D2): every line carries its item's VAT rate; tax is rounded
+ *     per line (half-up, 2 dp) and totals are sums of the rounded lines.
  */
 
 export type WriteMode = 'real' | 'test' | 'dry'
@@ -34,6 +33,8 @@ export type InvoiceLineDescriptor = {
   quantity: string
   /** Total net (string). */
   totalNetAmount: string
+  /** Spec B: VAT rate in percent (numeric string), from the item. */
+  taxRate: string
   /** Optional per-line metadata extension — e.g. usage tier breakdown. */
   metadataExtra?: Record<string, unknown>
   /**
@@ -59,6 +60,7 @@ export type WrittenInvoice = {
   invoiceId: string | null
   invoiceNumber: string | null
   totalNet: string
+  totalGross: string
 }
 
 /** @deprecated kept for test-suite compatibility; the writer has no cache any more. */
@@ -74,6 +76,12 @@ function format4dp(value: number): string {
   return roundHalfUp2dp(value).toFixed(4)
 }
 
+/** VAT rate of an item as a numeric string; items predating Spec B read as 0. */
+export function itemTaxRate(item: Pick<BillingItem, 'taxRate'>): string {
+  const rate = Number.parseFloat(String(item.taxRate ?? '0'))
+  return Number.isFinite(rate) && rate >= 0 ? String(rate) : '0'
+}
+
 function isoDate(date: Date): string {
   return new Date(date).toISOString().slice(0, 10)
 }
@@ -82,12 +90,14 @@ export async function writeDraftInvoice(
   em: EntityManager,
   params: WriteInvoiceParams,
 ): Promise<WrittenInvoice> {
-  const amounts = params.lines.map((line) => lineAmountsFromNet(Number.parseFloat(line.totalNetAmount), 0))
+  const amounts = params.lines.map((line) =>
+    lineAmountsFromNet(Number.parseFloat(line.totalNetAmount), Number.parseFloat(line.taxRate)),
+  )
   const totals = sumTotals(amounts)
 
   if (params.mode === 'dry') {
     // Compute totals; persist nothing.
-    return { invoiceId: null, invoiceNumber: null, totalNet: totals.subtotalNet }
+    return { invoiceId: null, invoiceNumber: null, totalNet: totals.subtotalNet, totalGross: totals.totalGross }
   }
 
   const { account, period, billRunId, lines, mode } = params
@@ -133,7 +143,7 @@ export async function writeDraftInvoice(
         description: line.description,
         quantity: line.quantity,
         unitPriceNet: line.unitPriceNet,
-        taxRate: '0',
+        taxRate: line.taxRate,
         netAmount: format4dp(amount.net),
         taxAmount: format4dp(amount.tax),
         grossAmount: format4dp(amount.gross),
@@ -147,7 +157,7 @@ export async function writeDraftInvoice(
   })
   await em.flush()
 
-  return { invoiceId: invoice.id, invoiceNumber, totalNet: totals.subtotalNet }
+  return { invoiceId: invoice.id, invoiceNumber, totalNet: totals.subtotalNet, totalGross: totals.totalGross }
 }
 
 /**
@@ -181,6 +191,7 @@ export function buildInvoiceLinesFromItems(
         unitPriceNet: amount,
         quantity: '1',
         totalNetAmount: amount,
+        taxRate: itemTaxRate(item),
       })
     } else if (item.type === 'recurring') {
       const rate = item.rateJson as { unit_price?: number } | null
@@ -193,6 +204,7 @@ export function buildInvoiceLinesFromItems(
         unitPriceNet: unitPrice,
         quantity: '1',
         totalNetAmount: unitPrice,
+        taxRate: itemTaxRate(item),
       })
     }
   }
@@ -222,7 +234,7 @@ export function displayPeriod(lines: readonly InvoiceLineDescriptor[], fallback:
  * localized labels later).
  */
 export function buildRecurringLineDescriptors(
-  item: Pick<BillingItem, 'id' | 'description' | 'chargeTiming'>,
+  item: Pick<BillingItem, 'id' | 'description' | 'chargeTiming' | 'taxRate'>,
   lines: readonly RecurringLine[],
 ): InvoiceLineDescriptor[] {
   return lines.map((line) => {
@@ -237,6 +249,8 @@ export function buildRecurringLineDescriptors(
       unitPriceNet: amount,
       quantity: '1',
       totalNetAmount: amount,
+      // Proration and credit lines inherit the item's rate (Spec B).
+      taxRate: itemTaxRate(item),
       servicePeriodStart: line.servicePeriodStart,
       servicePeriodEnd: line.servicePeriodEnd,
       metadataExtra: {

@@ -136,14 +136,17 @@ przebieg rozliczeniowy) — zwykłe faktury sprzedaży się tu nie pokazują.
 ### 3a. Przeglądanie listy
 1. Kliknij **Billing → Billing Invoices** — zobaczysz **3 faktury
    robocze** (status `draft`).
-2. Kolumny: *Number*, *Status*, *Period*, *Total*, *Outstanding*,
-   *Issued*. Faktury robocze mają numer tymczasowy `DRAFT-…`; prawdziwy
+2. Kolumny: *Number*, *Status*, *Account*, *Period*, *Total*, *Outstanding*,
+   *Issued*, *Due*, *Days overdue*. Faktury robocze mają numer tymczasowy `DRAFT-…`; prawdziwy
    numer (np. `INV/2026/11/0001`) nadawany jest dopiero przy
    zaksięgowaniu, więc usunięta wersja robocza nie zostawia dziury w
    numeracji.
 3. Kliknij **Filters** → *Status* = `draft`. Filtr *Document type* pozwala
-   pokazać faktury albo paragony doładowań (prepaid).
-4. Faktury billingowe **nie pojawiają się** w module Sales — billing ma
+   pokazać faktury albo paragony doładowań (prepaid). Filtr *Overdue* →
+   *Only overdue* pokazuje faktury po terminie (zaksięgowane, z
+   niezapłaconą kwotą, termin płatności minął) — z czerwoną liczbą dni.
+4. Menu wiersza (`⋯`) → **Download PDF** (dla roboczych **Preview PDF**).
+5. Faktury billingowe **nie pojawiają się** w module Sales — billing ma
    własne dokumenty.
 
 ### 3b. Szczegóły i edycja pozycji faktury
@@ -152,16 +155,22 @@ przebieg rozliczeniowy) — zwykłe faktury sprzedaży się tu nie pokazują.
    powiązany przebieg i konto.
 3. Pod nagłówkiem kafelki kwot — *Subtotal net*, *Grand total*,
    *Paid*, *Outstanding*.
-4. Sekcja **Lines** — pozycje faktury.
-5. Kliknij **Add line** → wpisz opis, ilość i cenę → zatwierdź. Sumy
-   przeliczają się automatycznie.
+4. Sekcja **Lines** — pozycje faktury z kolumnami *VAT %*, *VAT* i *Gross*.
+   Stawka pochodzi z pozycji rozliczeniowej (Billing Item).
+5. Kliknij **Add line** → wpisz opis, ilość, cenę i opcjonalnie stawkę VAT
+   (puste = domyślna stawka organizacji) → zatwierdź. Sumy netto, VAT i
+   brutto przeliczają się automatycznie.
 6. Najedź na pozycję w tabeli i kliknij ikonę ołówka (edycja) albo
    kosza (usunięcie). Każda zmiana trafia do dziennika audytu.
 
 ### 3c. Zaksięgowanie faktury
 1. Na stronie szczegółów faktury roboczej kliknij **Post invoice**.
+   Jeśli dane sprzedawcy nie są uzupełnione (zob. 3e), pojawi się błąd
+   „Fill in the seller details…" — numer nie zostanie zużyty.
 2. Status zmienia się z `draft` na `posted` i pojawia się komunikat
-   potwierdzający.
+   potwierdzający. Faktura dostaje numer, datę wystawienia i **termin
+   płatności** = data wystawienia + termin z konta (albo domyślny z
+   ustawień). Pole *Draft number* pokazuje dawny numer `DRAFT-…`.
 
 ### 3d. Ustawienia rozliczeń (numeracja, prepaid)
 1. Otwórz **Settings → Billing** (`/backend/config/billing`).
@@ -174,6 +183,42 @@ przebieg rozliczeniowy) — zwykłe faktury sprzedaży się tu nie pokazują.
 3. *Prepaid defaults* — próg niskiego salda, bufor limitu, VAT na
    paragonach doładowań, dostawca płatności, generowanie zestawień.
 4. **Save** (albo `Ctrl/Cmd + Enter`; `Esc` cofa zmiany).
+
+### 3e. Dane sprzedawcy, płatności i logo (Spec B)
+1. W **Settings → Billing** u góry widać żółty komunikat *Invoices cannot
+   be posted yet*, dopóki brakuje nazwy, adresu, NIP-u lub IBAN-u.
+2. Sekcja *Seller*: nazwa prawna, adres, NIP.
+3. Sekcja *Payment and invoicing*: bank, **IBAN** (sprawdzana suma
+   kontrolna — wpisz np. `PL61 1090 1014 0000 0712 1981 2874`; zmiana
+   ostatniej cyfry da błąd), BIC, domyślny termin płatności (dni),
+   **domyślna stawka VAT** (dla nowych pozycji), stopka faktury, logo
+   (PNG/JPEG).
+4. **Save** → komunikat znika. Dane demo (`seed`) wypełniają te pola
+   automatycznie.
+
+### 3f. VAT i terminy płatności
+1. **Billing Items → Create** — pole *VAT rate (%)* jest wstępnie
+   wypełnione stawką domyślną. Ustaw 23 dla jednej pozycji i 0 dla drugiej.
+2. Na koncie rozliczeniowym (**Edit**) ustaw *Payment terms (days)* (puste =
+   domyślny) i opcjonalnie *Email invoices automatically*.
+3. Uruchom przebieg (sekcja 4) → faktura robocza ma VAT per pozycja.
+4. Na stronie konta sekcja **Invoices**: kafelki *Open receivables*,
+   *Overdue*, *Unapplied credit* oraz tabela faktur konta (kliknięcie
+   wiersza → faktura, przycisk wstecz wraca na konto).
+
+### 3g. PDF i wysyłka e-mail
+1. Na fakturze roboczej kliknij **Preview PDF** — PDF z ukośnym napisem
+   *DRAFT*, w języku konta (*Invoice language*: en / pl, polskie znaki).
+2. Zaksięguj fakturę → **Download PDF** pobiera PDF zamrożony przy
+   księgowaniu (zmiana ustawień sprzedawcy go już nie zmienia).
+3. Kliknij **Send** → potwierdź adres → komunikat *Invoice sent* (albo
+   *Sending failed* z powodem, np. brak skonfigurowanego dostawcy e-mail).
+   Sekcja **Email deliveries** pokazuje każdą próbę; przycisk zmienia się
+   na **Resend**.
+4. Konto z adresem `…@invalid.local` (utworzone przez konektor CPQ) — wysyłka
+   kończy się błędem 422: popraw adres na koncie i wyślij ponownie.
+5. Konto z *Email invoices automatically* — faktura wysyła się sama po
+   zaksięgowaniu (wpis *Automatic* w historii).
 
 ## 4. Przebiegi rozliczeniowe (Bill Runs)
 

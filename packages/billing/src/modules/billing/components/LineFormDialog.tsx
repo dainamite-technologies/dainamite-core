@@ -40,6 +40,8 @@ export type LineFormValues = {
   unitPriceNet: number
   /** Optional explicit total override (operator "I know better" path). */
   totalNetAmount?: number
+  /** Spec B: VAT %. Omitted on add → the organization default rate. */
+  taxRate?: number
 }
 
 export type LineFormDialogProps = {
@@ -77,6 +79,7 @@ export function LineFormDialog({
   const [totalOverride, setTotalOverride] = React.useState(
     initial?.totalNetAmount != null ? String(initial.totalNetAmount) : '',
   )
+  const [taxRate, setTaxRate] = React.useState(initial?.taxRate != null ? String(initial.taxRate) : '')
   const [error, setError] = React.useState<string | null>(null)
 
   React.useEffect(() => {
@@ -85,6 +88,7 @@ export function LineFormDialog({
       setQuantity(initial?.quantity != null ? String(initial.quantity) : '')
       setUnitPriceNet(initial?.unitPriceNet != null ? String(initial.unitPriceNet) : '')
       setTotalOverride(initial?.totalNetAmount != null ? String(initial.totalNetAmount) : '')
+      setTaxRate(initial?.taxRate != null ? String(initial.taxRate) : '')
       setError(null)
     }
   }, [open, initial])
@@ -115,14 +119,20 @@ export function LineFormDialog({
       }
       totalOverrideValue = parsed
     }
+    const taxRateValue = toNumber(taxRate)
+    if (taxRate.trim() !== '' && (taxRateValue == null || taxRateValue < 0 || taxRateValue > 100)) {
+      setError(t('billing.invoices.lines.form.error.tax_rate_invalid', 'VAT rate must be between 0 and 100'))
+      return
+    }
     setError(null)
     await onSubmit({
       description: trimmedDescription,
       quantity: quantityValue,
       unitPriceNet: unitPriceValue,
       totalNetAmount: totalOverrideValue,
+      taxRate: taxRateValue ?? undefined,
     })
-  }, [description, onSubmit, quantity, t, totalOverride, unitPriceNet])
+  }, [description, onSubmit, quantity, t, taxRate, totalOverride, unitPriceNet])
 
   const handleKeyDown = React.useCallback(
     (event: React.KeyboardEvent<HTMLDivElement>) => {
@@ -196,6 +206,20 @@ export function LineFormDialog({
               />
             </label>
           </div>
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="text-muted-foreground">
+              {t('billing.invoices.lines.form.tax_rate', 'VAT rate (%)')}
+            </span>
+            <Input
+              type="number"
+              value={taxRate}
+              min="0"
+              max="100"
+              step="0.01"
+              placeholder={mode === 'add' ? t('billing.invoices.lines.form.tax_rate.default', 'Organization default') : ''}
+              onChange={(event) => setTaxRate(event.currentTarget.value)}
+            />
+          </label>
           <label className="flex flex-col gap-1 text-sm">
             <span className="text-muted-foreground">
               {t('billing.invoices.lines.form.total_override', 'Total override (optional)')}

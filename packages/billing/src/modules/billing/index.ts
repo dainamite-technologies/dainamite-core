@@ -17,8 +17,9 @@ export const metadata: ModuleInfo = {
   license: 'MIT',
   // Spec 0: billing owns its documents. `payment_gateways` is optional
   // (online top-ups only, resolved at runtime); no sales / configs /
-  // dictionaries dependency.
-  requires: ['auth', 'directory'],
+  // dictionaries dependency. Spec B: `attachments` (platform module) stores
+  // frozen invoice PDFs and the document logo.
+  requires: ['auth', 'directory', 'attachments'],
   ejectable: false,
 }
 

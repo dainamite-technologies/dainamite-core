@@ -9,11 +9,15 @@ function makeMockEm() {
   const store: Array<Record<string, unknown>> = []
   let idSeq = 0
   const nativeDeleteCalls: unknown[] = []
+  // Spec B: the seed fills empty seller fields on the org's BillingSettings.
+  const settings: Record<string, unknown> = { defaultTaxRate: '23', legalName: null }
 
   const em = {
     store,
     nativeDeleteCalls,
-    findOne: jest.fn(async (_entity: unknown, where: Record<string, unknown>) => {
+    settings,
+    findOne: jest.fn(async (entity: unknown, where: Record<string, unknown>) => {
+      if ((entity as { name?: string }).name === 'BillingSettings') return settings
       return (
         store.find((row) => {
           if (typeof where.name === 'string') return row.name === where.name
@@ -38,6 +42,7 @@ function makeMockEm() {
   return em as never as Parameters<typeof seedBillingDemo>[0] & {
     store: Array<Record<string, unknown>>
     nativeDeleteCalls: unknown[]
+    settings: Record<string, unknown>
   }
 }
 
@@ -109,5 +114,24 @@ describe('seedBillingDemo', () => {
     const em = makeMockEm()
     await resetBillingDemo(em, SCOPE)
     expect(em.nativeDelete).toHaveBeenCalledTimes(3)
+  })
+
+  it('seeds VAT rates on items, including a 0 % item (Spec B)', async () => {
+    const em = makeMockEm()
+    await seedBillingDemo(em, SCOPE, { now: NOW })
+    const rates = em.store.filter((r) => typeof r.sourceRef === 'string' && 'taxRate' in r).map((r) => r.taxRate)
+    expect(rates).toContain('23')
+    expect(rates).toContain('8')
+    expect(rates).toContain('0')
+  })
+
+  it('fills empty seller settings so demo invoices can be posted, never overwriting real values', async () => {
+    const em = makeMockEm()
+    em.settings.taxId = 'PL-REAL'
+    await seedBillingDemo(em, SCOPE, { now: NOW })
+    expect(em.settings.legalName).toBe('Dainamite Demo sp. z o.o.')
+    expect(em.settings.iban).toBe('PL61109010140000071219812874')
+    expect(em.settings.sellerAddress).toMatchObject({ city: 'Kraków' })
+    expect(em.settings.taxId).toBe('PL-REAL')
   })
 })

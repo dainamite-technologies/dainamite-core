@@ -23,8 +23,7 @@ import {
  *   - Every active + soft-deleted `BillingItem` for the account.
  *   - Every `BillingAccountUsage` record.
  *   - Every `BillingRunOutcome` row referencing the account.
- *   - Every `core/sales` invoice the engine emitted for the account
- *     (matched via `metadata->>'bill_account_id'`).
+ *   - Every billing document (`billing_invoices`) of the account.
  *   - Every `BillingDraftInvoiceEdit` audit row for those invoices.
  *
  * Scope: the caller's auth tenant/organization is the authority — a
@@ -191,7 +190,9 @@ export async function GET(
       exportedAt: new Date().toISOString(),
       // v2 adds prepaid balance / transactions / top-ups / statements (SPEC-002).
       // v3 (Spec 0): invoices come from billing_invoices with billing field names.
-      schemaVersion: 3,
+      // v4 (Spec B): items carry taxRate; the account carries paymentTermsDays /
+      // autoSendInvoice; invoice metadata may carry draft_number / deliveries.
+      schemaVersion: 4,
       tenantId,
       organizationId,
       window: {

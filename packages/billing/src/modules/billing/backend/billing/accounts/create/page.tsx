@@ -49,6 +49,11 @@ export default function CreateBillingAccountPage() {
         if (values.taxId.trim()) payload.taxId = values.taxId.trim()
         const creditLimit = Number.parseFloat(values.creditLimit)
         if (Number.isFinite(creditLimit) && creditLimit >= 0) payload.creditLimit = creditLimit
+        const termsDays = Number.parseInt(values.paymentTermsDays, 10)
+        if (values.paymentTermsDays.trim() && Number.isInteger(termsDays) && termsDays >= 0) {
+          payload.paymentTermsDays = termsDays
+        }
+        payload.autoSendInvoice = values.autoSendInvoice
         if (values.billingMode === 'prepaid' && values.lowBalanceThreshold.trim()) {
           const threshold = Number.parseFloat(values.lowBalanceThreshold)
           if (Number.isFinite(threshold) && threshold >= 0) payload.lowBalanceThreshold = threshold

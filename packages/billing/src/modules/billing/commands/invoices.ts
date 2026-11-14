@@ -16,19 +16,25 @@ import {
 } from '../data/entities'
 import { emitBillingEvent, type BillingEventId } from '../events'
 import { buildPostpaidCreditCrossingEvents } from '../lib/accountStatus'
-import { getBillingSettings, numberMaskFor } from '../lib/billingSettings'
+import { buildSellerSnapshot, getBillingSettings, missingSellerFields, numberMaskFor, taxRateColumn } from '../lib/billingSettings'
 import { claimDocumentNumber } from '../lib/numbering'
+import { buildBuyerSnapshot } from '../lib/documentParties'
+import { freezeInvoicePdf } from '../lib/pdf/invoicePdf'
+import { sendInvoice, type SendInvoiceResult } from '../lib/invoiceDelivery'
+import { computeDueDate, resolvePaymentTermsDays } from '../lib/dueDate'
 import { lineAmountsFromNet, sumTotals } from '../lib/vat'
 import {
   billingInvoiceAddLineSchema,
   billingInvoiceEditLineSchema,
   billingInvoicePostSchema,
   billingInvoiceRemoveLineSchema,
+  billingInvoiceSendSchema,
   billingWipeTestInvoicesSchema,
   type BillingInvoiceAddLineInput,
   type BillingInvoiceEditLineInput,
   type BillingInvoicePostInput,
   type BillingInvoiceRemoveLineInput,
+  type BillingInvoiceSendInput,
   type BillingWipeTestInvoicesInput,
 } from '../data/validators'
 
@@ -37,11 +43,15 @@ import {
  *
  * Post:
  *   1. Refuses non-drafts and test-run drafts.
- *   2. In ONE transaction: claims the next number of the `invoice` series
+ *   2. Refuses when the seller settings are incomplete (Spec B, P-D4 — a
+ *      posted invoice must be printable); no number is consumed.
+ *   3. In ONE transaction: claims the next number of the `invoice` series
  *      (gap-free — a rollback releases it), freezes the buyer / seller
- *      snapshots, sets `issue_date`, `posted_at`, `outstanding = total_gross`
- *      and `status = posted`.
- *   3. After commit: fires `billing.invoice.posted` + one
+ *      snapshots, sets `issue_date`, `due_date` (issue + payment terms),
+ *      `posted_at`, `outstanding = total_gross`, `status = posted`, and keeps
+ *      the replaced `DRAFT-…` number in `metadata.draft_number`.
+ *   4. After commit: freezes the PDF as an attachment (best effort), then
+ *      fires `billing.invoice.posted` + one
  *      `billing.invoice.line_posted` per line, then the postpaid credit
  *      crossing events.
  *
@@ -69,19 +79,8 @@ function todayUtc(): Date {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
 }
 
-/** Frozen "issued to" block — later account edits never change a posted document. */
-export function buildBuyerSnapshot(account: BillingAccount): Record<string, unknown> {
-  return {
-    bill_account_id: account.id,
-    name: account.name,
-    customer_id: account.customerId,
-    customer_kind: account.customerKind ?? 'company',
-    tax_id: account.taxId ?? null,
-    invoice_email: account.invoiceEmail,
-    invoice_language: account.invoiceLanguage,
-    invoice_address: account.invoiceAddress ?? null,
-  }
-}
+// Re-exported for existing callers; lives in lib/documentParties.ts (shared with the PDF).
+export { buildBuyerSnapshot }
 
 const postInvoiceCommand: CommandHandler<BillingInvoicePostInput, PostResult> = {
   id: 'billing.invoices.post',
@@ -125,8 +124,20 @@ const postInvoiceCommand: CommandHandler<BillingInvoicePostInput, PostResult> = 
       throw new CrudHttpError(409, { error: 'Billing account not found', code: 'billing.invoice.account_missing' })
     }
     const settings = await getBillingSettings(em, scope)
+    const missing = missingSellerFields(settings)
+    if (missing.length > 0) {
+      throw new CrudHttpError(409, {
+        error: 'Fill in the seller details in billing settings before posting invoices',
+        code: 'billing.settings.incomplete',
+        missing,
+      })
+    }
     const series = invoice.documentType === 'credit_memo' ? 'credit_memo' : 'invoice'
     const issueDate = todayUtc()
+    const dueDate = computeDueDate(
+      issueDate,
+      resolvePaymentTermsDays(account.paymentTermsDays, settings.defaultPaymentTermsDays),
+    )
 
     try {
       await em.transactional(async (tem) => {
@@ -152,13 +163,14 @@ const postInvoiceCommand: CommandHandler<BillingInvoicePostInput, PostResult> = 
           issueDate,
         )
         const now = new Date()
+        target.metadata = { ...(target.metadata ?? {}), draft_number: target.number }
         target.number = claimed.number
         target.series = series
         target.issueDate = issueDate
+        target.dueDate = dueDate
         target.postedAt = now
         target.buyerSnapshot = buildBuyerSnapshot(account)
-        // Seller fields (legal name, address, IBAN…) arrive with Spec B.
-        target.sellerSnapshot = { organization_id: target.organizationId }
+        target.sellerSnapshot = buildSellerSnapshot(settings)
         target.status = 'posted'
         target.paidTotal = '0'
         target.outstanding = target.totalGross
@@ -168,6 +180,10 @@ const postInvoiceCommand: CommandHandler<BillingInvoicePostInput, PostResult> = 
           number: target.number,
           series: target.series,
           issueDate: target.issueDate,
+          dueDate: target.dueDate,
+          metadata: target.metadata,
+          buyerSnapshot: target.buyerSnapshot,
+          sellerSnapshot: target.sellerSnapshot,
           postedAt: target.postedAt,
           status: target.status,
           outstanding: target.outstanding,
@@ -191,6 +207,15 @@ const postInvoiceCommand: CommandHandler<BillingInvoicePostInput, PostResult> = 
       deletedAt: null,
     } as never)
 
+    // Spec B: freeze the PDF after the commit, before announcing the post (the
+    // auto-send subscriber attaches it). A render / storage failure never rolls
+    // the post back — the first download renders and freezes it instead.
+    try {
+      await freezeInvoicePdf(em, invoice)
+    } catch (err) {
+      console.error('[billing.invoices.post] PDF could not be frozen; it will be rendered on first download', invoice.id, err)
+    }
+
     // Side effects fire AFTER the DB commit so downstream subscribers never
     // observe a "posted" event for an invoice the DB doesn't reflect.
     await emitBillingEvent('billing.invoice.posted', {
@@ -207,6 +232,8 @@ const postInvoiceCommand: CommandHandler<BillingInvoicePostInput, PostResult> = 
       billDate: isoDate(invoice.billDate),
       billPeriodStart: isoDate(invoice.periodStart),
       billPeriodEnd: isoDate(invoice.periodEnd),
+      issueDate: isoDate(invoice.issueDate),
+      dueDate: isoDate(invoice.dueDate),
       lineCount: lines.length,
     })
     for (const line of lines) {
@@ -379,6 +406,7 @@ const editDraftLineCommand: CommandHandler<
         if (parsed.changes.description !== undefined) line.description = parsed.changes.description
         if (parsed.changes.quantity !== undefined) line.quantity = format4dp(parsed.changes.quantity)
         if (parsed.changes.unitPriceNet !== undefined) line.unitPriceNet = format4dp(parsed.changes.unitPriceNet)
+        if (parsed.changes.taxRate !== undefined) line.taxRate = taxRateColumn(parsed.changes.taxRate)
         // An explicit total override wins; otherwise unit price × quantity.
         const net =
           parsed.changes.totalNetAmount !== undefined
@@ -443,7 +471,11 @@ const addDraftLineCommand: CommandHandler<
       description: parsed.description,
       quantity: format4dp(parsed.quantity),
       unitPriceNet: format4dp(parsed.unitPriceNet),
-      taxRate: '0',
+      // Spec B: explicit rate, else the organization default.
+      taxRate:
+        parsed.taxRate !== undefined
+          ? taxRateColumn(parsed.taxRate)
+          : (await getBillingSettings(em, parsed)).defaultTaxRate,
       netAmount: '0',
       taxAmount: '0',
       grossAmount: '0',
@@ -586,3 +618,24 @@ export {
   removeDraftLineCommand,
   wipeTestInvoicesCommand,
 }
+
+/**
+ * `billing.invoices.send` — emails a posted document with its frozen PDF
+ * (Spec B). Every attempt is logged in `metadata.deliveries`; a transport
+ * failure returns `status: 'failed'` instead of throwing. Not undoable: an
+ * email cannot be recalled.
+ */
+const sendInvoiceCommand: CommandHandler<BillingInvoiceSendInput, SendInvoiceResult> = {
+  id: 'billing.invoices.send',
+
+  async execute(rawInput, ctx) {
+    const parsed = billingInvoiceSendSchema.parse(rawInput)
+    ensureTenantScope(ctx, parsed.tenantId)
+    ensureOrganizationScope(ctx, parsed.organizationId)
+    return sendInvoice(getEm(ctx), { ...parsed, trigger: 'manual' })
+  },
+}
+
+registerCommand(sendInvoiceCommand)
+
+export { sendInvoiceCommand }

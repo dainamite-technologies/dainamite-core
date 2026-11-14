@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { DEFAULT_INVOICE_LANGUAGE, INVOICE_LANGUAGE_CODES } from '../lib/invoiceLanguages'
 import { DOCUMENT_SERIES, validateMask } from '../lib/numbering'
+import { isValidBic, isValidIban, normalizeIban } from '../lib/iban'
 
 // ─── Enums ───────────────────────────────────────────────────────
 
@@ -276,6 +277,9 @@ const moneyNonNegative = z.number().finite().nonnegative()
 
 // Invoice language must be one the document template supports (Spec E, D22).
 // Case/whitespace-tolerant on input, canonical lowercase code on output.
+// Spec B: payment terms in days (0 = due on issue).
+const paymentTermsDaysSchema = z.coerce.number().int().min(0).max(365)
+
 const invoiceLanguageSchema = z.string().trim().toLowerCase().pipe(z.enum(INVOICE_LANGUAGE_CODES))
 
 export const billingAccountCreateSchema = scopedSchema.extend({
@@ -305,6 +309,9 @@ export const billingAccountCreateSchema = scopedSchema.extend({
   // Initial low-balance threshold for a prepaid account's balance row.
   // Null = resolve the tenant config default at read time.
   lowBalanceThreshold: moneyNonNegative.nullable().optional(),
+  // Spec B: null/omitted = the organization default payment terms.
+  paymentTermsDays: paymentTermsDaysSchema.nullable().optional(),
+  autoSendInvoice: z.boolean().optional(),
 })
 
 export type BillingAccountCreateInput = z.infer<typeof billingAccountCreateSchema>
@@ -328,6 +335,8 @@ export const billingAccountUpdateSchema = scopedSchema.extend({
   // Editing the prepaid balance row's low-balance threshold. Null clears it
   // back to the tenant config default.
   lowBalanceThreshold: moneyNonNegative.nullable().optional(),
+  paymentTermsDays: paymentTermsDaysSchema.nullable().optional(),
+  autoSendInvoice: z.boolean().optional(),
   // `currencyCode` is intentionally NOT updatable — currency is frozen at
   // account create time so historical invoices keep their currency context.
   // `customerId` is also immutable; create a new account if the customer
@@ -364,6 +373,10 @@ export type BillingAccountListQuery = z.infer<typeof billingAccountListQuerySche
 // Spec A: `chargeTiming` / `prorate` only mean something for recurring
 // items. Omitted → the command applies the defaults (in_advance, true).
 // Setting a non-default value on another type is a client mistake.
+// Spec B (B-D1): VAT rate in percent. Omitted on create → the command fills
+// the organization default; never re-filled on update.
+const taxRateSchema = z.coerce.number().finite().min(0).max(100)
+
 const chargeTimingFields = {
   chargeTiming: z.enum(CHARGE_TIMINGS).optional(),
   prorate: z.boolean().optional(),
@@ -415,6 +428,7 @@ export const billingItemCreateSchema = scopedSchema
     subscriptionItemId: z.string().trim().max(255).optional(),
     // `source_ref` is the idempotency key. NULL → no dedup, always create.
     sourceRef: z.string().trim().min(1).max(255).optional(),
+    taxRate: taxRateSchema.optional(),
     ...chargeTimingFields,
     // currency_mismatch and billed_to_date are system-managed, never set by
     // clients on create.
@@ -457,6 +471,7 @@ const billingItemBulkEntrySchema = z
     subscriptionId: z.string().trim().max(255).optional(),
     subscriptionItemId: z.string().trim().max(255).optional(),
     sourceRef: z.string().trim().min(1).max(255).optional(),
+    taxRate: taxRateSchema.optional(),
     ...chargeTimingFields,
   })
   .superRefine((val, ctx) => {
@@ -501,6 +516,8 @@ export const billingItemUpdateSchema = scopedSchema.extend({
   subscriptionItemId: z.string().trim().max(255).nullable().optional(),
   // `source_ref` immutable — it's the idempotency identity of the item.
   isActive: z.boolean().optional(),
+  // Affects future invoices only — posted lines keep their snapshot.
+  taxRate: taxRateSchema.optional(),
   // Recurring only (enforced by the command, which knows the item type).
   // Safe to change after billing: the `billed_to_date` watermark prevents
   // any day from being billed twice.
@@ -621,14 +638,20 @@ export const billingInvoicePostSchema = scopedSchema.extend({
 
 export type BillingInvoicePostInput = z.infer<typeof billingInvoicePostSchema>
 
+// Spec B — email a posted document (manual send / resend).
+export const billingInvoiceSendSchema = scopedSchema.extend({
+  invoiceId: z.string().uuid(),
+})
+
+export type BillingInvoiceSendInput = z.infer<typeof billingInvoiceSendSchema>
+
 // ─── Draft invoice edits (Phase 4b) ──────────────────────────────
 
 /**
  * Fields the operator may change on a draft invoice line. Per spec:
  * "operator CAN: add lines, remove lines, edit line description /
- * quantity / unit_price / amount". `taxRate` is owned by core/sales
- * tax service and `currencyCode` is frozen at account create — both
- * intentionally absent from this schema.
+ * quantity / unit_price / amount". Spec B adds `taxRate` (VAT % of the
+ * line). `currencyCode` is frozen at account create and intentionally absent.
  */
 const lineEditableFields = z.object({
   description: z.string().trim().min(1).max(500).optional(),
@@ -639,6 +662,7 @@ const lineEditableFields = z.object({
   // credits or rounding fix-ups). When provided, it short-circuits
   // the auto-compute path.
   totalNetAmount: z.coerce.number().finite().optional(),
+  taxRate: taxRateSchema.optional(),
 })
 
 export const billingInvoiceEditLineSchema = scopedSchema.extend({
@@ -659,6 +683,8 @@ export const billingInvoiceAddLineSchema = scopedSchema.extend({
   // Billing Item.
   billingItemId: z.string().uuid().optional(),
   billingType: z.enum(BILLING_ITEM_TYPES).optional(),
+  // Omitted → the organization default VAT rate.
+  taxRate: taxRateSchema.optional(),
 })
 
 export type BillingInvoiceAddLineInput = z.infer<typeof billingInvoiceAddLineSchema>
@@ -786,6 +812,10 @@ export const billingInvoiceListQuerySchema = z
     billAccountId: z.string().uuid().optional(),
     testRun: queryBoolean,
     search: z.string().trim().max(100).optional(),
+    // Spec B: computed overdue (B-D6) and due-date window.
+    overdue: queryBoolean,
+    dueFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    dueTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   })
   .passthrough()
 
@@ -802,6 +832,20 @@ const numberMaskSchema = z
 
 const moneyString = z.coerce.number().finite().nonnegative()
 
+/** Trimmed optional text; '' → null (clears the field). */
+function optionalText(max: number) {
+  return z
+    .string()
+    .trim()
+    .max(max)
+    .transform((value) => (value === '' ? null : value))
+    .nullable()
+    .optional()
+}
+
+// Seller address: same shape (and country rule) as the buyer's invoice address.
+const sellerAddressSchema = invoiceAddressSchema
+
 export const billingSettingsUpdateSchema = scopedSchema.extend({
   lowBalanceThresholdDefault: moneyString.optional(),
   nearLimitBufferDefault: moneyString.optional(),
@@ -815,6 +859,30 @@ export const billingSettingsUpdateSchema = scopedSchema.extend({
     >)
     .strict()
     .optional(),
+  // Seller / payment / document fields (Spec B). Empty string clears.
+  legalName: optionalText(255),
+  sellerAddress: sellerAddressSchema.nullable().optional(),
+  taxId: optionalText(64),
+  bankName: optionalText(255),
+  iban: z
+    .string()
+    .transform(normalizeIban)
+    .refine((value) => value === '' || isValidIban(value), { message: 'billing.settings.error.iban_invalid' })
+    .transform((value) => (value === '' ? null : value))
+    .nullable()
+    .optional(),
+  bic: z
+    .string()
+    .trim()
+    .toUpperCase()
+    .refine((value) => value === '' || isValidBic(value), { message: 'billing.settings.error.bic_invalid' })
+    .transform((value) => (value === '' ? null : value))
+    .nullable()
+    .optional(),
+  invoiceFooter: optionalText(2000),
+  logoAttachmentId: z.string().uuid().nullable().optional(),
+  defaultPaymentTermsDays: paymentTermsDaysSchema.optional(),
+  defaultTaxRate: taxRateSchema.optional(),
 })
 
 export type BillingSettingsUpdateInput = z.infer<typeof billingSettingsUpdateSchema>

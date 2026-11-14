@@ -145,16 +145,21 @@ export class CpqQuoteCostService {
     return { currencyCode: currency, charges: result }
   }
 
-  /** Always available to `cpq.costs.view`, also with the toggle off (it is what an operator checks before switching off). */
+  /**
+   * Always available to `cpq.costs.view`, also with the toggle off (it is what an operator checks before switching off).
+   * One aggregate query per figure: no cost row is hydrated and no id list is bound, so the cost
+   * of the call does not grow with the tenant's cost history (it backs every cost-plus editor load).
+   */
   async usage(scope: TenantScope) {
     const em = this.deps.em.fork({ clear: true, useContext: false })
     const enabled = await this.deps.costService.enabled(scope.tenantId)
     const costPlusCharges = await em.count(CpqProductCharge, { ...scoped(scope), pricingMethod: 'cost_plus', isActive: true })
-    const costRows = await em.find(CpqQuoteLineCost, scoped(scope), { fields: ['quoteConfigurationId'] })
-    const quoteIds = [...new Set(costRows.map((row) => row.quoteConfigurationId))]
-    const openQuotes = quoteIds.length
-      ? await em.count(CpqQuoteConfiguration, { ...scoped(scope), id: { $in: quoteIds }, cpqStatus: { $nin: TERMINAL_STATUSES } })
-      : 0
+    // `id IN (SELECT quote_configuration_id FROM cpq_quote_line_costs WHERE …)`: a semi-join, so a
+    // quote with many cost lines counts once (distinct) and Postgres never sees a bound id list.
+    const costedQuotes = em.createQueryBuilder(CpqQuoteLineCost, 'qlc').select('qlc.quoteConfigurationId').where(scoped(scope))
+    const openQuotes = await em.count(CpqQuoteConfiguration, {
+      ...scoped(scope), cpqStatus: { $nin: TERMINAL_STATUSES }, id: { $in: costedQuotes },
+    })
     return { enabled, costPlusCharges, openQuotes, openRequests: 0, liveSubscriptions: 0 }
   }
 

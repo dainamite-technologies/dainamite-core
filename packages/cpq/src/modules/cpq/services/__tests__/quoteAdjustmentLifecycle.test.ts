@@ -85,6 +85,22 @@ describe('cost lines and markup overrides (R16)', () => {
     expect(overrides[0].deletedAt).toBeInstanceOf(Date)
     expect(em.find).toHaveBeenCalledWith(CpqQuoteLineCost, expect.objectContaining({ quoteConfigurationId: 'quote', quoteLineId: { $in: ['root', 'child'] }, ...scope, deletedAt: null }), expect.anything())
   })
+  it('removing a line tree soft-deletes its cost lines and leaves their sourcing columns as they were (characterization)', async () => {
+    const root = { id: 'root-config', quoteLineId: 'root', parentLineId: null, deletedAt: null }
+    const sourcing = { sourcingStatus: 'requested', costRequestId: 'req-1', requestSeq: 1, proposedAmount: '70.0000', declineReason: null }
+    const costs = [{ id: 'c1', quoteLineId: 'root', deletedAt: null, ...sourcing }]
+    const em = { find: jest.fn(async (entity: unknown) => entity === CpqQuoteLineConfiguration ? [root] : entity === CpqQuoteLineCost ? costs : []), flush: jest.fn().mockResolvedValue(undefined) }
+    await removeQuoteLineTree(em as never, 'quote', root as never, scope)
+    expect(costs[0].deletedAt).toBeInstanceOf(Date)
+    expect(costs[0]).toMatchObject(sourcing)
+  })
+  it('cloning keeps every sourcing column of the source cost row and copies none of the request identity', async () => {
+    const source = cost({ sourcingStatus: 'requested', costRequestId: 'req-9', requestSeq: 4 })
+    const { created } = await clone([source], [])
+    const copy = created.find((entry) => entry.entity === CpqQuoteLineCost)!.values
+    expect(copy).toMatchObject({ sourcingStatus: 'not_requested', costRequestId: null, requestSeq: null })
+    expect(source).toMatchObject({ sourcingStatus: 'requested', costRequestId: 'req-9', requestSeq: 4, proposedAmount: '39.0000', declineReason: 'x' })
+  })
 })
 
 describe('toggle off (R14)', () => {

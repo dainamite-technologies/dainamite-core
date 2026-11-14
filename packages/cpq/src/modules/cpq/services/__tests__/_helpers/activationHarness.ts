@@ -122,6 +122,7 @@ export function createActivationHarness(fixture: ActivationFixture) {
       return result
     })
   const inv = fixture.inventory ?? {}
+  const withNoCostChanges = (result: unknown) => (result && typeof result === 'object' ? { inventoryCostChanges: [], ...result } : result)
   const createSubscription = inventoryCall('createSubscription', inv.createSubscription ?? { id: 'sub-1' }, ['subscription', 'item', 'itemCost', 'assetAndCosts', 'changeLog'])
   const inventory: Record<string, jest.Mock> = {
     withEntityManager: jest.fn((bound: unknown): unknown => {
@@ -133,9 +134,10 @@ export function createActivationHarness(fixture: ActivationFixture) {
       const created = await createSubscription(...args)
       return { subscription: created, assets: [], inventoryCostChanges: [], inventoryCostLinks: [], ...fixture.createdCosts }
     }),
-    applyAmendment: inventoryCall('applyAmendment', inv.applyAmendment),
-    applyRenewal: inventoryCall('applyRenewal', inv.applyRenewal),
-    applyCancel: inventoryCall('applyCancel', inv.applyCancel),
+    // ARC results report the inventory cost changes they wrote; fixtures that predate that report none.
+    applyAmendment: inventoryCall('applyAmendment', withNoCostChanges(inv.applyAmendment)),
+    applyRenewal: inventoryCall('applyRenewal', withNoCostChanges(inv.applyRenewal)),
+    applyCancel: inventoryCall('applyCancel', withNoCostChanges(inv.applyCancel)),
     applyMergeRenewal: inventoryCall('applyMergeRenewal', inv.applyMergeRenewal),
   }
 

@@ -10,9 +10,14 @@ import {
 import {
   createAssetCosts,
   createItemCosts,
+  endAssetCosts,
+  endItemCosts,
+  endSubscriptionCosts,
+  replaceItemCosts,
   type CostSeed,
   type InventoryCostChange,
   type InventoryCostLink,
+  type InventoryCostSyncResult,
 } from './costs/inventoryCostSync'
 import { costsEntry, groupInventoryCostSnapshots } from './costs/inventoryCostSnapshot'
 import {
@@ -87,6 +92,12 @@ export interface ArcLineChange {
    * in this apply). Without this, bundle children added through ARC are
    * created as standalone sub items, not nested under the bundle. */
   parentQuoteLineId?: string | null
+  /**
+   * Cost write-back (Q5), built by the order service from the order line's costs. `create`: an `add` line's
+   * item costs. `replace`: a RECONFIGURED mirror line's costs replace its item's costs by `cost_key`. Absent for
+   * every other line (an unreconfigured mirror line leaves item costs untouched; a `cancel` line ends them).
+   */
+  costSync?: { mode: 'create' | 'replace'; seeds: CostSeed[] }
   /** Optional metadata for action='modify' — the configuration / pricing changes. */
   modifyPatch?: {
     configuration?: Record<string, unknown>
@@ -145,6 +156,8 @@ export interface ApplyArcResult {
   changeLog: CpqSubscriptionChangeLog
   /** Subscription as left after mutation (for amend / renew / cancel) or M (for merge-result). */
   subscription: CpqInventorySubscription
+  /** Real inventory cost changes of this ARC step (no-op rows excluded), each carrying its change-log row. */
+  inventoryCostChanges: InventoryCostChange[]
 }
 
 export interface ApplyMergeRenewalResult {
@@ -1146,26 +1159,32 @@ export class DefaultCpqInventoryService {
     )
     if (idempotent) {
       const sub = await this.requireSubscription(input.subscriptionId, scope)
-      return { changeLog: idempotent, subscription: sub }
+      return { changeLog: idempotent, subscription: sub, inventoryCostChanges: [] }
     }
 
     const sub = await this.requireSubscription(input.subscriptionId, scope)
     const beforeSnapshot = await this.snapshotSubscription(sub, scope)
 
-    const { lineChangeSummary } = await this.applyLineChanges(
+    const effectiveAt = new Date()
+    const applied = await this.applyLineChanges(
       sub,
       input.lineChanges,
       scope,
       null,
     )
+    const { lineChangeSummary } = applied
 
     await this.recomputeSubscriptionAggregatesInPlace(sub, scope)
+
+    // Costs are written before the after-snapshot, which reads them (Q12 ordering).
+    const costWrites = await this.writeBackLineCosts(input.lineChanges, applied, sub, scope, effectiveAt)
 
     await this.em.flush()
 
     const afterSnapshot = await this.snapshotSubscription(sub, scope)
 
     const log = this.createChangeLog({
+      effectiveAt,
       subscription: sub,
       changeType: 'amend',
       sourceQuoteId: input.sourceQuoteId,
@@ -1177,9 +1196,10 @@ export class DefaultCpqInventoryService {
     })
 
     sub.lastChangeLogId = log.id
+    const inventoryCostChanges = this.settleCostWrites(costWrites, log)
     await this.em.flush()
 
-    return { changeLog: log, subscription: sub }
+    return { changeLog: log, subscription: sub, inventoryCostChanges }
   }
 
   async applyRenewal(input: ApplyRenewalInput, scope: TenantScope): Promise<ApplyArcResult> {
@@ -1190,7 +1210,7 @@ export class DefaultCpqInventoryService {
     )
     if (idempotent) {
       const sub = await this.requireSubscription(input.subscriptionId, scope)
-      return { changeLog: idempotent, subscription: sub }
+      return { changeLog: idempotent, subscription: sub, inventoryCostChanges: [] }
     }
 
     const sub = await this.requireSubscription(input.subscriptionId, scope)
@@ -1205,20 +1225,25 @@ export class DefaultCpqInventoryService {
     sub.currentTermEnd = newEnd
     if (input.term.newTermMonths != null) sub.termMonths = input.term.newTermMonths
 
-    const { lineChangeSummary } = await this.applyLineChanges(
+    const effectiveAt = new Date()
+    const applied = await this.applyLineChanges(
       sub,
       input.lineChanges,
       scope,
       null,
     )
+    const { lineChangeSummary } = applied
 
     await this.recomputeSubscriptionAggregatesInPlace(sub, scope)
+
+    const costWrites = await this.writeBackLineCosts(input.lineChanges, applied, sub, scope, effectiveAt)
 
     await this.em.flush()
 
     const afterSnapshot = await this.snapshotSubscription(sub, scope)
 
     const log = this.createChangeLog({
+      effectiveAt,
       subscription: sub,
       changeType: 'renew',
       sourceQuoteId: input.sourceQuoteId,
@@ -1238,9 +1263,10 @@ export class DefaultCpqInventoryService {
     })
 
     sub.lastChangeLogId = log.id
+    const inventoryCostChanges = this.settleCostWrites(costWrites, log)
     await this.em.flush()
 
-    return { changeLog: log, subscription: sub }
+    return { changeLog: log, subscription: sub, inventoryCostChanges }
   }
 
   async applyMergeRenewal(
@@ -1527,7 +1553,7 @@ export class DefaultCpqInventoryService {
     )
     if (idempotent) {
       const sub = await this.requireSubscription(input.subscriptionId, scope)
-      return { changeLog: idempotent, subscription: sub }
+      return { changeLog: idempotent, subscription: sub, inventoryCostChanges: [] }
     }
 
     const sub = await this.requireSubscription(input.subscriptionId, scope)
@@ -1541,12 +1567,19 @@ export class DefaultCpqInventoryService {
 
     // Reuse the existing cascade. transitionSubscriptionStatus flushes; that's
     // fine — we'll snapshot again afterwards.
+    const effectiveAt = new Date()
     await this.transitionSubscriptionStatus(sub.id, 'terminated', scope)
 
     const reload = await this.requireSubscription(input.subscriptionId, scope)
+    // A Cancel order ends every open item and asset cost of the subscription (Q8 `ended_at`), after the status
+    // transition and before the after-snapshot, which shows them ended.
+    const ended = await endSubscriptionCosts(this.em, reload.id, { scope, startedAt: isoDay(effectiveAt), endedAt: isoDay(effectiveAt) })
+    const costWrites: CostWrites = { rows: ended.rows, changes: ended.changes }
+    await this.em.flush()
     const afterSnapshot = await this.snapshotSubscription(reload, scope)
 
     const log = this.createChangeLog({
+      effectiveAt,
       subscription: reload,
       changeType: 'cancel',
       sourceQuoteId: input.sourceQuoteId,
@@ -1562,9 +1595,10 @@ export class DefaultCpqInventoryService {
     })
 
     reload.lastChangeLogId = log.id
+    const inventoryCostChanges = this.settleCostWrites(costWrites, log)
     await this.em.flush()
 
-    return { changeLog: log, subscription: reload }
+    return { changeLog: log, subscription: reload, inventoryCostChanges }
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -1701,11 +1735,15 @@ export class DefaultCpqInventoryService {
     lineChanges: ArcLineChange[],
     scope: TenantScope,
     _ignored: null,
-  ): Promise<{ lineChangeSummary: Array<Record<string, unknown>> }> {
+  ): Promise<AppliedLineChanges> {
     void _ignored
 
     const summary: Array<Record<string, unknown>> = []
-    if (lineChanges.length === 0) return { lineChangeSummary: summary }
+    const cancelledItemIds: string[] = []
+    const cancelledAssetIds: string[] = []
+    if (lineChanges.length === 0) {
+      return { lineChangeSummary: summary, itemIdByQuoteLineId: new Map(), cancelledItemIds, cancelledAssetIds }
+    }
 
     // Pre-load assetizable specs for new items to decide whether to materialize
     // assets on add lines.
@@ -1854,6 +1892,8 @@ export class DefaultCpqInventoryService {
           status: { $nin: ['returned', 'cancelled'] },
         })
         for (const asset of assets) asset.status = 'cancelled'
+        cancelledItemIds.push(item.id)
+        cancelledAssetIds.push(...assets.map((asset) => asset.id))
 
         summary.push({
           action: 'cancel',
@@ -1906,7 +1946,54 @@ export class DefaultCpqInventoryService {
       }
     }
 
-    return { lineChangeSummary: summary }
+    return { lineChangeSummary: summary, itemIdByQuoteLineId: quoteLineToFinalItemId, cancelledItemIds, cancelledAssetIds }
+  }
+
+  /**
+   * Inventory-cost write-back of an Amend / Renew step (Q5), in the step-5 ordering (the caller flushes, snapshots,
+   * creates the change log, then `settleCostWrites`):
+   *  - a `cancel` line ends the open costs of its item and of the assets it cancelled;
+   *  - an `add` line creates its item's costs;
+   *  - a reconfigured mirror line (`costSync.mode = 'replace'`) replaces its item's costs by `cost_key`;
+   *  - every other line leaves costs untouched.
+   * Unchanged rows are neither written nor reported.
+   */
+  private async writeBackLineCosts(
+    lineChanges: ArcLineChange[],
+    applied: AppliedLineChanges,
+    sub: CpqInventorySubscription,
+    scope: TenantScope,
+    effectiveAt: Date,
+  ): Promise<CostWrites> {
+    const ctx = { scope, startedAt: isoDay(effectiveAt), endedAt: isoDay(effectiveAt) }
+    const rows: CpqInventoryCost[] = []
+    const changes: InventoryCostChange[] = []
+    const collect = (result: InventoryCostSyncResult) => {
+      rows.push(...result.rows)
+      changes.push(...result.changes)
+    }
+    const owners = (mode: 'create' | 'replace') => lineChanges
+      .filter((lc) => lc.costSync?.mode === mode && lc.quoteLineId && applied.itemIdByQuoteLineId.has(lc.quoteLineId))
+      .map((lc) => ({
+        subscriptionId: sub.id,
+        subscriptionItemId: applied.itemIdByQuoteLineId.get(lc.quoteLineId as string) as string,
+        seeds: lc.costSync?.seeds ?? [],
+      }))
+    collect(await endItemCosts(this.em, applied.cancelledItemIds, ctx))
+    collect(await endAssetCosts(this.em, applied.cancelledAssetIds, ctx))
+    collect(await createItemCosts(this.em, owners('create'), ctx))
+    collect(await replaceItemCosts(this.em, owners('replace'), ctx))
+    return { rows, changes }
+  }
+
+  /** Points the rows a step really changed at its change-log row (Q12) and tags each change with that row. */
+  private settleCostWrites(writes: CostWrites, log: CpqSubscriptionChangeLog): InventoryCostChange[] {
+    const changedIds = new Set(writes.changes.map((change) => change.inventoryCostId))
+    for (const row of writes.rows) {
+      if (changedIds.has(row.id)) row.lastChangeId = log.id
+    }
+    const effectiveDate = isoDay(log.effectiveAt)
+    return writes.changes.map((change) => ({ ...change, changeLogId: log.id, effectiveDate }))
   }
 
   private async recomputeSubscriptionAggregatesInPlace(
@@ -1927,6 +2014,8 @@ export class DefaultCpqInventoryService {
   }
 
   private createChangeLog(args: {
+    /** Pre-taken effective time, so `ended_at` of costs ended in the same step equals the row's `effective_at` (Q8). */
+    effectiveAt?: Date
     subscription: CpqInventorySubscription
     changeType: ChangeLogType
     sourceQuoteId?: string | null
@@ -1954,7 +2043,7 @@ export class DefaultCpqInventoryService {
       sourceQuoteId: args.sourceQuoteId ?? null,
       sourceOrderId: args.sourceOrderId ?? null,
       performedByUserId: args.performedByUserId ?? null,
-      effectiveAt: new Date(),
+      effectiveAt: args.effectiveAt ?? new Date(),
       beforeSnapshot: args.beforeSnapshot,
       afterSnapshot: args.afterSnapshot,
       lineChanges: args.lineChanges,
@@ -2047,6 +2136,24 @@ export class DefaultCpqInventoryService {
 }
 
 // ─── Module-private helpers ─────────────────────────────────────
+
+/** What `applyLineChanges` reports besides the summary: the inputs of the cost write-back. */
+interface AppliedLineChanges {
+  lineChangeSummary: Array<Record<string, unknown>>
+  /** Source quote line -> subscription item it resulted in (`add`: the new item; `modify`: the existing one). */
+  itemIdByQuoteLineId: Map<string, string>
+  /** Items and assets removed by `cancel` lines; their open costs are ended. */
+  cancelledItemIds: string[]
+  cancelledAssetIds: string[]
+}
+
+/** Cost rows an ARC step wrote and the real changes among them, until its change-log row exists. */
+interface CostWrites {
+  rows: CpqInventoryCost[]
+  changes: InventoryCostChange[]
+}
+
+const isoDay = (value: Date): string => value.toISOString().slice(0, 10)
 
 function toDate(value: Date | string): Date {
   return value instanceof Date ? value : new Date(value)

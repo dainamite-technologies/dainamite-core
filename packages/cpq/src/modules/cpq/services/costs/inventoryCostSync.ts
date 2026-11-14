@@ -70,6 +70,8 @@ export type InventoryCostChange = {
   supplierId: string | null
   kind: 'created' | 'changed' | 'ended' | 'repointed'
   orderLineCostId?: string | null
+  /** What triggered the change, reported as `cost_changed.cause`; absent means a new-sale `activation`. */
+  cause?: 'activation' | 'amend' | 'renew' | 'cancel' | 'merge'
   /** Change-log row that recorded the change; set by the caller once that row exists. */
   changeLogId?: string
   /** `YYYY-MM-DD` of that change-log row's effective time; set with `changeLogId`. */
@@ -93,6 +95,8 @@ export type InventoryCostSyncContext = {
   scope: TenantScope
   /** Activation date (`YYYY-MM-DD`): `started_at` of created rows. */
   startedAt: string
+  /** `YYYY-MM-DD` of the activating change-log row's `effective_at` (Q8): `ended_at` of rows this call ends. */
+  endedAt?: string
 }
 
 /** Seed from an order line cost (the carry-through source of every activation write). */
@@ -168,9 +172,11 @@ async function upsertOwnerCosts(
   kind: OwnerKind,
   owners: AnyOwner[],
   ctx: InventoryCostSyncContext,
+  replace = false,
 ): Promise<InventoryCostSyncResult> {
   const result: InventoryCostSyncResult = { rows: [], changes: [], links: [] }
-  const seeded = owners.filter((owner) => owner.seeds.length > 0)
+  // `replace` also visits owners with NO seeds: every key they hold is then missing and gets ended.
+  const seeded = replace ? owners : owners.filter((owner) => owner.seeds.length > 0)
   const ownerIds = seeded.map((owner) => assertOwner(kind, owner))
   if (seeded.length === 0) return result
 
@@ -217,20 +223,66 @@ async function upsertOwnerCosts(
       result.rows.push(row)
       if (seed.orderLineCostId) result.links.push({ orderLineCostId: seed.orderLineCostId, inventoryCostId: row.id })
       if (kindOfChange) {
-        result.changes.push({
-          inventoryCostId: row.id,
-          subscriptionId: row.subscriptionId,
-          ownerType: kind,
-          subscriptionItemId: row.subscriptionItemId ?? null,
-          assetId: row.assetId ?? null,
-          costKey: row.costKey,
-          supplierId: row.supplierId ?? null,
-          kind: kindOfChange,
-          orderLineCostId: seed.orderLineCostId,
-        })
+        result.changes.push({ ...changeOf(row, kind, kindOfChange), orderLineCostId: seed.orderLineCostId })
+      }
+    }
+    if (replace) {
+      // Replace semantics (Q5): an open row whose key is missing from the seeds is ended; ended rows stay ended.
+      const seededKeys = new Set(owner.seeds.map((seed) => seed.costKey))
+      for (const row of existing ?? []) {
+        if (row[ownerField] !== ownerId || seededKeys.has(row.costKey) || row.status !== 'active') continue
+        endRow(row, ctx)
+        result.rows.push(row)
+        result.changes.push(changeOf(row, kind, 'ended'))
       }
     }
   })
+  return result
+}
+
+function endRow(row: CpqInventoryCost, ctx: InventoryCostSyncContext): void {
+  row.status = 'ended'
+  row.endedAt = ctx.endedAt ?? new Date().toISOString().slice(0, 10)
+}
+
+function changeOf(row: CpqInventoryCost, kind: OwnerKind, changeKind: InventoryCostChange['kind']): InventoryCostChange {
+  return {
+    inventoryCostId: row.id,
+    subscriptionId: row.subscriptionId,
+    ownerType: kind,
+    subscriptionItemId: row.subscriptionItemId ?? null,
+    assetId: row.assetId ?? null,
+    costKey: row.costKey,
+    supplierId: row.supplierId ?? null,
+    kind: changeKind,
+  }
+}
+
+/**
+ * Ends every open (`active`) row of the given owners (Q8 `ended_at`). Already-ended rows are not touched, so
+ * ending twice is a no-op. Returns the real changes only.
+ */
+async function endOwnerCosts(
+  em: EntityManager,
+  kind: OwnerKind,
+  ownerIds: string[],
+  ctx: InventoryCostSyncContext,
+): Promise<InventoryCostSyncResult> {
+  const result: InventoryCostSyncResult = { rows: [], changes: [], links: [] }
+  if (ownerIds.length === 0) return result
+  const ownerField = kind === 'subscription_item' ? 'subscriptionItemId' : 'assetId'
+  const open = await em.find(CpqInventoryCost, {
+    organizationId: ctx.scope.organizationId,
+    tenantId: ctx.scope.tenantId,
+    deletedAt: null,
+    status: 'active',
+    [ownerField]: { $in: ownerIds },
+  })
+  for (const row of open ?? []) {
+    endRow(row, ctx)
+    result.rows.push(row)
+    result.changes.push(changeOf(row, kind, 'ended'))
+  }
   return result
 }
 
@@ -242,4 +294,41 @@ export function createItemCosts(em: EntityManager, owners: ItemCostOwner[], ctx:
 /** Creates (or updates in place / reactivates) the asset costs of the given assets. */
 export function createAssetCosts(em: EntityManager, owners: AssetCostOwner[], ctx: InventoryCostSyncContext): Promise<InventoryCostSyncResult> {
   return upsertOwnerCosts(em, 'asset', owners, ctx)
+}
+
+/**
+ * Replaces the item costs of the given items with their seeds, by `cost_key` (Q5): changed rows are updated in
+ * place, new keys created, ended keys that return reactivated (Q9), keys that are gone ended, unchanged rows
+ * left alone (no write, no change). An owner with no seeds has all its open costs ended.
+ */
+export function replaceItemCosts(em: EntityManager, owners: ItemCostOwner[], ctx: InventoryCostSyncContext): Promise<InventoryCostSyncResult> {
+  return upsertOwnerCosts(em, 'subscription_item', owners, ctx, true)
+}
+
+/** Ends every open cost of the given items. */
+export function endItemCosts(em: EntityManager, itemIds: string[], ctx: InventoryCostSyncContext): Promise<InventoryCostSyncResult> {
+  return endOwnerCosts(em, 'subscription_item', itemIds, ctx)
+}
+
+/** Ends every open cost of the given assets. */
+export function endAssetCosts(em: EntityManager, assetIds: string[], ctx: InventoryCostSyncContext): Promise<InventoryCostSyncResult> {
+  return endOwnerCosts(em, 'asset', assetIds, ctx)
+}
+
+/** Ends every open item and asset cost of a subscription (Cancel order). */
+export async function endSubscriptionCosts(em: EntityManager, subscriptionId: string, ctx: InventoryCostSyncContext): Promise<InventoryCostSyncResult> {
+  const open = await em.find(CpqInventoryCost, {
+    organizationId: ctx.scope.organizationId,
+    tenantId: ctx.scope.tenantId,
+    deletedAt: null,
+    status: 'active',
+    subscriptionId,
+  })
+  const result: InventoryCostSyncResult = { rows: [], changes: [], links: [] }
+  for (const row of open ?? []) {
+    endRow(row, ctx)
+    result.rows.push(row)
+    result.changes.push(changeOf(row, row.assetId ? 'asset' : 'subscription_item', 'ended'))
+  }
+  return result
 }

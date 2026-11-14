@@ -1196,3 +1196,68 @@ describe('cpq.subscription.cost_changed (step 7)', () => {
     await expect(ok.service.activateOrder('oc-1', ACTIVATION_SCOPE)).resolves.toMatchObject({ cpqStatus: 'active' })
   })
 })
+
+describe('ARC write-back wiring in activateOrder (step 13)', () => {
+  const olc = (id: string, orderLineId: string, costKey: string) => ({ id, orderLineId, orderConfigurationId: 'oc-1', costKey, name: costKey, role: 'price_basis',
+    costType: 'one_off', source: 'supplier', costModel: 'fixed', valueStatus: 'known', origin: 'catalog', totalAmount: '300' })
+  const orderLine = (orderLineId: string, sourceQuoteLineId: string) => ({ orderLineId, orderConfigurationId: 'oc-1', sourceQuoteLineId, quantity: 1,
+    configuration: {}, charges: [], parentLineId: null, mrcTotal: '0', nrcTotal: '0' })
+  const quoteLine = (quoteLineId: string, action: string, configuration: Record<string, unknown>, over: Record<string, unknown> = {}) => ({
+    quoteLineId, action, configuration, targetSubscriptionId: 'sub-1', sourceSubscriptionItemId: `item-${quoteLineId}`, quantity: 1, charges: [],
+    mrcTotal: '0', nrcTotal: '0', parentLineId: null, ...over })
+  const costChange = (over: Record<string, unknown>) => ({ inventoryCostId: 'ic-1', subscriptionId: 'sub-1', ownerType: 'subscription_item', subscriptionItemId: 'item-1',
+    assetId: null, costKey: 'tail', supplierId: null, kind: 'changed', changeLogId: 'log-1', effectiveDate: '2026-11-14', ...over })
+  const subscription = { id: 'sub-1', customerId: 'cust-1', currentTermStart: new Date('2027-01-01'), currentTermEnd: new Date('2028-01-01') }
+  const arcResult = (inventoryCostChanges: unknown[]) => ({ changeLog: { effectiveAt: new Date('2026-06-01'), afterSnapshot: { items: [] }, lineChanges: [] }, subscription, inventoryCostChanges })
+  const fixture = (quoteType: 'amend' | 'renew' | 'cancel', primitive: string, changes: unknown[]) => ({
+    quoteType,
+    targets: [{ subscriptionId: 'sub-1', mergeAction: 'standalone', newTermStart: '2027-01-01', newTermEnd: '2028-01-01', newTermMonths: 12 }],
+    orderLines: [orderLine('ol-re', 'ql-re'), orderLine('ol-plain', 'ql-plain'), orderLine('ol-add', 'ql-add')],
+    orderLineCosts: [olc('c-re', 'ol-re', 'tail'), olc('c-plain', 'ol-plain', 'tail'), olc('c-add', 'ol-add', 'tail')],
+    quoteLines: [
+      quoteLine('ql-re', 'modify', { _arcMirroredFromItemId: 'i', _arcReconfigured: true }),
+      quoteLine('ql-plain', 'modify', { _arcMirroredFromItemId: 'i', _arcPriceFrozen: true }),
+      quoteLine('ql-add', 'add', {}, { sourceSubscriptionItemId: null }),
+    ],
+    inventory: { [primitive]: arcResult(changes) },
+  })
+  const costEvents = (spy: jest.SpyInstance) => spy.mock.calls.filter(([id]) => id === 'cpq.subscription.cost_changed').map(([, payload]) => payload as Record<string, unknown>)
+  afterEach(() => jest.restoreAllMocks())
+
+  it('seeds only the reconfigured mirror line (marker read from the source quote line) and add lines; plain mirrors carry no costSync', async () => {
+    const h = createActivationHarness(fixture('amend', 'applyAmendment', []))
+    await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+    const [input] = h.inventory.applyAmendment.mock.calls[0] as [{ lineChanges: Array<Record<string, unknown>> }]
+    const [reconfigured, plain, added] = input.lineChanges as Array<{ costSync?: { mode: string; seeds: Array<{ orderLineCostId: string }> } }>
+    expect(reconfigured.costSync?.mode).toBe('replace')
+    expect(reconfigured.costSync?.seeds.map((seed) => seed.orderLineCostId)).toEqual(['c-re'])
+    expect(plain.costSync).toBeUndefined()
+    expect(added.costSync?.mode).toBe('create')
+    expect(added.costSync?.seeds.map((seed) => seed.orderLineCostId)).toEqual(['c-add'])
+  })
+
+  it.each([
+    ['amend', 'applyAmendment'],
+    ['renew', 'applyRenewal'],
+    ['cancel', 'applyCancel'],
+  ] as const)('%s: one cost_changed per real change after the commit, with cause %s and the change kind', async (quoteType, primitive) => {
+    const changes = [costChange({}), costChange({ inventoryCostId: 'ic-2', kind: quoteType === 'cancel' ? 'ended' : 'created', costKey: 'install' })]
+    const h = createActivationHarness(fixture(quoteType, primitive, changes))
+    const emitSpy = jest.spyOn(eventsModule, 'emitCpqEvent').mockResolvedValue(undefined as never)
+    await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+    const payloads = costEvents(emitSpy)
+    expect(payloads.map((p) => [p.cause, p.kind, p.inventoryCostId, p.sourceOrderId, p.changeLogId])).toEqual([
+      [quoteType, 'changed', 'ic-1', 'oc-1', 'log-1'],
+      [quoteType, quoteType === 'cancel' ? 'ended' : 'created', 'ic-2', 'oc-1', 'log-1'],
+    ])
+    // emitted after the transaction committed
+    expect(h.trace.at(-1)).toBe('tx:commit')
+  })
+
+  it('emits no cost_changed when the ARC step wrote nothing (frozen / no-op)', async () => {
+    const h = createActivationHarness(fixture('renew', 'applyRenewal', []))
+    const emitSpy = jest.spyOn(eventsModule, 'emitCpqEvent').mockResolvedValue(undefined as never)
+    await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+    expect(costEvents(emitSpy)).toEqual([])
+  })
+})

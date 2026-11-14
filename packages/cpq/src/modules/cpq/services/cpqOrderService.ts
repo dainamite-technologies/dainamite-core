@@ -32,7 +32,7 @@ import {
   type TenantScope,
 } from './types'
 import { emitCpqEvent } from '../events'
-import { stripQuoteOnlyArcMarkers } from './arcPriceFreeze'
+import { isArcReconfigured, stripQuoteOnlyArcMarkers } from './arcPriceFreeze'
 import { isArcTerminationLine } from './arcLineRemoval'
 import { summarizeOrderPricing, type OrderWaterfallSummary } from './orderPricingSummary'
 
@@ -407,9 +407,9 @@ export class DefaultCpqOrderService {
           postCommitEvents.push(() => emitActivatedEvent(orderConfig, inventory, scope))
         }
       } else {
-        postCommitEvents.push(
-          ...(await this.applyArcOrder(tx, orderConfig, sourceQuote!, orderLines, scope)),
-        )
+        const arc = await this.applyArcOrder(tx, orderConfig, sourceQuote!, orderLines, scope)
+        postCommitEvents.push(...arc.events)
+        inventoryCostChanges.push(...arc.costChanges)
       }
 
       orderConfig.cpqStatus = 'active'
@@ -425,7 +425,7 @@ export class DefaultCpqOrderService {
     // activation never reaches here. Emit lifecycle events AFTER the commit.
     // One `cost_changed` per real inventory cost change (no-op rows are not in the list); no amounts.
     for (const change of committed.inventoryCostChanges) {
-      postCommitEvents.push(() => emitCostChangedEvent(committed.orderConfig, change, 'activation', scope))
+      postCommitEvents.push(() => emitCostChangedEvent(committed.orderConfig, change, change.cause ?? 'activation', scope))
     }
     for (const fire of postCommitEvents) {
       try {
@@ -454,7 +454,7 @@ export class DefaultCpqOrderService {
     sourceQuote: CpqQuoteConfiguration,
     orderLines: CpqOrderLineConfiguration[],
     scope: TenantScope,
-  ): Promise<Array<() => Promise<void>>> {
+  ): Promise<{ events: Array<() => Promise<void>>; costChanges: InventoryCostChange[] }> {
     const quoteType = sourceQuote.quoteType as 'amend' | 'renew' | 'cancel'
 
     // Load attached targets.
@@ -508,6 +508,28 @@ export class DefaultCpqOrderService {
         : []
     const specMap = new Map(specs.map((s) => [s.id, s]))
 
+    // Cost seeds per source quote line, from the order line that was converted from it (ONE query for all the
+    // order's line costs). Read through the source quote line, whose configuration still carries the quote-only
+    // `_arcReconfigured` marker (the order line's copy is stripped).
+    const orderLineCosts = await em.find(CpqOrderLineCost, {
+      orderConfigurationId: orderConfig.id,
+      organizationId: scope.organizationId,
+      tenantId: scope.tenantId,
+      deletedAt: null,
+    }) ?? []
+    const orderLineIdByQuoteLine = new Map<string, string>()
+    for (const orderLine of orderLines) {
+      if (orderLine.sourceQuoteLineId) orderLineIdByQuoteLine.set(orderLine.sourceQuoteLineId, orderLine.orderLineId)
+    }
+    const costsByOrderLine = new Map<string, CpqOrderLineCost[]>()
+    for (const cost of orderLineCosts) costsByOrderLine.set(cost.orderLineId, [...(costsByOrderLine.get(cost.orderLineId) ?? []), cost])
+    const seedsForQuoteLine = (quoteLineId: string): CostSeed[] => {
+      const orderLineId = orderLineIdByQuoteLine.get(quoteLineId)
+      return (orderLineId ? costsByOrderLine.get(orderLineId) ?? [] : []).map(costSeedFromOrderLineCost)
+    }
+    const arcChange = (line: CpqQuoteLineConfiguration) => buildArcLineChange(line, specMap, seedsForQuoteLine)
+    const costChanges: InventoryCostChange[] = []
+
     const events: Array<() => Promise<void>> = []
     const eventBaseEnvelope = {
       organizationId: scope.organizationId,
@@ -525,10 +547,11 @@ export class DefaultCpqOrderService {
             sourceQuoteId: sourceQuote.id,
             sourceOrderId: orderConfig.id,
             performedByUserId: null,
-            lineChanges: lines.map((l) => buildArcLineChange(l, specMap)),
+            lineChanges: lines.map(arcChange),
           },
           scope,
         )
+        costChanges.push(...result.inventoryCostChanges.map((change) => ({ ...change, cause: 'amend' as const })))
         events.push(() => emitAmendedEvent(result, eventBaseEnvelope))
       }
     } else if (quoteType === 'cancel') {
@@ -546,6 +569,7 @@ export class DefaultCpqOrderService {
           },
           scope,
         )
+        costChanges.push(...result.inventoryCostChanges.map((change) => ({ ...change, cause: 'cancel' as const })))
         events.push(() => emitCancelledEvent(result, eventBaseEnvelope))
       }
     } else if (quoteType === 'renew') {
@@ -572,10 +596,11 @@ export class DefaultCpqOrderService {
                 newTermEnd: target.newTermEnd,
                 newTermMonths: target.newTermMonths ?? null,
               },
-              lineChanges: lines.map((l) => buildArcLineChange(l, specMap)),
+              lineChanges: lines.map(arcChange),
             },
             scope,
           )
+          costChanges.push(...result.inventoryCostChanges.map((change) => ({ ...change, cause: 'renew' as const })))
           events.push(() => emitRenewedEvent(result, eventBaseEnvelope))
         }
       } else if (absorb.length >= 2 && standalone.length === 0) {
@@ -602,7 +627,7 @@ export class DefaultCpqOrderService {
               newSubCode: sourceQuote.arcMergeNewSubCode ?? null,
               newSubName: sourceQuote.arcMergeNewSubName ?? null,
             },
-            lineChanges: mergeLines.map((l) => buildArcLineChange(l, specMap)),
+            lineChanges: mergeLines.map(arcChange),
           },
           scope,
         )
@@ -631,7 +656,7 @@ export class DefaultCpqOrderService {
       throw new OrderError(500, `Unknown quote_type '${quoteType}' for ARC activation`)
     }
 
-    return events
+    return { events, costChanges }
   }
 
   // ─── Inventory Creation ─────────────────────────────────────
@@ -1138,6 +1163,7 @@ export function isOrderError(err: unknown): err is OrderError {
 function buildArcLineChange(
   line: CpqQuoteLineConfiguration,
   specMap: Map<string, CpqProductSpecification>,
+  seedsForQuoteLine: (quoteLineId: string) => CostSeed[] = () => [],
 ): ArcLineChange {
   const action = line.action as 'add' | 'modify' | 'cancel'
   if (action === 'add') {
@@ -1153,11 +1179,13 @@ function buildArcLineChange(
       quantity: line.quantity,
       sourceQuoteLineId: line.quoteLineId,
     }
+    const seeds = seedsForQuoteLine(line.quoteLineId)
     return {
       quoteLineId: line.quoteLineId,
       action,
       itemInput,
       parentQuoteLineId: line.parentLineId ?? null,
+      ...(seeds.length > 0 ? { costSync: { mode: 'create' as const, seeds } } : {}),
     }
   }
   if (action === 'cancel') {
@@ -1167,11 +1195,15 @@ function buildArcLineChange(
       sourceSubscriptionItemId: line.sourceSubscriptionItemId ?? null,
     }
   }
-  // modify
+  // modify. Only a RECONFIGURED mirror line (marker read here, from the source quote line, before the quote-only
+  // markers are stripped) replaces its item's costs (Q5); any other mirror line leaves them untouched.
   return {
     quoteLineId: line.quoteLineId,
     action,
     sourceSubscriptionItemId: line.sourceSubscriptionItemId ?? null,
+    ...(isArcReconfigured(line.configuration)
+      ? { costSync: { mode: 'replace' as const, seeds: seedsForQuoteLine(line.quoteLineId) } }
+      : {}),
     modifyPatch: {
       configuration: stripQuoteOnlyArcMarkers(line.configuration) ?? undefined,
       charges: (line.charges ?? undefined) as Array<Record<string, unknown>> | undefined,

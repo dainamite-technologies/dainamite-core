@@ -106,6 +106,8 @@ describe('DefaultCpqInventoryService.applyAmendment', () => {
     em.find.mockResolvedValueOnce([])
     // recomputeSubscriptionAggregatesInPlace — fetch active items
     em.find.mockResolvedValueOnce([item])
+    // open costs of the cancelled item (step 13: ended with it, after the recompute; none here)
+    em.find.mockResolvedValueOnce([])
     // snapshotSubscription AFTER: items + assets
     em.find.mockResolvedValueOnce([item, cancelTarget])
     em.find.mockResolvedValueOnce([])
@@ -655,5 +657,199 @@ describe('change-log snapshots carry inventory costs', () => {
     const snap = await (service as unknown as { snapshotSubscription: (s: unknown, sc: unknown) => Promise<{ items: Array<{ costs: unknown[] }> }> })
       .snapshotSubscription(sub, SCOPE)
     expect(snap.items[0].costs).toEqual([expect.objectContaining({ status: 'ended', endedAt: '2026-11-14' })])
+  })
+})
+
+
+// ─── Minimal write-back at ARC activation (step 13) ─────────────────────
+
+describe('ARC inventory cost write-back', () => {
+  let uuidCounter = 0
+  beforeEach(() => {
+    uuidCounter = 0
+    jest.spyOn(globalThis.crypto, 'randomUUID').mockImplementation(
+      () => `00000000-0000-4000-8000-${String(++uuidCounter).padStart(12, '0')}` as `${string}-${string}-${string}-${string}-${string}`,
+    )
+  })
+  afterEach(() => jest.restoreAllMocks())
+
+  const T = { organizationId: SCOPE.organizationId, tenantId: SCOPE.tenantId, deletedAt: null }
+  const seed = (costKey: string, amount: string, over: Record<string, unknown> = {}) => ({
+    orderLineCostId: `olc-${costKey}`, costKey, chargeCode: null, origin: 'catalog', costElementId: null,
+    name: `Cost ${costKey}`, role: 'price_basis', costType: 'one_off', source: 'supplier', costModel: 'fixed',
+    valueStatus: 'known', valueOrigin: null, unitAmount: amount, instanceAmount: amount, totalAmount: amount,
+    currencyCode: 'EUR', fxRate: null, fxRateDate: null, indexSnapshot: null, supplierId: 'sup-1', supplierName: 'Acme',
+    supplierQuoteRef: null, validUntil: null, supplierTermEnd: null, supplierMinTermMonths: null, note: null,
+    ...over,
+  })
+  const costRow = (id: string, owner: Record<string, unknown>, costKey: string, amount: string, over: Record<string, unknown> = {}) => ({
+    ...T, id, subscriptionId: 'sub-1', subscriptionItemId: null, assetId: null, status: 'active', startedAt: '2026-01-01',
+    endedAt: null, lastChangeId: 'log-old', lastOrderLineCostId: null, ...owner, ...seed(costKey, amount), ...over,
+  })
+  const setup = () => {
+    const em = createStatefulEm()
+    const service = new DefaultCpqInventoryService(em as unknown as never)
+    em.seed(CpqInventorySubscription, [fakeSub()])
+    em.seed(CpqInventorySubscriptionItem, [fakeItem({ id: 'item-1' })])
+    return { em, service }
+  }
+  const costsOf = (snap: unknown, itemId: string) =>
+    ((snap as { items: Array<{ id: string; costs?: Array<Record<string, unknown>> }> }).items.find((i) => i.id === itemId)?.costs ?? [])
+  const amend = (service: DefaultCpqInventoryService, lineChanges: ArcLineChange[]) =>
+    service.applyAmendment({ subscriptionId: 'sub-1', sourceQuoteId: 'q', sourceOrderId: 'o', performedByUserId: null, lineChanges }, SCOPE)
+
+  it('Cancel order: ends the two item costs and the asset cost, ids kept, before active -> after ended, three events data', async () => {
+    const { em, service } = setup()
+    em.seed(CpqInventoryAsset, [{ ...T, id: 'asset-1', code: 'A', name: 'Srv', status: 'active', subscriptionId: 'sub-1', subscriptionItemId: null, productId: null }])
+    em.seed(CpqInventoryCost, [
+      costRow('ic-1', { subscriptionItemId: 'item-1' }, 'tail', '270'),
+      costRow('ic-2', { subscriptionItemId: 'item-1' }, 'install', '1500'),
+      costRow('ic-3', { assetId: 'asset-1' }, 'licence', '40'),
+    ])
+    const result = await service.applyCancel({ subscriptionId: 'sub-1', sourceQuoteId: 'q', sourceOrderId: 'o', performedByUserId: null } as never, SCOPE)
+
+    const rows = em.rows(CpqInventoryCost)
+    expect(rows.map((r) => [r.id, r.status])).toEqual([['ic-1', 'ended'], ['ic-2', 'ended'], ['ic-3', 'ended']])
+    const day = result.changeLog.effectiveAt.toISOString().slice(0, 10)
+    expect(rows.map((r) => r.endedAt)).toEqual([day, day, day]) // Q8: the change-log effective_at
+    expect(rows.every((r) => r.lastChangeId === result.changeLog.id)).toBe(true)
+    const before = result.changeLog.beforeSnapshot as never
+    const after = result.changeLog.afterSnapshot as never
+    expect(costsOf(before, 'item-1').map((c) => c.status)).toEqual(['active', 'active'])
+    expect(costsOf(after, 'item-1').map((c) => c.status)).toEqual(['ended', 'ended'])
+    expect(result.inventoryCostChanges.map((c) => [c.inventoryCostId, c.kind, c.ownerType, c.changeLogId, c.effectiveDate]).sort()).toEqual([
+      ['ic-1', 'ended', 'subscription_item', result.changeLog.id, day],
+      ['ic-2', 'ended', 'subscription_item', result.changeLog.id, day],
+      ['ic-3', 'ended', 'asset', result.changeLog.id, day],
+    ])
+  })
+
+  it('Cancel order: already-ended costs are not touched and not reported; idempotent re-run reports nothing', async () => {
+    const { em, service } = setup()
+    em.seed(CpqInventoryCost, [
+      costRow('ic-1', { subscriptionItemId: 'item-1' }, 'tail', '270', { status: 'ended', endedAt: '2026-03-01' }),
+    ])
+    const input = { subscriptionId: 'sub-1', sourceQuoteId: 'q', sourceOrderId: 'o', performedByUserId: null } as never
+    const result = await service.applyCancel(input, SCOPE)
+    expect(result.inventoryCostChanges).toEqual([])
+    expect(em.rows(CpqInventoryCost)[0]).toMatchObject({ endedAt: '2026-03-01', lastChangeId: 'log-old' })
+    em.rows(CpqSubscriptionChangeLog) // the first run persisted its log through create()
+    const again = await service.applyCancel(input, SCOPE)
+    expect(again.inventoryCostChanges).toEqual([])
+  })
+
+  it('Amend, re-priced mirror: the same cost row goes 270 -> 300, the amend row shows it, one changed change', async () => {
+    const { em, service } = setup()
+    em.seed(CpqInventoryCost, [costRow('ic-1', { subscriptionItemId: 'item-1' }, 'tail', '270')])
+    const result = await amend(service, [
+      { action: 'modify', quoteLineId: 'ql-1', sourceSubscriptionItemId: 'item-1', modifyPatch: { mrcAmount: 50 }, costSync: { mode: 'replace', seeds: [seed('tail', '300')] } },
+    ])
+    const rows = em.rows(CpqInventoryCost)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ id: 'ic-1', totalAmount: '300', status: 'active', lastChangeId: result.changeLog.id, lastOrderLineCostId: 'olc-tail' })
+    expect(costsOf(result.changeLog.beforeSnapshot, 'item-1')[0]).toMatchObject({ id: 'ic-1', totalAmount: '270' })
+    expect(costsOf(result.changeLog.afterSnapshot, 'item-1')[0]).toMatchObject({ id: 'ic-1', totalAmount: '300' })
+    expect(result.inventoryCostChanges).toEqual([
+      expect.objectContaining({ inventoryCostId: 'ic-1', kind: 'changed', costKey: 'tail', changeLogId: result.changeLog.id }),
+    ])
+  })
+
+  it('Amend, reconfigured mirror with an unchanged cost: only the changed key is written and reported', async () => {
+    const { em, service } = setup()
+    em.seed(CpqInventoryCost, [
+      costRow('ic-1', { subscriptionItemId: 'item-1' }, 'tail', '270'),
+      costRow('ic-2', { subscriptionItemId: 'item-1' }, 'install', '1500'),
+    ])
+    const result = await amend(service, [
+      { action: 'modify', quoteLineId: 'ql-1', sourceSubscriptionItemId: 'item-1', costSync: { mode: 'replace', seeds: [seed('tail', '300'), seed('install', '1500.00')] } },
+    ])
+    const [tail, install] = em.rows(CpqInventoryCost)
+    expect(tail).toMatchObject({ totalAmount: '300', lastChangeId: result.changeLog.id })
+    expect(install).toMatchObject({ totalAmount: '1500', lastChangeId: 'log-old' }) // untouched: keeps the older order
+    expect(result.inventoryCostChanges.map((c) => [c.costKey, c.kind])).toEqual([['tail', 'changed']])
+  })
+
+  it('Amend / Renew, untouched or frozen mirror (no costSync): item costs unchanged, nothing reported', async () => {
+    const { em, service } = setup()
+    em.seed(CpqInventoryCost, [costRow('ic-1', { subscriptionItemId: 'item-1' }, 'tail', '270')])
+    const result = await service.applyRenewal(
+      { subscriptionId: 'sub-1', sourceQuoteId: 'q', sourceOrderId: 'o', performedByUserId: null,
+        term: { newTermStart: '2027-01-01', newTermEnd: '2028-01-01' },
+        lineChanges: [{ action: 'modify', quoteLineId: 'ql-1', sourceSubscriptionItemId: 'item-1', modifyPatch: { mrcAmount: 50 } }] },
+      SCOPE,
+    )
+    expect(em.rows(CpqInventoryCost)[0]).toMatchObject({ totalAmount: '270', lastChangeId: 'log-old', status: 'active' })
+    expect(result.inventoryCostChanges).toEqual([])
+    expect(result.changeLog.changeType).toBe('renew')
+  })
+
+  it('Renew, reconfigured mirror: new key created, gone key ended, ended key reactivated (Q9) on the same row', async () => {
+    const { em, service } = setup()
+    em.seed(CpqInventoryCost, [
+      costRow('ic-tail', { subscriptionItemId: 'item-1' }, 'tail', '270'),
+      costRow('ic-old', { subscriptionItemId: 'item-1' }, 'old', '10'),
+      costRow('ic-back', { subscriptionItemId: 'item-1' }, 'back', '5', { status: 'ended', endedAt: '2026-02-01' }),
+    ])
+    const result = await service.applyRenewal(
+      { subscriptionId: 'sub-1', sourceQuoteId: 'q', sourceOrderId: 'o', performedByUserId: null,
+        term: { newTermStart: '2027-01-01', newTermEnd: '2028-01-01' },
+        lineChanges: [{ action: 'modify', quoteLineId: 'ql-1', sourceSubscriptionItemId: 'item-1',
+          costSync: { mode: 'replace', seeds: [seed('tail', '270'), seed('fresh', '7'), seed('back', '5')] } }] },
+      SCOPE,
+    )
+    const byId = Object.fromEntries(em.rows(CpqInventoryCost).map((r) => [r.id as string, r]))
+    expect(byId['ic-tail']).toMatchObject({ status: 'active', lastChangeId: 'log-old' })
+    expect(byId['ic-old']).toMatchObject({ status: 'ended', endedAt: result.changeLog.effectiveAt.toISOString().slice(0, 10) })
+    expect(byId['ic-back']).toMatchObject({ status: 'active', endedAt: null })
+    expect(em.rows(CpqInventoryCost).filter((r) => r.costKey === 'back')).toHaveLength(1)
+    expect(result.inventoryCostChanges.map((c) => [c.costKey, c.kind]).sort()).toEqual([['back', 'changed'], ['fresh', 'created'], ['old', 'ended']])
+  })
+
+  it('Amend add line creates item costs; the created cost is in the after snapshot only', async () => {
+    const { em, service } = setup()
+    const result = await amend(service, [
+      { action: 'add', quoteLineId: 'ql-new', itemInput: { name: 'New', mrcAmount: 20, nrcAmount: 0 }, costSync: { mode: 'create', seeds: [seed('tail', '99')] } },
+    ])
+    const rows = em.rows(CpqInventoryCost)
+    expect(rows).toHaveLength(1)
+    const newItemId = rows[0].subscriptionItemId as string
+    expect(costsOf(result.changeLog.beforeSnapshot, newItemId)).toEqual([])
+    expect(costsOf(result.changeLog.afterSnapshot, newItemId)).toEqual([expect.objectContaining({ costKey: 'tail', totalAmount: '99' })])
+    expect(rows[0]).toMatchObject({ status: 'active', lastChangeId: result.changeLog.id })
+    expect(result.inventoryCostChanges).toEqual([expect.objectContaining({ kind: 'created', ownerType: 'subscription_item' })])
+  })
+
+  it('a cancel line ends the item costs and the costs of the assets it cancels, not those of other owners', async () => {
+    const { em, service } = setup()
+    em.seed(CpqInventorySubscriptionItem, [fakeItem({ id: 'item-2', sortOrder: 1 })])
+    em.seed(CpqInventoryAsset, [
+      { ...T, id: 'asset-1', code: 'A', name: 'Srv', status: 'active', subscriptionId: 'sub-1', subscriptionItemId: 'item-1', productId: null },
+      { ...T, id: 'asset-2', code: 'B', name: 'Other', status: 'active', subscriptionId: 'sub-1', subscriptionItemId: 'item-2', productId: null },
+    ])
+    em.seed(CpqInventoryCost, [
+      costRow('ic-1', { subscriptionItemId: 'item-1' }, 'tail', '270'),
+      costRow('ic-a1', { assetId: 'asset-1' }, 'licence', '40'),
+      costRow('ic-2', { subscriptionItemId: 'item-2' }, 'tail', '1'),
+      costRow('ic-a2', { assetId: 'asset-2' }, 'licence', '2'),
+    ])
+    const result = await amend(service, [{ action: 'cancel', quoteLineId: 'ql-c', sourceSubscriptionItemId: 'item-1' }])
+    const status = Object.fromEntries(em.rows(CpqInventoryCost).map((r) => [r.id as string, r.status]))
+    expect(status).toEqual({ 'ic-1': 'ended', 'ic-a1': 'ended', 'ic-2': 'active', 'ic-a2': 'active' })
+    expect(result.inventoryCostChanges.map((c) => c.inventoryCostId).sort()).toEqual(['ic-1', 'ic-a1'])
+    expect(result.inventoryCostChanges.map((c) => c.ownerType).sort()).toEqual(['asset', 'subscription_item'])
+  })
+
+  it('writes costs before the after-snapshot and sets last_change_id after the change log exists (Q12)', async () => {
+    const { em, service } = setup()
+    em.seed(CpqInventoryCost, [costRow('ic-1', { subscriptionItemId: 'item-1' }, 'tail', '270')])
+    const order: string[] = []
+    const row = em.rows(CpqInventoryCost)[0]
+    let tailValue = '270'
+    Object.defineProperty(row, 'totalAmount', { get: () => tailValue, set: (v: string) => { order.push('cost-write'); tailValue = v }, configurable: true, enumerable: true })
+    const snapshot = jest.spyOn(service as unknown as { snapshotSubscription: () => Promise<unknown> }, 'snapshotSubscription')
+    snapshot.mockImplementation(async () => { order.push('snapshot'); return {} })
+    await amend(service, [{ action: 'modify', quoteLineId: 'ql-1', sourceSubscriptionItemId: 'item-1', costSync: { mode: 'replace', seeds: [seed('tail', '300')] } }])
+    expect(order).toEqual(['snapshot', 'cost-write', 'snapshot']) // before-snapshot, write, after-snapshot
+    expect(row.lastChangeId).not.toBe('log-old')
   })
 })

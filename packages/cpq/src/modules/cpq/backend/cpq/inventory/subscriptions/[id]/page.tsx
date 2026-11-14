@@ -13,6 +13,9 @@ import {
 import { StatusPath } from '../../../../../components/StatusPath'
 import { DepthBadge, PriceWaterfall } from '../../../../../components/PriceWaterfall'
 import { parseStoredCharge } from '../../../../../lib/priceAdjustmentView'
+import { includeEndedQuery, type SubscriptionCostsResponse } from '../../../../../lib/orderInventoryCostView'
+import { useCostsRead } from '../../../../../components/costs/useCostsRead'
+import { SubscriptionCostsSection, SubscriptionItemCostChips, SubscriptionItemCosts } from '../../../../../components/costs/SubscriptionCosts'
 
 // XD-250 — ARC integration on subscription detail.
 //   • header buttons (Amend / Renew / Cancel) call /from-subscription
@@ -180,6 +183,10 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
   const router = useRouter()
   const urlParams = useParams()
   const subId = (props.params?.id ?? urlParams?.id) as string
+  // Cost-plus costs: `off` (404) hides every cost UI; the projection is status-only without `cpq.costs.view`.
+  const [includeEndedCosts, setIncludeEndedCosts] = React.useState(false)
+  const costsRead = useCostsRead<SubscriptionCostsResponse>(subId ? `/api/cpq/inventory/subscriptions/${subId}/costs${includeEndedQuery(includeEndedCosts)}` : null)
+  const costs = costsRead.state === 'ready' ? costsRead.data : null
 
   const [sub, setSub] = React.useState<SubscriptionDetail | null>(null)
   const [loading, setLoading] = React.useState(true)
@@ -268,6 +275,7 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
         setSub((prev) => prev ? { ...prev, ...data } : prev)
       }
       setAssets(freshAssets)
+      void costsRead.reload()
     } catch (err) {
       setError((err as Error).message)
     } finally {
@@ -622,6 +630,7 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
                         <span className="font-medium text-sm">{item.name}</span>
                         {item.quantity > 1 && <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-medium">x{item.quantity}</span>}
                         <StatusBadge status={item.status} />
+                        <SubscriptionItemCostChips response={costs} itemId={item.id} />
                       </div>
                     </div>
                     <div className="shrink-0 text-right text-xs space-y-0.5">
@@ -724,6 +733,8 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
                         </div>
                       )}
 
+                      {costs && <SubscriptionItemCosts response={costs} itemId={item.id} currency={item.currencyCode || currency} />}
+
                       {item.metadata && Object.keys(item.metadata).length > 0 && (
                         <div>
                           <p className="text-xs font-medium text-muted-foreground mb-1">Metadata</p>
@@ -750,6 +761,16 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
           </div>
         )}
       </div>
+
+      {costs && (
+        <SubscriptionCostsSection
+          response={costs}
+          includeEnded={includeEndedCosts}
+          onToggleEnded={() => setIncludeEndedCosts((prev) => !prev)}
+          assets={assets.map((asset) => ({ id: asset.id, name: asset.name }))}
+          currency={currency}
+        />
+      )}
 
       {/* XD-250 Change History */}
       <div>

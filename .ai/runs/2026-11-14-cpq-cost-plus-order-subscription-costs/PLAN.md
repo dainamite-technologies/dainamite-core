@@ -29,7 +29,7 @@ Engine: om-auto-create-pr-loop (steps: 21, --loop: no)
 | C | 15 | Scrub CLI | group:C3 | done | a1dc794 |
 | C | 16 | MIGRATION.md and changeset | group:C3 | done | 5fbeb65 |
 | D | 17 | Order page costs and margin | group:D1 | done | |
-| D | 18 | Subscription and asset pages costs | group:D1 | todo | |
+| D | 18 | Subscription and asset pages costs | group:D1 | done | |
 | D | 19 | Change History cost diffs | group:D2 | todo | |
 | D | 20 | Docs and E2E | group:D2 | todo | |
 | D | 21 | Archive the Delta | group:D2 | todo | |

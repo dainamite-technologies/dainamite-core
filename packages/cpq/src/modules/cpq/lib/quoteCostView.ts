@@ -328,9 +328,10 @@ export function buildCostPatch(form: CostForm, existing: FullQuoteCost, confirm:
   if (amountChanged) patch.unitAmount = nextAmount
   const currency = text(form.currencyCode)
   if (currency && (existing.currencyCode !== null ? currency !== existing.currencyCode : amountChanged && nextAmount !== null)) patch.currencyCode = currency
-  const baselineStatus = existing.valueStatus === 'none' ? 'estimated' : existing.valueStatus
+  // A row without a value has no status to compare with, and the server would default one by source
+  // (`fixed` -> confirmed): an entered value always carries the status the user chose.
   if (confirm) patch.valueStatus = 'confirmed'
-  else if (nextAmount !== null && form.valueStatus !== baselineStatus) patch.valueStatus = form.valueStatus
+  else if (nextAmount !== null && (existing.valueStatus === 'none' || form.valueStatus !== existing.valueStatus)) patch.valueStatus = form.valueStatus
   if (text(form.supplierName) !== existing.supplierName) patch.supplierName = text(form.supplierName)
   if (text(form.supplierQuoteRef) !== existing.supplierQuoteRef) patch.supplierQuoteRef = text(form.supplierQuoteRef)
   if (text(form.validUntil) !== existing.validUntil) patch.validUntil = text(form.validUntil)

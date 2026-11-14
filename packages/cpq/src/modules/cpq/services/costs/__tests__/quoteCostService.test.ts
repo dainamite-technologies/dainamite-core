@@ -12,7 +12,7 @@ jest.mock('../../priceAdjustments/quotePricingWrite', () => ({
   },
 }))
 import { CpqQuoteCostService } from '../quoteCostService'
-import { TERMINAL_STATUSES } from '../../types'
+import { COST_CLOSED_STATUSES } from '../costLock'
 
 const SCOPE = { organizationId: 'org', tenantId: 'tenant' }
 const ids = { quote: '11111111-1111-4111-8111-111111111111', line: '22222222-2222-4222-8222-222222222222', cost: '33333333-3333-4333-8333-333333333333' }
@@ -110,12 +110,17 @@ describe('reads', () => {
     expect(em.count).toHaveBeenCalledTimes(2)
     expect(em.count).toHaveBeenCalledWith(CpqProductCharge, { ...SCOPE, deletedAt: null, pricingMethod: 'cost_plus', isActive: true })
     const quoteWhere = em.count.mock.calls.find(([entity]: unknown[]) => entity === CpqQuoteConfiguration)[1]
-    expect(quoteWhere).toMatchObject({ ...SCOPE, deletedAt: null, cpqStatus: { $nin: [...TERMINAL_STATUSES] } })
+    expect(quoteWhere).toMatchObject({ ...SCOPE, deletedAt: null, cpqStatus: { $nin: [...COST_CLOSED_STATUSES] } })
     // The quote ids come from a SQL subquery (semi-join), never from a materialized $in array.
     expect(Array.isArray(quoteWhere.id.$in)).toBe(false)
     expect(quoteWhere.id.$in).toBe(subquery)
-    expect(em.createQueryBuilder).toHaveBeenCalledTimes(1)
+    // Accepted-but-unconverted quotes are open; ordered quotes (NOT IN order sources) are not.
+    expect(quoteWhere.cpqStatus.$nin).not.toContain('accepted')
+    expect(quoteWhere.id.$nin).toBe(subquery)
+    expect(em.createQueryBuilder).toHaveBeenCalledTimes(2)
     expect(em.createQueryBuilder).toHaveBeenCalledWith(CpqQuoteLineCost, 'qlc')
+    expect(em.createQueryBuilder).toHaveBeenCalledWith(CpqOrderConfiguration, 'oc')
+    expect(subquery.select).toHaveBeenCalledWith('oc.sourceQuoteId')
     expect(subquery.select).toHaveBeenCalledWith('qlc.quoteConfigurationId')
     expect(subquery.where).toHaveBeenCalledWith({ ...SCOPE, deletedAt: null })
   })

@@ -3,6 +3,7 @@ import type { EntityManager } from '@mikro-orm/postgresql'
 import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import { withAtomicFlush } from '@open-mercato/shared/lib/commands/flush'
 import {
+  CpqOrderConfiguration,
   CpqProductCharge,
   CpqProductOffering,
   CpqQuoteConfiguration,
@@ -16,8 +17,8 @@ import { isArcMirrorLine, isFrozenAmendMirrorLine } from '../arcPriceFreeze'
 import { evaluateApplicability } from '../cpqPricingService'
 import { QuotingError, type DefaultCpqQuotingService } from '../cpqQuotingService'
 import { withQuotePricingWrite } from '../priceAdjustments/quotePricingWrite'
-import { getBaseCurrencyCode, TERMINAL_STATUSES, type TenantScope } from '../types'
-import { affectsPrice, extendsValidity, isWriteRefused, type CostLockState } from './costLock'
+import { getBaseCurrencyCode, type TenantScope } from '../types'
+import { affectsPrice, COST_CLOSED_STATUSES, extendsValidity, isWriteRefused, type CostLockState } from './costLock'
 import type { CpqCostService } from './costService'
 import { isQuoteCostLocked, previewCatalogCosts } from './costResolution'
 import { computeCostPlusPrice, type MarkupRule } from './costPlusPrice'
@@ -158,8 +159,10 @@ export class CpqQuoteCostService {
     // `id IN (SELECT quote_configuration_id FROM cpq_quote_line_costs WHERE …)`: a semi-join, so a
     // quote with many cost lines counts once (distinct) and Postgres never sees a bound id list.
     const costedQuotes = em.createQueryBuilder(CpqQuoteLineCost, 'qlc').select('qlc.quoteConfigurationId').where(scoped(scope))
+    // Open = costs not closed (an accepted quote still needs its costs confirmed) and not yet converted to an order.
+    const orderedQuotes = em.createQueryBuilder(CpqOrderConfiguration, 'oc').select('oc.sourceQuoteId').where(scoped(scope))
     const openQuotes = await em.count(CpqQuoteConfiguration, {
-      ...scoped(scope), cpqStatus: { $nin: TERMINAL_STATUSES }, id: { $in: costedQuotes },
+      ...scoped(scope), cpqStatus: { $nin: [...COST_CLOSED_STATUSES] }, id: { $in: costedQuotes, $nin: orderedQuotes },
     })
     return { enabled, costPlusCharges, openQuotes, openRequests: 0, liveSubscriptions: 0 }
   }

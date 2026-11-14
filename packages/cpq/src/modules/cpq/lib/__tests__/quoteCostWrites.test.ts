@@ -160,6 +160,12 @@ describe('on_request catalog cost (estimated tail)', () => {
     expect(buildCostPatch(form, tail, true, 5)).toEqual({ valueStatus: 'confirmed', expectedRevision: 5 })
   })
 
+  it('an entered value on a no-value fixed row always carries the chosen status (estimated stays estimated)', () => {
+    const none: FullQuoteCost = { ...unpriced, source: 'fixed' }
+    const form = { ...costFormFromCost(none, 'EUR', false), unitAmount: '280', valueStatus: 'estimated' as const }
+    expect(buildCostPatch(form, none, false, 2)).toMatchObject({ unitAmount: 280, valueStatus: 'estimated' })
+  })
+
   it('a supplier-ref-only edit never sends or clears the value', () => {
     const form = { ...costFormFromCost(tail, 'EUR', false), supplierQuoteRef: 'Q-9' }
     const patch = buildCostPatch(form, tail, false, 5)

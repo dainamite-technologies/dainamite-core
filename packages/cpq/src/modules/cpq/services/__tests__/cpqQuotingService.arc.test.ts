@@ -276,6 +276,26 @@ describe('recalculate → Amend mirror lines', () => {
   })
 })
 
+describe('recalculate → Cancel-quote lines carry no cost readiness errors', () => {
+  it.each([
+    ['cancel', 'cancel', true],
+    ['cancel', 'new', false],
+  ])('an unpriced cost-plus charge on a %s-action line of a %s quote', async (action, quoteType, silent) => {
+    const { em, pricingService, service } = makePricedService()
+    const { cpqConfig, lineConfig } = amendFixture({ port_size: '1G' })
+    Object.assign(cpqConfig, { quoteType, cpqStatus: 'ready' })
+    lineConfig.action = action
+    routeEm(em, cpqConfig, lineConfig)
+    pricingService.resolveProductCharges.mockImplementation(async (params: { costPlus: { errors: Array<{ chargeCode: string; code: string }> } }) => {
+      params.costPlus.errors.push({ chargeCode: 'tail', code: 'COST_PENDING' })
+      return [mrcCharge(0)]
+    })
+    await service.recalculate('cpq-1', { save: true }, SCOPE)
+    const messages = ((lineConfig.validationErrors ?? []) as Array<{ message: string }>).map((error) => error.message)
+    expect(messages.includes('COST_PENDING')).toBe(!silent)
+  })
+})
+
 describe('removeQuoteItem → ARC mirror line becomes a cancel line', () => {
   it.each(['amend', 'renew'])('soft-deletes the line\'s cost lines (catalog and manual) on %s, whatever the toggle', async (quoteType) => {
     const { em, pricingService, service } = makePricedService()

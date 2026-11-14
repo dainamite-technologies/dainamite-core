@@ -5,6 +5,7 @@ import {
   CpqQuoteMarkupOverride,
   type CpqQuoteConfiguration,
 } from '../../data/entities'
+import { isArcTerminationLine } from '../arcLineRemoval'
 import { isArcMirrorLine } from '../arcPriceFreeze'
 import type { ResolvedCharge, TenantScope } from '../types'
 import { computeQuoteMargin, priceBasisCostFlags, type MarginCost, type MarginLine, type MarginMarkup, type PriceBasisFlags, type QuoteMargin } from './quoteMargin'
@@ -49,7 +50,10 @@ export async function loadQuoteMarginState(em: EntityManager, quote: CpqQuoteCon
       chargeCode: charge.chargeCode, chargeType: charge.chargeType, totalPrice: charge.totalPrice ?? null,
     })),
   }))
-  const lineIds = new Set(lines.map((line) => line.lineId))
+  // Termination lines (Amend / Renew removals, Cancel-quote lines) accept no cost writes and never bind
+  // conversion: their costs must not hold the quote's price-basis / margin flags.
+  const terminationIds = new Set(lineConfigs.filter((line) => isArcTerminationLine(line, quote.quoteType)).map((line) => line.quoteLineId))
+  const lineIds = new Set(lines.map((line) => line.lineId).filter((id) => !terminationIds.has(id)))
   const marginCosts: MarginCost[] = costs.filter((row) => lineIds.has(row.quoteLineId)).map((row) => ({
     quoteLineId: row.quoteLineId, chargeCode: row.chargeCode, costKey: row.costKey, role: row.role, costType: row.costType,
     valueStatus: row.valueStatus, instanceAmount: row.instanceAmount, currencyCode: row.currencyCode,

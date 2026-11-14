@@ -59,7 +59,7 @@ import {
 } from './arcPriceFreeze'
 import type { CpqCostService } from './costs/costService'
 import { isQuoteCostLocked, resolveCostPlusInputs } from './costs/costResolution'
-import { isArcCancelledLine, planArcLineRemoval, planArcLineRestore, removalCancelsItem } from './arcLineRemoval'
+import { isArcCancelledLine, isArcTerminationLine, planArcLineRemoval, planArcLineRestore, removalCancelsItem } from './arcLineRemoval'
 
 interface QuotingServiceDeps {
   em: EntityManager
@@ -1101,7 +1101,8 @@ export class DefaultCpqQuotingService {
           costPlus,
         })
         // An unpriced cost-plus charge makes the line (and so the quote) not ready.
-        for (const error of costPlus.errors) {
+        // Termination lines (Cancel-quote lines) accept no cost writes and never bind conversion: no readiness error.
+        for (const error of isArcTerminationLine(lineConfig, cpqConfig.quoteType) ? [] : costPlus.errors) {
           validationErrors.push({ message: error.code, attribute: error.chargeCode, lineId: lineConfig.quoteLineId })
         }
       } else {

@@ -12,7 +12,7 @@ The calculate-price API SHALL return `listUnitPrice`, `listTotalPrice`, `standar
 Source: .ai/specs/2026-11-10-cpq-manual-price-adjustments.md
 
 ## Requirement: Cost-plus charges in the calculate-price API
-The system SHALL return a cost-plus charge's list price when all its applicable price-basis costs resolve without a quote (catalog costs resolved in memory, nothing persisted). It SHALL mark the charge `indicative: true` when any of them is an on-request estimate, and return `priceOnRequest: true` with `unitPrice` and `totalPrice` null, excluded from the totals, when it cannot be priced (pending cost, no price basis) or when the tenant toggle is off. It SHALL never return a cost, supplier or markup, and SHALL leave the Puffin public proxy's response unchanged.
+The system SHALL return a cost-plus charge's list price when all its applicable price-basis costs resolve without a quote (catalog costs resolved in memory, nothing persisted). It SHALL mark the charge `indicative: true` when any of them is an estimated price-basis cost, and return `priceOnRequest: true` with `unitPrice` and `totalPrice` null, excluded from the totals, when it cannot be priced (pending cost, no price basis) or when the tenant toggle is off. It SHALL never return a cost, supplier or markup, and SHALL leave the Puffin public proxy's response unchanged.
 
 ### Scenario: On-request without estimate
 - WHEN the Puffin calculator prices an offering whose cost-plus charge has an `on_request` element without an estimate

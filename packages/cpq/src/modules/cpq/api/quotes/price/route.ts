@@ -100,7 +100,7 @@ const chargeDoc = z.object({
   chargeCode: z.string(), chargeName: z.string(), chargeType: z.enum(['nrc', 'mrc', 'usage']),
   pricingMethod: z.enum(['flat', 'per_unit', 'volume', 'tiered', 'cost_plus']), currencyCode: z.string(),
   unitPrice: z.number().nullable(), quantity: z.number().nullable(), totalPrice: z.number().nullable(),
-  indicative: z.boolean().optional().describe('Cost-plus charge priced from at least one on-request estimate.'),
+  indicative: z.boolean().optional().describe('Cost-plus charge whose price rests on at least one estimated price-basis cost.'),
   priceOnRequest: z.boolean().optional().describe('Cost-plus charge that cannot be priced (pending cost, no price basis, or cost-plus disabled): unitPrice and totalPrice are null and it is excluded from totals.'),
   listUnitPrice: z.number().nullable().optional(), listTotalPrice: z.number().nullable().optional(),
   standardUnitPrice: z.number().optional(), standardTotalPrice: z.number().nullable().optional(),
@@ -109,7 +109,7 @@ const chargeDoc = z.object({
 }).passthrough()
 export const openApi: OpenApiRouteDoc = { tag: 'CPQ Pricing', methods: { POST: {
   summary: 'Calculate catalog prices and price rules without saving',
-  description: 'Cost-plus charges are priced from catalog costs resolved in memory (additive fields indicative / priceOnRequest); costs, suppliers and markup are never returned. Manual quote adjustments are never applied. Set includeWaterfall=true to return list and standard prices; these fields are omitted by default.',
+  description: 'Cost-plus charges are priced from catalog costs resolved in memory (`pricingMethod` gains the value cost_plus; additive flags indicative / priceOnRequest); costs, suppliers and markup are never returned. Manual quote adjustments are never applied. Set includeWaterfall=true to return list and standard prices; these fields are omitted by default.',
   requestBody: { schema: cpqPricePreviewSchema },
   responses: [{ status: 200, description: 'Resolved rule prices and optional waterfall', schema: z.object({
     primaryCharges: z.array(chargeDoc),

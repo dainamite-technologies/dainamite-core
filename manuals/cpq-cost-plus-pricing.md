@@ -276,7 +276,7 @@ change prices.
 
 `POST /api/cpq/quotes/price` prices cost-plus charges without a quote, from
 catalog costs resolved in memory. Additive charge fields: `indicative: true`
-(priced from an on-request estimate) and `priceOnRequest: true` (cannot be
+(priced from at least one estimated price-basis cost) and `priceOnRequest: true` (cannot be
 priced — pending cost, no price basis or toggle off; `unitPrice` and
 `totalPrice` are `null` and the charge is excluded from totals). Costs,
 suppliers and markup are never returned, and the Puffin public proxy forwards

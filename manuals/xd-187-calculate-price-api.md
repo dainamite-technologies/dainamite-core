@@ -380,13 +380,14 @@ Navigate to: **Sidebar → Sales section → CPQ Quotes** → click **New Quote*
 
 ## Cost-plus charges in the response (additive)
 
-Each charge in `primaryCharges` / `childItems[].charges` carries three additive
-fields. Existing consumers can ignore them; nothing else changed.
+Cost-plus pricing adds one new value to the existing charge-model field and two
+additive flags on each charge in `primaryCharges` / `childItems[].charges`.
+Existing consumers can ignore them; nothing else changed.
 
 | Field | Meaning |
 |---|---|
-| `pricingMethod` | `fixed` (default) or `cost_plus`. |
-| `indicative` | `true` when a cost-plus price rests on an *estimated* on-request cost. |
+| `pricingMethod` | The existing charge-model field (`flat` / `per_unit` / `volume` / `tiered`), which gains the value `cost_plus`. Branch on `cost_plus`, not on a "default" value. |
+| `indicative` | `true` when a cost-plus price rests on at least one *estimated* price-basis cost. |
 | `priceOnRequest` | `true` when the charge cannot be priced: cost pending, no price basis, or the `cpq.cost_plus` toggle is off. |
 
 A `priceOnRequest` charge has `unitPrice: null` and `totalPrice: null` and is

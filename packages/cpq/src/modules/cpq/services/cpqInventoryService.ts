@@ -7,6 +7,13 @@ import {
   CpqSubscriptionChangeLog,
 } from '../data/entities'
 import {
+  createAssetCosts,
+  createItemCosts,
+  type CostSeed,
+  type InventoryCostChange,
+  type InventoryCostLink,
+} from './costs/inventoryCostSync'
+import {
   INVENTORY_SUBSCRIPTION_TRANSITIONS,
   INVENTORY_ASSET_TRANSITIONS,
   getBaseCurrencyCode,
@@ -161,6 +168,28 @@ export interface CreateSubscriptionInput {
   sourceOrderId?: string
   metadata?: Record<string, unknown>
   items: CreateSubscriptionItemInput[]
+  /**
+   * New-sale assets (assetizable lines that become an asset without an item), created inside
+   * `createSubscription` after the items and BEFORE its `created` change-log snapshot, so the snapshot lists them.
+   * `parentItemIndex` is an index into `items`; `costs` seeds the asset's own inventory costs (Q2).
+   */
+  assets?: CreateSubscriptionAssetInput[]
+}
+
+export type CreateSubscriptionAssetInput = Omit<CreateAssetInput, 'customerId' | 'subscriptionId' | 'subscriptionItemId'> & {
+  customerId?: string
+  parentItemIndex?: number
+  costs?: CostSeed[]
+}
+
+/** `createSubscription` plus what the activation needs to link and report the costs it wrote. */
+export interface CreateSubscriptionResult {
+  subscription: CpqInventorySubscription
+  assets: CpqInventoryAsset[]
+  /** Real cost changes only (created rows; no-op rows are excluded). */
+  inventoryCostChanges: InventoryCostChange[]
+  /** Seed order line cost -> inventory cost it set, for `CpqOrderLineCost.inventory_cost_id`. */
+  inventoryCostLinks: InventoryCostLink[]
 }
 
 export interface CreateSubscriptionItemInput {
@@ -180,6 +209,8 @@ export interface CreateSubscriptionItemInput {
   sourceQuoteLineId?: string
   metadata?: Record<string, unknown>
   sortOrder?: number
+  /** Cost seeds (order line costs): become the item's inventory costs in the same step as the item. */
+  costs?: CostSeed[]
 }
 
 interface UpdateSubscriptionInput {
@@ -201,7 +232,7 @@ interface UpdateSubscriptionItemInput {
   sortOrder?: number
 }
 
-interface CreateAssetInput {
+export interface CreateAssetInput {
   customerId: string
   subscriptionId?: string
   subscriptionItemId?: string
@@ -388,6 +419,15 @@ export class DefaultCpqInventoryService {
   }
 
   async createSubscription(input: CreateSubscriptionInput, scope: TenantScope) {
+    return (await this.createSubscriptionWithCosts(input, scope)).subscription
+  }
+
+  /**
+   * Creates a subscription with its items, new-sale assets and inventory costs, then its `created` change-log
+   * row. Write ordering (feature spec §Architecture): items, assets and their costs -> flush -> after-snapshot
+   * -> change log -> `last_change_id` on the costs written here -> flush. Everything goes through `this.em`.
+   */
+  async createSubscriptionWithCosts(input: CreateSubscriptionInput, scope: TenantScope): Promise<CreateSubscriptionResult> {
     const code = input.code ?? await this.generateSubscriptionCode(scope)
 
     const subId = crypto.randomUUID()
@@ -416,6 +456,8 @@ export class DefaultCpqInventoryService {
     const items: CpqInventorySubscriptionItem[] = []
     for (const itemInput of input.items) {
       const item = this.em.create(CpqInventorySubscriptionItem, {
+        // Pre-generated so item costs can reference it before the first flush.
+        id: crypto.randomUUID(),
         organizationId: scope.organizationId,
         tenantId: scope.tenantId,
         subscriptionId: sub.id,
@@ -448,6 +490,61 @@ export class DefaultCpqInventoryService {
     sub.mrcAmount = String(mrcSum)
     sub.nrcAmount = String(nrcSum)
 
+    // New-sale assets (Q2): created here, before the `created` snapshot, so the snapshot lists them.
+    const assets: CpqInventoryAsset[] = []
+    if (input.assets?.length) {
+      // One count for the batch: the rows are not flushed yet, so a per-asset count would repeat the same code.
+      const existingAssets = await this.em.count(CpqInventoryAsset, {
+        organizationId: scope.organizationId,
+        tenantId: scope.tenantId,
+      })
+      const year = new Date().getFullYear()
+      for (const [index, assetInput] of input.assets.entries()) {
+        const parent = assetInput.parentItemIndex != null ? items[assetInput.parentItemIndex] : undefined
+        if (assetInput.parentItemIndex != null && !parent) {
+          throw { status: 400, error: `parentItemIndex ${assetInput.parentItemIndex} does not match an item` }
+        }
+        const asset = this.em.create(CpqInventoryAsset, {
+          id: crypto.randomUUID(),
+          organizationId: scope.organizationId,
+          tenantId: scope.tenantId,
+          customerId: assetInput.customerId ?? input.customerId,
+          subscriptionId: sub.id,
+          subscriptionItemId: parent?.id ?? null,
+          productId: assetInput.productId ?? null,
+          offeringId: assetInput.offeringId ?? null,
+          specId: assetInput.specId ?? null,
+          code: assetInput.code ?? `AST-${year}-${String(existingAssets + index + 1).padStart(5, '0')}`,
+          name: assetInput.name,
+          description: assetInput.description ?? null,
+          status: 'pending',
+          assetType: assetInput.assetType ?? 'one_time',
+          currencyCode: assetInput.currencyCode ?? input.currencyCode ?? await getBaseCurrencyCode(this.em, scope),
+          purchasePrice: String(assetInput.purchasePrice ?? 0),
+          quantity: assetInput.quantity ?? 1,
+          purchaseDate: assetInput.purchaseDate ? new Date(assetInput.purchaseDate) : null,
+          deliveryDate: assetInput.deliveryDate ? new Date(assetInput.deliveryDate) : null,
+          configuration: assetInput.configuration ?? {},
+          charges: assetInput.charges ?? null,
+          sourceQuoteId: assetInput.sourceQuoteId ?? input.sourceQuoteId ?? null,
+          sourceOrderId: assetInput.sourceOrderId ?? input.sourceOrderId ?? null,
+          sourceQuoteLineId: assetInput.sourceQuoteLineId ?? null,
+          metadata: assetInput.metadata ?? null,
+        })
+        this.em.persist(asset)
+        assets.push(asset)
+      }
+    }
+
+    // Inventory costs of the items and assets (written before the after-snapshot, which reads them).
+    const costContext = { scope, startedAt: new Date().toISOString().slice(0, 10) }
+    const itemCosts = await createItemCosts(this.em, items.map((item, index) => ({
+      subscriptionId: sub.id, subscriptionItemId: item.id, seeds: input.items[index].costs ?? [],
+    })), costContext)
+    const assetCosts = await createAssetCosts(this.em, assets.map((asset, index) => ({
+      subscriptionId: sub.id, assetId: asset.id, seeds: input.assets?.[index]?.costs ?? [],
+    })), costContext)
+
     // Seed the change log with a `created` entry so the Change History
     // panel always shows where the subscription came from — same shape
     // as the `amend` / `renew` / `cancel` entries written by ARC flows.
@@ -474,8 +571,18 @@ export class DefaultCpqInventoryService {
       })),
     })
     sub.lastChangeLogId = log.id
+    // Q12: the costs written in this step point at the change-log row that recorded them.
+    const changedCostIds = new Set([...itemCosts.changes, ...assetCosts.changes].map((change) => change.inventoryCostId))
+    for (const row of [...itemCosts.rows, ...assetCosts.rows]) {
+      if (changedCostIds.has(row.id)) row.lastChangeId = log.id
+    }
     await this.em.flush()
-    return sub
+    return {
+      subscription: sub,
+      assets,
+      inventoryCostChanges: [...itemCosts.changes, ...assetCosts.changes],
+      inventoryCostLinks: [...itemCosts.links, ...assetCosts.links],
+    }
   }
 
   async updateSubscription(id: string, updates: UpdateSubscriptionInput, scope: TenantScope) {

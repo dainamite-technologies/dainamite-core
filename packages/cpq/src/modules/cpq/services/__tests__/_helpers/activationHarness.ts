@@ -3,6 +3,7 @@ import {
   CpqInventorySubscriptionItem,
   CpqOrderConfiguration,
   CpqOrderLineConfiguration,
+  CpqOrderLineCost,
   CpqProductSpecification,
   CpqQuoteConfiguration,
   CpqQuoteLineConfiguration,
@@ -38,11 +39,15 @@ export interface ActivationFixture {
   targets?: Row[]
   quoteLines?: Row[]
   quoteOver?: Row
-  /** Inject a failure: `createAsset` throws (after the subscription, items and change log were written). */
-  failInventory?: 'createAsset'
+  /** Order line costs of the order (`CpqOrderLineCost` rows). */
+  orderLineCosts?: Row[]
+  /** What `createSubscriptionWithCosts` reports besides the subscription (default: nothing). */
+  createdCosts?: { inventoryCostChanges?: unknown[]; inventoryCostLinks?: unknown[] }
+  /** Inject a failure: `createSubscription` throws AFTER it wrote the subscription, items, costs and change log. */
+  failInventory?: 'createSubscription'
   /** Inject a failure on the final order-status flush. */
   failFinalFlush?: boolean
-  inventory?: Partial<Record<'createSubscription' | 'createAsset' | 'applyAmendment' | 'applyRenewal' | 'applyCancel' | 'applyMergeRenewal', unknown>>
+  inventory?: Partial<Record<'createSubscription' | 'applyAmendment' | 'applyRenewal' | 'applyCancel' | 'applyMergeRenewal', unknown>>
 }
 
 export function createActivationHarness(fixture: ActivationFixture) {
@@ -103,6 +108,7 @@ export function createActivationHarness(fixture: ActivationFixture) {
       if (entity === CpqInventorySubscriptionItem) return fixture.subscriptionItems ?? []
       if (entity === CpqQuoteTargetSubscription) return fixture.targets ?? []
       if (entity === CpqQuoteLineConfiguration) return fixture.quoteLines ?? []
+      if (entity === CpqOrderLineCost) return fixture.orderLineCosts ?? []
       return []
     }),
   }
@@ -112,17 +118,21 @@ export function createActivationHarness(fixture: ActivationFixture) {
     jest.fn(async (..._args: unknown[]) => {
       trace.push(name)
       store.pending.push(...rows)
-      if (name === 'createAsset' && fixture.failInventory === 'createAsset') throw new Error('createAsset failed')
+      if (name === 'createSubscription' && fixture.failInventory === 'createSubscription') throw new Error('createSubscription failed')
       return result
     })
   const inv = fixture.inventory ?? {}
+  const createSubscription = inventoryCall('createSubscription', inv.createSubscription ?? { id: 'sub-1' }, ['subscription', 'item', 'itemCost', 'assetAndCosts', 'changeLog'])
   const inventory: Record<string, jest.Mock> = {
     withEntityManager: jest.fn((bound: unknown): unknown => {
       trace.push(bound === txEm ? 'inventory.withEntityManager(tx)' : 'inventory.withEntityManager(OTHER)')
       return inventory
     }),
-    createSubscription: inventoryCall('createSubscription', inv.createSubscription ?? { id: 'sub-1' }, ['subscription', 'item', 'itemCost', 'changeLog']),
-    createAsset: inventoryCall('createAsset', inv.createAsset ?? { id: 'asset-1' }, ['asset']),
+    // `createSubscription` fixtures stay the bare subscription; the order service calls `createSubscriptionWithCosts`.
+    createSubscriptionWithCosts: jest.fn(async (...args: unknown[]) => {
+      const created = await createSubscription(...args)
+      return { subscription: created, assets: [], inventoryCostChanges: [], inventoryCostLinks: [], ...fixture.createdCosts }
+    }),
     applyAmendment: inventoryCall('applyAmendment', inv.applyAmendment),
     applyRenewal: inventoryCall('applyRenewal', inv.applyRenewal),
     applyCancel: inventoryCall('applyCancel', inv.applyCancel),

@@ -1,6 +1,7 @@
 import { storedAdjustmentFailure } from './priceAdjustments/storedAdjustmentFailure'
 import { loadConversionCostBlockers } from './costs/conversionGuard'
 import { copyQuoteCostsToOrder } from './costs/orderCostCopy'
+import { costSeedFromOrderLineCost, type CostSeed, type InventoryCostChange } from './costs/inventoryCostSync'
 import { withQuotePricingWrite } from './priceAdjustments/quotePricingWrite'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { SalesOrder, SalesOrderLine } from '@open-mercato/core/modules/sales/data/entities'
@@ -12,11 +13,13 @@ import {
   CpqInventorySubscription,
   CpqOrderConfiguration,
   CpqOrderLineConfiguration,
+  CpqOrderLineCost,
   CpqProductOffering,
   CpqProductSpecification,
   CpqInventorySubscriptionItem,
 } from '../data/entities'
 import type {
+  CreateSubscriptionAssetInput,
   ApplyArcResult,
   ApplyMergeRenewalResult,
   ArcLineChange,
@@ -364,6 +367,10 @@ export class DefaultCpqOrderService {
     if (this.em.isInTransaction?.()) throw new Error('activateOrder must not run inside an existing transaction')
     const isolated = this.em.fork({ clear: true, useContext: false })
     const postCommitEvents: Array<() => Promise<void>> = []
+    // Real inventory cost changes of this activation (no-op rows excluded). Collected inside the transaction and
+    // returned with its result; the `cost_changed` events that report them are emitted after the commit by a
+    // later step (never inside the transaction).
+    const inventoryCostChanges: InventoryCostChange[] = []
     const committed = await isolated.transactional(async (tx) => {
       const orderConfig = await this.loadOrderConfig(tx, orderId, scope)
 
@@ -396,6 +403,7 @@ export class DefaultCpqOrderService {
       if (quoteType === 'new') {
         const inventory = await this.createInventoryFromOrder(tx, orderConfig, orderLines, scope)
         if (inventory) {
+          inventoryCostChanges.push(...inventory.inventoryCostChanges)
           postCommitEvents.push(() => emitActivatedEvent(orderConfig, inventory, scope))
         }
       } else {
@@ -410,7 +418,7 @@ export class DefaultCpqOrderService {
       salesOrder.placedAt = new Date()
 
       await tx.flush()
-      return { orderConfig, salesOrder, orderLines }
+      return { orderConfig, salesOrder, orderLines, inventoryCostChanges }
     }, { clear: true })
 
     // `transactional` resolved, so the activation is committed; a rolled-back
@@ -659,6 +667,19 @@ export class DefaultCpqOrderService {
 
     const subscriptionName = await this.buildSubscriptionName(em, orderConfig, orderLines, scope)
 
+    // Cost seeds: the order's line costs, loaded in ONE query and grouped by order line. They are written
+    // whatever the `cpq.cost_plus` toggle says (only quote-side pricing is toggled, R14).
+    const orderLineCosts = await em.find(CpqOrderLineCost, {
+      orderConfigurationId: orderConfig.id,
+      organizationId: scope.organizationId,
+      tenantId: scope.tenantId,
+      deletedAt: null,
+    }) ?? []
+    const costsByOrderLine = new Map<string, CpqOrderLineCost[]>()
+    for (const cost of orderLineCosts) costsByOrderLine.set(cost.orderLineId, [...(costsByOrderLine.get(cost.orderLineId) ?? []), cost])
+    const seedsFor = (line: CpqOrderLineConfiguration): CostSeed[] =>
+      (costsByOrderLine.get(line.orderLineId) ?? []).map(costSeedFromOrderLineCost)
+
     const lineWithDates = orderLines.find((l) => l.startDate != null) ?? orderLines[0]
     const lineWithTerm = orderLines.find((l) => l.termMonths != null) ?? orderLines[0]
     const subscriptionItems = subscriptionLines.map((line) => ({
@@ -674,11 +695,37 @@ export class DefaultCpqOrderService {
       quantity: line.quantity,
       sourceQuoteLineId: line.sourceQuoteLineId ?? undefined,
       sortOrder: orderLines.indexOf(line),
+      costs: seedsFor(line),
     }))
+    // A subscription line's costs ride its item; an assetizable line becomes an asset WITHOUT an item, so its
+    // costs ride the asset (Q2). The asset hangs under the item of its parent line when that is an item line.
+    const subscriptionLineIndex = new Map(subscriptionLines.map((line, index) => [line.orderLineId, index]))
+    const assetInputs: CreateSubscriptionAssetInput[] = assetLines.map((line) => ({
+      parentItemIndex: line.parentLineId ? subscriptionLineIndex.get(line.parentLineId) : undefined,
+      productId: line.productId ?? undefined,
+      offeringId: line.offeringId ?? undefined,
+      specId: line.specId ?? undefined,
+      name: this.getLineName(line),
+      assetType: 'one_time',
+      currencyCode: orderConfig.currencyCode,
+      purchasePrice: Number(line.nrcTotal),
+      quantity: line.quantity,
+      purchaseDate: new Date().toISOString().split('T')[0],
+      configuration: stripQuoteOnlyArcMarkers(line.configuration) ?? {},
+      charges: (line.charges ?? []) as Array<Record<string, unknown>>,
+      sourceOrderId: orderConfig.id,
+      sourceQuoteLineId: line.sourceQuoteLineId ?? undefined,
+      costs: seedsFor(line),
+    }))
+    // Costs on a line that is neither (a stale order line id) cannot be owned: skipped, never fails activation.
+    const ownedLineIds = new Set(orderLines.map((line) => line.orderLineId))
+    for (const lineId of costsByOrderLine.keys()) {
+      if (!ownedLineIds.has(lineId)) console.warn(`[cpq.costs] order line costs of unknown order line ${lineId} were not carried to inventory`)
+    }
 
     // Bound to the transaction EM: never the DI `this.em`.
     const inventoryService = this.inventoryService.withEntityManager(em)
-    const subscription = await inventoryService.createSubscription(
+    const created = await inventoryService.createSubscriptionWithCosts(
       {
         customerId: orderConfig.customerId,
         name: subscriptionName,
@@ -691,9 +738,21 @@ export class DefaultCpqOrderService {
         items: subscriptionItems.length > 0
           ? subscriptionItems
           : [{ name: subscriptionName, mrcAmount: 0, nrcAmount: 0 }],
+        // With no subscription lines the only item is a placeholder and no asset has a parent index.
+        assets: assetInputs,
       },
       scope,
     )
+    const subscription = created.subscription
+
+    // Link every order line cost to the inventory cost it set (committed with the activation).
+    if (created.inventoryCostLinks.length > 0) {
+      const costById = new Map(orderLineCosts.map((cost) => [cost.id, cost]))
+      for (const link of created.inventoryCostLinks) {
+        const orderLineCost = costById.get(link.orderLineCostId)
+        if (orderLineCost) orderLineCost.inventoryCostId = link.inventoryCostId
+      }
+    }
 
     const orderLineToSubItem = new Map<string, string>()
     const allSubItems = await em.find(CpqInventorySubscriptionItem, {
@@ -718,35 +777,6 @@ export class DefaultCpqOrderService {
     }
     await em.flush()
 
-    for (const line of assetLines) {
-      let subscriptionItemId: string | undefined
-      if (line.parentLineId) {
-        subscriptionItemId = orderLineToSubItem.get(line.parentLineId) ?? undefined
-      }
-
-      await inventoryService.createAsset(
-        {
-          customerId: orderConfig.customerId,
-          subscriptionId: subscription.id,
-          subscriptionItemId,
-          productId: line.productId ?? undefined,
-          offeringId: line.offeringId ?? undefined,
-          specId: line.specId ?? undefined,
-          name: this.getLineName(line),
-          assetType: 'one_time',
-          currencyCode: orderConfig.currencyCode,
-          purchasePrice: Number(line.nrcTotal),
-          quantity: line.quantity,
-          purchaseDate: new Date().toISOString().split('T')[0],
-          configuration: stripQuoteOnlyArcMarkers(line.configuration) ?? {},
-          charges: (line.charges ?? []) as Array<Record<string, unknown>>,
-          sourceOrderId: orderConfig.id,
-          sourceQuoteLineId: line.sourceQuoteLineId ?? undefined,
-        },
-        scope,
-      )
-    }
-
     // Pair each subscription line with its created subscription item —
     // input for the `cpq.subscription.activated` billing-onboarding event.
     const eventItems = subscriptionLines
@@ -761,7 +791,7 @@ export class DefaultCpqOrderService {
       // no Billing Item anyway; emitting it would just make the
       // connector create a needless shell account.
       .filter((it) => it.mrcTotal > 0 || it.nrcTotal > 0)
-    return { subscriptionId: subscription.id, items: eventItems }
+    return { subscriptionId: subscription.id, items: eventItems, inventoryCostChanges: created.inventoryCostChanges }
   }
 
   // ─── Get / List ─────────────────────────────────────────────
@@ -1173,6 +1203,8 @@ interface ArcEventEnvelope {
 
 type ActivatedInventory = {
   subscriptionId: string
+  /** Real inventory cost changes written by the activation; never part of an event payload. */
+  inventoryCostChanges: InventoryCostChange[]
   items: Array<{
     subscriptionItemId: string
     productName: string

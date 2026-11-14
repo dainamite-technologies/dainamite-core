@@ -21,6 +21,7 @@ interface MockEm {
 
 interface MockInventoryService {
   createSubscription: jest.MockedFunction<(input: unknown, scope: unknown) => Promise<unknown>>
+  createSubscriptionWithCosts: jest.MockedFunction<(input: unknown, scope: unknown) => Promise<unknown>>
   createAsset: jest.MockedFunction<(input: unknown, scope: unknown) => Promise<unknown>>
 }
 
@@ -53,6 +54,7 @@ function createService(): {
   const em = createMockEm()
   const inventoryService: MockInventoryService = {
     createSubscription: jest.fn(),
+    createSubscriptionWithCosts: jest.fn(),
     createAsset: jest.fn(),
   }
   const numberGenerator: MockNumberGenerator = {
@@ -362,7 +364,7 @@ describe('DefaultCpqOrderService.activateOrder — guard rails', () => {
 
     const result = await service.activateOrder('oc1', SCOPE)
 
-    expect(inventoryService.createSubscription).not.toHaveBeenCalled()
+    expect(inventoryService.createSubscriptionWithCosts).not.toHaveBeenCalled()
     expect(inventoryService.createAsset).not.toHaveBeenCalled()
     expect(result.cpqStatus).toBe('active')
   })
@@ -843,7 +845,9 @@ describe('activateOrder transaction boundary', () => {
     subscriptionItems: [{ id: 'item-1' }],
   }
 
-  it('new sale: forks the request EM and runs createSubscription, the parent-link flush, createAsset and the status flush in ONE transaction, bound to the tx EM', async () => {
+  // MODIFIED by step 5: new-sale assets are created INSIDE createSubscription (before its `created`
+  // snapshot), so the old separate `createAsset` call and its flush are gone from the transaction.
+  it('new sale: forks the request EM and runs createSubscription (assets inside), the parent-link flush and the status flush in ONE transaction, bound to the tx EM', async () => {
     const h = createActivationHarness(newSaleFixture)
 
     const result = await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
@@ -853,18 +857,19 @@ describe('activateOrder transaction boundary', () => {
       'inventory.withEntityManager(tx)',
       'createSubscription',
       'flush[order=draft]',
-      'createAsset',
       'flush[order=active]',
       'tx:commit',
     ])
     expect(h.em.fork).toHaveBeenCalledWith({ clear: true, useContext: false })
     expect(h.txEm.transactional).toHaveBeenCalledTimes(1)
-    expect(h.inventory.createAsset).toHaveBeenCalledWith(
-      expect.objectContaining({ subscriptionId: 'sub-1', subscriptionItemId: 'item-1', purchasePrice: 500 }), ACTIVATION_SCOPE,
+    expect(h.inventory.createSubscriptionWithCosts).toHaveBeenCalledWith(
+      expect.objectContaining({
+        assets: [expect.objectContaining({ parentItemIndex: 0, purchasePrice: 500, name: 'Server' })],
+      }), ACTIVATION_SCOPE,
     )
     expect(h.salesOrder.status).toBe('active')
     expect(result.cpqStatus).toBe('active')
-    expect(h.store.committed).toEqual(['subscription', 'item', 'itemCost', 'changeLog', 'asset', 'order:active'])
+    expect(h.store.committed).toEqual(['subscription', 'item', 'itemCost', 'assetAndCosts', 'changeLog', 'order:active'])
     // the request EM was never read or written
     expect(h.em.find).not.toHaveBeenCalled()
     expect(h.em.flush).not.toHaveBeenCalled()
@@ -902,7 +907,7 @@ describe('activateOrder transaction boundary', () => {
   })
 
   it.each([
-    ['createAsset throws after the subscription, items, item cost and change log were flushed', { failInventory: 'createAsset' as const }],
+    ['createSubscription throws after the subscription, items, assets, costs and change log were flushed', { failInventory: 'createSubscription' as const }],
     ['the final order-status flush throws', { failFinalFlush: true }],
   ])('rolls everything back when %s', async (_label, failure) => {
     const h = createActivationHarness({ ...newSaleFixture, ...failure })
@@ -926,7 +931,7 @@ describe('activateOrder transaction boundary', () => {
   })
 
   it('emits no event on rollback and one activated event after commit', async () => {
-    const failed = createActivationHarness({ ...newSaleFixture, failInventory: 'createAsset' })
+    const failed = createActivationHarness({ ...newSaleFixture, failInventory: 'createSubscription' as const })
     const emitSpy = jest.spyOn(eventsModule, 'emitCpqEvent').mockResolvedValue(undefined as never)
     await expect(failed.service.activateOrder('oc-1', ACTIVATION_SCOPE)).rejects.toThrow()
     expect(emitSpy).not.toHaveBeenCalled()
@@ -939,13 +944,16 @@ describe('activateOrder transaction boundary', () => {
   })
 
   it('a retry after a rolled-back activation creates exactly one subscription', async () => {
-    const h = createActivationHarness({ ...newSaleFixture, failInventory: 'createAsset' })
+    const h = createActivationHarness({ ...newSaleFixture, failInventory: 'createSubscription' as const })
     jest.spyOn(eventsModule, 'emitCpqEvent').mockResolvedValue(undefined as never)
     await expect(h.service.activateOrder('oc-1', ACTIVATION_SCOPE)).rejects.toThrow()
     expect(h.store.committed).toEqual([])
 
     // the transient failure is gone: the retry activates once
-    h.inventory.createAsset.mockImplementation(async () => { h.store.pending.push('asset'); return { id: 'asset-1' } })
+    h.inventory.createSubscriptionWithCosts.mockImplementation(async () => {
+      h.store.pending.push('subscription')
+      return { subscription: { id: 'sub-1' }, assets: [], inventoryCostChanges: [], inventoryCostLinks: [] }
+    })
     await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
 
     expect(h.store.committed.filter((row) => row === 'subscription')).toHaveLength(1)
@@ -1029,5 +1037,103 @@ describe('conversion copies quote costs to order line costs (MODIFIED by step 4)
     await expect(run()).rejects.toThrow('copy failed')
     // only the pricing-revision phase flushed; the order lines were never flushed, so the transaction rolls back
     expect(em.flush).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('activateOrder writes inventory costs from the order line costs (step 5)', () => {
+  const line = (over: Record<string, unknown>) => ({ orderConfigurationId: 'oc-1', quantity: 1, configuration: {}, charges: [], parentLineId: null,
+    startDate: null, termMonths: null, offeringId: null, productId: null, specId: null, sourceQuoteLineId: null, nrcTotal: '0', mrcTotal: '0', ...over })
+  const olc = (id: string, orderLineId: string, costKey: string, over: Record<string, unknown> = {}) => ({ id, orderLineId, orderConfigurationId: 'oc-1', costKey, chargeCode: 'mrc',
+    origin: 'catalog', costElementId: null, name: costKey, role: 'price_basis', costType: 'mrc', source: 'table', costModel: 'flat', valueStatus: 'confirmed', valueOrigin: 'catalog',
+    unitAmount: '270', instanceAmount: '270', totalAmount: '270', currencyCode: 'EUR', fxRate: null, fxRateDate: null, indexSnapshot: null, supplierId: null,
+    supplierName: null, supplierQuoteRef: null, validUntil: null, supplierTermEnd: null, supplierMinTermMonths: null, note: null, inventoryCostId: null, ...over })
+  const fixture = () => ({
+    quoteType: 'new' as const,
+    orderLines: [
+      line({ orderLineId: 'ol-1', mrcTotal: '400', nrcTotal: '10', configuration: { offeringName: 'Hosting' } }),
+      line({ orderLineId: 'ol-2', specId: 'spec-asset', nrcTotal: '5000', parentLineId: 'ol-1', configuration: { offeringName: 'Server' } }),
+      line({ orderLineId: 'ol-3', mrcTotal: '50', configuration: { offeringName: 'Support' } }),
+    ],
+    specs: [{ id: 'spec-asset', isAssetizable: true }],
+    subscriptionItems: [{ id: 'item-1' }, { id: 'item-2' }],
+    orderLineCosts: [
+      olc('olc-1', 'ol-1', 'tail'), olc('olc-2', 'ol-1', 'install', { costType: 'nrc', totalAmount: '1500' }),
+      olc('olc-3', 'ol-2', 'hardware', { costType: 'nrc' }), olc('olc-4', 'ol-2', 'licence', { totalAmount: '40' }),
+    ],
+  })
+  const sentInput = (h: ReturnType<typeof createActivationHarness>) => h.inventory.createSubscriptionWithCosts.mock.calls[0][0] as {
+    items: Array<{ name: string; costs: Array<{ orderLineCostId: string; costKey: string }> }>
+    assets: Array<{ name: string; parentItemIndex?: number; purchasePrice: number; costs: Array<{ orderLineCostId: string; costKey: string }> }>
+  }
+
+  it('builds item seeds from the item line costs and asset seeds from the assetizable line costs, loading order line costs in one query', async () => {
+    const h = createActivationHarness(fixture())
+    await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+    const input = sentInput(h)
+    expect(input.items.map((i) => [i.name, i.costs.map((c) => c.costKey)])).toEqual([['Hosting', ['tail', 'install']], ['Support', []]])
+    expect(input.items[0].costs[0]).toMatchObject({ orderLineCostId: 'olc-1', totalAmount: '270', costType: 'mrc', origin: 'catalog' })
+    expect(input.assets).toHaveLength(1)
+    expect(input.assets[0]).toMatchObject({ name: 'Server', parentItemIndex: 0, purchasePrice: 5000 })
+    expect(input.assets[0].costs.map((c) => c.costKey)).toEqual(['hardware', 'licence'])
+    const costQueries = (h.txEm.find.mock.calls as unknown as Array<[unknown, Record<string, unknown>]>).filter(([entity]) => entity === CpqOrderLineCost)
+    expect(costQueries).toHaveLength(1)
+    expect(costQueries[0][1]).toMatchObject({ orderConfigurationId: 'oc-1', organizationId: ACTIVATION_SCOPE.organizationId, tenantId: ACTIVATION_SCOPE.tenantId, deletedAt: null })
+  })
+
+  it('links every order line cost to the inventory cost it set (item and asset costs), in the activation transaction', async () => {
+    const f = fixture()
+    const h = createActivationHarness({ ...f, createdCosts: { inventoryCostLinks: [
+      { orderLineCostId: 'olc-1', inventoryCostId: 'ic-1' }, { orderLineCostId: 'olc-2', inventoryCostId: 'ic-2' },
+      { orderLineCostId: 'olc-3', inventoryCostId: 'ic-3' }, { orderLineCostId: 'olc-4', inventoryCostId: 'ic-4' },
+    ] } })
+    await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+    expect(f.orderLineCosts.map((row) => row.inventoryCostId)).toEqual(['ic-1', 'ic-2', 'ic-3', 'ic-4'])
+    // the links are set before the parent-link flush, inside the transaction
+    expect(h.trace.indexOf('createSubscription')).toBeLessThan(h.trace.indexOf('flush[order=draft]'))
+    expect(h.trace.at(-1)).toBe('tx:commit')
+  })
+
+  it('writes costs whatever the cpq.cost_plus toggle says: the order service has no toggle dependency and always seeds', async () => {
+    // Only quote-side pricing is toggled (R14). The activation has no toggle lookup at all, so item costs are
+    // identical for a tenant with the toggle off; there is no config / cost-service read on the transaction EM.
+    const h = createActivationHarness(fixture())
+    await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+    expect(sentInput(h).items[0].costs).toHaveLength(2)
+    const readEntities = h.txEm.find.mock.calls.map(([entity]) => (entity as { name: string }).name)
+    expect(readEntities.filter((name) => /Config(uration)?$/.test(name) && !/Order|Quote/.test(name))).toEqual([])
+  })
+
+  it('threads the real inventory cost changes out of the transaction result (no event is declared or emitted here)', async () => {
+    const changes = [{ inventoryCostId: 'ic-1', subscriptionId: 'sub-1', ownerType: 'subscription_item', subscriptionItemId: 'item-1', assetId: null, costKey: 'tail', supplierId: null, kind: 'created' }]
+    const h = createActivationHarness({ ...fixture(), createdCosts: { inventoryCostChanges: changes } })
+    const emitSpy = jest.spyOn(eventsModule, 'emitCpqEvent').mockResolvedValue(undefined as never)
+    await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+    const transactionResult = await h.txEm.transactional.mock.results[0].value as { inventoryCostChanges: unknown[] }
+    expect(transactionResult.inventoryCostChanges).toEqual(changes)
+    expect(emitSpy.mock.calls.map(([event]) => event)).toEqual(['cpq.subscription.activated'])
+    emitSpy.mockRestore()
+  })
+
+  it('seeds nothing for a quote without costs and warns (never fails) about costs of an unknown order line', async () => {
+    const plain = createActivationHarness({ ...fixture(), orderLineCosts: [] })
+    await plain.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+    expect(sentInput(plain).items.every((item) => item.costs.length === 0)).toBe(true)
+    expect(sentInput(plain).assets[0].costs).toEqual([])
+
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const stale = createActivationHarness({ ...fixture(), orderLineCosts: [olc('olc-9', 'ol-gone', 'tail')] })
+    await expect(stale.service.activateOrder('oc-1', ACTIVATION_SCOPE)).resolves.toMatchObject({ cpqStatus: 'active' })
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('ol-gone'))
+    expect(sentInput(stale).items.every((item) => item.costs.length === 0)).toBe(true)
+    warn.mockRestore()
+  })
+
+  it('an activation that fails after the costs were written rolls the costs back with it', async () => {
+    const h = createActivationHarness({ ...fixture(), failInventory: 'createSubscription' })
+    jest.spyOn(console, 'error').mockImplementation(() => undefined)
+    await expect(h.service.activateOrder('oc-1', ACTIVATION_SCOPE)).rejects.toThrow()
+    expect(h.store.committed).toEqual([])
+    expect(h.store.committedOrderStatus).toBe('draft')
+    jest.restoreAllMocks()
   })
 })

@@ -3,6 +3,8 @@ import * as React from 'react'
 import { useRouter, useParams } from 'next/navigation'
 import { Alert } from '@open-mercato/ui/primitives/alert'
 import { Button } from '@open-mercato/ui/primitives/button'
+import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
+import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { FormHeader } from '@open-mercato/ui/backend/forms'
 import {
@@ -14,6 +16,7 @@ import { StatusPath } from '../../../../../components/StatusPath'
 import { DepthBadge, PriceWaterfall } from '../../../../../components/PriceWaterfall'
 import { parseStoredCharge } from '../../../../../lib/priceAdjustmentView'
 import { includeEndedQuery, type SubscriptionCostsResponse } from '../../../../../lib/orderInventoryCostView'
+import { costDiffValueText, diffOwners, diffSnapshotCosts, type CostDiffEntry, type SnapshotCost } from './costDiff'
 import { useCostsRead } from '../../../../../components/costs/useCostsRead'
 import { SubscriptionCostsSection, SubscriptionItemCostChips, SubscriptionItemCosts } from '../../../../../components/costs/SubscriptionCosts'
 
@@ -29,12 +32,15 @@ type SnapshotItem = {
   nrcAmount?: number | string
   quantity?: number
   status?: string
+  /** Present only for `cpq.costs.view` holders (the change-log route strips it otherwise). */
+  costs?: SnapshotCost[]
 }
 
 type SubscriptionSnapshot = {
   id?: string
   currencyCode?: string
   items?: SnapshotItem[]
+  assets?: Array<{ id: string; name?: string; costs?: SnapshotCost[] }>
 } | null
 
 type LineChangeEntry = {
@@ -209,6 +215,8 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
   const [arcInFlight, setArcInFlight] = React.useState<'amend' | 'renew' | 'cancel' | null>(null)
   const [changeLog, setChangeLog] = React.useState<ChangeLogRow[]>([])
   const [changeLogLoading, setChangeLogLoading] = React.useState(false)
+  // Per-owner (item or asset id) filter of the cost diffs in the Change History; null = all.
+  const [costDiffOwner, setCostDiffOwner] = React.useState<string | null>(null)
 
   const startArcQuote = React.useCallback(
     async (type: 'amend' | 'renew' | 'cancel') => {
@@ -288,10 +296,9 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
     async function loadLog() {
       setChangeLogLoading(true)
       try {
-        const r = await fetch(`/api/cpq/inventory/subscriptions/${subId}/change-log?pageSize=50`)
+        const r = await apiCall<{ items?: ChangeLogRow[] }>(`/api/cpq/inventory/subscriptions/${subId}/change-log?pageSize=50`)
         if (r.ok && !cancelled) {
-          const data = await r.json()
-          const rows: ChangeLogRow[] = data.items ?? []
+          const rows: ChangeLogRow[] = r.result?.items ?? []
           setChangeLog(rows)
           // Resolve the quote / order numbers referenced by each row so
           // the history list shows "Quote QUOTE-…-00005" instead of
@@ -775,6 +782,7 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
       {/* XD-250 Change History */}
       <div>
         <h3 className="text-sm font-medium mb-2 px-1">Change History ({changeLog.length})</h3>
+        <CostDiffOwnerFilter rows={changeLog} value={costDiffOwner} onChange={setCostDiffOwner} />
         {changeLogLoading ? (
           <div className="rounded-lg border bg-card py-6 text-center text-sm text-muted-foreground">Loading…</div>
         ) : changeLog.length === 0 ? (
@@ -807,7 +815,7 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
                     </button>
                   )}
                 </div>
-                <ChangeLogLineDetails row={row} currency={currency} />
+                <ChangeLogLineDetails row={row} currency={currency} costOwnerFilter={costDiffOwner} />
                 {row.termChange && (
                   <div className="text-xs text-muted-foreground">
                     Term: {String(row.termChange.oldTermEnd ?? '—')} → {String(row.termChange.newTermEnd ?? '—')}
@@ -952,7 +960,64 @@ function ErrorBanner({ message }: { message: string }) {
 // XD-250 — render the per-line summary of an ARC change, with inline product
 // names and before/after MRC values. Falls back gracefully when snapshots are
 // missing (older log rows) or when lineChanges is null (cancel / merge).
-function ChangeLogLineDetails({ row, currency }: { row: ChangeLogRow; currency: string }) {
+function ChangeLogLineDetails({ row, currency, costOwnerFilter }: { row: ChangeLogRow; currency: string; costOwnerFilter: string | null }) {
+  const costDiff = changeLogCostDiff(row)
+  const costs = <ChangeLogCostDiff entries={costOwnerFilter ? costDiff.filter((e) => e.ownerId === costOwnerFilter || e.fromOwnerId === costOwnerFilter) : costDiff} />
+  const lines = <ChangeLogItemLines row={row} currency={currency} />
+  return <>{lines}{costs}</>
+}
+
+/** Cost diff of a change-log row; empty when the API stripped the `costs` keys (no `cpq.costs.view`). */
+function changeLogCostDiff(row: ChangeLogRow): CostDiffEntry[] {
+  const merge = row.changeType === 'merge-result' ? 'result' : row.changeType === 'merge-source' ? 'source' : null
+  return diffSnapshotCosts(row.beforeSnapshot, row.afterSnapshot, { merge })
+}
+
+const COST_KIND_FALLBACKS: Record<CostDiffEntry['kind'], string> = { changed: 'changed', added: 'added', ended: 'ended', moved: 'moved' }
+const COST_KIND_VARIANTS: Record<CostDiffEntry['kind'], 'info' | 'success' | 'neutral' | 'brand'> = { changed: 'info', added: 'success', ended: 'neutral', moved: 'brand' }
+
+function CostDiffOwnerFilter({ rows, value, onChange }: { rows: ChangeLogRow[]; value: string | null; onChange: (ownerId: string | null) => void }) {
+  const t = useT()
+  const owners = React.useMemo(() => {
+    const merged = new Map<string, { ownerId: string; ownerName: string | null }>()
+    for (const row of rows) for (const o of diffOwners(changeLogCostDiff(row))) if (!merged.has(o.ownerId)) merged.set(o.ownerId, o)
+    return [...merged.values()]
+  }, [rows])
+  if (owners.length === 0) return null
+  return (
+    <div className="mb-2 flex flex-wrap items-center gap-1 px-1" data-testid="cpq-cost-diff-filter">
+      <span className="text-xs text-muted-foreground">{t('cpq.changeLog.costs.filter', 'Cost changes for')}</span>
+      <Button type="button" size="sm" variant={value === null ? 'default' : 'outline'} onClick={() => onChange(null)}>
+        {t('cpq.changeLog.costs.all', 'All')}
+      </Button>
+      {owners.map((o) => (
+        <Button key={o.ownerId} type="button" size="sm" variant={value === o.ownerId ? 'default' : 'outline'} onClick={() => onChange(o.ownerId)}>
+          {o.ownerName ?? `${o.ownerId.slice(0, 8)}…`}
+        </Button>
+      ))}
+    </div>
+  )
+}
+
+function ChangeLogCostDiff({ entries }: { entries: CostDiffEntry[] }) {
+  const t = useT()
+  if (entries.length === 0) return null
+  return (
+    <div className="mt-1.5 rounded border bg-muted/20 px-3 py-2 space-y-1" data-testid="cpq-change-log-costs">
+      <p className="text-xs font-medium text-muted-foreground">{t('cpq.changeLog.costs.title', 'Cost changes')}</p>
+      {entries.map((e) => (
+        <div key={`${e.costId}-${e.kind}`} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
+          <Tag variant={COST_KIND_VARIANTS[e.kind]}>{t(`cpq.changeLog.costs.${e.kind}`, COST_KIND_FALLBACKS[e.kind])}</Tag>
+          <span className="font-medium text-foreground">{e.name}</span>
+          <span className="text-muted-foreground">{costDiffValueText(e)}</span>
+          {e.ownerName && <span className="text-muted-foreground">· {e.ownerName}</span>}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function ChangeLogItemLines({ row, currency }: { row: ChangeLogRow; currency: string }) {
   const beforeItems = new Map<string, SnapshotItem>(
     (row.beforeSnapshot?.items ?? []).map((it) => [it.id, it]),
   )

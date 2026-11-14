@@ -346,56 +346,68 @@ export class DefaultCpqOrderService {
   // ─── Activate Order ─────────────────────────────────────────
 
   async activateOrder(orderId: string, scope: TenantScope): Promise<OrderResult> {
-    const em = this.em
-
-    const orderConfig = await this.loadOrderConfig(em, orderId, scope)
-
-    const currentStatus = orderConfig.cpqStatus as CpqOrderStatus
-    if (currentStatus !== 'draft' && currentStatus !== 'pending_activation') {
-      throw new OrderError(409, `Cannot activate order in '${currentStatus}' status`)
-    }
-
-    const salesOrder = await this.loadSalesOrder(em, orderConfig.orderId, scope)
-    const orderLines = await em.find(CpqOrderLineConfiguration, {
-      orderConfigurationId: orderConfig.id,
-      organizationId: scope.organizationId,
-      tenantId: scope.tenantId,
-      deletedAt: null,
-    })
-
-    // Branch on the source quote's quoteType. ARC quotes mutate existing
-    // subscriptions; new-sale quotes materialize a fresh subscription.
-    const sourceQuote = orderConfig.sourceQuoteId
-      ? await em.findOne(CpqQuoteConfiguration, {
-          id: orderConfig.sourceQuoteId,
-          organizationId: scope.organizationId,
-          tenantId: scope.tenantId,
-          deletedAt: null,
-        })
-      : null
-
-    const quoteType = sourceQuote?.quoteType ?? 'new'
+    // Atomic activation (Q1): the whole activation (new-sale or ARC branch, the
+    // order status update, every inventory write and the change-log rows) runs
+    // in ONE transaction on an isolated fork. Nothing is loaded into, or
+    // flushed from, the request EM, so a rollback leaves it free of pending
+    // change sets. Same isolation pattern as `withQuotePricingWrite`.
+    // An isolated fork opens its own connection: inside another transaction it
+    // could not see that transaction's uncommitted rows and could block on its
+    // locks, so fail fast.
+    if (this.em.isInTransaction?.()) throw new Error('activateOrder must not run inside an existing transaction')
+    const isolated = this.em.fork({ clear: true, useContext: false })
     const postCommitEvents: Array<() => Promise<void>> = []
+    const committed = await isolated.transactional(async (tx) => {
+      const orderConfig = await this.loadOrderConfig(tx, orderId, scope)
 
-    if (quoteType === 'new') {
-      const inventory = await this.createInventoryFromOrder(orderConfig, orderLines, scope)
-      if (inventory) {
-        postCommitEvents.push(() => emitActivatedEvent(orderConfig, inventory, scope))
+      const currentStatus = orderConfig.cpqStatus as CpqOrderStatus
+      if (currentStatus !== 'draft' && currentStatus !== 'pending_activation') {
+        throw new OrderError(409, `Cannot activate order in '${currentStatus}' status`)
       }
-    } else {
-      postCommitEvents.push(
-        ...(await this.applyArcOrder(orderConfig, sourceQuote!, orderLines, scope)),
-      )
-    }
 
-    orderConfig.cpqStatus = 'active'
-    orderConfig.activatedAt = new Date()
-    salesOrder.status = 'active'
-    salesOrder.placedAt = new Date()
+      const salesOrder = await this.loadSalesOrder(tx, orderConfig.orderId, scope)
+      const orderLines = await tx.find(CpqOrderLineConfiguration, {
+        orderConfigurationId: orderConfig.id,
+        organizationId: scope.organizationId,
+        tenantId: scope.tenantId,
+        deletedAt: null,
+      })
 
-    await em.flush()
+      // Branch on the source quote's quoteType. ARC quotes mutate existing
+      // subscriptions; new-sale quotes materialize a fresh subscription.
+      const sourceQuote = orderConfig.sourceQuoteId
+        ? await tx.findOne(CpqQuoteConfiguration, {
+            id: orderConfig.sourceQuoteId,
+            organizationId: scope.organizationId,
+            tenantId: scope.tenantId,
+            deletedAt: null,
+          })
+        : null
 
-    // Emit lifecycle events AFTER the activation transaction commits.
+      const quoteType = sourceQuote?.quoteType ?? 'new'
+
+      if (quoteType === 'new') {
+        const inventory = await this.createInventoryFromOrder(tx, orderConfig, orderLines, scope)
+        if (inventory) {
+          postCommitEvents.push(() => emitActivatedEvent(orderConfig, inventory, scope))
+        }
+      } else {
+        postCommitEvents.push(
+          ...(await this.applyArcOrder(tx, orderConfig, sourceQuote!, orderLines, scope)),
+        )
+      }
+
+      orderConfig.cpqStatus = 'active'
+      orderConfig.activatedAt = new Date()
+      salesOrder.status = 'active'
+      salesOrder.placedAt = new Date()
+
+      await tx.flush()
+      return { orderConfig, salesOrder, orderLines }
+    }, { clear: true })
+
+    // `transactional` resolved, so the activation is committed; a rolled-back
+    // activation never reaches here. Emit lifecycle events AFTER the commit.
     for (const fire of postCommitEvents) {
       try {
         await fire()
@@ -406,7 +418,10 @@ export class DefaultCpqOrderService {
       }
     }
 
-    return this.buildOrderResult(em, orderConfig, salesOrder, orderLines, scope)
+    // The DTO is built from the committed objects; name lookups use a throwaway
+    // read fork so the request EM never holds activation entities.
+    const reader = this.em.fork({ clear: true, useContext: false })
+    return this.buildOrderResult(reader, committed.orderConfig, committed.salesOrder, committed.orderLines, scope)
   }
 
   // ─── ARC activation branch (XD-250) ─────────────────────────
@@ -415,12 +430,12 @@ export class DefaultCpqOrderService {
   // cpqInventoryService.apply* primitives. Returns the list of post-commit
   // event emissions so the caller can fire them outside the activation TX.
   private async applyArcOrder(
+    em: EntityManager,
     orderConfig: CpqOrderConfiguration,
     sourceQuote: CpqQuoteConfiguration,
     orderLines: CpqOrderLineConfiguration[],
     scope: TenantScope,
   ): Promise<Array<() => Promise<void>>> {
-    const em = this.em
     const quoteType = sourceQuote.quoteType as 'amend' | 'renew' | 'cancel'
 
     // Load attached targets.
@@ -437,7 +452,8 @@ export class DefaultCpqOrderService {
       )
     }
 
-    const inventory = this.inventoryService
+    // Bound to the transaction EM: never the DI `this.em`.
+    const inventory = this.inventoryService.withEntityManager(em)
 
     // Group order lines by target_subscription_id — ARC order lines mirror the
     // quote lines' ARC fields (target_subscription_id is preserved through
@@ -602,6 +618,7 @@ export class DefaultCpqOrderService {
   // ─── Inventory Creation ─────────────────────────────────────
 
   private async createInventoryFromOrder(
+    em: EntityManager,
     orderConfig: CpqOrderConfiguration,
     orderLines: CpqOrderLineConfiguration[],
     scope: TenantScope,
@@ -610,7 +627,7 @@ export class DefaultCpqOrderService {
 
     const specIds = [...new Set(orderLines.map((l) => l.specId).filter(Boolean))] as string[]
     const specs = specIds.length > 0
-      ? await this.em.find(CpqProductSpecification, {
+      ? await em.find(CpqProductSpecification, {
           id: { $in: specIds },
           organizationId: scope.organizationId,
           tenantId: scope.tenantId,
@@ -633,7 +650,7 @@ export class DefaultCpqOrderService {
     )
     if (!hasSubscriptionContent && assetLines.length === 0) return null
 
-    const subscriptionName = await this.buildSubscriptionName(orderConfig, orderLines, scope)
+    const subscriptionName = await this.buildSubscriptionName(em, orderConfig, orderLines, scope)
 
     const lineWithDates = orderLines.find((l) => l.startDate != null) ?? orderLines[0]
     const lineWithTerm = orderLines.find((l) => l.termMonths != null) ?? orderLines[0]
@@ -652,7 +669,9 @@ export class DefaultCpqOrderService {
       sortOrder: orderLines.indexOf(line),
     }))
 
-    const subscription = await this.inventoryService.createSubscription(
+    // Bound to the transaction EM: never the DI `this.em`.
+    const inventoryService = this.inventoryService.withEntityManager(em)
+    const subscription = await inventoryService.createSubscription(
       {
         customerId: orderConfig.customerId,
         name: subscriptionName,
@@ -670,7 +689,7 @@ export class DefaultCpqOrderService {
     )
 
     const orderLineToSubItem = new Map<string, string>()
-    const allSubItems = await this.em.find(CpqInventorySubscriptionItem, {
+    const allSubItems = await em.find(CpqInventorySubscriptionItem, {
       subscriptionId: subscription.id,
       organizationId: scope.organizationId,
       tenantId: scope.tenantId,
@@ -690,7 +709,7 @@ export class DefaultCpqOrderService {
         }
       }
     }
-    await this.em.flush()
+    await em.flush()
 
     for (const line of assetLines) {
       let subscriptionItemId: string | undefined
@@ -698,7 +717,7 @@ export class DefaultCpqOrderService {
         subscriptionItemId = orderLineToSubItem.get(line.parentLineId) ?? undefined
       }
 
-      await this.inventoryService.createAsset(
+      await inventoryService.createAsset(
         {
           customerId: orderConfig.customerId,
           subscriptionId: subscription.id,
@@ -912,17 +931,18 @@ export class DefaultCpqOrderService {
   }
 
   private async buildSubscriptionName(
+    em: EntityManager,
     orderConfig: CpqOrderConfiguration,
     orderLines: CpqOrderLineConfiguration[],
     scope: TenantScope,
   ): Promise<string> {
     if (orderLines.length === 1 && orderLines[0].offeringId) {
-      return this.resolveOfferingName(this.em, orderLines[0].offeringId, scope)
+      return this.resolveOfferingName(em, orderLines[0].offeringId, scope)
     }
     const names: string[] = []
     for (const line of orderLines.slice(0, 3)) {
       if (line.offeringId) {
-        names.push(await this.resolveOfferingName(this.em, line.offeringId, scope))
+        names.push(await this.resolveOfferingName(em, line.offeringId, scope))
       }
     }
     if (names.length > 0) {

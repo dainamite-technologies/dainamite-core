@@ -273,6 +273,15 @@ export class DefaultCpqInventoryService {
     this.em = em
   }
 
+  /**
+   * Returns a service bound to `em` (typically a transaction EM). Every method
+   * of the returned instance reads and writes through `em` only; this service
+   * emits no events, so nothing escapes the caller's transaction.
+   */
+  withEntityManager(em: EntityManager): DefaultCpqInventoryService {
+    return new DefaultCpqInventoryService(em)
+  }
+
   // ═══════════════════════════════════════════════════════════════
   //  Subscriptions
   // ═══════════════════════════════════════════════════════════════
@@ -1812,6 +1821,9 @@ export class DefaultCpqInventoryService {
     etfCurrency?: string | null
   }): CpqSubscriptionChangeLog {
     const log = this.em.create(CpqSubscriptionChangeLog, {
+      // Pre-generated (Q12): the id is known before the insert, so
+      // `last_change_id` / `lastChangeLogId` assignments are reliable.
+      id: crypto.randomUUID(),
       organizationId: args.subscription.organizationId,
       tenantId: args.subscription.tenantId,
       subscriptionId: args.subscription.id,

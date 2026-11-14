@@ -1,5 +1,6 @@
 import { CpqOrderLineConfiguration } from '../../data/entities'
 import { DefaultCpqOrderService, OrderError } from '../cpqOrderService'
+import * as eventsModule from '../../events'
 import type { TenantScope } from '../types'
 import { ACTIVATION_SCOPE, createActivationHarness } from './_helpers/activationHarness'
 
@@ -829,45 +830,51 @@ describe('conversion output for a costed quote (characterization: cost lines nev
   })
 })
 
-describe('activateOrder persistence sequence on the request EM (characterization: the non-atomic boundary)', () => {
+describe('activateOrder transaction boundary', () => {
   const line = (over: Record<string, unknown>) => ({ orderConfigurationId: 'oc-1', quantity: 1, configuration: {}, charges: [], parentLineId: null,
     startDate: null, termMonths: null, offeringId: null, productId: null, specId: null, sourceQuoteLineId: null, nrcTotal: '0', mrcTotal: '0', ...over })
+  const newSaleFixture = {
+    quoteType: 'new' as const,
+    orderLines: [
+      line({ orderLineId: 'ol-1', mrcTotal: '100', nrcTotal: '10', configuration: { offeringName: 'Hosting' } }),
+      line({ orderLineId: 'ol-2', specId: 'spec-asset', nrcTotal: '500', parentLineId: 'ol-1', configuration: { offeringName: 'Server' } }),
+    ],
+    specs: [{ id: 'spec-asset', isAssetizable: true }],
+    subscriptionItems: [{ id: 'item-1' }],
+  }
 
-  it('new sale: createSubscription, a flush for the item parent links, createAsset for each assetizable line, then one final flush', async () => {
-    const h = createActivationHarness({
-      quoteType: 'new',
-      orderLines: [
-        line({ orderLineId: 'ol-1', mrcTotal: '100', nrcTotal: '10', configuration: { offeringName: 'Hosting' } }),
-        line({ orderLineId: 'ol-2', specId: 'spec-asset', nrcTotal: '500', parentLineId: 'ol-1', configuration: { offeringName: 'Server' } }),
-      ],
-      specs: [{ id: 'spec-asset', isAssetizable: true }],
-      subscriptionItems: [{ id: 'item-1' }],
-    })
+  it('new sale: forks the request EM and runs createSubscription, the parent-link flush, createAsset and the status flush in ONE transaction, bound to the tx EM', async () => {
+    const h = createActivationHarness(newSaleFixture)
 
     const result = await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
 
-    // Nothing is atomic today: every step flushes the request EM directly. The order status only changes
-    // after the inventory work has been flushed, and the final flush is the only one that sees it.
     expect(h.trace).toEqual([
+      'tx:begin',
+      'inventory.withEntityManager(tx)',
       'createSubscription',
       'flush[order=draft]',
       'createAsset',
       'flush[order=active]',
+      'tx:commit',
     ])
-    expect(h.em.fork).not.toHaveBeenCalled()
-    expect(h.em.transactional).not.toHaveBeenCalled()
+    expect(h.em.fork).toHaveBeenCalledWith({ clear: true, useContext: false })
+    expect(h.txEm.transactional).toHaveBeenCalledTimes(1)
     expect(h.inventory.createAsset).toHaveBeenCalledWith(
       expect.objectContaining({ subscriptionId: 'sub-1', subscriptionItemId: 'item-1', purchasePrice: 500 }), ACTIVATION_SCOPE,
     )
     expect(h.salesOrder.status).toBe('active')
     expect(result.cpqStatus).toBe('active')
+    expect(h.store.committed).toEqual(['subscription', 'item', 'itemCost', 'changeLog', 'asset', 'order:active'])
+    // the request EM was never read or written
+    expect(h.em.find).not.toHaveBeenCalled()
+    expect(h.em.flush).not.toHaveBeenCalled()
   })
 
   it.each([
     ['amend', 'applyAmendment', { mergeAction: 'standalone' }],
     ['cancel', 'applyCancel', { mergeAction: 'standalone' }],
     ['renew', 'applyRenewal', { mergeAction: 'standalone', newTermStart: '2027-01-01', newTermEnd: '2028-01-01', newTermMonths: 12 }],
-  ] as const)('%s: the inventory primitive runs first (it flushes inside), then one final flush on the request EM', async (quoteType, primitive, targetExtra) => {
+  ] as const)('%s: the inventory primitive (bound to the tx EM) and the final flush run inside one transaction', async (quoteType, primitive, targetExtra) => {
     const changeLog = { effectiveAt: new Date('2026-06-01T00:00:00.000Z'), afterSnapshot: { items: [] }, lineChanges: [] }
     const result = { changeLog, subscription: { id: 'sub-1', customerId: 'cust-1', currentTermStart: new Date('2027-01-01'), currentTermEnd: new Date('2028-01-01') } }
     const h = createActivationHarness({
@@ -879,12 +886,11 @@ describe('activateOrder persistence sequence on the request EM (characterization
 
     await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
 
-    expect(h.trace).toEqual([primitive, 'flush[order=active]'])
-    expect(h.em.fork).not.toHaveBeenCalled()
-    expect(h.em.transactional).not.toHaveBeenCalled()
+    expect(h.trace).toEqual(['tx:begin', 'inventory.withEntityManager(tx)', primitive, 'flush[order=active]', 'tx:commit'])
+    expect(h.em.fork).toHaveBeenCalled()
   })
 
-  it('merge renew: applyMergeRenewal then one final flush', async () => {
+  it('merge renew: applyMergeRenewal then the final flush, inside one transaction', async () => {
     const h = createActivationHarness({
       quoteType: 'renew',
       quoteOver: { arcMergeNewTermStart: '2027-01-01', arcMergeNewTermEnd: '2028-01-01', arcMergeNewTermMonths: 12 },
@@ -892,6 +898,65 @@ describe('activateOrder persistence sequence on the request EM (characterization
       inventory: { applyMergeRenewal: { mergedSubscription: { id: 'sub-m', currentTermStart: new Date('2027-01-01') }, mergeResultChangeLog: {}, sourceChangeLogs: [] } },
     })
     await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
-    expect(h.trace).toEqual(['applyMergeRenewal', 'flush[order=active]'])
+    expect(h.trace).toEqual(['tx:begin', 'inventory.withEntityManager(tx)', 'applyMergeRenewal', 'flush[order=active]', 'tx:commit'])
+  })
+
+  it.each([
+    ['createAsset throws after the subscription, items, item cost and change log were flushed', { failInventory: 'createAsset' as const }],
+    ['the final order-status flush throws', { failFinalFlush: true }],
+  ])('rolls everything back when %s', async (_label, failure) => {
+    const h = createActivationHarness({ ...newSaleFixture, ...failure })
+    const emitSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    await expect(h.service.activateOrder('oc-1', ACTIVATION_SCOPE)).rejects.toThrow()
+
+    expect(h.trace).toContain('tx:rollback')
+    expect(h.trace).not.toContain('tx:commit')
+    // no subscription, item, asset, item cost, change-log row or order status change persisted
+    expect(h.store.committed).toEqual([])
+    expect(h.store.committedOrderStatus).toBe('draft')
+    // the request EM was never touched: no pending change sets, nothing managed
+    expect(h.em.find).not.toHaveBeenCalled()
+    expect(h.em.findOne).not.toHaveBeenCalled()
+    expect(h.em.persist).not.toHaveBeenCalled()
+    expect(h.em.flush).not.toHaveBeenCalled()
+    expect(h.em.getUnitOfWork().getChangeSets()).toEqual([])
+    expect(h.em.getUnitOfWork().getIdentityMap().size).toBe(0)
+    emitSpy.mockRestore()
+  })
+
+  it('emits no event on rollback and one activated event after commit', async () => {
+    const failed = createActivationHarness({ ...newSaleFixture, failInventory: 'createAsset' })
+    const emitSpy = jest.spyOn(eventsModule, 'emitCpqEvent').mockResolvedValue(undefined as never)
+    await expect(failed.service.activateOrder('oc-1', ACTIVATION_SCOPE)).rejects.toThrow()
+    expect(emitSpy).not.toHaveBeenCalled()
+
+    const ok = createActivationHarness(newSaleFixture)
+    await ok.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+    expect(emitSpy).toHaveBeenCalledTimes(1)
+    expect(emitSpy.mock.calls[0][0]).toBe('cpq.subscription.activated')
+    emitSpy.mockRestore()
+  })
+
+  it('a retry after a rolled-back activation creates exactly one subscription', async () => {
+    const h = createActivationHarness({ ...newSaleFixture, failInventory: 'createAsset' })
+    jest.spyOn(eventsModule, 'emitCpqEvent').mockResolvedValue(undefined as never)
+    await expect(h.service.activateOrder('oc-1', ACTIVATION_SCOPE)).rejects.toThrow()
+    expect(h.store.committed).toEqual([])
+
+    // the transient failure is gone: the retry activates once
+    h.inventory.createAsset.mockImplementation(async () => { h.store.pending.push('asset'); return { id: 'asset-1' } })
+    await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+
+    expect(h.store.committed.filter((row) => row === 'subscription')).toHaveLength(1)
+    expect(h.store.committedOrderStatus).toBe('active')
+    jest.restoreAllMocks()
+  })
+
+  it('refuses to run inside an existing transaction (the isolated fork could not see its rows)', async () => {
+    const h = createActivationHarness(newSaleFixture)
+    h.em.isInTransaction.mockReturnValue(true)
+    await expect(h.service.activateOrder('oc-1', ACTIVATION_SCOPE)).rejects.toThrow(/existing transaction/)
+    expect(h.em.fork).not.toHaveBeenCalled()
   })
 })

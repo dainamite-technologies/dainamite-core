@@ -14,10 +14,14 @@ import type { TenantScope } from '../../types'
 /**
  * Harness for `DefaultCpqOrderService.activateOrder` characterization tests.
  *
- * The EM answers `find` / `findOne` by entity class from fixed fixtures; the
- * inventory service is a mock. Every `flush` and every inventory call is
- * appended to `trace` so a test can pin the ORDER of persistence steps on the
- * request EM (today's non-atomic activation boundary).
+ * `harness.em` is the REQUEST EM: `activateOrder` must only fork it, so any
+ * read / write on it throws. `harness.txEm` is the forked EM the activation runs
+ * on; it answers `find` / `findOne` by entity class from fixed fixtures and
+ * `transactional` simulates a DB transaction (writes become `committed` only
+ * when the callback resolves; a throw rolls them back). The inventory service is
+ * a mock bound through `withEntityManager`. Transaction boundaries, flushes and
+ * inventory calls are appended to `trace` so a test can pin the ORDER of
+ * persistence steps inside the transaction.
  */
 type Row = Record<string, unknown>
 
@@ -34,6 +38,10 @@ export interface ActivationFixture {
   targets?: Row[]
   quoteLines?: Row[]
   quoteOver?: Row
+  /** Inject a failure: `createAsset` throws (after the subscription, items and change log were written). */
+  failInventory?: 'createAsset'
+  /** Inject a failure on the final order-status flush. */
+  failFinalFlush?: boolean
   inventory?: Partial<Record<'createSubscription' | 'createAsset' | 'applyAmendment' | 'applyRenewal' | 'applyCancel' | 'applyMergeRenewal', unknown>>
 }
 
@@ -46,13 +54,42 @@ export function createActivationHarness(fixture: ActivationFixture) {
   const salesOrder: Row = { id: 'so-1', status: 'draft', orderNumber: 'ORD-1', placedAt: null }
   const quote: Row = { id: 'quote-1', quoteType: fixture.quoteType, ...fixture.quoteOver }
 
+  // Simulated database: `pending` is the open transaction, `committed` what survives.
+  const store = { pending: [] as string[], committed: [] as string[], committedOrderStatus: 'draft' }
+  const forbidden = (name: string) => jest.fn(() => { throw new Error(`request EM must not be used: ${name}`) })
   const em = {
     fork: jest.fn(),
-    transactional: jest.fn(),
+    isInTransaction: jest.fn(() => false),
+    find: forbidden('find'),
+    findOne: forbidden('findOne'),
+    persist: forbidden('persist'),
+    create: forbidden('create'),
+    flush: forbidden('flush'),
+    getUnitOfWork: () => ({ getChangeSets: () => [] as unknown[], getIdentityMap: () => new Map() }),
+  }
+  const txEm = {
+    transactional: jest.fn(async (callback: (tx: unknown) => Promise<unknown>) => {
+      trace.push('tx:begin')
+      store.pending = []
+      try {
+        const result = await callback(txEm)
+        store.committed.push(...store.pending)
+        store.committedOrderStatus = String(orderConfig.cpqStatus)
+        trace.push('tx:commit')
+        return result
+      } catch (err) {
+        store.pending = []
+        orderConfig.cpqStatus = 'draft'
+        trace.push('tx:rollback')
+        throw err
+      }
+    }),
     persist: jest.fn(),
     create: jest.fn((_entity: unknown, data: Row) => ({ ...data })),
     flush: jest.fn(async () => {
       trace.push(`flush[order=${String(orderConfig.cpqStatus)}]`)
+      if (fixture.failFinalFlush && orderConfig.cpqStatus === 'active') throw new Error('final flush failed')
+      if (orderConfig.cpqStatus === 'active') store.pending.push('order:active')
     }),
     findOne: jest.fn(async (entity: unknown) => {
       if (entity === CpqOrderConfiguration) return orderConfig
@@ -69,16 +106,23 @@ export function createActivationHarness(fixture: ActivationFixture) {
       return []
     }),
   }
+  em.fork.mockReturnValue(txEm)
 
-  const inventoryCall = (name: string, result: unknown) =>
+  const inventoryCall = (name: string, result: unknown, rows: string[] = []) =>
     jest.fn(async (..._args: unknown[]) => {
       trace.push(name)
+      store.pending.push(...rows)
+      if (name === 'createAsset' && fixture.failInventory === 'createAsset') throw new Error('createAsset failed')
       return result
     })
   const inv = fixture.inventory ?? {}
-  const inventory = {
-    createSubscription: inventoryCall('createSubscription', inv.createSubscription ?? { id: 'sub-1' }),
-    createAsset: inventoryCall('createAsset', inv.createAsset ?? { id: 'asset-1' }),
+  const inventory: Record<string, jest.Mock> = {
+    withEntityManager: jest.fn((bound: unknown): unknown => {
+      trace.push(bound === txEm ? 'inventory.withEntityManager(tx)' : 'inventory.withEntityManager(OTHER)')
+      return inventory
+    }),
+    createSubscription: inventoryCall('createSubscription', inv.createSubscription ?? { id: 'sub-1' }, ['subscription', 'item', 'itemCost', 'changeLog']),
+    createAsset: inventoryCall('createAsset', inv.createAsset ?? { id: 'asset-1' }, ['asset']),
     applyAmendment: inventoryCall('applyAmendment', inv.applyAmendment),
     applyRenewal: inventoryCall('applyRenewal', inv.applyRenewal),
     applyCancel: inventoryCall('applyCancel', inv.applyCancel),
@@ -90,5 +134,5 @@ export function createActivationHarness(fixture: ActivationFixture) {
     cpqInventoryService: inventory as unknown as never,
     salesDocumentNumberGenerator: { generate: jest.fn() } as unknown as never,
   })
-  return { service, em, inventory, trace, orderConfig, salesOrder }
+  return { service, em, txEm, inventory, trace, orderConfig, salesOrder, store }
 }

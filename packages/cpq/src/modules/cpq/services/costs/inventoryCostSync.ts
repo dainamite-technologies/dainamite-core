@@ -377,15 +377,18 @@ export async function repointAssetCosts(
 ): Promise<InventoryCostSyncResult> {
   const result: InventoryCostSyncResult = { rows: [], changes: [], links: [] }
   if (assetIds.length === 0) return result
-  const open = await em.find(CpqInventoryCost, {
+  // The asset keeps its id across a merge, so ALL its cost rows move with it: an ended row left on the old
+  // subscription id would vanish from both subscriptions' cost views (each lists rows of its own assets).
+  // Only open rows are reported (and get `last_change_id`): moving an ended row changes no cost.
+  const rows = await em.find(CpqInventoryCost, {
     organizationId: ctx.scope.organizationId,
     tenantId: ctx.scope.tenantId,
     deletedAt: null,
-    status: 'active',
     assetId: { $in: assetIds },
   })
-  for (const row of open ?? []) {
+  for (const row of rows ?? []) {
     row.subscriptionId = newSubscriptionId
+    if (row.status !== 'active') continue
     result.rows.push(row)
     result.changes.push(changeOf(row, 'asset', 'repointed'))
   }

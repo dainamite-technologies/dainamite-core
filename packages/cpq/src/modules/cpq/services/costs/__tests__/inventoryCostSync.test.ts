@@ -2,7 +2,7 @@ import { CpqInventoryAsset, CpqInventoryCost, CpqInventorySubscriptionItem, CpqO
 import { DefaultCpqInventoryService } from '../../cpqInventoryService'
 import { createMockEm } from '../../__tests__/_helpers/mockEm'
 import {
-  costSeedFromOrderLineCost, createAssetCosts, createItemCosts, isInventoryCostUnchanged, type CostSeed,
+  costSeedFromOrderLineCost, createAssetCosts, createItemCosts, isInventoryCostUnchanged, repointAssetCosts, type CostSeed,
 } from '../inventoryCostSync'
 
 const SCOPE = { organizationId: 'org', tenantId: 'tenant' }
@@ -268,5 +268,30 @@ describe('createSubscriptionWithCosts: write ordering, assets inside, last_chang
     const sub = await service.createSubscription(input as never, SC)
     expect(Object.keys(sub)).not.toEqual(expect.arrayContaining(['inventoryCostChanges']))
     expect(JSON.stringify(sub)).not.toMatch(/inventoryCost|costLinks/)
+  })
+})
+
+describe('repointAssetCosts', () => {
+  it('moves ALL the asset\'s cost rows to the merged subscription, reporting only the open ones', async () => {
+    const open = stored({ id: 'ic-open', subscriptionItemId: null, assetId: 'asset-1' })
+    const ended = stored({ id: 'ic-ended', costKey: 'install', subscriptionItemId: null, assetId: 'asset-1', status: 'ended', endedAt: '2026-06-01', lastChangeId: 'log-old' })
+    const { em, created } = setup([open, ended])
+    const result = await repointAssetCosts(em as never, ['asset-1'], 'sub-m', CTX)
+    expect(em.find).toHaveBeenCalledTimes(1)
+    expect(em.find.mock.calls[0][1]).not.toHaveProperty('status')
+    expect(em.find.mock.calls[0][1].assetId).toEqual({ $in: ['asset-1'] })
+    // Ids kept; both rows follow the asset so neither subscription's cost view loses the ended history.
+    expect([open.id, open.subscriptionId, ended.id, ended.subscriptionId]).toEqual(['ic-open', 'sub-m', 'ic-ended', 'sub-m'])
+    expect(created).toHaveLength(0)
+    // Only the open row is a cost change (and gets last_change_id later); the ended row keeps its history pointer.
+    expect(result.rows).toEqual([open])
+    expect(result.changes.map((c) => [c.kind, c.ownerType, c.costKey, c.assetId])).toEqual([['repointed', 'asset', 'tail', 'asset-1']])
+    expect(ended.lastChangeId).toBe('log-old')
+  })
+
+  it('does nothing for no assets', async () => {
+    const { em } = setup()
+    await expect(repointAssetCosts(em as never, [], 'sub-m', CTX)).resolves.toEqual({ rows: [], changes: [], links: [] })
+    expect(em.find).not.toHaveBeenCalled()
   })
 })

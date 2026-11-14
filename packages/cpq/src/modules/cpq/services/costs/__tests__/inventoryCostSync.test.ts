@@ -2,7 +2,7 @@ import { CpqInventoryAsset, CpqInventoryCost, CpqInventorySubscriptionItem, CpqO
 import { DefaultCpqInventoryService } from '../../cpqInventoryService'
 import { createMockEm } from '../../__tests__/_helpers/mockEm'
 import {
-  costSeedFromOrderLineCost, createAssetCosts, createItemCosts, isInventoryCostUnchanged, repointAssetCosts, type CostSeed,
+  costSeedFromOrderLineCost, createAssetCosts, createItemCosts, isInventoryCostUnchanged, repointAssetCosts, replaceItemCosts, type CostSeed,
 } from '../inventoryCostSync'
 
 const SCOPE = { organizationId: 'org', tenantId: 'tenant' }
@@ -118,6 +118,36 @@ describe('createItemCosts', () => {
     await expect(createItemCosts(em as never, [{ subscriptionId: 'sub-1', subscriptionItemId: 'i', assetId: 'a', seeds: [seed()] } as never], CTX)).rejects.toThrow(/exactly one/)
     await expect(createItemCosts(em as never, [{ subscriptionId: '', subscriptionItemId: 'i', seeds: [seed()] }], CTX)).rejects.toThrow(/exactly one/)
     expect(em.persist).not.toHaveBeenCalled()
+  })
+})
+
+describe('replaceItemCosts (review1-b)', () => {
+  const CTX_END = { ...CTX, endedAt: '2026-11-15' }
+
+  it('keeps an open manual-origin cost that is absent from the seeds', async () => {
+    const manual = stored({ id: 'ic-manual', costKey: 'manual_install', origin: 'manual' })
+    const { em } = setup([manual])
+    const result = await replaceItemCosts(em as never, [item([])], CTX_END)
+    expect(manual).toMatchObject({ status: 'active', endedAt: null })
+    expect(result.changes).toEqual([])
+  })
+
+  it('ends an open catalog cost whose key is missing from the seeds', async () => {
+    const gone = stored({ id: 'ic-gone', costKey: 'gone' })
+    const kept = stored({ id: 'ic-tail', costKey: 'tail' })
+    const { em } = setup([gone, kept])
+    const result = await replaceItemCosts(em as never, [item([seed()])], CTX_END)
+    expect(gone).toMatchObject({ status: 'ended', endedAt: '2026-11-15' })
+    expect(kept.status).toBe('active')
+    expect(result.changes.map((c) => [c.inventoryCostId, c.kind])).toEqual([['ic-gone', 'ended']])
+  })
+
+  it('with no seeds ends the open catalog costs only', async () => {
+    const catalog = stored({ id: 'ic-cat' })
+    const manual = stored({ id: 'ic-man', costKey: 'm', origin: 'manual' })
+    const { em } = setup([catalog, manual])
+    await replaceItemCosts(em as never, [item([])], CTX_END)
+    expect([catalog.status, manual.status]).toEqual(['ended', 'active'])
   })
 })
 

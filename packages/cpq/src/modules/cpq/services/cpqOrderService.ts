@@ -34,6 +34,7 @@ import {
 import { emitCpqEvent } from '../events'
 import { isArcReconfigured, stripQuoteOnlyArcMarkers } from './arcPriceFreeze'
 import { isArcTerminationLine } from './arcLineRemoval'
+import type { CpqCostService } from './costs/costService'
 import { summarizeOrderPricing, type OrderWaterfallSummary } from './orderPricingSummary'
 
 // ─── Types ──────────────────────────────────────────────────────
@@ -114,6 +115,8 @@ interface OrderServiceDeps {
   em: EntityManager
   cpqInventoryService: DefaultCpqInventoryService
   salesDocumentNumberGenerator: SalesDocumentNumberGenerator
+  /** Optional: reads the `cpq.cost_plus` toggle at ARC activation. Absent behaves as toggle on. */
+  cpqCostService?: Pick<CpqCostService, 'enabled'>
 }
 
 const CPQ_TO_SALES_ORDER_STATUS: Record<CpqOrderStatus, string> = {
@@ -130,8 +133,10 @@ export class DefaultCpqOrderService {
   private em: EntityManager
   private inventoryService: DefaultCpqInventoryService
   private numberGenerator: SalesDocumentNumberGenerator
+  private costService?: Pick<CpqCostService, 'enabled'>
 
   constructor(deps: OrderServiceDeps) {
+    this.costService = deps.cpqCostService
     this.em = deps.em
     this.inventoryService = deps.cpqInventoryService
     this.numberGenerator = deps.salesDocumentNumberGenerator
@@ -535,7 +540,10 @@ export class DefaultCpqOrderService {
         if (orderLineCost) orderLineCost.inventoryCostId = link.inventoryCostId
       }
     }
-    const arcChange = (line: CpqQuoteLineConfiguration) => buildArcLineChange(line, specMap, seedsForQuoteLine)
+    // Scope decision (spec Q5 + App Spec R14): with `cpq.cost_plus` off, a reconfigured mirror line carries no cost
+    // lines, so its write-back is upsert-only and ends nothing. Read once per activation (a read, no writes).
+    const costPlusOn = this.costService ? await this.costService.enabled(scope.tenantId) : true
+    const arcChange = (line: CpqQuoteLineConfiguration) => buildArcLineChange(line, specMap, seedsForQuoteLine, costPlusOn)
     const costChanges: InventoryCostChange[] = []
 
     const events: Array<() => Promise<void>> = []
@@ -1177,6 +1185,7 @@ function buildArcLineChange(
   line: CpqQuoteLineConfiguration,
   specMap: Map<string, CpqProductSpecification>,
   seedsForQuoteLine: (quoteLineId: string) => CostSeed[] = () => [],
+  costPlusOn = true,
 ): ArcLineChange {
   const action = line.action as 'add' | 'modify' | 'cancel'
   if (action === 'add') {
@@ -1215,7 +1224,7 @@ function buildArcLineChange(
     action,
     sourceSubscriptionItemId: line.sourceSubscriptionItemId ?? null,
     ...(isArcReconfigured(line.configuration)
-      ? { costSync: { mode: 'replace' as const, seeds: seedsForQuoteLine(line.quoteLineId) } }
+      ? { costSync: { mode: costPlusOn ? 'replace' as const : 'upsert' as const, seeds: seedsForQuoteLine(line.quoteLineId) } }
       : {}),
     modifyPatch: {
       configuration: stripQuoteOnlyArcMarkers(line.configuration) ?? undefined,

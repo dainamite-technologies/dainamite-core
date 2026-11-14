@@ -47,6 +47,8 @@ export interface ActivationFixture {
   failInventory?: 'createSubscription'
   /** Inject a failure on the final order-status flush. */
   failFinalFlush?: boolean
+  /** `cpq.cost_plus` toggle for ARC activation; absent = no cost service injected (behaves as on). */
+  costPlusEnabled?: boolean
   inventory?: Partial<Record<'createSubscription' | 'applyAmendment' | 'applyRenewal' | 'applyCancel' | 'applyMergeRenewal', unknown>>
 }
 
@@ -141,10 +143,12 @@ export function createActivationHarness(fixture: ActivationFixture) {
     applyMergeRenewal: inventoryCall('applyMergeRenewal', inv.applyMergeRenewal),
   }
 
+  const costService = { enabled: jest.fn(async (_tenantId: string) => fixture.costPlusEnabled !== false) }
   const service = new DefaultCpqOrderService({
     em: em as unknown as never,
     cpqInventoryService: inventory as unknown as never,
     salesDocumentNumberGenerator: { generate: jest.fn() } as unknown as never,
+    ...(fixture.costPlusEnabled === undefined ? {} : { cpqCostService: costService as unknown as never }),
   })
-  return { service, em, txEm, inventory, trace, orderConfig, salesOrder, store }
+  return { service, costService, em, txEm, inventory, trace, orderConfig, salesOrder, store }
 }

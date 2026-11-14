@@ -819,6 +819,19 @@ describe('ARC inventory cost write-back', () => {
     expect(result.inventoryCostChanges).toEqual([expect.objectContaining({ kind: 'created', ownerType: 'subscription_item' })])
   })
 
+  it("Amend, reconfigured mirror in 'upsert' mode (toggle off at activation): updates seeds, ends nothing", async () => {
+    const { em, service } = setup()
+    em.seed(CpqInventoryCost, [
+      costRow('ic-1', { subscriptionItemId: 'item-1' }, 'tail', '270'),
+      costRow('ic-2', { subscriptionItemId: 'item-1' }, 'install', '10'),
+    ])
+    const result = await amend(service, [
+      { action: 'modify', quoteLineId: 'ql-1', sourceSubscriptionItemId: 'item-1', modifyPatch: { mrcAmount: 50 }, costSync: { mode: 'upsert', seeds: [] } },
+    ])
+    expect(em.rows(CpqInventoryCost).map((r) => r.status)).toEqual(['active', 'active'])
+    expect(result.inventoryCostChanges).toEqual([])
+  })
+
   it('returns order line cost -> inventory cost links for add (created) and reconfigured mirror (updated and unchanged rows)', async () => {
     const { em, service } = setup()
     em.seed(CpqInventoryCost, [

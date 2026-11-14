@@ -96,10 +96,12 @@ export interface ArcLineChange {
   parentQuoteLineId?: string | null
   /**
    * Cost write-back (Q5), built by the order service from the order line's costs. `create`: an `add` line's
-   * item costs. `replace`: a RECONFIGURED mirror line's costs replace its item's costs by `cost_key`. Absent for
-   * every other line (an unreconfigured mirror line leaves item costs untouched; a `cancel` line ends them).
+   * item costs. `replace`: a RECONFIGURED mirror line's costs replace its item's costs by `cost_key` (ending only
+   * open catalog costs missing from the seeds). `upsert`: the same create / update, but nothing is ever ended (used
+   * when `cpq.cost_plus` is off at activation, so the quote could not carry costs). Absent for every other line
+   * (an unreconfigured mirror line leaves item costs untouched; a `cancel` line ends them).
    */
-  costSync?: { mode: 'create' | 'replace'; seeds: CostSeed[] }
+  costSync?: { mode: 'create' | 'replace' | 'upsert'; seeds: CostSeed[] }
   /** Optional metadata for action='modify' — the configuration / pricing changes. */
   modifyPatch?: {
     configuration?: Record<string, unknown>
@@ -2013,8 +2015,8 @@ export class DefaultCpqInventoryService {
       changes.push(...result.changes)
       links.push(...result.links)
     }
-    const owners = (mode: 'create' | 'replace') => lineChanges
-      .filter((lc) => lc.costSync?.mode === mode && lc.quoteLineId && applied.itemIdByQuoteLineId.has(lc.quoteLineId))
+    const owners = (...modes: Array<'create' | 'replace' | 'upsert'>) => lineChanges
+      .filter((lc) => lc.costSync !== undefined && modes.includes(lc.costSync.mode) && lc.quoteLineId && applied.itemIdByQuoteLineId.has(lc.quoteLineId))
       .map((lc) => ({
         subscriptionId: sub.id,
         subscriptionItemId: applied.itemIdByQuoteLineId.get(lc.quoteLineId as string) as string,
@@ -2022,7 +2024,7 @@ export class DefaultCpqInventoryService {
       }))
     collect(await endItemCosts(this.em, applied.cancelledItemIds, ctx))
     collect(await endAssetCosts(this.em, applied.cancelledAssetIds, ctx))
-    collect(await createItemCosts(this.em, owners('create'), ctx))
+    collect(await createItemCosts(this.em, owners('create', 'upsert'), ctx))
     collect(await replaceItemCosts(this.em, owners('replace'), ctx))
     return { rows, changes, links }
   }

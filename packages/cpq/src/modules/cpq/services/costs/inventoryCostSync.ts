@@ -227,10 +227,12 @@ async function upsertOwnerCosts(
       }
     }
     if (replace) {
-      // Replace semantics (Q5): an open row whose key is missing from the seeds is ended; ended rows stay ended.
+      // Replace semantics (Q5): an open CATALOG row whose key is missing from the seeds is ended; ended rows stay
+      // ended. Manual rows are never ended here: a mirror line cannot carry manual costs, so their absence from the
+      // seeds says nothing (review1-b).
       const seededKeys = new Set(owner.seeds.map((seed) => seed.costKey))
       for (const row of existing ?? []) {
-        if (row[ownerField] !== ownerId || seededKeys.has(row.costKey) || row.status !== 'active') continue
+        if (row[ownerField] !== ownerId || seededKeys.has(row.costKey) || row.status !== 'active' || row.origin !== 'catalog') continue
         endRow(row, ctx)
         result.rows.push(row)
         result.changes.push(changeOf(row, kind, 'ended'))
@@ -298,8 +300,9 @@ export function createAssetCosts(em: EntityManager, owners: AssetCostOwner[], ct
 
 /**
  * Replaces the item costs of the given items with their seeds, by `cost_key` (Q5): changed rows are updated in
- * place, new keys created, ended keys that return reactivated (Q9), keys that are gone ended, unchanged rows
- * left alone (no write, no change). An owner with no seeds has all its open costs ended.
+ * place, new keys created, ended keys that return reactivated (Q9), catalog keys that are gone ended, unchanged
+ * rows left alone (no write, no change). An owner with no seeds has all its open catalog costs ended; open manual
+ * costs (`origin !== 'catalog'`) are never ended by a replace.
  */
 export function replaceItemCosts(em: EntityManager, owners: ItemCostOwner[], ctx: InventoryCostSyncContext): Promise<InventoryCostSyncResult> {
   return upsertOwnerCosts(em, 'subscription_item', owners, ctx, true)

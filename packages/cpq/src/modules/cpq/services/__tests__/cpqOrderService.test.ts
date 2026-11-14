@@ -1268,6 +1268,18 @@ describe('ARC write-back wiring in activateOrder (step 13)', () => {
     expect(h.trace.at(-1)).toBe('tx:commit')
   })
 
+  describe('cpq.cost_plus toggle at activation (review1-b, spec Q5 + R14)', () => {
+    it.each([[true, 'replace'], [false, 'upsert']] as const)('toggle on=%s: the reconfigured mirror line syncs in %s mode, read once', async (on, mode) => {
+      const h = createActivationHarness({ ...fixture('amend', 'applyAmendment', []), costPlusEnabled: on })
+      await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+      const [input] = h.inventory.applyAmendment.mock.calls[0] as [{ lineChanges: Array<{ costSync?: { mode: string } }> }]
+      expect(input.lineChanges[0].costSync?.mode).toBe(mode)
+      expect(input.lineChanges[2].costSync?.mode).toBe('create')
+      expect(h.costService.enabled).toHaveBeenCalledTimes(1)
+      expect(h.costService.enabled).toHaveBeenCalledWith(ACTIVATION_SCOPE.tenantId)
+    })
+  })
+
   describe('links order line costs to the inventory costs the ARC step created / updated (review1-a)', () => {
     const links = [{ orderLineCostId: 'c-re', inventoryCostId: 'ic-re' }, { orderLineCostId: 'c-add', inventoryCostId: 'ic-add' }]
     const withLinks = (primitive: string, quoteType: 'amend' | 'renew') => {

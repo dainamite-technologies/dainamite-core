@@ -1893,3 +1893,298 @@ export class CpqQuoteMarkupOverride {
   @Property({ name: 'deleted_at', type: Date, nullable: true })
   deletedAt: Date | null = null
 }
+
+// ─── CpqOrderLineCost ────────────────────────────────────────────
+// One cost of an order line, copied from a quote cost line at conversion (feature
+// spec 2026-11-12-cpq-cost-plus-order-subscription-costs §Data Model, App Spec
+// §1.4.6). Never affects the order price. `cost_key` is unique per order line among
+// non-deleted rows (partial unique index in the migration). The value / FX / index /
+// supplier columns have the same names and types as `cpq_quote_line_costs`;
+// `total_amount` is the cost total in the order currency (cost model applied,
+// × line quantity). `inventory_cost_id` is set at activation to the inventory cost
+// it created; `reconfirmed_*` stay unused until the Phase 3 re-confirmation.
+// FK strings only; confidential, so it is not registered in ce.ts or search.
+
+@Entity({ tableName: 'cpq_order_line_costs' })
+@Index({ name: 'cpq_order_line_costs_config_idx', properties: ['organizationId', 'tenantId', 'orderConfigurationId'] })
+@Index({ name: 'cpq_order_line_costs_line_idx', properties: ['organizationId', 'tenantId', 'orderLineId'] })
+@Index({ name: 'cpq_order_line_costs_inventory_cost_idx', properties: ['organizationId', 'tenantId', 'inventoryCostId'] })
+export class CpqOrderLineCost {
+  [OptionalProps]?: 'createdAt' | 'updatedAt' | 'deletedAt'
+
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @Property({ name: 'organization_id', type: 'uuid' })
+  organizationId!: string
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  /** FK string → `cpq_order_configurations.id`. */
+  @Property({ name: 'order_configuration_id', type: 'uuid' })
+  orderConfigurationId!: string
+
+  /** The sales order line id (`CpqOrderLineConfiguration.orderLineId`). */
+  @Property({ name: 'order_line_id', type: 'uuid' })
+  orderLineId!: string
+
+  /** The quote cost line this row was copied from. */
+  @Property({ name: 'source_quote_line_cost_id', type: 'uuid' })
+  sourceQuoteLineCostId!: string
+
+  /** The item or asset cost this row set at activation (null until then). */
+  @Property({ name: 'inventory_cost_id', type: 'uuid', nullable: true })
+  inventoryCostId: string | null = null
+
+  @Property({ name: 'cost_key', type: 'text' })
+  costKey!: string
+
+  /** Null = a line-level margin_only cost. */
+  @Property({ name: 'charge_code', type: 'text', nullable: true })
+  chargeCode: string | null = null
+
+  /** catalog | manual (carried arrives with the ARC feature) */
+  @Property({ type: 'text' })
+  origin!: string
+
+  @Property({ name: 'cost_element_id', type: 'uuid', nullable: true })
+  costElementId: string | null = null
+
+  @Property({ type: 'text' })
+  name!: string
+
+  /** price_basis | margin_only */
+  @Property({ type: 'text' })
+  role!: string
+
+  /** nrc | mrc */
+  @Property({ name: 'cost_type', type: 'text' })
+  costType!: string
+
+  /** fixed | table | index | on_request */
+  @Property({ type: 'text' })
+  source!: string
+
+  /** flat | per_unit | tiered | volume */
+  @Property({ name: 'cost_model', type: 'text' })
+  costModel!: string
+
+  /** none | estimated | confirmed */
+  @Property({ name: 'value_status', type: 'text' })
+  valueStatus!: string
+
+  @Property({ name: 'value_origin', type: 'text', nullable: true })
+  valueOrigin: string | null = null
+
+  @Property({ name: 'unit_amount', type: 'numeric', columnType: 'numeric(18, 4)', nullable: true })
+  unitAmount: string | null = null
+
+  @Property({ name: 'instance_amount', type: 'numeric', columnType: 'numeric(18, 4)', nullable: true })
+  instanceAmount: string | null = null
+
+  /** Order currency, cost model applied, × line quantity. */
+  @Property({ name: 'total_amount', type: 'numeric', columnType: 'numeric(18, 4)', nullable: true })
+  totalAmount: string | null = null
+
+  @Property({ name: 'currency_code', type: 'text', nullable: true })
+  currencyCode: string | null = null
+
+  @Property({ name: 'fx_rate', type: 'numeric', columnType: 'numeric(18, 8)', nullable: true })
+  fxRate: string | null = null
+
+  @Property({ name: 'fx_rate_date', type: 'date', nullable: true })
+  fxRateDate: string | null = null
+
+  @Property({ name: 'index_snapshot', type: 'jsonb', nullable: true })
+  indexSnapshot: Record<string, unknown> | null = null
+
+  @Property({ name: 'supplier_id', type: 'uuid', nullable: true })
+  supplierId: string | null = null
+
+  @Property({ name: 'supplier_name', type: 'text', nullable: true })
+  supplierName: string | null = null
+
+  @Property({ name: 'supplier_quote_ref', type: 'text', nullable: true })
+  supplierQuoteRef: string | null = null
+
+  @Property({ name: 'valid_until', type: 'date', nullable: true })
+  validUntil: string | null = null
+
+  @Property({ name: 'supplier_term_end', type: 'date', nullable: true })
+  supplierTermEnd: string | null = null
+
+  @Property({ name: 'supplier_min_term_months', type: 'integer', nullable: true })
+  supplierMinTermMonths: number | null = null
+
+  @Property({ type: 'text', nullable: true })
+  note: string | null = null
+
+  /** Phase 3 re-confirmation (Q-D13); unused until then. */
+  @Property({ name: 'reconfirmed_at', type: Date, nullable: true })
+  reconfirmedAt: Date | null = null
+
+  @Property({ name: 'reconfirmed_by_user_id', type: 'uuid', nullable: true })
+  reconfirmedByUserId: string | null = null
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+
+  @Property({ name: 'updated_at', type: Date, onUpdate: () => new Date() })
+  updatedAt: Date = new Date()
+
+  @Property({ name: 'deleted_at', type: Date, nullable: true })
+  deletedAt: Date | null = null
+}
+
+// ─── CpqInventoryCost ────────────────────────────────────────────
+// The contracted cost of a live subscription item OR asset — the record that
+// carries the sold line's price (feature spec §Data Model, App Spec §1.4.6, I-10).
+// Exactly one owner is set (`CHECK num_nonnulls(subscription_item_id, asset_id) = 1`
+// in the migration). One row per owner and `cost_key` for the life of the purchase
+// (partial unique indexes); its id never changes: ARC activations update it in
+// place, a merge re-points it, a cancel ends it. History lives in the change-log
+// snapshots, not here. `last_change_id` is the change-log row of the last activation
+// that wrote it. Value columns as `cpq_order_line_costs`. FK strings only;
+// confidential, so it is not registered in ce.ts or search.
+
+@Entity({ tableName: 'cpq_inventory_costs' })
+@Index({ name: 'cpq_inventory_costs_subscription_idx', properties: ['organizationId', 'tenantId', 'subscriptionId'] })
+@Index({ name: 'cpq_inventory_costs_item_idx', properties: ['organizationId', 'tenantId', 'subscriptionItemId'] })
+@Index({ name: 'cpq_inventory_costs_asset_idx', properties: ['organizationId', 'tenantId', 'assetId'] })
+@Index({ name: 'cpq_inventory_costs_status_idx', properties: ['organizationId', 'tenantId', 'status'] })
+export class CpqInventoryCost {
+  [OptionalProps]?: 'status' | 'createdAt' | 'updatedAt' | 'deletedAt'
+
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @Property({ name: 'organization_id', type: 'uuid' })
+  organizationId!: string
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  /** The owner's subscription; re-pointed on a merge. */
+  @Property({ name: 'subscription_id', type: 'uuid' })
+  subscriptionId!: string
+
+  /** Owner of an item cost; re-pointed to the clone on a merge. */
+  @Property({ name: 'subscription_item_id', type: 'uuid', nullable: true })
+  subscriptionItemId: string | null = null
+
+  /** Owner of an asset cost (`cpq_inventory_assets`); never re-pointed. */
+  @Property({ name: 'asset_id', type: 'uuid', nullable: true })
+  assetId: string | null = null
+
+  /** active | ended (INVENTORY_COST_STATUSES) */
+  @Property({ type: 'text', default: 'active' })
+  status: string = 'active'
+
+  /** Activation date of the order that created it. */
+  @Property({ name: 'started_at', type: 'date' })
+  startedAt!: string
+
+  @Property({ name: 'ended_at', type: 'date', nullable: true })
+  endedAt: string | null = null
+
+  /** Change-log row of the last activation that wrote this cost. */
+  @Property({ name: 'last_change_id', type: 'uuid', nullable: true })
+  lastChangeId: string | null = null
+
+  /** The order line cost that last set its values. */
+  @Property({ name: 'last_order_line_cost_id', type: 'uuid', nullable: true })
+  lastOrderLineCostId: string | null = null
+
+  @Property({ name: 'cost_key', type: 'text' })
+  costKey!: string
+
+  /** Null = a line-level margin_only cost. */
+  @Property({ name: 'charge_code', type: 'text', nullable: true })
+  chargeCode: string | null = null
+
+  /** catalog | manual (carried arrives with the ARC feature) */
+  @Property({ type: 'text' })
+  origin!: string
+
+  @Property({ name: 'cost_element_id', type: 'uuid', nullable: true })
+  costElementId: string | null = null
+
+  @Property({ type: 'text' })
+  name!: string
+
+  /** price_basis | margin_only */
+  @Property({ type: 'text' })
+  role!: string
+
+  /** nrc | mrc */
+  @Property({ name: 'cost_type', type: 'text' })
+  costType!: string
+
+  /** fixed | table | index | on_request */
+  @Property({ type: 'text' })
+  source!: string
+
+  /** flat | per_unit | tiered | volume */
+  @Property({ name: 'cost_model', type: 'text' })
+  costModel!: string
+
+  /** none | estimated | confirmed */
+  @Property({ name: 'value_status', type: 'text' })
+  valueStatus!: string
+
+  @Property({ name: 'value_origin', type: 'text', nullable: true })
+  valueOrigin: string | null = null
+
+  @Property({ name: 'unit_amount', type: 'numeric', columnType: 'numeric(18, 4)', nullable: true })
+  unitAmount: string | null = null
+
+  @Property({ name: 'instance_amount', type: 'numeric', columnType: 'numeric(18, 4)', nullable: true })
+  instanceAmount: string | null = null
+
+  /** Subscription currency, cost model applied, × line quantity. */
+  @Property({ name: 'total_amount', type: 'numeric', columnType: 'numeric(18, 4)', nullable: true })
+  totalAmount: string | null = null
+
+  @Property({ name: 'currency_code', type: 'text', nullable: true })
+  currencyCode: string | null = null
+
+  @Property({ name: 'fx_rate', type: 'numeric', columnType: 'numeric(18, 8)', nullable: true })
+  fxRate: string | null = null
+
+  @Property({ name: 'fx_rate_date', type: 'date', nullable: true })
+  fxRateDate: string | null = null
+
+  @Property({ name: 'index_snapshot', type: 'jsonb', nullable: true })
+  indexSnapshot: Record<string, unknown> | null = null
+
+  @Property({ name: 'supplier_id', type: 'uuid', nullable: true })
+  supplierId: string | null = null
+
+  @Property({ name: 'supplier_name', type: 'text', nullable: true })
+  supplierName: string | null = null
+
+  @Property({ name: 'supplier_quote_ref', type: 'text', nullable: true })
+  supplierQuoteRef: string | null = null
+
+  @Property({ name: 'valid_until', type: 'date', nullable: true })
+  validUntil: string | null = null
+
+  @Property({ name: 'supplier_term_end', type: 'date', nullable: true })
+  supplierTermEnd: string | null = null
+
+  @Property({ name: 'supplier_min_term_months', type: 'integer', nullable: true })
+  supplierMinTermMonths: number | null = null
+
+  @Property({ type: 'text', nullable: true })
+  note: string | null = null
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+
+  @Property({ name: 'updated_at', type: Date, onUpdate: () => new Date() })
+  updatedAt: Date = new Date()
+
+  @Property({ name: 'deleted_at', type: Date, nullable: true })
+  deletedAt: Date | null = null
+}

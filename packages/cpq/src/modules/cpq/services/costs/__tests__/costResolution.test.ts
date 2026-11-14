@@ -99,8 +99,8 @@ describe('resolveQuoteCosts', () => {
     const s = store({ charges: [charge()], elements: [element()] })
     await run(s, { quoteOver: { quoteType: 'amend' }, lines: [{ lineConfig: mirror, mergedConfig: {} }] })
     expect(s.costs).toHaveLength(0)
-    // a reconfigured (unfrozen) mirror is instantiated
-    const reconfigured = lineConfig({ configuration: { _arcMirroredFromItemId: 'item-1' } })
+    // a reconfigured mirror (`_arcReconfigured`, Q13) is instantiated
+    const reconfigured = lineConfig({ configuration: { _arcMirroredFromItemId: 'item-1', _arcReconfigured: true } })
     await run(s, { quoteOver: { quoteType: 'amend' }, lines: [{ lineConfig: reconfigured, mergedConfig: {} }] })
     expect(s.costs).toHaveLength(1)
     const cancelled = lineConfig({ action: 'cancel' })
@@ -117,7 +117,7 @@ describe('resolveQuoteCosts', () => {
     expect(stats).toMatchObject({ dropped: 2, created: 0 })
     expect(s.costs.map((row) => row.deletedAt)).toEqual([expect.any(Date), expect.any(Date)])
     // ...while a kept mirror line of the same Renew quote is instantiated from the catalog
-    const kept = lineConfig({ quoteLineId: 'line-2', configuration: { _arcMirroredFromItemId: 'item-2' } })
+    const kept = lineConfig({ quoteLineId: 'line-2', configuration: { _arcMirroredFromItemId: 'item-2', _arcReconfigured: true } })
     const s2 = store({ charges: [charge()], elements: [element()] })
     await run(s2, { quoteOver: { quoteType: 'renew' }, lines: [{ lineConfig: removed, mergedConfig: {} }, { lineConfig: kept, mergedConfig: {} }] })
     expect(s2.costs).toEqual([expect.objectContaining({ quoteLineId: 'line-2', costKey: 'tail' })])
@@ -244,6 +244,81 @@ describe('resolveQuoteCosts', () => {
       expect(s.costs[0]).toMatchObject({ valueStatus: 'none', unitAmount: null })
       expect(String(s.costs[0].note)).toContain('80 USD')
     })
+  })
+})
+
+describe('mirror-line cost lines (Q13: reconfigured mirrors only; was feature 1 characterization)', () => {
+  const mirrorCfg = (extra: Row = {}) => lineConfig({ configuration: { _arcMirroredFromItemId: 'item-1', ...extra } })
+  const resolve = async (quoteType: string, lineConfigs: never[]) => {
+    const s = store({ charges: [charge()], elements: [element()] })
+    await run(s, { quoteOver: { quoteType }, lines: lineConfigs.map((cfg) => ({ lineConfig: cfg, mergedConfig: {} })) })
+    return s.costs
+  }
+
+  it('a frozen Amend mirror gets no catalog cost line', async () => {
+    expect(await resolve('amend', [mirrorCfg({ _arcPriceFrozen: true })])).toHaveLength(0)
+  })
+
+  it('a frozen cost-plus Renew mirror gets no catalog cost line', async () => {
+    expect(await resolve('renew', [mirrorCfg({ _arcPriceFrozen: true, _arcCostPlusFrozen: true })])).toHaveLength(0)
+  })
+
+  it('an Amend / Renew removal (cancel) line gets no catalog cost line', async () => {
+    for (const quoteType of ['amend', 'renew']) {
+      const cancelLine = lineConfig({ action: 'cancel', configuration: { _arcMirroredFromItemId: 'item-1' } })
+      expect(await resolve(quoteType, [cancelLine])).toHaveLength(0)
+    }
+  })
+
+  // CHANGED from feature 1 (was: "NOT skipped ... gets 1 cost line"): an unreconfigured mirror never gets catalog cost lines.
+  it('a Cancel-quote line (an unreconfigured mirror) gets no catalog cost line', async () => {
+    const cancelLine = lineConfig({ action: 'cancel', configuration: { _arcMirroredFromItemId: 'item-1' } })
+    expect(await resolve('cancel', [cancelLine])).toHaveLength(0)
+  })
+
+  // CHANGED from feature 1 (was: a non-frozen Renew mirror gets catalog cost lines).
+  it('an unreconfigured Renew mirror re-priced at the current standard gets no catalog cost lines (R1c)', async () => {
+    expect(await resolve('renew', [mirrorCfg()])).toHaveLength(0)
+  })
+
+  // CHANGED from feature 1 (was: any unfrozen Amend mirror): the line must carry `_arcReconfigured`.
+  it('an unfrozen Amend mirror without the reconfigured marker gets none, a reconfigured one gets catalog cost lines', async () => {
+    expect(await resolve('amend', [mirrorCfg()])).toHaveLength(0)
+    expect(await resolve('amend', [mirrorCfg({ _arcReconfigured: true })])).toEqual([expect.objectContaining({ costKey: 'tail', origin: 'catalog' })])
+  })
+
+  it('a reconfigured Renew mirror (also un-frozen from a cost-plus freeze) gets catalog cost lines', async () => {
+    expect(await resolve('renew', [mirrorCfg({ _arcReconfigured: true })])).toEqual([expect.objectContaining({ costKey: 'tail', origin: 'catalog' })])
+  })
+
+  // CHANGED from feature 1 (was: a freeze marker on a Renew mirror does not exempt it): moot, the marker no longer matters.
+  it('a stray freeze marker on a Renew mirror does not instantiate costs', async () => {
+    expect(await resolve('renew', [mirrorCfg({ _arcPriceFrozen: true })])).toHaveLength(0)
+  })
+
+  it('a reconfigured mirror is not a cancel line: cost lines of a cancelled one are still dropped', async () => {
+    const cancelled = lineConfig({ action: 'cancel', configuration: { _arcMirroredFromItemId: 'item-1', _arcReconfigured: true } })
+    expect(await resolve('renew', [cancelled])).toHaveLength(0)
+  })
+
+  it('drops catalog cost rows stored on an unreconfigured mirror before Q13 (they could never be confirmed)', async () => {
+    const s = store({ charges: [charge()], elements: [element()], costs: [catalogCost({ valueStatus: 'estimated' })] })
+    const stats = await run(s, { quoteOver: { quoteType: 'renew' }, lines: [{ lineConfig: mirrorCfg(), mergedConfig: {} }] })
+    expect(stats).toMatchObject({ dropped: 1, created: 0 })
+    expect(s.costs[0].deletedAt).toEqual(expect.any(Date))
+  })
+
+  it('cost-plus inputs of a reconfigured mirror carry its catalog cost lines (priced from cost); an unreconfigured one carries none', async () => {
+    const inputs = async (cfg: Row) => {
+      const s = store({ charges: [charge()], elements: [element()] })
+      const out = await resolveCostPlusInputs({
+        em: s.em as never, quote: quote({ quoteType: 'renew' }), scope: SCOPE,
+        lines: [{ lineConfig: mirrorCfg(cfg), mergedConfig: {} }], isEnabled: async () => true, save: true,
+      })
+      return out.costsByLine.get(LINE_ID) ?? []
+    }
+    expect(await inputs({ _arcReconfigured: true })).toHaveLength(1)
+    expect(await inputs({})).toHaveLength(0)
   })
 })
 

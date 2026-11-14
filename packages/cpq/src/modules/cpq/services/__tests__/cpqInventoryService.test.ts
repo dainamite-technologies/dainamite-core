@@ -187,6 +187,33 @@ describe('DefaultCpqInventoryService.transitionAssetStatus', () => {
   })
 })
 
+describe('DefaultCpqInventoryService.withEntityManager / change-log id (Q1, Q12)', () => {
+  it('returns a service bound to the given EM only, never the original one', async () => {
+    const { em, service } = makeService()
+    const tx = createMockEm()
+    const bound = service.withEntityManager(tx as unknown as never)
+
+    expect(bound).not.toBe(service)
+    await bound.createSubscription({ customerId: 'cust', name: 'S', currencyCode: 'USD', items: [{ name: 'i' }] }, SCOPE)
+
+    expect(tx.flush).toHaveBeenCalled()
+    expect(tx.persist).toHaveBeenCalled()
+    expect(em.flush).not.toHaveBeenCalled()
+    expect(em.persist).not.toHaveBeenCalled()
+    expect(em.create).not.toHaveBeenCalled()
+  })
+
+  it('pre-generates the change-log id before the insert and mirrors it on the subscription', async () => {
+    const { em, service } = makeService()
+    const sub = await service.createSubscription({ customerId: 'cust', name: 'S', currencyCode: 'USD', items: [{ name: 'i' }] }, SCOPE)
+
+    const logCall = em.create.mock.calls.find(([, data]) => 'changeType' in data)
+    const logId = (logCall?.[1] as { id?: string }).id
+    expect(logId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
+    expect((sub as { lastChangeLogId?: string }).lastChangeLogId).toBe(logId)
+  })
+})
+
 describe('DefaultCpqInventoryService.createSubscription', () => {
   it('aggregates MRC and NRC sums across items', async () => {
     const { em, service } = makeService()

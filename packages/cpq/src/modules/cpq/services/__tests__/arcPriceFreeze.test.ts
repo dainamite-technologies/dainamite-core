@@ -3,8 +3,10 @@ import {
   arcPricingInputsChanged,
   buildArcMirrorConfiguration,
   ARC_REPRICED_KEY,
+  ARC_COST_PLUS_FROZEN_KEY,
+  ARC_RECONFIGURED_KEY,
   isArcPriceFrozen,
-  isFrozenAmendMirrorLine,
+  isFrozenMirrorLine,
   stripArcMarkers,
   stripQuoteOnlyArcMarkers,
 } from '../arcPriceFreeze'
@@ -96,19 +98,19 @@ describe('arcPricingInputsChanged', () => {
   })
 })
 
-describe('isFrozenAmendMirrorLine', () => {
+describe('isFrozenMirrorLine', () => {
   const mirrored = { port_size: '1G', _arcMirroredFromItemId: 'item-1', [ARC_PRICE_FROZEN_KEY]: true }
 
   it('is true only for a flagged mirror line on an Amend quote', () => {
-    expect(isFrozenAmendMirrorLine(mirrored, 'amend')).toBe(true)
+    expect(isFrozenMirrorLine(mirrored, 'amend')).toBe(true)
   })
 
   it.each(['new', 'renew', 'cancel', null, undefined])('ignores the flag on a %s quote', (quoteType) => {
-    expect(isFrozenAmendMirrorLine(mirrored, quoteType)).toBe(false)
+    expect(isFrozenMirrorLine(mirrored, quoteType)).toBe(false)
   })
 
   it('ignores the flag on a line that is not a mirror line', () => {
-    expect(isFrozenAmendMirrorLine({ port_size: '1G', [ARC_PRICE_FROZEN_KEY]: true }, 'amend')).toBe(false)
+    expect(isFrozenMirrorLine({ port_size: '1G', [ARC_PRICE_FROZEN_KEY]: true }, 'amend')).toBe(false)
   })
 })
 
@@ -137,5 +139,54 @@ describe('stripQuoteOnlyArcMarkers', () => {
     const cfg = { port_size: '1G' }
     expect(stripQuoteOnlyArcMarkers(cfg)).toBe(cfg)
     expect(stripQuoteOnlyArcMarkers(null)).toBeNull()
+  })
+})
+
+describe('freeze matrix (Amend always; Renew only for a cost-plus item)', () => {
+  it.each([
+    ['amend', true],
+    ['renew', false],
+    ['cancel', false],
+  ] as const)('%s mirror configuration frozen=%s, and only an Amend quote honours the marker', (quoteType, frozen) => {
+    const cfg = buildArcMirrorConfiguration({ port_size: '1G' }, ITEM, quoteType)
+    expect(isArcPriceFrozen(cfg)).toBe(frozen)
+    expect(isFrozenMirrorLine(cfg, quoteType)).toBe(frozen)
+    // the freeze marker is quote-only: it never reaches an order / subscription configuration
+    expect(stripQuoteOnlyArcMarkers(cfg)).not.toHaveProperty(ARC_PRICE_FROZEN_KEY)
+  })
+
+  it('a Renew line carrying the marker is still not a frozen mirror line', () => {
+    expect(isFrozenMirrorLine({ _arcMirroredFromItemId: 'item-1', [ARC_PRICE_FROZEN_KEY]: true }, 'renew')).toBe(false)
+  })
+})
+
+describe('Renew freeze of cost-plus items (Q4)', () => {
+  it('freezes a Renew mirror line only when the item is cost-plus, with both markers', () => {
+    const cfg = buildArcMirrorConfiguration({ port_size: '1G' }, ITEM, 'renew', { costPlus: true })
+    expect(cfg).toMatchObject({ [ARC_PRICE_FROZEN_KEY]: true, [ARC_COST_PLUS_FROZEN_KEY]: true, _arcMirroredFromItemId: 'item-1' })
+    expect(isFrozenMirrorLine(cfg, 'renew')).toBe(true)
+    const plain = buildArcMirrorConfiguration({ port_size: '1G' }, ITEM, 'renew', { costPlus: false })
+    expect(plain).not.toHaveProperty(ARC_COST_PLUS_FROZEN_KEY)
+    expect(isFrozenMirrorLine(plain, 'renew')).toBe(false)
+  })
+
+  it('never freezes a Cancel line, and the cost-plus flag does not change Amend', () => {
+    expect(isFrozenMirrorLine(buildArcMirrorConfiguration({}, ITEM, 'cancel', { costPlus: true }), 'cancel')).toBe(false)
+    const amend = buildArcMirrorConfiguration({}, ITEM, 'amend', { costPlus: true })
+    expect(amend).not.toHaveProperty(ARC_COST_PLUS_FROZEN_KEY)
+    expect(isFrozenMirrorLine(amend, 'amend')).toBe(true)
+  })
+
+  it('honours the Renew freeze only on a Renew quote, only with both markers and a mirror id', () => {
+    const cfg = buildArcMirrorConfiguration({}, ITEM, 'renew', { costPlus: true })
+    expect(isFrozenMirrorLine(cfg, 'amend')).toBe(true)
+    expect(isFrozenMirrorLine(cfg, 'new')).toBe(false)
+    expect(isFrozenMirrorLine({ ...cfg, [ARC_COST_PLUS_FROZEN_KEY]: undefined }, 'renew')).toBe(false)
+    expect(isFrozenMirrorLine({ [ARC_PRICE_FROZEN_KEY]: true, [ARC_COST_PLUS_FROZEN_KEY]: true }, 'renew')).toBe(false)
+  })
+
+  it('keeps both markers and the reconfigured marker off orders and items', () => {
+    const cfg = { ...buildArcMirrorConfiguration({ port_size: '1G' }, ITEM, 'renew', { costPlus: true }), [ARC_RECONFIGURED_KEY]: true }
+    expect(stripQuoteOnlyArcMarkers(cfg)).toEqual({ port_size: '1G', _arcMirroredFromItemId: 'item-1', _arcMirroredName: 'GIX Access Port' })
   })
 })

@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server'
 import { OptimisticLockError } from '@mikro-orm/core'
+import { z } from 'zod'
+import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { resolveCpqRouteContext } from '../../../context'
+import { cpqErrorDoc } from '../../../_helpers/quoteRouteOpenApi'
 import { isOrderError } from '../../../../services/cpqOrderService'
 import type { DefaultCpqOrderService } from '../../../../services/cpqOrderService'
 
@@ -45,4 +48,20 @@ export async function POST(req: Request, { params }: { params: Promise<{ orderId
     console.error('[cpq/orders/[orderId]/activate.POST]', err)
     return NextResponse.json({ error: 'Internal error' }, { status: 500 })
   }
+}
+
+export const openApi: OpenApiRouteDoc = {
+  tag: 'CPQ Orders',
+  pathParams: z.object({ orderId: z.string().uuid() }),
+  methods: {
+    POST: {
+      summary: 'Activate a CPQ order: create or update the subscription, items, assets and their inventory costs',
+      description: 'Atomic: the whole activation (new sale or ARC) commits in one transaction, so a late failure persists nothing and the order stays retryable. Inventory costs are written with the items; the response carries no cost data.',
+      responses: [{ status: 200, description: 'The activated order with the created or updated subscription', schema: z.record(z.string(), z.unknown()) }],
+      errors: [
+        cpqErrorDoc(401, 'Unauthorized'), cpqErrorDoc(403, 'Missing permission'), cpqErrorDoc(404, 'Order not found'),
+        cpqErrorDoc(409, 'Order is not in an activatable status, or concurrent modification detected: nothing was persisted, retry'),
+      ],
+    },
+  },
 }

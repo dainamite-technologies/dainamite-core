@@ -18,6 +18,7 @@ import { PricingSummaryCard } from '../../../../components/PricingSummaryCard'
 import { ArcLineDiff, LineActionBadge } from '../../../../components/ArcLineDiff'
 import { ADJUST_PRICE_FEATURE } from '../../../../lib/priceAdjustmentView'
 import { arcRecurringDelta } from '../../../../lib/quoteSummaryView'
+import { shouldShowRenewCostBanner } from '../../../../lib/arcRenewBanner'
 import { usePriceAdjustments } from './_components/usePriceAdjustments'
 import { PriceAdjustmentsPanel } from './_components/PriceAdjustmentsPanel'
 import { ArcLineRemovalProvider, useArcLineRemoval, useArcLineRemovalUi } from './_components/arcLineRemoval'
@@ -974,6 +975,22 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
                 {t(
                   'cpq.quotes.arc.repricedDescription',
                   "Reconfigured lines were re-priced at today's catalog price. Negotiated prices from the subscription are not carried over to reconfigured lines yet.",
+                )}
+              </AlertDescription>
+            </Alert>
+          )}
+
+          {/* Renew lines of cost-plus items keep their contracted price (feature spec Q4). Shown to every
+              user; carries no amounts. */}
+          {shouldShowRenewCostBanner(arcQuoteType, cpqQuote.lines) && (
+            <Alert status="information" style="lighter">
+              <AlertTitle>
+                {t('cpq.quotes.arc.costsNotCarriedTitle', 'Costs are not carried to change quotes yet')}
+              </AlertTitle>
+              <AlertDescription>
+                {t(
+                  'cpq.quotes.arc.costsNotCarriedDescription',
+                  'This line keeps its contracted price. Changing its configuration re-prices it from today\'s costs.',
                 )}
               </AlertDescription>
             </Alert>

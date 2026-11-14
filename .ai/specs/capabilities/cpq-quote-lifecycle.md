@@ -1,6 +1,6 @@
 # Capability: cpq-quote-lifecycle
 
-How CPQ quotes are recalculated, moved through their statuses and converted into orders, and how projects hook their own rules into those writes.
+How CPQ quotes are recalculated, moved through their statuses and converted into orders and activated, and how projects hook their own rules into those writes.
 
 ## Requirement: Recalculation
 The system SHALL allow recalculating a quote only for users with `cpq.quotes.manage`, and SHALL refuse a saved recalculation on a quote in a terminal status.
@@ -25,7 +25,7 @@ The system SHALL consult registered mutation guards before and after status tran
 Source: .ai/specs/2026-11-10-cpq-quote-pricing-integrity.md
 
 ## Requirement: Quote to order conversion
-The system SHALL refuse to convert a quote whose stored pricing contains an invalid manual adjustment, refuse it while any price-basis cost line on a live quote line is not `confirmed` or has `valid_until` before the conversion date, or a live line stores a cost-plus charge without a price (`422 COSTS_NOT_CONFIRMED` with `lines: [{ quoteLineId, costKeys, chargeCodes }]`, either list possibly empty; checked regardless of the toggle and without relying on cost lines existing, before the order number is allocated; ARC cancel lines — items removed on Amend / Renew and Cancel-quote lines — never block), keep today's `cancelled` / `rejected` refusal, and take the quote's pricing lock while converting. Once an order exists, cost lines SHALL NOT change the quote's prices.
+The system SHALL refuse to convert a quote whose stored pricing contains an invalid manual adjustment, refuse it while any price-basis cost line on a live quote line is not `confirmed` or has `valid_until` before the conversion date, or a live line stores a cost-plus charge without a price (`422 COSTS_NOT_CONFIRMED` with `lines: [{ quoteLineId, costKeys, chargeCodes }]`, either list possibly empty; checked regardless of the toggle and without relying on cost lines existing, before the order number is allocated; ARC cancel lines — items removed on Amend / Renew and Cancel-quote lines — never block), keep today's `cancelled` / `rejected` refusal, and take the quote's pricing lock while converting. Once an order exists, cost lines SHALL NOT change the quote's prices. A successful conversion SHALL copy every non-deleted quote cost line to exactly one order line cost in the same transaction, and a refused or failed conversion SHALL write none.
 
 ### Scenario: Invalid adjustment blocks conversion
 - WHEN an accepted quote's stored line carries `ADJUSTMENT_TARGET_MISSING`
@@ -51,10 +51,34 @@ The system SHALL refuse to convert a quote whose stored pricing contains an inva
 - WHEN a pricing manager confirms the estimated cost of an accepted quote at its current value
 - THEN the write is accepted under the cost lock and conversion succeeds
 
-Frozen by: `packages/cpq/src/modules/cpq/services/__tests__/cpqOrderService.test.ts`
+### Scenario: Convert a costed quote
+- WHEN an accepted quote whose tail line has a confirmed `price_basis` cost of 270 EUR and a `margin_only` installation cost of 1500 EUR is converted
+- THEN the order line has two order line costs with the same `cost_key`s and values, and the order line's `charges`, `nrcTotal` and `mrcTotal` equal those of a conversion of the same quote without costs
+
+### Scenario: Conversion fails mid-way
+- WHEN copying a cost line throws
+- THEN no order, order line or order line cost exists afterwards
+
+Frozen by: `packages/cpq/src/modules/cpq/services/__tests__/cpqOrderService.test.ts`, `packages/cpq/src/modules/cpq/services/costs/__tests__/orderCostCopy.test.ts`
 
 Source: .ai/specs/2026-11-10-cpq-manual-price-adjustments.md
 Source: .ai/specs/2026-11-12-cpq-cost-plus-quote-pricing-margin.md
+Source: .ai/specs/2026-11-12-cpq-cost-plus-order-subscription-costs.md
+
+## Requirement: Order activation
+The system SHALL activate an order (new sale or ARC) atomically: subscriptions, items, assets, inventory costs, change-log rows and the order status SHALL be committed together or not at all, and lifecycle events SHALL be emitted only after the commit. A failed activation SHALL leave no pending change in the caller's entity manager.
+
+### Scenario: Late failure
+- WHEN activation fails after the items, item costs and change-log row were flushed
+- THEN no subscription, item, asset, inventory cost or change-log row from that activation exists, the order keeps its previous status, no event is emitted, and the request entity manager has no pending change sets
+
+### Scenario: Retry after a failure
+- WHEN the same order is activated again after that failure
+- THEN exactly one subscription is created
+
+Frozen by: `packages/cpq/src/modules/cpq/services/__tests__/cpqOrderService.test.ts`
+
+Source: .ai/specs/2026-11-12-cpq-cost-plus-order-subscription-costs.md
 
 ## Requirement: Quote pricing and status events
 The system SHALL emit `cpq.quote.pricing_changed` after a committed save that changes the quote's snapshot hash, and `cpq.quote.status_changed` after every committed status change (manual or automatic), each with the pricing snapshot. `cpq.quote.status_changed` SHALL also carry `hasPendingCosts` and `hasEstimatedCosts` (booleans, computed from price-basis cost lines only: the price is pending / indicative), and neither event SHALL carry any cost, markup or margin value.

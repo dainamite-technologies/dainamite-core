@@ -4,6 +4,7 @@ import type { EntityManager } from '@mikro-orm/postgresql'
 import { seedCpqDemo } from './lib/seeds/demo'
 import { seedPriceAdjustmentDefaults } from './lib/priceAdjustmentDefaults'
 import { seedCostPlusDefaults } from './lib/costPlusDefaults'
+import { scrubChangeLogCosts } from './lib/scrubChangeLogCosts'
 
 /**
  * `mercato cpq seed [--reset] [--tenant <id>] [--org <id>]`
@@ -146,6 +147,36 @@ const seedCostPlus: ModuleCli = {
   },
 }
 
+/**
+ * `mercato cpq scrub-change-log-costs [--tenant <id>] [--dry-run]`
+ *
+ * Rollback aid for the cost carry-through: removes every `items[].costs` and
+ * `assets[].costs` key from the `before_snapshot` / `after_snapshot` of
+ * `cpq_subscription_change_logs` (all tenants, or one with `--tenant`).
+ * Idempotent; `--dry-run` only counts. The cost history it removes is gone for
+ * good. Rollback order: scrub, then code, then down-migration (MIGRATION.md).
+ */
+const scrubChangeLogCostsCommand: ModuleCli = {
+  command: 'scrub-change-log-costs',
+  async run(rest) {
+    const args = parseArgs(rest)
+    const dryRun = Boolean(args['dry-run'])
+    const tenantId = typeof args.tenant === 'string' ? args.tenant : undefined
+    const container = await createRequestContainer()
+    const em = container.resolve<EntityManager>('em')
+    try {
+      const res = await scrubChangeLogCosts(em.fork(), { tenantId, dryRun })
+      console.log(
+        `[cpq scrub-change-log-costs] ${tenantId ? `tenant=${tenantId}` : 'all tenants'}${dryRun ? ' (dry run, nothing written)' : ''}: ` +
+          `scanned ${res.scanned} change-log rows, ${dryRun ? 'would scrub' : 'scrubbed'} ${res.affected}`,
+      )
+    } catch (error) {
+      console.error('[cpq scrub-change-log-costs] failed', error)
+      process.exitCode = 1
+    }
+  },
+}
+
 async function resolveAllScopes(
   em: EntityManager,
   args: Record<string, string | boolean>,
@@ -158,4 +189,4 @@ async function resolveAllScopes(
   return orgs.map((org) => ({ organizationId: org.id, tenantId: org.tenant.id }))
 }
 
-export default [seed, seedPriceAdjustments, seedCostPlus]
+export default [seed, seedPriceAdjustments, seedCostPlus, scrubChangeLogCostsCommand]

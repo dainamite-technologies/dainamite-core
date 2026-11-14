@@ -77,6 +77,33 @@ const events = [
     category: 'lifecycle',
     clientBroadcast: true,
   },
+  // Inventory cost change signal. NOT broadcast to the browser. The payload carries identifiers and keys only,
+  // never an amount (confidentiality: the cost value lives in the stored rows, behind `cpq.costs.view`).
+  {
+    id: 'cpq.subscription.cost_changed',
+    label: 'Subscription Cost Changed',
+    entity: 'subscription',
+    category: 'custom',
+    clientBroadcast: false,
+    payloadSchema: {
+      fields: [
+        { path: 'organizationId', type: 'text' },
+        { path: 'tenantId', type: 'text' },
+        { path: 'subscriptionId', type: 'text' },
+        { path: 'ownerType', type: 'select', label: 'subscription_item or asset' },
+        { path: 'subscriptionItemId', type: 'text', optional: true },
+        { path: 'assetId', type: 'text', optional: true },
+        { path: 'inventoryCostId', type: 'text' },
+        { path: 'changeLogId', type: 'text' },
+        { path: 'costKey', type: 'text' },
+        { path: 'effectiveDate', type: 'text' },
+        { path: 'supplierId', type: 'text', optional: true },
+        { path: 'sourceOrderId', type: 'text' },
+        { path: 'cause', type: 'select', label: 'activation, amend, renew, cancel or merge' },
+        { path: 'kind', type: 'select', label: 'created, changed, ended or repointed' },
+      ],
+    },
+  },
   // Quote pricing signals (manual price adjustments). Emitted after the quote
   // write commits by `withQuotePricingWrite`; payload carries the pricing
   // snapshot (deal value, discount depth, snapshot hash) so project workflows

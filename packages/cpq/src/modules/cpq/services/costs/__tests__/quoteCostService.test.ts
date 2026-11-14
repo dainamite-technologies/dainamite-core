@@ -1,5 +1,5 @@
 import {
-  CpqOrderConfiguration, CpqProductCharge, CpqQuoteConfiguration, CpqQuoteLineConfiguration, CpqQuoteLineCost, CpqQuoteMarkupOverride,
+  CpqInventoryAsset, CpqInventoryCost, CpqInventorySubscription, CpqInventorySubscriptionItem, CpqOrderConfiguration, CpqProductCharge, CpqQuoteConfiguration, CpqQuoteLineConfiguration, CpqQuoteLineCost, CpqQuoteMarkupOverride,
 } from '../../../data/entities'
 
 jest.mock('../../priceAdjustments/quotePricingWrite', () => ({
@@ -104,10 +104,24 @@ describe('reads', () => {
   })
   it('usage counts with one aggregate query per figure: no cost row hydrated, no bound id list', async () => {
     const { service, em, subquery } = setup({ costs: [catalogRow()] })
-    em.count.mockImplementation(async (entity: unknown) => (entity === CpqProductCharge ? 3 : entity === CpqQuoteConfiguration ? 2 : 0))
-    await expect(service.usage(SCOPE)).resolves.toEqual({ enabled: true, costPlusCharges: 3, openQuotes: 2, openRequests: 0, liveSubscriptions: 0 })
+    em.count.mockImplementation(async (entity: unknown) => (entity === CpqProductCharge ? 3 : entity === CpqQuoteConfiguration ? 2 : entity === CpqInventorySubscription ? 4 : 0))
+    await expect(service.usage(SCOPE)).resolves.toEqual({ enabled: true, costPlusCharges: 3, openQuotes: 2, openRequests: 0, liveSubscriptions: 4 })
     expect(em.find).not.toHaveBeenCalled()
-    expect(em.count).toHaveBeenCalledTimes(2)
+    expect(em.count).toHaveBeenCalledTimes(3)
+    // Live subscriptions with an open cost: a semi-join on active inventory costs, no bound id list.
+    const subWhere = em.count.mock.calls.find(([entity]: unknown[]) => entity === CpqInventorySubscription)[1]
+    expect(subWhere).toMatchObject({ ...SCOPE, deletedAt: null, status: { $nin: ['terminated', 'expired', 'superseded'] } })
+    expect(subWhere.id.$in).toBe(subquery)
+    expect(em.createQueryBuilder).toHaveBeenCalledWith(CpqInventoryCost, 'ic')
+    // Q6: a cost is open only while its owner is live (item not terminated / expired / superseded, asset not cancelled / returned).
+    expect(subquery.where).toHaveBeenCalledWith({
+      ...SCOPE, deletedAt: null, status: 'active',
+      $or: [{ subscriptionItemId: { $in: subquery } }, { assetId: { $in: subquery } }],
+    })
+    expect(em.createQueryBuilder).toHaveBeenCalledWith(CpqInventorySubscriptionItem, 'si')
+    expect(subquery.where).toHaveBeenCalledWith({ ...SCOPE, deletedAt: null, status: { $nin: ['terminated', 'expired', 'superseded'] } })
+    expect(em.createQueryBuilder).toHaveBeenCalledWith(CpqInventoryAsset, 'ia')
+    expect(subquery.where).toHaveBeenCalledWith({ ...SCOPE, deletedAt: null, status: { $nin: ['cancelled', 'returned'] } })
     expect(em.count).toHaveBeenCalledWith(CpqProductCharge, { ...SCOPE, deletedAt: null, pricingMethod: 'cost_plus', isActive: true })
     const quoteWhere = em.count.mock.calls.find(([entity]: unknown[]) => entity === CpqQuoteConfiguration)[1]
     expect(quoteWhere).toMatchObject({ ...SCOPE, deletedAt: null, cpqStatus: { $nin: [...COST_CLOSED_STATUSES] } })
@@ -117,7 +131,7 @@ describe('reads', () => {
     // Accepted-but-unconverted quotes are open; ordered quotes (NOT IN order sources) are not.
     expect(quoteWhere.cpqStatus.$nin).not.toContain('accepted')
     expect(quoteWhere.id.$nin).toBe(subquery)
-    expect(em.createQueryBuilder).toHaveBeenCalledTimes(2)
+    expect(em.createQueryBuilder).toHaveBeenCalledTimes(5)
     expect(em.createQueryBuilder).toHaveBeenCalledWith(CpqQuoteLineCost, 'qlc')
     expect(em.createQueryBuilder).toHaveBeenCalledWith(CpqOrderConfiguration, 'oc')
     expect(subquery.select).toHaveBeenCalledWith('oc.sourceQuoteId')
@@ -263,8 +277,8 @@ describe('ARC lines', () => {
   }
 
   it.each([
-    ['a Renew mirror line (re-priced at today\'s standard)', 'renew', mirrorConfig()],
-    ['a reconfigured (unfrozen) Amend mirror line', 'amend', mirrorConfig()],
+    ['a reconfigured Renew mirror line (Q13)', 'renew', mirrorConfig({ _arcReconfigured: true })],
+    ['a reconfigured (unfrozen) Amend mirror line', 'amend', mirrorConfig({ _arcReconfigured: true })],
   ])('confirms the estimated catalog cost of %s', async (_label, quoteType, line) => {
     const row = catalogRow()
     const { service, recalculate } = arc(quoteType, line, [row])
@@ -278,6 +292,10 @@ describe('ARC lines', () => {
 
   it.each([
     ['a frozen Amend mirror line', 'amend', mirrorConfig({ _arcPriceFrozen: true })],
+    ['a frozen cost-plus Renew mirror line', 'renew', mirrorConfig({ _arcPriceFrozen: true, _arcCostPlusFrozen: true })],
+    // CHANGED from feature 1 (these were confirmable): an unreconfigured mirror has no catalog cost lines (R1c).
+    ['an unreconfigured Renew mirror line', 'renew', mirrorConfig()],
+    ['an unfrozen Amend mirror line without the reconfigured marker', 'amend', mirrorConfig()],
     ['an item removed on Renew (cancel line)', 'renew', { action: 'cancel', ...mirrorConfig() }],
     ['an item removed on Amend (cancel line)', 'amend', { action: 'cancel', ...mirrorConfig() }],
     ['a Cancel-quote line', 'cancel', { action: 'cancel', ...mirrorConfig() }],
@@ -289,8 +307,8 @@ describe('ARC lines', () => {
     expect(row.valueStatus).toBe('estimated')
   })
 
-  it('creates no manual cost and no markup override on a non-frozen mirror line', async () => {
-    const { service, costs } = arc('renew', mirrorConfig(), [])
+  it('creates no manual cost and no markup override on a reconfigured mirror line (structure writes stay off mirrors)', async () => {
+    const { service, costs } = arc('renew', mirrorConfig({ _arcReconfigured: true }), [])
     await expect(service.createCost(ids.quote, create, ACTOR, SCOPE)).rejects.toMatchObject({ status: 422, message: 'LINE_NOT_ELIGIBLE' })
     const input = { quoteLineId: ids.line, chargeCode: 'tail', markupRule: 'markup_percent' as const, markupValue: 30, note: 'deal' }
     await expect(service.setMarkupOverride(ids.quote, input, ACTOR, SCOPE)).rejects.toMatchObject({ status: 422, message: 'LINE_NOT_ELIGIBLE' })

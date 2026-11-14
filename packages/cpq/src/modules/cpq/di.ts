@@ -77,6 +77,7 @@ export function register(container: AppContainer) {
         em: container.resolve('em'),
         cpqInventoryService: container.resolve('cpqInventoryService'),
         salesDocumentNumberGenerator: container.resolve('salesDocumentNumberGenerator'),
+        cpqCostService: container.resolve('cpqCostService'),
       })
     }).scoped(),
     cpqWizardService: asFunction(({ em }: { em: EntityManager }) => {

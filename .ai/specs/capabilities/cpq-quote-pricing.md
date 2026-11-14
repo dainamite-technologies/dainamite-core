@@ -94,7 +94,7 @@ The system SHALL report `ruleDiscountTotal` and `manualDiscountTotal` (both incl
 Source: .ai/specs/2026-11-10-cpq-manual-price-adjustments.md
 
 ## Requirement: Quote cost lines from catalog cost elements
-The system SHALL keep exactly one non-deleted catalog cost line per applicable active cost element on every configured quote line that the engine prices — new lines, Renew mirror lines, reconfigured Amend mirror lines and Cancel-quote lines; never frozen Amend mirror lines — matched by cost key. A line that becomes an ARC cancel line (an item removed on Amend / Renew) SHALL lose its cost lines (catalog and manual) and markup overrides at once, regardless of the toggle or the cost lock. On every saved recalculation it SHALL resolve `fixed` and `table` values (a `table` or `fixed` value is `confirmed`, an `on_request` catalog estimate is `estimated`, otherwise `none`) and soft-delete cost lines whose element no longer applies. A value a pricing manager entered or confirmed (`value_origin = manual`) SHALL survive recalculation until a driving attribute changes.
+The system SHALL keep exactly one non-deleted catalog cost line per applicable active cost element on every configured quote line that the engine prices — new lines, Cancel-quote lines and ARC mirror lines (Amend or Renew) that have been reconfigured; never unreconfigured mirror lines, including frozen cost-plus Renew mirrors (App Spec R1c) — matched by cost key. A line that becomes an ARC cancel line (an item removed on Amend / Renew) SHALL lose its cost lines (catalog and manual) and markup overrides at once, regardless of the toggle or the cost lock. On every saved recalculation it SHALL resolve `fixed` and `table` values (a `table` or `fixed` value is `confirmed`, an `on_request` catalog estimate is `estimated`, otherwise `none`) and soft-delete cost lines whose element no longer applies. A value a pricing manager entered or confirmed (`value_origin = manual`) SHALL survive recalculation until a driving attribute changes.
 
 ### Scenario: Add a costed product
 - WHEN a rep adds a product whose `tail_mrc` charge has a `table` element and an `on_request` element with estimate 300
@@ -108,6 +108,14 @@ The system SHALL keep exactly one non-deleted catalog cost line per applicable a
 - WHEN an Amend quote mirrors a subscription item and nothing on the line changes
 - THEN no catalog cost lines are created on the mirror line
 
+### Scenario: Frozen cost-plus Renew mirror
+- WHEN a Renew quote mirrors a cost-plus item and nothing on the line changes
+- THEN no catalog cost lines are created on the mirror line
+
+### Scenario: Reconfigured Amend or Renew mirror
+- WHEN the rep changes the bandwidth on an Amend or Renew mirror line whose charge has a `table` cost element
+- THEN the line gets one `catalog` cost line per applicable element (App Spec R1a), and a cost-plus charge on it is priced from them
+
 ### Scenario: Removed ARC item
 - WHEN a rep removes a mirrored item with an estimated tail cost on a Renew quote
 - THEN the line becomes a cancel line and its cost lines are soft-deleted
@@ -116,7 +124,10 @@ The system SHALL keep exactly one non-deleted catalog cost line per applicable a
 - WHEN a table element's dimensions match no entry of the cost table, or the matching entry has no value in the element's cost column
 - THEN the cost line is `none` with `TABLE_NO_MATCH` (never a confirmed 0) and the line is not ready
 
+Frozen by: `packages/cpq/src/modules/cpq/services/costs/__tests__/costResolution.test.ts`
+
 Source: .ai/specs/2026-11-12-cpq-cost-plus-quote-pricing-margin.md
+Source: .ai/specs/2026-11-12-cpq-cost-plus-order-subscription-costs.md
 
 ## Requirement: Cost-plus list price
 The system SHALL price a cost-plus charge at list total = markup(Σ known price-basis costs per instance, converted to the quote currency), where `markup_percent` m gives C × (1 + m/100), `target_margin_percent` gives C ÷ (1 − m/100) and `markup_absolute` gives C + a, rounded once to the currency precision (per-unit: unit = total ÷ quantity at 4 dp). Price rules and manual adjustments SHALL then apply unchanged; percent price rules on a cost-plus charge SHALL scale the exact per-instance total, so no unit × quantity drift appears. An absolute markup is in the charge currency (a markup override's in the quote currency). A charge with an unknown price-basis cost (`COST_PENDING`), with no applicable one (`NO_PRICE_BASIS_COST`), with an invalid markup (`MARKUP_INVALID`) or with an absolute markup in a currency other than the quote's (`CURRENCY_NO_RATE`, never a 1:1 add) SHALL have no price, and its line SHALL NOT be ready. `estimated` costs price the charge and make the quote indicative.

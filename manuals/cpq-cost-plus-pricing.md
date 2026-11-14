@@ -10,7 +10,8 @@ the price is cost, and lets a pricing manager see — and govern — the **margi
 of a quote. Everything downstream is unchanged: price rules and negotiated
 adjustments apply to a cost-plus price exactly as to any other list price.
 
-This release covers **known costs on new-sale quotes**. See
+This release covers **known costs on quotes**, and their **carry-through to
+orders, subscriptions and assets**. See
 [Coming with later features](#coming-with-later-features).
 
 ## Concepts
@@ -206,8 +207,9 @@ back to Ready to reconfigure.
 
 ### ARC quotes (Amend / Renew / Cancel)
 
-Costs are not yet carried over from a subscription (see
-[later features](#coming-with-later-features)). On an ARC quote:
+A quote's costs are carried to the order and the subscription (see
+[Orders and subscriptions](#orders-and-subscriptions)); what an ARC quote does with
+them is described there. On an ARC quote:
 
 - **Renew** mirror lines (re-priced at today's standard) and **reconfigured
   Amend** mirror lines get catalog cost lines like any other line. A pricing
@@ -224,6 +226,89 @@ Costs are not yet carried over from a subscription (see
 - **Cancel-quote** lines keep the catalog costs their price is computed from
   but accept no cost write.
 - Cancel lines (removed items, Cancel-quote lines) never block conversion.
+
+## Orders and subscriptions
+
+Costs follow the deal after the quote is accepted, so the contracted cost and
+margin stay visible for the whole life of the subscription. Nothing in this
+section changes a price or a billing event: the billing payload of an activation
+is byte-identical to the one of the same quote without costs.
+
+### At conversion
+
+Converting an accepted quote to an order **copies every cost line** of the quote
+to the order (one copy per quote cost line, with its value, supplier, validity
+and status). The copy happens in the same transaction as the order, so a
+conversion that is refused (see [Conversion guard](#conversion-guard)) writes
+nothing. The order is then a frozen record of what the deal costs: later edits
+of the catalog or of the quote never change it.
+
+### At activation
+
+Activating the order creates **one inventory cost per order cost**:
+
+- the costs of a **subscription line** belong to its **subscription item**;
+- the costs of an **assetizable line** (a server, a router) belong to the
+  **asset** created for it, not to an item.
+
+Activation is **atomic**: if any step fails, no subscription, item, asset, cost
+or Change History row is saved and no event is sent; activating again starts
+clean. Costs are written **whatever the tenant toggle says** — turning
+`cpq.cost_plus` off later never removes costs from a live subscription.
+
+### Where costs show
+
+| Place | What |
+|---|---|
+| **Order page** (and the order tab on the sales order) | A Costs section per order line, with a link to the asset a line became. Holders of `cpq.costs.view` also see the **Order margin** card. |
+| **Subscription page** | Costs inside each item's panel with the **item margin**, a Costs section with the **subscription roll-up** (items and assets) and the costs and margin of each cost-owning asset, and an **Ended costs** toggle (ended costs are hidden by default). An item or asset without costs says "No cost recorded". |
+| **Asset page** | A Costs section with the asset's costs and margin; an asset that hangs under an item links to it. |
+| **Change History** (subscription page) | Under each entry, a **Cost changes** block lists the costs that changed between the *before* and *after* snapshots: `changed` ("Tail · 270 EUR -> 300 EUR · Carrier X"), `added`, `ended` and `moved` (a merge re-points costs from the merged contracts to the new one). A filter above the list narrows the cost changes to one item or asset. The `created` entry lists every cost written at activation, including those of new-sale assets. |
+
+### Who sees what
+
+Users **without** `cpq.costs.view` get the **status-only projection** everywhere:
+the cost names, roles and **status chips** (pending / estimated / confirmed /
+expired, Ended) and never an amount, supplier, margin or markup. The Change
+History of such a user has no cost diff at all (the API removes the `costs`
+keys from the snapshots, so there is nothing to show). Costs are read-only on
+orders and subscriptions for everyone: they are corrected on a **change quote**
+(below), never edited in place. With the toggle off the cost sections are
+hidden (`404` from the cost endpoints).
+
+### Change quotes (Amend, Renew, Cancel)
+
+- **Renew freezes a cost-plus price.** The Renew mirror line of a cost-plus item
+  (an item whose stored charges contain a cost-plus charge) keeps the
+  **contracted price** instead of being re-priced at today's standard, exactly
+  like an Amend mirror. The quote page shows the banner *"Costs are not carried
+  to change quotes yet"* on such lines (to everyone, no amounts). Changing a
+  pricing input of the line **un-freezes** it and re-prices it from today's costs.
+  Renew mirrors of non-cost-plus items behave as before.
+- **Reconfigured lines get cost lines.** A mirror line whose pricing inputs
+  changed (configuration, quantity) gets catalog cost lines like a new line; an
+  unchanged mirror never does, so it keeps the stored costs.
+- **Activation writes the costs back.** A reconfigured line updates the item's
+  costs **in place** (same cost ids; a cost whose value did not change is not
+  touched and is not reported as a change); an added item creates its costs; a
+  removed item ends them. The item cost ids never change, so history and links
+  stay valid. Every change is recorded in the Change History snapshots.
+- **Cancel ends every cost.** Cancelling a subscription (or removing an item)
+  ends its open costs, and the costs of the assets that are cancelled with it.
+  Ended costs stay in the history; they are no longer *open* and do not count in
+  margins.
+- **Merge keeps the ids.** Merging contracts **re-points** the item and asset
+  costs to the cloned items and migrated assets of the new contract (the same
+  cost ids); the merged contracts keep no cost.
+
+### Rolling back
+
+The Change History snapshots of an upgraded tenant carry cost values. Before
+rolling the code back, run `yarn mercato cpq scrub-change-log-costs --dry-run`
+(add `--tenant <id>` for one tenant), then without `--dry-run`. The command
+removes only the `costs` keys of the snapshots, is idempotent and pages through
+the rows. The order is **scrub, then code, then down-migration**; see
+`packages/cpq/MIGRATION.md`.
 
 ## Margin
 
@@ -336,6 +421,9 @@ invalidate an earlier approval after a lock-exempt cost edit.
 | PATCH / DELETE | `/api/cpq/quotes/{quoteId}/costs/{costId}` | same | Enter / confirm / edit; delete manual only. |
 | PUT / DELETE | `/api/cpq/quotes/{quoteId}/markup-overrides` | same | Set / clear a markup override. |
 | POST | `/api/cpq/quotes/{quoteId}/status` | `cpq.quotes.manage` | Optional `expectedRevision`. |
+| GET | `/api/cpq/orders/{orderId}/costs` | `cpq.orders.view` | Order line costs; status only without `cpq.costs.view`, with it the amounts and `margin`. |
+| GET | `/api/cpq/inventory/subscriptions/{subscriptionId}/costs` | `cpq.inventory.view` | Item and asset costs, margins, roll-up; `?includeEnded=true` adds ended costs. |
+| GET | `/api/cpq/inventory/assets/{assetId}/costs` | `cpq.inventory.view` | Costs and margin of one asset (`ownerItemId` for an asset under an item). |
 
 Full contracts: the `openApi` export on each route.
 
@@ -364,8 +452,6 @@ Full contracts: the `openApi` export on each route.
 
 ## Coming with later features
 
-Order and subscription costs (copied at conversion, frozen at activation),
-supplier sourcing requests and answers, foreign-currency (FX) costs, ARC
-(amend / renew / cancel) carrying of costs, and index-linked costs are added by
-the later cost-plus features. Until then costs live on quotes only, and
+Supplier sourcing requests and answers, foreign-currency (FX) costs and
+index-linked costs are added by the later cost-plus features. Until then
 `CURRENCY_NO_RATE` is the answer to any non-quote-currency cost.

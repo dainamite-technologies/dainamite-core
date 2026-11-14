@@ -32,7 +32,7 @@ Engine: om-auto-create-pr-loop (steps: 21, --loop: no)
 | D | 18 | Subscription and asset pages costs | group:D1 | done | |
 | D | 19 | Change History cost diffs | group:D2 | done | |
 | D | 20 | Docs and E2E | group:D2 | done | |
-| D | 21 | Archive the Delta | group:D2 | todo | |
+| D | 21 | Archive the Delta | group:D2 | done | |
 
 ## Goal
 

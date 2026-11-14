@@ -117,3 +117,6 @@
 
 ## 2026-11-14T03:51:08Z — review1-a (product-charge authorization order)
 - Decision: every write on a stored cost-plus charge needs `cpq.costs.view` (403 before any validation), including switching it away and DELETE (same confidentiality rule as r1 #60; DELETE also destroys markup + cost elements). A raw body asking for `cost_plus` or setting non-null markup needs it before the Zod parse; clearing markup to `null` on a non-cost-plus charge stays open (the offering editor always sends it). The whole PUT now runs under `CpqCostService.inChargeLock` (made public), the same PESSIMISTIC_WRITE the element writes take.
+
+## 2026-11-14T04:00:42Z — review1-c (ARC lines)
+- Decision: "ARC cancel line" = `isArcTerminationLine` (new, arcLineRemoval.ts): an item removed on Amend / Renew OR any line of a Cancel quote. The R7 guard ignores all of them and every cost write on them is `422 LINE_NOT_ELIGIBLE`. Cost rows are dropped only for Amend / Renew removals (at removal, whatever the toggle / lock, and again by `planQuoteCosts`); Cancel-quote lines keep their planned catalog costs because the engine still prices them (dropping would make their cost-plus charges `COST_PENDING` and the Cancel quote incomplete). Value writes (`updateCost`) reach non-frozen mirror lines; manual costs and markup overrides stay refused on every mirror line.

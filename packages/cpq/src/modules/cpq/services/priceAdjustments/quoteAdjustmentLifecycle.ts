@@ -77,6 +77,27 @@ export async function cloneQuoteAdjustments(em: EntityManager, sourceId: string,
   await cloneQuoteCosts(em, sourceId, target, lineIds, scope)
 }
 
+/**
+ * Live cost lines and markup overrides of the given quote lines (at most 500 line ids per call),
+ * read in pages of 500. The caller soft-deletes them; no toggle check: stored data is always cleaned.
+ */
+export async function loadLineCostRows(em: EntityManager, quoteConfigurationId: string, lineIds: string[], scope: TenantScope): Promise<Array<CpqQuoteLineCost | CpqQuoteMarkupOverride>> {
+  const out: Array<CpqQuoteLineCost | CpqQuoteMarkupOverride> = []
+  if (lineIds.length === 0) return out
+  const costBase = { organizationId: scope.organizationId, tenantId: scope.tenantId, deletedAt: null }
+  for (const entity of [CpqQuoteLineCost, CpqQuoteMarkupOverride] as const) {
+    let costCursor: string | undefined
+    for (;;) {
+      const rows = await em.find(entity as never, { quoteConfigurationId, quoteLineId: { $in: lineIds }, ...costBase,
+        ...(costCursor ? { id: { $gt: costCursor } } : {}) } as never, { limit: 500, orderBy: { id: 'asc' } } as never) as Array<CpqQuoteLineCost | CpqQuoteMarkupOverride>
+      out.push(...rows)
+      if (rows.length < 500) break
+      costCursor = rows[rows.length - 1].id
+    }
+  }
+  return out
+}
+
 /** Delete the complete bundle subtree and its adjustments before recalculation reads it. */
 export async function removeQuoteLineTree(em: EntityManager, quoteConfigurationId: string, root: CpqQuoteLineConfiguration, scope: TenantScope): Promise<void> {
   const children = new Map<string, CpqQuoteLineConfiguration[]>()
@@ -100,7 +121,6 @@ export async function removeQuoteLineTree(em: EntityManager, quoteConfigurationI
   }
   const sales: SalesQuoteLine[] = [], adjustments: CpqQuotePriceAdjustment[] = []
   const costRows: Array<CpqQuoteLineCost | CpqQuoteMarkupOverride> = []
-  const costBase = { organizationId: scope.organizationId, tenantId: scope.tenantId, deletedAt: null }
   const ids = selected.map((line) => line.quoteLineId)
   for (let index = 0; index < ids.length; index += 500) {
     const lineIds = ids.slice(index, index + 500)
@@ -114,16 +134,7 @@ export async function removeQuoteLineTree(em: EntityManager, quoteConfigurationI
       cursor = rows[rows.length - 1].id
     }
     // Cost lines and markup overrides of a removed line go with it (R16); no toggle check: stored data is always cleaned.
-    for (const entity of [CpqQuoteLineCost, CpqQuoteMarkupOverride] as const) {
-      let costCursor: string | undefined
-      for (;;) {
-        const rows = await em.find(entity as never, { quoteConfigurationId, quoteLineId: { $in: lineIds }, ...costBase,
-          ...(costCursor ? { id: { $gt: costCursor } } : {}) } as never, { limit: 500, orderBy: { id: 'asc' } } as never) as Array<CpqQuoteLineCost | CpqQuoteMarkupOverride>
-        costRows.push(...rows)
-        if (rows.length < 500) break
-        costCursor = rows[rows.length - 1].id
-      }
-    }
+    costRows.push(...await loadLineCostRows(em, quoteConfigurationId, lineIds, scope))
   }
   const now = new Date()
   await withAtomicFlush(em, [() => {

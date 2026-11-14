@@ -1,4 +1,4 @@
-import { cloneQuoteAdjustments, removeQuoteLineTree } from './priceAdjustments/quoteAdjustmentLifecycle'
+import { cloneQuoteAdjustments, loadLineCostRows, removeQuoteLineTree } from './priceAdjustments/quoteAdjustmentLifecycle'
 import type { PriceAdjustment } from '../data/price-adjustments'
 import { withAtomicFlush } from '@open-mercato/shared/lib/commands/flush'
 import { loadQuoteAdjustments } from './priceAdjustments/loadQuoteAdjustments'
@@ -572,7 +572,15 @@ export class DefaultCpqQuotingService {
       }
       const plan = planArcLineRemoval(lineConfig, await loadLines(em, cpqConfig.id, scope), cpqConfig.quoteType)
       for (const root of plan.removeRoots) await removeQuoteLineTree(em, cpqConfig.id, root, scope)
+      // A cancel line sells nothing: its cost lines (catalog and manual) go now, whatever the
+      // toggle or the cost lock, so they can never block conversion or reappear in the margin.
+      const cancelledCosts: Awaited<ReturnType<typeof loadLineCostRows>> = []
+      for (let index = 0; index < plan.cancel.length; index += 500) {
+        cancelledCosts.push(...await loadLineCostRows(em, cpqConfig.id, plan.cancel.slice(index, index + 500).map((line) => line.quoteLineId), scope))
+      }
       await withAtomicFlush(em, [() => {
+        const now = new Date()
+        for (const row of cancelledCosts) row.deletedAt = now
         for (const line of plan.cancel) {
           line.action = 'cancel'
           line.charges = []

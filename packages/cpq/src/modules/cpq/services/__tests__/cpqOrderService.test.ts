@@ -710,6 +710,37 @@ describe('conversion cost guard (COSTS_NOT_CONFIRMED)', () => {
     expect(em.create).toHaveBeenCalledWith(CpqOrderLineConfiguration, expect.anything())
   })
 
+  async function convertArc(quoteType: string, quoteLines: Array<Record<string, unknown>>, costs: Array<Record<string, unknown>>) {
+    const { em, service } = createService()
+    em.findOne.mockResolvedValueOnce({ id: 'quote', quoteId: 'sales', cpqStatus: 'accepted', quoteType, currencyCode: 'USD', customerId: 'customer', pricingSummary: { nrcTotal: 0, mrcTotal: 80 } })
+      .mockResolvedValueOnce(null)
+    em.find.mockResolvedValueOnce(quoteLines as never).mockResolvedValueOnce(costs as never)
+    em.create.mockImplementation((_entity, values: Record<string, unknown>) => ({ createdAt: new Date(), ...values }))
+    return { em, run: () => service.convertQuoteToOrder('quote', SCOPE) }
+  }
+  const mirror = (over: Record<string, unknown> = {}) => ({ ...lines()[0], action: 'modify', offeringId: 'off', configuration: { _arcMirroredFromItemId: 'item-1' }, ...over })
+
+  it('a Renew mirror line binds: its estimated price-basis cost blocks, once confirmed the quote converts', async () => {
+    const estimated = await convertArc('renew', [mirror()], [cost({ valueStatus: 'estimated' })])
+    await expect(estimated.run()).rejects.toMatchObject({ status: 422, message: 'COSTS_NOT_CONFIRMED', details: { lines: [{ quoteLineId: 'line', costKeys: ['tail'] }] } })
+    const confirmed = await convertArc('renew', [mirror()], [cost({ valueStatus: 'confirmed' })])
+    await confirmed.run()
+    expect(confirmed.em.create).toHaveBeenCalledWith(CpqOrderLineConfiguration, expect.anything())
+  })
+
+  it.each([
+    ['an item removed on Renew', 'renew'],
+    ['an item removed on Amend', 'amend'],
+    ['a Cancel-quote line', 'cancel'],
+  ])('ignores the costs of %s (an ARC cancel line sells nothing)', async (_label, quoteType) => {
+    const kept = mirror({ quoteLineId: 'kept' })
+    const removed = mirror({ action: 'cancel', charges: [], mrcTotal: '0' })
+    const { em, run } = await convertArc(quoteType, quoteType === 'cancel' ? [removed] : [kept, removed],
+      [cost({ valueStatus: 'estimated' }), cost({ quoteLineId: 'kept' })])
+    await run()
+    expect(em.create).toHaveBeenCalledWith(CpqOrderLineConfiguration, expect.anything())
+  })
+
   it('only reads price-basis lines of the quote (margin-only rows are filtered out in the query)', async () => {
     const { em, run } = await convert([])
     await run()

@@ -269,10 +269,17 @@ async function planQuoteCosts(params: CostResolutionParams): Promise<CostPlan> {
   const lines = params.lines.filter(({ lineConfig }) => (lineConfig.offeringId || lineConfig.productId)
     && !isArcCancelledLine(lineConfig, quote.quoteType)
     && !isFrozenAmendMirrorLine(lineConfig.configuration, quote.quoteType))
+  // An item removed on an Amend / Renew quote leaves the subscription: its line keeps no cost
+  // (catalog or manual). Line removal already drops them; this also cleans rows stored before.
+  const cancelledLineIds = new Set(params.lines
+    .filter(({ lineConfig }) => isArcCancelledLine(lineConfig, quote.quoteType))
+    .map(({ lineConfig }) => lineConfig.quoteLineId))
 
   // ── Reads first (no mutation before the last query) ──
   const existing = await em.find(CpqQuoteLineCost, { ...scoped(scope), quoteConfigurationId: quote.id })
-  if (lines.length === 0) return { stats, creates: [], updates: [], drops: [], existing }
+  const cancelledDrops = existing.filter((row) => cancelledLineIds.has(row.quoteLineId))
+  stats.dropped += cancelledDrops.length
+  if (lines.length === 0) return { stats, creates: [], updates: [], drops: cancelledDrops, existing }
   const existingByLine = new Map<string, CpqQuoteLineCost[]>()
   for (const row of existing) existingByLine.set(row.quoteLineId, [...(existingByLine.get(row.quoteLineId) ?? []), row])
 
@@ -304,7 +311,7 @@ async function planQuoteCosts(params: CostResolutionParams): Promise<CostPlan> {
   // ── Compute ──
   const creates: CostPlan['creates'] = []
   const updates: CostPlan['updates'] = []
-  const drops: CostPlan['drops'] = []
+  const drops: CostPlan['drops'] = [...cancelledDrops]
   for (const { lineConfig, mergedConfig } of lines) {
     const rows = existingByLine.get(lineConfig.quoteLineId) ?? []
     const rowByKey = new Map(rows.map((row) => [row.costKey, row]))

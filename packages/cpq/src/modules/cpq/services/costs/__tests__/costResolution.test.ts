@@ -109,6 +109,20 @@ describe('resolveQuoteCosts', () => {
     expect(s2.costs).toHaveLength(0)
   })
 
+  it.each(['amend', 'renew'])('drops every cost line (catalog and manual) of an item removed on %s', async (quoteType) => {
+    const manual = catalogCost({ id: 'c-2', costKey: 'manual:abcd1234', origin: 'manual', valueOrigin: 'manual' })
+    const s = store({ charges: [charge()], elements: [element()], costs: [catalogCost({ valueStatus: 'estimated' }), manual] })
+    const removed = lineConfig({ action: 'cancel', configuration: { _arcMirroredFromItemId: 'item-1' } })
+    const stats = await run(s, { quoteOver: { quoteType }, lines: [{ lineConfig: removed, mergedConfig: {} }] })
+    expect(stats).toMatchObject({ dropped: 2, created: 0 })
+    expect(s.costs.map((row) => row.deletedAt)).toEqual([expect.any(Date), expect.any(Date)])
+    // ...while a kept mirror line of the same Renew quote is instantiated from the catalog
+    const kept = lineConfig({ quoteLineId: 'line-2', configuration: { _arcMirroredFromItemId: 'item-2' } })
+    const s2 = store({ charges: [charge()], elements: [element()] })
+    await run(s2, { quoteOver: { quoteType: 'renew' }, lines: [{ lineConfig: removed, mergedConfig: {} }, { lineConfig: kept, mergedConfig: {} }] })
+    expect(s2.costs).toEqual([expect.objectContaining({ quoteLineId: 'line-2', costKey: 'tail' })])
+  })
+
   it('computes per_unit instance amount from the charge quantity attribute', async () => {
     const s = store({ charges: [charge()], elements: [element({ costModel: 'per_unit', amount: '2.5' })] })
     await run(s, { config: { qty: 4 } })

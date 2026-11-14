@@ -29,6 +29,7 @@ import {
 } from './types'
 import { emitCpqEvent } from '../events'
 import { stripQuoteOnlyArcMarkers } from './arcPriceFreeze'
+import { isArcTerminationLine } from './arcLineRemoval'
 import { summarizeOrderPricing, type OrderWaterfallSummary } from './orderPricingSummary'
 
 // ─── Types ──────────────────────────────────────────────────────
@@ -179,7 +180,9 @@ export class DefaultCpqOrderService {
     if (invalidAdjustment) throw new OrderError(422, 'ADJUSTMENT_INVALID', invalidAdjustment)
 
     // Price-basis costs still estimated / unpriced / past their validity mean the price is indicative: no order yet.
-    const unconfirmed = await loadUnconfirmedPriceBasisCosts(em, cpqConfig.id, quoteLines.map((line) => line.quoteLineId), scope)
+    // ARC cancel lines (an item removed on Amend / Renew, every Cancel-quote line) sell nothing, so they never bind.
+    const bindingLines = quoteLines.filter((line) => !isArcTerminationLine(line, cpqConfig.quoteType))
+    const unconfirmed = await loadUnconfirmedPriceBasisCosts(em, cpqConfig.id, bindingLines.map((line) => line.quoteLineId), scope)
     if (unconfirmed.length > 0) throw new OrderError(422, 'COSTS_NOT_CONFIRMED', { lines: unconfirmed })
 
     const { number: orderNumber } = await this.numberGenerator.generate({

@@ -249,6 +249,50 @@ describe('cost lock matrix', () => {
   })
 })
 
+describe('ARC lines', () => {
+  const mirrorConfig = (over: Row = {}) => ({ configuration: { _arcMirroredFromItemId: 'item-1', ...over } })
+  function arc(quoteType: string, line: Row, costs: Row[] = [catalogRow()]) {
+    const ctx = setup({ line, costs })
+    ctx.quote.quoteType = quoteType
+    return ctx
+  }
+
+  it.each([
+    ['a Renew mirror line (re-priced at today\'s standard)', 'renew', mirrorConfig()],
+    ['a reconfigured (unfrozen) Amend mirror line', 'amend', mirrorConfig()],
+  ])('confirms the estimated catalog cost of %s', async (_label, quoteType, line) => {
+    const row = catalogRow()
+    const { service, recalculate } = arc(quoteType, line, [row])
+    await service.updateCost(ids.quote, ids.cost, { valueStatus: 'confirmed' }, ACTOR, SCOPE)
+    expect(row).toMatchObject({ valueStatus: 'confirmed', valueOrigin: 'manual', unitAmount: '300' })
+    expect(recalculate).toHaveBeenCalled()
+    // ...and enters a new value with a reason
+    await service.updateCost(ids.quote, ids.cost, { unitAmount: 280, note: 'partner quote' }, ACTOR, SCOPE)
+    expect(row.unitAmount).toBe('280')
+  })
+
+  it.each([
+    ['a frozen Amend mirror line', 'amend', mirrorConfig({ _arcPriceFrozen: true })],
+    ['an item removed on Renew (cancel line)', 'renew', { action: 'cancel', ...mirrorConfig() }],
+    ['an item removed on Amend (cancel line)', 'amend', { action: 'cancel', ...mirrorConfig() }],
+    ['a Cancel-quote line', 'cancel', { action: 'cancel', ...mirrorConfig() }],
+  ])('refuses every write on %s (LINE_NOT_ELIGIBLE)', async (_label, quoteType, line) => {
+    const row = catalogRow()
+    const { service } = arc(quoteType, line, [row])
+    await expect(service.updateCost(ids.quote, ids.cost, { valueStatus: 'confirmed' }, ACTOR, SCOPE)).rejects.toMatchObject({ status: 422, message: 'LINE_NOT_ELIGIBLE' })
+    await expect(service.createCost(ids.quote, create, ACTOR, SCOPE)).rejects.toMatchObject({ status: 422, message: 'LINE_NOT_ELIGIBLE' })
+    expect(row.valueStatus).toBe('estimated')
+  })
+
+  it('creates no manual cost and no markup override on a non-frozen mirror line', async () => {
+    const { service, costs } = arc('renew', mirrorConfig(), [])
+    await expect(service.createCost(ids.quote, create, ACTOR, SCOPE)).rejects.toMatchObject({ status: 422, message: 'LINE_NOT_ELIGIBLE' })
+    const input = { quoteLineId: ids.line, chargeCode: 'tail', markupRule: 'markup_percent' as const, markupValue: 30, note: 'deal' }
+    await expect(service.setMarkupOverride(ids.quote, input, ACTOR, SCOPE)).rejects.toMatchObject({ status: 422, message: 'LINE_NOT_ELIGIBLE' })
+    expect(costs).toHaveLength(0)
+  })
+})
+
 describe('updateCost rules', () => {
   it('overwriting a catalog value needs a note and then becomes manual', async () => {
     const row = catalogRow()

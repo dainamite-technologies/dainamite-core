@@ -5,6 +5,7 @@ import {
   CpqProductOffering,
   CpqQuoteConfiguration,
   CpqQuoteLineConfiguration,
+  CpqQuoteLineCost,
 } from '../../data/entities'
 
 /**
@@ -269,6 +270,31 @@ describe('recalculate → Amend mirror lines', () => {
     expect(pricingService.resolveProductCharges).not.toHaveBeenCalled()
     expect(lineConfig.mrcTotal).toBe('100')
     expect(result.lines[0].mrcTotal).toBe(100)
+  })
+})
+
+describe('removeQuoteItem → ARC mirror line becomes a cancel line', () => {
+  it.each(['amend', 'renew'])('soft-deletes the line\'s cost lines (catalog and manual) on %s, whatever the toggle', async (quoteType) => {
+    const { em, pricingService, service } = makePricedService()
+    const { cpqConfig, lineConfig } = amendFixture({ port_size: '1G', _arcMirroredFromItemId: 'item-1', _arcMirroredName: 'GIX Access Port' })
+    cpqConfig.quoteType = quoteType
+    routeEm(em, cpqConfig, lineConfig)
+    const costs = [
+      { id: 'c-1', quoteLineId: 'ql-1', costKey: 'tail', origin: 'catalog', valueStatus: 'estimated', deletedAt: null },
+      { id: 'c-2', quoteLineId: 'ql-1', costKey: 'manual:abcd1234', origin: 'manual', valueStatus: 'confirmed', deletedAt: null },
+    ]
+    em.find.mockImplementation(async (entity: unknown) => {
+      if (entity === CpqQuoteLineConfiguration) return [lineConfig]
+      if (entity === CpqQuoteLineCost) return costs
+      return []
+    })
+    pricingService.resolveProductCharges.mockResolvedValue([mrcCharge(120)])
+
+    await service.removeQuoteItem('cpq-1', 'ql-1', SCOPE)
+
+    expect(lineConfig.action).toBe('cancel')
+    expect(costs.map((row) => row.deletedAt)).toEqual([expect.any(Date), expect.any(Date)])
+    expect(em.find).toHaveBeenCalledWith(CpqQuoteLineCost, expect.objectContaining({ quoteConfigurationId: 'cpq-1', quoteLineId: { $in: ['ql-1'] }, deletedAt: null }), expect.anything())
   })
 })
 

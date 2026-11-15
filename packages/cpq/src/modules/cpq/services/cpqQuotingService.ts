@@ -51,6 +51,8 @@ import {
 } from './types'
 import {
   ARC_COST_PLUS_FROZEN_KEY,
+  ARC_COSTS_CARRIED_KEY,
+  ARC_CARRIED_COST_SET_HASH_KEY,
   ARC_PRICE_FROZEN_KEY,
   ARC_RECONFIGURED_KEY,
   isArcReconfigured,
@@ -66,6 +68,7 @@ import type { CpqCostService } from './costs/costService'
 import type { CpqFxRateResolver } from './costs/fxRateResolver'
 import { isQuoteCostLocked, resolveCostPlusInputs } from './costs/costResolution'
 import { isCostPlusItem } from './costs/costPlusItem'
+import { carryItemCosts, loadOpenItemCosts } from './costs/arcCostCarry'
 import type { SourcingSignal, SourcingSignalPublisher } from './costs/sourcingSignals'
 import { isArcCancelledLine, isArcTerminationLine, planArcLineRemoval, planArcLineRestore, removalCancelsItem } from './arcLineRemoval'
 
@@ -512,6 +515,12 @@ export class DefaultCpqQuotingService {
       arcMarkers[ARC_PRICE_FROZEN_KEY] = true
       if (existingCfg?.[ARC_COST_PLUS_FROZEN_KEY] === true) arcMarkers[ARC_COST_PLUS_FROZEN_KEY] = true
     }
+    // Carry-over markers (ARC costs spec Q5) are server-owned and sticky: a resubmission or a reconfiguration keeps the
+    // line cost-managed and keeps the I-12 baseline hash.
+    if (existingCfg?.[ARC_COSTS_CARRIED_KEY] === true) {
+      arcMarkers[ARC_COSTS_CARRIED_KEY] = true
+      if (typeof existingCfg[ARC_CARRIED_COST_SET_HASH_KEY] === 'string') arcMarkers[ARC_CARRIED_COST_SET_HASH_KEY] = existingCfg[ARC_CARRIED_COST_SET_HASH_KEY]
+    }
     if (pricingInputsChanged || existingCfg?.[ARC_REPRICED_KEY] === true) arcMarkers[ARC_REPRICED_KEY] = true
     if (isReconfigurable && (inputsChanged || isArcReconfigured(existingCfg))) arcMarkers[ARC_RECONFIGURED_KEY] = true
     update.configuration = { ...update.configuration, ...arcMarkers }
@@ -724,6 +733,13 @@ export class DefaultCpqQuotingService {
         if (salesLine) salesLine.quantity = String(item.quantity)
       }
     }])
+    // Amend: the restored line is a fresh mirror again, so it re-carries the item's open costs (ARC costs spec).
+    if (arcType === 'amend') {
+      const openCosts = await loadOpenItemCosts(em, restores.map(({ item }) => item.id), scope)
+      for (const { line, item } of restores) {
+        await carryItemCosts(em, { quote: cpqConfig, line, item, scope, openCosts: openCosts.get(item.id) ?? [], replace: true })
+      }
+    }
 
     return this.recalculateInternal(em, cpqConfig, salesQuote, scope, true, undefined, sourcing)
   }
@@ -2914,6 +2930,11 @@ async function mirrorTargetSubscriptionItems(
 
   const lineAction: 'modify' | 'cancel' = quoteType === 'cancel' ? 'cancel' : 'modify'
 
+  // ARC costs spec: an Amend mirror of a standalone target carries the item's open costs (merge-renew mirrors and
+  // Cancel / Renew mirrors carry nothing here). One query for the whole subscription.
+  const carryCosts = quoteType === 'amend' && !options?.mergeMode
+  const openCostsByItem = carryCosts ? await loadOpenItemCosts(em, items.map((item) => item.id), scope) : null
+
   for (const item of items) {
     const salesLineId = subItemIdToSalesLineId.get(item.id)!
     const parentLineId = item.parentItemId
@@ -2974,6 +2995,7 @@ async function mirrorTargetSubscriptionItems(
       sourceSubscriptionItemId: item.id,
     })
     em.persist(lineConfig)
+    if (openCostsByItem) await carryItemCosts(em, { quote: cpqConfig, line: lineConfig, item, scope, openCosts: openCostsByItem.get(item.id) ?? [] })
   }
 }
 

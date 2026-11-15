@@ -80,8 +80,8 @@ type ResolvedValue = FxFields & {
   errorCode: CostLineErrorCode | null
 }
 
-/** A value a person entered (`manual`) or a supplier answered (`supplier`): the catalog resolver never overwrites it until a driver changes. */
-const isEnteredOrigin = (origin: string | null | undefined): boolean => origin === 'manual' || origin === 'supplier'
+/** A value that is not the catalog's: entered by a user, answered by a supplier, or carried from the subscription item (it survives a recalculation until a driving attribute changes). */
+const isEnteredOrigin = (origin: string | null | undefined): boolean => origin === 'manual' || origin === 'supplier' || origin === 'carried'
 
 const NO_VALUE: ResolvedValue = { valueStatus: 'none', valueOrigin: null, unitAmount: null, instanceAmount: null, currencyCode: null, errorCode: null, ...NO_FX }
 
@@ -362,18 +362,26 @@ async function planQuoteCosts(params: CostResolutionParams & { save?: boolean })
     signals.push({ ...sourcingCostRef(row), kind: 'request_cancelled', costRequestId: row.costRequestId as string, requestSeq: row.requestSeq ?? 1, reason })
   }
 
-  // R1c: cancelled lines and unreconfigured ARC mirror lines (frozen or not, Q13) never get catalog cost lines.
+  // R1c: cancelled lines never get cost lines, and unreconfigured ARC mirror lines get no CATALOG cost lines (Q13).
+  // ARC costs spec: an unreconfigured Amend mirror keeps its `carried` lines (the subscription's costs), nothing else;
+  // a reconfigured mirror instantiates catalog lines for the elements that apply and keeps carried values whose
+  // cost key matches (unless a driving attribute changed, R1b).
   const lines = params.lines.filter(({ lineConfig }) => (lineConfig.offeringId || lineConfig.productId)
     && !isArcCancelledLine(lineConfig, quote.quoteType)
     && (!isArcMirrorLine(lineConfig.configuration, quote.quoteType) || isArcReconfigured(lineConfig.configuration)))
   // An item removed on an Amend / Renew quote leaves the subscription: its line keeps no cost
-  // (catalog or manual). Line removal already drops them; this also cleans rows stored before.
-  // Rows stored on an unreconfigured mirror line before Q13 (a Renew mirror re-priced at standard) are dropped
+  // (catalog, manual or carried). Line removal already drops them; this also cleans rows stored before.
+  // Non-carried rows stored on an unreconfigured mirror line before Q13 (a Renew mirror re-priced at standard) are dropped
   // too: nothing could confirm them (cost PATCH refuses such a line), so they would block conversion forever.
-  const cancelledLineIds = new Set(params.lines
-    .filter(({ lineConfig }) => isArcCancelledLine(lineConfig, quote.quoteType)
-      || (isArcMirrorLine(lineConfig.configuration, quote.quoteType) && !isArcReconfigured(lineConfig.configuration)))
+  const removedLineIds = new Set(params.lines
+    .filter(({ lineConfig }) => isArcCancelledLine(lineConfig, quote.quoteType))
     .map(({ lineConfig }) => lineConfig.quoteLineId))
+  const unreconfiguredMirrorIds = new Set(params.lines
+    .filter(({ lineConfig }) => !isArcCancelledLine(lineConfig, quote.quoteType)
+      && isArcMirrorLine(lineConfig.configuration, quote.quoteType) && !isArcReconfigured(lineConfig.configuration))
+    .map(({ lineConfig }) => lineConfig.quoteLineId))
+  const dropsOnRecalc = (row: CpqQuoteLineCost) => removedLineIds.has(row.quoteLineId)
+    || (unreconfiguredMirrorIds.has(row.quoteLineId) && row.origin !== 'carried')
 
   // FX snapshot policy (spec §Proposed Solution, R4). This plan only runs for an UNLOCKED quote (locked / ordered
   // quotes reuse the stored rows and never reach it) and is only persisted by a SAVED recalculation; a preview resolves
@@ -393,7 +401,7 @@ async function planQuoteCosts(params: CostResolutionParams & { save?: boolean })
 
   // ── Reads first (no mutation before the last query) ──
   const existing = await em.find(CpqQuoteLineCost, { ...scoped(scope), quoteConfigurationId: quote.id })
-  const cancelledDrops = existing.filter((row) => cancelledLineIds.has(row.quoteLineId))
+  const cancelledDrops = existing.filter(dropsOnRecalc)
   stats.dropped += cancelledDrops.length
   // R1a, line removal: an ARC removal / unreconfigured mirror drops its cost lines with their open requests.
   for (const row of cancelledDrops) cancelOnDrop(row, 'line_removed')
@@ -495,7 +503,8 @@ async function planQuoteCosts(params: CostResolutionParams & { save?: boolean })
           continue
         }
 
-        const patch: RowPatch = { ...structure }
+        // A carried line keeps the subscription's own structure (role, type, model, source, name); only the element link is set.
+        const patch: RowPatch = row.origin === 'carried' ? { costElementId: element.id } : { ...structure }
         // R1b: a driving attribute changed since the value was set. On a catalog `on_request` value, or on a value a
         // pricing manager entered / confirmed (origin `manual`), that resets it and keeps the old value in the note.
         const driversChanged = row.driverHash !== null && row.driverHash !== hash
@@ -559,11 +568,11 @@ async function planQuoteCosts(params: CostResolutionParams & { save?: boolean })
       stats.dropped += 1
     }
 
-    // A manual cost keeps its entered unit amount (and currency); a `per_unit` one's per-instance amount follows the
+    // A manual cost, and a carried one no element claims, keeps its entered unit amount (and currency); a `per_unit` one's per-instance amount follows the
     // charge quantity, so a reconfigured quantity re-prices from the right cost. A foreign-currency value also gets its
     // FX snapshot refreshed (Q6; a carried / mirror line keeps its stored one) and the Q13 status on rate arrival.
     for (const row of rows) {
-      if (row.origin !== 'manual' || row.unitAmount === null || row.unitAmount === undefined) continue
+      if ((row.origin !== 'manual' && !(row.origin === 'carried' && !desiredKeys.has(row.costKey))) || row.unitAmount === null || row.unitAmount === undefined) continue
       const charge = ownerCharges.find((candidate) => candidate.code === row.chargeCode)
       const patch: RowPatch = {}
       if (row.costModel === 'per_unit' && charge) patch.instanceAmount = money(Number(row.unitAmount) * quantityOf(charge, mergedConfig))

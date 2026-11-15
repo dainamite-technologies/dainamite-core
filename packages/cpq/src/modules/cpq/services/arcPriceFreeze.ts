@@ -40,7 +40,7 @@ export const ARC_RECONFIGURED_KEY = '_arcReconfigured'
 
 /**
  * Set on an ARC mirror line whose subscription item costs are carried onto the quote (ARC costs spec Q5): the
- * line is cost-managed and always syncs by `replace` at activation. Written by the carry step (spec step 6).
+ * line is cost-managed and always syncs by `replace` at activation. Written by `carryItemCosts` (spec step 6).
  */
 export const ARC_COSTS_CARRIED_KEY = '_arcCostsCarried'
 
@@ -48,7 +48,9 @@ export const ARC_COSTS_CARRIED_KEY = '_arcCostsCarried'
 export const ARC_CARRIED_COST_SET_HASH_KEY = '_arcCarriedCostSetHash'
 
 /** Markers that describe quote-time pricing state and never leave the quote. */
-const QUOTE_ONLY_ARC_KEYS = [ARC_PRICE_FROZEN_KEY, ARC_REPRICED_KEY, ARC_COST_PLUS_FROZEN_KEY, ARC_RECONFIGURED_KEY] as const
+const QUOTE_ONLY_ARC_KEYS = [
+  ARC_PRICE_FROZEN_KEY, ARC_REPRICED_KEY, ARC_COST_PLUS_FROZEN_KEY, ARC_RECONFIGURED_KEY, ARC_COSTS_CARRIED_KEY, ARC_CARRIED_COST_SET_HASH_KEY,
+] as const
 
 const ARC_MARKER_PREFIX = '_arc'
 

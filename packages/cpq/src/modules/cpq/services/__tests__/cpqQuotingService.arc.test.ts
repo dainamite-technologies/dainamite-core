@@ -2,7 +2,10 @@ import { DefaultCpqQuotingService } from '../cpqQuotingService'
 import { createMockEm, TEST_SCOPE as SCOPE } from './_helpers/mockEm'
 import { SalesQuote, SalesQuoteLine } from '@open-mercato/core/modules/sales/data/entities'
 import {
+  CpqInventoryCost,
+  CpqInventorySubscription,
   CpqInventorySubscriptionItem,
+  CpqQuoteTargetSubscription,
   CpqOrderConfiguration,
   CpqProductCharge,
   CpqProductOffering,
@@ -689,5 +692,147 @@ describe('cost-locked quotes refuse adding / reconfiguring a cost-plus line (COS
     const { pricingService, service } = costLockedFixture({ costPlusCharges: 0 })
     await service.updateQuoteItem('cpq-1', 'ql-1', { configuration: { port_size: '10G' }, quantity: 1 }, SCOPE)
     expect(pricingService.resolveProductCharges).toHaveBeenCalled()
+  })
+})
+
+// ─── ARC costs spec step 6: carry subscription item costs onto Amend mirror lines ───
+
+describe('Amend mirror carries the subscription item costs (ARC costs spec step 6)', () => {
+  const itemCost = (over: Record<string, unknown> = {}) => ({
+    id: 'ic-1', subscriptionItemId: 'item-1', subscriptionId: 'sub-1', status: 'active', costKey: 'tail', chargeCode: 'mrc', origin: 'catalog', costElementId: 'el-1',
+    name: 'Tail', role: 'price_basis', costType: 'mrc', source: 'table', costModel: 'flat', valueStatus: 'confirmed', valueOrigin: 'catalog',
+    unitAmount: '270.0000', instanceAmount: '270.0000', totalAmount: '270.0000', currencyCode: 'EUR', fxRate: null, fxRateDate: null, fxRateSource: null, fxRateDerivation: null,
+    indexSnapshot: null, supplierId: 'sup-1', supplierName: 'Carrier X', supplierQuoteRef: 'CX-1', validUntil: '2028-11-30', supplierTermEnd: '2028-11-30', supplierMinTermMonths: 12, note: null,
+    ...over,
+  })
+  const subscriptionItem = () => ({ id: 'item-1', subscriptionId: 'sub-1', name: 'GIX Access Port', status: 'active', quantity: 1, mrcAmount: '100', nrcAmount: '0', configuration: { port_size: '1G' }, offeringId: 'off-1', productId: null, specId: null, parentItemId: null, charges: [] })
+
+  function mirrorFixture(type: 'amend' | 'renew' | 'cancel', costs: Array<Record<string, unknown>>) {
+    const em = Object.assign(createMockEm(), { fork: jest.fn() })
+    em.fork.mockReturnValue(em)
+    const service = new DefaultCpqQuotingService({
+      em: em as never, cpqPricingService: {} as never, cpqValidationService: {} as never, cpqProductService: {} as never,
+      salesDocumentNumberGenerator: { generate: jest.fn().mockResolvedValue({ number: 'Q-1' }) } as never,
+    })
+    em.findOne.mockImplementation(async (entity: unknown) => (entity === CpqInventorySubscription
+      ? { id: 'sub-1', customerId: 'cust-1', currencyCode: 'EUR', billingCycle: 'monthly', status: 'active', code: 'SUB-1', startDate: new Date('2026-01-01'), endDate: new Date('2027-01-01'), termMonths: 12 }
+      : null))
+    em.find.mockImplementation(async (entity: unknown) => {
+      if (entity === CpqInventorySubscriptionItem) return [subscriptionItem()]
+      if (entity === CpqInventoryCost) return costs
+      return []
+    })
+    const create = () => (service as unknown as { createQuoteFromSubscription: (input: unknown, scope: unknown) => Promise<unknown> })
+      .createQuoteFromSubscription({ subscriptionId: 'sub-1', type }, SCOPE)
+    // `em.create` of the mock returns a copy, so mutations (the carry markers) show on the persisted objects only.
+    const created = (entity: unknown) => {
+      const data = em.create.mock.calls.filter(([e]) => e === entity).map(([, d]) => d as Record<string, any>)
+      if (entity !== CpqQuoteLineConfiguration) return data
+      const persisted = em.persist.mock.calls.map(([row]) => row as Record<string, any>)
+      return data.map((d) => persisted.find((row) => row.quoteLineId === d.quoteLineId && 'action' in row) ?? d)
+    }
+    return { em, create, created }
+  }
+
+  it('creates one carried cost line per open item cost and no catalog line, and marks the line cost-managed', async () => {
+    const { em, create, created } = mirrorFixture('amend', [itemCost(), itemCost({ id: 'ic-2', costKey: 'install', costType: 'nrc', unitAmount: '50', instanceAmount: '50', role: 'margin_only' })])
+    await create()
+    const costs = created(CpqQuoteLineCost)
+    expect(costs.map((c) => c.costKey)).toEqual(['install', 'tail'])
+    expect(costs.find((c) => c.costKey === 'tail')).toMatchObject({
+      origin: 'carried', valueOrigin: 'carried', valueStatus: 'confirmed', unitAmount: '270.0000', currencyCode: 'EUR', supplierName: 'Carrier X', supplierQuoteRef: 'CX-1',
+      supplierTermEnd: '2028-11-30', carriedFromItemCostId: 'ic-1', sourcingStatus: 'not_requested', renegotiationDue: false, costElementId: 'el-1',
+    })
+    expect(costs[0].carriedFromHash).toEqual(expect.any(String))
+    const [line] = created(CpqQuoteLineConfiguration)
+    expect(line.configuration).toMatchObject({ _arcMirroredFromItemId: 'item-1', _arcPriceFrozen: true, _arcCostsCarried: true, _arcCarriedCostSetHash: expect.any(String) })
+    expect(line).toMatchObject({ mrcTotal: '100', action: 'modify' })
+    expect(em.find).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ isActive: true }))
+  })
+
+  it('an item without open costs gets no carried line and no markers', async () => {
+    const { create, created } = mirrorFixture('amend', [])
+    await create()
+    expect(created(CpqQuoteLineCost)).toHaveLength(0)
+    expect(created(CpqQuoteLineConfiguration)[0].configuration).not.toHaveProperty('_arcCostsCarried')
+  })
+
+  it.each(['renew', 'cancel'] as const)('a %s mirror carries nothing (merge and Phase 1 freeze rules stay)', async (type) => {
+    const { em, create, created } = mirrorFixture(type, [itemCost()])
+    await create()
+    expect(created(CpqQuoteLineCost)).toHaveLength(0)
+    expect(created(CpqQuoteLineConfiguration)[0].configuration).not.toHaveProperty('_arcCostsCarried')
+    expect(em.find).not.toHaveBeenCalledWith(CpqInventoryCost, expect.anything())
+  })
+
+  it('a merge-renew attach mirrors the new target without carrying costs', async () => {
+    const { em, created } = mirrorFixture('renew', [itemCost()])
+    const cpqConfig = { id: 'cpq-1', quoteId: 'sq-1', cpqStatus: 'new', quoteType: 'renew', customerId: 'cust-1', currencyCode: 'EUR', organizationId: SCOPE.organizationId, tenantId: SCOPE.tenantId }
+    em.findOne.mockImplementation(async (entity: unknown) => {
+      if (entity === CpqQuoteConfiguration) return cpqConfig
+      if (entity === CpqInventorySubscription) return { id: 'sub-2', customerId: 'cust-1', currencyCode: 'EUR', billingCycle: 'monthly', status: 'active' }
+      if (entity === SalesQuote) return { id: 'sq-1', currencyCode: 'EUR' }
+      return null
+    })
+    em.find.mockImplementation(async (entity: unknown) => {
+      if (entity === CpqQuoteTargetSubscription) return [{ id: 't-1', subscriptionId: 'sub-1', mergeAction: 'standalone', quoteId: 'cpq-1' }]
+      if (entity === CpqInventorySubscription) return [{ id: 'sub-1', billingCycle: 'monthly' }]
+      if (entity === CpqInventorySubscriptionItem) return [subscriptionItem()]
+      if (entity === CpqInventoryCost) return [itemCost()]
+      return []
+    })
+    const service = new DefaultCpqQuotingService({
+      em: em as never, cpqPricingService: {} as never, cpqValidationService: {} as never, cpqProductService: {} as never, salesDocumentNumberGenerator: {} as never,
+    })
+    await service.attachTargetSubscription('cpq-1', { quoteType: 'renew', subscriptionId: 'sub-2' } as never, SCOPE)
+    expect(created(CpqQuoteLineConfiguration)).toHaveLength(1)
+    expect(created(CpqQuoteLineCost)).toHaveLength(0)
+  })
+
+  it('restore re-carries the item costs of a removed Amend line (fresh markers, previous cost rows replaced)', async () => {
+    const em = Object.assign(createMockEm(), { assign: jest.fn((e: Record<string, unknown>, u: Record<string, unknown>) => Object.assign(e, u)), fork: jest.fn() })
+    em.fork.mockReturnValue(em)
+    const service = new DefaultCpqQuotingService({
+      em: em as never, cpqPricingService: { resolveProductCharges: jest.fn().mockResolvedValue([mrcCharge(100)]) } as never,
+      cpqValidationService: { validateOfferingConfiguration: jest.fn().mockResolvedValue({ valid: true, errors: [] }), validateRelationships: jest.fn().mockResolvedValue([]) } as never,
+      cpqProductService: {} as never, salesDocumentNumberGenerator: {} as never,
+    })
+    const { cpqConfig, lineConfig } = amendFixture({ port_size: '1G', _arcMirroredFromItemId: 'item-1', _arcMirroredName: 'GIX Access Port', _arcCostsCarried: true, _arcCarriedCostSetHash: 'old' })
+    Object.assign(cpqConfig, { cpqStatus: 'new' })
+    lineConfig.action = 'cancel'
+    routeEm(em, cpqConfig, lineConfig)
+    const leftover = { id: 'old-row', quoteLineId: 'ql-1', deletedAt: null }
+    em.find.mockImplementation(async (entity: unknown) => {
+      if (entity === CpqQuoteLineConfiguration) return [lineConfig]
+      if (entity === CpqInventorySubscriptionItem) return [subscriptionItem()]
+      if (entity === CpqInventoryCost) return [itemCost()]
+      if (entity === CpqQuoteLineCost) return [leftover]
+      return []
+    })
+    await service.restoreQuoteItem('cpq-1', 'ql-1', SCOPE)
+    expect(lineConfig.action).toBe('modify')
+    expect(leftover.deletedAt).toBeInstanceOf(Date)
+    const carried = em.create.mock.calls.filter(([e]) => e === CpqQuoteLineCost).map(([, d]) => d as Record<string, unknown>)
+    expect(carried).toEqual([expect.objectContaining({ costKey: 'tail', origin: 'carried', quoteLineId: 'ql-1', carriedFromItemCostId: 'ic-1' })])
+    expect(lineConfig.configuration).toMatchObject({ _arcPriceFrozen: true, _arcCostsCarried: true, _arcCarriedCostSetHash: expect.not.stringMatching(/^old$/) })
+  })
+
+  it('updateQuoteItem keeps the carry markers on a resubmission and on a reconfiguration', async () => {
+    for (const config of [{ port_size: '1G' }, { port_size: '10G' }]) {
+      const { em, pricingService, service } = makePricedService()
+      const { cpqConfig, lineConfig } = amendFixture({ port_size: '1G', _arcMirroredFromItemId: 'item-1', _arcMirroredName: 'GIX Access Port', _arcPriceFrozen: true, _arcCostsCarried: true, _arcCarriedCostSetHash: 'h-1' })
+      routeEm(em, cpqConfig, lineConfig)
+      pricingService.resolveProductCharges.mockResolvedValue([mrcCharge(150)])
+      await service.updateQuoteItem('cpq-1', 'ql-1', { configuration: config, quantity: 1 }, SCOPE)
+      expect(lineConfig.configuration).toMatchObject({ _arcCostsCarried: true, _arcCarriedCostSetHash: 'h-1' })
+    }
+  })
+
+  it('a client can never set the carry markers', async () => {
+    const { em, service } = makePricedService()
+    const { cpqConfig, lineConfig } = amendFixture({ port_size: '1G', _arcMirroredFromItemId: 'item-1', _arcPriceFrozen: true })
+    routeEm(em, cpqConfig, lineConfig)
+    await service.updateQuoteItem('cpq-1', 'ql-1', { configuration: { port_size: '1G', _arcCostsCarried: true, _arcCarriedCostSetHash: 'x' }, quantity: 1 }, SCOPE)
+    expect(lineConfig.configuration).not.toHaveProperty('_arcCostsCarried')
   })
 })

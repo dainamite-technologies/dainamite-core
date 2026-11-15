@@ -334,6 +334,68 @@ describe('mirror-line cost lines (Q13: reconfigured mirrors only; was feature 1 
   })
 })
 
+describe('carried cost lines on ARC mirrors (ARC costs spec step 6: MODIFIED "Quote cost lines from catalog cost elements")', () => {
+  const mirrorCfg = (extra: Row = {}) => lineConfig({ configuration: { _arcMirroredFromItemId: 'item-1', ...extra } })
+  const carried = (over: Row = {}) => catalogCost({ id: 'carried-1', origin: 'carried', valueOrigin: 'carried', unitAmount: '240', instanceAmount: '240',
+    carriedFromItemCostId: 'ic-1', carriedFromHash: 'h1', name: 'Subscription tail', role: 'price_basis', costType: 'mrc', source: 'fixed', costModel: 'flat', ...over })
+
+  it('an unreconfigured Amend mirror keeps only its carried lines: no catalog line is created, no carried line is dropped', async () => {
+    const s = store({ charges: [charge()], elements: [element()], costs: [carried()] })
+    const stats = await run(s, { quoteOver: { quoteType: 'amend' }, lines: [{ lineConfig: mirrorCfg({ _arcPriceFrozen: true, _arcCostsCarried: true }), mergedConfig: {} }] })
+    expect(stats).toMatchObject({ created: 0, dropped: 0 })
+    expect(s.costs).toHaveLength(1)
+    expect(s.costs[0]).toMatchObject({ origin: 'carried', unitAmount: '240', deletedAt: null })
+  })
+
+  it('an unreconfigured mirror still drops its non-carried rows (stored before Q13) but keeps the carried ones', async () => {
+    const s = store({ charges: [charge()], elements: [element()], costs: [carried(), catalogCost({ id: 'c-9', costKey: 'old', valueStatus: 'estimated' })] })
+    const stats = await run(s, { quoteOver: { quoteType: 'amend' }, lines: [{ lineConfig: mirrorCfg({ _arcPriceFrozen: true }), mergedConfig: {} }] })
+    expect(stats.dropped).toBe(1)
+    expect(s.costs[0].deletedAt).toBeNull()
+    expect(s.costs[1].deletedAt).toEqual(expect.any(Date))
+  })
+
+  it('a removed (cancel) line drops its carried lines too', async () => {
+    const s = store({ charges: [charge()], elements: [element()], costs: [carried()] })
+    const stats = await run(s, { quoteOver: { quoteType: 'amend' }, lines: [{ lineConfig: lineConfig({ action: 'cancel', configuration: { _arcMirroredFromItemId: 'item-1' } }), mergedConfig: {} }] })
+    expect(stats.dropped).toBe(1)
+    expect(s.costs[0].deletedAt).toEqual(expect.any(Date))
+  })
+
+  it('a reconfigured mirror keeps the carried tail (value, origin, structure, supplier) and instantiates the other applicable element', async () => {
+    const s = store({
+      charges: [charge()], elements: [element({ amount: '300', name: 'Catalog tail' }), element({ id: 'el-2', code: 'setup', name: 'Setup', costType: 'nrc', amount: '50' })],
+      costs: [carried({ supplierName: 'Carrier X' })],
+    })
+    await run(s, { quoteOver: { quoteType: 'amend' }, lines: [{ lineConfig: mirrorCfg({ _arcReconfigured: true }), mergedConfig: {} }] })
+    expect(s.costs[0]).toMatchObject({ origin: 'carried', valueOrigin: 'carried', unitAmount: '240', name: 'Subscription tail', supplierName: 'Carrier X', costElementId: 'el-1', deletedAt: null })
+    expect(s.costs).toHaveLength(2)
+    expect(s.costs[1]).toMatchObject({ costKey: 'setup', origin: 'catalog', unitAmount: '50' })
+  })
+
+  it('a reconfigured mirror keeps its carried value on every later recalculation (idempotent)', async () => {
+    const s = store({ charges: [charge()], elements: [element({ amount: '300' })], costs: [carried()] })
+    const lines = [{ lineConfig: mirrorCfg({ _arcReconfigured: true }), mergedConfig: {} }]
+    await run(s, { quoteOver: { quoteType: 'amend' }, lines })
+    await run(s, { quoteOver: { quoteType: 'amend' }, lines })
+    expect(s.costs).toHaveLength(1)
+    expect(s.costs[0]).toMatchObject({ unitAmount: '240', valueOrigin: 'carried' })
+  })
+
+  it('R1b: a changed driving attribute resets a carried value to the catalog value and keeps the old one in the note; origin stays carried', async () => {
+    const s = store({ charges: [charge()], elements: [element({ amount: '300' })], costs: [carried({ driverHash: 'stale' })] })
+    await run(s, { quoteOver: { quoteType: 'amend' }, lines: [{ lineConfig: mirrorCfg({ _arcReconfigured: true }), mergedConfig: {} }] })
+    expect(s.costs[0]).toMatchObject({ origin: 'carried', valueOrigin: 'catalog', unitAmount: '300', carriedFromItemCostId: 'ic-1' })
+    expect(String(s.costs[0].note)).toContain('Previous value 240 USD')
+  })
+
+  it('a carried line of a reconfigured mirror that no element claims keeps its value and follows the quantity (per_unit)', async () => {
+    const s = store({ charges: [charge()], elements: [], costs: [carried({ costKey: 'legacy', costModel: 'per_unit', chargeCode: 'mrc', unitAmount: '10', instanceAmount: '10' })] })
+    await run(s, { quoteOver: { quoteType: 'amend' }, lines: [{ lineConfig: mirrorCfg({ _arcReconfigured: true }), mergedConfig: { qty: 3 } }] })
+    expect(s.costs[0]).toMatchObject({ origin: 'carried', unitAmount: '10', instanceAmount: '30', deletedAt: null })
+  })
+})
+
 describe('recalculateInternal wiring', () => {
   function service(enabled: jest.Mock) {
     const em: Record<string, jest.Mock> = {

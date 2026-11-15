@@ -1,5 +1,5 @@
 import {
-  CpqInventoryAsset, CpqInventoryCost, CpqInventorySubscription, CpqInventorySubscriptionItem, CpqOrderConfiguration, CpqProductCharge, CpqQuoteConfiguration, CpqQuoteLineConfiguration, CpqQuoteLineCost, CpqQuoteMarkupOverride,
+  CpqInventoryAsset, CpqInventoryCost, CpqInventorySubscription, CpqInventorySubscriptionItem, CpqOrderConfiguration, CpqProductCharge, CpqQuoteConfiguration, CpqQuoteLineConfiguration, CpqQuoteLineCost, CpqQuoteMarkupOverride, CpqQuoteTargetSubscription,
 } from '../../../data/entities'
 import { SalesQuote } from '@open-mercato/core/modules/sales/data/entities'
 
@@ -27,7 +27,7 @@ const SCOPE = { organizationId: 'org', tenantId: 'tenant' }
 const ids = { quote: '11111111-1111-4111-8111-111111111111', line: '22222222-2222-4222-8222-222222222222', cost: '33333333-3333-4333-8333-333333333333' }
 type Row = Record<string, any>
 
-function setup(opts: { status?: string; orders?: number; costs?: Row[]; overrides?: Row[]; line?: Row; charges?: Row[]; enabled?: boolean; publisher?: jest.Mock; fx?: jest.Mock; fxPairs?: Row[]; trackMargin?: boolean } = {}) {
+function setup(opts: { status?: string; orders?: number; costs?: Row[]; overrides?: Row[]; line?: Row; charges?: Row[]; enabled?: boolean; publisher?: jest.Mock; fx?: jest.Mock; fxPairs?: Row[]; trackMargin?: boolean; newTermEnd?: string | null } = {}) {
   const quote = { id: ids.quote, quoteId: ids.quote, cpqStatus: opts.status ?? 'ready', quoteType: 'new', currencyCode: 'EUR', pricingRevision: 4, quoteContext: {}, pricingSummary: { snapshotHash: 'snap-1' } }
   const line = { id: 'l', quoteLineId: ids.line, ...SCOPE, quoteConfigurationId: ids.quote, offeringId: 'off', productId: 'prod', configuration: {}, quantity: '1', charges: [], termMonths: 12, parentLineId: null, deletedAt: null, ...opts.line }
   const charges = opts.charges ?? [
@@ -50,6 +50,7 @@ function setup(opts: { status?: string; orders?: number; costs?: Row[]; override
       if (entity === CpqQuoteLineCost) return live(costs).find((row) => row.id === where.id) ?? null
       if (entity === CpqQuoteMarkupOverride) return live(overrides).find((row) => row.quoteLineId === where.quoteLineId && row.chargeCode === where.chargeCode) ?? null
       if (entity === CpqQuoteConfiguration) return quote
+      if (entity === CpqQuoteTargetSubscription) return opts.newTermEnd ? { subscriptionId: where.subscriptionId, newTermEnd: opts.newTermEnd } : null
       return null
     }),
     find: jest.fn(async (entity: unknown) => {
@@ -509,6 +510,122 @@ describe('carried costs on frozen Amend mirror lines (ARC costs spec step 7, Q4)
   it('a carried cost on a cancel (removal) line is still refused', async () => {
     const { service } = amend({ line: { action: 'cancel', configuration: { _arcMirroredFromItemId: 'item-1', _arcPriceFrozen: true } } })
     await expect(service.updateCost(ids.quote, ids.cost, { unitAmount: 240, note: 'x' }, ACTOR, SCOPE)).rejects.toMatchObject({ status: 422, message: 'LINE_NOT_ELIGIBLE' })
+  })
+})
+
+describe('Keep current cost (ARC costs step 15, App Spec R13)', () => {
+  const RENEW_LINE = { targetSubscriptionId: 'sub-1', configuration: { _arcMirroredFromItemId: 'item-1', _arcCostsCarried: true, _arcCarriedCostSetHash: 'h' } }
+  const dueRow = (over: Row = {}) => catalogRow({
+    origin: 'carried', valueOrigin: 'carried', valueStatus: 'estimated', renegotiationDue: true, source: 'fixed', costElementId: null, unitAmount: '320.0000', instanceAmount: '320.0000',
+    currencyCode: 'EUR', fxRate: null, validUntil: '2027-06-30', supplierTermEnd: '2027-06-30', supplierQuoteRef: 'CX-1', carriedFromItemCostId: 'ic-1', carriedFromHash: 'h1', ...over,
+  })
+  function renew(opts: { status?: string; orders?: number; row?: Row; newTermEnd?: string | null; line?: Row } = {}) {
+    const ctx = setup({ status: opts.status ?? 'with_customer', orders: opts.orders, line: opts.line ?? RENEW_LINE, costs: [opts.row ?? dueRow()], newTermEnd: opts.newTermEnd === undefined ? '2028-12-31' : opts.newTermEnd, trackMargin: true })
+    ctx.quote.quoteType = 'renew'
+    return ctx
+  }
+  const keep = (over: Row = {}) => ({ keepCurrent: true as const, validUntil: '2028-12-31', note: 'Carrier confirmed rolling term', ...over })
+
+  it('confirms the cost unchanged: flag cleared, value / currency kept, new validity and evidence stored, margin_hash unchanged', async () => {
+    const row = dueRow()
+    const { service, margin } = renew({ row })
+    const result = await service.updateCost(ids.quote, ids.cost, keep({ supplierTermEnd: '2029-01-31' }), ACTOR, SCOPE)
+    expect(row).toMatchObject({
+      renegotiationDue: false, valueStatus: 'confirmed', valueOrigin: 'carried', origin: 'carried', unitAmount: '320.0000', instanceAmount: '320.0000', currencyCode: 'EUR',
+      validUntil: '2028-12-31', supplierTermEnd: '2029-01-31', note: 'Carrier confirmed rolling term', supplierQuoteRef: 'CX-1',
+    })
+    const signal = margin()
+    expect(signal!.marginHash).toBe(signal!.previousMarginHash)
+    expect(result.cost).toMatchObject({ id: ids.cost, valueStatus: 'confirmed' })
+  })
+
+  it('the supplier term may be cleared to rolling (null) with the validity extended', async () => {
+    const row = dueRow()
+    const { service } = renew({ row })
+    await service.updateCost(ids.quote, ids.cost, keep({ supplierTermEnd: null }), ACTOR, SCOPE)
+    expect(row).toMatchObject({ supplierTermEnd: null, validUntil: '2028-12-31', renegotiationDue: false })
+  })
+
+  it('a new supplier quote ref is evidence on its own, and replaces the stored ref', async () => {
+    const row = dueRow()
+    const { service } = renew({ row })
+    await service.updateCost(ids.quote, ids.cost, { keepCurrent: true, validUntil: '2028-12-31', supplierTermEnd: '2029-01-31', supplierQuoteRef: 'CX-2300' }, ACTOR, SCOPE)
+    expect(row).toMatchObject({ supplierQuoteRef: 'CX-2300', supplierTermEnd: '2029-01-31', renegotiationDue: false, valueStatus: 'confirmed' })
+  })
+
+  it('VALIDITY_EVIDENCE_REQUIRED without a note or a new supplier quote ref (the same ref is not evidence); nothing is written', async () => {
+    const row = dueRow()
+    const { service, recalculate } = renew({ row })
+    for (const patch of [{ keepCurrent: true as const, validUntil: '2028-12-31' }, { keepCurrent: true as const, validUntil: '2028-12-31', supplierQuoteRef: 'CX-1' }]) {
+      await expect(service.updateCost(ids.quote, ids.cost, patch, ACTOR, SCOPE)).rejects.toMatchObject({ status: 422, message: 'VALIDITY_EVIDENCE_REQUIRED' })
+    }
+    expect(row).toMatchObject({ renegotiationDue: true, valueStatus: 'estimated', validUntil: '2027-06-30' })
+    expect(recalculate).not.toHaveBeenCalled()
+  })
+
+  it('RENEGOTIATION_DATES_SHORT while the validity or the (unchanged) supplier term is before the new term end', async () => {
+    const row = dueRow()
+    const { service } = renew({ row })
+    // validity extended, supplier term still short (2027-06-30)
+    await expect(service.updateCost(ids.quote, ids.cost, keep(), ACTOR, SCOPE)).rejects.toMatchObject({ status: 422, message: 'RENEGOTIATION_DATES_SHORT', details: { newTermEnd: '2028-12-31', fields: ['supplierTermEnd'] } })
+    // validity still short
+    await expect(service.updateCost(ids.quote, ids.cost, keep({ validUntil: '2028-12-30', supplierTermEnd: null }), ACTOR, SCOPE)).rejects.toMatchObject({ status: 422, message: 'RENEGOTIATION_DATES_SHORT' })
+    expect(row).toMatchObject({ renegotiationDue: true, valueStatus: 'estimated' })
+    // the new term end itself is enough
+    await service.updateCost(ids.quote, ids.cost, keep({ validUntil: '2028-12-31', supplierTermEnd: '2028-12-31' }), ACTOR, SCOPE)
+    expect(row.renegotiationDue).toBe(false)
+  })
+
+  it('is lock-exempt (R11): works on a locked quote (with_customer, an order) and re-prices nothing', async () => {
+    for (const ctx of [renew({ status: 'with_customer' }), renew({ status: 'ready', orders: 1 })]) {
+      await ctx.service.updateCost(ids.quote, ids.cost, keep({ supplierTermEnd: null }), ACTOR, SCOPE)
+      expect(ctx.costs[0]).toMatchObject({ renegotiationDue: false, valueStatus: 'confirmed' })
+      expect(ctx.recalculate).not.toHaveBeenCalled()
+    }
+  })
+
+  it('a rejected or cancelled quote still refuses it', async () => {
+    for (const status of ['rejected', 'cancelled']) {
+      await expect(renew({ status }).service.updateCost(ids.quote, ids.cost, keep({ supplierTermEnd: null }), ACTOR, SCOPE)).rejects.toMatchObject({ status: 409, message: 'COST_LOCKED' })
+    }
+  })
+
+  it('accepts nothing but the keep fields beside the flag (FIELD_NOT_ALLOWED), and only a due carried cost (NOT_RENEGOTIATION_DUE)', async () => {
+    const row = dueRow()
+    const { service } = renew({ row })
+    await expect(service.updateCost(ids.quote, ids.cost, keep({ unitAmount: 100 }), ACTOR, SCOPE)).rejects.toMatchObject({ status: 422, message: 'FIELD_NOT_ALLOWED', details: { fields: ['unitAmount'] } })
+    await expect(service.updateCost(ids.quote, ids.cost, keep({ valueStatus: 'confirmed' }), ACTOR, SCOPE)).rejects.toMatchObject({ status: 422, message: 'FIELD_NOT_ALLOWED' })
+    expect(row.unitAmount).toBe('320.0000')
+    await expect(renew({ row: dueRow({ renegotiationDue: false }) }).service.updateCost(ids.quote, ids.cost, keep({ supplierTermEnd: null }), ACTOR, SCOPE))
+      .rejects.toMatchObject({ status: 422, message: 'NOT_RENEGOTIATION_DUE' })
+    const catalog = renew({ row: dueRow({ origin: 'catalog', valueOrigin: 'catalog' }), line: { targetSubscriptionId: 'sub-1', configuration: { _arcMirroredFromItemId: 'item-1', _arcReconfigured: true } } })
+    await expect(catalog.service.updateCost(ids.quote, ids.cost, keep({ supplierTermEnd: null }), ACTOR, SCOPE)).rejects.toMatchObject({ status: 422, message: 'NOT_RENEGOTIATION_DUE' })
+  })
+
+  it('cancels an open supplier request on the cost (manual_value) and drops an unapplied proposal', async () => {
+    const row = dueRow({ sourcingStatus: 'requested', costRequestId: 'req-1', requestSeq: 1, requestHistory: [], proposedAmount: '300', proposedAnswer: { unitAmount: 300 } })
+    const { service } = renew({ row })
+    await service.updateCost(ids.quote, ids.cost, keep({ supplierTermEnd: null }), ACTOR, SCOPE)
+    expect(row).toMatchObject({ sourcingStatus: 'cancelled', cancelReason: 'manual_value', proposedAmount: null, proposedAnswer: null, renegotiationDue: false })
+  })
+
+  it('entering a new confirmed value by hand on a due carried cost clears the flag too', async () => {
+    const row = dueRow()
+    const { service } = renew({ row, status: 'ready' })
+    await service.updateCost(ids.quote, ids.cost, { unitAmount: 300, valueStatus: 'confirmed', note: 'phone quote', validUntil: '2028-12-31' }, ACTOR, SCOPE)
+    expect(row).toMatchObject({ renegotiationDue: false, valueStatus: 'confirmed', valueOrigin: 'manual', unitAmount: '300' })
+  })
+
+  it('a cancel line stays LINE_NOT_ELIGIBLE', async () => {
+    const { service } = renew({ line: { action: 'cancel', configuration: { _arcMirroredFromItemId: 'item-1' } } })
+    await expect(service.updateCost(ids.quote, ids.cost, keep({ supplierTermEnd: null }), ACTOR, SCOPE)).rejects.toMatchObject({ status: 422, message: 'LINE_NOT_ELIGIBLE' })
+  })
+
+  it('without a known new term end the dates are not checked', async () => {
+    const row = dueRow()
+    const { service } = renew({ row, newTermEnd: null })
+    await service.updateCost(ids.quote, ids.cost, keep({ validUntil: '2027-07-01' }), ACTOR, SCOPE)
+    expect(row.renegotiationDue).toBe(false)
   })
 })
 

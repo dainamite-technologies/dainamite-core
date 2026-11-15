@@ -48,13 +48,23 @@ export const cpqQuoteLineCostCreateSchema = z.object({
   expectedRevision: expectedRevision.optional(),
 }).strict()
 
-/** The line and the cost key are immutable. */
+/**
+ * The line and the cost key are immutable.
+ *
+ * `keepCurrent: true` (ARC costs spec "Keep current cost", App Spec R13) confirms a renegotiation-due carried cost UNCHANGED:
+ * only `validUntil`, `supplierTermEnd` (null = rolling), `supplierQuoteRef` and `note` may accompany it (evidence: a new
+ * supplier quote ref or a note), and the dates must not be before the renewal's new term end.
+ */
 export const cpqQuoteLineCostUpdateSchema = z.object({
   chargeCode: z.string().trim().min(1).max(100).nullish(),
   ...structureFields,
   ...valueFields,
+  keepCurrent: z.literal(true),
   expectedRevision: expectedRevision.optional(),
 }).partial().strict()
+
+/** The fields a `keepCurrent` write may carry beside the flag. */
+export const KEEP_CURRENT_FIELDS = ['keepCurrent', 'validUntil', 'supplierTermEnd', 'supplierQuoteRef', 'note', 'expectedRevision'] as const
 
 export const cpqQuoteLineCostDeleteSchema = z.object({ expectedRevision: z.coerce.number().int().min(0).optional() }).strict()
 

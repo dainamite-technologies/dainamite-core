@@ -26,7 +26,7 @@ Engine: om-auto-create-pr-loop (steps: 23, --loop: no)
 | D | 12 | Usage openArcQuotesWithCarriedCosts | group:D1 | done | |
 | D | 13 | Order line cost re-confirmation | group:D1 | done | |
 | E | 14 | Renew reconciliation, index re-evaluation, renegotiation due | group:E1 | done | |
-| E | 15 | Keep current cost | group:E1 | todo | |
+| E | 15 | Keep current cost | group:E1 | done | |
 | E | 16 | Refresh from subscription | group:E2 | todo | |
 | E | 17 | Cancel exposure | group:E2 | todo | |
 | E | 18 | Read projection additions | group:E2 | todo | |

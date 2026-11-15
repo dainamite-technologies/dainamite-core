@@ -15,8 +15,9 @@ import {
   CpqQuoteLineConfiguration,
   CpqQuoteLineCost,
   CpqQuoteMarkupOverride,
+  CpqQuoteTargetSubscription,
 } from '../../data/entities'
-import { MANUAL_COST_KEY_PREFIX, cpqCostPreviewSchema, cpqQuoteLineCostCreateSchema, cpqQuoteLineCostUpdateSchema, cpqQuoteMarkupOverrideSetSchema, type CostPreviewInput, type QuoteLineCostCreate, type QuoteLineCostUpdate, type QuoteMarkupOverrideSet } from '../../data/quote-costs'
+import { KEEP_CURRENT_FIELDS, MANUAL_COST_KEY_PREFIX, cpqCostPreviewSchema, cpqQuoteLineCostCreateSchema, cpqQuoteLineCostUpdateSchema, cpqQuoteMarkupOverrideSetSchema, type CostPreviewInput, type QuoteLineCostCreate, type QuoteLineCostUpdate, type QuoteMarkupOverrideSet } from '../../data/quote-costs'
 import { ASSET_NOT_LIVE_STATUSES, ITEM_NOT_LIVE_STATUSES } from '../../data/costs'
 import { isArcTerminationLine } from '../arcLineRemoval'
 import { isArcMirrorLine, isArcReconfigured, isFrozenMirrorLine } from '../arcPriceFreeze'
@@ -323,6 +324,7 @@ export class CpqQuoteCostService {
     return this.write(quoteId, scope, parsed.expectedRevision, actor, async (em, quote, signals) => {
       const row = await this.requireCost(em, quote, costId, scope)
       const line = await this.requireLine(em, quote, row.quoteLineId, scope, 'value', row)
+      if (parsed.keepCurrent) return this.keepCurrent(em, quote, line, row, parsed, actor, scope, signals)
       const before = lockState(row)
       const auditBefore = costAudit(row)
       const structural = (['name', 'role', 'costType', 'source', 'costModel', 'chargeCode'] as const).filter((key) => parsed[key] !== undefined)
@@ -400,6 +402,8 @@ export class CpqQuoteCostService {
           cancelRowRequests([row] as never, 'manual_value', { actorUserId: actor, signals })
           if (row.proposedAmount !== null && row.proposedAmount !== undefined) Object.assign(row, { proposedAmount: null, proposedAnswer: null })
         }
+        // A value entered / confirmed by hand on a renegotiation-due carried cost settles the renegotiation too.
+        if (row.origin === 'carried' && row.renegotiationDue && finalStatus === 'confirmed') row.renegotiationDue = false
         if (parsed.supplierId !== undefined) row.supplierId = parsed.supplierId ?? null
         if (parsed.supplierName !== undefined) row.supplierName = clean(parsed.supplierName)
         if (parsed.supplierQuoteRef !== undefined) row.supplierQuoteRef = clean(parsed.supplierQuoteRef)
@@ -416,6 +420,62 @@ export class CpqQuoteCostService {
       }
       return { cost: fullCostView(row, { quoteCurrencyCode: quote.currencyCode }), audit: { before: auditBefore, after: costAudit(row) }, margin, pricingRevision: quote.pricingRevision ?? 0 }
     })
+  }
+
+  /**
+   * Keep current cost (ARC costs spec, App Spec R13 / R11): confirms a renegotiation-due carried cost UNCHANGED, with new
+   * validity and evidence. The amount, currency and FX snapshot are untouched, so it is never price-affecting (the lock
+   * exempts it like any `estimated -> confirmed` of an unchanged value; only a rejected / cancelled quote refuses) and
+   * `margin_hash` stays (it covers values, not statuses or dates). Clears `renegotiation_due`; `value_origin` stays `carried`.
+   * `422 VALIDITY_EVIDENCE_REQUIRED` without a new supplier quote ref or a note; `422 RENEGOTIATION_DATES_SHORT` while a kept
+   * date (validity or supplier term) is before the target's new term end (the supplier term may be cleared to rolling: null).
+   */
+  private async keepCurrent(
+    em: EntityManager, quote: CpqQuoteConfiguration, line: CpqQuoteLineConfiguration, row: CpqQuoteLineCost, parsed: QuoteLineCostUpdate,
+    actor: string, scope: TenantScope, signals: SourcingSignal[],
+  ) {
+    const extra = Object.entries(parsed).filter(([key, value]) => value !== undefined && !(KEEP_CURRENT_FIELDS as readonly string[]).includes(key)).map(([key]) => key)
+    if (extra.length > 0) throw new QuotingError(422, 'FIELD_NOT_ALLOWED', undefined, { fields: extra })
+    if (row.origin !== 'carried' || row.renegotiationDue !== true) throw new QuotingError(422, 'NOT_RENEGOTIATION_DUE')
+    if (row.unitAmount === null || row.unitAmount === undefined) throw new QuotingError(422, 'AMOUNT_REQUIRED')
+    // Lock-exempt (R11): never price-affecting; the terminal statuses still refuse.
+    const locked = await isQuoteCostLocked(em, quote, scope)
+    this.assertWritable(quote, locked, false)
+    const note = clean(parsed.note)
+    const newRef = clean(parsed.supplierQuoteRef)
+    if (!(newRef && newRef !== row.supplierQuoteRef) && !note) throw new QuotingError(422, 'VALIDITY_EVIDENCE_REQUIRED')
+
+    const validUntil = parsed.validUntil !== undefined ? parsed.validUntil : row.validUntil
+    const supplierTermEnd = parsed.supplierTermEnd !== undefined ? parsed.supplierTermEnd : row.supplierTermEnd
+    const target = line.targetSubscriptionId
+      ? await em.findOne(CpqQuoteTargetSubscription, { ...scoped(scope), quoteId: quote.id, subscriptionId: line.targetSubscriptionId })
+      : null
+    const newTermEnd = target?.newTermEnd ? (target.newTermEnd instanceof Date ? target.newTermEnd.toISOString() : String(target.newTermEnd)).slice(0, 10) : null
+    if (newTermEnd) {
+      const day = (value: string | Date | null | undefined) => (value ? (value instanceof Date ? value.toISOString() : String(value)).slice(0, 10) : null)
+      const short = [['validUntil', day(validUntil)], ['supplierTermEnd', day(supplierTermEnd)]].filter(([, date]) => date !== null && (date as string) < newTermEnd).map(([key]) => key)
+      if (short.length > 0) throw new QuotingError(422, 'RENEGOTIATION_DATES_SHORT', undefined, { newTermEnd, fields: short })
+    }
+
+    const auditBefore = costAudit(row)
+    const previousStatus = row.valueStatus
+    const margin = await this.persistAndPrice(em, quote, scope, locked, () => {
+      Object.assign(row, { valueStatus: 'confirmed', renegotiationDue: false, validUntil: validUntil ?? null, supplierTermEnd: supplierTermEnd ?? null })
+      if (parsed.supplierQuoteRef !== undefined) row.supplierQuoteRef = newRef
+      if (parsed.note !== undefined) row.note = note
+      // A human confirmed the cost: an open supplier request is meaningless now and an unapplied proposal is superseded.
+      cancelRowRequests([row] as never, 'manual_value', { actorUserId: actor, signals })
+      if (row.proposedAmount !== null && row.proposedAmount !== undefined) Object.assign(row, { proposedAmount: null, proposedAnswer: null })
+    }, signals)
+    if (previousStatus !== 'confirmed') {
+      signals.push({
+        ...sourcingCostRef(row), kind: 'valued', cause: 'manual_value', costRequestId: row.costRequestId ?? null, requestSeq: row.requestSeq ?? null,
+        valueStatus: row.valueStatus, previousValueStatus: previousStatus, sourcingStatus: row.sourcingStatus, valueChanged: false,
+        answerPending: false, errorCode: row.errorCode ?? null, lineReady: lineReady(quote, row.quoteLineId), leadTimeHours: null,
+        requestedByUserId: row.requestedByUserId ?? null,
+      })
+    }
+    return { cost: fullCostView(row, { quoteCurrencyCode: quote.currencyCode }), audit: { before: auditBefore, after: costAudit(row) }, margin, pricingRevision: quote.pricingRevision ?? 0 }
   }
 
   async deleteCost(quoteId: string, costId: string, actor: string, scope: TenantScope, expectedRevision?: number): Promise<QuoteCostWriteResult> {

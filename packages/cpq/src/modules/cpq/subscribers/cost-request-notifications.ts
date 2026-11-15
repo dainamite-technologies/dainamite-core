@@ -1,7 +1,6 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
-import { resolveNotificationService } from '@open-mercato/core/modules/notifications/lib/notificationService'
 import { COST_REQUEST_NOTIFICATION, notificationTypes } from '../notifications'
-import { answeredBodyKey, notifyCostUser } from '../lib/costNotifications'
+import { answeredBodyKey, notifyCostUser, tryResolveNotificationService } from '../lib/costNotifications'
 import { loadCostNotificationNames } from '../lib/costNotificationContext'
 
 /**
@@ -37,6 +36,9 @@ export default async function handler(payload: Payload, ctx: Ctx): Promise<void>
   const type = costValuedNotificationType(payload)
   const typeDef = type ? notificationTypes.find((entry) => entry.type === type) : undefined
   if (!type || !typeDef) return
+  // Optional peer: without the notifications module there is nothing to do.
+  const notificationService = tryResolveNotificationService(ctx)
+  if (!notificationService) return
   try {
     const em = ctx.resolve<EntityManager>('em').fork()
     const scope = { tenantId: payload.tenantId, organizationId: payload.organizationId }
@@ -53,7 +55,7 @@ export default async function handler(payload: Payload, ctx: Ctx): Promise<void>
         quoteId: payload.quoteId, costLineId: payload.costLineId, costRequestId: payload.costRequestId ?? '',
         valueStatus: payload.valueStatus ?? '', errorCode: payload.errorCode ?? '', lineReady: String(payload.lineReady === true), cause: payload.cause ?? '',
       },
-    }, { notificationService: resolveNotificationService(ctx as never) })
+    }, { notificationService })
   } catch (error) {
     console.error(`[cpq] cost request notification failed for quote ${payload.quoteId}`, error)
     throw error

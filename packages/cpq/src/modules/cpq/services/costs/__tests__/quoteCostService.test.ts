@@ -440,7 +440,7 @@ describe('manual value writes and the sourcing columns', () => {
       return {}
     }) as never)
     await service.updateCost(ids.quote, ids.cost, { unitAmount: 90, valueStatus: 'confirmed', note: 'phone quote' }, ACTOR, SCOPE)
-    expect(recalculate.mock.calls[0][5]).toEqual({ signals: expect.any(Array) })
+    expect((recalculate.mock.calls[0] as unknown[])[5]).toEqual({ signals: expect.any(Array) })
     const [signals] = publisher.mock.calls[0] as [Array<{ kind: string }>]
     expect(signals).toContain(dropped)
     expect(signals.filter((signal) => signal.kind === 'valued')).toHaveLength(1)

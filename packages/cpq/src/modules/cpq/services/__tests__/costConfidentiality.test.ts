@@ -38,11 +38,9 @@ jest.mock('../priceAdjustments/quotePricingWrite', () => ({
   },
 }))
 const mockCreateBatch = jest.fn(async (..._args: unknown[]) => [])
-jest.mock('@open-mercato/core/modules/notifications/lib/notificationService', () => ({ resolveNotificationService: () => ({ createBatch: (...args: unknown[]) => mockCreateBatch(...args) }) }))
-jest.mock('@open-mercato/core/modules/notifications/lib/notificationRecipients', () => ({
-  getRecipientUserIdsForFeature: async () => ['manager-1'],
-  getScopedNotificationRecipientUserIds: async (_db: unknown, _t: string, _o: string, ids: string[]) => ids,
-}))
+const kyselyUsers: Record<string, any> = {}
+for (const method of ['selectFrom', 'where', 'select']) kyselyUsers[method] = () => kyselyUsers
+kyselyUsers.execute = async () => [{ user_id: 'manager-1' }]
 const mockRouteResult: { current: unknown } = { current: null }
 jest.mock('../../api/_helpers/sourcingCommandRoute', () => ({
   sourcingCommandRoute: async (_req: unknown, _ctx: unknown, options: any) => new Response(JSON.stringify(await options.respond(mockRouteResult.current))),
@@ -533,7 +531,7 @@ describe('supplier sourcing surfaces (feature 3)', () => {
       proposedAmount: null, ...over,
     })]
     const em: Row = {
-      __quote: quote, fork: jest.fn(() => em), getKysely: jest.fn(() => ({})), flush: jest.fn(async () => undefined), persist: jest.fn(),
+      __quote: quote, fork: jest.fn(() => em), getKysely: jest.fn(() => kyselyUsers), flush: jest.fn(async () => undefined), persist: jest.fn(),
       findOne: jest.fn(async (entity: unknown, where: Row) => {
         if (entity === CpqQuoteLineConfiguration) return where.quoteLineId === ids.line ? line : null
         if (entity === CpqQuoteLineCost) return costs.find((c) => c.id === where.id && !c.deletedAt) ?? null
@@ -559,7 +557,7 @@ describe('supplier sourcing surfaces (feature 3)', () => {
   async function runSubscribers(events: Array<{ id: string; payload: Row }>, em: Row) {
     const valued = (await import('../../subscribers/cost-request-notifications')).default
     const opened = (await import('../../subscribers/cost-request-opened-notification')).default
-    const ctx = { resolve: (name: string) => (name === 'em' ? em : { userHasAllFeatures: async () => true }) } as never
+    const ctx = { resolve: (name: string) => (name === 'em' ? em : name === 'notificationService' ? { createBatch: mockCreateBatch } : { userHasAllFeatures: async () => true }) } as never
     for (const { id, payload } of events) {
       if (id === 'cpq.quote.cost_valued') await valued(payload as never, ctx)
       if (id === 'cpq.quote.cost_requested') await opened(payload as never, ctx)

@@ -1,33 +1,32 @@
-const getRecipientUserIdsForFeature = jest.fn()
-const getScopedNotificationRecipientUserIds = jest.fn()
-jest.mock('@open-mercato/core/modules/notifications/lib/notificationRecipients', () => ({
-  getRecipientUserIdsForFeature: (...args: unknown[]) => getRecipientUserIdsForFeature(...args),
-  getScopedNotificationRecipientUserIds: (...args: unknown[]) => getScopedNotificationRecipientUserIds(...args),
-}))
 import { answeredBodyKey, notifyCostManagers, resolveCostManagerUserIds } from '../costNotifications'
 import { notificationTypes } from '../../notifications'
 
-const db = { marker: 'kysely' }
-const em = { getKysely: jest.fn(() => db) }
+let userRows: Array<{ user_id: string }> = []
+const queries: unknown[][] = []
+const chain: Record<string, any> = {}
+for (const method of ['selectFrom', 'where', 'select']) chain[method] = jest.fn((...args: unknown[]) => { queries.push([method, ...args]); return chain })
+chain.execute = jest.fn(async () => userRows)
+const em = { getKysely: jest.fn(() => chain) }
 const scope = { tenantId: 'tenant' }
 const typeDef = notificationTypes.find((type) => type.type === 'cpq.cost_request.opened')!
 const content = { typeDef, bodyVariables: { quoteNumber: 'Q-1', costName: 'Tail', productName: 'Link' }, linkHref: '/backend/cpq/cost-requests?quoteId=q1' }
 
+/** `inOrg` are the users of the quote's organization (the SQL filter); `features` are what each user holds. */
 function setup(features: Record<string, string[]>, opts: { inOrg?: string[] } = {}) {
-  getRecipientUserIdsForFeature.mockResolvedValue(Object.keys(features))
-  getScopedNotificationRecipientUserIds.mockImplementation(async (_db: unknown, _t: string, _o: string, ids: string[]) => ids.filter((id) => (opts.inOrg ?? Object.keys(features)).includes(id)))
+  userRows = (opts.inOrg ?? Object.keys(features)).map((user_id) => ({ user_id }))
   const rbacService = { userHasAllFeatures: jest.fn(async (user: string, required: string[]) => required.every((feature) => features[user]?.includes(feature))) }
   const notificationService = { createBatch: jest.fn(async () => []) }
   return { rbacService, notificationService, deps: { em: em as never, rbacService: rbacService as never, notificationService: notificationService as never } }
 }
 
-beforeEach(() => jest.clearAllMocks())
+beforeEach(() => { jest.clearAllMocks(); queries.length = 0 })
 
 describe('notifyCostManagers (Q16)', () => {
   it('looks up cpq.costs.manage candidates in the tenant, keeps those with view AND manage in the organization, and sends one batch', async () => {
     const { deps, rbacService, notificationService } = setup({ both: ['cpq.costs.view', 'cpq.costs.manage'], manageOnly: ['cpq.costs.manage'] })
     expect(await notifyCostManagers(scope, 'org', content, deps)).toBe(1)
-    expect(getRecipientUserIdsForFeature).toHaveBeenCalledWith(db, 'tenant', 'cpq.costs.manage')
+    expect(queries).toContainEqual(['where', 'users.organization_id', '=', 'org'])
+    expect(queries).toContainEqual(['where', 'users.tenant_id', '=', 'tenant'])
     expect(rbacService.userHasAllFeatures).toHaveBeenCalledWith('both', ['cpq.costs.view', 'cpq.costs.manage'], { tenantId: 'tenant', organizationId: 'org' })
     expect(notificationService.createBatch).toHaveBeenCalledTimes(1)
     const [input, ctx] = notificationService.createBatch.mock.calls[0] as unknown as [Record<string, unknown>, unknown]
@@ -46,7 +45,7 @@ describe('notifyCostManagers (Q16)', () => {
     expect(await resolveCostManagerUserIds(scope, 'org', deps)).toEqual(['local'])
     await notifyCostManagers(scope, 'org', content, deps)
     expect((notificationService.createBatch.mock.calls[0] as unknown as [{ recipientUserIds: string[] }])[0].recipientUserIds).toEqual(['local'])
-    expect(getScopedNotificationRecipientUserIds).toHaveBeenCalledWith(db, 'tenant', 'org', ['local', 'foreign'])
+    expect(deps.rbacService.userHasAllFeatures).not.toHaveBeenCalledWith('foreign', expect.anything(), expect.anything())
   })
 
   it('does not call the notification service without candidates', async () => {
@@ -58,7 +57,7 @@ describe('notifyCostManagers (Q16)', () => {
   it('carries data and a body key override into the batch, without amounts', async () => {
     const { deps, notificationService } = setup({ both: ['cpq.costs.view', 'cpq.costs.manage'] })
     await notifyCostManagers(scope, 'org', { ...content, bodyKey: 'x.body', data: { quoteId: 'q1' } }, deps)
-    expect(notificationService.createBatch.mock.calls[0][0]).toMatchObject({ bodyKey: 'x.body', data: { quoteId: 'q1' } })
+    expect((notificationService.createBatch.mock.calls[0] as unknown[])[0]).toMatchObject({ bodyKey: 'x.body', data: { quoteId: 'q1' } })
   })
 })
 

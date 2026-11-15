@@ -1,9 +1,22 @@
-import type { EntityManager } from '@mikro-orm/postgresql'
 import type { NotificationTypeDefinition } from '@open-mercato/shared/modules/notifications/types'
-import { buildBatchNotificationFromType } from '@open-mercato/core/modules/notifications/lib/notificationBuilder'
-import { getRecipientUserIdsForFeature, getScopedNotificationRecipientUserIds } from '@open-mercato/core/modules/notifications/lib/notificationRecipients'
-import type { NotificationService } from '@open-mercato/core/modules/notifications/lib/notificationService'
 import type { RbacService } from '@open-mercato/core/modules/auth/services/rbacService'
+
+/**
+ * Notifications are an OPTIONAL peer of CPQ (not in `metadata.requires`): this file imports nothing from the
+ * `notifications` module. The subscribers resolve `notificationService` through `tryResolveNotificationService` and
+ * no-op when it is absent; the batch input is built here from the type definition (same shape as the notifications
+ * module's `buildBatchNotificationFromType`).
+ */
+export type CostNotificationService = { createBatch: (input: Record<string, unknown>, ctx: { tenantId: string; organizationId: string | null }) => Promise<unknown> }
+
+/** Resolves the notification service from the container, or `undefined` when the notifications module is not installed. */
+export function tryResolveNotificationService(ctx: { resolve: <T = unknown>(name: string) => T }): CostNotificationService | undefined {
+  try {
+    return ctx.resolve<CostNotificationService>('notificationService') ?? undefined
+  } catch {
+    return undefined
+  }
+}
 
 /** A user sees and works cost requests only with BOTH features (App Spec C11): viewing the amounts and managing them. */
 export const COST_MANAGER_FEATURES = ['cpq.costs.view', 'cpq.costs.manage'] as const
@@ -24,41 +37,52 @@ export type CostNotificationContent = {
 }
 
 export type CostNotificationDeps = {
-  em: Pick<EntityManager, 'getKysely'>
-  notificationService: Pick<NotificationService, 'createBatch'>
+  em: { getKysely: <T = any>() => any }
+  notificationService: CostNotificationService
   rbacService: Pick<RbacService, 'userHasAllFeatures'>
 }
 
-export function buildCostNotification(recipientUserIds: string[], content: CostNotificationContent) {
-  const input = buildBatchNotificationFromType(content.typeDef, {
+export function buildCostNotification(recipientUserIds: string[], content: CostNotificationContent): Record<string, unknown> {
+  const { typeDef } = content
+  const bodyKey = content.bodyKey ?? typeDef.bodyKey
+  return {
     recipientUserIds,
+    type: typeDef.type,
+    titleKey: typeDef.titleKey,
+    bodyKey,
     titleVariables: content.titleVariables,
     bodyVariables: content.bodyVariables,
-    linkHref: content.linkHref,
+    title: typeDef.titleKey,
+    body: bodyKey,
+    icon: typeDef.icon,
+    severity: typeDef.severity,
+    actions: typeDef.actions.map((action) => ({ id: action.id, label: action.labelKey, labelKey: action.labelKey, variant: action.variant, icon: action.icon, href: action.href })),
+    primaryActionId: typeDef.primaryActionId,
+    sourceModule: typeDef.module,
     sourceEntityType: content.sourceEntityType,
     sourceEntityId: content.sourceEntityId,
+    linkHref: content.linkHref,
     groupKey: content.groupKey,
-  })
-  return {
-    ...input,
-    ...(content.bodyKey ? { bodyKey: content.bodyKey, body: content.bodyKey } : {}),
+    expiresAt: typeDef.expiresAfterHours ? new Date(Date.now() + typeDef.expiresAfterHours * 3_600_000).toISOString() : undefined,
     ...(content.data ? { data: content.data } : {}),
   }
 }
 
 /**
- * Users who may act on cost requests of one organization (sourcing spec Q16): candidates are everyone granted
- * `cpq.costs.manage` in the tenant (`getRecipientUserIdsForFeature`), narrowed to the quote's organization and then to
- * those who also hold `cpq.costs.view` (`rbacService.userHasAllFeatures`, wildcard- and organization-aware). A manager
+ * Users who may act on cost requests of one organization (sourcing spec Q16): candidates are the live users of
+ * the quote's organization, narrowed to those who hold BOTH `cpq.costs.view` and `cpq.costs.manage`
+ * (`rbacService.userHasAllFeatures`, wildcard- and organization-aware). A manager
  * without `cpq.costs.view` could not read what the request is about; a user of another organization is not a recipient.
  */
 export async function resolveCostManagerUserIds(scope: { tenantId: string }, organizationId: string, deps: Pick<CostNotificationDeps, 'em' | 'rbacService'>): Promise<string[]> {
-  const db = deps.em.getKysely<any>()
-  const candidates = await getRecipientUserIdsForFeature(db, scope.tenantId, 'cpq.costs.manage')
-  if (candidates.length === 0) return []
-  const inOrganization = await getScopedNotificationRecipientUserIds(db, scope.tenantId, organizationId, candidates)
+  const db = deps.em.getKysely()
+  // Candidates: live users of the quote's organization (the notification service refuses recipients outside it). The
+  // feature check below is the authoritative filter (wildcards, role and user ACLs, super admins, organization lists).
+  const rows = await db.selectFrom('users')
+    .where('users.tenant_id', '=', scope.tenantId).where('users.organization_id', '=', organizationId).where('users.deleted_at', 'is', null)
+    .select('users.id as user_id').execute() as Array<{ user_id: string }>
   const allowed: string[] = []
-  for (const userId of new Set(inOrganization)) {
+  for (const userId of new Set(rows.map((row) => row.user_id))) {
     if (await deps.rbacService.userHasAllFeatures(userId, [...COST_MANAGER_FEATURES], { tenantId: scope.tenantId, organizationId })) allowed.push(userId)
   }
   return allowed

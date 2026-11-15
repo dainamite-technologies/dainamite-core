@@ -1,13 +1,17 @@
-const createBatch = jest.fn(async () => [])
-jest.mock('@open-mercato/core/modules/notifications/lib/notificationService', () => ({ resolveNotificationService: () => ({ createBatch }) }))
-const notifyCostManagers = jest.fn(async () => 1)
+const createBatch = jest.fn(async (..._args: unknown[]) => [])
+const notifyCostManagers = jest.fn(async (..._args: unknown[]) => 1)
 jest.mock('../../lib/costNotifications', () => ({ ...jest.requireActual('../../lib/costNotifications'), notifyCostManagers: (...args: unknown[]) => notifyCostManagers(...args) }))
 import handler, { metadata, costValuedNotificationType } from '../cost-request-notifications'
 import openedHandler, { metadata as openedMetadata } from '../cost-request-opened-notification'
 import { notificationTypes } from '../../notifications'
 
 const em = { fork: () => em, findOne: jest.fn(async (_entity: unknown, where: { id: string }) => (where.id === 'sales-1' ? { quoteNumber: 'Q-123' } : { name: 'Link 10G' })) }
-const ctx = { resolve: jest.fn((name: string) => (name === 'em' ? em : { userHasAllFeatures: jest.fn() })) } as never
+const ctx = { resolve: jest.fn((name: string) => {
+  if (name === 'em') return em
+  if (name === 'notificationService') return { createBatch }
+  return { userHasAllFeatures: jest.fn() }
+}) } as never
+const ctxWithoutNotifications = { resolve: (name: string) => { if (name === 'em') return em; throw new Error(`not registered: ${name}`) } } as never
 const base = {
   tenantId: 't', organizationId: 'o', quoteId: 'cpq-1', salesQuoteId: 'sales-1', quoteLineId: 'line-1', costLineId: 'cost-1', costRequestId: 'req-1',
   costName: 'Tail', cause: 'answer', answerPending: false, valueStatus: 'confirmed', errorCode: null, lineReady: true, requestedByUserId: 'u1',
@@ -22,16 +26,16 @@ describe('cost_valued requester notifications', () => {
   })
 
   it.each([
-    [{}, 'confirmed'],
+    [{ valueStatus: 'confirmed' }, 'confirmed'],
     [{ valueStatus: 'estimated' }, 'estimated'],
     [{ valueStatus: 'none', errorCode: 'CURRENCY_NO_RATE', lineReady: false }, 'rateMissing'],
     [{ lineReady: false }, 'notReady'],
-  ])('answered %j picks the %s body', async (over, variant) => {
+  ] as Array<[Record<string, any>, string]>)('answered %j picks the %s body', async (over, variant) => {
     await handler({ ...base, ...over }, ctx)
     const [input, scope] = sent()
     expect(input).toMatchObject({ type: 'cpq.cost_request.answered', recipientUserIds: ['u1'], bodyKey: `cpq.notifications.costRequest.answered.body.${variant}`, linkHref: '/backend/cpq/quotes/cpq-1' })
     expect(input.bodyVariables).toEqual({ quoteNumber: 'Q-123', costName: 'Tail', productName: 'Link 10G' })
-    expect(input.data).toMatchObject({ valueStatus: over.valueStatus ?? 'confirmed', lineReady: String((over as any).lineReady ?? true), cause: 'answer' })
+    expect(input.data).toMatchObject({ valueStatus: over.valueStatus ?? 'confirmed', lineReady: String(over.lineReady ?? true), cause: 'answer' })
     expect(scope).toEqual({ tenantId: 't', organizationId: 'o' })
   })
 
@@ -65,6 +69,15 @@ describe('cost_valued requester notifications', () => {
     await expect(handler(base, ctx)).rejects.toThrow('boom')
     expect(errors).toHaveBeenCalledWith(expect.stringContaining('cpq-1'), expect.any(Error))
     errors.mockRestore()
+  })
+})
+
+describe('optional notifications module', () => {
+  it('no-ops when notificationService is not registered', async () => {
+    await handler(base, ctxWithoutNotifications)
+    await openedHandler(base, ctxWithoutNotifications)
+    expect(createBatch).not.toHaveBeenCalled()
+    expect(notifyCostManagers).not.toHaveBeenCalled()
   })
 })
 

@@ -1,8 +1,7 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
-import { resolveNotificationService } from '@open-mercato/core/modules/notifications/lib/notificationService'
 import type { RbacService } from '@open-mercato/core/modules/auth/services/rbacService'
 import { COST_REQUEST_NOTIFICATION, notificationTypes } from '../notifications'
-import { notifyCostManagers } from '../lib/costNotifications'
+import { notifyCostManagers, tryResolveNotificationService } from '../lib/costNotifications'
 import { loadCostNotificationNames } from '../lib/costNotificationContext'
 
 /**
@@ -25,6 +24,9 @@ export default async function handler(payload: Payload, ctx: Ctx): Promise<void>
   if (!payload?.tenantId || !payload.organizationId || !payload.quoteId || !payload.costLineId) return
   const typeDef = notificationTypes.find((type) => type.type === COST_REQUEST_NOTIFICATION.opened)
   if (!typeDef) return
+  // Optional peer: without the notifications module there is nothing to do.
+  const notificationService = tryResolveNotificationService(ctx)
+  if (!notificationService) return
   try {
     const em = ctx.resolve<EntityManager>('em').fork()
     const scope = { tenantId: payload.tenantId, organizationId: payload.organizationId }
@@ -38,7 +40,7 @@ export default async function handler(payload: Payload, ctx: Ctx): Promise<void>
       groupKey: `${COST_REQUEST_NOTIFICATION.opened}:${payload.costRequestId ?? payload.costLineId}`,
       data: { quoteId: payload.quoteId, costLineId: payload.costLineId, costRequestId: payload.costRequestId ?? '', costKey: payload.costKey ?? '' },
     }, {
-      em, notificationService: resolveNotificationService(ctx as never), rbacService: ctx.resolve<RbacService>('rbacService'),
+      em, notificationService, rbacService: ctx.resolve<RbacService>('rbacService'),
     })
   } catch (error) {
     console.error(`[cpq] cost request opened notification failed for quote ${payload.quoteId}`, error)

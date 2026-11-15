@@ -2380,7 +2380,7 @@ DefaultCpqQuotingService.prototype.detachTargetSubscription = async function (
       // Auto-revert merge mode if only one renew target remains.
       if (remaining.length === 1) remaining[0].mergeAction = 'standalone'
     }])
-    await this.recalculateLockedQuote(tx, cpqConfig, scope, true)
+    await this.recalculateLockedQuote(tx, cpqConfig, scope, true, undefined, { signals })
   }, (status, message) => new QuotingError(status, message), {
     validate: ensureEditable, events: { pricingCause: 'line' },
     afterCommit: publisher ? async (_result, quote) => { if (signals.length > 0) await publisher(signals, quote) } : undefined,

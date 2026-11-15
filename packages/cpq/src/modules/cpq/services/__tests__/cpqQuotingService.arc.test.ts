@@ -951,6 +951,87 @@ describe('Amend mirror carries the subscription item costs (ARC costs spec step 
     expect(lineConfig.configuration).toMatchObject({ _arcPriceFrozen: true, _arcCostsCarried: true, _arcCarriedCostSetHash: expect.not.stringMatching(/^old$/) })
   })
 
+  describe('refreshMirrorFromSubscription (step 16)', () => {
+    function refreshFixture(opts: { quoteType?: 'amend' | 'renew'; configuration?: Record<string, unknown>; target?: string | null; item?: Record<string, unknown> | null; previous?: Array<Record<string, unknown>>; action?: string } = {}) {
+      const em = Object.assign(createMockEm(), { assign: jest.fn((e: Record<string, unknown>, u: Record<string, unknown>) => Object.assign(e, u)), fork: jest.fn() })
+      em.fork.mockReturnValue(em)
+      const published: Array<Array<Record<string, unknown>>> = []
+      const service = new DefaultCpqQuotingService({
+        em: em as never, cpqPricingService: { resolveProductCharges: jest.fn().mockResolvedValue([mrcCharge(100)]) } as never,
+        cpqValidationService: { validateOfferingConfiguration: jest.fn().mockResolvedValue({ valid: true, errors: [] }), validateRelationships: jest.fn().mockResolvedValue([]) } as never,
+        cpqProductService: {} as never, salesDocumentNumberGenerator: {} as never,
+        sourcingPublisher: (async (signals: Array<Record<string, unknown>>) => { published.push(signals) }) as never,
+      })
+      const { cpqConfig, lineConfig } = amendFixture(opts.configuration ?? { port_size: '10G', _arcMirroredFromItemId: 'item-1', _arcMirroredName: 'GIX Access Port', _arcReconfigured: true, _arcCostsCarried: true, _arcCarriedCostSetHash: 'stale' })
+      Object.assign(cpqConfig, { cpqStatus: 'new', quoteType: opts.quoteType ?? 'amend' })
+      Object.assign(lineConfig, { targetSubscriptionId: opts.target === undefined ? 'sub-1' : opts.target, sourceSubscriptionItemId: 'item-1', action: opts.action ?? 'modify', quantity: 3, mrcTotal: '999' })
+      routeEm(em, cpqConfig, lineConfig)
+      const baseFindOne = em.findOne.getMockImplementation()!
+      const item = opts.item === undefined ? subscriptionItem() : opts.item
+      em.findOne.mockImplementation(async (entity: unknown, ...rest: unknown[]) => (entity === CpqInventorySubscriptionItem ? item : baseFindOne(entity, ...rest)))
+      const previous = opts.previous ?? [
+        { id: 'old-carried', quoteLineId: 'ql-1', origin: 'carried', sourcingStatus: 'not_requested', costRequestId: null, deletedAt: null },
+        { id: 'old-catalog', quoteLineId: 'ql-1', origin: 'catalog', sourcingStatus: 'requested', costRequestId: 'req-1', requestSeq: 1, supplierId: null, requestHistory: [], deletedAt: null },
+      ]
+      em.find.mockImplementation(async (entity: unknown) => {
+        if (entity === CpqQuoteLineConfiguration) return [lineConfig]
+        if (entity === CpqInventoryCost) return [itemCost()]
+        if (entity === CpqQuoteLineCost) return previous
+        return []
+      })
+      return { em, service, cpqConfig, lineConfig, previous, published }
+    }
+
+    it('re-mirrors the line from the item, soft-deletes the previous cost rows, cancels their open requests (reconfigured) and re-carries with fresh hashes', async () => {
+      const { em, service, lineConfig, previous, published } = refreshFixture()
+      await service.refreshMirrorFromSubscription('cpq-1', 'ql-1', SCOPE, 'user-1', undefined, ['amend'])
+      expect(lineConfig.quantity).toBe(1)
+      expect(lineConfig.mrcTotal).toBe('100')
+      expect(lineConfig.configuration).toMatchObject({ port_size: '1G', _arcPriceFrozen: true, _arcCostsCarried: true })
+      expect(lineConfig.configuration).not.toHaveProperty('_arcReconfigured')
+      expect((lineConfig.configuration as Record<string, unknown>)._arcCarriedCostSetHash).toBe(itemCostSetHash([itemCost() as never], subscriptionItem() as never))
+      expect(previous.every((row) => row.deletedAt instanceof Date)).toBe(true)
+      expect(previous[1]).toMatchObject({ sourcingStatus: 'cancelled', cancelReason: 'reconfigured' })
+      expect(previous[1].requestHistory).toHaveLength(1)
+      const carried = em.create.mock.calls.filter(([e]) => e === CpqQuoteLineCost).map(([, d]) => d as Record<string, unknown>)
+      expect(carried).toEqual([expect.objectContaining({ costKey: 'tail', origin: 'carried', carriedFromItemCostId: 'ic-1', quoteLineId: 'ql-1' })])
+      expect(published.flat()).toEqual([expect.objectContaining({ kind: 'request_cancelled', costRequestId: 'req-1', reason: 'reconfigured' })])
+    })
+
+    it('a standalone Renew line is marked cost-managed even when the item has no open costs', async () => {
+      const { em, service, lineConfig } = refreshFixture({ quoteType: 'renew', configuration: { _arcMirroredFromItemId: 'item-1', _arcMirroredName: 'GIX Access Port', _arcPriceFrozen: true, _arcCostPlusFrozen: true } })
+      em.find.mockImplementation(async (entity: unknown) => (entity === CpqQuoteLineConfiguration ? [lineConfig] : []))
+      await service.refreshMirrorFromSubscription('cpq-1', 'ql-1', SCOPE, null, undefined, ['renew'])
+      expect(lineConfig.configuration).toMatchObject({ _arcCostsCarried: true, _arcCarriedCostSetHash: itemCostSetHash([], subscriptionItem() as never) })
+    })
+
+    it.each([
+      ['a merge-renew line', { quoteType: 'renew' as const, target: null }, { status: 422, message: 'MERGE_LINE' }],
+      ['a line that is not a mirror', { configuration: { port_size: '1G' } }, { status: 422, message: 'NOT_ARC_MIRROR' }],
+      ['an ended subscription item', { item: { ...subscriptionItem(), status: 'terminated' } }, { status: 409, message: 'ITEM_NOT_ACTIVE' }],
+      ['a missing subscription item', { item: null }, { status: 409, message: 'ITEM_NOT_ACTIVE' }],
+      ['a caller without the ARC feature of the quote type', {}, { status: 403 }],
+    ])('refuses %s and writes nothing', async (_label, opts, expected) => {
+      const { service, lineConfig, previous } = refreshFixture(opts as never)
+      const before = JSON.stringify(lineConfig.configuration)
+      const allowed = expected.status === 403 ? ['renew' as const] : ['amend' as const, 'renew' as const]
+      await expect(service.refreshMirrorFromSubscription('cpq-1', 'ql-1', SCOPE, null, undefined, allowed)).rejects.toMatchObject(expected)
+      expect(JSON.stringify(lineConfig.configuration)).toBe(before)
+      expect(previous.every((row) => row.deletedAt === null)).toBe(true)
+    })
+
+    it('refuses a removed line and a cost-locked quote priced from costs', async () => {
+      const removed = refreshFixture({ action: 'cancel' })
+      await expect(removed.service.refreshMirrorFromSubscription('cpq-1', 'ql-1', SCOPE)).rejects.toMatchObject({ status: 409 })
+      const locked = refreshFixture()
+      Object.assign(locked.cpqConfig, { cpqStatus: 'with_customer' })
+      ;(locked.service as unknown as { costService: unknown }).costService = { enabled: jest.fn(async () => true) }
+      locked.em.count.mockResolvedValue(1)
+      await expect(locked.service.refreshMirrorFromSubscription('cpq-1', 'ql-1', SCOPE)).rejects.toMatchObject({ status: 409, message: 'COST_LOCKED' })
+      expect(locked.previous.every((row) => row.deletedAt === null)).toBe(true)
+    })
+  })
+
   it('updateQuoteItem keeps the carry markers on a resubmission and on a reconfiguration', async () => {
     for (const config of [{ port_size: '1G' }, { port_size: '10G' }]) {
       const { em, pricingService, service } = makePricedService()

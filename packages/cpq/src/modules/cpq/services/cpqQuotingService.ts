@@ -748,6 +748,72 @@ export class DefaultCpqQuotingService {
     return this.recalculateInternal(em, cpqConfig, salesQuote, scope, true, undefined, sourcing)
   }
 
+  // ─── Refresh a mirror line from its subscription item (ARC costs spec, step 16) ───
+
+  /**
+   * Re-mirrors one standalone Amend / Renew line from its live subscription item: configuration, quantity, stored
+   * charges and the carried costs (fresh `_arcCostsCarried` / `_arcCarriedCostSetHash`, so the COST_SOURCE_CHANGED
+   * guard passes again). The line's previous cost rows (carried, catalog, manual) are soft-deleted and their open
+   * requests cancelled (`reconfigured`, signals published after commit). The line goes back to the frozen / unmarked
+   * state of a fresh mirror (the reconfiguration markers are dropped). `allowedTypes` carries the quote types the caller
+   * holds the `cpq.arc.*.manage` feature for (the route checks the one matching the quote type, which it only learns here).
+   */
+  async refreshMirrorFromSubscription(
+    quoteId: string, lineId: string, scope: TenantScope, actorUserId: string | null = null,
+    expectedRevision?: number, allowedTypes?: ReadonlyArray<'amend' | 'renew'>,
+  ): Promise<QuoteResult> {
+    return this.writeQuote(quoteId, scope, (em, quote, sourcing) => this.refreshMirrorInTransaction(lineId, scope, em, quote, sourcing), expectedRevision,
+      (quote) => {
+        if (TERMINAL_STATUSES.includes(quote.cpqStatus as CpqStatus)) throw new QuotingError(409, `Cannot modify quote in '${quote.cpqStatus}' status`)
+        if (quote.quoteType !== 'amend' && quote.quoteType !== 'renew') throw new QuotingError(422, 'NOT_ARC_MIRROR')
+        if (allowedTypes && !allowedTypes.includes(quote.quoteType)) throw new QuotingError(403, 'Forbidden')
+      }, { ...LINE_EVENTS, actorUserId })
+  }
+
+  private async refreshMirrorInTransaction(lineId: string, scope: TenantScope, em: EntityManager, cpqConfig: CpqQuoteConfiguration, sourcing?: RecalcSourcingContext): Promise<QuoteResult> {
+    const salesQuote = await this.loadSalesQuote(em, cpqConfig.quoteId, scope)
+    const arcType = cpqConfig.quoteType as 'amend' | 'renew'
+    const lineConfig = await em.findOne(CpqQuoteLineConfiguration, {
+      quoteLineId: lineId, quoteConfigurationId: cpqConfig.id, organizationId: scope.organizationId, tenantId: scope.tenantId, deletedAt: null,
+    })
+    if (!lineConfig) throw new QuotingError(404, 'Quote line not found')
+    if (!isArcMirrorLine(lineConfig.configuration, cpqConfig.quoteType)) throw new QuotingError(422, 'NOT_ARC_MIRROR')
+    // A merge-renew line (no target subscription) carries no costs and has no standalone item to refresh from (Q10).
+    if (!lineConfig.targetSubscriptionId) throw new QuotingError(422, 'MERGE_LINE')
+    if (isArcCancelledLine(lineConfig, cpqConfig.quoteType)) throw new QuotingError(409, 'This subscription item is marked for removal — restore it first')
+
+    const itemId = lineConfig.sourceSubscriptionItemId ?? ((lineConfig.configuration as Record<string, unknown> | null)?._arcMirroredFromItemId as string | undefined) ?? null
+    const item = itemId
+      ? await em.findOne(CpqInventorySubscriptionItem, { id: itemId, organizationId: scope.organizationId, tenantId: scope.tenantId, deletedAt: null })
+      : null
+    if (!item || ['terminated', 'expired', 'superseded'].includes(item.status)) throw new QuotingError(409, 'ITEM_NOT_ACTIVE')
+
+    // The rows below are discarded and re-created, and the line's price may move: same cost lock as a restore.
+    await this.assertCostPlusLineWritable(em, cpqConfig, lineConfig, scope)
+
+    const previousCosts = await em.find(CpqQuoteLineCost, { quoteLineId: lineConfig.quoteLineId, quoteConfigurationId: cpqConfig.id, organizationId: scope.organizationId, tenantId: scope.tenantId, deletedAt: null })
+    const salesLine = await em.findOne(SalesQuoteLine, { id: lineConfig.quoteLineId, organizationId: scope.organizationId, tenantId: scope.tenantId, deletedAt: null })
+    await withAtomicFlush(em, [() => {
+      const now = new Date()
+      // Open requests on the discarded rows close first (history + request_cancelled signal, published after commit).
+      cancelRowRequests(previousCosts as never, 'reconfigured', sourcing ?? {})
+      for (const row of previousCosts) row.deletedAt = now
+      lineConfig.action = 'modify'
+      lineConfig.configuration = buildArcMirrorConfiguration(item.configuration, item, arcType, { costPlus: isCostPlusItem(item), mergeMode: false })
+      lineConfig.charges = pickArcMirrorCharges(item, cpqConfig.currencyCode)
+      lineConfig.quantity = item.quantity
+      lineConfig.nrcTotal = String(item.nrcAmount ?? 0)
+      lineConfig.mrcTotal = String(item.mrcAmount)
+      lineConfig.isConfigured = true
+      lineConfig.validationErrors = null
+      if (salesLine) salesLine.quantity = String(item.quantity)
+    }])
+    const openCosts = await loadOpenItemCosts(em, [item.id], scope)
+    await carryItemCosts(em, { quote: cpqConfig, line: lineConfig, item, scope, openCosts: openCosts.get(item.id) ?? [], markEmpty: arcType === 'renew' })
+
+    return this.recalculateInternal(em, cpqConfig, salesQuote, scope, true, undefined, sourcing)
+  }
+
   // ─── Get Quote (read from DB, no recalculation) ────────────────
 
   async getQuote(quoteId: string, scope: TenantScope): Promise<QuoteResult> {

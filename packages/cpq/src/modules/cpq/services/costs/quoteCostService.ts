@@ -342,7 +342,13 @@ export class CpqQuoteCostService {
       const auditBefore = costAudit(row)
       const locked = await isQuoteCostLocked(em, quote, scope)
       this.assertWritable(quote, locked, affectsPrice(lockState(row), null))
-      const margin = await this.persistAndPrice(em, quote, scope, locked, () => { row.deletedAt = new Date() }, signals)
+      const margin = await this.persistAndPrice(em, quote, scope, locked, () => {
+        // A deleted line cannot be answered: close its open request (history + request_cancelled signal) and drop any
+        // unapplied proposal in the same write, before the soft delete (no flush of its own).
+        cancelRowRequests([row] as never, 'line_removed', { actorUserId: actor, signals })
+        if (row.proposedAmount !== null && row.proposedAmount !== undefined) Object.assign(row, { proposedAmount: null, proposedAnswer: null })
+        row.deletedAt = new Date()
+      }, signals)
       return { cost: null, audit: { before: auditBefore, after: null }, margin, pricingRevision: quote.pricingRevision ?? 0 }
     })
   }

@@ -471,11 +471,22 @@ describe('manual value writes and the sourcing columns', () => {
     expect(sourcingOf(row)).toEqual(SOURCING)
   })
 
-  it('deleting a manual line only soft-deletes it', async () => {
-    const row = manualRow(SOURCING)
-    const { service } = setup({ costs: [row] })
+  it('deleting a manual line cancels its open request (line_removed), clears the proposal and publishes request_cancelled', async () => {
+    const publisher = jest.fn()
+    const row = manualRow({ requestHistory: [], ...SOURCING, proposedAnswer: { unitAmount: '70' } })
+    const { service } = setup({ costs: [row], publisher })
     await service.deleteCost(ids.quote, ids.cost, ACTOR, SCOPE)
     expect(row.deletedAt).toBeInstanceOf(Date)
-    expect(sourcingOf(row)).toEqual(SOURCING)
+    expect(row).toMatchObject({ sourcingStatus: 'cancelled', cancelReason: 'line_removed', costRequestId: 'req-1', proposedAmount: null, proposedAnswer: null })
+    expect(row.requestHistory).toEqual([expect.objectContaining({ outcome: 'cancelled', reason: 'line_removed' })])
+    expect(publisher).toHaveBeenCalledWith([
+      expect.objectContaining({ kind: 'request_cancelled', costRequestId: 'req-1', reason: 'line_removed', costLineId: ids.cost }),
+    ], expect.anything())
+  })
+  it('deleting a manual line without a request publishes nothing', async () => {
+    const publisher = jest.fn()
+    const { service } = setup({ costs: [manualRow()], publisher })
+    await service.deleteCost(ids.quote, ids.cost, ACTOR, SCOPE)
+    expect(publisher).not.toHaveBeenCalled()
   })
 })

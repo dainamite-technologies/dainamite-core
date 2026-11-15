@@ -166,6 +166,74 @@ the `@dainamite/cpq` package, per
 
 ## Schema / API changelog (track breaking changes here)
 
+### 2026-11-15 — Foreign-currency costs (cost-plus pricing, feature 4)
+
+Spec: `.ai/specs/2026-11-12-cpq-cost-plus-foreign-currency-costs.md`. Minor
+release of `@dainamite/cpq`. Requires features 1 to 3. Operator documentation:
+the "Foreign-currency costs" section of `manuals/cpq-cost-plus-pricing.md`.
+
+**Schema (additive, nullable; run `yarn mercato db migrate`).**
+- `Migration20261115100403`: `fx_rate_source` and `fx_rate_derivation` (text null)
+  on `cpq_quote_line_costs`.
+- `Migration20261115102552`: the same two columns on `cpq_order_line_costs` and
+  `cpq_inventory_costs`. `fx_rate` / `fx_rate_date` already existed (features 1, 2).
+
+**Behaviour changes.**
+- A cost in a currency other than the quote's is converted into the quote currency
+  with a dated rate read from the `currencies` module (`exchangeRateService.getRate`,
+  `autoFetch: false`, resolved by DI name only when registered; CPQ still installs
+  without `currencies`, where every foreign cost stays `none` + `CURRENCY_NO_RATE`).
+  Direct pair first, inverse (`1 / rate`, 8 dp) only when no source has a direct
+  rate; no triangulation; never 1:1.
+- The rate, its date, source and derivation are snapshotted on **saved**
+  recalculations and cost writes of unlocked quotes; they freeze with the cost
+  lock, are never refreshed on carried / ARC mirror lines, and are copied verbatim
+  to order and inventory costs (no look-up). Previews, unsaved recalculations and
+  calculate-price compute in memory and store nothing.
+- Cost `unit_amount` / `instance_amount` stay in the cost currency; order and
+  inventory cost `total_amount` is in the document currency (`instance × qty ×
+  rate`, rounded once). Quotes without foreign costs are byte-identical: charges,
+  `pricingSummary`, `snapshotHash` and `margin_hash` do not change on upgrade.
+- Cost tables prefer entries in the quote currency, then the element's currency
+  (fallback table currency) converted.
+- Manual cost writes and supplier answers in a foreign currency resolve a rate in
+  the write (previously `422 CURRENCY_NO_RATE` / stored `none`). A note-only PATCH of
+  a `none` + `CURRENCY_NO_RATE` line is accepted. A value that had no rate becomes
+  `estimated` when a rate arrives (a pricing manager confirms it).
+- **Calculate-price (public contract):** `POST /api/cpq/quotes/price` now prices
+  foreign-cost charges that returned `priceOnRequest` before, at today's rate. It
+  never returns a rate or cost currency. Public calculator prices (Puffin) built on a
+  foreign-cost charge move with each new daily rate (accepted).
+- Absolute markups and markup overrides are not converted; an absolute markup in
+  another currency stays `CURRENCY_NO_RATE`.
+
+**New settings (feature toggles, seeded by `seedCostPlusDefaults`, never overwritten):**
+`cpq.cost_plus.fx_max_days_back` (number, default 7, clamped 0-30) and
+`cpq.cost_plus.fx_source_priority` (json array of `source` names, default `[]`).
+
+**API (additive).** Cost projections (`GET /api/cpq/quotes/{id}/costs`, cost preview)
+carry `fxRate`, `fxRateDate`, `fxRateSource`, `fxRateDerivation`,
+`convertedInstanceAmount` and `errorDetail` for `cpq.costs.view` holders only; `error`
+stays a string code. `POST /api/cpq/cost-preview` accepts `fxFrom` and answers `fxHint`
+(the cost dialog's rate hint; stores nothing). `GET /api/cpq/cost-plus/usage` gains
+`missingFxPairs: [{ from, to, openQuotes }]`. Order / subscription cost reads carry the
+rate fields and the document-currency `totalAmount`.
+
+**Known limit: upstream issue UP-FX-1 (to be filed — draft in the run folder,
+`.ai/runs/2026-11-15-cpq-cost-plus-foreign-currency-costs/UP-FX-1-issue.md`).** The
+built-in NBP / Raiffeisen providers store PLN pairs at Warsaw-midnight timestamps that
+`getRate` (exact UTC-midnight match) never returns, and no non-PLN pair. FX therefore
+works with manually maintained rates (UTC midnight) or custom UTC-midnight providers;
+otherwise foreign costs are `CURRENCY_NO_RATE` (safe) and listed in `missingFxPairs`.
+After the upstream fix PLN pairs work with no CPQ change. Run servers in UTC.
+
+**Demo.** `demo_gix` (with examples) seeds USD→EUR rates (source `Manual`, UTC
+midnight, last 3 days) and one EUR quote with a converted 300 USD tail.
+
+**Rollback.** Code first, then the down-migrations (they drop the two new columns on
+each table only). Reverting the code returns foreign costs to `CURRENCY_NO_RATE` on the
+next unlocked saved recalculation; locked and converted quotes keep their stored prices.
+
 ### 2026-11-15 — Supplier cost sourcing (cost-plus pricing, feature 3)
 
 Spec: `.ai/specs/2026-11-12-cpq-cost-plus-supplier-sourcing.md`. Minor release of

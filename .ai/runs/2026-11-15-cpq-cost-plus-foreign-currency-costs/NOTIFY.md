@@ -29,3 +29,8 @@
 - "(looked back N days)" is rendered only when a look-back is passed; no read API exposes the tenant look-back, so the badge reads "No USD→EUR rate for 2026-11-12".
 - Not done: the "Missing exchange rates: USD→EUR (N open quotes)" operator line — no UI consumes `cost-plus/usage` beyond `enabled` (no toggle-off confirmation exists to extend).
 - Order / subscription / asset rows: the value is `totalAmount` in the document currency when a rate applies (it was previously formatted in the cost currency), with a note "from 300.00 USD · 0.92 · ECB · date".
+
+## 2026-11-15T12:30:00Z — step 11 decisions
+- UP-FX-1 is NOT filed (outward-facing). The full issue text is drafted in `UP-FX-1-issue.md` in this run folder; the manual and `packages/cpq/MIGRATION.md` reference it as "to be filed — draft in the run folder". A human files it and replaces the reference with the issue link.
+- Demo: a dedicated EUR offering ("GIX IP Transit with USD partner tail (EUR)", one fixed 300 USD price-basis element) instead of changing the existing USD IP Transit offering (its quotes are USD, so a USD tail would not convert, and existing tenants would not receive an element edit). Rates are written straight to the framework `ExchangeRate` entity (no public write service exists; demo_gix is L3), idempotent per pair / UTC day / source `Manual`.
+- E2E (`TC-CPQ-COST-FX-001`) cannot run locally. Rate sources are named `0e2efx-*` so they sort before any real source under the resolver's tie-break (no priority list), making the newer-rate steps deterministic.

@@ -11,8 +11,9 @@ of a quote. Everything downstream is unchanged: price rules and negotiated
 adjustments apply to a cost-plus price exactly as to any other list price.
 
 This release covers **known costs on quotes**, their **carry-through to
-orders, subscriptions and assets**, and **supplier cost sourcing** (asking a
-carrier for a cost and recording the answer). See
+orders, subscriptions and assets**, **supplier cost sourcing** (asking a
+carrier for a cost and recording the answer) and **foreign-currency costs**
+(a USD tail on a EUR quote, converted at a dated rate). See
 [Coming with later features](#coming-with-later-features).
 
 ## Concepts
@@ -41,8 +42,9 @@ per-instance amounts (full precision). Then, with markup value `m`
 
 An absolute markup `a` is in the **charge** currency. On a quote in another
 currency the charge has no price (`CURRENCY_NO_RATE`) — it is never added 1:1
-before FX conversion ships. The absolute amount of a markup **override** is
-entered in the quote currency.
+(only **costs** are converted, see
+[Foreign-currency costs](#foreign-currency-costs); a markup amount is not). The
+absolute amount of a markup **override** is entered in the quote currency.
 
 The total is rounded **once**, to the currency precision. For per-unit charges
 the unit price is the total divided by the quantity, kept at 4 decimals. Price
@@ -412,9 +414,11 @@ until the quote is reopened. `409 REQUEST_NOT_OPEN` when the request is already
 closed.
 
 **Foreign-currency answers.** An answer in a currency other than the quote's is
-recorded with the supplier's own amount and currency but stays `none` with
-`CURRENCY_NO_RATE`: nothing prices from it until FX support ships (the answered
-notification says "exchange rate missing"). Answer in the quote currency.
+recorded with the supplier's own amount and currency and converted like any
+foreign-currency cost (see [Foreign-currency costs](#foreign-currency-costs)).
+When no rate exists it stays `none` with `CURRENCY_NO_RATE` (the answered
+notification says "exchange rate missing") until a rate is maintained and the
+quote is next recalculated.
 
 **Margin-only costs** are exempt from the cost lock: an answer is always applied
 (never a proposal) and a decline follows the unlocked rule.
@@ -547,6 +551,128 @@ The `demo_gix` seed adds three quotes in the IP Transit family for demos: a
 requested tail that is overdue, a declined one ("No coverage at site") and a
 `with_customer` quote whose supplier answer is pending as a proposal. Each is
 identified by its `quoteContext.scenario`.
+
+## Foreign-currency costs
+
+Supplier costs often arrive in the supplier's currency: a carrier quotes the
+partner tail in USD for a EUR quote. CPQ keeps the cost in **its own currency
+and amount** (`300 USD`) and converts it into the quote currency with a **dated
+exchange rate** from the framework **Currencies** module wherever costs are
+added up (list price, margin, order and subscription costs). The rate is stored
+beside the cost line — `fx_rate`, its date, its source (provider) and how it was
+derived — so the price can always be explained.
+
+**Worked example.** A 300 USD tail on a EUR quote, USD→EUR rate `0.92` dated
+2026-11-11, markup 25 %: converted cost `300 × 0.92 = 276.00 EUR`, list price
+`276.00 × 1.25 = 345.00 EUR`. The Costs panel shows the original amount and
+`≈ 276.00 EUR · 0.92 · <source> · 2026-11-11`. The multiplication runs at full
+precision and the total is rounded **once**.
+
+### Where the rate comes from
+
+- **Maintain rates in Currencies** (the Currencies module's exchange-rate page, or
+  `POST /api/currencies/exchange-rates`): from `USD`, to `EUR`, the rate
+  (`to` units per 1 `from` unit), the **date** and a **source** name (for
+  example `Manual`).
+- The date must be **UTC midnight** of the day the rate applies to (UTC is the
+  reference day everywhere in this feature; run the servers in UTC). The look-up
+  matches that instant exactly.
+- **Built-in providers do not feed this today (upstream issue UP-FX-1, to be
+  filed — draft in the run folder, `.ai/runs/2026-11-15-cpq-cost-plus-foreign-currency-costs/UP-FX-1-issue.md`).**
+  The NBP and Raiffeisen fetchers store their rows at Warsaw-midnight (or
+  intra-day) timestamps that the look-up never matches, and only for pairs
+  against PLN — there is no USD→EUR row. A tenant that relies on them gets
+  `CURRENCY_NO_RATE` for every foreign cost (safe: never a wrong rate). Until
+  the upstream issue is fixed, maintain the rates you need **manually** or use a
+  custom provider that stores UTC-midnight rates. CPQ does not work around this.
+- Which rate is used (the **provider rule**). The Currencies module has no
+  default-provider setting, so CPQ adds the JSON toggle
+  `cpq.cost_plus.fx_source_priority` (ordered source names, default `[]`):
+  the first listed source that has a rate wins; otherwise a single rate is used
+  as it is; several unlisted rates are tie-broken by source name ascending. The
+  chosen source is stored on the line.
+- **Direct before inverse.** The cost-currency → quote-currency pair is looked up
+  first, from any source. Only when **no** source has a direct rate does CPQ use
+  the opposite pair as `1 / rate` (8 decimals), marked `derivation = inverse`.
+  There is no triangulation through a third currency. **Bid / ask caveat:** the
+  two directions of a provider pair can be different rate types (a bank buys at
+  one rate and sells at another), so `1 / rate` of one direction is not the
+  other direction's quoted rate. Where it matters, maintain both directions or
+  the direct pair you actually want.
+- **Look-back.** A rate may be older than the quote day: the most recent rate
+  within `cpq.cost_plus.fx_max_days_back` days (default 7, 0 to 30; per-tenant
+  override in Feature toggles) is used, and its real date is shown. Older than
+  that is "no rate".
+
+### No rate: `CURRENCY_NO_RATE`
+
+With no usable rate (none in the window, a non-positive stored rate, the
+`currencies` module not installed) the cost line is **pending** (`none`) with
+`CURRENCY_NO_RATE`, keeps the amount and currency that were entered, and the
+line is not ready. A cost is **never** converted 1:1. Once a rate is maintained,
+the line becomes ready on the next saved recalculation while the quote is
+unlocked (status `estimated` for a manual or supplier value, so a pricing manager
+confirms it; catalog values become `confirmed`). A locked quote keeps `none`
+until it is reopened.
+
+**Finding missing rates.** `GET /api/cpq/cost-plus/usage` returns
+`missingFxPairs: [{ from, to, openQuotes }]` — every pair on which a cost line of
+an open, unconverted quote has no rate, with the number of affected quotes
+(most affected first). The cost dialog shows "No USD→EUR rate for 2026-11-12"
+next to the amount while no rate is maintained.
+
+### When the rate is taken, and when it freezes
+
+| Situation | Rate |
+|---|---|
+| **Saved** recalculation or cost write on an unlocked quote (New / Incomplete / Ready, no order) | Resolved for today (UTC) and stored — price and margin can move between saves (`pricing_changed` / `margin_changed` are emitted as usual). |
+| Quote **locked** (with customer, in approval, approved, accepted, ...) or **converted** | The stored rate is reused; a newer rate changes nothing. |
+| Renew / Amend **mirror lines** and lines carried from a subscription item | Always keep their carried rate (a contracted cost never re-rates silently). |
+| Unsaved recalculation, cost preview, calculate-price | Computed in memory with today's rate; nothing is stored. |
+| Conversion to an order, activation of a subscription | The four rate fields are copied unchanged; no look-up. |
+| A new foreign-currency cost, or a re-entered value, on a locked quote (margin-only costs) | Takes the rate of the write day; the price does not move. A same-value confirmation keeps the stored rate. |
+
+So **a sent quote never moves with the rate**. A quote that is still being
+worked on follows the market until it is sent; to re-rate a locked quote, move
+it back to Ready and save a recalculation.
+
+Order and subscription costs hold the **document-currency** total
+(`instance × quantity × rate`, rounded once) next to the original cost
+amount, so order and subscription margins match the quote margin.
+
+### Cost tables
+
+A `table` cost element looks in entries of the **quote currency** first; only when
+none matches does it use entries in the element's **currency** (the "fallback
+table currency" field) and convert them. With neither, the line is
+`CURRENCY_NO_RATE`.
+
+### Calculate-price: prices move daily
+
+`POST /api/cpq/quotes/price` converts foreign-currency costs at today's rate in
+memory and never returns a rate, a cost currency or a cost amount. Without a
+rate the charge is `priceOnRequest`. Because the rate is looked up for each
+request, a **public calculator price built on a foreign-currency cost changes
+whenever a new daily rate is maintained** (accepted; calculator prices are
+indicative and stored nowhere).
+
+### Without the Currencies module
+
+CPQ does not require it. Without `currencies` registered every foreign-currency
+cost is `CURRENCY_NO_RATE`, and nothing logs an error at startup.
+
+### Confidentiality
+
+The rate, its date, source and the converted amount are cost data: visible only
+with `cpq.costs.view`, never in quote, order, calculate-price, event or change-log
+responses for other users.
+
+### Demo data
+
+`demo_gix` (with examples) seeds USD→EUR rates for the last three days (source
+`Manual`, UTC midnight: `0.92`, `0.915`, `0.91`) and the quote "Demo — IP Transit,
+USD partner tail converted to EUR" (fixed 300 USD tail, EUR quote, list price
+345.00 at today's rate). Re-running the seed adds the rate of the new day.
 
 ## Margin
 
@@ -691,7 +817,7 @@ Full contracts: the `openApi` export on each route.
 | 422 | `PURPOSE_LOCKED` | Table purpose cannot change while referenced. |
 | 422 | `NOTE_REQUIRED` / `VALIDITY_EVIDENCE_REQUIRED` | Overwrite or validity extension without a reason. |
 | 422 | `CATALOG_COST_NOT_DELETABLE` / `LINE_NOT_ELIGIBLE` / `CHARGE_NOT_FOUND` / `CHARGE_NOT_COST_PLUS` | Wrong target of a cost or markup write. |
-| 422 | `CURRENCY_NO_RATE` | Cost in a currency other than the quote's (no FX before a later feature). Also a line error on a cost line, and on a charge whose absolute markup is in another currency. |
+| 422 | `CURRENCY_NO_RATE` | No usable exchange rate for a cost in a currency other than the quote's (none within the look-back window, or the `currencies` module is not installed). Also a line error on a cost line (`errorDetail` names the pair and date), and on a charge whose absolute markup is in another currency. |
 | 409 | `COST_REQUEST_SUPERSEDED` / `REQUEST_NOT_OPEN` / `SUPPLIER_QUOTE_REF_CONFLICT` | Sourcing: stale request id (or inactive element), request already closed, same supplier reference with a different answer. |
 | 409 | `QUOTE_CLOSED` / `QUOTE_CONVERTED` | Sourcing write on a rejected / cancelled / deleted quote, or one that has an order (`QUOTE_CONVERTED` carries `orderId`). |
 | 409 | `COST_PLUS_DISABLED` | Answer / decline while the toggle is off (retryable). |
@@ -703,6 +829,5 @@ Full contracts: the `openApi` export on each route.
 
 ## Coming with later features
 
-Foreign-currency (FX) costs and index-linked costs are added by the later
-cost-plus features. Until then `CURRENCY_NO_RATE` is the answer to any
-non-quote-currency cost, including a supplier's answer in another currency.
+Index-linked costs are added by a later cost-plus feature. Foreign-currency
+costs are described in [Foreign-currency costs](#foreign-currency-costs).

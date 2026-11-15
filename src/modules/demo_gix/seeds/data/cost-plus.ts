@@ -53,3 +53,26 @@ export const COST_SOURCING_SCENARIOS = {
     dataCentre: 'digital-realty-ams11', answerAmount: 130, validDays: 30, supplierQuoteRef: 'PCL-cost-sourcing-proposal',
   },
 } as const
+
+/**
+ * Foreign-currency cost demo: a EUR quote whose partner tail is a fixed 300 USD, converted with the demo USD→EUR
+ * rates (source `Manual`, stored at UTC midnight, one per day for the last three days). 300 x 0.92 x 1.25 = 345.00.
+ */
+export const FX_DEMO = {
+  sku: 'GIX-IP-TRANSIT-EUR',
+  title: 'GIX IP Transit with USD partner tail (EUR)',
+  description: 'IP transit priced in EUR from a partner tail that the carrier quotes in USD',
+  specCode: 'SPEC-GIX-IP-TRANSIT-EUR',
+  offerCode: 'OFFER-GIX-IP-TRANSIT-EUR',
+  chargeCode: 'transit_fee_eur',
+  quoteCurrency: 'EUR',
+  costCurrency: 'USD',
+  markupPercent: 25,
+  tailElementCode: 'partner_tail_usd',
+  tailAmount: 300,
+  rateSource: 'Manual',
+  /** USD→EUR, newest first: index 0 is today (UTC). */
+  rates: ['0.92000000', '0.91500000', '0.91000000'],
+  scenario: 'cost-fx-converted-tail',
+  label: 'Demo — IP Transit, USD partner tail converted to EUR',
+} as const

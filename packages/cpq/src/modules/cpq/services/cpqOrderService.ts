@@ -2,6 +2,7 @@ import { storedAdjustmentFailure } from './priceAdjustments/storedAdjustmentFail
 import { loadConversionBlockers } from './costs/conversionGuard'
 import { copyQuoteCostsToOrder } from './costs/orderCostCopy'
 import { costSeedFromOrderLineCost, type CostSeed, type InventoryCostChange } from './costs/inventoryCostSync'
+import { assertCarriedCostsFresh, carriedCostLines, type StaleCarriedCostLine } from './costs/itemCostState'
 import { lockSourceQuote, lockSubscriptions } from './costs/sourceQuoteLock'
 import { withQuotePricingWrite } from './priceAdjustments/quotePricingWrite'
 import { LockMode } from '@mikro-orm/core'
@@ -209,6 +210,9 @@ export class DefaultCpqOrderService {
     // comes first, because such a line is usually also `estimated`.
     if (pendingAnswers.length > 0) throw new OrderError(422, 'COST_ANSWER_PENDING', { lines: pendingAnswers })
     if (unconfirmed.length > 0) throw new OrderError(422, 'COSTS_NOT_CONFIRMED', { lines: unconfirmed })
+    // I-12: carried costs (ARC mirror lines carrying `_arcCostsCarried`) must still match the subscription's open item
+    // costs. A no-op, with no read, for every quote without carried lines.
+    await assertCarriedCostsFresh(em, carriedCostLines(quoteLines, cpqConfig.quoteType), scope, costSourceChanged)
 
     // The quote becomes an order: requests still open (margin-only ones never block) are meaningless now. They are
     // cancelled in this same transaction, before anything is created (read, then mutate); the cost lines are
@@ -512,6 +516,10 @@ export class DefaultCpqOrderService {
       tenantId: scope.tenantId,
       deletedAt: null,
     })
+    // I-12, under the locks and before the first write: refuse when another ARC changed a carried item cost since
+    // this quote mirrored it. A no-op, with no read, for lines without carried-cost markers.
+    await assertCarriedCostsFresh(em, carriedCostLines(sourceQuoteLines, quoteType), scope, costSourceChanged)
+
     const linesByTarget = new Map<string | null, CpqQuoteLineConfiguration[]>()
     for (const line of sourceQuoteLines) {
       const key = line.targetSubscriptionId ?? null
@@ -1193,6 +1201,14 @@ export class OrderError extends Error {
     super(message)
     this.name = 'OrderError'
   }
+}
+
+/**
+ * `409 COST_SOURCE_CHANGED` (App Spec I-12): the body names every cost-managed line whose subscription item costs
+ * changed since the quote mirrored them, with the differing cost keys. Raised at conversion and at activation.
+ */
+function costSourceChanged(lines: StaleCarriedCostLine[]): OrderError {
+  return new OrderError(409, 'COST_SOURCE_CHANGED', { lines })
 }
 
 export function isOrderError(err: unknown): err is OrderError {

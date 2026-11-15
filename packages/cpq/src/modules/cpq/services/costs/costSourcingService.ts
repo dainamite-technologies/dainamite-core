@@ -5,6 +5,7 @@ import { SalesQuote } from '@open-mercato/core/modules/sales/data/entities'
 import {
   CpqChargeCostElement,
   CpqOrderConfiguration,
+  CpqOrderLineCost,
   CpqProductCharge,
   CpqQuoteConfiguration,
   CpqQuoteLineConfiguration,
@@ -107,11 +108,16 @@ const audit = (row: CpqQuoteLineCost, reason?: string): SourcingAudit => ({
  * cancelled quote or a deleted sales quote is `409 QUOTE_CLOSED`, a quote with an order is
  * `409 QUOTE_CONVERTED { orderId }`. Reads only; throws before anything is written.
  */
-export async function assertQuoteOpenForSourcing(em: EntityManager, quote: CpqQuoteConfiguration, scope: TenantScope): Promise<void> {
+export async function assertQuoteOpenForSourcing(em: EntityManager, quote: CpqQuoteConfiguration, scope: TenantScope, costId?: string): Promise<void> {
   const sales = await findOneWithDecryption(em, SalesQuote, { id: quote.quoteId, ...scoped(scope) }, undefined, scope)
   if (!sales || COST_CLOSED_STATUSES.includes(quote.cpqStatus as never)) throw new QuotingError(409, 'QUOTE_CLOSED')
   const order = await em.findOne(CpqOrderConfiguration, { sourceQuoteId: quote.id, ...scoped(scope) })
-  if (order) throw new QuotingError(409, 'QUOTE_CONVERTED', undefined, { orderId: order.id })
+  if (order) {
+    // ARC costs Q7 (additive): the order line cost copied from this quote cost line, so the Cost requests page can link
+    // to Re-confirm on the order. Null when the cost line has no copy (or no cost line was named).
+    const copy = costId ? await em.findOne(CpqOrderLineCost, { sourceQuoteLineCostId: costId, orderConfigurationId: order.id, ...scoped(scope) }) : null
+    throw new QuotingError(409, 'QUOTE_CONVERTED', undefined, { orderId: order.id, orderLineCostId: copy?.id ?? null })
+  }
 }
 
 /**
@@ -131,7 +137,7 @@ export class CpqCostSourcingService {
     const parsed = cpqCostRequestSchema.parse(input)
     await this.requireEnabled(scope)
     return this.write(quoteId, scope, parsed.expectedRevision, actor, async (em, quote, signals) => {
-      await assertQuoteOpenForSourcing(em, quote, scope)
+      await assertQuoteOpenForSourcing(em, quote, scope, costId)
       const row = await this.requireCost(em, quote, costId, scope)
       const line = await em.findOne(CpqQuoteLineConfiguration, { ...scoped(scope), quoteConfigurationId: quote.id, quoteLineId: row.quoteLineId })
       if (!line) throw new QuotingError(404, 'Quote line not found')
@@ -169,7 +175,7 @@ export class CpqCostSourcingService {
     const parsed = cpqCostCancelRequestSchema.parse(input)
     await this.requireEnabled(scope)
     return this.write(quoteId, scope, parsed.expectedRevision, actor, async (em, quote, signals) => {
-      await assertQuoteOpenForSourcing(em, quote, scope)
+      await assertQuoteOpenForSourcing(em, quote, scope, costId)
       const row = await this.requireCost(em, quote, costId, scope)
       // I-13: only the current request id can be cancelled; a replaced one is superseded, a closed one is not open.
       if (!row.costRequestId || row.costRequestId !== parsed.costRequestId) throw new QuotingError(409, 'COST_REQUEST_SUPERSEDED')
@@ -231,7 +237,7 @@ export class CpqCostSourcingService {
       marginTracker: true, events: { pricingCause: 'cost', actorUserId: actor },
       shortCircuit: async (em, quote) => {
         const row = await this.requireCost(em, quote, costId, scope)
-        await assertQuoteOpenForSourcing(em, quote, scope)
+        await assertQuoteOpenForSourcing(em, quote, scope, costId)
         if (!(await this.deps.costService.enabled(scope.tenantId))) throw new QuotingError(409, 'COST_PLUS_DISABLED')
         const line = await em.findOne(CpqQuoteLineConfiguration, { ...scoped(scope), quoteConfigurationId: quote.id, quoteLineId: row.quoteLineId })
         if (!line) throw new QuotingError(404, 'Quote line not found')
@@ -292,7 +298,7 @@ export class CpqCostSourcingService {
       marginTracker: true, events: { pricingCause: 'cost', actorUserId: actor },
       shortCircuit: async (em, quote) => {
         const row = await this.requireCost(em, quote, costId, scope)
-        await assertQuoteOpenForSourcing(em, quote, scope)
+        await assertQuoteOpenForSourcing(em, quote, scope, costId)
         if (!(await this.deps.costService.enabled(scope.tenantId))) throw new QuotingError(409, 'COST_PLUS_DISABLED')
         if (!row.costRequestId || row.costRequestId !== parsed.costRequestId || !(await this.elementActive(em, row, scope))) throw new QuotingError(409, 'COST_REQUEST_SUPERSEDED')
         if (!isRequestOpen(row)) throw new QuotingError(409, 'REQUEST_NOT_OPEN')
@@ -313,7 +319,7 @@ export class CpqCostSourcingService {
     const signals: SourcingSignal[] = []
     return this.write(quoteId, scope, parsed.expectedRevision, actor, async (em, quote) => {
       const row = await this.requireCost(em, quote, costId, scope)
-      await assertQuoteOpenForSourcing(em, quote, scope)
+      await assertQuoteOpenForSourcing(em, quote, scope, costId)
       const proposal = row.proposedAnswer as AnswerPayload | null
       if (row.proposedAmount === null || row.proposedAmount === undefined || !proposal) throw new QuotingError(409, 'NO_PENDING_ANSWER')
       const line = await em.findOne(CpqQuoteLineConfiguration, { ...scoped(scope), quoteConfigurationId: quote.id, quoteLineId: row.quoteLineId })

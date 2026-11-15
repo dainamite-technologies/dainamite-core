@@ -1,5 +1,5 @@
 import {
-  CpqChargeCostElement, CpqOrderConfiguration, CpqQuoteConfiguration, CpqQuoteLineConfiguration, CpqQuoteLineCost,
+  CpqChargeCostElement, CpqOrderConfiguration, CpqOrderLineCost, CpqQuoteConfiguration, CpqQuoteLineConfiguration, CpqQuoteLineCost,
 } from '../../../data/entities'
 import { SalesQuote } from '@open-mercato/core/modules/sales/data/entities'
 
@@ -31,7 +31,7 @@ jest.mock('@open-mercato/shared/lib/commands/flush', () => ({
 jest.mock('../costResolution', () => ({
   isQuoteCostLocked: async (_em: unknown, quote: { cpqStatus: string }) => !['new', 'incomplete', 'ready'].includes(quote.cpqStatus),
 }))
-import { CpqCostSourcingService } from '../costSourcingService'
+import { assertQuoteOpenForSourcing, CpqCostSourcingService } from '../costSourcingService'
 import type { SourcingSignal } from '../sourcingSignals'
 
 const SCOPE = { organizationId: 'org', tenantId: 'tenant' }
@@ -163,6 +163,23 @@ describe('request', () => {
     await expect(setup({ sales: false }).service.request(ids.quote, ids.cost, {}, ACTOR, SCOPE)).rejects.toMatchObject({ status: 409, message: 'QUOTE_CLOSED' })
     await expect(setup({ orders: [{ id: 'order-1' }] }).service.request(ids.quote, ids.cost, {}, ACTOR, SCOPE))
       .rejects.toMatchObject({ status: 409, message: 'QUOTE_CONVERTED', details: { orderId: 'order-1' } })
+  })
+
+  it('QUOTE_CONVERTED is additive (ARC costs Q7): orderLineCostId is the order line cost copied from this cost line, else null', async () => {
+    const withCopy = setup({ orders: [{ id: 'order-1' }] })
+    const original = withCopy.em.findOne.getMockImplementation()!
+    withCopy.em.findOne.mockImplementation(async (entity: unknown, where: Record<string, unknown>) => {
+      if (entity === CpqOrderLineCost) return where.sourceQuoteLineCostId === ids.cost && where.orderConfigurationId === 'order-1' ? { id: 'olc-1' } : null
+      return original(entity, where)
+    })
+    const quote = { id: ids.quote, quoteId: ids.quote, cpqStatus: 'ready' }
+    await expect(assertQuoteOpenForSourcing(withCopy.em as never, quote as never, SCOPE, ids.cost))
+      .rejects.toMatchObject({ status: 409, message: 'QUOTE_CONVERTED', details: { orderId: 'order-1', orderLineCostId: 'olc-1' } })
+    // no copy (or no cost line named): the order id still comes back, the order line cost id is null
+    await expect(assertQuoteOpenForSourcing(setup({ orders: [{ id: 'order-1' }] }).em as never, quote as never, SCOPE, ids.cost))
+      .rejects.toMatchObject({ details: { orderId: 'order-1', orderLineCostId: null } })
+    await expect(assertQuoteOpenForSourcing(withCopy.em as never, quote as never, SCOPE))
+      .rejects.toMatchObject({ details: { orderId: 'order-1', orderLineCostId: null } })
   })
 
   it('404s an unknown quote or cost line, honours expectedRevision, and 404s with the toggle off before touching anything', async () => {

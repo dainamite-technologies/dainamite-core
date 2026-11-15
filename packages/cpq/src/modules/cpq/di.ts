@@ -13,6 +13,7 @@ import { CpqAdjustmentService } from './services/priceAdjustments/adjustmentServ
 import { DefaultCpqBundleService } from './services/cpqBundleService'
 import { CpqCostService } from './services/costs/costService'
 import { CpqQuoteCostService } from './services/costs/quoteCostService'
+import { CpqOrderCostReconfirmService } from './services/costs/orderCostReconfirm'
 import { CpqCostSourcingService } from './services/costs/costSourcingService'
 import { CpqCostRequestQueueService } from './services/costs/costRequestQueue'
 import { createSourcingPublisher } from './services/costs/sourcingPublisher'
@@ -60,6 +61,11 @@ export function register(container: AppContainer) {
       quotingService: container.resolve('cpqQuotingService'),
       publisher: sourcingPublisher(),
       featureTogglesService: container.resolve('featureTogglesService'),
+      fxRateResolver: container.resolve('cpqFxRateResolver'),
+    })).scoped(),
+    cpqOrderCostReconfirmService: asFunction(() => new CpqOrderCostReconfirmService({
+      em: container.resolve('em'),
+      costService: container.resolve('cpqCostService'),
       fxRateResolver: container.resolve('cpqFxRateResolver'),
     })).scoped(),
     cpqCostRequestQueueService: asFunction(() => new CpqCostRequestQueueService({

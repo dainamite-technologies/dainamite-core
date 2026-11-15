@@ -11,7 +11,7 @@ import { cpqMarkupRuleEnum, cpqMarkupValueSchema } from './validators'
 export const MANUAL_COST_KEY_PREFIX = 'manual:'
 export const COST_NOTE_MAX_LENGTH = 500
 
-const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'YYYY-MM-DD').refine((value) => {
+export const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'YYYY-MM-DD').refine((value) => {
   const parsed = new Date(`${value}T00:00:00Z`)
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value
 }, 'Not a calendar date')

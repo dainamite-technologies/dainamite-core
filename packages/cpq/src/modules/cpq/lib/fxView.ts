@@ -82,12 +82,18 @@ export function formatConverted(cost: FxFields, quoteCurrency: string | null | u
 }
 
 /**
- * Order / subscription / asset costs show the value in the document currency (`totalAmount`), so the note names where it came
- * from: "from 100.00 USD · 0.92 · ECB · 2026-11-11". Always a snapshot: never "frozen" wording.
+ * Order / subscription / asset costs show the value in the document currency (`totalAmount`, the line total), so the note
+ * names where it came from in the SAME basis: the cost-currency total (`totalAmount / fxRate`, which is the per-instance
+ * amount times the line quantity): "from 600.00 USD · 0.92 · ECB · 2026-11-11" next to a 552.00 EUR value. Falls back to
+ * the per-instance amount when the line total is unknown. Always a snapshot: never "frozen" wording.
  */
-export function snapshotNote(cost: FxFields & { instanceAmount?: string | null; currencyCode?: string | null }, t: Translate): string | null {
+export function snapshotNote(cost: FxFields & { instanceAmount?: string | null; totalAmount?: string | null; currencyCode?: string | null }, t: Translate): string | null {
   if (!hasFxRate(cost)) return null
-  const amount = formatAmount(cost.instanceAmount)
+  const rate = Number(cost.fxRate)
+  const total = cost.totalAmount !== null && cost.totalAmount !== undefined && cost.totalAmount !== '' && Number.isFinite(rate) && rate > 0
+    ? Number(cost.totalAmount) / rate
+    : null
+  const amount = formatAmount(total !== null && Number.isFinite(total) ? total : cost.instanceAmount)
   const origin = amount && cost.currencyCode ? t('cpq.fx.from', 'from {value} {code}', { value: amount, code: cost.currencyCode }) : null
   return [origin, fxRateParts(cost, t)].filter(Boolean).join(' · ')
 }

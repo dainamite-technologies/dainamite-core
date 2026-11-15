@@ -95,4 +95,10 @@ describe('snapshotNote (order / subscription / asset)', () => {
     expect(note).toBe('from 300.00 USD · 0.92 · ECB · 2026-11-11')
     expect(snapshotNote({ instanceAmount: '300', currencyCode: 'EUR' }, t)).toBeNull()
   })
+  it('reconciles with the displayed line total: quantity 2 shows the cost-currency total (review1-d)', () => {
+    expect(snapshotNote({ ...converted, instanceAmount: '300', totalAmount: '552', currencyCode: 'USD' }, t)).toBe('from 600.00 USD · 0.92 · ECB · 2026-11-11')
+  })
+  it('falls back to the per-instance amount without a line total', () => {
+    expect(snapshotNote({ ...converted, instanceAmount: '300', totalAmount: null, currencyCode: 'USD' }, t)).toBe('from 300.00 USD · 0.92 · ECB · 2026-11-11')
+  })
 })

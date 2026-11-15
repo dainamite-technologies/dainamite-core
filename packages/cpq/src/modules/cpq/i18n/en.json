@@ -1,0 +1,16 @@
+{
+  "notifications.categories.cpq": "CPQ",
+  "cpq.notifications.costRequest.action.openQuote": "Open quote",
+  "cpq.notifications.costRequest.action.openRequests": "Open cost requests",
+  "cpq.notifications.costRequest.answerPending.body": "Supplier answered with a different cost on quote {quoteNumber} ({costName}, {productName}) - the quote price stays until the answer is applied",
+  "cpq.notifications.costRequest.answerPending.title": "Supplier answer waiting to be applied",
+  "cpq.notifications.costRequest.answered.body.confirmed": "Cost confirmed on quote {quoteNumber} ({costName}, {productName}) - line priced",
+  "cpq.notifications.costRequest.answered.body.estimated": "Budgetary cost on quote {quoteNumber} ({costName}, {productName}) - quote stays indicative",
+  "cpq.notifications.costRequest.answered.body.notReady": "Cost answered on quote {quoteNumber} ({costName}, {productName}) - line still not ready",
+  "cpq.notifications.costRequest.answered.body.rateMissing": "Cost answered on quote {quoteNumber} ({costName}, {productName}) - exchange rate missing, line not priced yet",
+  "cpq.notifications.costRequest.answered.title": "Supplier cost answered",
+  "cpq.notifications.costRequest.declined.body": "Supplier declined the cost request on quote {quoteNumber} ({costName}, {productName})",
+  "cpq.notifications.costRequest.declined.title": "Supplier cost request declined",
+  "cpq.notifications.costRequest.opened.body": "A supplier cost is needed on quote {quoteNumber} ({costName}, {productName})",
+  "cpq.notifications.costRequest.opened.title": "New supplier cost request"
+}

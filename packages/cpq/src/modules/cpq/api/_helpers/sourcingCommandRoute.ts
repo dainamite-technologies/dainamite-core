@@ -18,7 +18,7 @@ type Options<T extends object, R extends object> = {
   ownedKeys: string[]
   buildInput: (effective: T) => Record<string, unknown>
   /** The whitelisted response body: the route picks the fields, a command result is never echoed whole. */
-  respond: (result: R) => Record<string, unknown>
+  respond: (result: R) => Record<string, unknown> | Promise<Record<string, unknown>>
   /** `404` while `cpq.cost_plus` is off (answer / decline answer `409 COST_PLUS_DISABLED` instead). */
   toggleOff?: 'not_found' | 'skip'
 }
@@ -45,5 +45,5 @@ export async function sourcingCommandRoute<T extends object, R extends object>(r
   const { result } = await bus.execute<Record<string, unknown>, R>(options.commandId, { input: options.buildInput(effective), ctx: commandCtx })
   if (!result) throw new Error('Sourcing command did not return a result')
   await guard.runAfterSuccess()
-  return NextResponse.json(options.respond(result), { status: 200 })
+  return NextResponse.json(await options.respond(result), { status: 200 })
 }

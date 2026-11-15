@@ -18,7 +18,7 @@ Engine: om-auto-create-pr-loop (steps: 20, --loop: no)
 | A | 4 | Pure sourcing rules | group:A2 | done | 69264a7 |
 | B | 5 | Sourcing service, request / cancel commands and routes | group:B1 | done | 5502969 |
 | B | 6 | Auto-open and R1b / R1a cancellation | group:B1 | done | 33168d6 |
-| B | 7 | Answer and decline | group:B2 | todo | |
+| B | 7 | Answer and decline | group:B2 | done | |
 | B | 8 | Apply answer route | group:B2 | todo | |
 | B | 9 | Cancellation on close | group:B3 | todo | |
 | B | 10 | Element deactivation fan-out and sales quote deleted subscriber | group:B3 | todo | |

@@ -20,3 +20,9 @@
 
 ## 2026-11-14T19:47:01Z — 6-review-fix
 - A clone's first saved recalculation no longer auto-opens requests (spec "Clone": the cloned tail is `not_requested`, R16; open requests are never copied). New `autoOpen` option on cost resolution (default true); the clone path passes `false`. A later saved recalculation of the clone may still auto-open per Q12.
+
+## 2026-11-15T00:10:00Z — step 7 (B2)
+- Decision: a supplier-answered value gets `value_origin = 'supplier'` and the catalog resolver treats it like an entered (`manual`) value (kept until a driver changes, then R1b resets it). Without this the next saved recalculation would overwrite an applied answer with the catalog estimate. A declined (cleared) unlocked value also becomes origin `supplier` for the same reason.
+- Decision: `COST_ANSWER_PENDING` is checked BEFORE `COSTS_NOT_CONFIRMED` in conversion (a proposal line is usually also `estimated`; the pending refusal is the actionable one). Enforced in `conversionGuard.loadConversionBlockers` (one read of the price-basis rows; `proposed_amount` not null), consumed by `cpqOrderService`. Step 9 owns the remaining conversion work (request cancellation).
+- Decision: an answer in a non-quote currency is stored as `none` + `CURRENCY_NO_RATE` with the amount not persisted on the row (hash and history keep the idempotency); `validUntil >= today` and the currency format are `422`, the date is checked after the idempotency check so a retry never fails on a passed date.
+- Seam: `SourcingValuedSignal` (`kind: 'valued'`, causes answer / decline / apply_answer, no amounts) is pushed into the write's signal sink; step 12 maps it to `cpq.quote.cost_valued`. `fullCostView` gained `costRequestId`, `requestSeq`, `answeredAt`, `declineReason`, `hasAnswerPending`, `proposedAnswer` (cost-view holders only).

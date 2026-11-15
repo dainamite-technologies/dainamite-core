@@ -702,6 +702,15 @@ describe('conversion cost guard (COSTS_NOT_CONFIRMED)', () => {
     expect(em.create).not.toHaveBeenCalled()
   })
 
+  it('refuses a pending supplier proposal with 422 COST_ANSWER_PENDING naming line and key, before COSTS_NOT_CONFIRMED, creating nothing', async () => {
+    const { em, run } = await convert([cost({ proposedAmount: '310.0000' }), cost({ costKey: 'other', valueStatus: 'estimated' })])
+    await expect(run()).rejects.toMatchObject({ status: 422, message: 'COST_ANSWER_PENDING', details: { lines: [{ quoteLineId: 'line', costKeys: ['tail'] }] } })
+    expect(em.create).not.toHaveBeenCalled()
+    const converts = await convert([cost({ proposedAmount: null }), cost({ costKey: 'overhead', role: 'margin_only', valueStatus: 'estimated', proposedAmount: '1.0000' })])
+    await converts.run()
+    expect(converts.em.create).toHaveBeenCalledWith(CpqOrderLineConfiguration, expect.anything())
+  })
+
   it('refuses an unpriced (none) price-basis cost and an expired confirmed one', async () => {
     const none = await convert([cost({ valueStatus: 'none' })])
     await expect(none.run()).rejects.toMatchObject({ message: 'COSTS_NOT_CONFIRMED' })

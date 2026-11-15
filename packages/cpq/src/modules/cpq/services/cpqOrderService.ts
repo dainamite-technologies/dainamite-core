@@ -1,5 +1,5 @@
 import { storedAdjustmentFailure } from './priceAdjustments/storedAdjustmentFailure'
-import { loadConversionCostBlockers } from './costs/conversionGuard'
+import { loadConversionBlockers } from './costs/conversionGuard'
 import { copyQuoteCostsToOrder } from './costs/orderCostCopy'
 import { costSeedFromOrderLineCost, type CostSeed, type InventoryCostChange } from './costs/inventoryCostSync'
 import { withQuotePricingWrite } from './priceAdjustments/quotePricingWrite'
@@ -193,7 +193,10 @@ export class DefaultCpqOrderService {
     // without a price, mean the price is indicative: no order yet (whatever the toggle).
     // ARC cancel lines (an item removed on Amend / Renew, every Cancel-quote line) sell nothing, so they never bind.
     const bindingLines = quoteLines.filter((line) => !isArcTerminationLine(line, cpqConfig.quoteType))
-    const unconfirmed = await loadConversionCostBlockers(em, cpqConfig.id, bindingLines, scope)
+    const { unconfirmed, pendingAnswers } = await loadConversionBlockers(em, cpqConfig.id, bindingLines, scope)
+    // A supplier answer with a different value waits for `apply-answer` (sourcing spec): the more actionable refusal
+    // comes first, because such a line is usually also `estimated`.
+    if (pendingAnswers.length > 0) throw new OrderError(422, 'COST_ANSWER_PENDING', { lines: pendingAnswers })
     if (unconfirmed.length > 0) throw new OrderError(422, 'COSTS_NOT_CONFIRMED', { lines: unconfirmed })
 
     const { number: orderNumber } = await this.numberGenerator.generate({

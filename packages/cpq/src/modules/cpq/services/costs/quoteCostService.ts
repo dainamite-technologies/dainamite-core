@@ -73,6 +73,15 @@ const lockState = (row: CpqQuoteLineCost): CostLockState => ({
   validUntil: row.validUntil, supplierTermEnd: row.supplierTermEnd, supplierMinTermMonths: row.supplierMinTermMonths,
 })
 
+/** Per-instance amount of a unit cost: `per_unit` multiplies by the line's quantity attribute (named by the charge). */
+export async function costInstanceAmount(em: EntityManager, quote: CpqQuoteConfiguration, line: CpqQuoteLineConfiguration, quantityAttributeCode: string | null, costModel: string, unit: number): Promise<number> {
+  if (costModel !== 'per_unit') return unit
+  const offering = line.offeringId ? await em.findOne(CpqProductOffering, { ...scoped({ organizationId: line.organizationId, tenantId: line.tenantId }), id: line.offeringId }) : null
+  const merged: Record<string, unknown> = { ...(quote.quoteContext ?? {}), ...(offering?.designTimeValues ?? {}), ...line.configuration }
+  const quantity = Number(merged[quantityAttributeCode ?? ''] ?? 0)
+  return unit * (Number.isFinite(quantity) ? quantity : 0)
+}
+
 /**
  * Quote cost reads, previews and writes (App Spec §1.4.6, R10, R11). Registered
  * in DI as `cpqQuoteCostService`.
@@ -387,12 +396,8 @@ export class CpqQuoteCostService {
   }
 
   /** Per-instance amount: `per_unit` multiplies by the charge's quantity attribute of the line. */
-  private async instanceAmount(em: EntityManager, quote: CpqQuoteConfiguration, line: CpqQuoteLineConfiguration, charge: CpqProductCharge | null, costModel: string, unit: number): Promise<number> {
-    if (costModel !== 'per_unit') return unit
-    const offering = line.offeringId ? await em.findOne(CpqProductOffering, { ...scoped({ organizationId: line.organizationId, tenantId: line.tenantId }), id: line.offeringId }) : null
-    const merged: Record<string, unknown> = { ...(quote.quoteContext ?? {}), ...(offering?.designTimeValues ?? {}), ...line.configuration }
-    const quantity = Number(merged[charge?.quantityAttributeCode ?? ''] ?? 0)
-    return unit * (Number.isFinite(quantity) ? quantity : 0)
+  private instanceAmount(em: EntityManager, quote: CpqQuoteConfiguration, line: CpqQuoteLineConfiguration, charge: CpqProductCharge | null, costModel: string, unit: number): Promise<number> {
+    return costInstanceAmount(em, quote, line, charge?.quantityAttributeCode ?? null, costModel, unit)
   }
 
   private async requireEnabled(scope: TenantScope) {

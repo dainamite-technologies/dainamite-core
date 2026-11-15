@@ -42,6 +42,7 @@ export function register(container: AppContainer) {
     cpqCostSourcingService: asFunction(() => new CpqCostSourcingService({
       em: container.resolve('em'),
       costService: container.resolve('cpqCostService'),
+      quotingService: container.resolve('cpqQuotingService'),
     })).scoped(),
     cpqPricingService: asFunction(({ em }: { em: EntityManager }) => {
       return new DefaultCpqPricingService(em)

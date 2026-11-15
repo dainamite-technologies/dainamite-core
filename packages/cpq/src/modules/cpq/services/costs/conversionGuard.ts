@@ -20,7 +20,21 @@ export type UnconfirmedCostLine = {
   chargeCodes: string[]
 }
 
-type GuardRow = Pick<CpqQuoteLineCost, 'quoteLineId' | 'costKey' | 'role' | 'valueStatus' | 'validUntil'>
+type GuardRow = Pick<CpqQuoteLineCost, 'quoteLineId' | 'costKey' | 'role' | 'valueStatus' | 'validUntil'> & Partial<Pick<CpqQuoteLineCost, 'proposedAmount'>>
+
+/** A price-basis cost line with an unapplied supplier proposal blocks conversion with `422 COST_ANSWER_PENDING`. */
+export type PendingAnswerLine = { quoteLineId: string; costKeys: string[] }
+
+/** Pure: price-basis cost lines of live quote lines that hold an unapplied proposal (`proposed_amount`), per line, stable order. */
+export function pendingAnswerCosts(rows: GuardRow[], liveLineIds: Iterable<string>): PendingAnswerLine[] {
+  const live = new Set(liveLineIds)
+  const byLine = new Map<string, string[]>()
+  for (const row of rows) {
+    if (row.role !== 'price_basis' || row.proposedAmount === null || row.proposedAmount === undefined || !live.has(row.quoteLineId)) continue
+    byLine.set(row.quoteLineId, [...(byLine.get(row.quoteLineId) ?? []), row.costKey])
+  }
+  return [...byLine].sort(([a], [b]) => a.localeCompare(b)).map(([quoteLineId, keys]) => ({ quoteLineId, costKeys: keys.sort() }))
+}
 /** A line as the guard reads it: its id and the stored `charges` snapshot of the last saved recalculation. */
 export type GuardLine = { quoteLineId: string; charges?: unknown }
 
@@ -68,8 +82,18 @@ export function conversionCostBlockers(lines: GuardLine[], rows: GuardRow[], con
 export async function loadConversionCostBlockers(
   em: EntityManager, quoteConfigurationId: string, lines: GuardLine[], scope: TenantScope, conversionDate = new Date().toISOString().slice(0, 10),
 ): Promise<UnconfirmedCostLine[]> {
+  return (await loadConversionBlockers(em, quoteConfigurationId, lines, scope, conversionDate)).unconfirmed
+}
+
+/** Both conversion refusals from ONE read of the price-basis rows: unconfirmed costs and pending supplier answers. */
+export async function loadConversionBlockers(
+  em: EntityManager, quoteConfigurationId: string, lines: GuardLine[], scope: TenantScope, conversionDate = new Date().toISOString().slice(0, 10),
+): Promise<{ unconfirmed: UnconfirmedCostLine[]; pendingAnswers: PendingAnswerLine[] }> {
   const rows = await em.find(CpqQuoteLineCost, {
     quoteConfigurationId, role: 'price_basis', organizationId: scope.organizationId, tenantId: scope.tenantId, deletedAt: null,
   })
-  return conversionCostBlockers(lines, rows, conversionDate)
+  return {
+    unconfirmed: conversionCostBlockers(lines, rows, conversionDate),
+    pendingAnswers: pendingAnswerCosts(rows, lines.map((line) => line.quoteLineId)),
+  }
 }

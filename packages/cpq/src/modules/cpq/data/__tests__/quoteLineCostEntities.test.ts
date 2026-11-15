@@ -7,7 +7,7 @@ describe('quote line cost schema', () => {
   it('declares the value sets for this feature', () => {
     expect([...COST_LINE_ORIGINS]).toEqual(['catalog', 'manual'])
     expect([...COST_VALUE_STATUSES]).toEqual(['none', 'estimated', 'confirmed'])
-    expect([...COST_VALUE_ORIGINS]).toEqual(['catalog', 'manual'])
+    expect([...COST_VALUE_ORIGINS]).toEqual(['catalog', 'manual', 'supplier'])
     expect(COST_SOURCING_STATUSES[0]).toBe('not_requested')
   })
 

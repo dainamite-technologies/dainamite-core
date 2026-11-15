@@ -6,7 +6,7 @@ import type { CpqCostSourcingService } from '../services/costs/costSourcingServi
 
 /**
  * Command preamble of the cost sourcing commands: authenticated subject, audit actor, scope and the immutable
- * feature IDs the command requires (never role names). Request / cancel need `cpq.quotes.manage` only.
+ * feature IDs the command requires (never role names). Each command passes its own features (request / cancel: `cpq.quotes.manage`; answer / decline: `cpq.costs.view` + `cpq.costs.manage`; apply-answer: `cpq.quotes.manage` + `cpq.costs.manage`).
  */
 export async function sourcingCommandContext(ctx: CommandRuntimeContext, features: string[]) {
   const subject = ctx.auth?.sub

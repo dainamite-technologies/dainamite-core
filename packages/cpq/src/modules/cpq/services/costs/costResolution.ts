@@ -71,6 +71,9 @@ type ResolvedValue = {
   errorCode: CostLineErrorCode | null
 }
 
+/** A value a person entered (`manual`) or a supplier answered (`supplier`): the catalog resolver never overwrites it until a driver changes. */
+const isEnteredOrigin = (origin: string | null | undefined): boolean => origin === 'manual' || origin === 'supplier'
+
 const NO_VALUE: ResolvedValue = { valueStatus: 'none', valueOrigin: null, unitAmount: null, instanceAmount: null, currencyCode: null, errorCode: null }
 
 /** Driver attributes of an element: its applicability attribute (table dimensions are added by the caller). */
@@ -418,10 +421,10 @@ async function planQuoteCosts(params: CostResolutionParams & { save?: boolean })
         // R1b: a driving attribute changed since the value was set. On a catalog `on_request` value, or on a value a
         // pricing manager entered / confirmed (origin `manual`), that resets it and keeps the old value in the note.
         const driversChanged = row.driverHash !== null && row.driverHash !== hash
-        if (driversChanged && row.valueStatus !== 'none' && (element.source === 'on_request' || row.valueOrigin === 'manual')) {
+        if (driversChanged && row.valueStatus !== 'none' && (element.source === 'on_request' || isEnteredOrigin(row.valueOrigin))) {
           patch.note = resetNote(row, attributes)
         }
-        if (driversChanged || row.valueOrigin !== 'manual') {
+        if (driversChanged || !isEnteredOrigin(row.valueOrigin)) {
           // Catalog values follow the catalog on every saved recalculation while unlocked (R4).
           Object.assign(patch, toFields(resolved))
         } else if (row.unitAmount !== null && row.unitAmount !== undefined) {
@@ -432,7 +435,7 @@ async function planQuoteCosts(params: CostResolutionParams & { save?: boolean })
         patch.driverHash = hash
         // R1b (sourcing part): a reconfiguration that resets an on_request / entered value makes the open request
         // meaningless: cancel it in this write and, per Q12, open a fresh one for requires_sourcing elements.
-        const reset = driversChanged && (element.source === 'on_request' || row.valueOrigin === 'manual')
+        const reset = driversChanged && (element.source === 'on_request' || isEnteredOrigin(row.valueOrigin))
         let state: RequestRowState = row
         if (saved && reset && isRequestOpen(row)) {
           const cancel = cancelRequestPatch(row, { reason: 'reconfigured', now, closedByUserId: actor })

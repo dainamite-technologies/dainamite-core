@@ -36,7 +36,30 @@ export type SourcingCancelledSignal = SourcingCostRef & {
   reason: CancelReason
 }
 
-export type SourcingSignal = SourcingRequestedSignal | SourcingCancelledSignal
+/**
+ * A sourcing action changed a cost line's value or value status (Q11: answer, decline, apply-answer). Statuses and
+ * flags only: never the amount (App Spec I-4). Step 12 maps it to `cpq.quote.cost_valued`.
+ */
+export type SourcingValuedSignal = SourcingCostRef & {
+  kind: 'valued'
+  cause: 'answer' | 'decline' | 'apply_answer'
+  costRequestId: string | null
+  requestSeq: number | null
+  /** Resolved after the write's recalculation. */
+  valueStatus: string
+  previousValueStatus: string
+  sourcingStatus: string
+  valueChanged: boolean
+  /** An unapplied proposal exists (a different-value answer on a locked quote). */
+  answerPending: boolean
+  errorCode: string | null
+  lineReady: boolean
+  /** `answered_at - requested_at` in hours (answer / decline). */
+  leadTimeHours: number | null
+  requestedByUserId: string | null
+}
+
+export type SourcingSignal = SourcingRequestedSignal | SourcingCancelledSignal | SourcingValuedSignal
 
 export type SourcingSignalSink = SourcingSignal[]
 

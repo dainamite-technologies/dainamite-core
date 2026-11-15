@@ -227,6 +227,15 @@ describe('resolveQuoteCosts', () => {
       expect(s.costs[0]).toMatchObject({ valueOrigin: 'manual', unitAmount: '80', note: null })
     })
 
+    it('keeps a supplier-answered value (origin supplier) like an entered one, and resets it when the driver changes', async () => {
+      const s = await seed()
+      Object.assign(s.costs[0], { valueOrigin: 'supplier', valueStatus: 'confirmed', unitAmount: '80', instanceAmount: '80' })
+      await run(s, { config: { speed: '1G' } })
+      expect(s.costs[0]).toMatchObject({ valueOrigin: 'supplier', valueStatus: 'confirmed', unitAmount: '80' })
+      await run(s, { config: { speed: '10G' } })
+      expect(s.costs[0]).toMatchObject({ valueStatus: 'estimated', valueOrigin: 'catalog', unitAmount: '55' })
+    })
+
     it('resets to the estimate and moves the previous value into the note when it changes', async () => {
       const s = await seed()
       Object.assign(s.costs[0], { valueOrigin: 'manual', valueStatus: 'confirmed', unitAmount: '80', instanceAmount: '80' })

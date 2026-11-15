@@ -11,6 +11,9 @@ jest.mock('../../priceAdjustments/quotePricingWrite', () => ({
     if (!quote || quote.id !== quoteId) throw makeError(404, 'Quote not found')
     if (options.expectedRevision !== undefined && options.expectedRevision !== (quote.pricingRevision ?? 0)) throw makeError(409, 'STALE_REVISION')
     const before = quote.pricingRevision
+    // Refusals and idempotent no-ops short-circuit BEFORE the revision bump.
+    const early = options.shortCircuit ? await options.shortCircuit(em, quote) : undefined
+    if (early !== undefined) return early
     quote.pricingRevision = (quote.pricingRevision ?? 0) + 1
     try {
       const result = await execute(em, quote)
@@ -21,6 +24,12 @@ jest.mock('../../priceAdjustments/quotePricingWrite', () => ({
       throw error
     }
   },
+}))
+jest.mock('@open-mercato/shared/lib/commands/flush', () => ({
+  withAtomicFlush: async (_em: unknown, phases: Array<() => unknown>) => { for (const phase of phases) await phase() },
+}))
+jest.mock('../costResolution', () => ({
+  isQuoteCostLocked: async (_em: unknown, quote: { cpqStatus: string }) => !['new', 'incomplete', 'ready'].includes(quote.cpqStatus),
 }))
 import { CpqCostSourcingService } from '../costSourcingService'
 import type { SourcingSignal } from '../sourcingSignals'
@@ -53,8 +62,9 @@ function setup(opts: { status?: string; orders?: Row[]; costs?: Row[]; line?: Ro
     }),
   }
   const publisher = jest.fn()
-  const service = new CpqCostSourcingService({ em: em as never, costService: { enabled: jest.fn(async () => opts.enabled ?? true) }, publisher })
-  return { service, em, quote, costs, publisher }
+  const recalculate = jest.fn(async () => ({ id: ids.quote, cpqStatus: quote.cpqStatus, lines: [] }))
+  const service = new CpqCostSourcingService({ em: em as never, costService: { enabled: jest.fn(async () => opts.enabled ?? true) }, quotingService: { recalculateLockedQuote: recalculate } as never, publisher })
+  return { service, em, quote, costs, publisher, recalculate }
 }
 
 function cost(over: Row = {}): Row {
@@ -237,5 +247,218 @@ describe('cancelOpenRequests (the single cancellation helper)', () => {
     const byLine = setup({ costs: [open(), other()] })
     await byLine.service.cancelOpenRequests(byLine.em as never, byLine.quote, SCOPE, 'line_removed', { quoteLineIds: ['line-2'] })
     expect(byLine.costs.map((row) => row.sourcingStatus)).toEqual(['requested', 'cancelled'])
+  })
+})
+
+// ─── Answer / decline / apply-answer (steps 7-8) ─────────────────
+
+const REF = 'CARR-889'
+const answerInput = (over: Row = {}) => ({ costRequestId: ids.req, unitAmount: 280, currencyCode: 'EUR', supplierQuoteRef: REF, ...over })
+const requested = (over: Row = {}) => cost({
+  sourcingStatus: 'requested', costRequestId: ids.req, requestSeq: 1, requestedAt: new Date('2026-01-01T00:00:00Z'), requestedByUserId: 'u0',
+  requestSupplierId: 'sup-1', lastAnswerHash: null, supplierQuoteRef: null, ...over,
+})
+
+describe('answer: unlocked quote', () => {
+  it('applies the value (origin supplier), closes the request into history, re-prices and signals `valued` without an amount', async () => {
+    const { service, costs, recalculate, quote } = setup({ costs: [requested()] })
+    const result = await service.answer(ids.quote, ids.cost, answerInput({ supplierName: 'Carrier', validUntil: '2999-01-01' }), ACTOR, SCOPE)
+    expect(result.response).toMatchObject({ outcome: 'applied', lineReady: true, pricingRevision: 5, cost: { unitAmount: '280', valueStatus: 'confirmed', valueOrigin: 'supplier' } })
+    expect(costs[0]).toMatchObject({
+      sourcingStatus: 'answered', valueStatus: 'confirmed', valueOrigin: 'supplier', unitAmount: '280', instanceAmount: '280', currencyCode: 'EUR',
+      supplierQuoteRef: REF, supplierName: 'Carrier', supplierId: 'sup-1', validUntil: '2999-01-01', answeredByUserId: ACTOR, proposedAmount: null, errorCode: null,
+    })
+    expect(costs[0].lastAnswerHash).toMatch(/^[0-9a-f]{64}$/)
+    expect(costs[0].requestHistory).toEqual([expect.objectContaining({ costRequestId: ids.req, outcome: 'answered', supplierQuoteRef: REF, closedByUserId: ACTOR })])
+    expect(recalculate).toHaveBeenCalledTimes(1)
+    expect(quote.pricingRevision).toBe(5)
+    const valued = result.signals.find((signal) => signal.kind === 'valued')
+    expect(valued).toMatchObject({ cause: 'answer', valueStatus: 'confirmed', previousValueStatus: 'estimated', valueChanged: true, answerPending: false, lineReady: true, requestedByUserId: 'u0' })
+    expect(JSON.stringify(result.signals)).not.toMatch(/280|7777/)
+  })
+
+  it('an estimated answer applies as estimated; a non-quote currency is stored and resolves to none + CURRENCY_NO_RATE', async () => {
+    const a = setup({ costs: [requested()] })
+    await a.service.answer(ids.quote, ids.cost, answerInput({ valueStatus: 'estimated' }), ACTOR, SCOPE)
+    expect(a.costs[0].valueStatus).toBe('estimated')
+    const b = setup({ costs: [requested()] })
+    await b.service.answer(ids.quote, ids.cost, answerInput({ currencyCode: 'USD' }), ACTOR, SCOPE)
+    expect(b.costs[0]).toMatchObject({ valueStatus: 'none', unitAmount: null, instanceAmount: null, currencyCode: 'USD', errorCode: 'CURRENCY_NO_RATE', sourcingStatus: 'answered' })
+  })
+
+  it('a carried line is accepted; a confirming answer clears renegotiationDue only where the column exists', async () => {
+    const withColumn = setup({ costs: [requested({ origin: 'carried', costElementId: null, renegotiationDue: true })] })
+    await withColumn.service.answer(ids.quote, ids.cost, answerInput(), ACTOR, SCOPE)
+    expect(withColumn.costs[0]).toMatchObject({ sourcingStatus: 'answered', renegotiationDue: false })
+    const without = setup({ costs: [requested({ origin: 'carried', costElementId: null })] })
+    await without.service.answer(ids.quote, ids.cost, answerInput(), ACTOR, SCOPE)
+    expect(without.costs[0]).not.toHaveProperty('renegotiationDue')
+    expect(without.costs[0].sourcingStatus).toBe('answered')
+  })
+
+  it('a margin-only cost applies even on a locked quote, without re-pricing', async () => {
+    const { service, costs, recalculate } = setup({ costs: [requested({ role: 'margin_only' })], status: 'with_customer' })
+    const result = await service.answer(ids.quote, ids.cost, answerInput({ unitAmount: 999 }), ACTOR, SCOPE)
+    expect(result.response.outcome).toBe('applied')
+    expect(costs[0]).toMatchObject({ unitAmount: '999', proposedAmount: null })
+    expect(recalculate).not.toHaveBeenCalled()
+  })
+})
+
+describe('answer: refusals and idempotency (I-13) write nothing', () => {
+  const attempt = async (setupOpts: Parameters<typeof setup>[0], input: Row = answerInput()) => {
+    const ctx = setup(setupOpts)
+    const snapshot = JSON.stringify(ctx.costs)
+    const outcome: { value?: unknown; error?: any } = await ctx.service.answer(ids.quote, ids.cost, input as never, ACTOR, SCOPE).then((value) => ({ value }), (error) => ({ error }))
+    expect(JSON.stringify(ctx.costs)).toBe(snapshot)
+    expect(ctx.recalculate).not.toHaveBeenCalled()
+    return { ...ctx, ...outcome }
+  }
+
+  it('stale request id is 409 COST_REQUEST_SUPERSEDED, also with the same ref as an applied answer (never 200)', async () => {
+    const first = setup({ costs: [requested()] })
+    await first.service.answer(ids.quote, ids.cost, answerInput(), ACTOR, SCOPE)
+    const applied = first.costs[0]
+    const reRequested = { ...applied, costRequestId: '77777777-7777-4777-8777-777777777777', sourcingStatus: 'requested', lastAnswerHash: null }
+    const stale = await attempt({ costs: [reRequested] })
+    expect(stale.error).toMatchObject({ status: 409, message: 'COST_REQUEST_SUPERSEDED' })
+    const sameRef = await attempt({ costs: [{ ...applied, costRequestId: '77777777-7777-4777-8777-777777777777' }] })
+    expect(sameRef.error).toMatchObject({ status: 409, message: 'COST_REQUEST_SUPERSEDED' })
+    expect((await attempt({ costs: [cost()] })).error).toMatchObject({ status: 409, message: 'COST_REQUEST_SUPERSEDED' })
+  })
+
+  it('retry with the same ref and payload is a 200 noop: no revision bump, no write, no signal', async () => {
+    const first = setup({ costs: [requested()] })
+    await first.service.answer(ids.quote, ids.cost, answerInput(), ACTOR, SCOPE)
+    const second = setup({ costs: [first.costs[0]] })
+    const revision = second.quote.pricingRevision
+    const result = await second.service.answer(ids.quote, ids.cost, answerInput(), ACTOR, SCOPE)
+    expect(result.response).toMatchObject({ outcome: 'noop', pricingRevision: revision })
+    expect(second.quote.pricingRevision).toBe(revision)
+    expect(result.signals).toEqual([])
+    expect(second.recalculate).not.toHaveBeenCalled()
+    expect(second.publisher).not.toHaveBeenCalled()
+  })
+
+  it('same ref with a different payload is 409 SUPPLIER_QUOTE_REF_CONFLICT', async () => {
+    const first = setup({ costs: [requested()] })
+    await first.service.answer(ids.quote, ids.cost, answerInput(), ACTOR, SCOPE)
+    const outcome = await attempt({ costs: [first.costs[0]] }, answerInput({ unitAmount: 295 }))
+    expect(outcome.error).toMatchObject({ status: 409, message: 'SUPPLIER_QUOTE_REF_CONFLICT' })
+  })
+
+  it('a closed request (declined / cancelled / answered under another ref) is 409 REQUEST_NOT_OPEN', async () => {
+    for (const sourcingStatus of ['declined', 'cancelled', 'answered']) {
+      const outcome = await attempt({ costs: [requested({ sourcingStatus })] }, answerInput({ supplierQuoteRef: 'OTHER' }))
+      expect(outcome.error).toMatchObject({ status: 409, message: 'REQUEST_NOT_OPEN' })
+    }
+  })
+
+  it('an inactive cost element is 409 COST_REQUEST_SUPERSEDED and the request is NOT cancelled by the refusal (Q4)', async () => {
+    const outcome = await attempt({ costs: [requested()], element: null })
+    expect(outcome.error).toMatchObject({ status: 409, message: 'COST_REQUEST_SUPERSEDED' })
+    expect(outcome.costs[0].sourcingStatus).toBe('requested')
+  })
+
+  it('a Cancel line is 422 LINE_NOT_ELIGIBLE (checked before the request id)', async () => {
+    const outcome = await attempt({ costs: [requested()], quoteType: 'amend', line: { action: 'cancel' } }, answerInput({ costRequestId: '88888888-8888-4888-8888-888888888888' }))
+    expect(outcome.error).toMatchObject({ status: 422, message: 'LINE_NOT_ELIGIBLE' })
+  })
+
+  it('closed quote, converted quote (with orderId) and toggle off (409 COST_PLUS_DISABLED, after the closed checks)', async () => {
+    expect((await attempt({ costs: [requested()], status: 'rejected' })).error).toMatchObject({ status: 409, message: 'QUOTE_CLOSED' })
+    expect((await attempt({ costs: [requested()], sales: false })).error).toMatchObject({ status: 409, message: 'QUOTE_CLOSED' })
+    expect((await attempt({ costs: [requested()], orders: [{ id: 'order-1' }] })).error).toMatchObject({ status: 409, message: 'QUOTE_CONVERTED', details: { orderId: 'order-1' } })
+    expect((await attempt({ costs: [requested()], enabled: false })).error).toMatchObject({ status: 409, message: 'COST_PLUS_DISABLED' })
+    expect((await attempt({ costs: [requested()], enabled: false, status: 'cancelled' })).error).toMatchObject({ status: 409, message: 'QUOTE_CLOSED' })
+  })
+
+  it('unknown cost line is 404; invalid currency format and a past validUntil are 422', async () => {
+    const ctx = setup({ costs: [requested()] })
+    await expect(ctx.service.answer(ids.quote, '99999999-9999-4999-8999-999999999999', answerInput() as never, ACTOR, SCOPE)).rejects.toMatchObject({ status: 404 })
+    expect((await attempt({ costs: [requested()] }, answerInput({ currencyCode: 'eur' }))).error).toMatchObject({ status: 422, message: 'INVALID_CURRENCY_CODE' })
+    expect((await attempt({ costs: [requested()] }, answerInput({ currencyCode: 'EURO' }))).error).toMatchObject({ status: 422 })
+    expect((await attempt({ costs: [requested()] }, answerInput({ validUntil: '2000-01-01' }))).error).toMatchObject({ status: 422, message: 'VALID_UNTIL_IN_PAST' })
+  })
+
+  it('a retried answer whose validUntil has passed meanwhile is still a noop (the date is checked after idempotency)', async () => {
+    const first = setup({ costs: [requested()] })
+    await first.service.answer(ids.quote, ids.cost, answerInput({ validUntil: '2999-01-01' }), ACTOR, SCOPE)
+    const retry = setup({ costs: [first.costs[0]] })
+    const result = await retry.service.answer(ids.quote, ids.cost, answerInput({ validUntil: '2999-01-01' }), ACTOR, SCOPE)
+    expect(result.response.outcome).toBe('noop')
+  })
+})
+
+describe('answer: locked quote (R11)', () => {
+  it('same amount and currency confirms: price untouched, no re-pricing, supplier and validity updated', async () => {
+    const { service, costs, recalculate } = setup({ costs: [requested({ unitAmount: '276.0000', instanceAmount: '276.0000' })], status: 'with_customer' })
+    const result = await service.answer(ids.quote, ids.cost, answerInput({ unitAmount: 276, validUntil: '2999-01-01', supplierName: 'Carrier' }), ACTOR, SCOPE)
+    expect(result.response.outcome).toBe('confirmed_unchanged')
+    expect(costs[0]).toMatchObject({ valueStatus: 'confirmed', valueOrigin: 'supplier', unitAmount: '276.0000', instanceAmount: '276.0000', proposedAmount: null, sourcingStatus: 'answered', validUntil: '2999-01-01', supplierName: 'Carrier' })
+    expect(recalculate).not.toHaveBeenCalled()
+  })
+
+  it('a different value is stored as a proposal only: amount, status and charges unchanged, answerPending signalled', async () => {
+    const { service, costs, recalculate } = setup({ costs: [requested({ unitAmount: '276.0000', instanceAmount: '276.0000' })], status: 'with_customer' })
+    const result = await service.answer(ids.quote, ids.cost, answerInput({ unitAmount: 310 }), ACTOR, SCOPE)
+    expect(result.response.outcome).toBe('proposed')
+    expect(costs[0]).toMatchObject({ unitAmount: '276.0000', valueStatus: 'estimated', sourcingStatus: 'answered', proposedAmount: '310.0000' })
+    expect(costs[0].proposedAnswer).toMatchObject({ unitAmount: '310.0000', currencyCode: 'EUR', supplierQuoteRef: REF, valueStatus: 'confirmed' })
+    expect(costs[0].proposedAnswer).not.toHaveProperty('costRequestId')
+    expect(recalculate).not.toHaveBeenCalled()
+    expect(result.signals.find((signal) => signal.kind === 'valued')).toMatchObject({ answerPending: true, valueChanged: false })
+  })
+
+  it('a retried proposal is a noop and a changed payload under the same ref conflicts (the proposal ref is the idempotency ref)', async () => {
+    const first = setup({ costs: [requested({ unitAmount: '276.0000' })], status: 'with_customer' })
+    await first.service.answer(ids.quote, ids.cost, answerInput({ unitAmount: 310 }), ACTOR, SCOPE)
+    const again = setup({ costs: [first.costs[0]], status: 'with_customer' })
+    expect((await again.service.answer(ids.quote, ids.cost, answerInput({ unitAmount: 310 }), ACTOR, SCOPE)).response.outcome).toBe('noop')
+    await expect(again.service.answer(ids.quote, ids.cost, answerInput({ unitAmount: 320 }), ACTOR, SCOPE)).rejects.toMatchObject({ status: 409, message: 'SUPPLIER_QUOTE_REF_CONFLICT' })
+  })
+})
+
+describe('decline (Q3)', () => {
+  const declineInput = { costRequestId: ids.req, reason: 'No coverage at site' }
+
+  it('unlocked: value none, the estimate moves into the note, request closed as declined, quote re-priced', async () => {
+    const { service, costs, recalculate } = setup({ costs: [requested({ unitAmount: '300.0000', instanceAmount: '300.0000' })] })
+    const result = await service.decline(ids.quote, ids.cost, declineInput, ACTOR, SCOPE)
+    expect(result.response).toMatchObject({ outcome: 'declined', pricingRevision: 5 })
+    expect(costs[0]).toMatchObject({ sourcingStatus: 'declined', declineReason: 'No coverage at site', valueStatus: 'none', unitAmount: null, instanceAmount: null, valueOrigin: 'supplier', answeredByUserId: ACTOR })
+    expect(costs[0].note).toBe('estimate 300 discarded: declined')
+    expect(costs[0].requestHistory).toEqual([expect.objectContaining({ outcome: 'declined', declineReason: 'No coverage at site' })])
+    expect(recalculate).toHaveBeenCalledTimes(1)
+    expect(result.signals.find((signal) => signal.kind === 'valued')).toMatchObject({ cause: 'decline', valueStatus: 'none', previousValueStatus: 'estimated', valueChanged: true })
+  })
+
+  it('locked price-basis: the amount is kept and downgraded to estimated; no re-pricing', async () => {
+    const { service, costs, recalculate } = setup({ costs: [requested({ unitAmount: '300.0000', valueStatus: 'confirmed' })], status: 'with_customer' })
+    await service.decline(ids.quote, ids.cost, declineInput, ACTOR, SCOPE)
+    expect(costs[0]).toMatchObject({ sourcingStatus: 'declined', valueStatus: 'estimated', unitAmount: '300.0000' })
+    expect(recalculate).not.toHaveBeenCalled()
+  })
+
+  it('locked margin-only follows the unlocked rule (lock-exempt)', async () => {
+    const { service, costs } = setup({ costs: [requested({ role: 'margin_only', unitAmount: '50.0000' })], status: 'with_customer' })
+    await service.decline(ids.quote, ids.cost, declineInput, ACTOR, SCOPE)
+    expect(costs[0]).toMatchObject({ valueStatus: 'none', unitAmount: null })
+  })
+
+  it('refusals write nothing: answered / declined request is REQUEST_NOT_OPEN, stale id and inactive element are SUPERSEDED, closed / converted / disabled', async () => {
+    const run = async (opts: Parameters<typeof setup>[0], input = declineInput) => {
+      const ctx = setup(opts)
+      const snapshot = JSON.stringify(ctx.costs)
+      const error = await ctx.service.decline(ids.quote, ids.cost, input, ACTOR, SCOPE).then(() => null, (e) => e)
+      expect(JSON.stringify(ctx.costs)).toBe(snapshot)
+      return error
+    }
+    expect(await run({ costs: [requested({ sourcingStatus: 'answered' })] })).toMatchObject({ status: 409, message: 'REQUEST_NOT_OPEN' })
+    expect(await run({ costs: [requested()] }, { ...declineInput, costRequestId: '88888888-8888-4888-8888-888888888888' })).toMatchObject({ status: 409, message: 'COST_REQUEST_SUPERSEDED' })
+    expect(await run({ costs: [requested()], element: null })).toMatchObject({ status: 409, message: 'COST_REQUEST_SUPERSEDED' })
+    expect(await run({ costs: [requested()], status: 'cancelled' })).toMatchObject({ status: 409, message: 'QUOTE_CLOSED' })
+    expect(await run({ costs: [requested()], orders: [{ id: 'o1' }] })).toMatchObject({ status: 409, message: 'QUOTE_CONVERTED' })
+    expect(await run({ costs: [requested()], enabled: false })).toMatchObject({ status: 409, message: 'COST_PLUS_DISABLED' })
   })
 })

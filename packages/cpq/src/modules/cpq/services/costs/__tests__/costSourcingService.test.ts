@@ -327,6 +327,14 @@ describe('answer: unlocked quote', () => {
     expect(b.costs[0]).toMatchObject({ currencyCode: 'EUR', fxRate: null, fxRateDate: null, fxRateSource: null, fxRateDerivation: null })
   })
 
+  it('review1-a: confirmed_unchanged never promotes a foreign row that has no rate snapshot (it would read 1:1)', async () => {
+    const noSnapshot = { currencyCode: 'USD', unitAmount: '280.0000', instanceAmount: null, valueStatus: 'none', errorCode: 'CURRENCY_NO_RATE', fxRate: null, fxRateDate: null, fxRateSource: null, fxRateDerivation: null }
+    const b = setup({ costs: [requested({ ...noSnapshot })], status: 'with_customer' })
+    const result = await b.service.answer(ids.quote, ids.cost, answerInput({ currencyCode: 'USD', unitAmount: 280 }), ACTOR, SCOPE)
+    expect(result.response.outcome).toBe('confirmed_unchanged')
+    expect(b.costs[0]).toMatchObject({ valueStatus: 'none', errorCode: 'CURRENCY_NO_RATE', fxRate: null, instanceAmount: null })
+  })
+
   it('FX step 7: locked quote, price-basis: a foreign answer is a proposal (compared in the cost currency + code), same amount and currency confirms and keeps the snapshot', async () => {
     const fx = jest.fn(async () => ({ ok: true, rate: '0.95000000', rateDate: '2026-11-14', source: 'Manual', derivation: 'direct' }))
     const frozen = { currencyCode: 'USD', unitAmount: '280.0000', instanceAmount: '280.0000', fxRate: '0.92000000', fxRateDate: '2026-11-11', fxRateSource: 'ECB', fxRateDerivation: 'direct' }

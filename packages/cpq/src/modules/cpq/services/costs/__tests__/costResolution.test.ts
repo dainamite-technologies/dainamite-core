@@ -884,6 +884,27 @@ describe('foreign-currency catalog costs on a EUR quote', () => {
       expect(s.costs[0]).toMatchObject({ valueStatus: 'confirmed', note: null, ...SNAPSHOT })
     })
 
+    it('review1-a: a manual value whose rate disappears is none + CURRENCY_NO_RATE with no instance amount (never readable 1:1)', async () => {
+      const s = store({ charges: [charge()], costs: [noRate({ valueStatus: 'confirmed', errorCode: null, instanceAmount: '300', fxRate: '0.90000000', fxRateDate: '2026-11-10', fxRateSource: 'Old', fxRateDerivation: 'direct' })] })
+      await run(s, { quoteOver: eurQuote, fxResolver: fxStub({}) })
+      expect(s.costs[0]).toMatchObject({ valueStatus: 'none', errorCode: 'CURRENCY_NO_RATE', unitAmount: '300', instanceAmount: null, ...NO_SNAPSHOT })
+    })
+
+    it('review1-a: a transient resolver error keeps the stored snapshot and status (no demotion) and logs a warning', async () => {
+      const s = store({ charges: [charge()], costs: [noRate({ valueStatus: 'confirmed', errorCode: null, instanceAmount: '300', fxRate: '0.90000000', fxRateDate: '2026-11-10', fxRateSource: 'Old', fxRateDerivation: 'direct' })] })
+      const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined)
+      await run(s, { quoteOver: eurQuote, fxResolver: fxStub({ 'USD>EUR': { ok: false, code: 'CURRENCY_NO_RATE', reason: 'error' } }) })
+      expect(s.costs[0]).toMatchObject({ valueStatus: 'confirmed', errorCode: null, instanceAmount: '300', fxRate: '0.90000000', fxRateSource: 'Old' })
+      expect(warn).toHaveBeenCalledTimes(1)
+      warn.mockRestore()
+    })
+
+    it('review1-a: an `unavailable` resolver reason demotes like not_found', async () => {
+      const s = store({ charges: [charge()], costs: [noRate({ valueStatus: 'confirmed', errorCode: null, instanceAmount: '300', fxRate: '0.90000000', fxRateDate: '2026-11-10', fxRateSource: 'Old', fxRateDerivation: 'direct' })] })
+      await run(s, { quoteOver: eurQuote, fxResolver: fxStub({ 'USD>EUR': { ok: false, code: 'CURRENCY_NO_RATE', reason: 'unavailable' } }) })
+      expect(s.costs[0]).toMatchObject({ valueStatus: 'none', errorCode: 'CURRENCY_NO_RATE', instanceAmount: null, ...NO_SNAPSHOT })
+    })
+
     it('a mirror line holding a rate keeps it even for a value awaiting nothing', async () => {
       const mirror = lineConfig({ configuration: { _arcMirroredFromItemId: 'item-1', _arcReconfigured: true } })
       const s = store({ charges: [charge()], costs: [noRate({ valueStatus: 'confirmed', errorCode: null, instanceAmount: '300', fxRate: '0.90000000', fxRateDate: '2026-11-10', fxRateSource: 'Old', fxRateDerivation: 'direct' })] })

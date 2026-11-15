@@ -218,7 +218,7 @@ export class CpqCostSourcingService {
           Object.assign(row, closed, { proposedAmount: normalized.unitAmount, proposedAnswer: payload })
         } else if (verdict === 'confirmed_unchanged') {
           Object.assign(row, closed, { proposedAmount: null, proposedAnswer: null }, this.supplierFields(row, payload),
-            payload.valueStatus === 'confirmed' ? { valueStatus: 'confirmed', valueOrigin: 'supplier' } : {})
+            payload.valueStatus === 'confirmed' && this.hasValidSnapshot(row, quote) ? { valueStatus: 'confirmed', valueOrigin: 'supplier' } : {})
         } else {
           Object.assign(row, closed, { proposedAmount: null, proposedAnswer: null }, await this.valuePatch(em, quote, line, row, payload, scope))
         }
@@ -480,6 +480,14 @@ export class CpqCostSourcingService {
       outcome, closedAt: now, closedByUserId: actor,
     })
     return entry ? { requestHistory: appendRequestHistory(row.requestHistory as Array<Record<string, unknown>> | undefined, entry as unknown as Record<string, unknown>) } : {}
+  }
+
+  /**
+   * A status promotion must never leave a foreign-currency row without a rate snapshot (it would read 1:1): only a row in
+   * the quote currency, or one that holds a snapshot, may be promoted to `confirmed` without re-resolving FX.
+   */
+  private hasValidSnapshot(row: CpqQuoteLineCost, quote: CpqQuoteConfiguration): boolean {
+    return (row.currencyCode ?? quote.currencyCode) === quote.currencyCode || (row.fxRate !== null && row.fxRate !== undefined)
   }
 
   /** Supplier columns of an answer; an answer without supplier fields keeps the targeted supplier of the request. */

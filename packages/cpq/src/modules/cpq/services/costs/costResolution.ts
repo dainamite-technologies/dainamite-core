@@ -67,7 +67,9 @@ const scoped = (scope: TenantScope) => ({ organizationId: scope.organizationId, 
 type FxFields = { fxRate: string | null; fxRateDate: string | null; fxRateSource: string | null; fxRateDerivation: string | null }
 const NO_FX: FxFields = { fxRate: null, fxRateDate: null, fxRateSource: null, fxRateDerivation: null }
 /** Rate for one cost currency into the quote currency, or `null` when none is available (never a 1:1 conversion). */
-type FxLookup = (currency: string) => Promise<FxFields | null>
+type FxLookup = (currency: string) => Promise<FxFields | typeof FX_ERROR | null>
+/** A transient resolver failure (`reason: 'error'`): distinct from "no rate", so a stored snapshot is not demoted. */
+const FX_ERROR = Symbol('cpq.fx.error')
 
 type ResolvedValue = FxFields & {
   valueStatus: 'none' | 'estimated' | 'confirmed'
@@ -119,7 +121,7 @@ async function resolveValue(
   // No rate: `none` + CURRENCY_NO_RATE with the unit amount and currency kept, never a 1:1 conversion (R3).
   const foreign = async (status: 'confirmed' | 'estimated', currency: string, unit: number, instance: number): Promise<ResolvedValue> => {
     const fx = await lookup(currency)
-    if (!fx) {
+    if (!fx || fx === FX_ERROR) {
       return { valueStatus: 'none', valueOrigin: 'catalog', unitAmount: money(unit), instanceAmount: null, currencyCode: currency, errorCode: 'CURRENCY_NO_RATE', ...NO_FX }
     }
     return { valueStatus: status, valueOrigin: 'catalog', unitAmount: money(unit), instanceAmount: money(instance), currencyCode: currency, errorCode: null, ...fx }
@@ -147,7 +149,8 @@ async function resolveValue(
       const fallbackCurrency = element.currencyCode && element.currencyCode !== quoteCurrency ? element.currencyCode : null
       if (!rowInQuoteCurrency && fallbackCurrency) {
         const inFallback = lookupTablePrice(lookupTable, element.costColumnKey, model, configuration, quantity, fallbackCurrency, strict)
-        if (inFallback.outcome === 'zero_quantity') return foreign('confirmed', fallbackCurrency, 0, 0)
+        // A zero cost converts to zero at any rate, so it needs no rate: confirmed 0 in the cost currency, no snapshot.
+        if (inFallback.outcome === 'zero_quantity') return { valueStatus: 'confirmed', valueOrigin: 'catalog', unitAmount: money(0), instanceAmount: money(0), currencyCode: fallbackCurrency, errorCode: null, ...NO_FX }
         if (inFallback.outcome !== 'miss') return foreign('confirmed', fallbackCurrency, inFallback.unitPrice, inFallback.totalPrice)
       }
       // CURRENCY_NO_RATE only when the quote currency has no matching row at all and another currency prices it.
@@ -177,7 +180,13 @@ async function enteredFxPatch(row: CpqQuoteLineCost, quoteCurrency: string, look
   if (row.unitAmount === null || row.unitAmount === undefined || !row.currencyCode) return {}
   if (row.currencyCode === quoteCurrency) return row.fxRate === null || row.fxRate === undefined ? {} : { ...NO_FX }
   const fx = await lookup(row.currencyCode)
-  if (!fx) return { ...NO_FX, valueStatus: 'none', errorCode: 'CURRENCY_NO_RATE' }
+  if (fx === FX_ERROR && row.fxRate !== null && row.fxRate !== undefined && row.valueStatus !== 'none') {
+    // Transient lookup failure: keep the stored snapshot and status (no demotion); the next recalculation retries.
+    console.warn(`[cpq.fx] rate lookup ${row.currencyCode}>${quoteCurrency} failed; kept the stored snapshot of a cost line`)
+    return {}
+  }
+  // Like every other no-rate write the instance amount is cleared, so no stored row can ever be read 1:1.
+  if (!fx || fx === FX_ERROR) return { ...NO_FX, valueStatus: 'none', errorCode: 'CURRENCY_NO_RATE', instanceAmount: null }
   const patch: RowPatch = { ...fx }
   if (row.valueStatus === 'none' && row.errorCode === 'CURRENCY_NO_RATE') {
     patch.valueStatus = 'estimated'
@@ -378,6 +387,7 @@ async function planQuoteCosts(params: CostResolutionParams & { save?: boolean })
     }
     if (!params.fxResolver) return null
     const result = await params.fxResolver.resolve({ from: currency, to: quote.currencyCode, scope })
+    if (!result.ok && result.reason === 'error') return FX_ERROR
     return result.ok ? { fxRate: result.rate, fxRateDate: result.rateDate, fxRateSource: result.source, fxRateDerivation: result.derivation } : null
   }
 

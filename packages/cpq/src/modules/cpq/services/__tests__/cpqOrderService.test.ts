@@ -1380,6 +1380,20 @@ describe('conversion and supplier cost requests (step 9)', () => {
     expect(row.requestHistory).toEqual([expect.objectContaining({ outcome: 'cancelled', reason: 'quote_closed' })])
   })
 
+  it('publishes the cancellation signal after the conversion committed, once', async () => {
+    const row = cost({})
+    const { service, em } = createService()
+    const publisher = jest.fn()
+    ;(service as unknown as { sourcingPublisher: unknown }).sourcingPublisher = publisher
+    em.findOne.mockResolvedValueOnce({ id: 'quote', quoteId: 'sales', cpqStatus: 'accepted', currencyCode: 'USD', customerId: 'customer', pricingSummary: { nrcTotal: 0, mrcTotal: 80 } })
+      .mockResolvedValueOnce(null)
+    em.find.mockResolvedValueOnce([line] as never).mockResolvedValueOnce([row] as never).mockResolvedValueOnce([row] as never).mockResolvedValueOnce([row] as never)
+    em.create.mockImplementation((_entity, values: Record<string, unknown>) => ({ createdAt: new Date(), ...values }))
+    await service.convertQuoteToOrder('quote', SCOPE)
+    expect(publisher).toHaveBeenCalledTimes(1)
+    expect(publisher).toHaveBeenCalledWith([expect.objectContaining({ kind: 'request_cancelled', reason: 'quote_closed', costRequestId: 'req-1' })], expect.anything())
+  })
+
   it('cancels a margin-only request (it never blocks) and still copies the cost line to the order', async () => {
     const row = cost({ role: 'margin_only', valueStatus: 'estimated' })
     const { em, run } = await convert([row])

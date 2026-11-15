@@ -15,6 +15,7 @@ import { CpqCostService } from './services/costs/costService'
 import { CpqQuoteCostService } from './services/costs/quoteCostService'
 import { CpqCostSourcingService } from './services/costs/costSourcingService'
 import { CpqCostRequestQueueService } from './services/costs/costRequestQueue'
+import { createSourcingPublisher } from './services/costs/sourcingPublisher'
 
 /**
  * Resolve dependencies from the container closure rather than via destructured
@@ -24,12 +25,16 @@ import { CpqCostRequestQueueService } from './services/costs/costRequestQueue'
  * pre-compiled in node_modules.
  */
 export function register(container: AppContainer) {
+  // Publishes the sourcing signals of every committed quote write as the non-broadcast cost_* events (step 12). One
+  // instance per scope; every producer (sourcing, quote costs, adjustments, quoting, orders) receives the same one.
+  const sourcingPublisher = () => createSourcingPublisher({ em: container.resolve('em') })
   container.register({
     cpqAdjustmentService: asFunction(() => new CpqAdjustmentService({
       em: container.resolve('em'),
       quotingService: container.resolve('cpqQuotingService'),
       featureTogglesService: container.resolve('featureTogglesService'),
       costService: container.resolve('cpqCostService'),
+      sourcingPublisher: sourcingPublisher(),
     })).scoped(),
     cpqCostService: asFunction(() => new CpqCostService({
       em: container.resolve('em'),
@@ -42,6 +47,7 @@ export function register(container: AppContainer) {
       em: container.resolve('em'),
       costService: container.resolve('cpqCostService'),
       quotingService: container.resolve('cpqQuotingService'),
+      publisher: sourcingPublisher(),
     })).scoped(),
     cpqCostRequestQueueService: asFunction(() => new CpqCostRequestQueueService({
       em: container.resolve('em'),
@@ -51,6 +57,7 @@ export function register(container: AppContainer) {
       em: container.resolve('em'),
       costService: container.resolve('cpqCostService'),
       quotingService: container.resolve('cpqQuotingService'),
+      publisher: sourcingPublisher(),
     })).scoped(),
     cpqPricingService: asFunction(({ em }: { em: EntityManager }) => {
       return new DefaultCpqPricingService(em)
@@ -81,6 +88,7 @@ export function register(container: AppContainer) {
         cpqProductService: container.resolve('cpqProductService'),
         salesDocumentNumberGenerator: container.resolve('salesDocumentNumberGenerator'),
         cpqCostService: container.resolve('cpqCostService'),
+        sourcingPublisher: sourcingPublisher(),
       })
     }).scoped().proxy(),
     cpqInventoryService: asFunction(() => {
@@ -92,6 +100,7 @@ export function register(container: AppContainer) {
         cpqInventoryService: container.resolve('cpqInventoryService'),
         salesDocumentNumberGenerator: container.resolve('salesDocumentNumberGenerator'),
         cpqCostService: container.resolve('cpqCostService'),
+        sourcingPublisher: sourcingPublisher(),
       })
     }).scoped(),
     cpqWizardService: asFunction(({ em }: { em: EntityManager }) => {

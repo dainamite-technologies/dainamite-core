@@ -38,11 +38,11 @@ export type SourcingCancelledSignal = SourcingCostRef & {
 
 /**
  * A sourcing action changed a cost line's value or value status (Q11: answer, decline, apply-answer). Statuses and
- * flags only: never the amount (App Spec I-4). Step 12 maps it to `cpq.quote.cost_valued`.
+ * flags only: never the amount (App Spec I-4). The publisher maps it to `cpq.quote.cost_valued`.
  */
 export type SourcingValuedSignal = SourcingCostRef & {
   kind: 'valued'
-  cause: 'answer' | 'decline' | 'apply_answer'
+  cause: 'answer' | 'decline' | 'apply_answer' | 'manual_value' | 'reset'
   costRequestId: string | null
   requestSeq: number | null
   /** Resolved after the write's recalculation. */
@@ -66,7 +66,7 @@ export type SourcingSignalSink = SourcingSignal[]
 /** The quote the committed write belonged to. */
 export type SourcingPublishScope = { id: string; tenantId: string; organizationId: string }
 
-/** Step 12 provides the implementation (non-broadcast events, once per request / cancellation). Failures must not throw. */
+/** `createSourcingPublisher` provides the implementation (non-broadcast events, once per request / cancellation). Failures must not throw. */
 export type SourcingSignalPublisher = (signals: readonly SourcingSignal[], quote: SourcingPublishScope) => Promise<void> | void
 
 type RefSource = {
@@ -83,3 +83,7 @@ export const sourcingCostRef = (row: RefSource): SourcingCostRef => ({
   quoteConfigurationId: row.quoteConfigurationId, quoteId: row.quoteId, quoteLineId: row.quoteLineId,
   costLineId: row.id, costKey: row.costKey, costName: row.name, chargeCode: row.chargeCode ?? null,
 })
+
+/** A quote line is ready while the stored validation has no error for it. */
+export const lineReady = (quote: { validationResult?: { errors?: unknown } | null }, quoteLineId: string): boolean =>
+  !(((quote.validationResult?.errors as Array<{ lineId?: string }> | undefined) ?? []).some((error) => error.lineId === quoteLineId))

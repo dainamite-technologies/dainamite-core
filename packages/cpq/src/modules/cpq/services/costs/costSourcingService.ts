@@ -40,7 +40,7 @@ import {
 import { createMarginTracker } from './quoteMarginTracker'
 import { costInstanceAmount } from './quoteCostService'
 import { fullCostView, type FullCostView } from './quoteCostView'
-import { sourcingCostRef, type SourcingSignal, type SourcingSignalPublisher } from './sourcingSignals'
+import { lineReady, sourcingCostRef, type SourcingSignal, type SourcingSignalPublisher } from './sourcingSignals'
 
 type Dependencies = {
   em: EntityManager
@@ -90,10 +90,6 @@ const proposalOf = (answer: NormalizedAnswer): AnswerPayload => {
   const { costRequestId: _requestId, ...payload } = answer
   return payload
 }
-
-/** A quote line is ready while the stored validation has no error for it. */
-const lineReady = (quote: CpqQuoteConfiguration, quoteLineId: string): boolean =>
-  !((quote.validationResult?.errors as Array<{ lineId?: string }> | undefined) ?? []).some((error) => error.lineId === quoteLineId)
 
 const audit = (row: CpqQuoteLineCost, reason?: string): SourcingAudit => ({
   id: row.id, quoteLineId: row.quoteLineId, costKey: row.costKey, sourcingStatus: row.sourcingStatus,

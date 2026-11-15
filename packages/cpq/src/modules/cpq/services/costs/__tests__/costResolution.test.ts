@@ -461,7 +461,12 @@ describe('cost requests on saved recalculations (Q12, R1a, R1b)', () => {
       expect(String(s.costs[0].note)).toContain('80 USD')
       expect(String(s.costs[0].note)).toContain('carrier call')
       expect(s.costs[0].requestHistory).toEqual([cancelledEntry('reconfigured')])
-      expect(signals).toEqual([expect.objectContaining({ kind: 'request_cancelled', reason: 'reconfigured', costRequestId: 'req-1', requestSeq: 3, costLineId: s.costs[0].id })])
+      expect(signals).toEqual([
+        expect.objectContaining({ kind: 'request_cancelled', reason: 'reconfigured', costRequestId: 'req-1', requestSeq: 3, costLineId: s.costs[0].id }),
+        // Q11: the R1b reset is also a sourcing-relevant value change (amount-free, cause `reset`).
+        expect.objectContaining({ kind: 'valued', cause: 'reset', valueChanged: true, answerPending: false, sourcingStatus: 'cancelled', costLineId: s.costs[0].id }),
+      ])
+      expect(JSON.stringify(signals)).not.toMatch(/"(unitAmount|instanceAmount|amount)"/)
     })
 
     it('opens a fresh request for a requires_sourcing element (seq + 1, requester = the actor, supplier from the element default)', async () => {
@@ -475,7 +480,7 @@ describe('cost requests on saved recalculations (Q12, R1a, R1b)', () => {
       expect(s.costs[0].costRequestId).not.toBe('req-1')
       expect(s.costs[0].requestedAt).toBeInstanceOf(Date)
       expect(s.costs[0].requestHistory).toEqual([{ ...cancelledEntry('reconfigured'), supplierId: 'sup-9' }])
-      expect(signals.map((signal) => signal.kind)).toEqual(['request_cancelled', 'requested'])
+      expect(signals.map((signal) => signal.kind)).toEqual(['request_cancelled', 'requested', 'valued'])
       expect(signals[1]).toMatchObject({ kind: 'requested', requestSeq: 4, auto: true, supplierId: 'sup-9', requestedByUserId: ACTOR, costRequestId: s.costs[0].costRequestId })
     })
 
@@ -485,7 +490,7 @@ describe('cost requests on saved recalculations (Q12, R1a, R1b)', () => {
       const signals: SourcingSignal[] = []
       await run(s, { config: { speed: '10G' }, actorUserId: ACTOR, signals })
       expect(s.costs[0]).toMatchObject({ sourcingStatus: 'requested', requestSeq: 4, proposedAmount: null })
-      expect(signals.map((signal) => signal.kind)).toEqual(['requested'])
+      expect(signals.map((signal) => signal.kind)).toEqual(['requested', 'valued'])
     })
 
     it('leaves the sourcing columns alone while the driving attribute is unchanged', async () => {

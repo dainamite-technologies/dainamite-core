@@ -422,8 +422,36 @@ describe('manual value writes and the sourcing columns', () => {
     await service.updateCost(ids.quote, ids.cost, { unitAmount: 280, valueStatus: 'confirmed', note: 'phone quote' }, ACTOR, SCOPE)
     expect(row).toMatchObject({ unitAmount: '280', valueOrigin: 'manual', valueStatus: 'confirmed', sourcingStatus: 'cancelled', cancelReason: 'manual_value', costRequestId: 'req-1', proposedAmount: null, proposedAnswer: null, lastAnswerHash: null })
     expect(row.requestHistory).toEqual([expect.objectContaining({ outcome: 'cancelled', reason: 'manual_value' })])
-    expect(publisher).toHaveBeenCalledWith([expect.objectContaining({ kind: 'request_cancelled', costRequestId: 'req-1', reason: 'manual_value', costLineId: ids.cost })], expect.anything())
+    expect(publisher).toHaveBeenCalledWith([
+      expect.objectContaining({ kind: 'request_cancelled', costRequestId: 'req-1', reason: 'manual_value', costLineId: ids.cost }),
+      // Q11: a manual value write is a sourcing-relevant value change.
+      expect.objectContaining({ kind: 'valued', cause: 'manual_value', valueStatus: 'confirmed', previousValueStatus: 'none', valueChanged: true, answerPending: false, costLineId: ids.cost }),
+    ], expect.anything())
     expect(JSON.stringify(publisher.mock.calls)).not.toMatch(/280/)
+  })
+
+  it('hands the signal sink to the saved recalculation, so R1a / R1b signals of a cost write are published too (step 12 gap)', async () => {
+    const publisher = jest.fn()
+    const row = catalogRow({ unitAmount: '100', instanceAmount: '100' })
+    const { service, recalculate } = setup({ costs: [row], publisher })
+    const dropped = { kind: 'request_cancelled', costRequestId: 'req-9', requestSeq: 1, reason: 'reconfigured', costLineId: 'other' }
+    recalculate.mockImplementationOnce((async (_em: unknown, _quote: unknown, _scope: unknown, _save: unknown, _adj: unknown, sourcing: { signals?: unknown[] }) => {
+      sourcing.signals?.push(dropped)
+      return {}
+    }) as never)
+    await service.updateCost(ids.quote, ids.cost, { unitAmount: 90, valueStatus: 'confirmed', note: 'phone quote' }, ACTOR, SCOPE)
+    expect(recalculate.mock.calls[0][5]).toEqual({ signals: expect.any(Array) })
+    const [signals] = publisher.mock.calls[0] as [Array<{ kind: string }>]
+    expect(signals).toContain(dropped)
+    expect(signals.filter((signal) => signal.kind === 'valued')).toHaveLength(1)
+  })
+
+  it('a note-only edit publishes nothing', async () => {
+    const publisher = jest.fn()
+    const row = catalogRow({ unitAmount: '100', instanceAmount: '100' })
+    const { service } = setup({ costs: [row], publisher })
+    await service.updateCost(ids.quote, ids.cost, { note: 'remark' }, ACTOR, SCOPE)
+    expect(publisher).not.toHaveBeenCalled()
   })
 
   it('a manual value on a line holding an unapplied proposal clears the proposal and keeps the closed request status', async () => {

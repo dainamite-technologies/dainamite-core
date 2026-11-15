@@ -31,7 +31,7 @@ import type { QuoteMargin } from './quoteMargin'
 import { createMarginTracker } from './quoteMarginTracker'
 import { cancelRowRequests } from './costRequestCancel'
 import { liveQuoteConfigurationIds } from './costRequestQueue'
-import type { SourcingSignal, SourcingSignalPublisher } from './sourcingSignals'
+import { lineReady, sourcingCostRef, type SourcingSignal, type SourcingSignalPublisher } from './sourcingSignals'
 import {
   fullCostView, groupByLine, loadQuoteCosts, loadQuoteMargin, loadQuoteMarkupOverrides, markupOverrideView, redactedCostView,
   type FullCostView, type MarkupOverrideView,
@@ -41,7 +41,7 @@ type Dependencies = {
   em: EntityManager
   costService: Pick<CpqCostService, 'enabled'>
   quotingService: Pick<DefaultCpqQuotingService, 'recalculateLockedQuote'>
-  /** Publishes the sourcing signals (request cancelled by a manual value) of a committed write; wired by step 12. */
+  /** Publishes the sourcing signals (request cancelled by a manual value) of a committed write; wired in di.ts. */
   publisher?: SourcingSignalPublisher
 }
 
@@ -208,7 +208,7 @@ export class CpqQuoteCostService {
   async createCost(quoteId: string, input: QuoteLineCostCreate, actor: string, scope: TenantScope): Promise<QuoteCostWriteResult> {
     const parsed = cpqQuoteLineCostCreateSchema.parse(input)
     await this.requireEnabled(scope)
-    return this.write(quoteId, scope, parsed.expectedRevision, actor, async (em, quote) => {
+    return this.write(quoteId, scope, parsed.expectedRevision, actor, async (em, quote, signals) => {
       const line = await this.requireLine(em, quote, parsed.quoteLineId, scope, 'structure')
       const charge = parsed.chargeCode ? await this.requireCharge(em, line, parsed.chargeCode, scope) : null
       this.assertRoleRules(parsed.role, parsed.costType, charge, parsed.costModel)
@@ -232,7 +232,7 @@ export class CpqQuoteCostService {
         supplierQuoteRef: clean(parsed.supplierQuoteRef), validUntil: parsed.validUntil ?? null, supplierTermEnd: parsed.supplierTermEnd ?? null,
         supplierMinTermMonths: parsed.supplierMinTermMonths ?? null, note: clean(parsed.note), errorCode: null, sourcingStatus: 'not_requested',
       } as never)
-      const margin = await this.persistAndPrice(em, quote, scope, locked, () => { em.persist(row) })
+      const margin = await this.persistAndPrice(em, quote, scope, locked, () => { em.persist(row) }, signals)
       return { cost: fullCostView(row), audit: { before: null, after: costAudit(row) }, margin, pricingRevision: quote.pricingRevision ?? 0 }
     })
   }
@@ -240,8 +240,7 @@ export class CpqQuoteCostService {
   async updateCost(quoteId: string, costId: string, patch: QuoteLineCostUpdate, actor: string, scope: TenantScope): Promise<QuoteCostWriteResult> {
     const parsed = cpqQuoteLineCostUpdateSchema.parse(patch)
     await this.requireEnabled(scope)
-    const signals: SourcingSignal[] = []
-    return this.write(quoteId, scope, parsed.expectedRevision, actor, async (em, quote) => {
+    return this.write(quoteId, scope, parsed.expectedRevision, actor, async (em, quote, signals) => {
       const row = await this.requireCost(em, quote, costId, scope)
       const line = await this.requireLine(em, quote, row.quoteLineId, scope, 'value')
       const before = lockState(row)
@@ -305,20 +304,29 @@ export class CpqQuoteCostService {
         if (parsed.supplierName !== undefined) row.supplierName = clean(parsed.supplierName)
         if (parsed.supplierQuoteRef !== undefined) row.supplierQuoteRef = clean(parsed.supplierQuoteRef)
         if (parsed.note !== undefined) row.note = note
-      })
+      }, signals)
+      // Q11: a manual value write is a sourcing-relevant value change (amount-free `cost_valued`, cause `manual_value`).
+      if (valueChanged || statusChanged) {
+        signals.push({
+          ...sourcingCostRef(row), kind: 'valued', cause: 'manual_value', costRequestId: row.costRequestId ?? null, requestSeq: row.requestSeq ?? null,
+          valueStatus: row.valueStatus, previousValueStatus: before.valueStatus, sourcingStatus: row.sourcingStatus, valueChanged: true,
+          answerPending: false, errorCode: row.errorCode ?? null, lineReady: lineReady(quote, row.quoteLineId), leadTimeHours: null,
+          requestedByUserId: row.requestedByUserId ?? null,
+        })
+      }
       return { cost: fullCostView(row), audit: { before: auditBefore, after: costAudit(row) }, margin, pricingRevision: quote.pricingRevision ?? 0 }
-    }, signals)
+    })
   }
 
   async deleteCost(quoteId: string, costId: string, actor: string, scope: TenantScope, expectedRevision?: number): Promise<QuoteCostWriteResult> {
     await this.requireEnabled(scope)
-    return this.write(quoteId, scope, expectedRevision, actor, async (em, quote) => {
+    return this.write(quoteId, scope, expectedRevision, actor, async (em, quote, signals) => {
       const row = await this.requireCost(em, quote, costId, scope)
       if (row.origin !== 'manual') throw new QuotingError(422, 'CATALOG_COST_NOT_DELETABLE')
       const auditBefore = costAudit(row)
       const locked = await isQuoteCostLocked(em, quote, scope)
       this.assertWritable(quote, locked, affectsPrice(lockState(row), null))
-      const margin = await this.persistAndPrice(em, quote, scope, locked, () => { row.deletedAt = new Date() })
+      const margin = await this.persistAndPrice(em, quote, scope, locked, () => { row.deletedAt = new Date() }, signals)
       return { cost: null, audit: { before: auditBefore, after: null }, margin, pricingRevision: quote.pricingRevision ?? 0 }
     })
   }
@@ -328,7 +336,7 @@ export class CpqQuoteCostService {
   async setMarkupOverride(quoteId: string, input: QuoteMarkupOverrideSet, actor: string, scope: TenantScope): Promise<MarkupOverrideWriteResult> {
     const parsed = cpqQuoteMarkupOverrideSetSchema.parse(input)
     await this.requireEnabled(scope)
-    return this.write(quoteId, scope, parsed.expectedRevision, actor, async (em, quote) => {
+    return this.write(quoteId, scope, parsed.expectedRevision, actor, async (em, quote, signals) => {
       const line = await this.requireLine(em, quote, parsed.quoteLineId, scope, 'structure')
       const charge = await this.requireCharge(em, line, parsed.chargeCode, scope)
       if (charge.pricingMethod !== 'cost_plus') throw new QuotingError(422, 'CHARGE_NOT_COST_PLUS')
@@ -344,29 +352,31 @@ export class CpqQuoteCostService {
       const margin = await this.persistAndPrice(em, quote, scope, locked, () => {
         if (existing) Object.assign(existing, values)
         else em.persist(row)
-      })
+      }, signals)
       return { override: markupOverrideView(row), audit: { before: auditBefore, after: { id: row.id, quoteLineId: row.quoteLineId, chargeCode: row.chargeCode } }, margin, pricingRevision: quote.pricingRevision ?? 0 }
     })
   }
 
   async clearMarkupOverride(quoteId: string, quoteLineId: string, chargeCode: string, actor: string, scope: TenantScope, expectedRevision?: number): Promise<MarkupOverrideWriteResult> {
     await this.requireEnabled(scope)
-    return this.write(quoteId, scope, expectedRevision, actor, async (em, quote) => {
+    return this.write(quoteId, scope, expectedRevision, actor, async (em, quote, signals) => {
       const row = await em.findOne(CpqQuoteMarkupOverride, { ...scoped(scope), quoteConfigurationId: quote.id, quoteLineId, chargeCode })
       if (!row) throw new QuotingError(404, 'Markup override not found')
       const locked = await isQuoteCostLocked(em, quote, scope)
       this.assertWritable(quote, locked, true)
       const auditBefore = { id: row.id, quoteLineId: row.quoteLineId, chargeCode: row.chargeCode }
-      const margin = await this.persistAndPrice(em, quote, scope, locked, () => { row.deletedAt = new Date(); row.updatedByUserId = actor })
+      const margin = await this.persistAndPrice(em, quote, scope, locked, () => { row.deletedAt = new Date(); row.updatedByUserId = actor }, signals)
       return { override: null, audit: { before: auditBefore, after: null }, margin, pricingRevision: quote.pricingRevision ?? 0 }
     })
   }
 
   // ─── Internals ─────────────────────────────────────────────────
 
-  private write<T>(quoteId: string, scope: TenantScope, revision: number | undefined, actor: string, execute: (em: EntityManager, quote: CpqQuoteConfiguration) => Promise<T>, signals: SourcingSignal[] = []) {
+  private write<T>(quoteId: string, scope: TenantScope, revision: number | undefined, actor: string, execute: (em: EntityManager, quote: CpqQuoteConfiguration, signals: SourcingSignal[]) => Promise<T>) {
+    // Requests cancelled / opened by this write (manual value, R1a / R1b through its recalculation) are published after commit.
+    const signals: SourcingSignal[] = []
     const publisher = this.deps.publisher
-    return withQuotePricingWrite(this.deps.em, quoteId, scope, execute, (status, message) => new QuotingError(status, message), {
+    return withQuotePricingWrite(this.deps.em, quoteId, scope, (em, quote) => execute(em, quote, signals), (status, message) => new QuotingError(status, message), {
       expectedRevision: revision, events: { pricingCause: 'cost', actorUserId: actor },
       marginTracker: createMarginTracker({ scope, isEnabled: (tenantId) => this.deps.costService.enabled(tenantId), force: true }),
       afterCommit: publisher ? async (_result, quote) => { if (signals.length > 0) await publisher(signals, quote) } : undefined,
@@ -378,10 +388,10 @@ export class CpqQuoteCostService {
    * only ever receives price-neutral writes (margin-only, confirmation, validity), and re-pricing it would re-read the
    * catalog, so it is skipped. Returns the margin of the written state.
    */
-  private async persistAndPrice(em: EntityManager, quote: CpqQuoteConfiguration, scope: TenantScope, locked: boolean, persist: () => void): Promise<QuoteMargin> {
+  private async persistAndPrice(em: EntityManager, quote: CpqQuoteConfiguration, scope: TenantScope, locked: boolean, persist: () => void, signals: SourcingSignal[]): Promise<QuoteMargin> {
     await withAtomicFlush(em, [
       persist,
-      async () => { if (!locked) await this.deps.quotingService.recalculateLockedQuote(em, quote, scope) },
+      async () => { if (!locked) await this.deps.quotingService.recalculateLockedQuote(em, quote, scope, true, undefined, { signals }) },
     ])
     return loadQuoteMargin(em, quote, scope)
   }

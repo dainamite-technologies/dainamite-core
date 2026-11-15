@@ -421,7 +421,8 @@ async function planQuoteCosts(params: CostResolutionParams & { save?: boolean })
         // R1b: a driving attribute changed since the value was set. On a catalog `on_request` value, or on a value a
         // pricing manager entered / confirmed (origin `manual`), that resets it and keeps the old value in the note.
         const driversChanged = row.driverHash !== null && row.driverHash !== hash
-        if (driversChanged && row.valueStatus !== 'none' && (element.source === 'on_request' || isEnteredOrigin(row.valueOrigin))) {
+        const valueReset = driversChanged && row.valueStatus !== 'none' && (element.source === 'on_request' || isEnteredOrigin(row.valueOrigin))
+        if (valueReset) {
           patch.note = resetNote(row, attributes)
         }
         if (driversChanged || !isEnteredOrigin(row.valueOrigin)) {
@@ -449,6 +450,20 @@ async function planQuoteCosts(params: CostResolutionParams & { save?: boolean })
           signals.push({
             ...sourcingCostRef(row), kind: 'requested', costRequestId: open.costRequestId as string, requestSeq: open.requestSeq as number,
             supplierId: (open.requestSupplierId as string | null) ?? null, requestedByUserId: actor, auto: true,
+          })
+        }
+        // Q11: an R1b reset of a value is a sourcing-relevant value change (amount-free `cost_valued`, cause `reset`).
+        // Whether the line is still priceable is approximated by the reset value's own status (the validation of the
+        // finished recalculation is not available here).
+        if (saved && valueReset) {
+          const status = String(patch.valueStatus ?? row.valueStatus)
+          const errorCode = (patch.errorCode as string | null | undefined) ?? row.errorCode ?? null
+          signals.push({
+            ...sourcingCostRef(row), kind: 'valued', cause: 'reset', costRequestId: (patch.costRequestId as string | undefined) ?? row.costRequestId ?? null,
+            requestSeq: (patch.requestSeq as number | undefined) ?? row.requestSeq ?? null, valueStatus: status, previousValueStatus: row.valueStatus,
+            sourcingStatus: String(patch.sourcingStatus ?? row.sourcingStatus), valueChanged: true, answerPending: false, errorCode,
+            lineReady: status !== 'none' && !errorCode, leadTimeHours: null,
+            requestedByUserId: ('requestedByUserId' in patch ? (patch.requestedByUserId as string | null) : row.requestedByUserId) ?? null,
           })
         }
         updates.push({ row, patch })

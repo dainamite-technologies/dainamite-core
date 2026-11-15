@@ -27,6 +27,19 @@ export type RedactedQuoteCost = {
   overdue?: boolean
   /** `false` on a Cancel line or a frozen-unpriceable cost line: the server refuses requests there (Q14). */
   requestEligible?: boolean
+  /** ARC costs: the cost was carried from the subscription item (booleans only, safe for everyone). */
+  carried?: boolean
+  /** ARC Renew: a carried cost whose supplier term or validity ends before the renewal's new term end. */
+  renegotiationDue?: boolean
+}
+
+/** The carried-from item cost as it stands now, for the "Was …" diff (`cpq.costs.view` only). */
+export type CostPrevious = {
+  unitAmount: string | null
+  currencyCode: string | null
+  supplierName: string | null
+  validUntil: string | null
+  supplierTermEnd: string | null
 }
 
 /** The full cost line, `cpq.costs.view` only. Decimals are strings. */
@@ -56,13 +69,46 @@ export type FullQuoteCost = RedactedQuoteCost & FxFields & {
   requestSupplierId?: string | null
   requestSupplierName?: string | null
   supplierId?: string | null
+  /** Carried costs only (ARC costs): the item cost the line was carried from, as it stands now. */
+  previous?: CostPrevious
+}
+
+/** What a Cancel quote / cancel line would leave outliving the cancellation (`cpq.costs.view` only; no amounts). */
+export type CancelExposureView = {
+  referenceDate: string
+  items: Array<{
+    inventoryCostId: string
+    costKey: string
+    name: string
+    supplierName: string | null
+    supplierTermEnd: string | null
+    exposureMonths: number | null
+    termUnknown: boolean
+  }>
+}
+
+/** `ArcLineDiff`'s cost figures (`cpq.costs.view` only): the subscription item's costs before, the line's after. */
+export type ArcCostsView = { before: { mrcCost: number; nrcCost: number }; after: { mrcCost: number; nrcCost: number } }
+
+export type QuoteCostLineEntry = {
+  quoteLineId: string
+  costs: Array<RedactedQuoteCost | FullQuoteCost>
+  /** ARC: the line keeps the subscription's contracted price (everyone). */
+  frozen?: boolean
+  renegotiationDue?: boolean
+  /** `cpq.costs.view` only. */
+  droppedItemCosts?: Array<{ inventoryCostId: string; costKey: string; name: string; reason: string }>
+  exposure?: CancelExposureView
+  arcCosts?: ArcCostsView
 }
 
 export type QuoteMarkupOverride = { id: string; quoteLineId: string; chargeCode: string; markupRule: string; markupValue: string; note: string | null }
 
 export type QuoteCostsResponse = {
-  lines: Array<{ quoteLineId: string; costs: Array<RedactedQuoteCost | FullQuoteCost> }>
+  lines: QuoteCostLineEntry[]
   pricingRevision: number
+  /** Cancel quotes: the whole-quote exposure (`cpq.costs.view` only; absent when nothing outlives the cancellation). */
+  exposure?: CancelExposureView
   markupOverrides?: QuoteMarkupOverride[]
   margin?: QuoteMargin
 }
@@ -179,6 +225,12 @@ export const COST_ERROR_FALLBACKS: Record<string, string> = {
   COST_TYPE_MISMATCH: 'The cost type does not match the charge type',
   LINE_NOT_ELIGIBLE: 'This line cannot carry costs',
   AMOUNT_REQUIRED: 'Enter the cost amount',
+  RENEGOTIATION_DATES_SHORT: 'A kept date is before the renewal\'s new term end — extend it or clear the supplier term',
+  NOT_RENEGOTIATION_DUE: 'This cost no longer needs renegotiation',
+  NOT_ARC_MIRROR: 'Only lines that mirror a subscription item can be refreshed',
+  MERGE_LINE: 'Lines of a merged subscription have no single item to refresh from',
+  ITEM_NOT_ACTIVE: 'The subscription item is no longer active',
+  COST_SOURCE_CHANGED: 'The subscription\'s costs changed since this quote was created',
   CURRENCY_NO_RATE: 'No exchange rate is available for this currency',
   FIELD_NOT_ALLOWED: 'This field cannot be changed on a catalog cost',
   QUANTITY_ATTRIBUTE_REQUIRED: 'The line has no quantity attribute for a per-unit cost',

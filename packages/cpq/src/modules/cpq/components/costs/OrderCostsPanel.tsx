@@ -11,7 +11,7 @@ import {
   type SubscriptionCostsResponse,
 } from '../../lib/orderInventoryCostView'
 import { OrderCostsSection, type OrderCostLine } from './OrderCostsSection'
-import { useCostsRead } from './useCostsRead'
+import { useCostsRead, type CostsReadResult } from './useCostsRead'
 
 const todayIso = () => new Date().toISOString().slice(0, 10)
 
@@ -20,15 +20,18 @@ const todayIso = () => new Date().toISOString().slice(0, 10)
  * is activated, the costs of its linked subscriptions are read (holders only) to link asset-owned costs to their asset.
  * `refreshKey` changes when the order changes (for example after activation).
  */
-export function OrderCostsPanel({ orderId, lines, currency, subscriptionIds, refreshKey }: {
+export function OrderCostsPanel({ orderId, lines, currency, subscriptionIds, refreshKey, read }: {
   orderId: string
+  /** The page's own costs read (shared with the line diff); the panel loads its own when absent. */
+  read?: CostsReadResult<OrderCostsResponse>
   lines: ReadonlyArray<OrderCostLine>
   currency: string
   subscriptionIds: ReadonlyArray<string>
   refreshKey?: string
 }) {
   const t = useT()
-  const { state, data, reload } = useCostsRead<OrderCostsResponse>(`/api/cpq/orders/${orderId}/costs`)
+  const own = useCostsRead<OrderCostsResponse>(read ? null : `/api/cpq/orders/${orderId}/costs`)
+  const { state, data, reload } = read ?? own
   const [subscriptions, setSubscriptions] = React.useState<SubscriptionCostsResponse[]>([])
   const idsKey = subscriptionIds.join('|')
   const holder = hasCostAccess(data)

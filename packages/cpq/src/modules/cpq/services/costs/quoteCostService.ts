@@ -42,7 +42,7 @@ import {
   type FullCostView, type MarkupOverrideView,
 } from './quoteCostView'
 import { loadCancelExposure } from './cancelExposure'
-import { lineArcFlags, loadCarriedPrevious, loadDroppedItemCosts } from './arcCostRead'
+import { lineArcFlags, loadCarriedPrevious, loadDroppedItemCosts, loadQuoteArcCosts } from './arcCostRead'
 
 type Dependencies = {
   em: EntityManager
@@ -134,7 +134,7 @@ export class CpqQuoteCostService {
       }
     }
     // Per-line ARC additions. `frozen` / `renegotiationDue` are flags for everyone; a frozen line without cost rows still gets an entry.
-    type LineEntry<T> = { quoteLineId: string; costs: T[]; frozen?: boolean; renegotiationDue?: boolean; exposure?: unknown; droppedItemCosts?: unknown[] }
+    type LineEntry<T> = { quoteLineId: string; costs: T[]; frozen?: boolean; renegotiationDue?: boolean; exposure?: unknown; droppedItemCosts?: unknown[]; arcCosts?: unknown }
     const withFlags = <T,>(lines: Array<LineEntry<T>>) => {
       for (const config of lineConfigs) {
         const rows = costs.filter((row) => row.quoteLineId === config.quoteLineId)
@@ -155,6 +155,13 @@ export class CpqQuoteCostService {
       const entry = lines.find((line) => line.quoteLineId === quoteLineId)
       if (entry) entry.droppedItemCosts = items
       else lines.push({ quoteLineId, costs: [], droppedItemCosts: items })
+    }
+    // ArcLineDiff cost rows (step 19): before / after MRC and NRC cost per ARC mirror line. Holders only, like every figure here.
+    const arcCosts = await loadQuoteArcCosts(em, quote, lineConfigs, costs, scope)
+    for (const [quoteLineId, value] of arcCosts) {
+      const entry = lines.find((line) => line.quoteLineId === quoteLineId)
+      if (entry) entry.arcCosts = value
+      else lines.push({ quoteLineId, costs: [], arcCosts: value })
     }
     const cancelRead = await loadCancelExposure(em, quote, lineConfigs, scope)
     for (const lineExposure of cancelRead.lines) {

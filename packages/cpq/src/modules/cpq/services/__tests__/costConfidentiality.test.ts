@@ -720,7 +720,7 @@ describe('supplier sourcing surfaces (feature 3)', () => {
 // ─── ARC costs (feature 5, step 18): the Amend / Renew / Cancel read projections ───
 
 describe('ARC cost projections (feature 5, step 18)', () => {
-  const ARC_KEYS = /"(previous|droppedItemCosts|exposure|exposureMonths|termUnknown)"/
+  const ARC_KEYS = /"(previous|droppedItemCosts|exposure|exposureMonths|termUnknown|arcCosts|mrcCost|nrcCost)"/
   const itemCost = (over: Row = {}): Row => inventoryCostRow({ id: 'ic-1', status: 'active', supplierTermEnd: '2099-11-30', ...over })
   const carriedRow = (over: Row = {}): Row => costRow({ origin: 'carried', valueOrigin: 'carried', carriedFromItemCostId: 'ic-1', renegotiationDue: true, valueStatus: 'estimated', ...over })
 
@@ -750,6 +750,28 @@ describe('ARC cost projections (feature 5, step 18)', () => {
     const full = await service.read(ids.quote, SCOPE, true)
     expect(full.lines[0].costs[0]).toMatchObject({ previous: { unitAmount: COST, supplierName: SUPPLIER } })
     expect(leaked(full)).toEqual(expect.arrayContaining(['7777.77', SUPPLIER]))
+  })
+
+  it('ArcLineDiff costs (step 19): arcCosts on the quote read and the order read are holder-only', async () => {
+    const service = arcService('amend',
+      [{ quoteLineId: ids.line, action: 'modify', sourceSubscriptionItemId: feat.item, configuration: { ...mirror, _arcPriceFrozen: true, _arcCostsCarried: true } }],
+      [carriedRow({ instanceAmount: COST, costType: 'mrc' })], [itemCost({ totalAmount: COST, costType: 'mrc', valueStatus: 'confirmed' })])
+    const redacted = await service.read(ids.quote, SCOPE, false)
+    expect(JSON.stringify(redacted)).not.toMatch(ARC_KEYS)
+    const full: Row = await service.read(ids.quote, SCOPE, true)
+    expect(full.lines[0].arcCosts).toMatchObject({ before: { mrcCost: Number(COST) }, after: { mrcCost: expect.any(Number) } })
+
+    const { readOrderCosts } = await import('../costs/orderCostView')
+    const orderLine: Row = { ...orderLineRow, configuration: { ...mirror }, action: 'modify' }
+    const em: Row = {
+      findOne: jest.fn(async (entity: unknown) => (entity === CpqOrderConfiguration ? { ...orderConfigRow, cpqStatus: 'draft' } : entity === CpqQuoteConfiguration ? { id: ids.quote, quoteType: 'amend', currencyCode: 'USD' } : null)),
+      find: jest.fn(async (entity: unknown) => (entity === CpqOrderLineCost ? [{ ...orderLineCostRow(), orderLineId: orderLine.orderLineId }] : entity === CpqOrderLineConfiguration ? [orderLine]
+        : entity === CpqInventoryCost ? [itemCost({ totalAmount: COST, costType: 'mrc', valueStatus: 'confirmed' })] : [])),
+    }
+    const status = await readOrderCosts(em as never, feat.order, SCOPE, false)
+    expect(JSON.stringify(status)).not.toMatch(ARC_KEYS)
+    const holder = await readOrderCosts(em as never, feat.order, SCOPE, true)
+    expect(JSON.stringify(holder)).toContain('arcCosts')
   })
 
   it('Renew: dropped item costs are listed for holders only (computed on read from the open item costs the line no longer carries)', async () => {

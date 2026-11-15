@@ -19,6 +19,7 @@ import { ArcLineDiff, LineActionBadge } from '../../../../components/ArcLineDiff
 import { ADJUST_PRICE_FEATURE } from '../../../../lib/priceAdjustmentView'
 import { arcRecurringDelta } from '../../../../lib/quoteSummaryView'
 import { shouldShowRenewCostBanner } from '../../../../lib/arcRenewBanner'
+import { arcCostsOfLine } from '../../../../lib/arcCostView'
 import { usePriceAdjustments } from './_components/usePriceAdjustments'
 import { PriceAdjustmentsPanel } from './_components/PriceAdjustmentsPanel'
 import { ArcLineRemovalProvider, useArcLineRemoval, useArcLineRemovalUi } from './_components/arcLineRemoval'
@@ -1522,7 +1523,7 @@ function QuoteLineRow({ line, lineIdx, currency, isExpanded, pricingDetail, isBu
       {/* XD-250 ARC: before/after preview, below the charges, when line mirrors a sub item */}
       {isExpanded && line.arcSource && (
         <div className="border-t bg-muted/10 px-12 py-2">
-          <ArcLineDiff line={line} currency={currency} />
+          <ArcLineDiff line={line} currency={currency} costs={arcCostsOfLine(costsUi?.data, line.lineId)} />
         </div>
       )}
       {/* Fallback: line has no per-charge breakdown and no ARC diff (truly empty) */}

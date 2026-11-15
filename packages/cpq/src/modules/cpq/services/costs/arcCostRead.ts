@@ -1,8 +1,9 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { CpqInventoryCost, type CpqQuoteConfiguration, type CpqQuoteLineConfiguration, type CpqQuoteLineCost } from '../../data/entities'
-import { isCostManagedRenewLine, isFrozenMirrorLine } from '../arcPriceFreeze'
+import { isArcMirrorLine, isCostManagedRenewLine, isFrozenMirrorLine } from '../arcPriceFreeze'
 import type { TenantScope } from '../types'
 import { loadOpenItemCosts } from './arcCostCarry'
+import { costLineTotal } from './quoteMargin'
 
 /**
  * Read-projection additions for ARC quotes (ARC costs spec step 18, §API Contracts `GET /quotes/{id}/costs`):
@@ -75,4 +76,49 @@ export function lineArcFlags(quote: Pick<CpqQuoteConfiguration, 'quoteType'>, li
     frozen: line ? isFrozenMirrorLine(line.configuration, quote.quoteType) : false,
     renegotiationDue: rows.some((row) => row.renegotiationDue === true),
   }
+}
+
+// ─── ArcLineDiff costs (ARC costs spec step 19) ─────────────────
+
+/** MRC / NRC cost totals in the document currency (quantity applied). */
+export type ArcCostTotals = { mrcCost: number; nrcCost: number }
+/** The `costs` prop of `ArcLineDiff`: the subscription item's costs before, the line's costs after. `cpq.costs.view` only. */
+export type ArcCosts = { before: ArcCostTotals; after: ArcCostTotals }
+
+type CostTotalRow = { costType: string; total: number | null }
+
+const totalsOf = (rows: readonly CostTotalRow[]): ArcCostTotals => {
+  const sum = (type: string) => Math.round(rows.filter((row) => row.costType === type).reduce((acc, row) => acc + (row.total ?? 0), 0) * 10_000) / 10_000
+  return { mrcCost: sum('mrc'), nrcCost: sum('nrc') }
+}
+
+/** A terminated (cancel) line ends every cost: the "after" side is zero. Unknown (status none) costs count 0, like the margin. */
+export function computeArcCosts(before: readonly CostTotalRow[], after: readonly CostTotalRow[], terminated: boolean): ArcCosts {
+  return { before: totalsOf(before), after: terminated ? { mrcCost: 0, nrcCost: 0 } : totalsOf(after) }
+}
+
+/** Item cost total in the subscription currency: the stored `total_amount`, null while the cost is unknown. */
+export const itemCostTotal = (cost: Pick<CpqInventoryCost, 'valueStatus' | 'totalAmount'>): number | null =>
+  cost.valueStatus === 'none' || cost.totalAmount === null || cost.totalAmount === undefined ? null : Number(cost.totalAmount)
+
+/** `arcCosts` per ARC mirror line of a quote: open item costs of the mirrored item vs the line's cost rows. */
+export async function loadQuoteArcCosts(
+  em: EntityManager, quote: Pick<CpqQuoteConfiguration, 'quoteType'>, lines: readonly CpqQuoteLineConfiguration[],
+  costs: readonly CpqQuoteLineCost[], scope: TenantScope,
+): Promise<Map<string, ArcCosts>> {
+  const result = new Map<string, ArcCosts>()
+  const mirrors = lines.filter((line) => isArcMirrorLine(line.configuration, quote.quoteType))
+  const itemIdOf = (line: CpqQuoteLineConfiguration) => line.sourceSubscriptionItemId ?? ((line.configuration as Record<string, unknown> | null)?._arcMirroredFromItemId as string | undefined) ?? null
+  const itemIds = [...new Set(mirrors.map(itemIdOf).filter((id): id is string => !!id))]
+  if (itemIds.length === 0) return result
+  const open = await loadOpenItemCosts(em, itemIds, scope)
+  for (const line of mirrors) {
+    const itemId = itemIdOf(line)
+    if (!itemId) continue
+    const quantity = Number(line.quantity)
+    const after = costs.filter((row) => row.quoteLineId === line.quoteLineId).map((row): CostTotalRow => ({ costType: row.costType, total: costLineTotal(row, quantity) }))
+    const before = (open.get(itemId) ?? []).map((item): CostTotalRow => ({ costType: item.costType, total: itemCostTotal(item) }))
+    result.set(line.quoteLineId, computeArcCosts(before, after, line.action === 'cancel'))
+  }
+  return result
 }

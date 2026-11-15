@@ -1,6 +1,7 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { CpqInventoryCost, CpqOrderConfiguration, CpqOrderLineConfiguration, CpqOrderLineCost, CpqQuoteConfiguration, CpqQuoteLineConfiguration } from '../../data/entities'
-import type { CarriedPrevious } from './arcCostRead'
+import { computeArcCosts, itemCostTotal, type ArcCosts, type CarriedPrevious } from './arcCostRead'
+import { loadOpenItemCosts } from './arcCostCarry'
 import { loadCancelExposure, type CancelExposure } from './cancelExposure'
 import { isArcTerminationLine } from '../arcLineRemoval'
 import { isArcMirrorLine } from '../arcPriceFreeze'
@@ -48,6 +49,8 @@ export function fullOrderCostView(row: CpqOrderLineCost, previous?: OrderCostPre
     supplierMinTermMonths: row.supplierMinTermMonths ?? null,
     inventoryCostId: row.inventoryCostId ?? null,
     sourceQuoteLineCostId: row.sourceQuoteLineCostId,
+    /** Set by a re-confirmation before activation (step 13); the user is not exposed. */
+    reconfirmedAt: row.reconfirmedAt ? new Date(row.reconfirmedAt).toISOString() : null,
     ...(previous ? { previous } : {}),
   }
 }
@@ -55,7 +58,7 @@ export function fullOrderCostView(row: CpqOrderLineCost, previous?: OrderCostPre
 export type OrderCostsRead = {
   orderId: string
   currencyCode?: string
-  lines: Array<{ orderLineId: string; costs: Array<ReturnType<typeof redactedOrderCostView> | ReturnType<typeof fullOrderCostView>> }>
+  lines: Array<{ orderLineId: string; costs: Array<ReturnType<typeof redactedOrderCostView> | ReturnType<typeof fullOrderCostView>>; arcCosts?: ArcCosts }>
   margin?: QuoteMargin
   /** Cancel exposure of the source quote's cancelled items (`cpq.costs.view` only; absent when the quote cancels nothing). */
   exposure?: CancelExposure
@@ -94,6 +97,23 @@ export async function readOrderCosts(em: EntityManager, orderId: string, scope: 
   for (const row of ordered) groups.set(row.orderLineId, [...(groups.get(row.orderLineId) ?? []), project(row)])
   const result: OrderCostsRead = { orderId: config.id, lines: [...groups].map(([orderLineId, lineCosts]) => ({ orderLineId, costs: lineCosts })) }
   if (!canViewCosts) return result
+  // ArcLineDiff cost rows (step 19), `cpq.costs.view` only and only before activation (afterwards the item holds the order's own costs).
+  if (!activated) {
+    const itemIdOf = (line: CpqOrderLineConfiguration) => {
+      const id = (line.configuration as Record<string, unknown> | null)?._arcMirroredFromItemId
+      return typeof id === 'string' ? id : null
+    }
+    const mirrors = lines.filter((line) => itemIdOf(line))
+    const open = await loadOpenItemCosts(em, [...new Set(mirrors.map((line) => itemIdOf(line) as string))], scope)
+    for (const line of mirrors) {
+      const own = ordered.filter((row) => row.orderLineId === line.orderLineId).map((row) => ({ costType: row.costType, total: row.valueStatus === 'none' || row.totalAmount == null ? null : Number(row.totalAmount) }))
+      const before = (open.get(itemIdOf(line) as string) ?? []).map((item) => ({ costType: item.costType, total: itemCostTotal(item) }))
+      const arcCosts = computeArcCosts(before, own, line.action === 'cancel')
+      const entry = result.lines.find((candidate) => candidate.orderLineId === line.orderLineId)
+      if (entry) entry.arcCosts = arcCosts
+      else result.lines.push({ orderLineId: line.orderLineId, costs: [], arcCosts })
+    }
+  }
   const marginLines: MarginLine[] = lines.map((line) => ({
     lineId: line.orderLineId,
     parentLineId: line.parentLineId ?? null,

@@ -34,6 +34,6 @@ const readResponse = z.object({
 
 export const openApi: OpenApiRouteDoc = { tag: 'CPQ Costs', pathParams: orderIdPathParams, methods: { GET: {
   summary: 'Read the cost lines of an order (status only without cpq.costs.view)',
-  responses: [{ status: 200, description: 'Cost lines per order line, and the margin for cpq.costs.view holders', schema: readResponse }],
+  responses: [{ status: 200, description: 'Cost lines per order line, and the margin for cpq.costs.view holders. Holders also get exposure, previous on carried costs and, before activation, arcCosts per ARC line {before, after: {mrcCost, nrcCost}}', schema: readResponse }],
   errors: [cpqErrorDoc(401, 'Unauthorized'), cpqErrorDoc(403, 'Missing permission'), cpqErrorDoc(404, 'Order not found, also returned while the tenant toggle cpq.cost_plus is off')],
 } } }

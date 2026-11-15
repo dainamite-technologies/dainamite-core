@@ -1,5 +1,14 @@
 # @dainamite/cpq-billing-connector
 
+## 4.0.0
+
+### Patch Changes
+
+- Updated dependencies [34d3ac4]
+- Updated dependencies [d86651d]
+  - @dainamite/billing@0.22.0
+  - @dainamite/cpq@0.7.0
+
 ## 3.1.0
 
 ### Minor Changes

@@ -4,6 +4,7 @@ import { seedGixPriceAdjustmentExample } from './price-adjustment-examples'
 import { seedCpqArcExamples } from './arc-examples'
 import { seedGixCostPlusCatalog, seedGixCostPlusExamples } from './cost-plus-examples'
 import { seedGixCostSourcingExamples } from './cost-sourcing-examples'
+import { seedGixCostSourcingWorkflow } from './cost-sourcing-workflow'
 import {
   seedGixBundleData,
   seedGixPriceRules,
@@ -35,6 +36,8 @@ export async function seedGixDefaults(ctx: CpqUseCaseSeedContext): Promise<void>
   await seedGixWizards(em, scope)
   // Cost-plus: tenant toggle ON, cross-connect cost table, IP Transit offering (idempotent).
   await seedGixCostPlusCatalog(em, ctx.container, scope)
+  // Supplier cost sourcing recipe (workflow `cpq_cost_sourcing`), seeded disabled.
+  await seedGixCostSourcingWorkflow(em, ctx.container, scope)
 }
 
 /**

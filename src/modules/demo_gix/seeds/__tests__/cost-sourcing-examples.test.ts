@@ -41,7 +41,7 @@ function setup(opts: { autoOpen?: boolean; failTransition?: boolean } = {}) {
   const sourcing = {
     request: jest.fn(async (id: string) => { Object.assign(tails.get(id) as Tail, { sourcingStatus: 'requested', costRequestId: `req-${id}` }) }),
     decline: jest.fn(async (id: string) => { (tails.get(id) as Tail).sourcingStatus = 'declined' }),
-    answer: jest.fn(async (id: string) => { (tails.get(id) as Tail).sourcingStatus = 'answered' }),
+    answer: jest.fn(async (id: string, ..._rest: unknown[]) => { (tails.get(id) as Tail).sourcingStatus = 'answered' }),
   }
   const container = { resolve: (name: string) => ({ cpqQuotingService: quoting, cpqQuoteCostService: costs, cpqCostSourcingService: sourcing })[name] }
   return { em, quoting, sourcing, tails, quotes, nativeUpdates, container }
@@ -78,7 +78,7 @@ describe('seedGixCostSourcingExamples', () => {
     const proposalQuote = byScenario(t.quotes, answeredProposal.scenario)
     expect(t.quoting.transitionStatus.mock.calls.map((call) => [call[0], call[1]])).toEqual([[proposalQuote.id, 'ready'], [proposalQuote.id, 'with_customer']])
     expect(t.sourcing.answer).toHaveBeenCalledTimes(1)
-    expect(t.sourcing.answer.mock.calls[0][2]).toMatchObject({ costRequestId: `req-${proposalQuote.id}`, unitAmount: 130, currencyCode: 'USD', supplierQuoteRef: 'PCL-cost-sourcing-proposal' })
+    expect((t.sourcing.answer.mock.calls[0] as unknown[])[2]).toMatchObject({ costRequestId: `req-${proposalQuote.id}`, unitAmount: 130, currencyCode: 'USD', supplierQuoteRef: 'PCL-cost-sourcing-proposal' })
     expect(t.tails.get(proposalQuote.id)?.sourcingStatus).toBe('answered')
   })
 

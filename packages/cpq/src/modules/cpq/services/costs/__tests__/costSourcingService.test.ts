@@ -283,7 +283,9 @@ describe('answer: unlocked quote', () => {
     expect(a.costs[0].valueStatus).toBe('estimated')
     const b = setup({ costs: [requested()] })
     await b.service.answer(ids.quote, ids.cost, answerInput({ currencyCode: 'USD' }), ACTOR, SCOPE)
-    expect(b.costs[0]).toMatchObject({ valueStatus: 'none', unitAmount: null, instanceAmount: null, currencyCode: 'USD', errorCode: 'CURRENCY_NO_RATE', sourcingStatus: 'answered' })
+    // The supplier's amount is kept in its own currency (for the FX feature); no instance amount, so nothing prices from it.
+    expect(b.costs[0]).toMatchObject({ valueStatus: 'none', instanceAmount: null, currencyCode: 'USD', errorCode: 'CURRENCY_NO_RATE', sourcingStatus: 'answered' })
+    expect(Number(b.costs[0].unitAmount)).toBe(280)
   })
 
   it('a carried line is accepted; a confirming answer clears renegotiationDue only where the column exists', async () => {

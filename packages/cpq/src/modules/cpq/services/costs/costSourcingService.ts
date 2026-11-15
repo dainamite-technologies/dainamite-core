@@ -436,13 +436,15 @@ export class CpqCostSourcingService {
   }
 
   /**
-   * The value fields an answer writes (`value_origin = supplier`). An answer in a non-quote currency is stored but
-   * resolves to `none` + `CURRENCY_NO_RATE` (no FX yet, Q15): never a silent 1:1 conversion.
+   * The value fields an answer writes (`value_origin = supplier`). An answer in a non-quote currency is STORED (the
+   * supplier's unit amount in its own currency, so the FX feature can convert it) but resolves to `none` +
+   * `CURRENCY_NO_RATE` with no instance amount (no FX yet, Q15; spec edge case "Answer in a non-quote currency"):
+   * pricing and margin ignore a `none` cost, so there is never a silent 1:1 conversion.
    */
   private async valuePatch(em: EntityManager, quote: CpqQuoteConfiguration, line: CpqQuoteLineConfiguration, row: CpqQuoteLineCost, answer: AnswerPayload, scope: TenantScope) {
     const supplier = this.supplierFields(row, answer)
     if (answer.currencyCode !== quote.currencyCode) {
-      return { ...supplier, valueStatus: 'none', valueOrigin: 'supplier', unitAmount: null, instanceAmount: null, currencyCode: answer.currencyCode, errorCode: 'CURRENCY_NO_RATE' }
+      return { ...supplier, valueStatus: 'none', valueOrigin: 'supplier', unitAmount: money(Number(answer.unitAmount)), instanceAmount: null, currencyCode: answer.currencyCode, errorCode: 'CURRENCY_NO_RATE' }
     }
     const unit = Number(answer.unitAmount)
     let quantityAttributeCode: string | null = null

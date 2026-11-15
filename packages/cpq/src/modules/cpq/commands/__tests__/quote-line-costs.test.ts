@@ -104,3 +104,20 @@ it('lets a COST_LOCKED refusal from the service through unchanged on create, upd
   await expect(updateQuoteLineCostCommand.execute({ quoteId, costId, patch: { unitAmount: 5 } }, ctx)).rejects.toBe(locked)
   await expect(deleteQuoteLineCostCommand.execute({ quoteId, costId }, ctx)).rejects.toBe(locked)
 })
+
+// ARC costs step 7 (MODIFIED "Manual costs, cost confirmation and markup override"): the command forwards a carried-value
+// overwrite (value + note + evidence) untouched, the service decides lock and NOTE_REQUIRED, and the strict patch schema
+// still accepts no origin / carry fields: `carried` is server-side only.
+it('forwards a carried-value overwrite with its note and evidence, and lets NOTE_REQUIRED through unchanged', async () => {
+  const { ctx, service } = setup()
+  const patch = { unitAmount: 240, supplierQuoteRef: 'CX-2207', note: 'renegotiated with Carrier X' }
+  await updateQuoteLineCostCommand.execute({ quoteId, costId, patch }, ctx)
+  expect(service.updateCost).toHaveBeenCalledWith(quoteId, costId, patch, actor, { tenantId, organizationId })
+  const refusal = Object.assign(new Error('NOTE_REQUIRED'), { status: 422 })
+  service.updateCost.mockRejectedValue(refusal)
+  await expect(updateQuoteLineCostCommand.execute({ quoteId, costId, patch: { unitAmount: 240 } }, ctx)).rejects.toBe(refusal)
+  for (const forbidden of [{ origin: 'carried' }, { valueOrigin: 'carried' }, { carriedFromItemCostId: costId }, { renegotiationDue: true }]) {
+    await expect(updateQuoteLineCostCommand.execute({ quoteId, costId, patch: forbidden } as never, ctx)).rejects.toThrow()
+  }
+  expect(service.updateCost).toHaveBeenCalledTimes(2)
+})

@@ -11,7 +11,10 @@ jest.mock('../../priceAdjustments/quotePricingWrite', () => ({
     if (!quote || quote.id !== quoteId) throw makeError(404, 'Quote not found')
     if (expectedRevision !== undefined && expectedRevision !== (quote.pricingRevision ?? 0)) throw makeError(409, 'STALE_REVISION')
     quote.pricingRevision = (quote.pricingRevision ?? 0) + 1
+    // Opt-in (`em.__trackMargin`): run the real margin tracker around the write, as the real write transaction does.
+    if (em.__trackMargin) await options.marginTracker?.before(em, quote)
     const result = await execute(em, quote)
+    if (em.__trackMargin) em.__margin = await options.marginTracker?.after(em, quote)
     await options.afterCommit?.(result, quote)
     return result
   },
@@ -24,8 +27,8 @@ const SCOPE = { organizationId: 'org', tenantId: 'tenant' }
 const ids = { quote: '11111111-1111-4111-8111-111111111111', line: '22222222-2222-4222-8222-222222222222', cost: '33333333-3333-4333-8333-333333333333' }
 type Row = Record<string, any>
 
-function setup(opts: { status?: string; orders?: number; costs?: Row[]; overrides?: Row[]; line?: Row; charges?: Row[]; enabled?: boolean; publisher?: jest.Mock; fx?: jest.Mock; fxPairs?: Row[] } = {}) {
-  const quote = { id: ids.quote, quoteId: ids.quote, cpqStatus: opts.status ?? 'ready', quoteType: 'new', currencyCode: 'EUR', pricingRevision: 4, quoteContext: {} }
+function setup(opts: { status?: string; orders?: number; costs?: Row[]; overrides?: Row[]; line?: Row; charges?: Row[]; enabled?: boolean; publisher?: jest.Mock; fx?: jest.Mock; fxPairs?: Row[]; trackMargin?: boolean } = {}) {
+  const quote = { id: ids.quote, quoteId: ids.quote, cpqStatus: opts.status ?? 'ready', quoteType: 'new', currencyCode: 'EUR', pricingRevision: 4, quoteContext: {}, pricingSummary: { snapshotHash: 'snap-1' } }
   const line = { id: 'l', quoteLineId: ids.line, ...SCOPE, quoteConfigurationId: ids.quote, offeringId: 'off', productId: 'prod', configuration: {}, quantity: '1', charges: [], termMonths: 12, parentLineId: null, deletedAt: null, ...opts.line }
   const charges = opts.charges ?? [
     { code: 'tail', pricingMethod: 'cost_plus', chargeType: 'mrc', quantityAttributeCode: 'qty', offeringId: 'off' },
@@ -38,6 +41,7 @@ function setup(opts: { status?: string; orders?: number; costs?: Row[]; override
   const subquery: Row = { select: jest.fn(() => subquery), where: jest.fn(() => subquery) }
   const em: Row = {
     __quote: quote,
+    __trackMargin: opts.trackMargin === true,
     fork: jest.fn(() => em),
     createQueryBuilder: jest.fn(() => subquery),
     findOne: jest.fn(async (entity: unknown, where: Row) => {
@@ -68,7 +72,7 @@ function setup(opts: { status?: string; orders?: number; costs?: Row[]; override
     publisher: opts.publisher as never,
     fxRateResolver: opts.fx ? { resolve: opts.fx } as never : undefined,
   })
-  return { service, em, quote, costs, overrides, recalculate, subquery, fxPairs }
+  return { service, em, quote, costs, overrides, recalculate, subquery, fxPairs, margin: () => em.__margin as Row | null | undefined }
 }
 
 const catalogRow = (over: Row = {}): Row => ({
@@ -421,6 +425,84 @@ describe('ARC lines', () => {
     const input = { quoteLineId: ids.line, chargeCode: 'tail', markupRule: 'markup_percent' as const, markupValue: 30, note: 'deal' }
     await expect(service.setMarkupOverride(ids.quote, input, ACTOR, SCOPE)).rejects.toMatchObject({ status: 422, message: 'LINE_NOT_ELIGIBLE' })
     expect(costs).toHaveLength(0)
+  })
+})
+
+describe('carried costs on frozen Amend mirror lines (ARC costs spec step 7, Q4)', () => {
+  const FROZEN = { configuration: { _arcMirroredFromItemId: 'item-1', _arcPriceFrozen: true, _arcCostsCarried: true, _arcCarriedCostSetHash: 'h' } }
+  const carriedRow = (over: Row = {}) => catalogRow({ origin: 'carried', valueOrigin: 'carried', valueStatus: 'confirmed', source: 'fixed', costElementId: null,
+    unitAmount: '270.0000', instanceAmount: '270.0000', carriedFromItemCostId: 'ic-1', carriedFromHash: 'h1', supplierName: 'Carrier X', supplierQuoteRef: 'CX-1', ...over })
+  function amend(opts: { status?: string; orders?: number; line?: Row; costs?: Row[]; quoteType?: string } = {}) {
+    const ctx = setup({ status: opts.status ?? 'with_customer', orders: opts.orders, line: opts.line ?? FROZEN, costs: opts.costs ?? [carriedRow()], trackMargin: true })
+    ctx.quote.quoteType = opts.quoteType ?? 'amend'
+    return ctx
+  }
+
+  it('stores a changed price-basis value on a locked quote, leaves the price alone (no re-pricing, snapshotHash unchanged) and moves margin_hash', async () => {
+    const row = carriedRow()
+    const { service, quote, recalculate, margin } = amend({ costs: [row] })
+    await service.updateCost(ids.quote, ids.cost, { unitAmount: 240, supplierQuoteRef: 'CX-2207', note: 'renegotiated' }, ACTOR, SCOPE)
+    expect(row).toMatchObject({ unitAmount: '240', instanceAmount: '240', valueOrigin: 'manual', origin: 'carried', supplierQuoteRef: 'CX-2207', carriedFromItemCostId: 'ic-1', carriedFromHash: 'h1' })
+    expect(recalculate).not.toHaveBeenCalled()
+    expect(quote.pricingSummary.snapshotHash).toBe('snap-1')
+    // the margin signal the write emits as margin_changed: the hash moved, an approval given on the old margin no longer holds
+    const signal = margin()
+    expect(signal).toMatchObject({ approvalInvalidated: true })
+    expect(signal!.marginHash).not.toBe(signal!.previousMarginHash)
+  })
+
+  it('an order locks the quote too, and the frozen carried write is still allowed (until the order is activated by its own flow)', async () => {
+    const row = carriedRow()
+    const { service } = amend({ status: 'ready', orders: 1, costs: [row] })
+    await service.updateCost(ids.quote, ids.cost, { unitAmount: 240, note: 'renegotiated' }, ACTOR, SCOPE)
+    expect(row.unitAmount).toBe('240')
+  })
+
+  it('overwriting a carried value needs a note (NOTE_REQUIRED); keeping it with new validity and evidence does not', async () => {
+    const row = carriedRow({ validUntil: '2026-12-01' })
+    const { service } = amend({ costs: [row] })
+    await expect(service.updateCost(ids.quote, ids.cost, { unitAmount: 240 }, ACTOR, SCOPE)).rejects.toMatchObject({ status: 422, message: 'NOTE_REQUIRED' })
+    expect(row).toMatchObject({ unitAmount: '270.0000', valueOrigin: 'carried' })
+    await service.updateCost(ids.quote, ids.cost, { validUntil: '2027-06-01', supplierQuoteRef: 'CX-NEW' }, ACTOR, SCOPE)
+    expect(row).toMatchObject({ validUntil: '2027-06-01', supplierQuoteRef: 'CX-NEW', unitAmount: '270', valueOrigin: 'carried' })
+  })
+
+  it('a carried line refuses structural edits and deletion (its structure is the subscription item\'s)', async () => {
+    const { service } = amend()
+    await expect(service.updateCost(ids.quote, ids.cost, { role: 'margin_only' }, ACTOR, SCOPE)).rejects.toMatchObject({ status: 422, message: 'FIELD_NOT_ALLOWED' })
+    await expect(service.deleteCost(ids.quote, ids.cost, ACTOR, SCOPE)).rejects.toMatchObject({ status: 422, message: 'CATALOG_COST_NOT_DELETABLE' })
+  })
+
+  it('a rejected or cancelled quote still refuses the write', async () => {
+    for (const status of ['rejected', 'cancelled']) {
+      await expect(amend({ status }).service.updateCost(ids.quote, ids.cost, { unitAmount: 240, note: 'x' }, ACTOR, SCOPE)).rejects.toMatchObject({ status: 409, message: 'COST_LOCKED' })
+    }
+  })
+
+  it('once the line is un-frozen (reconfigured) the normal price-basis lock applies again', async () => {
+    const row = carriedRow()
+    const { service } = amend({ line: { configuration: { _arcMirroredFromItemId: 'item-1', _arcReconfigured: true, _arcCostsCarried: true } }, costs: [row] })
+    await expect(service.updateCost(ids.quote, ids.cost, { unitAmount: 240, note: 'x' }, ACTOR, SCOPE)).rejects.toMatchObject({ status: 409, message: 'COST_LOCKED' })
+    expect(row.unitAmount).toBe('270.0000')
+  })
+
+  it('a cost-plus Renew frozen mirror takes the same rule (frozen mirror line)', async () => {
+    const row = carriedRow()
+    const { service } = amend({ quoteType: 'renew', line: { configuration: { _arcMirroredFromItemId: 'item-1', _arcPriceFrozen: true, _arcCostPlusFrozen: true } }, costs: [row] })
+    await service.updateCost(ids.quote, ids.cost, { unitAmount: 240, note: 'x' }, ACTOR, SCOPE)
+    expect(row.unitAmount).toBe('240')
+  })
+
+  it('does not widen anything else: a catalog cost on a frozen Amend line is still LINE_NOT_ELIGIBLE, and a manual cost cannot be created there', async () => {
+    const catalog = catalogRow()
+    const a = amend({ costs: [catalog] })
+    await expect(a.service.updateCost(ids.quote, ids.cost, { valueStatus: 'confirmed' }, ACTOR, SCOPE)).rejects.toMatchObject({ status: 422, message: 'LINE_NOT_ELIGIBLE' })
+    await expect(a.service.createCost(ids.quote, create, ACTOR, SCOPE)).rejects.toMatchObject({ status: 422, message: 'LINE_NOT_ELIGIBLE' })
+  })
+
+  it('a carried cost on a cancel (removal) line is still refused', async () => {
+    const { service } = amend({ line: { action: 'cancel', configuration: { _arcMirroredFromItemId: 'item-1', _arcPriceFrozen: true } } })
+    await expect(service.updateCost(ids.quote, ids.cost, { unitAmount: 240, note: 'x' }, ACTOR, SCOPE)).rejects.toMatchObject({ status: 422, message: 'LINE_NOT_ELIGIBLE' })
   })
 })
 

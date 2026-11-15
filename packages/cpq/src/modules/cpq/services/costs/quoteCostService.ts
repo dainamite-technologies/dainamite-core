@@ -19,7 +19,7 @@ import {
 import { MANUAL_COST_KEY_PREFIX, cpqCostPreviewSchema, cpqQuoteLineCostCreateSchema, cpqQuoteLineCostUpdateSchema, cpqQuoteMarkupOverrideSetSchema, type CostPreviewInput, type QuoteLineCostCreate, type QuoteLineCostUpdate, type QuoteMarkupOverrideSet } from '../../data/quote-costs'
 import { ASSET_NOT_LIVE_STATUSES, ITEM_NOT_LIVE_STATUSES } from '../../data/costs'
 import { isArcTerminationLine } from '../arcLineRemoval'
-import { isArcMirrorLine, isArcReconfigured } from '../arcPriceFreeze'
+import { isArcMirrorLine, isArcReconfigured, isFrozenMirrorLine } from '../arcPriceFreeze'
 import { evaluateApplicability } from '../cpqPricingService'
 import { QuotingError, type DefaultCpqQuotingService } from '../cpqQuotingService'
 import { withQuotePricingWrite } from '../priceAdjustments/quotePricingWrite'
@@ -315,12 +315,13 @@ export class CpqQuoteCostService {
     await this.requireEnabled(scope)
     return this.write(quoteId, scope, parsed.expectedRevision, actor, async (em, quote, signals) => {
       const row = await this.requireCost(em, quote, costId, scope)
-      const line = await this.requireLine(em, quote, row.quoteLineId, scope, 'value')
+      const line = await this.requireLine(em, quote, row.quoteLineId, scope, 'value', row)
       const before = lockState(row)
       const auditBefore = costAudit(row)
       const structural = (['name', 'role', 'costType', 'source', 'costModel', 'chargeCode'] as const).filter((key) => parsed[key] !== undefined)
-      // Catalog lines take their structure from the catalog element; only values, supplier data and the note are editable.
-      if (row.origin === 'catalog' && structural.length > 0) throw new QuotingError(422, 'FIELD_NOT_ALLOWED', undefined, { fields: structural })
+      // Catalog and carried lines take their structure from the catalog element / the subscription item; only values,
+      // supplier data and the note are editable.
+      if (row.origin !== 'manual' && structural.length > 0) throw new QuotingError(422, 'FIELD_NOT_ALLOWED', undefined, { fields: structural })
 
       const chargeCode = parsed.chargeCode !== undefined ? clean(parsed.chargeCode) : row.chargeCode
       const charge = chargeCode ? await this.requireCharge(em, line, chargeCode, scope) : null
@@ -353,10 +354,14 @@ export class CpqQuoteCostService {
       const statusChanged = before.valueStatus !== value.valueStatus
 
       const locked = await isQuoteCostLocked(em, quote, scope)
-      this.assertWritable(quote, locked, affectsPrice(before, next))
-      // Overwriting a catalog value needs a reason; the previous value is kept in the audit trail by the note.
+      // ARC costs spec Q4: a frozen Amend mirror line keeps its stored charges whatever its costs say (I-11), so a cost
+      // change on it is margin-only for the lock: allowed in every non-terminal status, it moves `margin_hash` only.
+      // Once the line is un-frozen (reconfigured) the normal price-basis lock applies.
+      const priceAffecting = affectsPrice(before, next) && !isFrozenMirrorLine(line.configuration, quote.quoteType)
+      this.assertWritable(quote, locked, priceAffecting)
+      // Overwriting a catalog or carried value needs a reason; the previous value is kept in the audit trail by the note.
       const note = clean(parsed.note)
-      if (row.valueOrigin === 'catalog' && valueChanged && !note) throw new QuotingError(422, 'NOTE_REQUIRED')
+      if ((row.valueOrigin === 'catalog' || row.valueOrigin === 'carried') && valueChanged && !note) throw new QuotingError(422, 'NOTE_REQUIRED')
       if (extendsValidity(before, next)) {
         const newRef = clean(parsed.supplierQuoteRef)
         if (!(newRef && newRef !== row.supplierQuoteRef) && !note) throw new QuotingError(422, 'VALIDITY_EVIDENCE_REQUIRED')
@@ -558,15 +563,17 @@ export class CpqQuoteCostService {
    * `structure` (a manual cost, a markup override): only lines the quote itself prices — never an
    * ARC mirror or cancel line. `value` (entering / confirming a stored cost): also a reconfigured ARC
    * mirror line (`_arcReconfigured`, Q13: Amend or Renew), whose
-   * catalog cost lines bind at conversion (R7) — but never a cancel line or an unreconfigured mirror (it has no catalog cost lines, R1c).
+   * catalog cost lines bind at conversion (R7), and any ARC mirror line for a `carried` cost line (ARC costs spec Q4:
+   * the frozen Amend line's carried costs are editable, margin-only) — but never a cancel line, and never a catalog cost on an
+   * unreconfigured mirror (it has no catalog cost lines, R1c).
    */
-  private async requireLine(em: EntityManager, quote: CpqQuoteConfiguration, quoteLineId: string, scope: TenantScope, mode: 'structure' | 'value') {
+  private async requireLine(em: EntityManager, quote: CpqQuoteConfiguration, quoteLineId: string, scope: TenantScope, mode: 'structure' | 'value', cost?: Pick<CpqQuoteLineCost, 'origin'>) {
     const line = await em.findOne(CpqQuoteLineConfiguration, { ...scoped(scope), quoteConfigurationId: quote.id, quoteLineId })
     if (!line) throw new QuotingError(404, 'Quote line not found')
     const eligible = (line.offeringId || line.productId)
       && !isArcTerminationLine(line, quote.quoteType)
       && (mode === 'value'
-        ? (!isArcMirrorLine(line.configuration, quote.quoteType) || isArcReconfigured(line.configuration))
+        ? (!isArcMirrorLine(line.configuration, quote.quoteType) || isArcReconfigured(line.configuration) || cost?.origin === 'carried')
         : !isArcMirrorLine(line.configuration, quote.quoteType))
     if (!eligible) throw new QuotingError(422, 'LINE_NOT_ELIGIBLE')
     return line

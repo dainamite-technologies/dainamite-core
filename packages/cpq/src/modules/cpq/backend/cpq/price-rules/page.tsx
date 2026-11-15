@@ -9,7 +9,7 @@ import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar
 import { CpqListView, useCpqListData } from '../../../components/CpqListView'
 import {
   PriceRuleForm,
-  RULE_TYPE_LABELS,
+  buildRuleTypeLabels,
   emptyPriceRuleForm,
   priceRuleFormToPayload,
   type PriceRule,
@@ -62,18 +62,20 @@ export default function PriceRulesPage() {
       .catch(() => {})
   }, [])
 
+  const ruleTypeLabels = React.useMemo(() => buildRuleTypeLabels(t), [t])
+
   const ruleTypeOptions = React.useMemo(
-    () => Object.entries(RULE_TYPE_LABELS).map(([value, label]) => ({ value, label })),
-    [],
+    () => Object.entries(ruleTypeLabels).map(([value, label]) => ({ value, label })),
+    [ruleTypeLabels],
   )
 
   const chargeTypeOptions = React.useMemo(
     () => [
-      { value: 'nrc', label: 'NRC' },
-      { value: 'mrc', label: 'MRC' },
-      { value: 'usage', label: 'Usage' },
+      { value: 'nrc', label: t('cpq.priceRules.chargeTypes.nrc', 'NRC') },
+      { value: 'mrc', label: t('cpq.priceRules.chargeTypes.mrc', 'MRC') },
+      { value: 'usage', label: t('cpq.priceRules.chargeTypes.usage', 'Usage') },
     ],
-    [],
+    [t],
   )
 
   const filters = React.useMemo<FilterDef[]>(
@@ -122,16 +124,20 @@ export default function PriceRulesPage() {
       })
       if (!res.ok) {
         const err = await res.json()
-        throw new Error(err.details ? JSON.stringify(err.details) : err.error ?? 'Failed to create')
+        throw new Error(
+          err.details
+            ? JSON.stringify(err.details)
+            : err.error ?? t('cpq.priceRules.errors.createFailed', 'Failed to create'),
+        )
       }
       setShowForm(false)
       data.reload()
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Unknown error')
+      setError(err instanceof Error ? err.message : t('cpq.priceRules.errors.unknown', 'Unknown error'))
     } finally {
       setSaving(false)
     }
-  }, [data, form])
+  }, [data, form, t])
 
   const columns = React.useMemo<ColumnDef<PriceRule>[]>(
     () => [
@@ -154,7 +160,7 @@ export default function PriceRulesPage() {
         accessorKey: 'ruleType',
         header: t('cpq.priceRules.table.type', 'Type'),
         cell: ({ row }) => (
-          <span>{RULE_TYPE_LABELS[row.original.ruleType] ?? row.original.ruleType}</span>
+          <span>{ruleTypeLabels[row.original.ruleType] ?? row.original.ruleType}</span>
         ),
       },
       {
@@ -168,8 +174,9 @@ export default function PriceRulesPage() {
         cell: ({ row }) => (
           <span className="text-xs">
             {row.original.productOfferingId
-              ? row.original.productOfferingName ?? 'Product-scoped'
-              : 'Global'}
+              ? row.original.productOfferingName ??
+                t('cpq.priceRules.scope.productScoped', 'Product-scoped')
+              : t('cpq.priceRules.scope.global', 'Global')}
           </span>
         ),
       },
@@ -201,12 +208,14 @@ export default function PriceRulesPage() {
         header: t('cpq.priceRules.table.status', 'Status'),
         cell: ({ row }) => (
           <Tag variant={row.original.isActive ? 'success' : 'neutral'} dot>
-            {row.original.isActive ? 'Active' : 'Inactive'}
+            {row.original.isActive
+              ? t('cpq.common.active', 'Active')
+              : t('cpq.common.inactive', 'Inactive')}
           </Tag>
         ),
       },
     ],
-    [t],
+    [ruleTypeLabels, t],
   )
 
   return (
@@ -245,7 +254,7 @@ export default function PriceRulesPage() {
       }
       emptyState={
         <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
-          No price rules found. Click &quot;Create Rule&quot; to add one.
+          {t('cpq.priceRules.empty', 'No price rules found. Click "Create Rule" to add one.')}
         </div>
       }
     />

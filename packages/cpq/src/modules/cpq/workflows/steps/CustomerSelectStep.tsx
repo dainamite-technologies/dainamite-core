@@ -1,6 +1,7 @@
 'use client'
 
 import React, { useState, useEffect, useCallback } from 'react'
+import { useT } from '@open-mercato/shared/lib/i18n/context'
 import type { WizardStepProps } from '../types'
 
 type Customer = {
@@ -11,6 +12,7 @@ type Customer = {
 }
 
 export function CustomerSelectStep({ config, onComplete, onBack, stepData, currentStepId, completedSteps }: WizardStepProps) {
+  const t = useT()
   const [customers, setCustomers] = useState<Customer[]>([])
   const [search, setSearch] = useState('')
   const [selected, setSelected] = useState<Customer | null>(null)
@@ -59,7 +61,7 @@ export function CustomerSelectStep({ config, onComplete, onBack, stepData, curre
       <div className="flex gap-2">
         <input
           type="text"
-          placeholder="Search customers..."
+          placeholder={t('cpq.wizard.steps.customerSelect.searchPlaceholder', 'Search customers...')}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
@@ -71,21 +73,23 @@ export function CustomerSelectStep({ config, onComplete, onBack, stepData, curre
           disabled={loading}
           className="inline-flex items-center justify-center rounded-md border px-4 py-2 text-sm font-medium hover:bg-muted disabled:opacity-50"
         >
-          {loading ? 'Searching...' : 'Search'}
+          {loading
+            ? t('cpq.wizard.steps.customerSelect.searching', 'Searching...')
+            : t('cpq.wizard.steps.customerSelect.search', 'Search')}
         </button>
       </div>
 
       {selected && (
         <div className="rounded-md border-2 border-primary bg-primary/5 p-3 flex items-center justify-between">
           <span className="text-sm">
-            <strong>Selected:</strong> {selected.name}
+            <strong>{t('cpq.wizard.steps.customerSelect.selected', 'Selected:')}</strong> {selected.name}
           </span>
           <button
             type="button"
             onClick={() => setSelected(null)}
             className="text-xs text-muted-foreground hover:text-foreground underline"
           >
-            Clear
+            {t('cpq.wizard.steps.customerSelect.clear', 'Clear')}
           </button>
         </div>
       )}
@@ -107,7 +111,7 @@ export function CustomerSelectStep({ config, onComplete, onBack, stepData, curre
         ))}
         {customers.length === 0 && !loading && (
           <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
-            No customers found.
+            {t('cpq.wizard.steps.customerSelect.empty', 'No customers found.')}
           </div>
         )}
       </div>
@@ -115,7 +119,7 @@ export function CustomerSelectStep({ config, onComplete, onBack, stepData, curre
       <div className="flex gap-2 justify-end pt-2">
         {completedSteps.length > 0 && (
           <button type="button" onClick={onBack} className="inline-flex items-center justify-center rounded-md border px-4 py-2 text-sm font-medium hover:bg-muted">
-            Back
+            {t('cpq.common.back', 'Back')}
           </button>
         )}
         <button
@@ -128,7 +132,7 @@ export function CustomerSelectStep({ config, onComplete, onBack, stepData, curre
           disabled={!selected}
           className="inline-flex items-center justify-center rounded-md bg-primary px-5 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          Next
+          {t('cpq.wizard.next', 'Next')}
         </button>
       </div>
     </div>

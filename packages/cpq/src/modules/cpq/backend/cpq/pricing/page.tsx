@@ -73,7 +73,7 @@ export default function PricingTablesPage() {
         header: t('cpq.pricing.status', 'Status'),
         cell: ({ row }) => (
           <Tag variant={row.original.isActive ? 'success' : 'neutral'} dot>
-            {row.original.isActive ? t('common.active', 'Active') : t('common.inactive', 'Inactive')}
+            {row.original.isActive ? t('cpq.common.active', 'Active') : t('cpq.common.inactive', 'Inactive')}
           </Tag>
         ),
       },

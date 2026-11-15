@@ -219,7 +219,7 @@ przebieg rozliczeniowy) — zwykłe faktury sprzedaży się tu nie pokazują.
 
 ### 3g. PDF i wysyłka e-mail
 1. Na fakturze roboczej kliknij **Preview PDF** — PDF z ukośnym napisem
-   *DRAFT*, w języku konta (*Invoice language*: en / pl, polskie znaki).
+   *DRAFT*, w języku konta (*Invoice language*: en / es / de / pl, znaki diakrytyczne).
 2. Zaksięguj fakturę → **Download PDF** pobiera PDF zamrożony przy
    księgowaniu (zmiana ustawień sprzedawcy go już nie zmienia).
 3. Kliknij **Send** → potwierdź adres → komunikat *Invoice sent* (albo

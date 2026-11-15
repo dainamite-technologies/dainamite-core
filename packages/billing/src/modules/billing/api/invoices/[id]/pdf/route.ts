@@ -4,6 +4,7 @@ import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
 import { BillingInvoice } from '../../../../data/entities'
 import { getInvoicePdf } from '../../../../lib/pdf/invoicePdf'
+import { INVOICE_LANGUAGE_CODES } from '../../../../lib/invoiceLanguages'
 
 /**
  * `GET /api/billing/invoices/[id]/pdf` — the document PDF (Spec B).
@@ -71,7 +72,7 @@ export const openApi = {
       description:
         '`application/pdf`. Posted documents return the PDF frozen at post (an attachment); drafts ' +
         'and test documents are rendered live with a DRAFT / TEST watermark and never stored. ' +
-        'Labels follow the account invoice language (en / pl).',
+        `Labels follow the account invoice language (${INVOICE_LANGUAGE_CODES.join(' / ')}).`,
       responses: [{ status: 200, description: 'PDF document (`application/pdf`)' }],
       errors: [{ status: 404, description: 'Invoice not found in this organization' }],
     },

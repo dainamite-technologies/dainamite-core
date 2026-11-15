@@ -1,6 +1,6 @@
 "use client"
 import * as React from 'react'
-import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { useT, type TranslateFn } from '@open-mercato/shared/lib/i18n/context'
 import { useRouter, useParams, useSearchParams } from 'next/navigation'
 import ArcQuoteConfigurator, {
   type AttachedTarget,
@@ -169,11 +169,24 @@ function fmt(amount: number, currency: string): string {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(amount)
 }
 
-async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
+async function apiJson<T>(t: TranslateFn, url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init)
   const json = await res.json()
-  if (!res.ok) throw new Error(json?.error ?? `Request failed (${res.status})`)
+  if (!res.ok) throw new Error(json?.error ?? t('cpq.common.requestFailed', 'Request failed ({status})', { status: res.status }))
   return json as T
+}
+
+function quoteTypeLabel(t: TranslateFn, quoteType: string): string {
+  switch (quoteType) {
+    case 'amend':
+      return t('cpq.quotes.type.amend', 'amend')
+    case 'renew':
+      return t('cpq.quotes.type.renew', 'renew')
+    case 'cancel':
+      return t('cpq.quotes.type.cancel', 'cancel')
+    default:
+      return quoteType
+  }
 }
 
 // ─── Header sub-components ─────────────────────────────────────
@@ -197,6 +210,7 @@ function MoreActionsDropdown({ items }: { items: ActionItem[] }) {
   // <details>-style trigger; menuActions on FormHeader would render it
   // inside the header layout, but here we want it adjacent to other
   // primary buttons.
+  const t = useT()
   const [open, setOpen] = React.useState(false)
   const ref = React.useRef<HTMLDivElement>(null)
   React.useEffect(() => {
@@ -212,7 +226,7 @@ function MoreActionsDropdown({ items }: { items: ActionItem[] }) {
   return (
     <div className="relative" ref={ref}>
       <Button type="button" variant="outline" onClick={() => setOpen((v) => !v)}>
-        Actions
+        {t('cpq.quotes.detail.actions', 'Actions')}
         <svg className="h-3 w-3 ml-1" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
         </svg>
@@ -249,6 +263,7 @@ function MoreActionsDropdown({ items }: { items: ActionItem[] }) {
 }
 
 function buildMoreActions({
+  t,
   recalculate,
   canRecalculate,
   submitting,
@@ -256,6 +271,7 @@ function buildMoreActions({
   onDelete,
   deleting,
 }: {
+  t: TranslateFn
   recalculate: () => void
   canRecalculate: boolean
   submitting: boolean
@@ -269,7 +285,7 @@ function buildMoreActions({
   if (canRecalculate) {
     items.push({
       id: 'recalculate',
-      label: 'Recalculate',
+      label: t('cpq.quotes.detail.recalculate', 'Recalculate'),
       onSelect: recalculate,
       loading: submitting,
       disabled: submitting,
@@ -278,7 +294,7 @@ function buildMoreActions({
   if (deletable) {
     items.push({
       id: 'delete',
-      label: 'Delete',
+      label: t('cpq.common.delete', 'Delete'),
       onSelect: onDelete,
       disabled: deleting,
       loading: deleting,
@@ -356,11 +372,11 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
   // ─── Negotiated prices ─────────────────────────────────────────
   const reloadQuote = React.useCallback(async () => {
     try {
-      setCpqQuote(await apiJson<QuoteResult>(`/api/cpq/quotes/${cpqConfigId}`))
+      setCpqQuote(await apiJson<QuoteResult>(t, `/api/cpq/quotes/${cpqConfigId}`))
     } catch (err) {
       setError((err as Error).message)
     }
-  }, [cpqConfigId])
+  }, [cpqConfigId, t])
   const priceAdjustments = usePriceAdjustments<QuoteResult>({
     quote: isNew ? null : cpqQuote,
     quoteType: arcQuoteType,
@@ -377,7 +393,7 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
       const quoteId = searchParams.get('quoteId')
       const customerId = searchParams.get('customerId')
       if (!customerId) {
-        setError('customerId is required to create a CPQ quote')
+        setError(t('cpq.quotes.detail.customerIdRequired', 'customerId is required to create a CPQ quote'))
         setLoading(false)
         return
       }
@@ -385,7 +401,7 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
         try {
           const body: Record<string, string> = { customerId: customerId! }
           if (quoteId) body.quoteId = quoteId
-          const result = await apiJson<QuoteResult>('/api/cpq/quotes', {
+          const result = await apiJson<QuoteResult>(t, '/api/cpq/quotes', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body),
@@ -403,7 +419,7 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
     let cancelled = false
     async function load() {
       try {
-        const result = await apiJson<QuoteResult>(`/api/cpq/quotes/${cpqConfigId}`)
+        const result = await apiJson<QuoteResult>(t, `/api/cpq/quotes/${cpqConfigId}`)
         if (!cancelled) setCpqQuote(result)
       } catch (err) {
         if (!cancelled) setError((err as Error).message)
@@ -413,14 +429,14 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
     }
     load()
     return () => { cancelled = true }
-  }, [cpqConfigId, isNew, searchParams, router])
+  }, [cpqConfigId, isNew, searchParams, router, t])
 
   // ─── Actions ─────────────────────────────────────────────────
 
   const loadOfferings = async () => {
     setOfferingsLoading(true)
     try {
-      const result = await apiJson<{ items: Offering[] }>('/api/cpq/product-offerings?pageSize=100&lifecycleStatus=active')
+      const result = await apiJson<{ items: Offering[] }>(t, '/api/cpq/product-offerings?pageSize=100&lifecycleStatus=active')
       setOfferings(result.items ?? [])
     } catch { setOfferings([]) }
     finally { setOfferingsLoading(false) }
@@ -430,7 +446,7 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
     try {
       const params = new URLSearchParams({ offeringId })
       if (Object.keys(currentConfig).length > 0) params.set('configuration', JSON.stringify(currentConfig))
-      const result = await apiJson<{ attributes: ConstrainedAttribute[] }>(`/api/cpq/quotes/attributes?${params}`)
+      const result = await apiJson<{ attributes: ConstrainedAttribute[] }>(t, `/api/cpq/quotes/attributes?${params}`)
       setAttributes(result.attributes ?? [])
     } catch { setAttributes([]) }
   }
@@ -449,7 +465,7 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
         const body: Record<string, unknown> = { offeringId: selectedOffering.id, configuration: config, quantity }
         if (addingToParentLineId) body.parentLineId = addingToParentLineId
         if (tid) body.targetSubscriptionId = tid
-        lastResult = await apiJson<QuoteResult>(`/api/cpq/quotes/${cpqQuote.id}/items`, {
+        lastResult = await apiJson<QuoteResult>(t, `/api/cpq/quotes/${cpqQuote.id}/items`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
@@ -466,7 +482,7 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
     if (!cpqQuote) return
     try {
       setSubmitting(true); setError(null)
-      const result = await apiJson<QuoteResult>(`/api/cpq/quotes/${cpqQuote.id}/items/${lineId}`, {
+      const result = await apiJson<QuoteResult>(t, `/api/cpq/quotes/${cpqQuote.id}/items/${lineId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ configuration: config, quantity }),
@@ -492,7 +508,7 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
     if (!cpqQuote) return
     try {
       setSubmitting(true); setError(null)
-      const result = await apiJson<QuoteResult>(`/api/cpq/quotes/${cpqQuote.id}/recalculate`, {
+      const result = await apiJson<QuoteResult>(t, `/api/cpq/quotes/${cpqQuote.id}/recalculate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ save: true }),
@@ -506,7 +522,7 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
     if (!cpqQuote) return
     try {
       setConverting(true); setError(null)
-      const result = await apiJson<{ id: string }>('/api/cpq/orders', {
+      const result = await apiJson<{ id: string }>(t, '/api/cpq/orders', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ quoteId: cpqQuote.id }),
@@ -520,7 +536,7 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
     if (!cpqQuote) return
     try {
       setTransitioning(true); setError(null)
-      const result = await apiJson<QuoteResult>(`/api/cpq/quotes/${cpqQuote.id}/status`, {
+      const result = await apiJson<QuoteResult>(t, `/api/cpq/quotes/${cpqQuote.id}/status`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ targetStatus }),
@@ -534,7 +550,7 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
     if (!cpqQuote) return
     try {
       setDeleting(true); setError(null); setShowDeleteConfirm(false)
-      await apiJson<{ ok: boolean }>(`/api/cpq/quotes/${cpqQuote.id}`, { method: 'DELETE' })
+      await apiJson<{ ok: boolean }>(t, `/api/cpq/quotes/${cpqQuote.id}`, { method: 'DELETE' })
       router.push('/backend/cpq/quotes')
     } catch (err) { setError((err as Error).message) }
     finally { setDeleting(false) }
@@ -572,7 +588,7 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
     setAddingTargetSubIds(inherited ? [inherited] : [])
     if (offeringId) {
       try {
-        const result = await apiJson<{ items: Offering[] }>('/api/cpq/product-offerings?pageSize=100&lifecycleStatus=active')
+        const result = await apiJson<{ items: Offering[] }>(t, '/api/cpq/product-offerings?pageSize=100&lifecycleStatus=active')
         const match = (result.items ?? []).find((o) => o.id === offeringId)
         if (match) {
           selectOffering(match)
@@ -607,7 +623,7 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
   if (loading) {
     return (
       <div className="flex items-center gap-2 py-12 justify-center text-sm text-muted-foreground">
-        <Spinner /> Loading…
+        <Spinner /> {t('cpq.quotes.detail.loading', 'Loading…')}
       </div>
     )
   }
@@ -615,9 +631,9 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
   if (!cpqQuote) {
     return (
       <div className="space-y-4">
-        <button onClick={() => router.push('/backend/cpq/quotes')} className="text-sm text-muted-foreground hover:text-foreground">← Back to Quotes</button>
+        <button onClick={() => router.push('/backend/cpq/quotes')} className="text-sm text-muted-foreground hover:text-foreground">{t('cpq.quotes.detail.backToQuotes', '← Back to Quotes')}</button>
         {error && <ErrorBanner message={error} />}
-        <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">Quote not found.</div>
+        <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">{t('cpq.quotes.detail.notFound', 'Quote not found.')}</div>
       </div>
     )
   }
@@ -666,7 +682,7 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
             // items from new targets (XD-250 multi-target ARC), so refetch
             // the full quote to pick up the new lines without a hard refresh.
             try {
-              const fresh = await apiJson<QuoteResult>(`/api/cpq/quotes/${cpqQuote.id}`)
+              const fresh = await apiJson<QuoteResult>(t, `/api/cpq/quotes/${cpqQuote.id}`)
               setCpqQuote(fresh)
             } catch {
               /* ignore — loadArcTargets already surfaced any error */
@@ -682,18 +698,18 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
       <FormHeader
         mode="detail"
         backHref="/backend/cpq/quotes"
-        backLabel="Back to CPQ Quotes"
-        entityTypeLabel="CPQ Quote"
-        title={cpqQuote.quoteNumber || cpqQuote.customerName || 'Untitled'}
+        backLabel={t('cpq.quotes.detail.backLabel', 'Back to CPQ Quotes')}
+        entityTypeLabel={t('cpq.quotes.detail.entityType', 'CPQ Quote')}
+        title={cpqQuote.quoteNumber || cpqQuote.customerName || t('cpq.quotes.detail.untitled', 'Untitled')}
         statusBadge={
           <div className="flex flex-wrap items-center gap-2 pt-1">
             <Tag variant={quoteCpqStatusMap[cpqQuote.cpqStatus as QuoteCpqStatus] ?? 'neutral'} dot>
               {formatStatusLabel(cpqQuote.cpqStatus)}
             </Tag>
             {arcQuoteType !== 'new' && (
-              <Tag variant="brand" className="uppercase">{arcQuoteType}</Tag>
+              <Tag variant="brand" className="uppercase">{quoteTypeLabel(t, arcQuoteType)}</Tag>
             )}
-            {cpqQuote.convertedOrderId && <Tag variant="success" dot>Converted</Tag>}
+            {cpqQuote.convertedOrderId && <Tag variant="success" dot>{t('cpq.quotes.detail.converted', 'Converted')}</Tag>}
           </div>
         }
         // FormHeader.detail ignores `utilityActions` whenever `actionsContent`
@@ -707,7 +723,7 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
               onClick={() => router.push(`/backend/sales/quotes/${cpqQuote.quoteId}`)}
             >
               <ExternalLink className="h-3.5 w-3.5" />
-              View Sales Quote
+              {t('cpq.quotes.detail.viewSalesQuote', 'View Sales Quote')}
             </Button>
             {cpqQuote.convertedOrderId ? (
               <Button
@@ -715,31 +731,32 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
                 onClick={() => router.push(`/backend/cpq/orders/${cpqQuote.convertedOrderId}`)}
               >
                 <ArrowRight className="h-4 w-4" />
-                Go to order
+                {t('cpq.quotes.detail.goToOrder', 'Go to order')}
               </Button>
             ) : view !== 'summary' ? (
               <Button type="button" variant="outline" onClick={() => { resetConfigState(); setView('summary') }}>
-                Cancel
+                {t('cpq.common.cancel', 'Cancel')}
               </Button>
             ) : (
               <>
                 <Button type="button" onClick={startAddOffering}>
                   <Plus className="h-4 w-4" />
-                  Add Offering
+                  {t('cpq.quotes.detail.addOffering', 'Add Offering')}
                 </Button>
                 {arcEditable && (
                   <Button type="button" variant="outline" onClick={() => setArcDrawerOpen(true)}>
-                    Modify Subscription
+                    {t('cpq.quotes.detail.modifySubscription', 'Modify Subscription')}
                   </Button>
                 )}
                 {cpqQuote.cpqStatus === 'accepted' && (
                   <Button type="button" onClick={convertToOrder} disabled={converting}>
                     {converting ? <Spinner /> : <ArrowRight className="h-4 w-4" />}
-                    Convert to Order
+                    {t('cpq.quotes.detail.convertToOrder', 'Convert to Order')}
                   </Button>
                 )}
                 <MoreActionsDropdown
                   items={buildMoreActions({
+                    t,
                     recalculate,
                     canRecalculate: canRecalculateQuote(grantedFeatures, cpqQuote.cpqStatus),
                     submitting,
@@ -782,7 +799,7 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
           statusMap={quoteCpqStatusMap}
           onTransition={transitionStatus}
           disabled={transitioning}
-          ariaLabel="Quote status path"
+          ariaLabel={t('cpq.quotes.detail.statusPath', 'Quote status path')}
         />
         {transitioning && <Spinner />}
       </div>
@@ -793,9 +810,11 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
         <div className="rounded-md border border-brand-violet/30 bg-brand-violet/10 px-4 py-3 text-sm text-brand-violet">
           <div className="flex items-center justify-between">
             <div>
-              <span className="font-medium uppercase">{arcQuoteType}</span>
+              <span className="font-medium uppercase">{quoteTypeLabel(t, arcQuoteType)}</span>
               {' • '}
-              {arcTargets.length} target{arcTargets.length === 1 ? '' : 's'}:
+              {arcTargets.length === 1
+                ? t('cpq.quotes.detail.arcTargets.one', '{count} target:', { count: arcTargets.length })
+                : t('cpq.quotes.detail.arcTargets.other', '{count} targets:', { count: arcTargets.length })}
               {' '}
               {arcTargets.map((t, i) => (
                 <span key={t.id}>
@@ -812,7 +831,7 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
               ))}
               {isMergeRenew && (
                 <span className="ml-2 text-status-warning-text font-medium">
-                  • Merging into a new contract
+                  {t('cpq.quotes.detail.mergingRenew', '• Merging into a new contract')}
                 </span>
               )}
             </div>
@@ -824,7 +843,7 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
           currency). Mirrors the sidebar tiles in the standard
           sales-document detail layout. */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-        <MetaCard label="Customer">
+        <MetaCard label={t('cpq.quotes.detail.meta.customer', 'Customer')}>
           {cpqQuote.customerName ? (
             <span className="font-medium">{cpqQuote.customerName}</span>
           ) : (
@@ -833,10 +852,10 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
             </span>
           )}
         </MetaCard>
-        <MetaCard label="Version">
+        <MetaCard label={t('cpq.quotes.detail.meta.version', 'Version')}>
           <span className="font-medium">v{cpqQuote.version}</span>
         </MetaCard>
-        <MetaCard label="Currency">
+        <MetaCard label={t('cpq.quotes.detail.meta.currency', 'Currency')}>
           <span className="font-medium">{currency}</span>
         </MetaCard>
       </div>
@@ -845,17 +864,17 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setShowDeleteConfirm(false)}>
           <div className="w-full max-w-sm rounded-lg border bg-card shadow-xl" onClick={(e) => e.stopPropagation()}>
             <div className="px-4 py-3 border-b">
-              <h3 className="text-sm font-medium">Delete Quote</h3>
+              <h3 className="text-sm font-medium">{t('cpq.quotes.detail.deleteConfirm.title', 'Delete Quote')}</h3>
             </div>
             <div className="p-4">
-              <p className="text-sm text-muted-foreground">Are you sure you want to delete this quote? This will soft-delete the quote and all its line items.</p>
+              <p className="text-sm text-muted-foreground">{t('cpq.quotes.detail.deleteConfirm.text', 'Are you sure you want to delete this quote? This will soft-delete the quote and all its line items.')}</p>
             </div>
             <div className="flex justify-end gap-2 px-4 py-3 border-t">
               <Button type="button" variant="outline" onClick={() => setShowDeleteConfirm(false)}>
-                Cancel
+                {t('cpq.common.cancel', 'Cancel')}
               </Button>
               <Button type="button" variant="destructive" onClick={deleteQuote} disabled={deleting}>
-                {deleting ? <Spinner /> : null} Delete
+                {deleting ? <Spinner /> : null} {t('cpq.common.delete', 'Delete')}
               </Button>
             </div>
           </div>
@@ -870,7 +889,7 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
           {/* Validation errors */}
           {!cpqQuote.validationResult.valid && (
             <Alert variant="warning">
-              <AlertTitle>Validation Issues</AlertTitle>
+              <AlertTitle>{t('cpq.quotes.detail.validationIssues', 'Validation Issues')}</AlertTitle>
               <AlertDescription>
                 {/* Stacked <span>s rather than <ul>/<li>: before Open Mercato
                     0.8 AlertDescription rendered a <p>, where a list is invalid
@@ -938,7 +957,8 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
         <>
           {addingToParentLineId && (
             <Alert variant="info">
-              Adding component to bundle: <span className="font-medium">{cpqQuote.lines.find((l) => l.lineId === addingToParentLineId)?.offeringName ?? 'Bundle'}</span>
+              {t('cpq.quotes.detail.addingComponentTo', 'Adding component to bundle:')}{' '}
+              <span className="font-medium">{cpqQuote.lines.find((l) => l.lineId === addingToParentLineId)?.offeringName ?? t('cpq.quotes.detail.bundleFallback', 'Bundle')}</span>
             </Alert>
           )}
           <OfferingBrowser
@@ -954,7 +974,11 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
       {/* Configure new offering */}
       {view === 'configure' && selectedOffering && (
         <ConfigurePanel
-          title={addingToParentLineId ? `Add Component: ${selectedOffering.name}` : `Configure: ${selectedOffering.name}`}
+          title={
+            addingToParentLineId
+              ? t('cpq.quotes.detail.configure.addComponentTitle', 'Add Component: {name}', { name: selectedOffering.name })
+              : t('cpq.quotes.detail.configure.configureTitle', 'Configure: {name}', { name: selectedOffering.name })
+          }
           attributes={attributes}
           config={config}
           quantity={quantity}
@@ -980,7 +1004,7 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
           }}
           onQuantityChange={setQuantity}
           onSubmit={addItem}
-          submitLabel="Add to Quote"
+          submitLabel={t('cpq.quotes.detail.configure.addToQuote', 'Add to Quote')}
           submitting={submitting}
         />
       )}
@@ -988,7 +1012,9 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
       {/* Edit existing line */}
       {view === 'edit' && editingLineId && (
         <ConfigurePanel
-          title={`Edit: ${cpqQuote.lines.find((l) => l.lineId === editingLineId)?.offeringName ?? 'Line'}`}
+          title={t('cpq.quotes.detail.configure.editTitle', 'Edit: {name}', {
+            name: cpqQuote.lines.find((l) => l.lineId === editingLineId)?.offeringName ?? t('cpq.quotes.detail.configure.lineFallback', 'Line'),
+          })}
           attributes={attributes}
           config={config}
           quantity={quantity}
@@ -1003,7 +1029,7 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
           }}
           onQuantityChange={setQuantity}
           onSubmit={() => updateItem(editingLineId)}
-          submitLabel="Update Line"
+          submitLabel={t('cpq.quotes.detail.configure.updateLine', 'Update Line')}
           submitting={submitting}
         />
       )}
@@ -1023,6 +1049,7 @@ function QuoteLineTree({ lines, currency, expandedLines, pricingDetail, targetCo
   onRemoveLine: (lineId: string) => void; onAddComponent: (parentLineId: string, offeringId?: string) => void
   onTogglePricingDetail: (lineIdx: number, chargeIdx: number) => void
 }) {
+  const t = useT()
   const [bundleTrees, setBundleTrees] = React.useState<Map<string, BundleTree>>(new Map())
   const [loadingTrees, setLoadingTrees] = React.useState<Set<string>>(new Set())
 
@@ -1040,18 +1067,18 @@ function QuoteLineTree({ lines, currency, expandedLines, pricingDetail, targetCo
     if (bundleTrees.has(offeringId) || loadingTrees.has(offeringId)) return
     setLoadingTrees((prev) => new Set(prev).add(offeringId))
     try {
-      const result = await apiJson<{ tree: BundleTree }>(`/api/cpq/bundle-tree?offeringId=${offeringId}`)
+      const result = await apiJson<{ tree: BundleTree }>(t, `/api/cpq/bundle-tree?offeringId=${offeringId}`)
       setBundleTrees((prev) => new Map(prev).set(offeringId, result.tree))
     } catch { /* ignore — will just not show structure */ }
     finally { setLoadingTrees((prev) => { const n = new Set(prev); n.delete(offeringId); return n }) }
-  }, [bundleTrees, loadingTrees])
+  }, [bundleTrees, loadingTrees, t])
 
   return (
     <div>
-      <h3 className="text-sm font-medium mb-2 px-1">Line Items</h3>
+      <h3 className="text-sm font-medium mb-2 px-1">{t('cpq.quotes.detail.lineItems', 'Line Items')}</h3>
       {lines.length === 0 ? (
         <div className="rounded-lg border bg-card py-8 text-center text-sm text-muted-foreground">
-          No items configured yet. Click &quot;Add Offering&quot; to start.
+          {t('cpq.quotes.detail.noLines', 'No items configured yet. Click "Add Offering" to start.')}
         </div>
       ) : (
         <div className="rounded-lg border bg-card divide-y">
@@ -1119,10 +1146,11 @@ function BundleSlotPanel({ bundleTree, treeLoading, children, allLines, currency
   onRemoveLine: (lineId: string) => void; onAddComponent: (parentLineId: string, offeringId?: string) => void
   onTogglePricingDetail: (lineIdx: number, chargeIdx: number) => void
 }) {
+  const t = useT()
   if (treeLoading) {
     return (
       <div className="border-t bg-muted/5 px-8 py-3">
-        <div className="flex items-center gap-2 text-xs text-muted-foreground"><Spinner /> Loading bundle structure…</div>
+        <div className="flex items-center gap-2 text-xs text-muted-foreground"><Spinner /> {t('cpq.quotes.bundle.loadingStructure', 'Loading bundle structure…')}</div>
       </div>
     )
   }
@@ -1171,13 +1199,14 @@ function BundleSlotPanel({ bundleTree, treeLoading, children, allLines, currency
             <div className="flex items-center gap-2 px-6 py-2 bg-muted/20">
               <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">{slot.name}</span>
               {isRequired ? (
-                <Tag variant="warning" className="text-[10px] px-1.5">required</Tag>
+                <Tag variant="warning" className="text-[10px] px-1.5">{t('cpq.quotes.bundle.slotRequired', 'required')}</Tag>
               ) : (
-                <Tag variant="neutral" className="text-[10px] px-1.5">optional</Tag>
+                <Tag variant="neutral" className="text-[10px] px-1.5">{t('cpq.quotes.bundle.slotOptional', 'optional')}</Tag>
               )}
               <span className="text-[10px] text-muted-foreground">
                 {filledCount}/{slot.cardinalityMax ?? '∞'}
-                {slot.cardinalityMin > 0 && ` (min ${slot.cardinalityMin})`}
+                {slot.cardinalityMin > 0 && ' '}
+                {slot.cardinalityMin > 0 && t('cpq.quotes.bundle.slotMin', '(min {min})', { min: slot.cardinalityMin })}
               </span>
               <div className="flex-1" />
               {/* Available offerings in this slot */}
@@ -1196,7 +1225,13 @@ function BundleSlotPanel({ bundleTree, treeLoading, children, allLines, currency
                             ? 'border-border hover:border-primary hover:bg-primary/5 hover:text-primary cursor-pointer'
                             : 'border-border text-muted-foreground opacity-50 cursor-not-allowed'
                       }`}
-                      title={isFilled ? 'Already added' : canAdd ? `Add ${comp.childOffering.offeringName}` : 'Slot is full'}
+                      title={
+                        isFilled
+                          ? t('cpq.quotes.bundle.alreadyAdded', 'Already added')
+                          : canAdd
+                            ? t('cpq.quotes.bundle.addComponent', 'Add {name}', { name: comp.childOffering.offeringName })
+                            : t('cpq.quotes.bundle.slotFull', 'Slot is full')
+                      }
                     >
                       {isFilled ? (
                         <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
@@ -1293,7 +1328,7 @@ function QuoteLineRow({ line, lineIdx, currency, isExpanded, pricingDetail, isBu
               <span className="text-muted-foreground text-xs">└</span>
             )}
             {isBundle && (
-              <Tag variant="brand" className="px-1.5 text-xs">bundle</Tag>
+              <Tag variant="brand" className="px-1.5 text-xs">{t('cpq.lines.bundle', 'bundle')}</Tag>
             )}
             <span className={`font-medium text-sm ${isRemoved ? 'text-muted-foreground line-through' : ''}`}>{line.offeringName}</span>
             {line.quantity > 1 && <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-medium">×{line.quantity}</span>}
@@ -1318,18 +1353,22 @@ function QuoteLineRow({ line, lineIdx, currency, isExpanded, pricingDetail, isBu
               <Tag
                 variant="brand"
                 className="px-1.5 text-xs"
-                title={`Acts on subscription ${targetCodes.get(line.targetSubscriptionId)}`}
+                title={t('cpq.quotes.detail.actsOnSubscription', 'Acts on subscription {code}', { code: targetCodes.get(line.targetSubscriptionId) ?? '' })}
               >
                 → {targetCodes.get(line.targetSubscriptionId)}
               </Tag>
             )}
             {isRemoved ? null : line.isConfigured ? (
-              <Tag variant="success" className="px-1.5 text-xs">configured</Tag>
+              <Tag variant="success" className="px-1.5 text-xs">{t('cpq.quotes.detail.lineConfigured', 'configured')}</Tag>
             ) : (
-              <Tag variant="warning" className="px-1.5 text-xs">incomplete</Tag>
+              <Tag variant="warning" className="px-1.5 text-xs">{t('cpq.quotes.detail.lineIncomplete', 'incomplete')}</Tag>
             )}
             {isBundle && (
-              <span className="text-xs text-muted-foreground">{childCount} component{childCount !== 1 ? 's' : ''}</span>
+              <span className="text-xs text-muted-foreground">
+                {childCount !== 1
+                  ? t('cpq.lines.componentCount.other', '{count} components', { count: childCount })
+                  : t('cpq.lines.componentCount.one', '{count} component', { count: childCount })}
+              </span>
             )}
           </div>
           {line.validationErrors && line.validationErrors.length > 0 && (
@@ -1341,12 +1380,12 @@ function QuoteLineRow({ line, lineIdx, currency, isExpanded, pricingDetail, isBu
         <div className="shrink-0 text-right text-xs space-y-0.5">
           {isRemoved && line.arcSource && line.arcSource.mrcAmount > 0 && (
             <div>
-              <span className="text-muted-foreground">MRC </span>
+              <span className="text-muted-foreground">{t('cpq.lines.mrc', 'MRC')} </span>
               <span className="font-mono text-muted-foreground line-through">{fmt(line.arcSource.mrcAmount, currency)}</span>
             </div>
           )}
-          {line.nrcTotal > 0 && <div><span className="text-muted-foreground">NRC </span><span className="font-mono font-medium">{fmt(line.nrcTotal, currency)}</span></div>}
-          {line.mrcTotal > 0 && <div><span className="text-muted-foreground">MRC </span><span className="font-mono font-medium">{fmt(line.mrcTotal, currency)}</span></div>}
+          {line.nrcTotal > 0 && <div><span className="text-muted-foreground">{t('cpq.lines.nrc', 'NRC')} </span><span className="font-mono font-medium">{fmt(line.nrcTotal, currency)}</span></div>}
+          {line.mrcTotal > 0 && <div><span className="text-muted-foreground">{t('cpq.lines.mrc', 'MRC')} </span><span className="font-mono font-medium">{fmt(line.mrcTotal, currency)}</span></div>}
         </div>
 
         {/* Actions */}
@@ -1366,18 +1405,18 @@ function QuoteLineRow({ line, lineIdx, currency, isExpanded, pricingDetail, isBu
         <div className="flex items-center gap-1 shrink-0">
           <DiscountLineAction line={line} />
           {onAddComponent && (
-            <button onClick={onAddComponent} className="rounded p-1.5 text-muted-foreground hover:text-primary hover:bg-primary/5 transition-colors" title="Add Component">
+            <button onClick={onAddComponent} className="rounded p-1.5 text-muted-foreground hover:text-primary hover:bg-primary/5 transition-colors" title={t('cpq.quotes.detail.addComponent', 'Add Component')}>
               <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
               </svg>
             </button>
           )}
-          <button onClick={onEdit} className="rounded p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors" title="Edit">
+          <button onClick={onEdit} className="rounded p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors" title={t('cpq.common.edit', 'Edit')}>
             <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0115.75 21H5.25A2.25 2.25 0 013 18.75V8.25A2.25 2.25 0 015.25 6H10" />
             </svg>
           </button>
-          <button onClick={onRemove} className="rounded p-1.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors" title="Remove">
+          <button onClick={onRemove} className="rounded p-1.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors" title={t('cpq.quotes.detail.removeLine', 'Remove')}>
             <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
             </svg>
@@ -1409,21 +1448,23 @@ function QuoteLineRow({ line, lineIdx, currency, isExpanded, pricingDetail, isBu
 }
 
 function LineSummaryFallback({ line, currency }: { line: QuoteLine; currency: string }) {
+  const t = useT()
   const hasTotals = line.nrcTotal > 0 || line.mrcTotal > 0
   const mirroredFromItemId = (line.configuration?._arcMirroredFromItemId as string | undefined) ?? null
   return (
     <div className="border-t bg-muted/10 px-12 py-2 text-xs text-muted-foreground space-y-1">
       <div>
-        No detailed charge breakdown available for this line.
-        {mirroredFromItemId && ' Mirrored from existing subscription item.'}
+        {t('cpq.quotes.detail.noBreakdown', 'No detailed charge breakdown available for this line.')}
+        {mirroredFromItemId && ' '}
+        {mirroredFromItemId && t('cpq.orders.detail.mirroredItem', 'Mirrored from existing subscription item.')}
       </div>
       {hasTotals && (
         <div className="flex gap-4">
           {line.nrcTotal > 0 && (
-            <span>NRC <span className="font-mono font-medium text-foreground">{fmt(line.nrcTotal, currency)}</span></span>
+            <span>{t('cpq.lines.nrc', 'NRC')} <span className="font-mono font-medium text-foreground">{fmt(line.nrcTotal, currency)}</span></span>
           )}
           {line.mrcTotal > 0 && (
-            <span>MRC <span className="font-mono font-medium text-foreground">{fmt(line.mrcTotal, currency)}</span></span>
+            <span>{t('cpq.lines.mrc', 'MRC')} <span className="font-mono font-medium text-foreground">{fmt(line.mrcTotal, currency)}</span></span>
           )}
         </div>
       )}
@@ -1461,6 +1502,7 @@ function Spinner() {
 }
 
 function ErrorBanner({ message, onDismiss }: { message: string; onDismiss?: () => void }) {
+  const t = useT()
   return (
     <Alert variant="destructive" className="flex items-start gap-2">
       <span className="flex-1">{message}</span>
@@ -1468,7 +1510,7 @@ function ErrorBanner({ message, onDismiss }: { message: string; onDismiss?: () =
         <button
           onClick={onDismiss}
           className="text-destructive/70 hover:text-destructive text-sm font-bold"
-          aria-label="Dismiss"
+          aria-label={t('cpq.common.dismiss', 'Dismiss')}
         >
           ×
         </button>
@@ -1480,6 +1522,7 @@ function ErrorBanner({ message, onDismiss }: { message: string; onDismiss?: () =
 function OfferingBrowser({ offerings, loading, search, onSearchChange, onSelect }: {
   offerings: Offering[]; loading: boolean; search: string; onSearchChange: (v: string) => void; onSelect: (o: Offering) => void
 }) {
+  const t = useT()
   const filtered = offerings.filter((o) => {
     if (!search.trim()) return true
     const q = search.toLowerCase()
@@ -1488,18 +1531,18 @@ function OfferingBrowser({ offerings, loading, search, onSearchChange, onSelect 
 
   return (
     <div className="space-y-3">
-      <h3 className="text-sm font-medium px-1">Select Product Offering</h3>
+      <h3 className="text-sm font-medium px-1">{t('cpq.quotes.offeringBrowser.title', 'Select Product Offering')}</h3>
       <div className="relative">
         <svg className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
         </svg>
-        <input type="text" placeholder="Search offerings…" value={search} onChange={(e) => onSearchChange(e.target.value)}
+        <input type="text" placeholder={t('cpq.quotes.offeringBrowser.searchPlaceholder', 'Search offerings…')} value={search} onChange={(e) => onSearchChange(e.target.value)}
           className="w-full rounded-md border bg-background pl-10 pr-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
       </div>
       {loading ? (
-        <div className="flex items-center gap-2 py-8 justify-center text-sm text-muted-foreground"><Spinner /> Loading offerings…</div>
+        <div className="flex items-center gap-2 py-8 justify-center text-sm text-muted-foreground"><Spinner /> {t('cpq.quotes.offeringBrowser.loading', 'Loading offerings…')}</div>
       ) : filtered.length === 0 ? (
-        <div className="py-8 text-center text-sm text-muted-foreground">{search ? 'No offerings match your search.' : 'No active offerings available.'}</div>
+        <div className="py-8 text-center text-sm text-muted-foreground">{search ? t('cpq.quotes.offeringBrowser.noMatch', 'No offerings match your search.') : t('cpq.quotes.offeringBrowser.empty', 'No active offerings available.')}</div>
       ) : (
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
           {filtered.map((offering) => (
@@ -1524,6 +1567,7 @@ function ConfigurePanel({ title, attributes, config, quantity, arcTargetOptions,
   onConfigChange: (key: string, value: unknown) => void; onQuantityChange: (q: number) => void
   onSubmit: () => void; submitLabel: string; submitting: boolean
 }) {
+  const t = useT()
   const noTargetsPicked =
     arcTargetOptions !== null && arcTargetOptions.length > 0 && arcSelectedTargetIds.length === 0
   return (
@@ -1533,7 +1577,7 @@ function ConfigurePanel({ title, attributes, config, quantity, arcTargetOptions,
         {arcTargetOptions && arcTargetOptions.length > 0 && (
           <div>
             <label className="block text-sm font-medium mb-1">
-              Apply to subscription(s)
+              {t('cpq.quotes.detail.configure.applyToSubscriptions', 'Apply to subscription(s)')}
               <span className="text-destructive ml-1">*</span>
             </label>
             <div className="space-y-1.5 rounded-md border bg-background px-3 py-2">
@@ -1557,15 +1601,15 @@ function ConfigurePanel({ title, attributes, config, quantity, arcTargetOptions,
               })}
             </div>
             <p className="text-xs text-muted-foreground mt-1">
-              Pick one or more — a separate line will be created on each selected subscription.
+              {t('cpq.quotes.detail.configure.applyToSubscriptionsHint', 'Pick one or more — a separate line will be created on each selected subscription.')}
             </p>
             {noTargetsPicked && (
-              <p className="text-xs text-destructive mt-1">Select at least one target.</p>
+              <p className="text-xs text-destructive mt-1">{t('cpq.quotes.detail.configure.selectTarget', 'Select at least one target.')}</p>
             )}
           </div>
         )}
         <div>
-          <label className="block text-sm font-medium mb-1">Quantity</label>
+          <label className="block text-sm font-medium mb-1">{t('cpq.quotes.detail.configure.quantity', 'Quantity')}</label>
           <NumberInput
             integer
             min={1}
@@ -1575,7 +1619,7 @@ function ConfigurePanel({ title, attributes, config, quantity, arcTargetOptions,
           />
         </div>
         {attributes.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No configurable attributes for this offering.</p>
+          <p className="text-sm text-muted-foreground">{t('cpq.quotes.detail.configure.noAttributes', 'No configurable attributes for this offering.')}</p>
         ) : (
           attributes.map((attr) => <AttributeField key={attr.code} attribute={attr} value={config[attr.code]} onChange={(v) => onConfigChange(attr.code, v)} />)
         )}
@@ -1591,6 +1635,7 @@ function ConfigurePanel({ title, attributes, config, quantity, arcTargetOptions,
 }
 
 function AttributeField({ attribute, value, onChange }: { attribute: ConstrainedAttribute; value: unknown; onChange: (v: unknown) => void }) {
+  const t = useT()
   const { code, name, attributeType, isRequired, options, constraints, helpText, defaultValue } = attribute
   const currentValue = value ?? defaultValue ?? ''
 
@@ -1602,13 +1647,13 @@ function AttributeField({ attribute, value, onChange }: { attribute: Constrained
       {(attributeType === 'select' || attributeType === 'enum') && options && options.length > 0 ? (
         <select value={String(currentValue)} onChange={(e) => onChange(e.target.value)}
           className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50">
-          <option value="">— Select —</option>
+          <option value="">{t('cpq.quotes.detail.configure.selectPlaceholder', '— Select —')}</option>
           {options.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
         </select>
       ) : attributeType === 'boolean' ? (
         <label className="flex items-center gap-2">
           <input type="checkbox" checked={Boolean(currentValue)} onChange={(e) => onChange(e.target.checked)} className="rounded border-border" />
-          <span className="text-sm text-muted-foreground">{helpText ?? 'Enable'}</span>
+          <span className="text-sm text-muted-foreground">{helpText ?? t('cpq.quotes.detail.configure.enable', 'Enable')}</span>
         </label>
       ) : attributeType === 'number' ? (
         <NumberInput

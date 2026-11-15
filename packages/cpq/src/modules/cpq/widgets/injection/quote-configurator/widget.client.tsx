@@ -3,6 +3,7 @@ import * as React from 'react'
 import type { InjectionWidgetComponentProps } from '@open-mercato/shared/modules/widgets/injection'
 import { useRouter } from 'next/navigation'
 import { Tag } from '@open-mercato/ui/primitives/tag'
+import { useT, type TranslateFn } from '@open-mercato/shared/lib/i18n/context'
 import {
   formatStatusLabel,
   quoteCpqStatusMap,
@@ -58,10 +59,24 @@ function fmt(amount: number, currency: string): string {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(amount)
 }
 
+function chargeTypeLabel(t: TranslateFn, chargeType: ResolvedCharge['chargeType']): string {
+  switch (chargeType) {
+    case 'nrc':
+      return t('cpq.lines.chargeType.nrc', 'nrc')
+    case 'mrc':
+      return t('cpq.lines.chargeType.mrc', 'mrc')
+    case 'usage':
+      return t('cpq.lines.chargeType.usage', 'usage')
+    default:
+      return chargeType
+  }
+}
+
 // ─── Main Widget (read-only) ─────────────────────────────────────
 
 export default function QuoteConfiguratorWidget({ data }: InjectionWidgetComponentProps) {
   const router = useRouter()
+  const t = useT()
   const record = data as Record<string, unknown> | null
   const quoteId = (record?.id as string) ?? null
 
@@ -83,12 +98,12 @@ export default function QuoteConfiguratorWidget({ data }: InjectionWidgetCompone
     return () => { cancelled = true }
   }, [quoteId])
 
-  if (!quoteId) return <div className="p-4 text-sm text-muted-foreground">No quote context available.</div>
+  if (!quoteId) return <div className="p-4 text-sm text-muted-foreground">{t('cpq.widgets.quoteConfigurator.noContext', 'No quote context available.')}</div>
 
   if (loading) {
     return (
       <div className="flex items-center gap-2 p-6 text-sm text-muted-foreground">
-        <Spinner /> Loading CPQ configuration…
+        <Spinner /> {t('cpq.widgets.quoteConfigurator.loading', 'Loading CPQ configuration…')}
       </div>
     )
   }
@@ -105,7 +120,7 @@ export default function QuoteConfiguratorWidget({ data }: InjectionWidgetCompone
             <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
           </svg>
         </div>
-        <p className="text-sm text-muted-foreground mb-4">This quote has no CPQ configuration yet.</p>
+        <p className="text-sm text-muted-foreground mb-4">{t('cpq.widgets.quoteConfigurator.noConfig', 'This quote has no CPQ configuration yet.')}</p>
         <button
           onClick={() => router.push(`/backend/cpq/quotes/new?quoteId=${quoteId}&customerId=${custId}`)}
           className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-sm hover:bg-primary/90 transition-colors"
@@ -113,9 +128,9 @@ export default function QuoteConfiguratorWidget({ data }: InjectionWidgetCompone
           <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
           </svg>
-          Create CPQ Quote
+          {t('cpq.widgets.quoteConfigurator.create', 'Create CPQ Quote')}
         </button>
-        {!custId && <p className="mt-2 text-xs text-status-warning-text">Assign a customer to this quote first.</p>}
+        {!custId && <p className="mt-2 text-xs text-status-warning-text">{t('cpq.widgets.quoteConfigurator.assignCustomer', 'Assign a customer to this quote first.')}</p>}
       </div>
     )
   }
@@ -146,7 +161,7 @@ export default function QuoteConfiguratorWidget({ data }: InjectionWidgetCompone
           onClick={() => router.push(`/backend/cpq/quotes/${cpqQuote.id}`)}
           className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground shadow-sm hover:bg-primary/90 transition-colors"
         >
-          Open CPQ Configurator
+          {t('cpq.widgets.quoteConfigurator.open', 'Open CPQ Configurator')}
           <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
           </svg>
@@ -156,7 +171,7 @@ export default function QuoteConfiguratorWidget({ data }: InjectionWidgetCompone
       {/* Lines */}
       {cpqQuote.lines.length === 0 ? (
         <div className="rounded-lg border bg-card py-8 text-center text-sm text-muted-foreground">
-          No items configured yet.
+          {t('cpq.widgets.quoteConfigurator.noLines', 'No items configured yet.')}
         </div>
       ) : (
         <div className="rounded-lg border bg-card divide-y">
@@ -178,9 +193,9 @@ export default function QuoteConfiguratorWidget({ data }: InjectionWidgetCompone
                       <span className="font-medium text-sm">{line.offeringName}</span>
                       {line.quantity > 1 && <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-medium">×{line.quantity}</span>}
                       {line.isConfigured ? (
-                        <Tag variant="success" className="px-1.5 text-xs">configured</Tag>
+                        <Tag variant="success" className="px-1.5 text-xs">{t('cpq.quotes.detail.lineConfigured', 'configured')}</Tag>
                       ) : (
-                        <Tag variant="warning" className="px-1.5 text-xs">incomplete</Tag>
+                        <Tag variant="warning" className="px-1.5 text-xs">{t('cpq.quotes.detail.lineIncomplete', 'incomplete')}</Tag>
                       )}
                     </div>
                     {line.validationErrors && line.validationErrors.length > 0 && (
@@ -188,8 +203,8 @@ export default function QuoteConfiguratorWidget({ data }: InjectionWidgetCompone
                     )}
                   </div>
                   <div className="shrink-0 text-right text-xs space-y-0.5">
-                    {line.nrcTotal > 0 && <div><span className="text-muted-foreground">NRC </span><span className="font-mono font-medium">{fmt(line.nrcTotal, currency)}</span></div>}
-                    {line.mrcTotal > 0 && <div><span className="text-muted-foreground">MRC </span><span className="font-mono font-medium">{fmt(line.mrcTotal, currency)}</span></div>}
+                    {line.nrcTotal > 0 && <div><span className="text-muted-foreground">{t('cpq.lines.nrc', 'NRC')} </span><span className="font-mono font-medium">{fmt(line.nrcTotal, currency)}</span></div>}
+                    {line.mrcTotal > 0 && <div><span className="text-muted-foreground">{t('cpq.lines.mrc', 'MRC')} </span><span className="font-mono font-medium">{fmt(line.mrcTotal, currency)}</span></div>}
                   </div>
                 </div>
 
@@ -199,18 +214,18 @@ export default function QuoteConfiguratorWidget({ data }: InjectionWidgetCompone
                     <table className="w-full text-xs">
                       <thead>
                         <tr className="text-muted-foreground">
-                          <th className="text-left py-1 font-medium">Charge</th>
-                          <th className="text-left py-1 font-medium">Type</th>
-                          <th className="text-right py-1 font-medium">Unit Price</th>
-                          <th className="text-right py-1 font-medium">Qty</th>
-                          <th className="text-right py-1 font-medium">Total</th>
+                          <th className="text-left py-1 font-medium">{t('cpq.widgets.quoteConfigurator.charges.charge', 'Charge')}</th>
+                          <th className="text-left py-1 font-medium">{t('cpq.widgets.quoteConfigurator.charges.type', 'Type')}</th>
+                          <th className="text-right py-1 font-medium">{t('cpq.widgets.quoteConfigurator.charges.unitPrice', 'Unit Price')}</th>
+                          <th className="text-right py-1 font-medium">{t('cpq.widgets.quoteConfigurator.charges.qty', 'Qty')}</th>
+                          <th className="text-right py-1 font-medium">{t('cpq.widgets.quoteConfigurator.charges.total', 'Total')}</th>
                         </tr>
                       </thead>
                       <tbody>
                         {line.charges.map((c, i) => (
                           <tr key={i} className="border-t border-dashed border-border/50">
                             <td className="py-1">{c.chargeName}</td>
-                            <td className="py-1 uppercase">{c.chargeType}</td>
+                            <td className="py-1 uppercase">{chargeTypeLabel(t, c.chargeType)}</td>
                             <td className="py-1 text-right font-mono">{fmt(c.unitPrice, currency)}</td>
                             <td className="py-1 text-right font-mono">{c.quantity ?? '—'}</td>
                             <td className="py-1 text-right font-mono">{c.totalPrice != null ? fmt(c.totalPrice, currency) : c.note ?? '—'}</td>
@@ -231,19 +246,19 @@ export default function QuoteConfiguratorWidget({ data }: InjectionWidgetCompone
         <div className="rounded-lg border bg-card p-4">
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
             <div>
-              <p className="text-xs text-muted-foreground">Non-Recurring (NRC)</p>
+              <p className="text-xs text-muted-foreground">{t('cpq.quotes.summary.nrc', 'Non-Recurring (NRC)')}</p>
               <p className="text-lg font-semibold font-mono">{fmt(summary.nrcTotal, currency)}</p>
             </div>
             <div>
-              <p className="text-xs text-muted-foreground">Monthly Recurring (MRC)</p>
+              <p className="text-xs text-muted-foreground">{t('cpq.quotes.summary.mrc', 'Monthly Recurring (MRC)')}</p>
               <p className="text-lg font-semibold font-mono">{fmt(summary.mrcTotal, currency)}</p>
             </div>
             {summary.usageCharges.length > 0 && (
               <div>
-                <p className="text-xs text-muted-foreground">Usage Charges</p>
+                <p className="text-xs text-muted-foreground">{t('cpq.quotes.summary.usageCharges', 'Usage Charges')}</p>
                 <div className="mt-1 space-y-0.5">
                   {summary.usageCharges.map((uc, i) => (
-                    <p key={i} className="text-xs">{uc.chargeName}: {fmt(uc.unitPrice, currency)}/unit</p>
+                    <p key={i} className="text-xs">{uc.chargeName}: {t('cpq.lines.perUnit', '{price}/unit', { price: fmt(uc.unitPrice, currency) })}</p>
                   ))}
                 </div>
               </div>

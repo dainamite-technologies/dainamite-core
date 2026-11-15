@@ -73,8 +73,10 @@ export function PriceWaterfall({ charge, currency, reasonLabels, renderManualAct
             )
           }
           const source = row.kind === 'rule'
-            ? `${t('cpq.priceAdjustments.waterfall.rule', 'Price rule')}: ${row.label}`
-            : `${t('cpq.priceAdjustments.waterfall.manual', 'Negotiated')}: ${reasonLabels?.[row.reasonCode ?? ''] ?? row.reasonCode ?? row.label}`
+            ? t('cpq.priceAdjustments.waterfall.ruleSource', 'Price rule: {name}', { name: row.label })
+            : t('cpq.priceAdjustments.waterfall.manualSource', 'Negotiated: {reason}', {
+                reason: reasonLabels?.[row.reasonCode ?? ''] ?? row.reasonCode ?? row.label,
+              })
           return (
             <tr key={`${row.kind}-${index}`} className="border-t border-border/30">
               <td className="py-0.5 pl-3 text-muted-foreground">{t(`cpq.priceAdjustments.types.${row.ruleType}`, TYPE_FALLBACKS[row.ruleType] ?? row.ruleType)}</td>

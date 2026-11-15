@@ -39,8 +39,8 @@ export function ArcLineDiff({ line, currency }: { line: ArcDiffLine; currency: s
   const isCancel = line.action === 'cancel'
   const rows: Array<{ label: string; before: number; after: number; asCurrency: boolean }> = [
     { label: t('cpq.arc.diff.quantity', 'Quantity'), before: src.quantity, after: isCancel ? 0 : line.quantity, asCurrency: false },
-    { label: 'MRC', before: src.mrcAmount, after: isCancel ? 0 : line.mrcTotal, asCurrency: true },
-    { label: 'NRC', before: src.nrcAmount, after: isCancel ? 0 : line.nrcTotal, asCurrency: true },
+    { label: t('cpq.arc.diff.mrc', 'MRC'), before: src.mrcAmount, after: isCancel ? 0 : line.mrcTotal, asCurrency: true },
+    { label: t('cpq.arc.diff.nrc', 'NRC'), before: src.nrcAmount, after: isCancel ? 0 : line.nrcTotal, asCurrency: true },
   ]
   const fmtVal = (value: number, asCurrency: boolean) => (asCurrency ? formatMoney(value, currency) : String(value))
 

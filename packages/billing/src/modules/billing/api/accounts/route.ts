@@ -10,6 +10,7 @@ import { fetchAccountFinancials, fetchOverdueAccountIds, financialsOrZero } from
 /** A uuid no row has — narrows an `$in` filter to nothing. */
 const NO_MATCH_ID = '00000000-0000-4000-8000-000000000000'
 import { billingEntityIds } from '../../data/entityIds'
+import { DEFAULT_INVOICE_LANGUAGE, INVOICE_LANGUAGE_CODES } from '../../lib/invoiceLanguages'
 import {
   billingAccountCreateSchema,
   billingAccountListQuerySchema,
@@ -243,7 +244,7 @@ export const openApi = createBillingCrudOpenApi({
     responseSchema: defaultCreateResponseSchema,
     description:
       'Creates a new billing account for a customer — a company or a person (`customerKind`, default `company`). ' +
-      '`invoiceLanguage` must be a language supported by the invoice template (`en`, `pl`; default `en`).',
+      `\`invoiceLanguage\` must be a language supported by the invoice template (${INVOICE_LANGUAGE_CODES.map((c) => `\`${c}\``).join(', ')}; default \`${DEFAULT_INVOICE_LANGUAGE}\`).`,
   },
   update: {
     schema: billingAccountUpdateSchema,

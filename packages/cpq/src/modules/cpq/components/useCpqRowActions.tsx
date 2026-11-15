@@ -11,10 +11,14 @@ export type UseCpqRowActionsOptions<T extends { id: string }> = {
   /** DELETE endpoint that accepts `{ id }` body (e.g. `/api/cpq/product-offerings`). */
   endpoint: string
   /**
-   * Singular noun for the entity, used in confirm + flash messages.
-   * E.g. `'offering'`, `'pricing table'`, `'price rule'`.
+   * Singular noun for the entity (e.g. `'offering'`).
+   *
+   * @deprecated Not used in messages any more: splicing a noun into a
+   * sentence cannot produce correct grammar in ES / DE / PL (gender, case).
+   * Confirm and flash messages are noun-free and count-based
+   * (spec 2026-11-15-cpq-multi-language). Kept for API compatibility.
    */
-  entityName: string
+  entityName?: string
   /**
    * Build the href for the row's edit/detail page (e.g. `(row) =>
    * `/backend/cpq/offerings/${row.id}`).
@@ -59,7 +63,7 @@ export type CpqRowActionsApi<T extends { id: string }> = {
 export function useCpqRowActions<T extends { id: string }>(
   options: UseCpqRowActionsOptions<T>,
 ): CpqRowActionsApi<T> {
-  const { endpoint, entityName, editHref, onReload, canDelete } = options
+  const { endpoint, editHref, onReload, canDelete } = options
   const t = useT()
   const { confirm, ConfirmDialogElement } = useConfirmDialog()
 
@@ -79,25 +83,22 @@ export function useCpqRowActions<T extends { id: string }>(
     async (row: T) => {
       if (canDelete && !canDelete(row)) return
       const confirmed = await confirm({
-        title: t(
-          'cpq.rowActions.deleteOne.confirm',
-          `Delete this ${entityName}?`,
-        ),
+        title: t('cpq.rowActions.deleteOne.confirm', 'Delete this item?'),
         variant: 'destructive',
       })
       if (!confirmed) return
       const ok = await deleteOne(row.id)
       if (!ok) {
         flash(
-          t('cpq.rowActions.deleteOne.error', `Failed to delete ${entityName}`),
+          t('cpq.rowActions.deleteOne.error', 'Failed to delete the item'),
           'error',
         )
         return
       }
-      flash(t('cpq.rowActions.deleteOne.success', `${entityName} deleted`), 'success')
+      flash(t('cpq.rowActions.deleteOne.success', 'Item deleted'), 'success')
       onReload()
     },
-    [canDelete, confirm, deleteOne, entityName, onReload, t],
+    [canDelete, confirm, deleteOne, onReload, t],
   )
 
   const bulkDelete = React.useCallback(
@@ -106,19 +107,13 @@ export function useCpqRowActions<T extends { id: string }>(
       const eligible = canDelete ? rows.filter(canDelete) : rows
       if (!eligible.length) {
         flash(
-          t(
-            'cpq.rowActions.deleteBulk.noEligible',
-            `None of the selected ${entityName}s can be deleted in their current state.`,
-          ),
+          t('cpq.rowActions.deleteBulk.noEligible', 'None of the selected items can be deleted in their current state.'),
           'error',
         )
         return { ok: false }
       }
       const confirmed = await confirm({
-        title: t(
-          'cpq.rowActions.deleteBulk.confirm',
-          `Delete ${eligible.length} ${entityName}${eligible.length > 1 ? 's' : ''}?`,
-        ),
+        title: t('cpq.rowActions.deleteBulk.confirm', 'Delete selected items ({count})?', { count: eligible.length }),
         variant: 'destructive',
       })
       if (!confirmed) return { ok: false }
@@ -131,22 +126,19 @@ export function useCpqRowActions<T extends { id: string }>(
 
       if (failed > 0) {
         flash(
-          t(
-            'cpq.rowActions.deleteBulk.partialError',
-            `Failed to delete ${failed} ${entityName}${failed > 1 ? 's' : ''}`,
-          ),
+          t('cpq.rowActions.deleteBulk.partialError', 'Failed to delete {count} of the selected items', { count: failed }),
           'error',
         )
       } else {
         flash(
-          t('cpq.rowActions.deleteBulk.success', `${entityName}s deleted`),
+          t('cpq.rowActions.deleteBulk.success', 'Selected items deleted ({count})', { count: eligible.length }),
           'success',
         )
       }
       onReload()
       return { ok: failed === 0, affectedCount: eligible.length - failed }
     },
-    [canDelete, confirm, deleteOne, entityName, onReload, t],
+    [canDelete, confirm, deleteOne, onReload, t],
   )
 
   const buildItems = React.useCallback(

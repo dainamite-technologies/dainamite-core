@@ -1,6 +1,7 @@
 'use client'
 
 import React, { useState, useEffect, useCallback } from 'react'
+import { useT } from '@open-mercato/shared/lib/i18n/context'
 import type { WizardStepProps } from '../types'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { Tag } from '@open-mercato/ui/primitives/tag'
@@ -21,6 +22,7 @@ function fmt(n: number, currency = 'USD') {
 }
 
 export function ItemListStep({ config, onComplete, onBack, stepData, completedSteps, quoteId }: WizardStepProps) {
+  const t = useT()
   const [lines, setLines] = useState<QuoteLine[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -67,19 +69,23 @@ export function ItemListStep({ config, onComplete, onBack, stepData, completedSt
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <span className="text-xs text-muted-foreground">
-          {lines.length} item{lines.length !== 1 ? 's' : ''}
-          {minItems > 0 && ` (min: ${minItems})`}
-          {maxItems < Infinity && ` (max: ${maxItems})`}
+          {lines.length !== 1
+            ? t('cpq.wizard.steps.itemList.count.other', '{count} items', { count: lines.length })
+            : t('cpq.wizard.steps.itemList.count.one', '{count} item', { count: lines.length })}
+          {minItems > 0 && ' '}
+          {minItems > 0 && t('cpq.wizard.steps.itemList.min', '(min: {min})', { min: minItems })}
+          {maxItems < Infinity && ' '}
+          {maxItems < Infinity && t('cpq.wizard.steps.itemList.max', '(max: {max})', { max: maxItems })}
         </span>
         {canAddMore && (
           <span className="text-xs text-muted-foreground">
-            Use the offering browser to add items to the quote, then return here.
+            {t('cpq.wizard.steps.itemList.hint', 'Use the offering browser to add items to the quote, then return here.')}
           </span>
         )}
       </div>
 
       {loading ? (
-        <div className="text-sm text-muted-foreground">Loading items...</div>
+        <div className="text-sm text-muted-foreground">{t('cpq.wizard.steps.itemList.loading', 'Loading items...')}</div>
       ) : (
         <div className="space-y-2">
           {lines.map((line) => (
@@ -92,14 +98,14 @@ export function ItemListStep({ config, onComplete, onBack, stepData, completedSt
                 {line.quantity > 1 && <span className="ml-2 text-xs text-muted-foreground">x{line.quantity}</span>}
                 {!line.isConfigured && (
                   <Tag variant="warning" className="ml-2">
-                    Needs configuration
+                    {t('cpq.wizard.steps.itemList.needsConfiguration', 'Needs configuration')}
                   </Tag>
                 )}
               </div>
               <div className="flex items-center gap-3">
                 {showPricing && (
                   <span className="text-xs">
-                    {fmt(line.nrcTotal)} NRC / {fmt(line.mrcTotal)} MRC
+                    {t('cpq.wizard.linePricing', '{nrc} NRC / {mrc} MRC', { nrc: fmt(line.nrcTotal), mrc: fmt(line.mrcTotal) })}
                   </span>
                 )}
                 <Button
@@ -108,14 +114,14 @@ export function ItemListStep({ config, onComplete, onBack, stepData, completedSt
                   size="sm"
                   onClick={() => handleRemove(line.lineId)}
                 >
-                  Remove
+                  {t('cpq.wizard.remove', 'Remove')}
                 </Button>
               </div>
             </div>
           ))}
           {lines.length === 0 && (
             <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
-              No items added yet.
+              {t('cpq.wizard.steps.itemList.empty', 'No items added yet.')}
             </div>
           )}
         </div>
@@ -124,11 +130,11 @@ export function ItemListStep({ config, onComplete, onBack, stepData, completedSt
       <div className="flex gap-2 justify-end pt-2">
         {completedSteps.length > 0 && (
           <button type="button" onClick={onBack} className="inline-flex items-center justify-center rounded-md border px-4 py-2 text-sm font-medium hover:bg-muted">
-            Back
+            {t('cpq.common.back', 'Back')}
           </button>
         )}
         <button type="button" onClick={loadLines} className="inline-flex items-center justify-center rounded-md border px-4 py-2 text-sm font-medium hover:bg-muted">
-          Refresh
+          {t('cpq.wizard.steps.itemList.refresh', 'Refresh')}
         </button>
         <button
           type="button"
@@ -138,7 +144,7 @@ export function ItemListStep({ config, onComplete, onBack, stepData, completedSt
           disabled={!canProceed}
           className="inline-flex items-center justify-center rounded-md bg-primary px-5 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          Next
+          {t('cpq.wizard.next', 'Next')}
         </button>
       </div>
     </div>

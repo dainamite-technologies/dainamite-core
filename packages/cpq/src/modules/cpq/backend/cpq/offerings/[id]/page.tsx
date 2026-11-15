@@ -1,6 +1,6 @@
 "use client"
 import * as React from 'react'
-import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { useT, type TranslateFn } from '@open-mercato/shared/lib/i18n/context'
 import { useParams, useRouter } from 'next/navigation'
 import { Alert } from '@open-mercato/ui/primitives/alert'
 import { Button } from '@open-mercato/ui/primitives/button'
@@ -153,16 +153,47 @@ const EMPTY_CHARGE: EditingCharge = {
 
 // XD-297: the charge "shape" is two axes — Charge Model (how quantity drives
 // the charge) and Pricing Method (where the unit price comes from).
-const CHARGE_MODEL_LABELS: Record<string, string> = {
-  flat: 'Flat Fee',
-  per_unit: 'Per Unit',
-  volume: 'Volume-based',
-  tiered: 'Tiered',
+function chargeModelLabel(t: TranslateFn, model: string): string {
+  switch (model) {
+    case 'flat':
+      return t('cpq.offerings.chargeModel.flat', 'Flat Fee')
+    case 'per_unit':
+      return t('cpq.offerings.chargeModel.perUnit', 'Per Unit')
+    case 'volume':
+      return t('cpq.offerings.chargeModel.volume', 'Volume-based')
+    case 'tiered':
+      return t('cpq.offerings.chargeModel.tiered', 'Tiered')
+    default:
+      return model
+  }
 }
 
-const PRICING_SOURCE_LABELS: Record<string, string> = {
-  fixed: 'Fixed Price',
-  table: 'Table Lookup',
+function pricingSourceLabel(t: TranslateFn, source: string): string {
+  switch (source) {
+    case 'fixed':
+      return t('cpq.offerings.pricingMethod.fixed', 'Fixed Price')
+    case 'table':
+      return t('cpq.offerings.pricingMethod.table', 'Table Lookup')
+    default:
+      return source
+  }
+}
+
+type ChargeMissingField = 'fixedPrice' | 'currency' | 'quantityAttribute' | 'pricingTable' | 'priceColumn'
+
+function chargeMissingFieldLabel(t: TranslateFn, field: ChargeMissingField): string {
+  switch (field) {
+    case 'fixedPrice':
+      return t('cpq.offerings.charge.fields.fixedPrice', 'Fixed Price')
+    case 'currency':
+      return t('cpq.offerings.charge.fields.currency', 'Currency')
+    case 'quantityAttribute':
+      return t('cpq.offerings.charge.fields.quantityAttribute', 'Quantity Attribute')
+    case 'pricingTable':
+      return t('cpq.offerings.charge.fields.pricingTable', 'Pricing Table')
+    case 'priceColumn':
+      return t('cpq.offerings.charge.fields.priceColumn', 'Price Column')
+  }
 }
 
 // V-CHG-1 in `validators.ts`: mirror the (chargeModel × pricingMethod) rules in
@@ -181,17 +212,17 @@ function isChargeComplete(charge: ChargeShape): boolean {
   return chargeMissingFields(charge).length === 0
 }
 
-function chargeMissingFields(charge: ChargeShape): string[] {
+function chargeMissingFields(charge: ChargeShape): ChargeMissingField[] {
   const { model, source } = normalizeChargePricing(charge)
-  const missing: string[] = []
+  const missing: ChargeMissingField[] = []
   if (source === 'fixed') {
-    if (!charge.fixedPrice) missing.push('Fixed Price')
-    if (!charge.currencyCode) missing.push('Currency')
-    if (model === 'per_unit' && !charge.quantityAttributeCode) missing.push('Quantity Attribute')
+    if (!charge.fixedPrice) missing.push('fixedPrice')
+    if (!charge.currencyCode) missing.push('currency')
+    if (model === 'per_unit' && !charge.quantityAttributeCode) missing.push('quantityAttribute')
   } else {
-    if (!charge.pricingTableId) missing.push('Pricing Table')
-    if (!charge.priceColumnKey) missing.push('Price Column')
-    if (model !== 'flat' && !charge.quantityAttributeCode) missing.push('Quantity Attribute')
+    if (!charge.pricingTableId) missing.push('pricingTable')
+    if (!charge.priceColumnKey) missing.push('priceColumn')
+    if (model !== 'flat' && !charge.quantityAttributeCode) missing.push('quantityAttribute')
   }
   return missing
 }
@@ -251,7 +282,7 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
         // Load offering detail
         const res = await fetch(`/api/cpq/product-offerings?id=${encodeURIComponent(offeringId)}`)
         if (!res.ok) {
-          if (!cancelled) setError('Failed to load offering')
+          if (!cancelled) setError(t('cpq.offerings.detail.error.load', 'Failed to load offering'))
           return
         }
 
@@ -301,7 +332,7 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
         }
       } catch (err) {
         console.error('Failed to load', err)
-        if (!cancelled) setError('Failed to load')
+        if (!cancelled) setError(t('cpq.offerings.detail.error.loadGeneric', 'Failed to load'))
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -343,7 +374,7 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
 
       if (!res.ok) {
         const d = await res.json()
-        setError(d.error ?? 'Failed to save')
+        setError(d.error ?? t('cpq.offerings.detail.error.save', 'Failed to save'))
         return
       }
 
@@ -369,7 +400,7 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
         setGeneralMode('view')
       }
     } catch {
-      setError('Failed to save')
+      setError(t('cpq.offerings.detail.error.save', 'Failed to save'))
     } finally {
       setSaving(false)
     }
@@ -387,10 +418,10 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
         router.push('/backend/cpq/offerings')
       } else {
         const d = await res.json()
-        setError(d.error ?? 'Failed to delete')
+        setError(d.error ?? t('cpq.offerings.detail.error.delete', 'Failed to delete'))
       }
     } catch {
-      setError('Failed to delete')
+      setError(t('cpq.offerings.detail.error.delete', 'Failed to delete'))
     }
   }
 
@@ -430,7 +461,7 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
       })
       if (!res.ok) {
         const d = await res.json()
-        setError(d.error ?? 'Failed to save charge')
+        setError(d.error ?? t('cpq.offerings.detail.error.saveCharge', 'Failed to save charge'))
         return
       }
       // Reload offering to get updated charges
@@ -441,14 +472,14 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
       }
       setEditingCharge(null)
     } catch {
-      setError('Failed to save charge')
+      setError(t('cpq.offerings.detail.error.saveCharge', 'Failed to save charge'))
     } finally {
       setSaving(false)
     }
   }
 
   const deleteCharge = async (chargeId: string) => {
-    if (!confirm('Delete this charge?')) return
+    if (!confirm(t('cpq.offerings.detail.confirmDeleteCharge', 'Delete this charge?'))) return
     try {
       const res = await fetch('/api/cpq/product-charges', {
         method: 'DELETE',
@@ -457,7 +488,7 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
       })
       if (res.ok) setCharges((prev) => prev.filter((c) => c.id !== chargeId))
     } catch {
-      setError('Failed to delete charge')
+      setError(t('cpq.offerings.detail.error.deleteCharge', 'Failed to delete charge'))
     }
   }
 
@@ -472,7 +503,7 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
   // ─── Render ─────────────────────────────────────────────────
 
   if (loading) {
-    return <div className="text-sm text-muted-foreground">{t('common.loading', 'Loading...')}</div>
+    return <div className="text-sm text-muted-foreground">{t('cpq.common.loading', 'Loading...')}</div>
   }
 
   return (
@@ -484,7 +515,7 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
             onClick={() => router.push('/backend/cpq/offerings')}
             className="text-sm text-muted-foreground hover:text-foreground"
           >
-            ← {t('common.back', 'Back')}
+            ← {t('cpq.common.back', 'Back')}
           </button>
           <h1 className="text-2xl font-bold">
             {isNew ? t('cpq.offerings.new', 'New Offering') : form.name}
@@ -496,7 +527,7 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
           )}
           {specDetail && (
             <span className="text-sm text-muted-foreground">
-              Spec: <button onClick={() => router.push(`/backend/cpq/specifications/${specDetail.id}`)} className="text-primary hover:underline">{specDetail.name}</button>
+              {t('cpq.offerings.detail.specLabel', 'Spec:')} <button onClick={() => router.push(`/backend/cpq/specifications/${specDetail.id}`)} className="text-primary hover:underline">{specDetail.name}</button>
             </span>
           )}
         </div>
@@ -511,11 +542,11 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                   setGeneralMode('edit')
                 }}
               >
-                {t('common.edit', 'Edit')}
+                {t('cpq.common.edit', 'Edit')}
               </Button>
             )}
             <Button type="button" variant="destructive" onClick={deleteOffering}>
-              {t('common.delete', 'Delete')}
+              {t('cpq.common.delete', 'Delete')}
             </Button>
           </div>
         )}
@@ -540,9 +571,9 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                 tab === t_ ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'
               }`}
             >
-              {t_ === 'general' && 'General'}
-              {t_ === 'charges' && `Charges (${charges.length})`}
-              {t_ === 'components' && `Components (${components.length})`}
+              {t_ === 'general' && t('cpq.offerings.detail.tabs.general', 'General')}
+              {t_ === 'charges' && t('cpq.offerings.detail.tabs.charges', 'Charges ({count})', { count: charges.length })}
+              {t_ === 'components' && t('cpq.offerings.detail.tabs.components', 'Components ({count})', { count: components.length })}
             </button>
           ))}
         </div>
@@ -553,7 +584,7 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
         <div className="rounded-lg border bg-card p-6 space-y-4">
           {isNew && (
             <div>
-              <label className="block text-sm font-medium mb-1">Specification</label>
+              <label className="block text-sm font-medium mb-1">{t('cpq.offerings.detail.specification', 'Specification')}</label>
               <select
                 value={form.specId}
                 onChange={(e) => {
@@ -563,7 +594,7 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                 }}
                 className="w-full rounded-md border px-3 py-2 text-sm"
               >
-                <option value="">Select a specification...</option>
+                <option value="">{t('cpq.offerings.detail.selectSpecification', 'Select a specification...')}</option>
                 {specs.map((s) => (
                   <option key={s.id} value={s.id}>{s.name} ({s.code})</option>
                 ))}
@@ -581,7 +612,7 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                   type="text"
                   value={form.code}
                   onChange={(e) => setForm({ ...form, code: e.target.value })}
-                  placeholder="e.g. gix-cloud-connect-aws"
+                  placeholder={t('cpq.offerings.detail.codePlaceholder', 'e.g. gix-cloud-connect-aws')}
                   className="w-full rounded-md border px-3 py-2 text-sm"
                 />
               )}
@@ -613,9 +644,9 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                   onChange={(e) => setForm({ ...form, lifecycleStatus: e.target.value })}
                   className="w-full rounded-md border px-3 py-2 text-sm"
                 >
-                  <option value="draft">Draft</option>
-                  <option value="active">Active</option>
-                  <option value="deprecated">Deprecated</option>
+                  <option value="draft">{t('cpq.offerings.lifecycle.draft', 'Draft')}</option>
+                  <option value="active">{t('cpq.offerings.lifecycle.active', 'Active')}</option>
+                  <option value="deprecated">{t('cpq.offerings.lifecycle.deprecated', 'Deprecated')}</option>
                 </select>
               )}
             </div>
@@ -624,7 +655,7 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
               <div className="flex items-center h-[38px]">
                 {generalMode === 'view' && !isNew ? (
                   <Tag variant={form.isActive ? 'success' : 'neutral'} dot>
-                    {form.isActive ? t('common.yes', 'Yes') : t('common.no', 'No')}
+                    {form.isActive ? t('cpq.common.yes', 'Yes') : t('cpq.common.no', 'No')}
                   </Tag>
                 ) : (
                   <input
@@ -654,7 +685,7 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
           {/* Design-time values */}
           {designTimeAttrs.length > 0 && (
             <div className="space-y-3">
-              <label className="block text-sm font-medium">Design-Time Values</label>
+              <label className="block text-sm font-medium">{t('cpq.offerings.detail.designTimeValues', 'Design-Time Values')}</label>
               <div className="grid grid-cols-2 gap-3">
                 {designTimeAttrs.map((attr) => {
                   const value = designTimeValues[attr.code]
@@ -677,7 +708,7 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                             <span className="text-muted-foreground">—</span>
                           ) : attr.attributeType === 'boolean' ? (
                             <Tag variant={value ? 'success' : 'neutral'} dot>
-                              {value ? t('common.yes', 'Yes') : t('common.no', 'No')}
+                              {value ? t('cpq.common.yes', 'Yes') : t('cpq.common.no', 'No')}
                             </Tag>
                           ) : (
                             optionLabel ?? String(value)
@@ -689,7 +720,7 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                           onChange={(e) => setDesignTimeValues({ ...designTimeValues, [attr.code]: e.target.value || null })}
                           className="w-full rounded-md border px-2 py-1.5 text-sm"
                         >
-                          <option value="">Select {attr.name}...</option>
+                          <option value="">{t('cpq.offerings.detail.selectAttribute', 'Select {name}...', { name: attr.name })}</option>
                           {attr.options.map((opt) => (
                             <option key={opt.value} value={opt.value}>{opt.label}</option>
                           ))}
@@ -738,7 +769,7 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                 onClick={saveOffering}
                 disabled={saving || !form.code || !form.name || (isNew && !form.specId)}
               >
-                {saving ? t('common.saving', 'Saving...') : t('common.save', 'Save')}
+                {saving ? t('cpq.common.saving', 'Saving...') : t('cpq.common.save', 'Save')}
               </Button>
               <Button
                 type="button"
@@ -755,7 +786,7 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                   setGeneralMode('view')
                 }}
               >
-                {t('common.cancel', 'Cancel')}
+                {t('cpq.common.cancel', 'Cancel')}
               </Button>
             </div>
           )}
@@ -778,27 +809,27 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
           {editingCharge && (
             <div className="rounded-lg border bg-card p-4 space-y-3">
               <h3 className="font-medium text-sm">
-                {editingCharge.id ? 'Edit Charge' : 'New Charge'}
+                {editingCharge.id ? t('cpq.offerings.charge.form.editTitle', 'Edit Charge') : t('cpq.offerings.charge.form.newTitle', 'New Charge')}
               </h3>
               <div className="grid grid-cols-3 gap-3">
                 <div>
-                  <label className="block text-xs font-medium mb-1">Code</label>
-                  <input type="text" value={editingCharge.code} onChange={(e) => setEditingCharge({ ...editingCharge, code: e.target.value })} placeholder="e.g. mrc-monthly" className="w-full rounded-md border px-2 py-1.5 text-sm" />
+                  <label className="block text-xs font-medium mb-1">{t('cpq.offerings.charge.fields.code', 'Code')}</label>
+                  <input type="text" value={editingCharge.code} onChange={(e) => setEditingCharge({ ...editingCharge, code: e.target.value })} placeholder={t('cpq.offerings.charge.fields.codePlaceholder', 'e.g. mrc-monthly')} className="w-full rounded-md border px-2 py-1.5 text-sm" />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium mb-1">Name</label>
+                  <label className="block text-xs font-medium mb-1">{t('cpq.offerings.charge.fields.name', 'Name')}</label>
                   <input type="text" value={editingCharge.name} onChange={(e) => setEditingCharge({ ...editingCharge, name: e.target.value })} className="w-full rounded-md border px-2 py-1.5 text-sm" />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium mb-1">Charge Type</label>
+                  <label className="block text-xs font-medium mb-1">{t('cpq.offerings.charge.fields.chargeType', 'Charge Type')}</label>
                   <select value={editingCharge.chargeType} onChange={(e) => setEditingCharge({ ...editingCharge, chargeType: e.target.value })} className="w-full rounded-md border px-2 py-1.5 text-sm">
-                    <option value="mrc">MRC (Monthly Recurring)</option>
-                    <option value="nrc">NRC (Non-Recurring)</option>
-                    <option value="usage">Usage</option>
+                    <option value="mrc">{t('cpq.offerings.chargeType.mrc', 'MRC (Monthly Recurring)')}</option>
+                    <option value="nrc">{t('cpq.offerings.chargeType.nrc', 'NRC (Non-Recurring)')}</option>
+                    <option value="usage">{t('cpq.offerings.chargeType.usage', 'Usage')}</option>
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-medium mb-1">Charge Model</label>
+                  <label className="block text-xs font-medium mb-1">{t('cpq.offerings.charge.fields.chargeModel', 'Charge Model')}</label>
                   <select
                     value={editingCharge.chargeModel ?? 'flat'}
                     onChange={(e) => {
@@ -815,14 +846,14 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                     }}
                     className="w-full rounded-md border px-2 py-1.5 text-sm"
                   >
-                    <option value="flat">Flat Fee</option>
-                    <option value="per_unit">Per Unit</option>
-                    <option value="volume">Volume-based</option>
-                    <option value="tiered">Tiered</option>
+                    <option value="flat">{chargeModelLabel(t, 'flat')}</option>
+                    <option value="per_unit">{chargeModelLabel(t, 'per_unit')}</option>
+                    <option value="volume">{chargeModelLabel(t, 'volume')}</option>
+                    <option value="tiered">{chargeModelLabel(t, 'tiered')}</option>
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-medium mb-1">Pricing Method</label>
+                  <label className="block text-xs font-medium mb-1">{t('cpq.offerings.charge.fields.pricingMethod', 'Pricing Method')}</label>
                   <select
                     value={editingCharge.pricingMethod}
                     onChange={(e) => {
@@ -840,44 +871,44 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                   >
                     {/* Volume / tiered are graduated over table ranges — a fixed price isn't applicable. */}
                     {editingCharge.chargeModel !== 'volume' && editingCharge.chargeModel !== 'tiered' && (
-                      <option value="fixed">Fixed Price</option>
+                      <option value="fixed">{pricingSourceLabel(t, 'fixed')}</option>
                     )}
-                    <option value="table">Table Lookup</option>
+                    <option value="table">{pricingSourceLabel(t, 'table')}</option>
                   </select>
                 </div>
                 {editingCharge.pricingMethod === 'fixed' ? (
                   <>
                     <div>
-                      <label className="block text-xs font-medium mb-1">Fixed Price <span className="text-destructive">*</span></label>
+                      <label className="block text-xs font-medium mb-1">{chargeMissingFieldLabel(t, 'fixedPrice')} <span className="text-destructive">*</span></label>
                       <input type="text" value={editingCharge.fixedPrice ?? ''} onChange={(e) => setEditingCharge({ ...editingCharge, fixedPrice: e.target.value || null })} placeholder="0.00" className="w-full rounded-md border px-2 py-1.5 text-sm" />
                     </div>
                     <div>
-                      <label className="block text-xs font-medium mb-1">Currency <span className="text-destructive">*</span></label>
+                      <label className="block text-xs font-medium mb-1">{chargeMissingFieldLabel(t, 'currency')} <span className="text-destructive">*</span></label>
                       <input type="text" value={editingCharge.currencyCode ?? 'USD'} onChange={(e) => setEditingCharge({ ...editingCharge, currencyCode: e.target.value || null })} className="w-full rounded-md border px-2 py-1.5 text-sm" />
                     </div>
                   </>
                 ) : (
                   <>
                     <div>
-                      <label className="block text-xs font-medium mb-1">Pricing Table <span className="text-destructive">*</span></label>
+                      <label className="block text-xs font-medium mb-1">{chargeMissingFieldLabel(t, 'pricingTable')} <span className="text-destructive">*</span></label>
                       <select value={editingCharge.pricingTableId ?? ''} onChange={(e) => setEditingCharge({ ...editingCharge, pricingTableId: e.target.value || null, priceColumnKey: null })} className="w-full rounded-md border px-2 py-1.5 text-sm">
-                        <option value="">Select table...</option>
+                        <option value="">{t('cpq.offerings.charge.fields.selectTable', 'Select table...')}</option>
                         {pricingTables.map((pt) => (
                           <option key={pt.id} value={pt.id}>{pt.name} ({pt.code})</option>
                         ))}
                       </select>
                       {pricingTables.length === 0 && (
                         <p className="text-xs text-warning mt-0.5">
-                          No pricing tables yet —{' '}
-                          <a href="/backend/cpq/pricing-tables" className="text-primary hover:underline">create one</a>{' '}
-                          before using Table Lookup pricing.
+                          {t('cpq.offerings.charge.noPricingTables.prefix', 'No pricing tables yet —')}{' '}
+                          <a href="/backend/cpq/pricing-tables" className="text-primary hover:underline">{t('cpq.offerings.charge.noPricingTables.link', 'create one')}</a>{' '}
+                          {t('cpq.offerings.charge.noPricingTables.suffix', 'before using Table Lookup pricing.')}
                         </p>
                       )}
                     </div>
                     <div>
-                      <label className="block text-xs font-medium mb-1">Price Column <span className="text-destructive">*</span></label>
+                      <label className="block text-xs font-medium mb-1">{chargeMissingFieldLabel(t, 'priceColumn')} <span className="text-destructive">*</span></label>
                       <select value={editingCharge.priceColumnKey ?? ''} onChange={(e) => setEditingCharge({ ...editingCharge, priceColumnKey: e.target.value || null })} className="w-full rounded-md border px-2 py-1.5 text-sm" disabled={!selectedPricingTable}>
-                        <option value="">Select column...</option>
+                        <option value="">{t('cpq.offerings.charge.fields.selectColumn', 'Select column...')}</option>
                         {selectedPricingTable?.priceColumns.map((col) => (
                           <option key={col.key} value={col.key}>{col.label}</option>
                         ))}
@@ -890,27 +921,27 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                 {((editingCharge.pricingMethod === 'table' && editingCharge.chargeModel !== 'flat') ||
                   (editingCharge.pricingMethod === 'fixed' && editingCharge.chargeModel === 'per_unit')) && (
                   <div>
-                    <label className="block text-xs font-medium mb-1">Quantity Attribute <span className="text-destructive">*</span></label>
+                    <label className="block text-xs font-medium mb-1">{chargeMissingFieldLabel(t, 'quantityAttribute')} <span className="text-destructive">*</span></label>
                     <select value={editingCharge.quantityAttributeCode ?? ''} onChange={(e) => setEditingCharge({ ...editingCharge, quantityAttributeCode: e.target.value || null })} className="w-full rounded-md border px-2 py-1.5 text-sm">
-                      <option value="">Select attribute...</option>
+                      <option value="">{t('cpq.offerings.charge.fields.selectAttribute', 'Select attribute...')}</option>
                       {attributes.filter((a) => a.attributeType === 'number').map((a) => (
                         <option key={a.code} value={a.code}>{a.name} ({a.code})</option>
                       ))}
                     </select>
-                    <p className="text-xs text-muted-foreground mt-0.5">Attribute whose value drives the quantity for pricing</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">{t('cpq.offerings.charge.fields.quantityAttributeHelp', 'Attribute whose value drives the quantity for pricing')}</p>
                     {attributes.filter((a) => a.attributeType === 'number').length === 0 && form.specId && (
                       <p className="text-xs text-warning mt-0.5">
-                        Spec has no number attributes —{' '}
+                        {t('cpq.offerings.charge.noNumberAttributes.prefix', 'Spec has no number attributes —')}{' '}
                         <a href={`/backend/cpq/specifications/${form.specId}`} className="text-primary hover:underline">
-                          add one to the spec
+                          {t('cpq.offerings.charge.noNumberAttributes.link', 'add one to the spec')}
                         </a>{' '}
-                        first.
+                        {t('cpq.offerings.charge.noNumberAttributes.suffix', 'first.')}
                       </p>
                     )}
                   </div>
                 )}
                 <div>
-                  <label className="block text-xs font-medium mb-1">Sort Order</label>
+                  <label className="block text-xs font-medium mb-1">{t('cpq.offerings.charge.fields.sortOrder', 'Sort Order')}</label>
                   <NumberInput
                     integer
                     value={editingCharge.sortOrder}
@@ -919,13 +950,13 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                 </div>
               </div>
               <div>
-                <label className="block text-xs font-medium mb-1">Description</label>
+                <label className="block text-xs font-medium mb-1">{t('cpq.offerings.charge.fields.description', 'Description')}</label>
                 <input type="text" value={editingCharge.description ?? ''} onChange={(e) => setEditingCharge({ ...editingCharge, description: e.target.value || null })} className="w-full rounded-md border px-2 py-1.5 text-sm" />
               </div>
               <div className="flex items-end gap-4">
                 <label className="flex items-center gap-1.5 text-sm">
                   <input type="checkbox" checked={editingCharge.isActive} onChange={(e) => setEditingCharge({ ...editingCharge, isActive: e.target.checked })} className="rounded border" />
-                  Active
+                  {t('cpq.common.active', 'Active')}
                 </label>
               </div>
               {(() => {
@@ -935,14 +966,22 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                   <>
                     {missing.length > 0 && (
                       <Alert variant="destructive">
-                        Missing required field{missing.length > 1 ? 's' : ''} for {editingCharge.pricingMethod} pricing: {missing.join(', ')}
+                        {missing.length > 1
+                          ? t('cpq.offerings.charge.missingFieldsPlural', 'Missing required fields for {method} pricing: {fields}', {
+                              method: editingCharge.pricingMethod,
+                              fields: missing.map((field) => chargeMissingFieldLabel(t, field)).join(', '),
+                            })
+                          : t('cpq.offerings.charge.missingFieldsSingular', 'Missing required field for {method} pricing: {fields}', {
+                              method: editingCharge.pricingMethod,
+                              fields: missing.map((field) => chargeMissingFieldLabel(t, field)).join(', '),
+                            })}
                       </Alert>
                     )}
                     <div className="flex gap-2">
                       <button onClick={saveCharge} disabled={blocked} className="inline-flex items-center rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed">
-                        {saving ? 'Saving...' : 'Save'}
+                        {saving ? t('cpq.common.saving', 'Saving...') : t('cpq.common.save', 'Save')}
                       </button>
-                      <button onClick={() => setEditingCharge(null)} className="inline-flex items-center rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-muted">Cancel</button>
+                      <button onClick={() => setEditingCharge(null)} className="inline-flex items-center rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-muted">{t('cpq.common.cancel', 'Cancel')}</button>
                     </div>
                   </>
                 )
@@ -953,20 +992,20 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
           {/* Charges table */}
           {charges.length === 0 ? (
             <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
-              No charges defined. Add recurring, non-recurring, or usage charges to this offering.
+              {t('cpq.offerings.charges.empty', 'No charges defined. Add recurring, non-recurring, or usage charges to this offering.')}
             </div>
           ) : (
             <div className="rounded-lg border">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b bg-muted/50">
-                    <th className="px-4 py-3 text-left font-medium">Code</th>
-                    <th className="px-4 py-3 text-left font-medium">Name</th>
-                    <th className="px-4 py-3 text-left font-medium">Type</th>
-                    <th className="px-4 py-3 text-left font-medium">Pricing</th>
-                    <th className="px-4 py-3 text-left font-medium">Price</th>
-                    <th className="px-4 py-3 text-left font-medium">Active</th>
-                    <th className="px-4 py-3 text-right font-medium">Actions</th>
+                    <th className="px-4 py-3 text-left font-medium">{t('cpq.offerings.charges.columns.code', 'Code')}</th>
+                    <th className="px-4 py-3 text-left font-medium">{t('cpq.offerings.charges.columns.name', 'Name')}</th>
+                    <th className="px-4 py-3 text-left font-medium">{t('cpq.offerings.charges.columns.type', 'Type')}</th>
+                    <th className="px-4 py-3 text-left font-medium">{t('cpq.offerings.charges.columns.pricing', 'Pricing')}</th>
+                    <th className="px-4 py-3 text-left font-medium">{t('cpq.offerings.charges.columns.price', 'Price')}</th>
+                    <th className="px-4 py-3 text-left font-medium">{t('cpq.offerings.charges.columns.active', 'Active')}</th>
+                    <th className="px-4 py-3 text-right font-medium">{t('cpq.offerings.charges.columns.actions', 'Actions')}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -985,7 +1024,7 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                         <td className="px-4 py-3">
                           {charge.name}
                           {incomplete && (
-                            <Tag variant="error" className="ml-2 px-2 text-[10px]" dot>Incomplete</Tag>
+                            <Tag variant="error" className="ml-2 px-2 text-[10px]" dot>{t('cpq.offerings.charges.incomplete', 'Incomplete')}</Tag>
                           )}
                         </td>
                         <td className="px-4 py-3">
@@ -994,8 +1033,8 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                           </Tag>
                         </td>
                         <td className="px-4 py-3 text-xs">
-                          {CHARGE_MODEL_LABELS[model] ?? model}
-                          <span className="text-muted-foreground"> · {PRICING_SOURCE_LABELS[source] ?? source}</span>
+                          {chargeModelLabel(t, model)}
+                          <span className="text-muted-foreground"> · {pricingSourceLabel(t, source)}</span>
                         </td>
                         <td className="px-4 py-3 text-xs">
                           {source === 'fixed' ? (
@@ -1005,30 +1044,30 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                                 : <span className="text-muted-foreground">—</span>}
                               {model === 'per_unit' && (
                                 <span>
-                                  <span className="text-muted-foreground">× Qty:</span>{' '}
-                                  {qtyAttr ? `${qtyAttr.name} (${qtyAttr.code})` : <span className="text-destructive">missing</span>}
+                                  <span className="text-muted-foreground">{t('cpq.offerings.charges.qtyLabel', '× Qty:')}</span>{' '}
+                                  {qtyAttr ? `${qtyAttr.name} (${qtyAttr.code})` : <span className="text-destructive">{t('cpq.offerings.charges.missing', 'missing')}</span>}
                                 </span>
                               )}
                             </div>
                           ) : (
                             <div className="flex flex-col gap-0.5">
                               <span>
-                                <span className="text-muted-foreground">Table:</span>{' '}
-                                {tableRef ? `${tableRef.name} → ${charge.priceColumnKey ?? '?'}` : <span className="text-destructive">missing</span>}
+                                <span className="text-muted-foreground">{t('cpq.offerings.charges.tableLabel', 'Table:')}</span>{' '}
+                                {tableRef ? `${tableRef.name} → ${charge.priceColumnKey ?? '?'}` : <span className="text-destructive">{t('cpq.offerings.charges.missing', 'missing')}</span>}
                               </span>
                               {model !== 'flat' && (
                                 <span>
-                                  <span className="text-muted-foreground">× Qty:</span>{' '}
-                                  {qtyAttr ? `${qtyAttr.name} (${qtyAttr.code})` : <span className="text-destructive">missing</span>}
+                                  <span className="text-muted-foreground">{t('cpq.offerings.charges.qtyLabel', '× Qty:')}</span>{' '}
+                                  {qtyAttr ? `${qtyAttr.name} (${qtyAttr.code})` : <span className="text-destructive">{t('cpq.offerings.charges.missing', 'missing')}</span>}
                                 </span>
                               )}
                             </div>
                           )}
                         </td>
-                        <td className="px-4 py-3">{charge.isActive ? 'Yes' : 'No'}</td>
+                        <td className="px-4 py-3">{charge.isActive ? t('cpq.common.yes', 'Yes') : t('cpq.common.no', 'No')}</td>
                         <td className="px-4 py-3 text-right">
-                          <button onClick={() => startEditCharge(charge)} className="text-xs text-primary hover:underline mr-2">Edit</button>
-                          <button onClick={() => deleteCharge(charge.id)} className="text-xs text-destructive hover:underline">Delete</button>
+                          <button onClick={() => startEditCharge(charge)} className="text-xs text-primary hover:underline mr-2">{t('cpq.common.edit', 'Edit')}</button>
+                          <button onClick={() => deleteCharge(charge.id)} className="text-xs text-destructive hover:underline">{t('cpq.common.delete', 'Delete')}</button>
                         </td>
                       </tr>
                     )
@@ -1045,7 +1084,7 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
         <div className="space-y-4">
           {bundleSlots.length === 0 ? (
             <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
-              No bundle slots defined on this specification. Add slots on the specification first.
+              {t('cpq.offerings.components.noSlots', 'No bundle slots defined on this specification. Add slots on the specification first.')}
             </div>
           ) : (
             <>
@@ -1080,7 +1119,7 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                         }}
                         className="inline-flex items-center justify-center rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
                       >
-                        + Add Component
+                        {t('cpq.offerings.components.add', '+ Add Component')}
                       </button>
                     </div>
 
@@ -1088,20 +1127,20 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                       <div className="p-4 border-b bg-muted/20 space-y-3">
                         <div className="grid grid-cols-3 gap-3">
                           <div className="col-span-2">
-                            <label className="block text-xs font-medium mb-1">Component Offering</label>
+                            <label className="block text-xs font-medium mb-1">{t('cpq.offerings.components.fields.componentOffering', 'Component Offering')}</label>
                             <select
                               value={addingComponent.childOfferingId}
                               onChange={(e) => setAddingComponent({ ...addingComponent, childOfferingId: e.target.value })}
                               className="w-full rounded-md border px-3 py-2 text-sm"
                             >
-                              <option value="">— Select offering —</option>
+                              <option value="">{t('cpq.offerings.components.fields.selectOffering', '— Select offering —')}</option>
                               {(slotOfferings[slot.targetSpecId] ?? []).map((o) => (
-                                <option key={o.id} value={o.id}>{o.name} ({o.code}){o.offeringType === 'bundle' ? ' [bundle]' : ''}</option>
+                                <option key={o.id} value={o.id}>{o.name} ({o.code}){o.offeringType === 'bundle' ? t('cpq.offerings.components.bundleSuffix', ' [bundle]') : ''}</option>
                               ))}
                             </select>
                           </div>
                           <div>
-                            <label className="block text-xs font-medium mb-1">Default?</label>
+                            <label className="block text-xs font-medium mb-1">{t('cpq.offerings.components.fields.isDefault', 'Default?')}</label>
                             <div className="flex items-center h-[38px]">
                               <input
                                 type="checkbox"
@@ -1109,7 +1148,7 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                                 onChange={(e) => setAddingComponent({ ...addingComponent, isDefault: e.target.checked })}
                                 className="rounded border"
                               />
-                              <span className="ml-2 text-xs text-muted-foreground">Pre-selected in quote</span>
+                              <span className="ml-2 text-xs text-muted-foreground">{t('cpq.offerings.components.fields.isDefaultHelp', 'Pre-selected in quote')}</span>
                             </div>
                           </div>
                         </div>
@@ -1132,7 +1171,7 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                                 })
                                 if (!res.ok) {
                                   const d = await res.json()
-                                  setError(d.error ?? 'Failed to add component')
+                                  setError(d.error ?? t('cpq.offerings.components.error.add', 'Failed to add component'))
                                   return
                                 }
                                 setAddingComponent(null)
@@ -1142,20 +1181,20 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                                   setComponents(d.items ?? [])
                                 }
                               } catch {
-                                setError('Failed to add component')
+                                setError(t('cpq.offerings.components.error.add', 'Failed to add component'))
                               } finally {
                                 setSaving(false)
                               }
                             }}
                             className="inline-flex items-center justify-center rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
                           >
-                            {saving ? 'Adding...' : 'Add'}
+                            {saving ? t('cpq.offerings.components.adding', 'Adding...') : t('cpq.offerings.components.addSubmit', 'Add')}
                           </button>
                           <button
                             onClick={() => setAddingComponent(null)}
                             className="inline-flex items-center justify-center rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-muted"
                           >
-                            Cancel
+                            {t('cpq.common.cancel', 'Cancel')}
                           </button>
                         </div>
                       </div>
@@ -1163,32 +1202,32 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
 
                     {slotComponents.length === 0 ? (
                       <div className="p-4 text-center text-xs text-muted-foreground">
-                        No components assigned to this slot
+                        {t('cpq.offerings.components.emptySlot', 'No components assigned to this slot')}
                         {slot.cardinalityMin > 0 && (
-                          <span className="ml-1 text-status-warning-text font-medium">(required: min {slot.cardinalityMin})</span>
+                          <span className="ml-1 text-status-warning-text font-medium">{t('cpq.offerings.components.requiredMin', '(required: min {min})', { min: slot.cardinalityMin })}</span>
                         )}
                       </div>
                     ) : (
                       <table className="w-full text-sm">
                         <thead>
                           <tr className="border-b bg-muted/30">
-                            <th className="px-4 py-2 text-left text-xs font-medium">Offering</th>
-                            <th className="px-4 py-2 text-left text-xs font-medium">Code</th>
-                            <th className="px-4 py-2 text-left text-xs font-medium">Type</th>
-                            <th className="px-4 py-2 text-left text-xs font-medium">Default</th>
-                            <th className="px-4 py-2 text-right text-xs font-medium">Actions</th>
+                            <th className="px-4 py-2 text-left text-xs font-medium">{t('cpq.offerings.components.columns.offering', 'Offering')}</th>
+                            <th className="px-4 py-2 text-left text-xs font-medium">{t('cpq.offerings.components.columns.code', 'Code')}</th>
+                            <th className="px-4 py-2 text-left text-xs font-medium">{t('cpq.offerings.components.columns.type', 'Type')}</th>
+                            <th className="px-4 py-2 text-left text-xs font-medium">{t('cpq.offerings.components.columns.default', 'Default')}</th>
+                            <th className="px-4 py-2 text-right text-xs font-medium">{t('cpq.offerings.components.columns.actions', 'Actions')}</th>
                           </tr>
                         </thead>
                         <tbody>
                           {slotComponents.map((comp) => (
                             <tr key={comp.id} className="border-b last:border-0">
-                              <td className="px-4 py-2.5 font-medium">{comp.childOffering?.name ?? 'Unknown'}</td>
+                              <td className="px-4 py-2.5 font-medium">{comp.childOffering?.name ?? t('cpq.offerings.components.unknown', 'Unknown')}</td>
                               <td className="px-4 py-2.5 text-muted-foreground text-xs">{comp.childOffering?.code ?? '—'}</td>
                               <td className="px-4 py-2.5">
                                 {comp.childOffering?.offeringType === 'bundle' ? (
-                                  <Tag variant="brand" className="px-2 text-[10px]">bundle</Tag>
+                                  <Tag variant="brand" className="px-2 text-[10px]">{t('cpq.offerings.components.tag.bundle', 'bundle')}</Tag>
                                 ) : (
-                                  <Tag variant="neutral" className="px-2 text-[10px]">simple</Tag>
+                                  <Tag variant="neutral" className="px-2 text-[10px]">{t('cpq.offerings.components.tag.simple', 'simple')}</Tag>
                                 )}
                               </td>
                               <td className="px-4 py-2.5">
@@ -1208,14 +1247,14 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                                   className="cursor-pointer"
                                 >
                                   <Tag variant={comp.isDefault ? 'success' : 'neutral'} className="px-2 text-[10px]">
-                                    {comp.isDefault ? 'Yes' : 'No'}
+                                    {comp.isDefault ? t('cpq.common.yes', 'Yes') : t('cpq.common.no', 'No')}
                                   </Tag>
                                 </button>
                               </td>
                               <td className="px-4 py-2.5 text-right">
                                 <button
                                   onClick={async () => {
-                                    if (!confirm('Remove this component from the bundle?')) return
+                                    if (!confirm(t('cpq.offerings.components.confirmRemove', 'Remove this component from the bundle?'))) return
                                     try {
                                       const res = await fetch('/api/cpq/offering-components', {
                                         method: 'DELETE',
@@ -1226,15 +1265,15 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                                         setComponents((prev) => prev.filter((c) => c.id !== comp.id))
                                       } else {
                                         const d = await res.json()
-                                        setError(d.error ?? 'Failed to remove')
+                                        setError(d.error ?? t('cpq.offerings.components.error.remove', 'Failed to remove'))
                                       }
                                     } catch {
-                                      setError('Failed to remove component')
+                                      setError(t('cpq.offerings.components.error.removeComponent', 'Failed to remove component'))
                                     }
                                   }}
                                   className="text-xs text-destructive hover:underline"
                                 >
-                                  Remove
+                                  {t('cpq.offerings.components.remove', 'Remove')}
                                 </button>
                               </td>
                             </tr>

@@ -4,7 +4,7 @@ import { CrudHttpError } from '@open-mercato/shared/lib/crud/errors'
 import type { SendEmailOptions } from '@open-mercato/shared/lib/email/send'
 import { BillingAccount, BillingInvoice } from '../data/entities'
 import { emitBillingEvent } from '../events'
-import { DEFAULT_INVOICE_LANGUAGE } from './invoiceLanguages'
+import { resolveInvoiceLanguage } from './invoiceLanguages'
 import { formatIban } from './iban'
 import { documentLocale, formatDocumentDate, formatDocumentMoney, type DocumentTranslate } from './pdf/invoiceModel'
 import { getInvoicePdf, loadDocumentTranslator, type TranslatorLoader } from './pdf/invoicePdf'
@@ -148,10 +148,9 @@ export async function sendInvoice(
     })
   }
 
-  const language =
-    (typeof buyer.invoice_language === 'string' && buyer.invoice_language) ||
-    account?.invoiceLanguage ||
-    DEFAULT_INVOICE_LANGUAGE
+  const language = resolveInvoiceLanguage(
+    (typeof buyer.invoice_language === 'string' && buyer.invoice_language) || account?.invoiceLanguage,
+  )
   const translate = await (deps.loadTranslator ?? loadDocumentTranslator)(language)
   const seller = (invoice.sellerSnapshot ?? {}) as Record<string, unknown>
   const email = buildInvoiceEmail({

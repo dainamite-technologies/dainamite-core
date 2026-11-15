@@ -57,13 +57,13 @@ export default function CpqOrdersListPage() {
 
   const statusOptions = React.useMemo(
     () => [
-      { value: 'draft', label: 'Draft' },
-      { value: 'pending_activation', label: 'Pending Activation' },
-      { value: 'active', label: 'Active' },
-      { value: 'fulfilled', label: 'Fulfilled' },
-      { value: 'cancelled', label: 'Cancelled' },
+      { value: 'draft', label: t('cpq.orders.status.draft', 'Draft') },
+      { value: 'pending_activation', label: t('cpq.orders.status.pending_activation', 'Pending Activation') },
+      { value: 'active', label: t('cpq.orders.status.active', 'Active') },
+      { value: 'fulfilled', label: t('cpq.orders.status.fulfilled', 'Fulfilled') },
+      { value: 'cancelled', label: t('cpq.orders.status.cancelled', 'Cancelled') },
     ],
-    [],
+    [t],
   )
 
   const filters = React.useMemo<FilterDef[]>(

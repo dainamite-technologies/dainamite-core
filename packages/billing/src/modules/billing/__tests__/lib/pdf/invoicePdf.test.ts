@@ -5,9 +5,14 @@ import {
   type PdfInvoice,
   type PdfLine,
 } from '../../../lib/pdf/invoiceModel'
-import { renderInvoicePdf, sanitizeForFont } from '../../../lib/pdf/invoiceTemplate'
+import fontkit from '@pdf-lib/fontkit'
+import { TABLE_COLUMNS, renderInvoicePdf, sanitizeForFont, wrap } from '../../../lib/pdf/invoiceTemplate'
+import { NOTO_SANS_BOLD_BASE64 } from '../../../lib/pdf/fonts/embeddedFonts'
 import en from '../../../i18n/en.json'
 import pl from '../../../i18n/pl.json'
+import es from '../../../i18n/es.json'
+import de from '../../../i18n/de.json'
+import type { InvoiceLanguageCode } from '../../../lib/invoiceLanguages'
 
 const translator = (dict: Record<string, string>): DocumentTranslate => (key, fallback) => dict[key] ?? fallback
 
@@ -58,14 +63,16 @@ const seller = {
 
 const buyer = { name: 'Jan Kowalski', address: { line1: 'ul. Testowa 1', city: 'Warszawa', postal_code: '00-001', country: 'PL' }, taxId: null }
 
-function model(language: 'en' | 'pl', overrides: Partial<PdfInvoice> = {}, docLines: PdfLine[] = lines) {
+const DICTIONARIES: Record<InvoiceLanguageCode, Record<string, string>> = { en, pl, es, de }
+
+function model(language: InvoiceLanguageCode, overrides: Partial<PdfInvoice> = {}, docLines: PdfLine[] = lines) {
   return buildInvoiceDocumentModel({
     invoice: { ...invoice, ...overrides },
     lines: docLines,
     seller,
     buyer,
     language,
-    translate: translator(language === 'pl' ? (pl as Record<string, string>) : (en as Record<string, string>)),
+    translate: translator(DICTIONARIES[language]),
   })
 }
 
@@ -94,6 +101,43 @@ describe('buildInvoiceDocumentModel', () => {
     expect(m.totals[2]).toEqual(['Do zapłaty', '174,00 zł'])
     expect(m.payment?.lines).toContain('Tytuł przelewu: INV/2026/11/0007')
     expect(m.seller.heading).toBe('Sprzedawca')
+  })
+
+  it('builds Spanish labels and es-ES money / dates (invoice and credit memo)', () => {
+    const m = model('es', { currencyCode: 'EUR', totalGross: '1234.5600' })
+    expect(m.title).toBe('Factura')
+    expect(m.meta).toEqual(expect.arrayContaining([['Fecha de emisión', '14/11/2026']]))
+    expect(m.table.headers).toEqual(expect.arrayContaining(['Cant.', 'Precio unit.', '% IVA', 'IVA']))
+    expect(m.totals[0][0]).toBe('Base imponible')
+    expect(m.totals[2]).toEqual(['Total a pagar', '1234,56 €'])
+    // The payment matcher looks for the invoice number in the transfer title.
+    expect(m.payment?.lines).toContain('Concepto: INV/2026/11/0007')
+    expect(m.seller.heading).toBe('Emisor')
+    expect(m.buyer.heading).toBe('Cliente')
+    expect(m.vatSummary.heading).toBe('Resumen de IVA')
+    expect(m.pageLabel(1, 2)).not.toContain('{')
+    const memo = model('es', { documentType: 'credit_memo', correctsNumber: 'INV/2026/10/0003', correctsIssueDate: '2026-10-05' })
+    expect(memo.title).toBe('Factura rectificativa')
+    expect(memo.meta).toEqual(expect.arrayContaining([['Rectifica', 'INV/2026/10/0003 de 05/10/2026']]))
+    expect(memo.totals[2][0]).toBe('Total abonado')
+    expect(memo.payment?.lines.join(' ')).toContain('INV/2026/10/0003')
+    expect(model('es', { status: 'draft' }).watermark).toBe('BORRADOR')
+  })
+
+  it('builds German labels and de-DE money / dates (invoice and credit memo)', () => {
+    const m = model('de', { currencyCode: 'EUR', totalGross: '1234.5600' })
+    expect(m.title).toBe('Rechnung')
+    expect(m.meta).toEqual(expect.arrayContaining([['Leistungszeitraum', '01.11.2026 – 30.11.2026']]))
+    expect(m.table.headers).toEqual(expect.arrayContaining(['Anz.', 'Einzelpreis netto', 'USt. %', 'USt.']))
+    expect(m.totals[2]).toEqual(['Zahlbetrag', '1.234,56 €'])
+    expect(m.payment?.lines).toContain('Verwendungszweck: INV/2026/11/0007')
+    expect(m.seller.heading).toBe('Rechnungssteller')
+    expect(m.buyer.heading).toBe('Rechnungsempfänger')
+    const memo = model('de', { documentType: 'credit_memo', correctsNumber: 'INV/2026/10/0003', correctsIssueDate: '2026-10-05' })
+    expect(memo.title).toBe('Rechnungskorrektur')
+    expect(memo.meta).toEqual(expect.arrayContaining([['Korrigiert', 'INV/2026/10/0003 vom 05.10.2026']]))
+    expect(memo.totals[2][0]).toBe('Gutgeschriebener Betrag')
+    expect(model('de', { status: 'draft' }).watermark).toBe('ENTWURF')
   })
 
   it('groups the VAT summary by rate (highest first) and it adds up to the totals', () => {
@@ -149,8 +193,8 @@ describe('buildInvoiceDocumentModel', () => {
 
   it('splits the footer into lines and falls back to English for unknown languages', () => {
     expect(model('en').footer).toEqual(['KRS 0000000000', 'Kapitał zakładowy 5 000 zł'])
-    const de = buildInvoiceDocumentModel({ invoice, lines, seller, buyer, language: 'de', translate: translator({}) })
-    expect(de.meta[1]).toEqual(['Issue date', '14/11/2026'])
+    const unknown = buildInvoiceDocumentModel({ invoice, lines, seller, buyer, language: 'xx', translate: translator({}) })
+    expect(unknown.meta[1]).toEqual(['Issue date', '14/11/2026'])
   })
 })
 
@@ -177,6 +221,32 @@ describe('renderInvoicePdf', () => {
     expect(await pages(40)).toBe(2)
     expect(await pages(80)).toBe(3)
   }, 30_000)
+
+  it.each(['es', 'de'] as const)('renders a one-page %s document with its own title and diacritics', async (language) => {
+    const m = model(language, { currencyCode: 'EUR' })
+    const doc = await PDFDocument.load(await renderInvoicePdf(m))
+    expect(doc.getPageCount()).toBe(1)
+    expect(doc.getTitle()).toBe(`${m.title} INV/2026/11/0007`)
+  }, 30_000)
+
+  it.each(['en', 'es', 'de', 'pl'] as const)(
+    'fits %s column headers in their columns with the real font (no mid-word split, at most 3 lines)',
+    async (language) => {
+      const doc = await PDFDocument.create()
+      doc.registerFontkit(fontkit)
+      const bold = await doc.embedFont(Buffer.from(NOTO_SANS_BOLD_BASE64, 'base64'), { subset: true })
+      // Same size / padding the template uses for table headers (SMALL_SIZE = 8, 3pt each side).
+      model(language).table.headers.forEach((header, i) => {
+        const width = TABLE_COLUMNS[i] - 6
+        const lines = wrap(header, bold, 8, width)
+        expect({ header, lines: lines.length }).toEqual({ header, lines: expect.any(Number) })
+        expect(lines.length).toBeLessThanOrEqual(3)
+        // Every wrapped line is a whole word (or words): no word was cut by characters.
+        const words = new Set(header.split(/\s+/))
+        for (const part of lines) for (const w of part.split(' ')) expect({ header, word: w, whole: words.has(w) }).toEqual({ header, word: w, whole: true })
+      })
+    },
+  )
 
   it('wraps long descriptions instead of overflowing the column', async () => {
     const long = line({ description: 'Bardzo długi opis usługi '.repeat(12) })

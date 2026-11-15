@@ -27,7 +27,7 @@ const SMALL_SIZE = 8
 const LINE_GAP = 3
 
 // # | description | qty | unit net | VAT % | net | VAT | gross  (sums to CONTENT_WIDTH)
-const TABLE_COLUMNS = [24, 179, 30, 62, 36, 62, 56, 66.28]
+export const TABLE_COLUMNS = [24, 179, 30, 62, 36, 62, 56, 66.28]
 
 const TEXT = rgb(0.12, 0.12, 0.14)
 const MUTED = rgb(0.42, 0.42, 0.46)
@@ -51,7 +51,7 @@ export function sanitizeForFont(text: string, charset: Set<number>): string {
   return out
 }
 
-function wrap(text: string, font: PDFFont, size: number, width: number): string[] {
+export function wrap(text: string, font: PDFFont, size: number, width: number): string[] {
   const lines: string[] = []
   for (const paragraph of text.split('\n')) {
     let current = ''

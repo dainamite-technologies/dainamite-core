@@ -94,7 +94,7 @@ export function PricingSummaryCard({ summary, currency, arcDelta }: {
           <div>
             <p className="text-xs text-muted-foreground">{t('cpq.quotes.summary.usageCharges', 'Usage Charges')}</p>
             {usageCharges.map((uc, i) => (
-              <p key={i} className="text-xs mt-0.5">{uc.chargeName}: {formatMoney(uc.unitPrice, currency)}/unit</p>
+              <p key={i} className="text-xs mt-0.5">{t('cpq.quotes.summary.usageChargeLine', '{name}: {price}/unit', { name: uc.chargeName, price: formatMoney(uc.unitPrice, currency) })}</p>
             ))}
           </div>
         )}

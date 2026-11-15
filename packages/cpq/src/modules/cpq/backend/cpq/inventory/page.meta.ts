@@ -7,10 +7,10 @@ export const metadata = {
   requireAuth: true,
   requireFeatures: ['cpq.inventory.view'],
   pageTitle: 'CPQ Subscriptions',
-  pageTitleKey: 'cpq.inventory.title',
+  pageTitleKey: 'cpq.inventory.nav.title',
   pageGroup: 'CPQ',
   pageGroupKey: 'customers~sales~cpq.nav.group',
   pageOrder: 3,
   icon: inventoryIcon,
-  breadcrumb: [{ label: 'CPQ Subscriptions', labelKey: 'cpq.inventory.title' }],
+  breadcrumb: [{ label: 'CPQ Subscriptions', labelKey: 'cpq.inventory.nav.title' }],
 } as const

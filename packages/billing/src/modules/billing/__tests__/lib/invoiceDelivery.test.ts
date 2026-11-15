@@ -97,6 +97,23 @@ describe('sendInvoice', () => {
     spy.mockRestore()
   })
 
+  it('loads the translator for the resolved document language (snapshot first, then account, else default)', async () => {
+    const spyLoader = jest.fn(async (_language: string) => (_key: string, fallback: string) => fallback)
+    const sendEmail = jest.fn(async () => undefined)
+    const run = async (snapshotLanguage: unknown, accountLanguage: string) => {
+      spyLoader.mockClear()
+      const { em } = makeEm(
+        invoiceRow({ buyerSnapshot: { name: 'Jan', invoice_language: snapshotLanguage } }),
+        { invoiceLanguage: accountLanguage },
+      )
+      await sendInvoice(em as never, { invoiceId: 'inv-1', ...scope, trigger: 'manual' }, { sendEmail, loadTranslator: spyLoader, now })
+      return spyLoader.mock.calls[0]?.[0]
+    }
+    expect(await run(' PL ', 'en')).toBe('pl')
+    expect(await run(undefined, 'pl')).toBe('pl')
+    expect(await run('xx', 'pl')).toBe('en')
+  })
+
   it('refuses drafts and test documents with 409 not_posted', async () => {
     for (const overrides of [{ status: 'draft' }, { testRun: true }]) {
       const { em } = makeEm(invoiceRow(overrides))

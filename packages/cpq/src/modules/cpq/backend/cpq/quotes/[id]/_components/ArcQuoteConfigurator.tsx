@@ -1,6 +1,7 @@
 "use client"
 import * as React from 'react'
 import { Alert } from '@open-mercato/ui/primitives/alert'
+import { useT, type TranslateFn } from '@open-mercato/shared/lib/i18n/context'
 import { NumberInput as BaseNumberInput } from '../../../../../components/NumberInput'
 
 // XD-250 — ARC configurator drawer.
@@ -59,19 +60,32 @@ export interface ArcQuoteConfiguratorProps {
   onChanged: () => void | Promise<void>
 }
 
-const REASON_CODES = [
-  { value: 'upgrade', label: 'Upgrade' },
-  { value: 'downgrade', label: 'Downgrade' },
-  { value: 'config-change', label: 'Configuration change' },
-  { value: 'price-adjustment', label: 'Price adjustment' },
-  { value: 'term-extension', label: 'Term extension' },
-  { value: 'term-reduction', label: 'Term reduction' },
-  { value: 'consolidation', label: 'Consolidation' },
-  { value: 'customer-request', label: 'Customer request' },
-  { value: 'non-payment', label: 'Non-payment' },
-  { value: 'contract-breach', label: 'Contract breach' },
-  { value: 'other', label: 'Other' },
-] as const
+function buildReasonCodes(t: TranslateFn): Array<{ value: string; label: string }> {
+  return [
+    { value: 'upgrade', label: t('cpq.quotes.arc.drawer.reasons.upgrade', 'Upgrade') },
+    { value: 'downgrade', label: t('cpq.quotes.arc.drawer.reasons.downgrade', 'Downgrade') },
+    { value: 'config-change', label: t('cpq.quotes.arc.drawer.reasons.configChange', 'Configuration change') },
+    { value: 'price-adjustment', label: t('cpq.quotes.arc.drawer.reasons.priceAdjustment', 'Price adjustment') },
+    { value: 'term-extension', label: t('cpq.quotes.arc.drawer.reasons.termExtension', 'Term extension') },
+    { value: 'term-reduction', label: t('cpq.quotes.arc.drawer.reasons.termReduction', 'Term reduction') },
+    { value: 'consolidation', label: t('cpq.quotes.arc.drawer.reasons.consolidation', 'Consolidation') },
+    { value: 'customer-request', label: t('cpq.quotes.arc.drawer.reasons.customerRequest', 'Customer request') },
+    { value: 'non-payment', label: t('cpq.quotes.arc.drawer.reasons.nonPayment', 'Non-payment') },
+    { value: 'contract-breach', label: t('cpq.quotes.arc.drawer.reasons.contractBreach', 'Contract breach') },
+    { value: 'other', label: t('cpq.quotes.arc.drawer.reasons.other', 'Other') },
+  ]
+}
+
+function arcTypeLabel(t: TranslateFn, type: ArcType): string {
+  switch (type) {
+    case 'amend':
+      return t('cpq.quotes.type.amend', 'amend')
+    case 'renew':
+      return t('cpq.quotes.type.renew', 'renew')
+    case 'cancel':
+      return t('cpq.quotes.type.cancel', 'cancel')
+  }
+}
 
 export default function ArcQuoteConfigurator(
   props: ArcQuoteConfiguratorProps,
@@ -88,6 +102,8 @@ export default function ArcQuoteConfigurator(
     onChanged,
   } = props
 
+  const t = useT()
+  const reasonCodes = React.useMemo(() => buildReasonCodes(t), [t])
   const [step, setStep] = React.useState<Step>(
     initialType === 'new' ? 'pick-action' : 'pick-targets',
   )
@@ -98,17 +114,17 @@ export default function ArcQuoteConfigurator(
   const [eligibleLoading, setEligibleLoading] = React.useState(false)
   const [picked, setPicked] = React.useState<Record<string, EligibleSub>>(() => {
     const seed: Record<string, EligibleSub> = {}
-    for (const t of initialTargets) {
-      if (t.subscription) {
-        seed[t.subscriptionId] = {
-          id: t.subscriptionId,
-          code: t.subscription.code,
-          name: t.subscription.name,
+    for (const target of initialTargets) {
+      if (target.subscription) {
+        seed[target.subscriptionId] = {
+          id: target.subscriptionId,
+          code: target.subscription.code,
+          name: target.subscription.name,
           status: 'active',
-          currencyCode: t.subscription.currencyCode,
-          billingCycle: t.subscription.billingCycle,
+          currencyCode: target.subscription.currencyCode,
+          billingCycle: target.subscription.billingCycle,
           currentTermEnd: null,
-          mrcAmount: t.subscription.mrcAmount,
+          mrcAmount: target.subscription.mrcAmount,
         }
       }
     }
@@ -189,16 +205,16 @@ export default function ArcQuoteConfigurator(
         })
         if (!r.ok) {
           const body = await r.json().catch(() => ({}))
-          throw new Error(body.error ?? `PATCH /quotes/${quoteId} failed`)
+          throw new Error(body.error ?? t('cpq.quotes.arc.drawer.errors.patchFailed', 'PATCH /quotes/{quoteId} failed', { quoteId }))
         }
       }
 
       // Step 2 — detach removed targets.
-      const initialTargetIds = new Set(initialTargets.map((t) => t.subscriptionId))
+      const initialTargetIds = new Set(initialTargets.map((target) => target.subscriptionId))
       const pickedIds = new Set(pickedList.map((s) => s.id))
-      for (const t of initialTargets) {
-        if (!pickedIds.has(t.subscriptionId)) {
-          await fetch(`/api/cpq/quotes/${quoteId}/target-subscriptions/${t.id}`, { method: 'DELETE' })
+      for (const target of initialTargets) {
+        if (!pickedIds.has(target.subscriptionId)) {
+          await fetch(`/api/cpq/quotes/${quoteId}/target-subscriptions/${target.id}`, { method: 'DELETE' })
         }
       }
 
@@ -224,7 +240,7 @@ export default function ArcQuoteConfigurator(
           })
           if (!r.ok) {
             const errBody = await r.json().catch(() => ({}))
-            throw new Error(errBody.error ?? `POST /target-subscriptions failed`)
+            throw new Error(errBody.error ?? t('cpq.quotes.arc.drawer.errors.attachFailed', 'POST /target-subscriptions failed'))
           }
         }
       }
@@ -245,7 +261,7 @@ export default function ArcQuoteConfigurator(
         })
         if (!r.ok) {
           const errBody = await r.json().catch(() => ({}))
-          throw new Error(errBody.error ?? `POST /merge-meta failed`)
+          throw new Error(errBody.error ?? t('cpq.quotes.arc.drawer.errors.mergeMetaFailed', 'POST /merge-meta failed'))
         }
       }
 
@@ -262,7 +278,7 @@ export default function ArcQuoteConfigurator(
         })
         if (!r.ok) {
           const errBody = await r.json().catch(() => ({}))
-          throw new Error(errBody.error ?? `POST /cancel-meta failed`)
+          throw new Error(errBody.error ?? t('cpq.quotes.arc.drawer.errors.cancelMetaFailed', 'POST /cancel-meta failed'))
         }
       }
 
@@ -283,13 +299,14 @@ export default function ArcQuoteConfigurator(
     mergeTerm,
     cancelMeta,
     onChanged,
+    t,
   ])
 
   return (
     <div className="fixed inset-0 z-50 flex" role="dialog" aria-modal="true">
       {/* Overlay */}
       <button
-        aria-label="Close drawer"
+        aria-label={t('cpq.quotes.arc.drawer.close', 'Close drawer')}
         className="absolute inset-0 bg-black/40"
         onClick={onClose}
       />
@@ -297,7 +314,7 @@ export default function ArcQuoteConfigurator(
       <div className="ml-auto h-full w-full max-w-2xl bg-card shadow-xl border-l overflow-y-auto relative flex flex-col">
         <header className="border-b px-5 py-4 flex items-start justify-between">
           <div>
-            <h2 className="text-lg font-semibold">Modify subscription</h2>
+            <h2 className="text-lg font-semibold">{t('cpq.quotes.arc.drawer.title', 'Modify subscription')}</h2>
             <p className="text-xs text-muted-foreground mt-0.5">
               {customerName ?? customerId.slice(0, 12) + '…'} • {currencyCode}
             </p>
@@ -313,14 +330,14 @@ export default function ArcQuoteConfigurator(
         <div className="flex-1 px-5 py-4 space-y-4">
           {/* Step indicator */}
           <p className="text-xs text-muted-foreground">
-            Step: <span className="font-mono">{step}</span>
-            {type && <span> • {type}</span>}
-            {pickedList.length > 0 && <span> • {pickedList.length} target(s)</span>}
+            {t('cpq.quotes.arc.drawer.stepLabel', 'Step:')} <span className="font-mono">{step}</span>
+            {type && <span> • {arcTypeLabel(t, type)}</span>}
+            {pickedList.length > 0 && <span> • {t('cpq.quotes.arc.drawer.targetCount', '{count} target(s)', { count: pickedList.length })}</span>}
           </p>
 
           {step === 'pick-action' && (
             <div className="space-y-3">
-              <p className="text-sm">Pick the kind of change you want to make:</p>
+              <p className="text-sm">{t('cpq.quotes.arc.drawer.pickAction', 'Pick the kind of change you want to make:')}</p>
               {(['amend', 'renew', 'cancel'] as const).map((opt) => (
                 <button
                   key={opt}
@@ -330,11 +347,11 @@ export default function ArcQuoteConfigurator(
                   }}
                   className="block w-full text-left rounded-md border border-input px-4 py-3 hover:bg-muted"
                 >
-                  <span className="font-medium capitalize">{opt}</span>
+                  <span className="font-medium capitalize">{arcTypeLabel(t, opt)}</span>
                   <span className="block text-xs text-muted-foreground mt-0.5">
-                    {opt === 'amend' && 'Add or remove items on existing subscriptions. Term untouched.'}
-                    {opt === 'renew' && 'Extend term. With 2+ targets, merges them into a new contract.'}
-                    {opt === 'cancel' && 'Terminate one or more subscriptions.'}
+                    {opt === 'amend' && t('cpq.quotes.arc.drawer.actions.amendHint', 'Add or remove items on existing subscriptions. Term untouched.')}
+                    {opt === 'renew' && t('cpq.quotes.arc.drawer.actions.renewHint', 'Extend term. With 2+ targets, merges them into a new contract.')}
+                    {opt === 'cancel' && t('cpq.quotes.arc.drawer.actions.cancelHint', 'Terminate one or more subscriptions.')}
                   </span>
                 </button>
               ))}
@@ -344,9 +361,9 @@ export default function ArcQuoteConfigurator(
           {step === 'pick-targets' && type && (
             <div className="space-y-3">
               {eligibleLoading ? (
-                <div className="text-sm text-muted-foreground">Loading subscriptions…</div>
+                <div className="text-sm text-muted-foreground">{t('cpq.quotes.arc.drawer.loadingSubscriptions', 'Loading subscriptions…')}</div>
               ) : eligible.length === 0 ? (
-                <div className="text-sm text-muted-foreground">No subscriptions for this customer.</div>
+                <div className="text-sm text-muted-foreground">{t('cpq.quotes.arc.drawer.noSubscriptions', 'No subscriptions for this customer.')}</div>
               ) : (
                 <div className="space-y-1">
                   {eligible.map((s) => {
@@ -382,14 +399,15 @@ export default function ArcQuoteConfigurator(
                             <span className="text-xs font-mono text-muted-foreground">{s.code}</span>
                           </div>
                           <div className="text-xs text-muted-foreground">
-                            {s.status} • {s.billingCycle} • MRC {s.mrcAmount.toFixed(2)} {s.currencyCode}
+                            {s.status} • {s.billingCycle} • {t('cpq.lines.mrc', 'MRC')} {s.mrcAmount.toFixed(2)} {s.currencyCode}
+                            {s.currentTermEnd ? ' • ' : ''}
                             {s.currentTermEnd
-                              ? ` • Term ends ${new Date(s.currentTermEnd).toLocaleDateString()}`
+                              ? t('cpq.quotes.arc.drawer.termEnds', 'Term ends {date}', { date: new Date(s.currentTermEnd).toLocaleDateString() })
                               : ''}
                           </div>
                           {currencyMismatch && (
                             <div className="text-xs text-status-warning-text mt-1">
-                              Currency mismatch ({s.currencyCode} vs {currencyCode}) — cannot include
+                              {t('cpq.quotes.arc.drawer.currencyMismatch', 'Currency mismatch ({subscriptionCurrency} vs {quoteCurrency}) — cannot include', { subscriptionCurrency: s.currencyCode, quoteCurrency: currencyCode })}
                             </div>
                           )}
                         </div>
@@ -400,12 +418,12 @@ export default function ArcQuoteConfigurator(
               )}
               {!cyclesMatch && (
                 <Alert variant="warning" className="text-xs">
-                  Picked targets have different billing cycles — merge requires matching cycles.
+                  {t('cpq.quotes.arc.drawer.cyclesMismatch', 'Picked targets have different billing cycles — merge requires matching cycles.')}
                 </Alert>
               )}
               {isMergeRenew && (
                 <Alert variant="warning" className="text-xs">
-                  Merging {pickedList.length} contracts into a new one — sources will be marked Merged at activation.
+                  {t('cpq.quotes.arc.drawer.mergeWarning', 'Merging {count} contracts into a new one — sources will be marked Merged at activation.', { count: pickedList.length })}
                 </Alert>
               )}
             </div>
@@ -413,15 +431,15 @@ export default function ArcQuoteConfigurator(
 
           {step === 'config-renew' && type === 'renew' && !isMergeRenew && (
             <div className="space-y-3">
-              <p className="text-sm">New contract term for {pickedList[0]?.name}:</p>
+              <p className="text-sm">{t('cpq.quotes.arc.drawer.renew.singleTitle', 'New contract term for {name}:', { name: pickedList[0]?.name ?? '' })}</p>
               <p className="text-xs text-muted-foreground">
-                Pre-filled with same length as the current term, starting at the
-                current term end. Type a new value in <span className="font-medium">Months</span> to
-                auto-shift the end date, or edit start/end directly.
+                {t('cpq.quotes.arc.drawer.renew.singleHintBefore', 'Pre-filled with same length as the current term, starting at the current term end. Type a new value in')}{' '}
+                <span className="font-medium">{t('cpq.quotes.arc.drawer.fields.months', 'Months')}</span>{' '}
+                {t('cpq.quotes.arc.drawer.renew.singleHintAfter', 'to auto-shift the end date, or edit start/end directly.')}
               </p>
               <div className="grid grid-cols-3 gap-3">
                 <DateInput
-                  label="Start"
+                  label={t('cpq.quotes.arc.drawer.fields.start', 'Start')}
                   value={singleTerm.start}
                   onChange={(v) => {
                     // If months is set, slide end too so the contract length stays.
@@ -431,12 +449,12 @@ export default function ArcQuoteConfigurator(
                   }}
                 />
                 <DateInput
-                  label="End"
+                  label={t('cpq.quotes.arc.drawer.fields.end', 'End')}
                   value={singleTerm.end}
                   onChange={(v) => setSingleTerm({ ...singleTerm, end: v })}
                 />
                 <NumberInput
-                  label="Months"
+                  label={t('cpq.quotes.arc.drawer.fields.months', 'Months')}
                   value={singleTerm.months}
                   onChange={(v) => {
                     // Recompute end = start + months when both are present.
@@ -454,15 +472,16 @@ export default function ArcQuoteConfigurator(
           {step === 'config-renew' && type === 'renew' && isMergeRenew && (
             <div className="space-y-3">
               <p className="text-sm">
-                New contract details (merge of {pickedList.length} subscriptions):
+                {t('cpq.quotes.arc.drawer.renew.mergeTitle', 'New contract details (merge of {count} subscriptions):', { count: pickedList.length })}
               </p>
               <p className="text-xs text-muted-foreground">
-                Type a value into <span className="font-medium">Months</span> to
-                auto-fill both dates — start defaults to today, end is start + months.
+                {t('cpq.quotes.arc.drawer.renew.mergeHintBefore', 'Type a value into')}{' '}
+                <span className="font-medium">{t('cpq.quotes.arc.drawer.fields.months', 'Months')}</span>{' '}
+                {t('cpq.quotes.arc.drawer.renew.mergeHintAfter', 'to auto-fill both dates — start defaults to today, end is start + months.')}
               </p>
               <div className="grid grid-cols-3 gap-3">
                 <DateInput
-                  label="Start"
+                  label={t('cpq.quotes.arc.drawer.fields.start', 'Start')}
                   value={mergeTerm.start}
                   onChange={(v) => {
                     const months = mergeTerm.months ? Number(mergeTerm.months) : null
@@ -471,12 +490,12 @@ export default function ArcQuoteConfigurator(
                   }}
                 />
                 <DateInput
-                  label="End"
+                  label={t('cpq.quotes.arc.drawer.fields.end', 'End')}
                   value={mergeTerm.end}
                   onChange={(v) => setMergeTerm({ ...mergeTerm, end: v })}
                 />
                 <NumberInput
-                  label="Months"
+                  label={t('cpq.quotes.arc.drawer.fields.months', 'Months')}
                   value={mergeTerm.months}
                   onChange={(v) => {
                     const months = v ? Number(v) : null
@@ -488,12 +507,12 @@ export default function ArcQuoteConfigurator(
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <TextInput
-                  label="New contract code (optional — auto-generated if blank)"
+                  label={t('cpq.quotes.arc.drawer.fields.newCode', 'New contract code (optional — auto-generated if blank)')}
                   value={mergeTerm.code}
                   onChange={(v) => setMergeTerm({ ...mergeTerm, code: v })}
                 />
                 <TextInput
-                  label="New contract name (optional)"
+                  label={t('cpq.quotes.arc.drawer.fields.newName', 'New contract name (optional)')}
                   value={mergeTerm.name}
                   onChange={(v) => setMergeTerm({ ...mergeTerm, name: v })}
                 />
@@ -503,16 +522,16 @@ export default function ArcQuoteConfigurator(
 
           {step === 'config-cancel' && type === 'cancel' && (
             <div className="space-y-3">
-              <p className="text-sm">Reason for cancellation:</p>
+              <p className="text-sm">{t('cpq.quotes.arc.drawer.cancel.title', 'Reason for cancellation:')}</p>
               <div className="space-y-2">
-                <label className="block text-xs text-muted-foreground">Reason code</label>
+                <label className="block text-xs text-muted-foreground">{t('cpq.quotes.arc.drawer.cancel.reasonCode', 'Reason code')}</label>
                 <select
                   value={cancelMeta.reasonCode}
                   onChange={(e) => setCancelMeta({ ...cancelMeta, reasonCode: e.target.value })}
                   className="w-full rounded-md border border-input bg-background px-2 py-1.5 text-sm"
                 >
-                  <option value="">— pick one —</option>
-                  {REASON_CODES.map((r) => (
+                  <option value="">{t('cpq.quotes.arc.drawer.cancel.pickOne', '— pick one —')}</option>
+                  {reasonCodes.map((r) => (
                     <option key={r.value} value={r.value}>
                       {r.label}
                     </option>
@@ -520,18 +539,18 @@ export default function ArcQuoteConfigurator(
                 </select>
               </div>
               <TextInput
-                label="Free text (optional)"
+                label={t('cpq.quotes.arc.drawer.cancel.freeText', 'Free text (optional)')}
                 value={cancelMeta.reasonText}
                 onChange={(v) => setCancelMeta({ ...cancelMeta, reasonText: v })}
               />
               <div className="grid grid-cols-2 gap-3">
                 <TextInput
-                  label="ETF amount (optional)"
+                  label={t('cpq.quotes.arc.drawer.cancel.etfAmount', 'ETF amount (optional)')}
                   value={cancelMeta.etfAmount}
                   onChange={(v) => setCancelMeta({ ...cancelMeta, etfAmount: v })}
                 />
                 <TextInput
-                  label="ETF currency"
+                  label={t('cpq.quotes.arc.drawer.cancel.etfCurrency', 'ETF currency')}
                   value={cancelMeta.etfCurrency}
                   onChange={(v) => setCancelMeta({ ...cancelMeta, etfCurrency: v })}
                 />
@@ -541,10 +560,10 @@ export default function ArcQuoteConfigurator(
 
           {step === 'review' && (
             <div className="space-y-3">
-              <p className="text-sm">Review and submit:</p>
+              <p className="text-sm">{t('cpq.quotes.arc.drawer.review.title', 'Review and submit:')}</p>
               <ul className="text-sm space-y-1 list-disc pl-5">
-                <li>Action: {type}</li>
-                <li>Targets: {pickedList.length}</li>
+                <li>{t('cpq.quotes.arc.drawer.review.action', 'Action: {type}', { type: type ? arcTypeLabel(t, type) : '' })}</li>
+                <li>{t('cpq.quotes.arc.drawer.review.targets', 'Targets: {count}', { count: pickedList.length })}</li>
                 {pickedList.map((s) => (
                   <li key={s.id} className="text-muted-foreground">
                     {s.code} — {s.name}
@@ -552,28 +571,32 @@ export default function ArcQuoteConfigurator(
                 ))}
                 {type === 'renew' && !isMergeRenew && (
                   <li>
-                    Term: {singleTerm.start} → {singleTerm.end}
-                    {singleTerm.months ? ` (${singleTerm.months}m)` : ''}
+                    {singleTerm.months
+                      ? t('cpq.quotes.arc.drawer.review.termWithMonths', 'Term: {start} → {end} ({months}m)', { start: singleTerm.start, end: singleTerm.end, months: singleTerm.months })
+                      : t('cpq.quotes.arc.drawer.review.term', 'Term: {start} → {end}', { start: singleTerm.start, end: singleTerm.end })}
                   </li>
                 )}
                 {type === 'renew' && isMergeRenew && (
                   <li>
-                    Merge term: {mergeTerm.start} → {mergeTerm.end}
-                    {mergeTerm.code ? ` • code=${mergeTerm.code}` : ''}
-                    {mergeTerm.name ? ` • name=${mergeTerm.name}` : ''}
+                    {t('cpq.quotes.arc.drawer.review.mergeTerm', 'Merge term: {start} → {end}', { start: mergeTerm.start, end: mergeTerm.end })}
+                    {mergeTerm.code ? ' • ' : ''}
+                    {mergeTerm.code ? t('cpq.quotes.arc.drawer.review.mergeCode', 'code={code}', { code: mergeTerm.code }) : ''}
+                    {mergeTerm.name ? ' • ' : ''}
+                    {mergeTerm.name ? t('cpq.quotes.arc.drawer.review.mergeName', 'name={name}', { name: mergeTerm.name }) : ''}
                   </li>
                 )}
                 {type === 'cancel' && (
                   <li>
-                    Reason: {cancelMeta.reasonCode}
+                    {t('cpq.quotes.arc.drawer.review.reason', 'Reason: {reason}', { reason: cancelMeta.reasonCode })}
+                    {cancelMeta.etfAmount ? ' • ' : ''}
                     {cancelMeta.etfAmount
-                      ? ` • ETF ${cancelMeta.etfAmount} ${cancelMeta.etfCurrency}`
+                      ? t('cpq.quotes.arc.drawer.review.etf', 'ETF {amount} {currency}', { amount: cancelMeta.etfAmount, currency: cancelMeta.etfCurrency })
                       : ''}
                   </li>
                 )}
               </ul>
               <Alert variant="warning" className="text-xs">
-                Submitting locks the quote type. Lines will be edited on the host page after this completes.
+                {t('cpq.quotes.arc.drawer.review.lockWarning', 'Submitting locks the quote type. Lines will be edited on the host page after this completes.')}
               </Alert>
               {submitError && (
                 <Alert variant="destructive" className="text-xs">{submitError}</Alert>
@@ -582,12 +605,12 @@ export default function ArcQuoteConfigurator(
           )}
 
           {step === 'submitting' && (
-            <div className="text-sm text-muted-foreground">Submitting…</div>
+            <div className="text-sm text-muted-foreground">{t('cpq.quotes.arc.drawer.submitting', 'Submitting…')}</div>
           )}
 
           {step === 'done' && (
             <div className="text-sm text-status-success-text">
-              Done — close to return to the quote.
+              {t('cpq.quotes.arc.drawer.done', 'Done — close to return to the quote.')}
             </div>
           )}
         </div>
@@ -614,14 +637,14 @@ export default function ArcQuoteConfigurator(
             }
             className="text-sm text-muted-foreground hover:text-foreground disabled:opacity-30"
           >
-            ← Back
+            {t('cpq.quotes.arc.drawer.back', '← Back')}
           </button>
           <div className="flex gap-2">
             <button
               onClick={onClose}
               className="rounded-md border border-input px-3 py-1.5 text-sm hover:bg-muted"
             >
-              Cancel
+              {t('cpq.common.cancel', 'Cancel')}
             </button>
             {step === 'pick-targets' && (
               <button
@@ -633,7 +656,7 @@ export default function ArcQuoteConfigurator(
                 }}
                 className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
               >
-                Next
+                {t('cpq.quotes.arc.drawer.next', 'Next')}
               </button>
             )}
             {(step === 'config-renew' || step === 'config-cancel') && (
@@ -645,7 +668,7 @@ export default function ArcQuoteConfigurator(
                 onClick={() => setStep('review')}
                 className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
               >
-                Next
+                {t('cpq.quotes.arc.drawer.next', 'Next')}
               </button>
             )}
             {step === 'review' && (
@@ -654,7 +677,7 @@ export default function ArcQuoteConfigurator(
                 onClick={submit}
                 className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
               >
-                Submit
+                {t('cpq.quotes.arc.drawer.submit', 'Submit')}
               </button>
             )}
             {step === 'done' && (
@@ -662,7 +685,7 @@ export default function ArcQuoteConfigurator(
                 onClick={onClose}
                 className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground hover:bg-primary/90"
               >
-                Close
+                {t('cpq.quotes.arc.drawer.closeButton', 'Close')}
               </button>
             )}
           </div>

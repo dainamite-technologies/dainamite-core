@@ -95,7 +95,7 @@ export default function CpqWizardsPage() {
         header: t('cpq.wizards.table.active', 'Active'),
         cell: ({ row }) => (
           <Tag variant={row.original.isActive ? 'success' : 'neutral'} dot>
-            {row.original.isActive ? 'Yes' : 'No'}
+            {row.original.isActive ? t('cpq.common.yes', 'Yes') : t('cpq.common.no', 'No')}
           </Tag>
         ),
       },

@@ -83,7 +83,8 @@ export class BillingAccount {
   @Property({ name: 'invoice_email', type: 'text' })
   invoiceEmail!: string
 
-  // ISO 639-1 (`en`, `pl`, …). Used by mailer / template renderer.
+  // ISO 639-1; allowed values come from `lib/invoiceLanguages.ts` (Zod-validated,
+  // no DB constraint). Used by mailer / template renderer.
   @Property({ name: 'invoice_language', type: 'text' })
   invoiceLanguage!: string
 

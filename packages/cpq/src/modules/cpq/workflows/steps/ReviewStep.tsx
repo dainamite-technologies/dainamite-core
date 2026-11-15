@@ -1,6 +1,7 @@
 'use client'
 
 import React, { useState, useEffect, useCallback } from 'react'
+import { useT, type TranslateFn } from '@open-mercato/shared/lib/i18n/context'
 import type { WizardStepProps } from '../types'
 
 type ResolvedCharge = {
@@ -47,7 +48,21 @@ function fmt(n: number, currency = 'USD') {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(n)
 }
 
+function chargeTypeLabel(t: TranslateFn, chargeType: string): string {
+  switch (chargeType) {
+    case 'nrc':
+      return t('cpq.lines.chargeType.nrc', 'nrc')
+    case 'mrc':
+      return t('cpq.lines.chargeType.mrc', 'mrc')
+    case 'usage':
+      return t('cpq.lines.chargeType.usage', 'usage')
+    default:
+      return chargeType
+  }
+}
+
 export function ReviewStep({ config, onComplete, onBack, completedSteps, quoteId }: WizardStepProps) {
+  const t = useT()
   const [quote, setQuote] = useState<QuoteData | null>(null)
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
@@ -55,7 +70,7 @@ export function ReviewStep({ config, onComplete, onBack, completedSteps, quoteId
   const showChargeBreakdown = config.showChargeBreakdown !== false
   const showAdjustments = config.showAdjustments !== false
   const submitAction = (config.submitAction as string) ?? 'save'
-  const submitLabel = (config.submitLabel as string) ?? 'Complete'
+  const submitLabel = (config.submitLabel as string) ?? t('cpq.wizard.steps.review.complete', 'Complete')
 
   const loadQuote = useCallback(async () => {
     if (!quoteId) { setLoading(false); return }
@@ -102,13 +117,13 @@ export function ReviewStep({ config, onComplete, onBack, completedSteps, quoteId
   }, [quoteId, submitAction, quote, onComplete])
 
   if (loading) {
-    return <div className="text-sm text-muted-foreground">Loading quote summary...</div>
+    return <div className="text-sm text-muted-foreground">{t('cpq.wizard.steps.review.loading', 'Loading quote summary...')}</div>
   }
 
   if (!quote) {
     return (
       <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
-        No quote data available. Please go back and configure items.
+        {t('cpq.wizard.steps.review.noData', 'No quote data available. Please go back and configure items.')}
       </div>
     )
   }
@@ -119,25 +134,25 @@ export function ReviewStep({ config, onComplete, onBack, completedSteps, quoteId
     <div className="space-y-5">
       {/* Quote summary */}
       <div className="rounded-lg border bg-muted/30 p-4 space-y-3">
-        <h4 className="text-sm font-medium">Quote Summary</h4>
+        <h4 className="text-sm font-medium">{t('cpq.wizard.steps.review.summaryTitle', 'Quote Summary')}</h4>
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <span className="text-xs text-muted-foreground">NRC Total</span>
+            <span className="text-xs text-muted-foreground">{t('cpq.wizard.steps.review.nrcTotal', 'NRC Total')}</span>
             <p className="text-lg font-semibold">{fmt(pricingSummary.nrcTotal, pricingSummary.currencyCode)}</p>
           </div>
           <div>
-            <span className="text-xs text-muted-foreground">MRC Total</span>
+            <span className="text-xs text-muted-foreground">{t('cpq.wizard.steps.review.mrcTotal', 'MRC Total')}</span>
             <p className="text-lg font-semibold">{fmt(pricingSummary.mrcTotal, pricingSummary.currencyCode)}</p>
           </div>
           {pricingSummary.discountTotal > 0 && (
             <div>
-              <span className="text-xs text-muted-foreground">Discounts</span>
+              <span className="text-xs text-muted-foreground">{t('cpq.wizard.steps.review.discounts', 'Discounts')}</span>
               <p className="text-sm">-{fmt(pricingSummary.discountTotal, pricingSummary.currencyCode)}</p>
             </div>
           )}
           {pricingSummary.surchargeTotal > 0 && (
             <div>
-              <span className="text-xs text-muted-foreground">Surcharges</span>
+              <span className="text-xs text-muted-foreground">{t('cpq.wizard.steps.review.surcharges', 'Surcharges')}</span>
               <p className="text-sm">+{fmt(pricingSummary.surchargeTotal, pricingSummary.currencyCode)}</p>
             </div>
           )}
@@ -146,18 +161,18 @@ export function ReviewStep({ config, onComplete, onBack, completedSteps, quoteId
 
       {/* Line items */}
       <div className="space-y-3">
-        <h4 className="text-sm font-medium">Items ({lines.length})</h4>
+        <h4 className="text-sm font-medium">{t('cpq.wizard.steps.review.items', 'Items ({count})', { count: lines.length })}</h4>
         <div className="space-y-2">
           {lines.map((line) => (
             <div key={line.lineId} className="rounded-lg border p-3 space-y-2">
               <div className="flex items-center justify-between">
                 <strong className="text-sm">{line.offeringName}</strong>
                 <span className="text-sm">
-                  {fmt(line.nrcTotal, pricingSummary.currencyCode)} NRC / {fmt(line.mrcTotal, pricingSummary.currencyCode)} MRC
+                  {t('cpq.wizard.linePricing', '{nrc} NRC / {mrc} MRC', { nrc: fmt(line.nrcTotal, pricingSummary.currencyCode), mrc: fmt(line.mrcTotal, pricingSummary.currencyCode) })}
                 </span>
               </div>
               {line.quantity > 1 && (
-                <span className="text-xs text-muted-foreground">Quantity: {line.quantity}</span>
+                <span className="text-xs text-muted-foreground">{t('cpq.wizard.steps.review.quantity', 'Quantity: {quantity}', { quantity: line.quantity })}</span>
               )}
 
               {showChargeBreakdown && line.charges?.length > 0 && (
@@ -165,9 +180,9 @@ export function ReviewStep({ config, onComplete, onBack, completedSteps, quoteId
                   <table className="w-full text-xs">
                     <thead>
                       <tr className="border-b bg-muted/30">
-                        <th className="px-3 py-1.5 text-left font-medium">Charge</th>
-                        <th className="px-3 py-1.5 text-left font-medium">Type</th>
-                        <th className="px-3 py-1.5 text-right font-medium">Price</th>
+                        <th className="px-3 py-1.5 text-left font-medium">{t('cpq.wizard.steps.review.charges.charge', 'Charge')}</th>
+                        <th className="px-3 py-1.5 text-left font-medium">{t('cpq.wizard.steps.review.charges.type', 'Type')}</th>
+                        <th className="px-3 py-1.5 text-right font-medium">{t('cpq.wizard.steps.review.charges.price', 'Price')}</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -175,9 +190,9 @@ export function ReviewStep({ config, onComplete, onBack, completedSteps, quoteId
                         <React.Fragment key={charge.chargeCode}>
                           <tr className="border-b last:border-0">
                             <td className="px-3 py-1.5">{charge.chargeName}</td>
-                            <td className="px-3 py-1.5 uppercase">{charge.chargeType}</td>
+                            <td className="px-3 py-1.5 uppercase">{chargeTypeLabel(t, charge.chargeType)}</td>
                             <td className="px-3 py-1.5 text-right">
-                              {charge.totalPrice != null ? fmt(charge.totalPrice, charge.currencyCode) : `${fmt(charge.unitPrice, charge.currencyCode)}/unit`}
+                              {charge.totalPrice != null ? fmt(charge.totalPrice, charge.currencyCode) : t('cpq.lines.perUnit', '{price}/unit', { price: fmt(charge.unitPrice, charge.currencyCode) })}
                             </td>
                           </tr>
                           {showAdjustments && charge.adjustments?.map((adj) => (
@@ -202,7 +217,7 @@ export function ReviewStep({ config, onComplete, onBack, completedSteps, quoteId
       <div className="flex gap-2 justify-end pt-2">
         {completedSteps.length > 0 && (
           <button type="button" onClick={onBack} className="inline-flex items-center justify-center rounded-md border px-4 py-2 text-sm font-medium hover:bg-muted">
-            Back
+            {t('cpq.common.back', 'Back')}
           </button>
         )}
         <button
@@ -211,7 +226,7 @@ export function ReviewStep({ config, onComplete, onBack, completedSteps, quoteId
           disabled={submitting}
           className="inline-flex items-center justify-center rounded-md bg-primary px-5 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
         >
-          {submitting ? 'Submitting...' : submitLabel}
+          {submitting ? t('cpq.wizard.steps.review.submitting', 'Submitting...') : submitLabel}
         </button>
       </div>
     </div>

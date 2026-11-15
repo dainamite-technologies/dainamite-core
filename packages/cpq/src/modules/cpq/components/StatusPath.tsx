@@ -2,6 +2,7 @@
 import * as React from 'react'
 import { ChevronRight } from 'lucide-react'
 import { Tag } from '@open-mercato/ui/primitives/tag'
+import { useT } from '@open-mercato/shared/lib/i18n/context'
 import type { TagMap } from '@open-mercato/ui/primitives/tag'
 import { formatStatusLabel } from './statusMaps'
 
@@ -30,7 +31,7 @@ export function StatusPath({
   onTransition,
   allowedTransitions,
   disabled,
-  ariaLabel = 'Status path',
+  ariaLabel,
 }: {
   current: string
   /** Happy-path statuses in order. */
@@ -39,15 +40,17 @@ export function StatusPath({
   terminals?: string[]
   /** Status → Tag variant. Missing entries fall back to "neutral". */
   statusMap: Record<string, TagVariant>
-  /** Optional human labels (overrides `formatStatusLabel`). */
+  /** Optional human labels, already translated by the caller (overrides `formatStatusLabel`). */
   labels?: Record<string, string>
   /** Click handler. Omit for read-only path. */
   onTransition?: (target: string) => void
   /** If set, only these targets are clickable. Else any non-current. */
   allowedTransitions?: string[]
   disabled?: boolean
+  /** Translated accessible name; defaults to "Status path". */
   ariaLabel?: string
 }) {
+  const t = useT()
   // Build the displayed sequence. Aliases can swap into the happy
   // path slot (e.g. quote's `pre_approved` shown as `approved`). We
   // don't handle aliasing here — consumers can swap entries in
@@ -61,7 +64,7 @@ export function StatusPath({
   const interactiveMode = typeof onTransition === 'function'
 
   return (
-    <nav aria-label={ariaLabel} className="flex items-center gap-1.5 flex-wrap text-xs">
+    <nav aria-label={ariaLabel ?? t('cpq.statusPath.ariaLabel', 'Status path')} className="flex items-center gap-1.5 flex-wrap text-xs">
       {sequence.map((status, idx) => {
         const reached = currentIdx >= 0 && idx <= currentIdx
         const isCurrent = status === current
@@ -91,7 +94,7 @@ export function StatusPath({
                 type="button"
                 onClick={() => onTransition!(status)}
                 aria-current={isCurrent ? 'step' : undefined}
-                title={`Transition to ${label}`}
+                title={t('cpq.statusPath.transitionTo', 'Transition to {status}', { status: label })}
                 className={wrapperClass}
               >
                 <Tag variant={variant} dot={isCurrent} className={tagClass}>

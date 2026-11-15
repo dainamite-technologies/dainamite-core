@@ -12,18 +12,18 @@ Engine: om-auto-create-pr-loop (steps: 12, --loop: no)
 
 | Phase | Step | Title | Exec | Status | Commit |
 |-------|------|-------|------|--------|--------|
-| A | 1 | Characterization tests | group:A1 | done | |
-| A | 2 | FX settings | group:A2 | done | |
-| A | 3 | FX rate resolver | group:A2 | done | |
-| A | 4 | DI registration | group:A2 | done | |
-| B | 5 | Entity: rate source and derivation | group:B1 | done | |
-| B | 6 | Engine: snapshot policy, table currency, pricing and margin | group:B1 | done | |
-| B | 7 | Writes in a foreign currency | group:B2 | done | |
-| B | 8 | Read APIs and missingFxPairs | group:B2 | done | |
-| C | 9 | Carry-through to order and inventory costs | group:C1 | done | |
-| D | 10 | UI | group:D1 | done | |
-| E | 11 | Seed, docs, migration notes and E2E | group:E1 | done | |
-| E | 12 | Archive the Delta | group:E1 | done | |
+| A | 1 | Characterization tests | group:A1 | done | c9b9595 |
+| A | 2 | FX settings | group:A2 | done | 1506682 |
+| A | 3 | FX rate resolver | group:A2 | done | 38def29 |
+| A | 4 | DI registration | group:A2 | done | 38666f9 |
+| B | 5 | Entity: rate source and derivation | group:B1 | done | d7aa99d |
+| B | 6 | Engine: snapshot policy, table currency, pricing and margin | group:B1 | done | af00b5a |
+| B | 7 | Writes in a foreign currency | group:B2 | done | 6a23c20 |
+| B | 8 | Read APIs and missingFxPairs | group:B2 | done | 72174c4 |
+| C | 9 | Carry-through to order and inventory costs | group:C1 | done | a21bf07 |
+| D | 10 | UI | group:D1 | done | c0996c0 |
+| E | 11 | Seed, docs, migration notes and E2E | group:E1 | done | 9927729 |
+| E | 12 | Archive the Delta | group:E1 | done | 7310325 |
 
 ## Goal
 

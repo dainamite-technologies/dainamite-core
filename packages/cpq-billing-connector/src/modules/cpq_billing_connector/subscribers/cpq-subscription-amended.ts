@@ -4,14 +4,18 @@ import {
   mapSubscriptionItemsToBillingItems,
   type CpqSubscriptionItem,
 } from '../lib/chargeMapper'
+import { arcItemBillStart, loadArcBillStartSetup, markArcSetupApplied } from '../lib/arcBillStart'
+import type { BillStartSetup } from '../lib/orderSetupResolution'
 
 /**
  * Subscriber: `cpq.subscription.amended` → mid-cycle add / remove.
  *
  * CPQ's amended event carries `addedItems`, `removedSubscriptionItemIds`
  * and the `effectiveDate` of the amendment. The connector:
- *   1. Creates a Billing Item for every added charge, starting on
- *      `effectiveDate`.
+ *   1. Creates a Billing Item for every added charge on the subscription's
+ *      own account. Bill start per added line (order billing setup, D7):
+ *      line override → CPQ service start → the order's default bill start
+ *      → `effectiveDate`.
  *   2. End-dates every Billing Item of each removed subscription item at
  *      `effectiveDate - 1 day`.
  *
@@ -39,6 +43,8 @@ export type AmendedPayload = {
   effectiveDate: string
   addedItems?: CpqSubscriptionItem[]
   removedSubscriptionItemIds?: string[]
+  /** CPQ order id — the key of the order billing setup. */
+  sourceOrderId?: string
 }
 
 function isoDateMinusOneDay(iso: string): string {
@@ -48,11 +54,16 @@ function isoDateMinusOneDay(iso: string): string {
 }
 
 /** Billing Item payloads for the added charges — pure, no proration lines. */
-export function buildAddedItemPayloads(billAccountId: string, payload: AmendedPayload): ItemCreatePayload[] {
+export function buildAddedItemPayloads(
+  billAccountId: string,
+  payload: AmendedPayload,
+  setup: BillStartSetup | null = null,
+): ItemCreatePayload[] {
   return mapSubscriptionItemsToBillingItems({
     subscriptionId: payload.subscriptionId,
     items: payload.addedItems ?? [],
     billStartDate: payload.effectiveDate,
+    billStartDateFor: (item) => arcItemBillStart(item, setup, payload.effectiveDate),
   }).map((item) => ({
     billAccountId,
     type: item.type,
@@ -85,15 +96,29 @@ export default async function handle(payload: AmendedPayload): Promise<void> {
     organizationId: payload.organizationId,
   }
 
-  // Activation runs first and creates the account. If it's missing,
+  // The subscription's account is the one its existing items bill to (the
+  // customer may have several accounts — order billing setup spec, D7).
+  // Activation runs first and creates the account; if nothing is found,
   // there is nothing to amend — the queue will have retried activation.
-  const account = await billingApi.findAccountByCustomer(scope, payload.customerId)
-  if (!account) return
+  const existingItems = await billingApi.findItemsBySubscription(scope, payload.subscriptionId)
+  const accountId =
+    existingItems[0]?.billAccountId ??
+    (await billingApi.findAccountByCustomer(scope, payload.customerId))?.id ??
+    null
+  if (!accountId) return
 
   // 1. New Billing Items for every added charge (the engine prorates the stub).
-  const itemsToCreate = buildAddedItemPayloads(account.id, payload)
+  const setup = added.length > 0 ? await loadArcBillStartSetup(container, scope, payload.sourceOrderId) : null
+  const itemsToCreate = buildAddedItemPayloads(accountId, payload, setup)
   if (itemsToCreate.length > 0) {
     await billingApi.bulkCreateItems(scope, itemsToCreate)
+    const account = await billingApi.findAccountById(scope, accountId)
+    await markArcSetupApplied(container, scope, {
+      sourceOrderId: payload.sourceOrderId,
+      customerId: payload.customerId,
+      currencyCode: account?.currencyCode ?? '',
+      billingAccountId: accountId,
+    })
   }
 
   // 2. End-date every Billing Item of each removed subscription item.

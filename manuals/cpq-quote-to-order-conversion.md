@@ -122,6 +122,21 @@ The status badge next to the quote title is clickable. It opens a dropdown with 
 
 ---
 
+## Step 8b — (Optional) Set Up Billing
+
+Only when the billing module and the CPQ → Billing connector are installed: the order page shows a **Billing** tab next to **Line items**.
+
+1. Open the **Billing** tab
+2. **Billing account** — choose **Use existing account** (only active accounts of this customer in the order's currency are listed) or **Create new account**. A new account is prefilled with the customer's name, email and billing address; change any field you need
+3. **Bill start** — leave **Default bill start** empty to bill from the activation date, or pick a date. Set a date on a single line to start billing that line later (e.g. installation next month)
+4. Click **Save billing setup** (or `Cmd/Ctrl + Enter`)
+
+> **Amend / renew orders:** the tab only shows the lines the order adds. They bill to the subscription's existing billing account; set a date to start billing a line later than the change (amend) or the new term (renew).
+
+> Skipping this step is fine: activation then uses the customer's data, reuses the customer's newest account in the order currency (or creates one), and bills from the activation date. After activation the tab is read-only and links to the billing account.
+
+---
+
 ## Step 9 — Activate the Order
 
 1. On the order detail page with **draft** status — click the green **"Activate Order"** button

@@ -381,6 +381,8 @@
   "cpq.orders.detail.notFound": "Bestellung nicht gefunden.",
   "cpq.orders.detail.sourceQuote": "Ursprungsangebot",
   "cpq.orders.detail.statusPath": "Bestellstatuspfad",
+  "cpq.orders.detail.tabs": "Bestellbereiche",
+  "cpq.orders.detail.tabs.lines": "Positionen",
   "cpq.orders.detail.viewSalesOrder": "Vertriebsbestellung anzeigen",
   "cpq.orders.empty": "Keine CPQ-Bestellungen gefunden. Wandeln Sie ein angenommenes Angebot um, um eine Bestellung zu erstellen.",
   "cpq.orders.filters.currency": "Währung",

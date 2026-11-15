@@ -381,6 +381,8 @@
   "cpq.orders.detail.notFound": "Nie znaleziono zamówienia.",
   "cpq.orders.detail.sourceQuote": "Oferta źródłowa",
   "cpq.orders.detail.statusPath": "Ścieżka statusu zamówienia",
+  "cpq.orders.detail.tabs": "Sekcje zamówienia",
+  "cpq.orders.detail.tabs.lines": "Pozycje",
   "cpq.orders.detail.viewSalesOrder": "Pokaż zamówienie sprzedaży",
   "cpq.orders.empty": "Nie znaleziono zamówień CPQ. Przekształć zaakceptowaną ofertę w zamówienie, aby je utworzyć.",
   "cpq.orders.filters.currency": "Waluta",

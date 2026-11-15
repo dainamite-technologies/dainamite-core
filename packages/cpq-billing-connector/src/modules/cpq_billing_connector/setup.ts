@@ -1,11 +1,15 @@
 import type { ModuleSetupConfig } from '@open-mercato/shared/modules/setup'
 
 /**
- * Connector has no tenant-init work to do. It ships zero entities,
- * zero dictionaries, zero default roles. The subscribers auto-register
- * via the generator's `subscribers/` discovery; nothing else is
- * required for the module to function.
+ * No tenant-init work: no dictionaries, no seed data. Role defaults mirror
+ * CPQ's order permissions — whoever activates CPQ orders (admin) sets their
+ * billing up; whoever can view CPQ orders (employee) can see it.
  */
-export const setup: ModuleSetupConfig = {}
+export const setup: ModuleSetupConfig = {
+  defaultRoleFeatures: {
+    admin: ['cpq_billing_connector.*'],
+    employee: ['cpq_billing_connector.order_setup.view'],
+  },
+}
 
 export default setup

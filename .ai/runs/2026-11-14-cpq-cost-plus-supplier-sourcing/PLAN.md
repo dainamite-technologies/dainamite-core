@@ -28,7 +28,7 @@ Engine: om-auto-create-pr-loop (steps: 20, --loop: no)
 | C | 14 | Confidentiality sweep extension | group:C1 | done | 889b5fb |
 | D | 15 | Cost requests page | group:D1 | done | |
 | D | 16 | Quote Costs panel additions | group:D1 | done | |
-| E | 17 | Demo seed | group:E1 | todo | |
+| E | 17 | Demo seed | group:E1 | done | |
 | E | 18 | Workflow recipe seeded disabled | group:E1 | todo | |
 | E | 19 | Manual, migration notes and E2E | group:E2 | todo | |
 | E | 20 | Archive the Delta | group:E2 | todo | |

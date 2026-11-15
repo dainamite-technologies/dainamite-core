@@ -3,6 +3,7 @@ import { seedGixExamples as seedGixExamplesImpl } from './examples'
 import { seedGixPriceAdjustmentExample } from './price-adjustment-examples'
 import { seedCpqArcExamples } from './arc-examples'
 import { seedGixCostPlusCatalog, seedGixCostPlusExamples } from './cost-plus-examples'
+import { seedGixCostSourcingExamples } from './cost-sourcing-examples'
 import {
   seedGixBundleData,
   seedGixPriceRules,
@@ -54,4 +55,6 @@ export async function seedGixExamples(ctx: CpqUseCaseSeedContext): Promise<void>
   await seedCpqArcExamples(ctx.em, ctx.container, scope)
   // Cost-plus demo quotes in the pending / estimated / confirmed / expired cost states.
   await seedGixCostPlusExamples(ctx.em, ctx.container, scope)
+  // Supplier cost sourcing demo quotes: partner tail requested (overdue), declined, answered with a pending proposal.
+  await seedGixCostSourcingExamples(ctx.em, ctx.container, scope)
 }

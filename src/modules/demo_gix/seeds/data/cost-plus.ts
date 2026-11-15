@@ -40,3 +40,16 @@ export const COST_PLUS_SCENARIOS = {
   confirmed: { scenario: 'cost-plus-confirmed', label: 'Demo — IP Transit, cost confirmed', dataCentre: 'equinix-ld5', partnerTail: 110, validDays: 60 },
   expired: { scenario: 'cost-plus-expired', label: 'Demo — IP Transit, supplier quote expired', dataCentre: 'equinix-fr5', partnerTail: 105, validDays: -10 },
 } as const
+
+/** Working days the overdue demo request has been open (above the default overdue threshold). */
+export const OVERDUE_WORKING_DAYS = 8
+
+/** Supplier cost sourcing demo quotes (keyed by `quoteContext.scenario`), one per sourcing state. */
+export const COST_SOURCING_SCENARIOS = {
+  requestedOverdue: { scenario: 'cost-sourcing-requested-overdue', label: 'Demo — IP Transit, partner tail requested (overdue)', dataCentre: 'equinix-md2' },
+  declined: { scenario: 'cost-sourcing-declined', label: 'Demo — IP Transit, partner tail declined', dataCentre: 'equinix-dc3', reason: 'No coverage at site' },
+  answeredProposal: {
+    scenario: 'cost-sourcing-answered-proposal', label: 'Demo — IP Transit, supplier answer pending (with customer)',
+    dataCentre: 'digital-realty-ams11', answerAmount: 130, validDays: 30, supplierQuoteRef: 'PCL-cost-sourcing-proposal',
+  },
+} as const

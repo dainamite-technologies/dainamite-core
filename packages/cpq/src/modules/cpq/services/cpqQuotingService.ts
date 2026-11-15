@@ -953,12 +953,9 @@ export class DefaultCpqQuotingService {
       // Reads first (lines, sales rows, open requests), then one flushed mutation phase.
       await cancelOpenRequests(em, cpqConfig, scope, 'quote_closed', { actorUserId: sourcing.actorUserId, signals: sourcing.signals })
       const lineConfigs = await em.find(CpqQuoteLineConfiguration, { quoteConfigurationId: cpqConfig.id, ...scoped, deletedAt: null })
-      const salesLines: SalesQuoteLine[] = []
-      for (const lc of lineConfigs) {
-        const salesLine = await em.findOne(SalesQuoteLine, { id: lc.quoteLineId })
-        if (salesLine) salesLines.push(salesLine)
-      }
-      const salesQuote = await em.findOne(SalesQuote, { id: cpqConfig.quoteId })
+      const lineIds = lineConfigs.map((lc) => lc.quoteLineId)
+      const salesLines = lineIds.length ? await em.find(SalesQuoteLine, { id: { $in: lineIds }, ...scoped }) : []
+      const salesQuote = await em.findOne(SalesQuote, { id: cpqConfig.quoteId, ...scoped })
       await withAtomicFlush(em, [() => {
         const now = new Date()
         for (const lc of lineConfigs) lc.deletedAt = now

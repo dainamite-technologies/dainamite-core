@@ -737,12 +737,12 @@ describe('DefaultCpqQuotingService — cost request cancellation on close and de
     em.findOne.mockImplementation(async (entity: unknown, where: Record<string, unknown>) => {
       if (entity === CpqQuoteConfiguration) return config
       if (entity === SalesQuote) return salesQuote
-      if (entity === SalesQuoteLine) return salesLines.find((row) => row.id === where.id) ?? null
       return null
     })
     em.find.mockImplementation(async (entity: unknown, where: Record<string, unknown>) => {
       if (entity === CpqQuoteLineCost) return where.sourcingStatus === 'requested' ? costs.filter((row) => row.sourcingStatus === 'requested') : costs
       if (entity === CpqQuoteLineConfiguration) return lineConfigs
+      if (entity === SalesQuoteLine) return salesLines.filter((row) => (where.id as { $in: unknown[] }).$in.includes(row.id))
       return []
     })
     return { em, service, config, salesQuote, lineConfigs, salesLines, costs, published }
@@ -778,6 +778,16 @@ describe('DefaultCpqQuotingService — cost request cancellation on close and de
     for (const row of [config, salesQuote, ...lineConfigs, ...salesLines]) expect(row.deletedAt).toBeInstanceOf(Date)
     expect(costs[0]).toMatchObject({ sourcingStatus: 'cancelled', cancelReason: 'quote_closed' })
     expect(published).toEqual([[expect.objectContaining({ kind: 'request_cancelled', reason: 'quote_closed' })]])
+  })
+
+  it('deleteQuote reads the sales lines in ONE tenant-scoped query and the sales quote scoped', async () => {
+    const { em, service } = setup('ready')
+    await service.deleteQuote('cpq-1', SCOPE)
+    const lineReads = em.find.mock.calls.filter((call: unknown[]) => call[0] === SalesQuoteLine)
+    expect(lineReads).toHaveLength(1)
+    expect(lineReads[0][1]).toMatchObject({ id: { $in: ['sl-1'] }, organizationId: SCOPE.organizationId, tenantId: SCOPE.tenantId })
+    const salesRead = em.findOne.mock.calls.find((call: unknown[]) => call[0] === SalesQuote)
+    expect(salesRead?.[1]).toMatchObject({ id: 'sq-1', organizationId: SCOPE.organizationId, tenantId: SCOPE.tenantId })
   })
 
   it.each(['accepted', 'rejected', 'cancelled'])('deleteQuote answers 409 for a quote in %s status and writes nothing', async (status) => {

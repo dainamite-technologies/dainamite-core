@@ -7,6 +7,7 @@ import { Input } from '@open-mercato/ui/primitives/input'
 import { Textarea } from '@open-mercato/ui/primitives/textarea'
 import { Alert, AlertDescription } from '@open-mercato/ui/primitives/alert'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@open-mercato/ui/primitives/select'
+import { CostFxHint } from './CostFxHint'
 import {
   COST_ISSUE_FALLBACKS,
   COST_ROLE_FALLBACKS,
@@ -41,7 +42,7 @@ function Choice<V extends string>({ value, onChange, options, disabled }: { valu
 }
 
 /** Fields of the Add / Edit / Confirm cost dialog. Presentational: state and submit live in `CostDialog`. */
-export function CostFormBody({ form, onChange, mode, existing, charges, issues, errorCode, onReload }: {
+export function CostFormBody({ form, onChange, mode, existing, charges, issues, errorCode, onReload, quoteCurrency }: {
   form: CostForm
   onChange: (next: CostForm) => void
   mode: CostDialogMode
@@ -51,6 +52,8 @@ export function CostFormBody({ form, onChange, mode, existing, charges, issues, 
   issues: CostFormIssue[]
   errorCode: string | null
   onReload: () => void
+  /** The quote currency: a different currency in the form triggers the rate hint. */
+  quoteCurrency?: string
 }) {
   const t = useT()
   const set = <K extends keyof CostForm>(key: K, value: CostForm[K]) => onChange({ ...form, [key]: value })
@@ -108,6 +111,7 @@ export function CostFormBody({ form, onChange, mode, existing, charges, issues, 
           </Field>
         </div>
       )}
+      {quoteCurrency && (form.source === 'fixed' || form.source === 'on_request') && <CostFxHint currency={form.currencyCode} quoteCurrency={quoteCurrency} />}
       {mode !== 'confirm' && form.unitAmount.trim() !== '' && (
         <Field label={t('cpq.quoteCosts.status', 'Status')}>
           <Choice value={form.valueStatus} onChange={(value) => set('valueStatus', value)}

@@ -23,3 +23,9 @@
 ## 2026-11-15T11:30:00Z — step 9 decisions
 - `costLineTotal` now takes `fxRate`: `total_amount = round4(instance x qty x fx_rate)` (rate omitted when unset), one rounding; unit / instance / currency stay in the cost currency, all four `fx_*` fields are copied verbatim, no resolver call at conversion or activation. A foreign cost with no rate is `none` and so has a null total.
 - Snapshot cost shape always includes `fxRateSource` / `fxRateDerivation` (null when unset), like the existing `fxRate` / `fxRateDate`; the pricing golden and subscription event payload golden stay green (costs are not in the event payloads).
+
+## 2026-11-15T12:00:00Z — step 10 decisions
+- The dialog's rate hint needs a pair rate, which `cost-preview` (offering-based) could not answer. Additive extension: `cost-preview` accepts `fxFrom` (3-letter cost currency; with it, offeringId / productId become optional) and answers `fxHint` ({from, to, fxRate*, or error + errorDetail}). Nothing stored; same route features. The client skips the call without cpq.pricing.view + cpq.costs.view and ignores any failure silently.
+- "(looked back N days)" is rendered only when a look-back is passed; no read API exposes the tenant look-back, so the badge reads "No USD→EUR rate for 2026-11-12".
+- Not done: the "Missing exchange rates: USD→EUR (N open quotes)" operator line — no UI consumes `cost-plus/usage` beyond `enabled` (no toggle-off confirmation exists to extend).
+- Order / subscription / asset rows: the value is `totalAmount` in the document currency when a rate applies (it was previously formatted in the cost currency), with a note "from 300.00 USD · 0.92 · ECB · date".

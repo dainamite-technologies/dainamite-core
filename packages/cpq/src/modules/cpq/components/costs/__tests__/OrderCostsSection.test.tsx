@@ -62,4 +62,12 @@ describe('OrderCostsSummaryView', () => {
   it('renders nothing for a status-only order without costs', () => {
     expect(wrap(<OrderCostsSummaryView response={{ orderId: 'o', lines: [] }} currency="EUR" today="2026-11-14" />)).toBe('')
   })
+
+  it('a converted cost shows the document-currency total and the rate note, never "frozen"', () => {
+    const usd: FullCostRow = { ...cost, currencyCode: 'USD', unitAmount: '300', instanceAmount: '300', totalAmount: '276', fxRate: '0.92000000', fxRateDate: '2026-11-11', fxRateSource: 'ECB', fxRateDerivation: 'direct' }
+    const content = text(wrap(<OrderCostsSection response={{ ...holder, lines: [{ orderLineId: 'l1', costs: [usd] }] }} lines={lines} currency="EUR" today="2026-11-14" />))
+    expect(content).toContain('€276.00')
+    expect(content).toContain('from 300.00 USD · 0.92 · ECB · 2026-11-11')
+    expect(content).not.toContain('frozen')
+  })
 })

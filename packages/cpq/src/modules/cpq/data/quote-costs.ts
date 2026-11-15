@@ -83,7 +83,12 @@ export const cpqCostPreviewSchema = z.object({
   configuration: z.record(z.string(), z.unknown()).default({}),
   currencyCode: z.string().regex(/^[A-Z]{3}$/).optional(),
   quantity: z.number().finite().min(0).optional(),
-}).strict().refine((value) => Boolean(value.offeringId) !== Boolean(value.productId), { message: 'Provide exactly one of offeringId or productId' })
+  /** Cost currency for the dialog's rate hint (FX spec §UI/UX): answers `fxHint` for this currency into the quote currency. */
+  fxFrom: z.string().regex(/^[A-Z]{3}$/).optional(),
+}).strict().refine(
+  (value) => (value.offeringId || value.productId ? Boolean(value.offeringId) !== Boolean(value.productId) : Boolean(value.fxFrom)),
+  { message: 'Provide exactly one of offeringId or productId' },
+)
 
 export type QuoteLineCostCreate = z.infer<typeof cpqQuoteLineCostCreateSchema>
 export type QuoteLineCostUpdate = z.infer<typeof cpqQuoteLineCostUpdateSchema>

@@ -4,6 +4,7 @@
  * server's lock matrix for display only; the API stays the authority.
  */
 import type { MarginFigures, QuoteMargin } from '../services/costs/quoteMargin'
+import type { FxFields } from './fxView'
 
 /** Same set `isQuoteCostLocked` uses: costs that change the price are editable only in these statuses. */
 export const COST_EDITABLE_STATUSES = ['new', 'incomplete', 'ready'] as const
@@ -29,7 +30,7 @@ export type RedactedQuoteCost = {
 }
 
 /** The full cost line, `cpq.costs.view` only. Decimals are strings. */
-export type FullQuoteCost = RedactedQuoteCost & {
+export type FullQuoteCost = RedactedQuoteCost & FxFields & {
   quoteLineId: string
   chargeCode: string | null
   origin: 'catalog' | 'manual' | string

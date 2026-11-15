@@ -51,6 +51,12 @@ describe('buildCostElementPayload', () => {
     expect(buildCostElementPayload(form, 'edit', { id: 'e1' })).not.toHaveProperty('code')
   })
 
+  it('sends a table element currency as the fallback table currency, and null when empty', () => {
+    const form = { ...costElementToForm(row), code: 'x' }
+    expect(buildCostElementPayload({ ...form, currencyCode: 'USD' }, 'edit', { id: 'e1' })).toMatchObject({ source: 'table', currencyCode: 'USD' })
+    expect(buildCostElementPayload({ ...form, currencyCode: '' }, 'edit', { id: 'e1' })).toMatchObject({ currencyCode: null })
+  })
+
   it('keeps the currency of an on-request cost only when an estimate is given', () => {
     const base = { ...emptyCostElementForm('mrc'), source: 'on_request' as const, name: 'S', currencyCode: 'USD' }
     expect(buildCostElementPayload(base, 'edit', { id: 'e' })).toMatchObject({ estimateAmount: null, currencyCode: null })

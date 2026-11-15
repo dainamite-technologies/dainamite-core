@@ -141,7 +141,8 @@ function sourceFields(form: CostElementForm) {
     return { amount, currencyCode: form.currencyCode || null, costTableId: null, costColumnKey: null, estimateAmount: null }
   }
   if (form.source === 'table') {
-    return { amount: null, currencyCode: null, costTableId: form.costTableId || null, costColumnKey: form.costColumnKey || null, estimateAmount: null }
+    // The currency of a table element is its fallback table currency (FX spec Q10): optional, converted when no quote-currency entry exists.
+    return { amount: null, currencyCode: form.currencyCode || null, costTableId: form.costTableId || null, costColumnKey: form.costColumnKey || null, estimateAmount: null }
   }
   return { amount: null, currencyCode: estimate !== null ? form.currencyCode || null : null, costTableId: null, costColumnKey: null, estimateAmount: estimate }
 }

@@ -13,6 +13,8 @@ import {
   type CostRow,
   type FullCostRow,
 } from '../../lib/orderInventoryCostView'
+import { FxNote } from '../FxNote'
+import { snapshotNote, fxTooltip } from '../../lib/fxView'
 import { CostStatusBadges } from '../../backend/cpq/quotes/[id]/_components/CostStatusBadges'
 
 const STATUS_VARIANTS: Record<string, 'warning' | 'info' | 'success'> = { none: 'warning', estimated: 'info', confirmed: 'success' }
@@ -47,6 +49,7 @@ export function CostRowsTable({ costs, currency, today }: { costs: ReadonlyArray
         {costs.map((cost) => {
           const row = isFullCostRow(cost) ? cost : null
           const value = row ? costValueView(row, currency) : null
+          const snapshot = row ? snapshotNote(row, t) : null
           const expired = badgeInputs([cost], today)[0]?.expired
           return (
             <tr key={cost.id} className={`border-t border-dashed border-border/50 ${isEnded(cost) ? 'text-muted-foreground' : ''}`} data-testid="cpq-cost-row">
@@ -67,6 +70,7 @@ export function CostRowsTable({ costs, currency, today }: { costs: ReadonlyArray
                   <td className="py-1 text-right font-mono" data-testid="cpq-cost-value">
                     {value.amount}
                     {value.period && <span className="ml-1 font-sans text-muted-foreground">{t(`cpq.inventoryCosts.period.${value.period}`, PERIOD_FALLBACKS[value.period])}</span>}
+                    {snapshot && <FxNote text={snapshot} tooltip={fxTooltip(row, {}, t)} />}
                   </td>
                   <td className="py-1 pl-2">{row.supplierName ?? '—'}</td>
                   <td className="py-1">{row.supplierTermEnd ?? '—'}</td>

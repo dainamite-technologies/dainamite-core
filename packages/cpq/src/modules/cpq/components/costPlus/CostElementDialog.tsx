@@ -128,7 +128,13 @@ export function CostElementDialog({ open, charge, element, onClose, onSaved }: P
               onChange={(e) => {
                 const source = e.target.value as CostElementForm['source']
                 // Tiered / volume only work from a table.
-                set({ source, ...(source !== 'table' && (form.costModel === 'tiered' || form.costModel === 'volume') ? { costModel: 'flat' as const } : {}) })
+                set({
+                  source,
+                  ...(source !== 'table' && (form.costModel === 'tiered' || form.costModel === 'volume') ? { costModel: 'flat' as const } : {}),
+                  // The charge currency pre-fills fixed / estimate amounts; a table's currency is an optional fallback, so it starts empty.
+                  ...(source === 'table' && element?.source !== 'table' ? { currencyCode: '' } : {}),
+                  ...(source !== 'table' && form.source === 'table' && !form.currencyCode ? { currencyCode: charge.currencyCode ?? 'USD' } : {}),
+                })
               }}
             >
               {(['fixed', 'table', 'on_request'] as const).map((source) => (
@@ -172,6 +178,13 @@ export function CostElementDialog({ open, charge, element, onClose, onSaved }: P
                     {t('cpq.costElements.noCostTables', 'No cost tables yet. Create a pricing table with purpose “cost”.')}
                   </span>
                 )}
+              </label>
+              <label className="space-y-1">
+                <span className="text-xs font-medium">{t('cpq.costElements.fallbackTableCurrency', 'Fallback table currency')}</span>
+                <Input value={form.currencyCode} maxLength={3} placeholder="USD" data-testid="cpq-cost-element-fallback-currency" onChange={(e) => set({ currencyCode: e.target.value.toUpperCase() })} />
+                <span className="block text-xs text-muted-foreground">
+                  {t('cpq.costElements.fallbackTableCurrencyHint', 'Used when the cost table has no entry in the quote currency; the price is then converted at the dated rate.')}
+                </span>
               </label>
               <label className="space-y-1">
                 <span className="text-xs font-medium">{t('cpq.costElements.costColumn', 'Column')} *</span>

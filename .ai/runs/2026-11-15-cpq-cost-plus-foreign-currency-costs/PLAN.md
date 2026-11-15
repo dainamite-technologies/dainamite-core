@@ -21,7 +21,7 @@ Engine: om-auto-create-pr-loop (steps: 12, --loop: no)
 | B | 7 | Writes in a foreign currency | group:B2 | done | |
 | B | 8 | Read APIs and missingFxPairs | group:B2 | done | |
 | C | 9 | Carry-through to order and inventory costs | group:C1 | done | |
-| D | 10 | UI | group:D1 | todo | |
+| D | 10 | UI | group:D1 | done | |
 | E | 11 | Seed, docs, migration notes and E2E | group:E1 | todo | |
 | E | 12 | Archive the Delta | group:E1 | todo | |
 

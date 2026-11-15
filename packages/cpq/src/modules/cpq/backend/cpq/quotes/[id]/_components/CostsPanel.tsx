@@ -11,10 +11,13 @@ import {
   COST_ROLE_FALLBACKS,
   COST_SOURCE_FALLBACKS,
   COST_STATUS_FALLBACKS,
+  costErrorFallback,
   isFullCost,
   type FullQuoteCost,
   type RedactedQuoteCost,
 } from '../../../../../lib/quoteCostView'
+import { FxNote } from '../../../../../components/FxNote'
+import { costErrorText, formatConverted, fxTooltip } from '../../../../../lib/fxView'
 import { SOURCING_STATUS_FALLBACKS, SOURCING_STATUS_VARIANTS } from '../../../../../lib/costSourcingView'
 import { CostRequestDetailPanel } from '../../../cost-requests/_components/CostRequestDetailPanel'
 
@@ -24,6 +27,12 @@ const STATUS_VARIANTS: Record<string, 'warning' | 'info' | 'success'> = { none: 
 
 /** Rendered per cost row in the actions column (step 20 supplies Edit / Confirm / Delete). */
 export type CostRowActions = (cost: FullQuoteCost) => React.ReactNode
+
+function QuoteCostConverted({ cost, locked }: { cost: FullQuoteCost; locked: boolean }) {
+  const t = useT()
+  const line = formatConverted(cost, null, t)
+  return line ? <FxNote text={line.text} tooltip={fxTooltip(cost, { locked }, t)} /> : null
+}
 
 export function CostsPanel({ quoteId, lineId, lineName, costs, locked, status, canManage, renderRowActions, headerActions }: {
   quoteId: string
@@ -127,9 +136,12 @@ export function CostsPanel({ quoteId, lineId, lineName, costs, locked, status, c
                           {cost.requestSeq ? ` #${cost.requestSeq}` : ''}
                         </Tag>
                       )}
-                      {cost.error && <span className="ml-1 text-destructive">{t(`cpq.quoteCosts.errors.${cost.error}`, cost.error)}</span>}
+                      {cost.error && <span className="ml-1 text-destructive" data-testid="cpq-cost-error">{costErrorText(cost, t, costErrorFallback)}</span>}
                     </td>
-                    <td className="py-1 text-right font-mono">{cost.unitAmount ?? '—'}</td>
+                    <td className="py-1 text-right font-mono">
+                      {cost.unitAmount ?? '—'}
+                      <QuoteCostConverted cost={cost} locked={locked} />
+                    </td>
                     <td className="py-1 pl-2">{cost.currencyCode ?? '—'}</td>
                     <td className="py-1">{cost.supplierName ?? '—'}</td>
                     <td className="py-1">{cost.validUntil ?? '—'}</td>

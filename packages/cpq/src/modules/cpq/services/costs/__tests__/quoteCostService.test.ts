@@ -652,3 +652,26 @@ describe('manual value writes and the sourcing columns', () => {
     expect(publisher).not.toHaveBeenCalled()
   })
 })
+
+describe('preview: fxFrom rate hint (cost dialog)', () => {
+  it('answers the rate a currency converts at, with no offering and no charges; nothing is stored', async () => {
+    const fx = jest.fn(async () => FX_OK)
+    const { service, em } = setup({ fx })
+    const body = await service.preview({ fxFrom: 'USD', currencyCode: 'EUR', configuration: {} }, SCOPE)
+    expect(body).toEqual({ currencyCode: 'EUR', charges: [], fxHint: { from: 'USD', to: 'EUR', fxRate: '0.92000000', fxRateDate: '2026-11-11', fxRateSource: 'ECB', fxRateDerivation: 'direct' } })
+    expect(fx).toHaveBeenCalledWith(expect.objectContaining({ from: 'USD', to: 'EUR' }))
+    expect(em.persist).not.toHaveBeenCalled()
+  })
+  it('names the missing pair when no rate exists, and answers null for the quote currency', async () => {
+    const { service } = setup({ fx: jest.fn(async () => ({ ok: false, code: 'CURRENCY_NO_RATE', reason: 'not_found' })) })
+    const body = await service.preview({ fxFrom: 'USD', currencyCode: 'EUR', configuration: {} }, SCOPE) as { fxHint: Record<string, unknown> }
+    expect(body.fxHint).toMatchObject({ from: 'USD', to: 'EUR', error: 'CURRENCY_NO_RATE', errorDetail: { code: 'CURRENCY_NO_RATE', from: 'USD', to: 'EUR' } })
+    const same = await service.preview({ fxFrom: 'EUR', currencyCode: 'EUR', configuration: {} }, SCOPE) as { fxHint?: unknown }
+    expect(same.fxHint).toBeUndefined()
+  })
+  it('still requires exactly one of offeringId / productId unless only fxFrom is sent', async () => {
+    const { service } = setup({ fx: jest.fn(async () => FX_OK) })
+    await expect(service.preview({ configuration: {} } as never, SCOPE)).rejects.toBeDefined()
+    await expect(service.preview({ offeringId: ids.line, productId: ids.line, configuration: {} } as never, SCOPE)).rejects.toBeDefined()
+  })
+})

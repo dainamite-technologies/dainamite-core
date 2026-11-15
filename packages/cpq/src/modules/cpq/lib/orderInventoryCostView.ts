@@ -4,6 +4,7 @@
  * projection without `cpq.costs.view`); these helpers only mirror the shape and never compare feature arrays.
  */
 import type { AssetMargin, ItemMargin } from '../services/costs/itemMargin'
+import { hasFxRate, type FxFields } from './fxView'
 import { formatMoney, formatPercent, lineCostBadges, type CostBadge, type QuoteMargin } from './quoteCostView'
 
 /** What every user with the page's view feature gets for an order or inventory cost. */
@@ -19,7 +20,7 @@ export type CostRow = {
 }
 
 /** The full projection, `cpq.costs.view` only. Decimals are strings. */
-export type FullCostRow = CostRow & {
+export type FullCostRow = CostRow & FxFields & {
   chargeCode: string | null
   source: string
   costModel: string
@@ -91,7 +92,9 @@ export function costValueView(cost: FullCostRow, fallbackCurrency: string): Cost
   const raw = cost.totalAmount ?? cost.instanceAmount ?? cost.unitAmount
   const period = cost.costType === 'mrc' ? 'month' : cost.costType === 'nrc' ? 'one_off' : null
   if (raw === null || raw === undefined || raw === '' || Number.isNaN(Number(raw))) return { amount: '—', period: null }
-  return { amount: formatMoney(Number(raw), cost.currencyCode ?? fallbackCurrency), period }
+  // `totalAmount` is in the document currency once a rate applied; the unit / instance amounts stay in the cost currency.
+  const currency = cost.totalAmount !== null && cost.totalAmount !== undefined && hasFxRate(cost) ? fallbackCurrency : cost.currencyCode ?? fallbackCurrency
+  return { amount: formatMoney(Number(raw), currency), period }
 }
 
 export const PERIOD_FALLBACKS: Record<'month' | 'one_off', string> = { month: '/ month', one_off: 'one-off' }

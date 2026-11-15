@@ -137,13 +137,16 @@ export class CpqQuoteCostService {
     const parsed = cpqCostPreviewSchema.parse(input)
     await this.requireEnabled(scope)
     const em = this.deps.em.fork({ clear: true, useContext: false })
+    const currency = parsed.currencyCode ?? await getBaseCurrencyCode(em, scope)
+    const fxHint = parsed.fxFrom ? await this.fxHint(parsed.fxFrom, currency, scope) : undefined
+    // Rate-hint only call (the cost dialog): no offering, no charges.
+    if (!parsed.offeringId && !parsed.productId) return { currencyCode: currency, charges: [], ...(fxHint ? { fxHint } : {}) }
     const owner = parsed.offeringId ? { offeringId: parsed.offeringId } : { productId: parsed.productId }
     const offering = parsed.offeringId
       ? await em.findOne(CpqProductOffering, { ...scoped(scope), id: parsed.offeringId })
       : null
     if (parsed.offeringId && !offering) throw new QuotingError(404, 'Offering not found')
     const charges = await em.find(CpqProductCharge, { ...scoped(scope), isActive: true, ...owner }, { orderBy: { sortOrder: 'asc' } })
-    const currency = parsed.currencyCode ?? await getBaseCurrencyCode(em, scope)
     const configuration: Record<string, unknown> = { ...(offering?.designTimeValues ?? {}), ...parsed.configuration }
     if (parsed.quantity !== undefined) {
       for (const charge of charges) if (charge.quantityAttributeCode) configuration[charge.quantityAttributeCode] = parsed.quantity
@@ -193,7 +196,17 @@ export class CpqQuoteCostService {
         ...(error ? { error } : {}),
       })
     }
-    return { currencyCode: currency, charges: result }
+    return { currencyCode: currency, charges: result, ...(fxHint ? { fxHint } : {}) }
+  }
+
+  /** The rate a cost in `from` would convert at today (nothing stored). Same currency answers null; never throws. */
+  private async fxHint(from: string, to: string, scope: TenantScope) {
+    if (from === to || !this.deps.fxRateResolver) return null
+    const resolved = await this.deps.fxRateResolver.resolve({ from, to, scope })
+    const date = new Date().toISOString().slice(0, 10)
+    return resolved.ok
+      ? { from, to, fxRate: resolved.rate, fxRateDate: resolved.rateDate, fxRateSource: resolved.source, fxRateDerivation: resolved.derivation }
+      : { from, to, error: 'CURRENCY_NO_RATE' as const, errorDetail: { code: 'CURRENCY_NO_RATE' as const, from, to, date } }
   }
 
   /**

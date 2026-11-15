@@ -117,14 +117,14 @@ describe('reads', () => {
   })
   it('usage works with the toggle off', async () => {
     const { service } = setup({ enabled: false })
-    await expect(service.usage(SCOPE)).resolves.toEqual({ enabled: false, costPlusCharges: 0, openQuotes: 0, openRequests: 0, liveSubscriptions: 0, missingFxPairs: [] })
+    await expect(service.usage(SCOPE)).resolves.toEqual({ enabled: false, costPlusCharges: 0, openQuotes: 0, openRequests: 0, liveSubscriptions: 0, openArcQuotesWithCarriedCosts: 0, missingFxPairs: [] })
   })
   it('usage counts with one aggregate query per figure: no cost row hydrated, no bound id list', async () => {
     const { service, em, subquery } = setup({ costs: [catalogRow()] })
     em.count.mockImplementation(async (entity: unknown) => (entity === CpqProductCharge ? 3 : entity === CpqQuoteConfiguration ? 2 : entity === CpqInventorySubscription ? 4 : entity === CpqQuoteLineCost ? 5 : 0))
-    await expect(service.usage(SCOPE)).resolves.toEqual({ enabled: true, costPlusCharges: 3, openQuotes: 2, openRequests: 5, liveSubscriptions: 4, missingFxPairs: [] })
+    await expect(service.usage(SCOPE)).resolves.toEqual({ enabled: true, costPlusCharges: 3, openQuotes: 2, openRequests: 5, liveSubscriptions: 4, openArcQuotesWithCarriedCosts: 2, missingFxPairs: [] })
     expect(em.find).not.toHaveBeenCalled()
-    expect(em.count).toHaveBeenCalledTimes(4)
+    expect(em.count).toHaveBeenCalledTimes(5)
     // Open requests: one COUNT of status-requested rows, restricted to quotes alive on both sides by a semi-join.
     const reqWhere = em.count.mock.calls.find(([entity]: unknown[]) => entity === CpqQuoteLineCost)[1]
     expect(reqWhere).toMatchObject({ ...SCOPE, deletedAt: null, sourcingStatus: 'requested' })
@@ -153,12 +153,18 @@ describe('reads', () => {
     // Accepted-but-unconverted quotes are open; ordered quotes (NOT IN order sources) are not.
     expect(quoteWhere.cpqStatus.$nin).not.toContain('accepted')
     expect(quoteWhere.id.$nin).toBe(subquery)
-    expect(em.createQueryBuilder).toHaveBeenCalledTimes(7) // + sales quotes and quote configurations of the open-request semi-join
+    expect(em.createQueryBuilder).toHaveBeenCalledTimes(8) // + the carried-cost semi-join, + sales quotes and quote configurations of the open-request semi-join
     expect(em.createQueryBuilder).toHaveBeenCalledWith(CpqQuoteLineCost, 'qlc')
     expect(em.createQueryBuilder).toHaveBeenCalledWith(CpqOrderConfiguration, 'oc')
     expect(subquery.select).toHaveBeenCalledWith('oc.sourceQuoteId')
     expect(subquery.select).toHaveBeenCalledWith('qlc.quoteConfigurationId')
     expect(subquery.where).toHaveBeenCalledWith({ ...SCOPE, deletedAt: null })
+    // ARC exposure: same open definition, restricted by a semi-join on carried cost lines (the partial index predicate).
+    const arcCall = em.count.mock.calls.find(([entity, where]: unknown[]) => entity === CpqQuoteConfiguration && (where as Row).id.$in === subquery && (where as Row) !== quoteWhere)
+    expect(arcCall).toBeDefined()
+    expect(arcCall[1]).toMatchObject({ ...SCOPE, deletedAt: null, cpqStatus: { $nin: [...COST_CLOSED_STATUSES] } })
+    expect(arcCall[1].id.$nin).toBe(subquery)
+    expect(subquery.where).toHaveBeenCalledWith({ ...SCOPE, deletedAt: null, carriedFromItemCostId: { $ne: null } })
   })
 })
 

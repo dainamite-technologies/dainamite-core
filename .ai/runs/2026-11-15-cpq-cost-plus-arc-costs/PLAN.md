@@ -23,7 +23,7 @@ Engine: om-auto-create-pr-loop (steps: 23, --loop: no)
 | C | 9 | Cost-only Amend and I-9 | group:C2 | done | |
 | C | 10 | Merge rule | group:C2 | done | |
 | C | 11 | Forward compatibility | group:C2 | done | |
-| D | 12 | Usage openArcQuotesWithCarriedCosts | group:D1 | todo | |
+| D | 12 | Usage openArcQuotesWithCarriedCosts | group:D1 | done | |
 | D | 13 | Order line cost re-confirmation | group:D1 | todo | |
 | E | 14 | Renew reconciliation, index re-evaluation, renegotiation due | group:E1 | todo | |
 | E | 15 | Keep current cost | group:E1 | todo | |

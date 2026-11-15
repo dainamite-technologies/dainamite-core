@@ -244,7 +244,14 @@ export class CpqQuoteCostService {
     const openRequests = await em.count(CpqQuoteLineCost, {
       ...scoped(scope), sourcingStatus: 'requested', quoteConfigurationId: { $in: liveQuoteConfigurationIds(em, scope) },
     })
-    return { enabled, costPlusCharges, openQuotes, openRequests, liveSubscriptions, missingFxPairs: await this.missingFxPairs(em, scope) }
+    // ARC exposure (ARC costs spec step 12): open quotes (same definition as openQuotes) holding at least one carried
+    // cost line. Semi-join on the partial index cpq_quote_line_costs_carried_item_cost_idx (carried_from_item_cost_id is not null).
+    const carriedQuotes = em.createQueryBuilder(CpqQuoteLineCost, 'qlc').select('qlc.quoteConfigurationId')
+      .where({ ...scoped(scope), carriedFromItemCostId: { $ne: null } })
+    const openArcQuotesWithCarriedCosts = await em.count(CpqQuoteConfiguration, {
+      ...scoped(scope), cpqStatus: { $nin: [...COST_CLOSED_STATUSES] }, id: { $in: carriedQuotes, $nin: orderedQuotes },
+    })
+    return { enabled, costPlusCharges, openQuotes, openRequests, liveSubscriptions, openArcQuotesWithCarriedCosts, missingFxPairs: await this.missingFxPairs(em, scope) }
   }
 
   /**

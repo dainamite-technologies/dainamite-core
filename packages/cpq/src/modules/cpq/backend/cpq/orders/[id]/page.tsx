@@ -18,6 +18,9 @@ import { ArcLineDiff, LineActionBadge } from '../../../../components/ArcLineDiff
 import { arcRecurringDelta } from '../../../../lib/quoteSummaryView'
 import { isArcCancelledLine } from '../../../../services/arcLineRemoval'
 import { useT, type TranslateFn } from '@open-mercato/shared/lib/i18n/context'
+import { InjectedDetailTabs } from '../../../../components/InjectedDetailTabs'
+
+import { CPQ_ORDER_DETAIL_TABS_SPOT, type CpqOrderDetailInjectionContext } from '../../../../lib/orderDetailInjection'
 
 // ─── Types ───────────────────────────────────────────────────────
 
@@ -442,15 +445,38 @@ export default function CpqOrderDetailPage(props: { params?: { id?: string } }) 
           : null}
       />
 
-      {/* Order Lines */}
-      <OrderLineTree
-        lines={order.lines}
-        quoteType={order.quoteType}
-        currency={currency}
-        expandedLines={expandedLines}
-        pricingDetail={pricingDetail}
-        onToggleLine={toggleLine}
-        onTogglePricingDetail={togglePricingDetail}
+      {/* Order Lines — plus any tabs other modules inject into
+          `cpq.order.detail:tabs` (e.g. a billing connector). Without an
+          injected tab the line tree renders alone, exactly as before. */}
+      <InjectedDetailTabs<CpqOrderDetailInjectionContext, OrderResult>
+        spotId={CPQ_ORDER_DETAIL_TABS_SPOT}
+        ariaLabel={t('cpq.orders.detail.tabs', 'Order sections')}
+        context={{
+          orderId: order.id,
+          salesOrderId: order.orderId,
+          cpqStatus: order.cpqStatus,
+          customerId: order.customerId,
+          currencyCode: order.currencyCode,
+          quoteType: order.quoteType,
+        }}
+        data={order}
+        baseTabs={[
+          {
+            id: 'lines',
+            label: t('cpq.orders.detail.tabs.lines', 'Line items'),
+            render: () => (
+              <OrderLineTree
+                lines={order.lines}
+                quoteType={order.quoteType}
+                currency={currency}
+                expandedLines={expandedLines}
+                pricingDetail={pricingDetail}
+                onToggleLine={toggleLine}
+                onTogglePricingDetail={togglePricingDetail}
+              />
+            ),
+          },
+        ]}
       />
     </div>
   )

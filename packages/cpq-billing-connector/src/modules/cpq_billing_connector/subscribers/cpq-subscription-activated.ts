@@ -3,9 +3,17 @@ import { BillingApiClient, type Scope, type AccountSeed } from '../lib/billingAp
 import { mapSubscriptionItemsToBillingItems } from '../lib/chargeMapper'
 import type { CpqSubscriptionItem } from '../lib/chargeMapper'
 import {
-  DEFAULT_INVOICE_LANGUAGE,
-  isSupportedInvoiceLanguage,
-} from '@dainamite/billing/modules/billing/lib/invoiceLanguages'
+  buildAccountSeedValues,
+  earliestIsoDate,
+  isUsableAccount,
+  pickDefaultAccount,
+  resolveLineBillStart,
+  todayIsoDate,
+  toIsoDate,
+  type BillCycle,
+} from '../lib/orderSetupResolution'
+import type { AccountOverrides } from '../data/validators'
+import type { CpqBillingOrderSetupService } from '../services/orderSetupService'
 
 /**
  * Subscriber: `cpq.subscription.activated` → billing onboarding.
@@ -13,19 +21,23 @@ import {
  * `@dainamite/cpq` emits this event when a new-sale order is activated
  * (`cpqOrderService.activateOrder`).
  *
- * Behaviour when fired:
- *   1. Get-or-create the Billing Account for `(tenant, org, customerId)`.
- *      Missing account → shell account with placeholders (operator
- *      must configure before billing fires). `nextBillDate` defaults
- *      to the activation date: recurring items are billed in advance
- *      (billing Spec A), so the first period is billed from day one.
- *      An EXISTING account keeps its bill date — billing prorates the
- *      new subscription's partial first period.
- *   2. For every charge on every CPQ subscription item, create a
- *      Billing Item via `billing.items.create`. `source_ref` is the
- *      deterministic `cpq-<subId>-<subItemId>-<chargeType>` key, so
- *      re-firing the activation event hits the idempotency guard
- *      instead of duplicating items.
+ * Behaviour when fired (spec `2026-11-15-cpq-billing-connector-order-billing-setup`):
+ *   1. Resolve the Billing Account:
+ *      - the account a previous run of this event already used (idempotent
+ *        re-fire), else
+ *      - the operator's choice in the order billing setup (`existing` →
+ *        that account if still usable; `new` → create with the operator's
+ *        overrides), else
+ *      - the newest active account of the customer in the order's currency,
+ *        else create one. A new account's fields come from operator override
+ *        → customer data on the event (sales order snapshot) → placeholder.
+ *   2. Record the account on the setup row (`applied_at`) before creating
+ *      items, so a retry after a partial failure reuses it.
+ *   3. Create one Billing Item per charge. Bill start per line: operator
+ *      override → CPQ service start → the order's default bill start →
+ *      activation date. `source_ref` is the deterministic
+ *      `cpq-<subId>-<subItemId>-<chargeType>` key, so a re-fired event hits
+ *      billing's idempotency guard instead of duplicating items.
  *
  * Errors propagate to the persistent queue worker, which retries
  * per the OM queue contract.
@@ -45,58 +57,99 @@ export type ActivatedPayload = {
   /** 'company' | 'person'. Omitted → billing defaults to 'company'. */
   customerKind?: 'company' | 'person'
   currencyCode: string
-  /** Optional richer customer fields — used when present, otherwise placeholders. */
+  /** CPQ order id (`CpqOrderConfiguration.id`) — the key of the order billing setup. */
+  sourceOrderId?: string
+  /** Optional customer fields (CPQ: sales order snapshot) — used when present, otherwise placeholders. */
   customerName?: string
   invoiceEmail?: string
   invoiceLanguage?: string
   invoiceAddress?: Record<string, unknown>
-  billCycle?: 'monthly' | 'quarterly' | 'annually' | 'weekly'
+  billCycle?: BillCycle
   billCycleAnchor?: string
   nextBillDate?: string
   taxId?: string | null
   items: CpqSubscriptionItem[]
-  /** Activation date — used as bill_start_date on every created item. */
+  /** Activation date (`YYYY-MM-DD`) — the last fallback of every item's bill start. */
   activationDate?: string
 }
 
-function todayIsoDate(): string {
-  return new Date().toISOString().slice(0, 10)
+/** The order billing setup fields the subscriber reads. */
+export type AppliedSetup = {
+  accountMode: 'existing' | 'new'
+  billingAccountId?: string | null
+  accountOverrides?: AccountOverrides | null
+  defaultBillStartDate?: string | null
+  lineBillStarts?: Record<string, string> | null
+  appliedBillingAccountId?: string | null
 }
 
-/**
- * Billing only accepts invoice languages its document template supports.
- * An unsupported code from upstream must not fail onboarding (the persistent
- * queue would retry forever), so it falls back to billing's default — the
- * operator can change it on the account afterwards.
- */
-function resolveInvoiceLanguage(raw: string | undefined): string {
-  const code = (raw ?? '').trim().toLowerCase()
-  return isSupportedInvoiceLanguage(code) ? code : DEFAULT_INVOICE_LANGUAGE
-}
-
-export function buildAccountSeed(payload: ActivatedPayload): AccountSeed {
-  return {
-    customerId: payload.customerId,
-    ...(payload.customerKind ? { customerKind: payload.customerKind } : {}),
-    name: payload.customerName ?? `Customer ${payload.customerId}`,
+export function buildAccountSeed(
+  payload: ActivatedPayload,
+  options: { overrides?: AccountOverrides | null; earliestBillStart?: string | null } = {},
+): AccountSeed {
+  const values = buildAccountSeedValues({
+    defaults: payload,
     currencyCode: payload.currencyCode,
-    billCycle: payload.billCycle ?? 'monthly',
-    billCycleAnchor: payload.billCycleAnchor ?? '1',
-    invoiceEmail:
-      payload.invoiceEmail ?? `billing+${payload.customerId}@invalid.local`,
-    invoiceLanguage: resolveInvoiceLanguage(payload.invoiceLanguage),
-    invoiceAddress: payload.invoiceAddress ?? {
-      line1: 'TBD',
-      city: 'TBD',
-      postal_code: 'TBD',
-      country: 'XX',
-    },
-    // Billing Spec A: recurring items are billed in advance, so the first
-    // bill date is the subscription start — billing the first period on
-    // activation. (Was "today + 1 month", which skipped that period.)
-    nextBillDate: new Date(payload.nextBillDate ?? payload.activationDate ?? todayIsoDate()),
-    taxId: payload.taxId ?? null,
+    overrides: options.overrides,
+    earliestBillStart: options.earliestBillStart,
+    activationDate: payload.activationDate,
+  })
+  return { ...values, nextBillDate: new Date(values.nextBillDate) }
+}
+
+export function itemBillStart(
+  item: CpqSubscriptionItem,
+  setup: AppliedSetup | null,
+  activationDate: string,
+): string {
+  return resolveLineBillStart({
+    orderLineId: item.orderLineId,
+    serviceStartDate: item.startDate,
+    setup,
+    activationDate,
+  })
+}
+
+type AccountPort = Pick<BillingApiClient, 'findAccountById' | 'findCandidateAccounts' | 'createAccount'>
+
+/** Step 1 of the handler. Exported for tests; `billing` is a port so it can be faked. */
+export async function resolveBillingAccount(params: {
+  billing: AccountPort
+  scope: Scope
+  payload: ActivatedPayload
+  setup: AppliedSetup | null
+  earliestBillStart: string | null
+}): Promise<{ id: string; accountMode: 'existing' | 'new' }> {
+  const { billing, scope, payload, setup, earliestBillStart } = params
+  const target = { customerId: payload.customerId, currencyCode: payload.currencyCode }
+
+  // Re-fired event: reuse what the first run created or picked.
+  if (setup?.appliedBillingAccountId) {
+    const applied = await billing.findAccountById(scope, setup.appliedBillingAccountId)
+    if (applied) return { id: applied.id, accountMode: setup.accountMode }
   }
+
+  if (setup?.accountMode === 'existing' && setup.billingAccountId) {
+    const chosen = await billing.findAccountById(scope, setup.billingAccountId)
+    if (isUsableAccount(chosen, target)) return { id: chosen.id, accountMode: 'existing' }
+    console.warn(
+      '[cpq-billing-connector] chosen billing account is no longer usable; falling back to defaults',
+      { orderId: payload.sourceOrderId, billingAccountId: setup.billingAccountId },
+    )
+  }
+
+  const create = async (overrides: AccountOverrides | null) => {
+    const created = await billing.createAccount(scope, buildAccountSeed(payload, { overrides, earliestBillStart }))
+    if (!created.id) throw new Error('[cpq-billing-connector] billing.accounts.create returned no id')
+    return { id: created.id, accountMode: 'new' as const }
+  }
+
+  if (setup?.accountMode === 'new') return create(setup.accountOverrides ?? null)
+
+  const candidates = await billing.findCandidateAccounts(scope, payload.customerId, payload.currencyCode)
+  const reuse = pickDefaultAccount(candidates, target)
+  if (reuse) return { id: reuse.id, accountMode: 'existing' }
+  return create(null)
 }
 
 export default async function handle(payload: ActivatedPayload): Promise<void> {
@@ -109,18 +162,51 @@ export default async function handle(payload: ActivatedPayload): Promise<void> {
 
   const container = await createRequestContainer()
   const billingApi = new BillingApiClient(container)
+  const setupService = container.resolve('cpqBillingOrderSetupService') as CpqBillingOrderSetupService
   const scope: Scope = {
     tenantId: payload.tenantId,
     organizationId: payload.organizationId,
   }
 
-  const account = await billingApi.getOrCreateAccount(scope, buildAccountSeed(payload))
+  const setupRow = payload.sourceOrderId ? await setupService.findSetup(scope, payload.sourceOrderId) : null
+  const setup: AppliedSetup | null = setupRow
+    ? {
+        accountMode: setupRow.accountMode,
+        billingAccountId: setupRow.billingAccountId ?? null,
+        accountOverrides: (setupRow.accountOverrides ?? {}) as AccountOverrides,
+        defaultBillStartDate: toIsoDate(setupRow.defaultBillStartDate),
+        lineBillStarts: setupRow.lineBillStarts ?? {},
+        appliedBillingAccountId: setupRow.appliedBillingAccountId ?? null,
+      }
+    : null
 
-  const billStartDate = payload.activationDate ?? todayIsoDate()
+  const activationDate = toIsoDate(payload.activationDate) ?? todayIsoDate()
+  const billStartFor = (item: CpqSubscriptionItem) => itemBillStart(item, setup, activationDate)
+  const earliestBillStart = earliestIsoDate(payload.items.map(billStartFor))
+
+  const account = await resolveBillingAccount({
+    billing: billingApi,
+    scope,
+    payload,
+    setup,
+    earliestBillStart,
+  })
+
+  if (payload.sourceOrderId) {
+    await setupService.markApplied(scope, {
+      orderId: payload.sourceOrderId,
+      customerId: payload.customerId,
+      currencyCode: payload.currencyCode,
+      billingAccountId: account.id,
+      accountMode: account.accountMode,
+    })
+  }
+
   const itemPayloads = mapSubscriptionItemsToBillingItems({
     subscriptionId: payload.subscriptionId,
     items: payload.items,
-    billStartDate,
+    billStartDate: activationDate,
+    billStartDateFor: billStartFor,
   })
 
   // Bulk-create — one command for the whole subscription's charges

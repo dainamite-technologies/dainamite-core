@@ -99,15 +99,48 @@ export class BillingApiClient {
 
   /**
    * Find a non-deleted Billing Account for `(tenant, organization,
-   * customer)`. Returns the first match or `null`. The connector
-   * uses this to skip account creation when the customer already
-   * has one.
+   * customer)`. Returns the first match or `null`. Only a last-resort
+   * fallback for ARC events whose subscription has no billing items yet;
+   * activation uses `findCandidateAccounts` (currency + active aware).
    */
   async findAccountByCustomer(scope: Scope, customerId: string): Promise<BillingAccount | null> {
     return this.em.findOne(BillingAccount, {
       tenantId: scope.tenantId,
       organizationId: scope.organizationId,
       customerId,
+      deletedAt: null,
+    })
+  }
+
+  /**
+   * Accounts the connector may reuse for a CPQ order: same customer, same
+   * currency, active, not deleted — newest first. Never reuse an account in
+   * another currency or an inactive one (order billing setup spec, D4).
+   */
+  async findCandidateAccounts(
+    scope: Scope,
+    customerId: string,
+    currencyCode: string,
+  ): Promise<BillingAccount[]> {
+    return this.em.find(
+      BillingAccount,
+      {
+        tenantId: scope.tenantId,
+        organizationId: scope.organizationId,
+        customerId,
+        currencyCode: currencyCode.toUpperCase(),
+        isActive: true,
+        deletedAt: null,
+      },
+      { orderBy: { createdAt: 'desc' } },
+    )
+  }
+
+  async findAccountById(scope: Scope, id: string): Promise<BillingAccount | null> {
+    return this.em.findOne(BillingAccount, {
+      id,
+      tenantId: scope.tenantId,
+      organizationId: scope.organizationId,
       deletedAt: null,
     })
   }
@@ -122,13 +155,6 @@ export class BillingApiClient {
       ctx: buildSystemCtx(this.container, scope),
     })
     return (result as { result?: { id: string } }).result ?? { id: '' }
-  }
-
-  async getOrCreateAccount(scope: Scope, seed: AccountSeed): Promise<{ id: string; created: boolean }> {
-    const existing = await this.findAccountByCustomer(scope, seed.customerId)
-    if (existing) return { id: existing.id, created: false }
-    const created = await this.createAccount(scope, seed)
-    return { id: created.id, created: true }
   }
 
   // ─── Items ──────────────────────────────────────────────────────

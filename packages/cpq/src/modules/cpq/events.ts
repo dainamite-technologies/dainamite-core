@@ -41,6 +41,29 @@ const events = [
     entity: 'subscription',
     category: 'lifecycle',
     clientBroadcast: true,
+    // Customer fields come from the sales order snapshot and are optional:
+    // a missing value is omitted, never guessed. `items[].orderLineId` is the
+    // sales order line id (the `lineId` the CPQ order API exposes) and
+    // `items[].startDate` the line's service start (`YYYY-MM-DD`), if any.
+    payloadSchema: {
+      fields: [
+        { path: 'tenantId', type: 'text' },
+        { path: 'organizationId', type: 'text' },
+        { path: 'subscriptionId', type: 'text' },
+        { path: 'customerId', type: 'text' },
+        { path: 'currencyCode', type: 'text' },
+        { path: 'activationDate', type: 'date' },
+        { path: 'sourceQuoteId', type: 'text', optional: true },
+        { path: 'sourceOrderId', type: 'text', label: 'CPQ order id' },
+        { path: 'customerName', type: 'text', optional: true },
+        { path: 'customerKind', type: 'select', optional: true },
+        { path: 'invoiceEmail', type: 'text', optional: true },
+        { path: 'invoiceAddress.line1', type: 'text', optional: true },
+        { path: 'invoiceAddress.city', type: 'text', optional: true },
+        { path: 'invoiceAddress.postalCode', type: 'text', optional: true },
+        { path: 'invoiceAddress.country', type: 'text', optional: true },
+      ],
+    },
   },
   {
     id: 'cpq.subscription.amended',

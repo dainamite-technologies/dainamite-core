@@ -381,6 +381,8 @@
   "cpq.orders.detail.notFound": "Order not found.",
   "cpq.orders.detail.sourceQuote": "Source Quote",
   "cpq.orders.detail.statusPath": "Order status path",
+  "cpq.orders.detail.tabs": "Order sections",
+  "cpq.orders.detail.tabs.lines": "Line items",
   "cpq.orders.detail.viewSalesOrder": "View Sales Order",
   "cpq.orders.empty": "No CPQ orders found. Convert an accepted quote to create an order.",
   "cpq.orders.filters.currency": "Currency",

@@ -381,6 +381,8 @@
   "cpq.orders.detail.notFound": "Pedido no encontrado.",
   "cpq.orders.detail.sourceQuote": "Cotización de origen",
   "cpq.orders.detail.statusPath": "Ciclo de estados del pedido",
+  "cpq.orders.detail.tabs": "Secciones del pedido",
+  "cpq.orders.detail.tabs.lines": "Líneas",
   "cpq.orders.detail.viewSalesOrder": "Ver pedido de ventas",
   "cpq.orders.empty": "No se encontraron pedidos CPQ. Convierta una cotización aceptada para crear un pedido.",
   "cpq.orders.filters.currency": "Moneda",

@@ -1,7 +1,5 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
-import type { SalesDocumentNumberGenerator } from '@open-mercato/core/modules/sales/services/salesDocumentNumberGenerator'
-import type { TaxCalculationService } from '@open-mercato/core/modules/sales/services/taxCalculationService'
 import { BillingAccount, BillingTopup } from '../data/entities'
 import { emitBillingEvent } from '../events'
 import { captureTopup } from '../lib/topupCapture'
@@ -66,15 +64,13 @@ export default async function handle(payload: CapturedPayload): Promise<void> {
     return
   }
 
-  const taxRate = await getTopupTaxRate(em)
-  const numberGenerator = container.resolve(
-    'salesDocumentNumberGenerator',
-  ) as SalesDocumentNumberGenerator
-  const taxService = container.resolve('taxCalculationService') as TaxCalculationService
+  const taxRate = await getTopupTaxRate(em, {
+    tenantId: account.tenantId,
+    organizationId: account.organizationId,
+  })
 
   const result = await captureTopup(
     em,
-    { numberGenerator, taxService },
     {
       topup,
       account: {

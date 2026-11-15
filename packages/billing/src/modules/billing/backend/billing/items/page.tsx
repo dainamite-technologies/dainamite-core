@@ -7,10 +7,11 @@ import type { LegacyColumnDef as ColumnDef } from '@tanstack/react-table/legacy'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
-import { DataTable } from '@open-mercato/ui/backend/DataTable'
+import { BillingDataTable as DataTable } from '../../../components/BillingDataTable'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
+import { itemDetailHref } from '../../../lib/navigation'
 
 /**
  * Billing Items admin list.
@@ -34,6 +35,7 @@ type BillingItemRow = {
   uom_code: string | null
   subscription_id: string | null
   source_ref: string | null
+  charge_timing: 'in_advance' | 'in_arrears'
   is_active: boolean
   created_at: string
 }
@@ -187,6 +189,20 @@ export default function BillingItemsListPage() {
         ),
       },
       {
+        accessorKey: 'charge_timing',
+        header: t('billing.items.columns.timing', 'Timing'),
+        cell: ({ row }) =>
+          row.original.type === 'recurring' ? (
+            <span className="text-sm">
+              {row.original.charge_timing === 'in_arrears'
+                ? t('billing.items.charge_timing.in_arrears', 'In arrears')
+                : t('billing.items.charge_timing.in_advance', 'In advance')}
+            </span>
+          ) : (
+            <span className="text-muted-foreground">—</span>
+          ),
+      },
+      {
         accessorKey: 'bill_account_id',
         header: t('billing.items.columns.account', 'Account'),
         cell: ({ row }) => (
@@ -250,7 +266,7 @@ export default function BillingItemsListPage() {
           perspective={{ tableId: 'billing-items' }}
           columns={columns}
           data={rows}
-          onRowClick={(row) => router.push(`/backend/billing/items/${row.id}`)}
+          onRowClick={(row) => router.push(itemDetailHref(row.id, { fromItemsList: true }))}
           isLoading={loading}
           pagination={{
             page,

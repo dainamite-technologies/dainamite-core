@@ -6,6 +6,7 @@ import {
   BillingAccount,
   BillingAccountUsage,
   BillingItem,
+  BillingInvoice,
 } from '../../data/entities'
 
 /**
@@ -76,8 +77,15 @@ function createEnvironment(
       // test fixture records by uom for the runner.
       if (sql.includes('billing_account_usage') && sql.includes('GROUP BY uom_code')) {
         const accountId = (params?.[2] ?? '') as string
+        // Mirror the SQL bounds by calendar day: period_end <= ? [AND period_end > ?]
+        const day = (v: unknown) => new Date(v as Date).toISOString().slice(0, 10)
+        const upTo = params?.[3] ? day(params[3]) : null
+        const after = params?.[4] ? day(params[4]) : null
         const recs = (options.usageByAccount?.get(accountId) ?? []).filter(
-          (r) => r.ratedInBillRunId === null,
+          (r) =>
+            r.ratedInBillRunId === null &&
+            (!upTo || day(r.periodEnd) <= upTo) &&
+            (!after || day(r.periodEnd) > after),
         )
         const grouped = new Map<string, { sum: number; count: number }>()
         for (const r of recs) {
@@ -128,7 +136,15 @@ function createEnvironment(
       }
       return []
     }),
-    findOne: jest.fn(async (_entity: unknown, _where: unknown) => null),
+    // Dedupe check: an existing billing invoice for (account, bill date).
+    findOne: jest.fn(async (entity: unknown, where: unknown) => {
+      if (entity === BillingInvoice) {
+        const accountId = (where as { billAccountId?: string }).billAccountId
+        const existing = accountId ? options.openDraftIds?.get(accountId) : undefined
+        return existing ? { id: existing } : null
+      }
+      return null
+    }),
     nativeUpdate: jest.fn(async (entity: unknown, where: unknown, data: unknown) => {
       if (entity === BillingAccountUsage) {
         // Predicate-based bulk update (post-Phase-4f refactor): the
@@ -214,14 +230,21 @@ function makeAccount(overrides: Partial<BillingAccount>): BillingAccount {
   } as BillingAccount
 }
 
-function makeRecurringItem(billAccountId: string, id = 'item-mrc'): BillingItem {
+function makeRecurringItem(
+  billAccountId: string,
+  id = 'item-mrc',
+  overrides: Partial<BillingItem> = {},
+): BillingItem {
   return {
     id,
     organizationId: 'org-1',
     tenantId: 'tenant-1',
     billAccountId,
     type: 'recurring',
-    billStartDate: new Date('2026-01-01T00:00:00Z'),
+    // Starts on the account's bill date (Spec A default: billed in advance).
+    billStartDate: new Date('2026-06-01T00:00:00Z'),
+    chargeTiming: 'in_advance',
+    prorate: true,
     billEndDate: null,
     description: 'MRC',
     rateJson: { unit_price: 49.99 },
@@ -235,6 +258,7 @@ function makeRecurringItem(billAccountId: string, id = 'item-mrc'): BillingItem 
     createdAt: new Date(),
     updatedAt: new Date(),
     deletedAt: null,
+    ...overrides,
   } as BillingItem
 }
 
@@ -268,7 +292,8 @@ describe('runBillRun — orchestration', () => {
     expect(outcomes[0].draftInvoiceId).toMatch(/^gen-/)
     // Real-mode advances next_bill_date
     expect(account.nextBillDate.toISOString().slice(0, 10)).toBe('2026-07-01')
-    expect(item.billedToDate?.toISOString().slice(0, 10)).toBe('2026-05-31')
+    // In advance: the June bill date bills June (Spec A).
+    expect(item.billedToDate?.toISOString().slice(0, 10)).toBe('2026-06-30')
     // Persisted entities: BillingRun + SalesInvoice + 1 line + BillingAccountUsage advance + BillingRunOutcome
     expect(captured.persisted.length).toBeGreaterThan(0)
   })
@@ -445,11 +470,10 @@ describe('runBillRun — orchestration', () => {
     expect(outcomes[0].status).toBe('success')
     // Persisted SalesInvoiceLine for the usage item with the right total
     const usageLine = captured.persisted.find((p) => {
-      const m = (p as { metadata?: { billing_type?: string } }).metadata
-      return m?.billing_type === 'usage'
+      return (p as { billingType?: string }).billingType === 'usage'
     })
     expect(usageLine).toBeDefined()
-    expect((usageLine as { totalNetAmount?: string }).totalNetAmount).toBe('15.0000')
+    expect((usageLine as { netAmount?: string }).netAmount).toBe('15.0000')
 
     // Real-mode marks records as rated
     expect(u1.ratedInBillRunId).toBe(billRun.id)
@@ -488,12 +512,11 @@ describe('runBillRun — orchestration', () => {
     await runBillRun(em as never, container as never, params({}))
 
     const usageLine = captured.persisted.find((p) => {
-      const m = (p as { metadata?: { billing_type?: string } }).metadata
-      return m?.billing_type === 'usage'
-    }) as { unitPriceNet?: string; totalNetAmount?: string; quantity?: string } | undefined
+      return (p as { billingType?: string }).billingType === 'usage'
+    }) as { unitPriceNet?: string; netAmount?: string; quantity?: string } | undefined
     expect(usageLine?.unitPriceNet).toBe('0.0010')
     expect(usageLine?.quantity).toBe('12000.0000')
-    expect(usageLine?.totalNetAmount).toBe('12.0000')
+    expect(usageLine?.netAmount).toBe('12.0000')
   })
 
   it('test mode: rates usage on draft but does NOT mark records as rated', async () => {
@@ -525,15 +548,15 @@ describe('runBillRun — orchestration', () => {
     await runBillRun(em as never, container as never, params({}))
 
     const lines = captured.persisted.filter((p) => {
-      const m = (p as { metadata?: { billing_type?: string } }).metadata
-      return m?.billing_type === 'recurring' || m?.billing_type === 'usage'
+      const type = (p as { billingType?: string }).billingType
+      return type === 'recurring' || type === 'usage'
     })
     expect(lines).toHaveLength(2)
     // Invoice header totalNet should be 49.99 (MRC) + 12.00 (usage) = 61.99
     const invoice = captured.persisted.find(
-      (p) => (p as { invoiceNumber?: string }).invoiceNumber,
-    ) as { grandTotalNetAmount?: string } | undefined
-    expect(invoice?.grandTotalNetAmount).toBe('61.9900')
+      (p) => (p as { documentType?: string }).documentType === 'invoice',
+    ) as { subtotalNet?: string } | undefined
+    expect(invoice?.subtotalNet).toBe('61.9900')
   })
 
   it('summary aggregates drafts_created / accounts_failed / accounts_with_warnings', async () => {
@@ -557,5 +580,193 @@ describe('runBillRun — orchestration', () => {
       accounts_with_warnings: 1,
       accounts_failed: 0,
     })
+  })
+})
+
+// ─── Spec A — cycle semantics ────────────────────────────────────
+
+describe('runBillRun — Spec A cycles', () => {
+  const day = (d: Date | null | undefined) => (d ? new Date(d).toISOString().slice(0, 10) : null)
+  type Cycle = { bill_date: string; status: string; period_start: string | null; period_end: string | null; invoice_id: string | null }
+  const cyclesOf = (outcome: { cycles?: unknown }) => (outcome.cycles ?? []) as Cycle[]
+  const invoicesOf = (persisted: unknown[]) =>
+    persisted.filter((p) => (p as { documentType?: string }).documentType === 'invoice') as Array<{
+      number: string
+      billDate: Date
+      testRun: boolean
+      metadata: Record<string, unknown>
+    }>
+
+  function operatorScenario() {
+    const account = makeAccount({ nextBillDate: new Date('2026-11-14T00:00:00Z') })
+    const item = makeRecurringItem(account.id, 'internet', {
+      billStartDate: new Date('2026-11-14T00:00:00Z'),
+      rateJson: { unit_price: 100 },
+    })
+    return { account, item }
+  }
+  const asOf = new Date('2027-02-01T00:00:00Z')
+
+  it("real: the operator's test bills 3 cycles and advances the account", async () => {
+    const { account, item } = operatorScenario()
+    const env = createEnvironment({ accounts: [account], itemsByAccount: new Map([[account.id, [item]]]) })
+
+    const { billRun, outcomes } = await runBillRun(env.em as never, env.container as never, params({ asOfDate: asOf }))
+
+    expect(cyclesOf(outcomes[0]).map((c) => [c.bill_date, c.period_start, c.period_end, c.status])).toEqual([
+      ['2026-11-14', '2026-11-14', '2026-12-13', 'invoiced'],
+      ['2026-12-14', '2026-12-14', '2027-01-13', 'invoiced'],
+      ['2027-01-14', '2027-01-14', '2027-02-13', 'invoiced'],
+    ])
+    expect(invoicesOf(env.captured.persisted).map((i) => day(i.billDate))).toEqual([
+      '2026-11-14',
+      '2026-12-14',
+      '2027-01-14',
+    ])
+    expect(day(account.nextBillDate)).toBe('2027-02-14')
+    expect(day(item.billedToDate)).toBe('2027-02-13')
+    expect(billRun.summary).toMatchObject({ drafts_created: 3, cycles_processed: 3 })
+  })
+
+  it('a scheduled run catches up exactly like a manual one', async () => {
+    const { account, item } = operatorScenario()
+    const env = createEnvironment({ accounts: [account], itemsByAccount: new Map([[account.id, [item]]]) })
+    const { outcomes } = await runBillRun(
+      env.em as never,
+      env.container as never,
+      params({ asOfDate: asOf, triggeredBy: 'schedule' }),
+    )
+    expect(cyclesOf(outcomes[0])).toHaveLength(3)
+  })
+
+  it('test: writes a TEST draft per cycle and leaves the account untouched', async () => {
+    const { account, item } = operatorScenario()
+    const env = createEnvironment({ accounts: [account], itemsByAccount: new Map([[account.id, [item]]]) })
+
+    const { outcomes } = await runBillRun(env.em as never, env.container as never, params({ asOfDate: asOf, mode: 'test' }))
+
+    expect(cyclesOf(outcomes[0]).map((c) => c.status)).toEqual(['invoiced', 'invoiced', 'invoiced'])
+    const invoices = invoicesOf(env.captured.persisted)
+    expect(invoices).toHaveLength(3)
+    expect(invoices.every((i) => i.number.startsWith('TEST-') && i.testRun === true)).toBe(true)
+    expect(day(account.nextBillDate)).toBe('2026-11-14')
+    expect(item.billedToDate).toBeNull()
+    expect(env.numberGenerator.generate).not.toHaveBeenCalled()
+  })
+
+  it('dry: previews every cycle and persists no invoice', async () => {
+    const { account, item } = operatorScenario()
+    const env = createEnvironment({ accounts: [account], itemsByAccount: new Map([[account.id, [item]]]) })
+
+    const { outcomes } = await runBillRun(env.em as never, env.container as never, params({ asOfDate: asOf, mode: 'dry' }))
+
+    expect(cyclesOf(outcomes[0]).map((c) => [c.status, c.invoice_id])).toEqual([
+      ['previewed', null],
+      ['previewed', null],
+      ['previewed', null],
+    ])
+    expect(invoicesOf(env.captured.persisted)).toHaveLength(0)
+    expect(day(account.nextBillDate)).toBe('2026-11-14')
+    expect(item.billedToDate).toBeNull()
+  })
+
+  it('test re-run: existing test drafts are skipped per cycle, simulation continues', async () => {
+    const { account, item } = operatorScenario()
+    const env = createEnvironment({
+      accounts: [account],
+      itemsByAccount: new Map([[account.id, [item]]]),
+      openDraftIds: new Map([[account.id, 'test-draft']]),
+    })
+    const { outcomes } = await runBillRun(env.em as never, env.container as never, params({ asOfDate: asOf, mode: 'test' }))
+    expect(outcomes[0].status).toBe('success')
+    expect(cyclesOf(outcomes[0]).map((c) => c.status)).toEqual(['skipped_existing', 'skipped_existing', 'skipped_existing'])
+    expect(invoicesOf(env.captured.persisted)).toHaveLength(0)
+  })
+
+  it('test mode never bills the same usage twice across simulated cycles', async () => {
+    const account = makeAccount({ nextBillDate: new Date('2026-06-01T00:00:00Z') })
+    const usageItem = {
+      ...makeRecurringItem(account.id, 'usage-api'),
+      type: 'usage',
+      uomCode: 'api_request',
+      rateJson: { unit_price: 0.01 },
+    } as BillingItem
+    const record = {
+      id: 'u1',
+      organizationId: 'org-1',
+      tenantId: 'tenant-1',
+      billAccountId: account.id,
+      uomCode: 'api_request',
+      quantity: '100.0000',
+      periodStart: new Date('2026-05-01T00:00:00Z'),
+      periodEnd: new Date('2026-05-31T00:00:00Z'),
+      ratedInBillRunId: null,
+      deletedAt: null,
+    } as BillingAccountUsage
+    const env = createEnvironment({
+      accounts: [account],
+      itemsByAccount: new Map([[account.id, [usageItem]]]),
+      usageByAccount: new Map([[account.id, [record]]]),
+    })
+
+    const { outcomes } = await runBillRun(
+      env.em as never,
+      env.container as never,
+      params({ asOfDate: new Date('2026-08-01T00:00:00Z'), mode: 'test' }),
+    )
+
+    expect(cyclesOf(outcomes[0]).map((c) => c.status)).toEqual(['invoiced', 'empty', 'empty'])
+    expect(record.ratedInBillRunId).toBeNull()
+  })
+
+  it('in advance and in arrears items share one invoice with their own service periods', async () => {
+    const account = makeAccount({})
+    const advance = makeRecurringItem(account.id, 'adv')
+    const arrears = makeRecurringItem(account.id, 'arr', {
+      chargeTiming: 'in_arrears',
+      billStartDate: new Date('2026-05-01T00:00:00Z'),
+    })
+    const env = createEnvironment({ accounts: [account], itemsByAccount: new Map([[account.id, [advance, arrears]]]) })
+
+    const { outcomes } = await runBillRun(env.em as never, env.container as never, params({}))
+
+    const lines = env.captured.persisted.filter((p) => (p as { billingType?: string }).billingType === 'recurring') as Array<{ billingItemId: string; servicePeriodStart: Date; servicePeriodEnd: Date }>
+    expect(lines.map((l) => [l.billingItemId, day(l.servicePeriodStart), day(l.servicePeriodEnd)])).toEqual([
+      ['adv', '2026-06-01', '2026-06-30'],
+      ['arr', '2026-05-01', '2026-05-31'],
+    ])
+    expect(cyclesOf(outcomes[0])[0]).toMatchObject({ period_start: '2026-05-01', period_end: '2026-06-30' })
+  })
+
+  it('an item ended after advance billing gets a credit line (negative total warning)', async () => {
+    const account = makeAccount({ nextBillDate: new Date('2026-07-01T00:00:00Z') })
+    const item = makeRecurringItem(account.id, 'cancelled', {
+      billedToDate: new Date('2026-06-30T00:00:00Z'),
+      billEndDate: new Date('2026-06-15T00:00:00Z'),
+      rateJson: { unit_price: 30 },
+    })
+    const env = createEnvironment({ accounts: [account], itemsByAccount: new Map([[account.id, [item]]]) })
+
+    const { outcomes } = await runBillRun(
+      env.em as never,
+      env.container as never,
+      params({ asOfDate: new Date('2026-07-01T00:00:00Z') }),
+    )
+
+    const line = env.captured.persisted.find((p) => (p as { metadata?: { credit_for?: string } | null }).metadata?.credit_for) as { netAmount: string; description: string }
+    expect(line.netAmount).toBe('-15.0000')
+    expect(line.description).toBe('MRC · 2026-06-16 – 2026-06-30')
+    expect(day(item.billedToDate)).toBe('2026-06-15')
+    expect(outcomes[0].status).toBe('success_with_warnings')
+    expect((outcomes[0].warnings as { negative_total_bill_dates?: string[] }).negative_total_bill_dates).toEqual(['2026-07-01'])
+  })
+
+  it('stops at the hard cap and warns', async () => {
+    const account = makeAccount({ nextBillDate: new Date('2020-01-01T00:00:00Z') })
+    const env = createEnvironment({ accounts: [account], itemsByAccount: new Map([[account.id, []]]) })
+    const { outcomes } = await runBillRun(env.em as never, env.container as never, params({ mode: 'dry' }))
+    expect(cyclesOf(outcomes[0])).toHaveLength(60)
+    expect((outcomes[0].warnings as { catch_up_cap_reached?: boolean }).catch_up_cap_reached).toBe(true)
+    expect(outcomes[0].status).toBe('success_with_warnings')
   })
 })

@@ -30,6 +30,15 @@ export const billingEntityIds = {
   transaction: 'billing:billing_account_transaction',
   topup: 'billing:billing_topup',
   statement: 'billing:billing_statement',
+  // Spec 0 (standalone invoice ledger)
+  invoice: 'billing:billing_invoice',
+  invoiceLine: 'billing:billing_invoice_line',
+  documentSequence: 'billing:billing_document_sequence',
+  settings: 'billing:billing_settings',
+  // Spec C (payments)
+  payment: 'billing:billing_payment',
+  allocation: 'billing:billing_allocation',
+  paymentImport: 'billing:billing_payment_import',
 } as const
 
 export type BillingEntityId = (typeof billingEntityIds)[keyof typeof billingEntityIds]

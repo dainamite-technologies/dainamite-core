@@ -8,13 +8,21 @@ import {
 } from '@open-mercato/shared/lib/commands/scope'
 import { CrudHttpError } from '@open-mercato/shared/lib/crud/errors'
 import { BillingRun, BillingRunOutcome } from '../data/entities'
+import type { CommandBus } from '@open-mercato/shared/lib/commands'
+import { isCrudHttpError } from '@open-mercato/shared/lib/crud/errors'
 import {
+  billingRunDeleteSchema,
+  billingRunPostDraftsSchema,
+  type BillingRunPostDraftsInput,
   billingRunRetryFailedSchema,
   billingRunTriggerSchema,
+  type BillingRunDeleteInput,
   type BillingRunRetryFailedInput,
   type BillingRunTriggerInput,
 } from '../data/validators'
+import { emitBillingEvent } from '../events'
 import { runBillRun } from '../lib/billRunEngine'
+import { deleteTestRunArtifacts } from '../lib/testRunCleanup'
 import { TenantLockBusyError } from '../lib/tenantLock'
 
 /**
@@ -71,7 +79,6 @@ const triggerRunCommand: CommandHandler<BillingRunTriggerInput, TriggerResult> =
         triggeredBy: 'manual',
         mode: parsed.mode,
         scopedAccountIds: parsed.scopedAccountIds,
-        catchUp: parsed.catchUp,
       })
       return {
         billRunId: billRun.id,
@@ -139,7 +146,6 @@ const retryFailedCommand: CommandHandler<BillingRunRetryFailedInput, TriggerResu
         mode: parsed.mode,
         scopedAccountIds,
         parentRunId: parentRun.id,
-        catchUp: parentRun.catchUp,
       })
       return {
         billRunId: billRun.id,
@@ -160,7 +166,203 @@ const retryFailedCommand: CommandHandler<BillingRunRetryFailedInput, TriggerResu
   },
 }
 
+// ─── Delete (Spec F, F-D1) ───────────────────────────────────────
+//
+// Test and dry runs are scratch data: deleting one removes its test
+// invoices (with lines and draft-edit audit rows), its outcomes and the run
+// row, in one transaction. Real runs are the audit trail and are refused.
+// Retry children keep existing; their parent link is cleared. Not undoable,
+// like the test-invoice wipe.
+
+type DeleteRunResult = { ok: true; invoicesRemoved: number }
+
+export function runMode(run: Pick<BillingRun, 'dryRun' | 'testMode'>): 'real' | 'test' | 'dry' {
+  if (run.dryRun) return 'dry'
+  if (run.testMode) return 'test'
+  return 'real'
+}
+
+const deleteRunCommand: CommandHandler<BillingRunDeleteInput, DeleteRunResult> = {
+  id: 'billing.runs.delete',
+
+  async execute(rawInput, ctx) {
+    const parsed = billingRunDeleteSchema.parse(rawInput)
+    ensureTenantScope(ctx, parsed.tenantId)
+    ensureOrganizationScope(ctx, parsed.organizationId)
+
+    const em = getEm(ctx)
+    const outcome = await em.transactional(async (tem) => {
+      const run = await tem.findOne(BillingRun, {
+        id: parsed.billRunId,
+        tenantId: parsed.tenantId,
+        organizationId: parsed.organizationId,
+        deletedAt: null,
+      })
+      // 404 for another organization's run too (no existence leak).
+      if (!run) throw new CrudHttpError(404, { error: 'Bill Run not found', code: 'billing.run.not_found' })
+      const mode = runMode(run)
+      if (mode === 'real') {
+        throw new CrudHttpError(422, {
+          error: 'Real Bill Runs cannot be deleted',
+          code: 'billing.run.delete_real_forbidden',
+        })
+      }
+      if (run.status === 'running') {
+        throw new CrudHttpError(409, { error: 'The Bill Run is still running', code: 'billing.run.running' })
+      }
+      const scope = { tenantId: parsed.tenantId, organizationId: parsed.organizationId }
+      const invoicesRemoved = await deleteTestRunArtifacts(tem as EntityManager, { ...scope, billRunId: run.id })
+      await tem.execute(
+        'UPDATE billing_runs SET parent_run_id = NULL WHERE tenant_id = ? AND organization_id = ? AND parent_run_id = ?',
+        [scope.tenantId, scope.organizationId, run.id],
+      )
+      await tem.execute(
+        'DELETE FROM billing_run_outcomes WHERE tenant_id = ? AND organization_id = ? AND bill_run_id = ?',
+        [scope.tenantId, scope.organizationId, run.id],
+      )
+      await tem.execute('DELETE FROM billing_runs WHERE tenant_id = ? AND organization_id = ? AND id = ?', [
+        scope.tenantId,
+        scope.organizationId,
+        run.id,
+      ])
+      return { mode, invoicesRemoved }
+    })
+
+    // After commit: subscribers never see a phantom delete.
+    await emitBillingEvent(
+      'billing.run.deleted',
+      {
+        billRunId: parsed.billRunId,
+        tenantId: parsed.tenantId,
+        organizationId: parsed.organizationId,
+        mode: outcome.mode,
+        invoicesRemoved: outcome.invoicesRemoved,
+      },
+      { persistent: true },
+    )
+    return { ok: true, invoicesRemoved: outcome.invoicesRemoved }
+  },
+}
+
+// ─── Post the run's drafts ──────────────────────────────────────
+//
+// Posts the draft invoices a REAL run wrote, in bounded batches (ascending
+// id, keyset cursor) so a run with thousands of invoices never becomes one
+// long request. Each invoice goes through `billing.invoices.post` on its own
+// — numbering, frozen PDF, due date, credit auto-apply, auto-send and events
+// stay exactly as for a single post — so one failure never undoes the
+// others. A seller-settings failure would fail every invoice, so the batch
+// stops at the first one and says so.
+
+export const POST_DRAFTS_DEFAULT_LIMIT = 25
+
+type PostDraftsFailure = { invoiceId: string; number: string; error: string; code: string | null }
+
+export type PostDraftsResult = {
+  posted: number
+  failed: PostDraftsFailure[]
+  /** Last invoice id handled — pass back as `afterInvoiceId`. Null when nothing was processed. */
+  nextCursor: string | null
+  /** Drafts of the run after the cursor that are still to process. */
+  remaining: number
+  /** Set when the batch stopped early (e.g. `billing.settings.incomplete`). */
+  stoppedReason: string | null
+}
+
+const DRAFTS_AFTER_SQL = `SELECT id, number FROM billing_invoices
+  WHERE tenant_id = ? AND organization_id = ? AND bill_run_id = ?
+    AND status = 'draft' AND test_run = false AND document_type = 'invoice' AND deleted_at IS NULL
+    AND (?::uuid IS NULL OR id > ?::uuid)
+  ORDER BY id
+  LIMIT ?`
+
+const DRAFTS_REMAINING_SQL = `SELECT COUNT(*)::int AS remaining FROM billing_invoices
+  WHERE tenant_id = ? AND organization_id = ? AND bill_run_id = ?
+    AND status = 'draft' AND test_run = false AND document_type = 'invoice' AND deleted_at IS NULL
+    AND (?::uuid IS NULL OR id > ?::uuid)`
+
+const postDraftsCommand: CommandHandler<BillingRunPostDraftsInput, PostDraftsResult> = {
+  id: 'billing.runs.post_drafts',
+
+  async execute(rawInput, ctx) {
+    const parsed = billingRunPostDraftsSchema.parse(rawInput)
+    ensureTenantScope(ctx, parsed.tenantId)
+    ensureOrganizationScope(ctx, parsed.organizationId)
+
+    const em = getEm(ctx)
+    const run = await em.findOne(BillingRun, {
+      id: parsed.billRunId,
+      tenantId: parsed.tenantId,
+      organizationId: parsed.organizationId,
+      deletedAt: null,
+    })
+    if (!run) throw new CrudHttpError(404, { error: 'Bill Run not found', code: 'billing.run.not_found' })
+    if (runMode(run) !== 'real') {
+      throw new CrudHttpError(422, { error: 'Only real Bill Runs have invoices to post', code: 'billing.run.not_real' })
+    }
+    if (run.status === 'running') {
+      throw new CrudHttpError(409, { error: 'The Bill Run is still running', code: 'billing.run.running' })
+    }
+
+    const scope = [parsed.tenantId, parsed.organizationId, run.id] as const
+    const cursor = parsed.afterInvoiceId ?? null
+    const limit = parsed.limit ?? POST_DRAFTS_DEFAULT_LIMIT
+    const drafts = (await em.execute(DRAFTS_AFTER_SQL, [...scope, cursor, cursor, limit])) as unknown as Array<{
+      id: string
+      number: string
+    }>
+
+    const commandBus = ctx.container.resolve('commandBus') as CommandBus
+    const failed: PostDraftsFailure[] = []
+    let posted = 0
+    let nextCursor: string | null = null
+    let stoppedReason: string | null = null
+    for (const draft of drafts ?? []) {
+      nextCursor = draft.id
+      try {
+        await commandBus.execute('billing.invoices.post', {
+          input: { tenantId: parsed.tenantId, organizationId: parsed.organizationId, invoiceId: draft.id },
+          ctx,
+        })
+        posted += 1
+      } catch (err) {
+        const body = isCrudHttpError(err) ? (err.body as { error?: string; code?: string }) : null
+        const code = body?.code ?? null
+        failed.push({
+          invoiceId: draft.id,
+          number: draft.number,
+          error: body?.error ?? (err instanceof Error ? err.message : String(err)),
+          code,
+        })
+        if (code === 'billing.settings.incomplete') {
+          // Every other draft would fail the same way — stop. The returned
+          // cursor stays where this call started; drafts posted in this call
+          // are no longer drafts, so a retry after fixing the settings picks
+          // up exactly the ones still pending.
+          stoppedReason = code
+          break
+        }
+      }
+    }
+
+    const remainingRows = (await em.execute(DRAFTS_REMAINING_SQL, [
+      ...scope,
+      stoppedReason ? cursor : nextCursor,
+      stoppedReason ? cursor : nextCursor,
+    ])) as unknown as Array<{ remaining: number }>
+    return {
+      posted,
+      failed,
+      nextCursor: stoppedReason ? cursor : nextCursor,
+      remaining: Number(remainingRows?.[0]?.remaining ?? 0),
+      stoppedReason,
+    }
+  },
+}
+
 registerCommand(triggerRunCommand)
 registerCommand(retryFailedCommand)
+registerCommand(deleteRunCommand)
+registerCommand(postDraftsCommand)
 
-export { triggerRunCommand, retryFailedCommand }
+export { triggerRunCommand, retryFailedCommand, deleteRunCommand, postDraftsCommand }

@@ -12,10 +12,14 @@ export const metadata: ModuleInfo = {
   title: 'Billing',
   version: '0.1.0',
   description:
-    'Lightweight recurring-billing engine — collects one-time / recurring / usage items, runs Bill Runs, produces draft invoices in core/sales.',
+    'Lightweight recurring-billing engine — collects one-time / recurring / usage items, runs Bill Runs and issues its own invoices, memos and top-up receipts (no core sales dependency).',
   author: 'Dainamite',
   license: 'MIT',
-  requires: ['auth', 'directory', 'dictionaries', 'configs', 'sales', 'payment_gateways'],
+  // Spec 0: billing owns its documents. `payment_gateways` is optional
+  // (online top-ups only, resolved at runtime); no sales / configs /
+  // dictionaries dependency. Spec B: `attachments` (platform module) stores
+  // frozen invoice PDFs and the document logo.
+  requires: ['auth', 'directory', 'attachments'],
   ejectable: false,
 }
 

@@ -143,7 +143,7 @@ Register in `src/modules.ts`: `{ id: '<id>', from: '@app' }`
 - `yarn generate` automatically runs a best-effort structural cache purge (`yarn mercato configs cache structural --all-tenants`) after successful generation; if the cache command is unavailable, generation still succeeds
 - Sidebar icons MUST use `lucide-react` components — never inline SVG via `React.createElement`
 - `page.meta.ts` MUST include `pageGroup`, `pageGroupKey`, and `pageOrder` for sidebar grouping
-- Settings pages MUST use `pageContext: 'settings' as const` with `navHidden: true`
+- Settings pages MUST use `pageContext: 'settings' as const` and MUST NOT set `navHidden` when they should be listed in the Settings sidebar. The nav builder (`@open-mercato/ui/backend/utils/nav.ts`) drops `navHidden` routes from **every** sidebar, settings included, and the main sidebar already filters out `pageContext !== 'main'`. Use `navHidden: true` only for settings sub-pages reached from another settings page.
 - All related pages within a module MUST share the same `pageGroupKey`
 - DataTable MUST wire pagination props (`page`, `pageSize`, `totalCount`, `onPageChange`)
 

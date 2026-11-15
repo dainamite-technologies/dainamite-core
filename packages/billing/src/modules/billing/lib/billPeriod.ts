@@ -174,6 +174,25 @@ export function isCycleDue(nextBillDate: Date, asOfDate: Date): boolean {
 }
 
 /**
+ * The cycle boundary `k` cycles away from `anchor` (k may be negative),
+ * computed directly from the anchor — never by chaining single steps — so
+ * month-end clamping does not drift (Jan 31 → Feb 28 → Mar 31, not Mar 28).
+ */
+export function shiftCycles(anchor: Date | string | number, cycle: BillCycle, k: number): Date {
+  const base = cloneAtMidnight(anchor)
+  switch (cycle) {
+    case 'weekly':
+      return addDays(base, 7 * k)
+    case 'monthly':
+      return shiftMonths(base, k)
+    case 'quarterly':
+      return shiftMonths(base, 3 * k)
+    case 'annually':
+      return shiftYears(base, k)
+  }
+}
+
+/**
  * Test seam: re-export the day-add helper so the engine can compute
  * `bill_period_end + 1 day` consistently with this module's calendar
  * semantics (avoids drift between engine code and period-math tests).

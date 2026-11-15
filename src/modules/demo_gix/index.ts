@@ -14,5 +14,5 @@ export const metadata: ModuleInfo = {
   // Depends on cpq for the use-case registry API and on demo_tenants for orchestration.
   // demo_tenants is the runtime orchestrator and runs AFTER this module's import-time
   // registration call.
-  requires: ['cpq'],
+  requires: ['cpq', 'billing'],
 }

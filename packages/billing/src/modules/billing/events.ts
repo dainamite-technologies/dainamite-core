@@ -5,10 +5,13 @@ import { createModuleEvents } from '@open-mercato/shared/modules/events'
  *
  * Emission contract:
  *   - `billing.invoice.posted` fires once per posted draft AFTER the post
- *     transaction commits (sequence number assigned, status set to `posted`
- *     in core/sales). Consumed by mailers / accounting bridges / analytics.
+ *     transaction commits (series number, issue/due dates assigned, status
+ *     `posted` in `billing_invoices`) and after the PDF is frozen. Consumed by
+ *     the auto-send subscriber, accounting bridges, analytics.
+ *   - `billing.invoice.sent` / `billing.invoice.send_failed` fire once per
+ *     email delivery attempt (Spec B), manual or automatic.
  *   - `billing.invoice.line_posted` fires once per line on a posted invoice
- *     so analytics can aggregate without scanning core/sales lines directly.
+ *     so analytics can aggregate without scanning invoice lines directly.
  *   - `billing.run.completed` fires once per Bill Run after all per-account
  *     transactions finished (status is one of `completed` / `partial_failure`
  *     / `failed`). Useful for "did the nightly run go OK?" alerts.
@@ -48,6 +51,48 @@ const events = [
     clientBroadcast: true,
   },
   {
+    id: 'billing.invoice.sent',
+    label: 'Billing Invoice Sent',
+    entity: 'invoice',
+    category: 'lifecycle',
+    clientBroadcast: true,
+  },
+  {
+    id: 'billing.invoice.send_failed',
+    label: 'Billing Invoice Send Failed',
+    entity: 'invoice',
+    category: 'lifecycle',
+    clientBroadcast: true,
+  },
+  // ─── Payments (Spec C) ───────────────────────────────────────
+  { id: 'billing.payment.created', label: 'Billing Payment Created', entity: 'payment', category: 'lifecycle' },
+  { id: 'billing.payment.allocated', label: 'Billing Payment Allocated', entity: 'payment', category: 'lifecycle' },
+  { id: 'billing.payment.unallocated', label: 'Billing Payment Unallocated', entity: 'payment', category: 'lifecycle' },
+  {
+    id: 'billing.payment.converted_to_topup',
+    label: 'Billing Payment Converted to Top-up',
+    entity: 'payment',
+    category: 'lifecycle',
+  },
+  {
+    id: 'billing.payment_import.completed',
+    label: 'Billing Payment Import Completed',
+    entity: 'payment_import',
+    category: 'lifecycle',
+    clientBroadcast: true,
+  },
+  { id: 'billing.invoice.paid', label: 'Billing Invoice Paid', entity: 'invoice', category: 'lifecycle', clientBroadcast: true },
+  // ─── Corrective documents (Spec D) ───────────────────────────
+  { id: 'billing.credit_memo.posted', label: 'Billing Credit Memo Posted', entity: 'credit_memo', category: 'lifecycle', clientBroadcast: true },
+  { id: 'billing.debit_memo.posted', label: 'Billing Debit Memo Posted', entity: 'debit_memo', category: 'lifecycle', clientBroadcast: true },
+  { id: 'billing.invoice.credited', label: 'Billing Invoice Credited', entity: 'invoice', category: 'lifecycle', clientBroadcast: true },
+  {
+    id: 'billing.invoice.partially_paid',
+    label: 'Billing Invoice Partially Paid',
+    entity: 'invoice',
+    category: 'lifecycle',
+  },
+  {
     id: 'billing.invoice.line_posted',
     label: 'Billing Invoice Line Posted',
     entity: 'invoice_line',
@@ -56,6 +101,14 @@ const events = [
   {
     id: 'billing.run.completed',
     label: 'Bill Run Completed',
+    entity: 'bill_run',
+    category: 'lifecycle',
+    clientBroadcast: true,
+  },
+  // Spec F — a test / dry run and its test invoices were deleted.
+  {
+    id: 'billing.run.deleted',
+    label: 'Bill Run Deleted',
     entity: 'bill_run',
     category: 'lifecycle',
     clientBroadcast: true,

@@ -15,10 +15,10 @@ import { metadata } from '../index'
 
 const PACKAGE_ROOT = path.resolve(__dirname, '..')
 
-// Must mirror peerDependencies in packages/billing/package.json (plus
-// relatives + node builtins). Adding a prefix here without adding it to
-// peerDependencies = silent runtime failure for consumers that don't have
-// the dep transitively.
+// Must mirror peerDependencies + dependencies in packages/billing/package.json
+// (plus relatives + node builtins). Adding a prefix here without adding it to
+// package.json = silent runtime failure for consumers that don't have the dep
+// transitively. `pdf-lib` / `@pdf-lib/` are regular dependencies (Spec B PDF).
 const ALLOWED_IMPORT_PREFIXES = [
   './',
   '../',
@@ -36,6 +36,8 @@ const ALLOWED_IMPORT_PREFIXES = [
   '@dainamite/',
   'node:',
   '@tanstack/',
+  'pdf-lib',
+  '@pdf-lib/',
 ]
 
 const NODE_BUILTINS = new Set([
@@ -128,10 +130,22 @@ describe('@dainamite/billing package isolation', () => {
     }
   })
 
-  it('declares all required modules in metadata.requires', () => {
-    expect(metadata.requires).toEqual(
-      expect.arrayContaining(['auth', 'directory', 'dictionaries', 'configs', 'sales']),
-    )
+  it('requires only platform modules (Spec 0: no core business modules; Spec B: attachments)', () => {
+    expect(metadata.requires).toEqual(['auth', 'directory', 'attachments'])
+  })
+
+  it('never imports core sales / configs / dictionaries / payment_gateways (Spec 0)', () => {
+    const banned = new Set(['sales', 'configs', 'dictionaries', 'payment_gateways'])
+    const violations: string[] = []
+    for (const [file, specs] of importsByFile) {
+      for (const spec of specs) {
+        const subModule = extractCoreModuleSubpath(spec)
+        if (subModule && banned.has(subModule)) violations.push(`  ${path.relative(PACKAGE_ROOT, file)} → ${spec}`)
+      }
+    }
+    if (violations.length > 0) {
+      throw new Error(`Billing must not depend on core business modules:\n${violations.join('\n')}`)
+    }
   })
 
   it('does not import from sibling app modules', () => {

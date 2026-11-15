@@ -1,12 +1,12 @@
 "use client"
 import * as React from 'react'
 import Link from 'next/link'
-import { useParams } from 'next/navigation'
+import { useParams, useRouter } from 'next/navigation'
 import type { LegacyColumnDef as ColumnDef } from '@tanstack/react-table/legacy'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { Page, PageBody, PageHeader } from '@open-mercato/ui/backend/Page'
 import { FormHeader } from '@open-mercato/ui/backend/forms'
-import { DataTable } from '@open-mercato/ui/backend/DataTable'
+import { BillingDataTable as DataTable } from '../../../../components/BillingDataTable'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { LoadingMessage, ErrorMessage } from '@open-mercato/ui/backend/detail'
@@ -17,6 +17,9 @@ import {
 } from '@open-mercato/ui/backend/utils/apiCall'
 import { normalizeCrudServerError } from '@open-mercato/ui/backend/utils/serverErrors'
 import { billRunName } from '../../../../lib/billRunLabel'
+import { RunCyclesSection, type RunCycle } from '../../../../components/RunCyclesSection'
+import { TestRunActions, billRunMode } from '../../../../components/TestRunActions'
+import { PostRunDraftsButton } from '../../../../components/PostRunDraftsButton'
 import {
   DetailCard,
   DetailField,
@@ -42,7 +45,6 @@ type BillRun = {
   parent_run_id: string | null
   dry_run: boolean
   test_mode: boolean
-  catch_up: boolean
   as_of_date: string
   started_at: string | null
   finished_at: string | null
@@ -50,6 +52,7 @@ type BillRun = {
   summary: {
     accounts_processed?: number
     drafts_created?: number
+    cycles_processed?: number
     drafts_skipped_existing?: number
     accounts_failed?: number
     accounts_with_warnings?: number
@@ -71,6 +74,7 @@ type BillRunOutcome = {
   warnings: Record<string, unknown> | null
   draft_invoice_id: string | null
   invoice_number: string | null
+  cycles: RunCycle[] | null
   created_at: string
 }
 
@@ -180,6 +184,7 @@ export default function BillRunDetailPage(props: { params?: { id?: string } }) {
     void loadOutcomes()
   }, [loadOutcomes])
 
+  const router = useRouter()
   const failedCount = run?.summary?.accounts_failed ?? 0
 
   const handleRetryFailed = React.useCallback(async () => {
@@ -259,10 +264,10 @@ export default function BillRunDetailPage(props: { params?: { id?: string } }) {
         accessorKey: 'warnings',
         header: t('billing.runs.outcomes.columns.warnings', 'Warnings'),
         cell: ({ row }) => {
-          if (!row.original.warnings) return '—'
-          return (
-            <span className="font-mono text-xs">{JSON.stringify(row.original.warnings)}</span>
-          )
+          // Skipped items get their own table below; show the rest inline.
+          const { skipped_items: _skipped, ...rest } = row.original.warnings ?? {}
+          if (Object.keys(rest).length === 0) return '—'
+          return <span className="font-mono text-xs">{JSON.stringify(rest)}</span>
         },
       },
     ],
@@ -302,14 +307,37 @@ export default function BillRunDetailPage(props: { params?: { id?: string } }) {
           <Tag variant={runStatusVariant(run.status)}>{run.status}</Tag>
         }
         actionsContent={
-          failedCount > 0 ? (
-            <Button disabled={retrying} onClick={handleRetryFailed}>
-              {retrying
-                ? t('billing.runs.retry.in_progress', 'Retrying…')
-                : t('billing.runs.retry.action', 'Retry failed accounts')}
-              {` (${failedCount})`}
-            </Button>
-          ) : null
+          <>
+            {failedCount > 0 ? (
+              <Button disabled={retrying} onClick={handleRetryFailed}>
+                {retrying
+                  ? t('billing.runs.retry.in_progress', 'Retrying…')
+                  : t('billing.runs.retry.action', 'Retry failed accounts')}
+                {` (${failedCount})`}
+              </Button>
+            ) : null}
+            {run.status !== 'running' && billRunMode(run) === 'real' ? (
+              <PostRunDraftsButton
+                runId={run.id}
+                onPosted={() => {
+                  void loadRun()
+                  void loadOutcomes()
+                }}
+              />
+            ) : null}
+            {run.status !== 'running' ? (
+              <TestRunActions
+                runId={run.id}
+                mode={billRunMode(run)}
+                draftsCount={run.summary?.drafts_created}
+                onWiped={() => {
+                  void loadRun()
+                  void loadOutcomes()
+                }}
+                onDeleted={() => router.push('/backend/billing/runs')}
+              />
+            ) : null}
+          </>
         }
       />
       <PageBody>
@@ -330,9 +358,6 @@ export default function BillRunDetailPage(props: { params?: { id?: string } }) {
                 ) : (
                   <Tag variant="default">{t('billing.runs.mode.real', 'Real')}</Tag>
                 )}
-                {run.catch_up ? (
-                  <Tag variant="default">{t('billing.runs.mode.catch_up', 'Catch-up')}</Tag>
-                ) : null}
               </div>
             </DetailField>
             <DetailField label={t('billing.runs.detail.field.as_of_date', 'As-of date')}>
@@ -360,6 +385,10 @@ export default function BillRunDetailPage(props: { params?: { id?: string } }) {
               <Stat
                 label={t('billing.runs.summary.drafts', 'Drafts')}
                 value={run.summary.drafts_created ?? 0}
+              />
+              <Stat
+                label={t('billing.runs.summary.cycles', 'Cycles')}
+                value={run.summary.cycles_processed ?? 0}
               />
               <Stat
                 label={t('billing.runs.summary.skipped', 'Skipped')}
@@ -397,6 +426,8 @@ export default function BillRunDetailPage(props: { params?: { id?: string } }) {
               }}
             />
           </div>
+
+          <RunCyclesSection outcomes={outcomes} />
         </div>
       </PageBody>
     </Page>

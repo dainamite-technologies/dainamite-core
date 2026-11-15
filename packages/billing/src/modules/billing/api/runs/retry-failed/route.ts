@@ -81,7 +81,8 @@ export const openApi = createBillingCrudOpenApi({
     responseSchema: retryResponseSchema,
     description:
       'Re-runs the failed accounts of an earlier Bill Run. The new run ' +
-      'inherits the parent run\'s `asOfDate` and `catchUp` flag; its ' +
+      'inherits the parent run\'s `asOfDate` (and, like every run, bills all due ' +
+      'cycles up to it); its ' +
       '`parent_run_id` points back at the source. Returns 409 if there ' +
       'are no failed outcomes or if another run is in flight.',
   },

@@ -1,58 +1,49 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
-import { ModuleConfig } from '@open-mercato/core/modules/configs/data/entities'
+import { getBillingSettings, receiptTaxRate, type SettingsScope } from './billingSettings'
 
 /**
- * Typed readers for the prepaid billing module configs (SPEC-002), seeded by
- * `setup.ts → seedBillingConfigs`. Stored as raw JSON scalars in
- * `ModuleConfig.valueJson`. Each reader falls back to the same default the
- * seed uses, so a missing row (older tenant) behaves identically.
+ * Typed readers for the prepaid billing settings (SPEC-002), stored per
+ * organization in `billing_settings` (Spec 0, E-D2 — previously tenant-wide
+ * core `configs` rows). Every reader takes the organization scope; the
+ * defaults are identical to the old config seed, so behaviour is unchanged.
  */
-
-async function readConfig(em: EntityManager, name: string): Promise<unknown> {
-  const row = await em.findOne(ModuleConfig, { moduleId: 'billing', name })
-  if (!row) return undefined
-  return row.valueJson as unknown
-}
 
 function asNumberString(value: unknown, fallback: string): string {
   if (value === null || value === undefined) return fallback
   if (typeof value === 'number' && Number.isFinite(value)) return String(value)
   if (typeof value === 'string' && value.trim() !== '' && Number.isFinite(Number(value))) {
-    return value.trim()
+    return String(Number(value))
   }
   return fallback
 }
 
-/** `prepaid.low_balance_threshold_default` — numeric string (default '0'). */
-export async function getLowBalanceThresholdDefault(em: EntityManager): Promise<string> {
-  return asNumberString(await readConfig(em, 'prepaid.low_balance_threshold_default'), '0')
+/** Low-balance threshold default — numeric string (default '0'). */
+export async function getLowBalanceThresholdDefault(em: EntityManager, scope: SettingsScope): Promise<string> {
+  return asNumberString((await getBillingSettings(em, scope)).lowBalanceThresholdDefault, '0')
 }
 
-/** `credit.near_limit_buffer_default` — numeric string (default '0'). */
-export async function getNearLimitBufferDefault(em: EntityManager): Promise<string> {
-  return asNumberString(await readConfig(em, 'credit.near_limit_buffer_default'), '0')
+/** Near-credit-limit buffer default — numeric string (default '0'). */
+export async function getNearLimitBufferDefault(em: EntityManager, scope: SettingsScope): Promise<string> {
+  return asNumberString((await getBillingSettings(em, scope)).nearLimitBufferDefault, '0')
 }
 
-/** `prepaid.topup_provider` — gateway provider key (default 'stripe'). */
-export async function getTopupProvider(em: EntityManager): Promise<string> {
-  const value = await readConfig(em, 'prepaid.topup_provider')
-  return typeof value === 'string' && value.trim() !== '' ? value.trim() : 'stripe'
+/** Gateway provider key for top-ups (default 'stripe'). */
+export async function getTopupProvider(em: EntityManager, scope: SettingsScope): Promise<string> {
+  const value = (await getBillingSettings(em, scope)).topupProvider
+  return typeof value === 'string' && value.trim() ? value.trim() : 'stripe'
 }
 
-/** `prepaid.statement_enabled` — master switch (default true). */
-export async function getStatementEnabled(em: EntityManager): Promise<boolean> {
-  const value = await readConfig(em, 'prepaid.statement_enabled')
-  if (value === undefined || value === null) return true
-  if (typeof value === 'boolean') return value
-  // A stored string "false" must read as false (Boolean("false") === true).
-  if (typeof value === 'string') return value.trim().toLowerCase() !== 'false'
-  return Boolean(value)
+/** Consumption statements master switch (default true). */
+export async function getStatementEnabled(em: EntityManager, scope: SettingsScope): Promise<boolean> {
+  return (await getBillingSettings(em, scope)).statementEnabled !== false
 }
 
-/** `prepaid.topup_tax_rate` — VAT percent on top-up receipts (default 0). */
-export async function getTopupTaxRate(em: EntityManager): Promise<number> {
-  const value = await readConfig(em, 'prepaid.topup_tax_rate')
-  if (typeof value === 'number' && Number.isFinite(value)) return value
-  if (typeof value === 'string' && Number.isFinite(Number(value))) return Number(value)
-  return 0
+/** VAT percent on top-up receipts (default 0; always 0 when tax is charged at consumption). */
+export async function getTopupTaxRate(em: EntityManager, scope: SettingsScope): Promise<number> {
+  return receiptTaxRate(await getBillingSettings(em, scope))
+}
+
+/** Where prepaid VAT is charged (Spec F, F-D3). Default `topup`. */
+export async function getPrepaidTaxPoint(em: EntityManager, scope: SettingsScope): Promise<'topup' | 'consumption'> {
+  return (await getBillingSettings(em, scope)).prepaidTaxPoint === 'consumption' ? 'consumption' : 'topup'
 }

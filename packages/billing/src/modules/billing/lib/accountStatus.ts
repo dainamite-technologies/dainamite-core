@@ -44,7 +44,7 @@ export async function getBalanceSnapshot(
   const balance = row?.balance ?? '0.0000'
   const threshold = resolveLowBalanceThreshold(
     row?.lowBalanceThreshold ?? null,
-    await getLowBalanceThresholdDefault(em),
+    await getLowBalanceThresholdDefault(em, { tenantId: account.tenantId, organizationId: account.organizationId }),
   )
   return {
     billAccountId: account.id,
@@ -57,8 +57,8 @@ export async function getBalanceSnapshot(
 }
 
 /**
- * Σ outstanding of POSTED (not-yet-paid) core/sales invoices the engine
- * emitted for this account — the postpaid `credit_used` (v1; mid-period
+ * Σ outstanding of posted / partially paid billing invoices and debit memos
+ * of this account (Spec 0: billing-owned `billing_invoices`) — the postpaid `credit_used` (v1; mid-period
  * accrued usage is not counted, see SPEC-002 Open Question #5). Top-up
  * receipts are `paid`, so they never count here.
  */
@@ -67,13 +67,15 @@ export async function getPostpaidOutstanding(
   account: BillingAccount,
 ): Promise<string> {
   const rows = (await em.execute(
-    `SELECT COALESCE(SUM(outstanding_amount), 0) AS total
-       FROM sales_invoices
+    `SELECT COALESCE(SUM(outstanding), 0) AS total
+       FROM billing_invoices
       WHERE tenant_id = ?
         AND organization_id = ?
         AND deleted_at IS NULL
-        AND status = 'posted'
-        AND metadata->>'bill_account_id' = ?`,
+        AND test_run = false
+        AND status IN ('posted', 'partially_paid')
+        AND document_type IN ('invoice', 'debit_memo')
+        AND bill_account_id = ?`,
     [account.tenantId, account.organizationId, account.id],
   )) as unknown as Array<{ total: string }>
   return formatMoney(rows?.[0]?.total ?? 0)
@@ -86,7 +88,7 @@ export async function getCreditSnapshot(
   account: BillingAccount,
 ): Promise<CreditSnapshotResult> {
   const mode = (account.billingMode as BillingMode) ?? 'postpaid'
-  const nearLimitBuffer = await getNearLimitBufferDefault(em)
+  const nearLimitBuffer = await getNearLimitBufferDefault(em, { tenantId: account.tenantId, organizationId: account.organizationId })
 
   let balance: string | null = null
   let outstanding: string | null = null
@@ -126,7 +128,7 @@ export async function buildPostpaidCreditCrossingEvents(
   const creditLimit = account.creditLimit ?? '0'
   if (toUnits(creditLimit) <= 0) return []
 
-  const nearLimitBuffer = await getNearLimitBufferDefault(em)
+  const nearLimitBuffer = await getNearLimitBufferDefault(em, { tenantId: account.tenantId, organizationId: account.organizationId })
   const usedAfter = await getPostpaidOutstanding(em, account)
   const usedBefore = subMoney(usedAfter, justPostedOutstanding)
   const crossing = detectCreditCrossing({

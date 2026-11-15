@@ -7,10 +7,13 @@ import type { LegacyColumnDef as ColumnDef } from '@tanstack/react-table/legacy'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
-import { DataTable } from '@open-mercato/ui/backend/DataTable'
+import { BillingDataTable as DataTable } from '../../../components/BillingDataTable'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
+import { CustomerLabel } from '../../../components/CustomerLabel'
+import { fetchCustomerNames } from '../../../components/customerNames'
+import type { CustomerSummary } from '../../../lib/customerLookup'
 
 /**
  * Billing Accounts admin list.
@@ -25,6 +28,7 @@ import { readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
 type BillingAccountRow = {
   id: string
   customer_id: string
+  customer_kind: 'company' | 'person'
   name: string
   currency_code: string
   bill_cycle: 'monthly' | 'quarterly' | 'annually' | 'weekly'
@@ -33,6 +37,9 @@ type BillingAccountRow = {
   next_bill_date: string
   last_bill_date: string | null
   billing_mode: 'postpaid' | 'prepaid'
+  // Spec F (F8): open receivables and the overdue subset.
+  balance_due?: string
+  overdue_amount?: string
   is_active: boolean
   created_at: string
 }
@@ -60,6 +67,7 @@ export default function BillingAccountsListPage() {
   const [total, setTotal] = React.useState(0)
   const [totalPages, setTotalPages] = React.useState(1)
   const [loading, setLoading] = React.useState(true)
+  const [customerNames, setCustomerNames] = React.useState<Record<string, CustomerSummary>>({})
 
   const filterDefs = React.useMemo<FilterDef[]>(
     () => [
@@ -80,6 +88,15 @@ export default function BillingAccountsListPage() {
         type: 'text',
       },
       {
+        id: 'customerKind',
+        label: t('billing.accounts.filters.customer_kind', 'Customer type'),
+        type: 'select',
+        options: [
+          { value: 'company', label: t('billing.accounts.kind.company', 'Company') },
+          { value: 'person', label: t('billing.accounts.kind.person', 'Person') },
+        ],
+      },
+      {
         id: 'billingMode',
         label: t('billing.accounts.columns.mode', 'Mode'),
         type: 'select',
@@ -87,6 +104,12 @@ export default function BillingAccountsListPage() {
           { value: 'postpaid', label: t('billing.mode.postpaid', 'Postpaid') },
           { value: 'prepaid', label: t('billing.mode.prepaid', 'Prepaid') },
         ],
+      },
+      {
+        id: 'hasOverdue',
+        label: t('billing.accounts.filters.has_overdue', 'Has overdue'),
+        type: 'select',
+        options: [{ value: 'true', label: t('billing.common.yes', 'Yes') }],
       },
       {
         id: 'isActive',
@@ -120,14 +143,24 @@ export default function BillingAccountsListPage() {
       if (typeof filters.billingMode === 'string' && filters.billingMode) {
         params.set('billingMode', filters.billingMode)
       }
+      if (typeof filters.customerKind === 'string' && filters.customerKind) {
+        params.set('customerKind', filters.customerKind)
+      }
+      if (filters.hasOverdue === 'true') params.set('hasOverdue', 'true')
       if (filters.isActive === 'true') params.set('isActive', 'true')
       if (filters.isActive === 'false') params.set('isActive', 'false')
       const result = await readApiResultOrThrow<ListResponse>(
         `/api/billing/accounts?${params.toString()}`,
       )
-      setRows(result.items ?? [])
+      const items = result.items ?? []
+      setRows(items)
       setTotal(result.total ?? 0)
       setTotalPages(result.totalPages ?? 1)
+      // One batched lookup per customer kind for the whole page (no N+1).
+      // Names arrive after the rows; until then the raw id is shown.
+      void fetchCustomerNames(
+        items.map((row) => ({ customerId: row.customer_id, customerKind: row.customer_kind })),
+      ).then(setCustomerNames)
     } finally {
       setLoading(false)
     }
@@ -135,7 +168,9 @@ export default function BillingAccountsListPage() {
     filters.billCycle,
     filters.currencyCode,
     filters.billingMode,
+    filters.customerKind,
     filters.isActive,
+    filters.hasOverdue,
     page,
     pageSize,
     search,
@@ -158,7 +193,11 @@ export default function BillingAccountsListPage() {
         accessorKey: 'customer_id',
         header: t('billing.accounts.columns.customer', 'Customer'),
         cell: ({ row }) => (
-          <span className="font-mono text-xs">{row.original.customer_id}</span>
+          <CustomerLabel
+            customerId={row.original.customer_id}
+            customerKind={row.original.customer_kind ?? 'company'}
+            name={customerNames[row.original.customer_id]?.name}
+          />
         ),
       },
       {
@@ -196,6 +235,33 @@ export default function BillingAccountsListPage() {
         cell: ({ row }) => formatDate(row.original.last_bill_date),
       },
       {
+        accessorKey: 'balance_due',
+        header: t('billing.accounts.columns.balance_due', 'Balance due'),
+        cell: ({ row }) =>
+          row.original.billing_mode === 'prepaid' ? (
+            <span className="text-muted-foreground">—</span>
+          ) : (
+            <span className="tabular-nums">
+              {Number(row.original.balance_due ?? 0).toFixed(2)} {row.original.currency_code}
+            </span>
+          ),
+      },
+      {
+        accessorKey: 'overdue_amount',
+        header: t('billing.accounts.columns.overdue', 'Overdue'),
+        cell: ({ row }) => {
+          const overdue = Number(row.original.overdue_amount ?? 0)
+          if (row.original.billing_mode === 'prepaid' || !(overdue > 0)) {
+            return <span className="text-muted-foreground">—</span>
+          }
+          return (
+            <span className="font-medium tabular-nums text-status-error-text">
+              {overdue.toFixed(2)} {row.original.currency_code}
+            </span>
+          )
+        },
+      },
+      {
         accessorKey: 'is_active',
         header: t('billing.accounts.columns.status', 'Status'),
         cell: ({ row }) =>
@@ -206,7 +272,7 @@ export default function BillingAccountsListPage() {
           ),
       },
     ],
-    [t],
+    [customerNames, t],
   )
 
   return (

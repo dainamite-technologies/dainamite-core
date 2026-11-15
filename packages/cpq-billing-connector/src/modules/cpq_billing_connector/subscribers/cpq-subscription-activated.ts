@@ -2,6 +2,10 @@ import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import { BillingApiClient, type Scope, type AccountSeed } from '../lib/billingApiClient'
 import { mapSubscriptionItemsToBillingItems } from '../lib/chargeMapper'
 import type { CpqSubscriptionItem } from '../lib/chargeMapper'
+import {
+  DEFAULT_INVOICE_LANGUAGE,
+  isSupportedInvoiceLanguage,
+} from '@dainamite/billing/modules/billing/lib/invoiceLanguages'
 
 /**
  * Subscriber: `cpq.subscription.activated` → billing onboarding.
@@ -13,8 +17,10 @@ import type { CpqSubscriptionItem } from '../lib/chargeMapper'
  *   1. Get-or-create the Billing Account for `(tenant, org, customerId)`.
  *      Missing account → shell account with placeholders (operator
  *      must configure before billing fires). `nextBillDate` defaults
- *      to today + one month so the Bill Run won't bill an under-
- *      configured account until the operator advances it.
+ *      to the activation date: recurring items are billed in advance
+ *      (billing Spec A), so the first period is billed from day one.
+ *      An EXISTING account keeps its bill date — billing prorates the
+ *      new subscription's partial first period.
  *   2. For every charge on every CPQ subscription item, create a
  *      Billing Item via `billing.items.create`. `source_ref` is the
  *      deterministic `cpq-<subId>-<subItemId>-<chargeType>` key, so
@@ -31,11 +37,13 @@ export const metadata = {
   id: 'cpq-billing-connector:subscription-activated',
 }
 
-type ActivatedPayload = {
+export type ActivatedPayload = {
   tenantId: string
   organizationId: string
   subscriptionId: string
   customerId: string
+  /** 'company' | 'person'. Omitted → billing defaults to 'company'. */
+  customerKind?: 'company' | 'person'
   currencyCode: string
   /** Optional richer customer fields — used when present, otherwise placeholders. */
   customerName?: string
@@ -51,42 +59,42 @@ type ActivatedPayload = {
   activationDate?: string
 }
 
-function isoDateAddMonths(months: number): string {
-  // Clamp the day to the last valid day of the target month so Jan 31 + 1
-  // month → Feb 28/29 (not Mar 3, which is what `setUTCMonth` alone would
-  // produce by overflowing into the next month).
-  const d = new Date()
-  const targetYear = d.getUTCFullYear()
-  const targetMonth = d.getUTCMonth() + months
-  const lastDayOfTargetMonth = new Date(Date.UTC(targetYear, targetMonth + 1, 0)).getUTCDate()
-  d.setUTCDate(Math.min(d.getUTCDate(), lastDayOfTargetMonth))
-  d.setUTCMonth(targetMonth)
-  return d.toISOString().slice(0, 10)
-}
-
 function todayIsoDate(): string {
   return new Date().toISOString().slice(0, 10)
 }
 
-function buildAccountSeed(payload: ActivatedPayload): AccountSeed {
+/**
+ * Billing only accepts invoice languages its document template supports.
+ * An unsupported code from upstream must not fail onboarding (the persistent
+ * queue would retry forever), so it falls back to billing's default — the
+ * operator can change it on the account afterwards.
+ */
+function resolveInvoiceLanguage(raw: string | undefined): string {
+  const code = (raw ?? '').trim().toLowerCase()
+  return isSupportedInvoiceLanguage(code) ? code : DEFAULT_INVOICE_LANGUAGE
+}
+
+export function buildAccountSeed(payload: ActivatedPayload): AccountSeed {
   return {
     customerId: payload.customerId,
+    ...(payload.customerKind ? { customerKind: payload.customerKind } : {}),
     name: payload.customerName ?? `Customer ${payload.customerId}`,
     currencyCode: payload.currencyCode,
     billCycle: payload.billCycle ?? 'monthly',
     billCycleAnchor: payload.billCycleAnchor ?? '1',
     invoiceEmail:
       payload.invoiceEmail ?? `billing+${payload.customerId}@invalid.local`,
-    invoiceLanguage: payload.invoiceLanguage ?? 'en',
+    invoiceLanguage: resolveInvoiceLanguage(payload.invoiceLanguage),
     invoiceAddress: payload.invoiceAddress ?? {
       line1: 'TBD',
       city: 'TBD',
       postal_code: 'TBD',
       country: 'XX',
     },
-    nextBillDate: payload.nextBillDate
-      ? new Date(payload.nextBillDate)
-      : new Date(isoDateAddMonths(1)),
+    // Billing Spec A: recurring items are billed in advance, so the first
+    // bill date is the subscription start — billing the first period on
+    // activation. (Was "today + 1 month", which skipped that period.)
+    nextBillDate: new Date(payload.nextBillDate ?? payload.activationDate ?? todayIsoDate()),
     taxId: payload.taxId ?? null,
   }
 }

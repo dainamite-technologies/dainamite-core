@@ -1,4 +1,5 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
+import { LockMode, UniqueConstraintViolationException } from '@mikro-orm/core'
 import type { CommandHandler, CommandRuntimeContext } from '@open-mercato/shared/lib/commands/types'
 import { registerCommand } from '@open-mercato/shared/lib/commands'
 import { withAtomicFlush } from '@open-mercato/shared/lib/commands/flush'
@@ -7,40 +8,61 @@ import {
   ensureTenantScope,
 } from '@open-mercato/shared/lib/commands/scope'
 import { CrudHttpError } from '@open-mercato/shared/lib/crud/errors'
-import { SalesInvoice, SalesInvoiceLine } from '@open-mercato/core/modules/sales/data/entities'
-import { BillingAccount, BillingDraftInvoiceEdit } from '../data/entities'
+import {
+  BillingAccount,
+  BillingDraftInvoiceEdit,
+  BillingInvoice,
+  BillingInvoiceLine,
+} from '../data/entities'
 import { emitBillingEvent, type BillingEventId } from '../events'
 import { buildPostpaidCreditCrossingEvents } from '../lib/accountStatus'
+import { buildSellerSnapshot, getBillingSettings, missingSellerFields, numberMaskFor, taxRateColumn } from '../lib/billingSettings'
+import { claimDocumentNumber } from '../lib/numbering'
+import { buildBuyerSnapshot } from '../lib/documentParties'
+import { freezeInvoicePdf } from '../lib/pdf/invoicePdf'
+import { accountLockKey } from '../lib/accountLock'
+import { allocate, applyAccountCredit, emptyEffects, mergeEffects, toCents } from '../lib/allocation'
+import { emitAllocationEffects } from '../lib/allocationEvents'
+import { seriesFor } from '../lib/documentTypes'
+import { creditFits, loadCorrectionTotals } from '../lib/memoGuards'
+import { sendInvoice, type SendInvoiceResult } from '../lib/invoiceDelivery'
+import { computeDueDate, resolvePaymentTermsDays } from '../lib/dueDate'
+import { lineAmountsFromNet, sumTotals } from '../lib/vat'
+import { deleteTestRunArtifacts } from '../lib/testRunCleanup'
 import {
   billingInvoiceAddLineSchema,
   billingInvoiceEditLineSchema,
   billingInvoicePostSchema,
   billingInvoiceRemoveLineSchema,
+  billingInvoiceSendSchema,
   billingWipeTestInvoicesSchema,
   type BillingInvoiceAddLineInput,
   type BillingInvoiceEditLineInput,
   type BillingInvoicePostInput,
   type BillingInvoiceRemoveLineInput,
+  type BillingInvoiceSendInput,
   type BillingWipeTestInvoicesInput,
 } from '../data/validators'
-import { resolveInvoiceStatusEntryId } from '../lib/invoiceStatus'
 
 /**
- * Posts a `core/sales` draft invoice that the Bill Run engine
- * created.
+ * Billing invoice commands (Spec 0 — billing-owned `billing_invoices`).
  *
- * Phase 2 deviation note: the invoice number is already set at
- * draft-create time (because `SalesInvoice.invoice_number` is NOT
- * NULL upstream). "Post" therefore only:
- *   1. Asserts the invoice is currently a draft (refuse otherwise).
- *   2. Refuses test-mode invoices (`metadata.test_run=true`) — they
- *      should never reach production posting.
- *   3. Flips `status` (and `status_entry_id`) to `posted`.
- *   4. Fires `billing.invoice.posted` (one) + `billing.invoice.line_posted`
- *      per line (for downstream consumers — accounting, analytics).
+ * Post:
+ *   1. Refuses non-drafts and test-run drafts.
+ *   2. Refuses when the seller settings are incomplete (Spec B, P-D4 — a
+ *      posted invoice must be printable); no number is consumed.
+ *   3. In ONE transaction: claims the next number of the `invoice` series
+ *      (gap-free — a rollback releases it), freezes the buyer / seller
+ *      snapshots, sets `issue_date`, `due_date` (issue + payment terms),
+ *      `posted_at`, `outstanding = total_gross`, `status = posted`, and keeps
+ *      the replaced `DRAFT-…` number in `metadata.draft_number`.
+ *   4. After commit: freezes the PDF as an attachment (best effort), then
+ *      fires `billing.invoice.posted` + one
+ *      `billing.invoice.line_posted` per line, then the postpaid credit
+ *      crossing events.
  *
- * Once posted, the invoice is frozen at the billing layer; corrections
- * go through `core/sales`'s manual edit flow.
+ * Once posted a document is immutable; corrections are credit / debit memos
+ * (Spec D). Draft lines can be edited / added / removed with an audit row.
  */
 
 function getEm(ctx: CommandRuntimeContext): EntityManager {
@@ -54,6 +76,18 @@ type PostResult = {
   lineCount: number
 }
 
+function isoDate(date: Date | null | undefined): string | null {
+  return date ? new Date(date).toISOString().slice(0, 10) : null
+}
+
+function todayUtc(): Date {
+  const now = new Date()
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
+}
+
+// Re-exported for existing callers; lives in lib/documentParties.ts (shared with the PDF).
+export { buildBuyerSnapshot }
+
 const postInvoiceCommand: CommandHandler<BillingInvoicePostInput, PostResult> = {
   id: 'billing.invoices.post',
 
@@ -61,14 +95,14 @@ const postInvoiceCommand: CommandHandler<BillingInvoicePostInput, PostResult> = 
     const parsed = billingInvoicePostSchema.parse(rawInput)
     ensureTenantScope(ctx, parsed.tenantId)
     ensureOrganizationScope(ctx, parsed.organizationId)
+    const scope = { tenantId: parsed.tenantId, organizationId: parsed.organizationId }
 
     const em = getEm(ctx)
-    const invoice = await em.findOne(SalesInvoice, {
+    const invoice = await em.findOne(BillingInvoice, {
       id: parsed.invoiceId,
-      tenantId: parsed.tenantId,
-      organizationId: parsed.organizationId,
+      ...scope,
       deletedAt: null,
-    })
+    } as never)
     if (!invoice) {
       throw new CrudHttpError(404, { error: 'Invoice not found' })
     }
@@ -79,119 +113,244 @@ const postInvoiceCommand: CommandHandler<BillingInvoicePostInput, PostResult> = 
         currentStatus: invoice.status,
       })
     }
-    const meta = (invoice.metadata as Record<string, unknown> | null) ?? {}
-    if (meta.test_run === true) {
-      // Test invoices live for inspection only — posting them would
-      // leak test data into accounting. Force-delete the test invoice
-      // instead (Phase 4b admin UI exposes a "Wipe test drafts"
-      // button against `DELETE /api/billing/test-invoices`).
+    if (invoice.testRun) {
+      // Test invoices live for inspection only — posting them would leak test
+      // data into accounting. Wipe them instead (POST /api/billing/test-invoices/wipe).
       throw new CrudHttpError(409, {
         error: 'Test-mode invoices cannot be posted',
         code: 'billing.invoice.test_run',
       })
     }
 
-    const postedStatusEntryId = await resolveInvoiceStatusEntryId(
-      em,
-      parsed.tenantId,
-      parsed.organizationId,
-      'posted',
-    )
+    const account = await em.findOne(BillingAccount, {
+      id: invoice.billAccountId,
+      ...scope,
+    } as never)
+    if (!account) {
+      throw new CrudHttpError(409, { error: 'Billing account not found', code: 'billing.invoice.account_missing' })
+    }
+    const settings = await getBillingSettings(em, scope)
+    const missing = missingSellerFields(settings)
+    if (missing.length > 0) {
+      throw new CrudHttpError(409, {
+        error: 'Fill in the seller details in billing settings before posting invoices',
+        code: 'billing.settings.incomplete',
+        missing,
+      })
+    }
+    const isCreditMemo = invoice.documentType === 'credit_memo'
+    const series = seriesFor(invoice.documentType)
+    const issueDate = todayUtc()
+    // Receivables (invoices, debit memos) are due after the terms; a credit
+    // memo is a credit source with no due date (Spec D).
+    const dueDate = isCreditMemo
+      ? null
+      : computeDueDate(issueDate, resolvePaymentTermsDays(account.paymentTermsDays, settings.defaultPaymentTermsDays))
+    const settlement = emptyEffects()
 
-    await withAtomicFlush(em, [
-      () => {
-        invoice.status = 'posted'
-        invoice.statusEntryId = postedStatusEntryId
-        invoice.updatedAt = new Date()
-      },
-    ])
+    try {
+      await em.transactional(async (tem) => {
+        // Re-read inside the transaction and lock the row, so two concurrent
+        // posts of the same draft can't both claim a number.
+        const target = await (tem as EntityManager).findOne(
+          BillingInvoice,
+          { id: invoice.id, ...scope, deletedAt: null } as never,
+          { lockMode: LockMode.PESSIMISTIC_WRITE },
+        )
+        if (!target || target.status !== 'draft') {
+          throw new CrudHttpError(409, {
+            error: 'Only draft invoices can be posted',
+            code: 'billing.invoice.not_draft',
+            currentStatus: target?.status ?? null,
+          })
+        }
+        // Spec C/D: every receivables change of an account is serialised by
+        // the per-account lock (same key as `withAccountLock`).
+        await (tem as EntityManager).execute('SELECT pg_advisory_xact_lock(hashtextextended(?, 0))', [
+          accountLockKey({ tenantId: scope.tenantId, billAccountId: target.billAccountId }),
+        ])
+        let original: BillingInvoice | null = null
+        if (isCreditMemo) {
+          original = target.correctsInvoiceId
+            ? await (tem as EntityManager).findOne(BillingInvoice, { id: target.correctsInvoiceId, ...scope, deletedAt: null } as never)
+            : null
+          if (!original) {
+            throw new CrudHttpError(409, { error: 'The corrected invoice no longer exists', code: 'billing.memo.invalid_original' })
+          }
+          // Cumulative guard (P-D4), authoritative here under the lock.
+          const corrections = await loadCorrectionTotals(tem as EntityManager, scope, original.id, { excludeId: target.id })
+          if (!creditFits(toCents(original.totalGross), corrections, toCents(target.totalGross))) {
+            throw new CrudHttpError(409, {
+              error: 'The credit exceeds what is left to credit on this invoice',
+              code: 'billing.memo.exceeds_invoice',
+            })
+          }
+        }
+        const claimed = await claimDocumentNumber(
+          tem as EntityManager,
+          scope,
+          series,
+          numberMaskFor(settings, series),
+          issueDate,
+        )
+        const now = new Date()
+        target.metadata = { ...(target.metadata ?? {}), draft_number: target.number }
+        target.number = claimed.number
+        target.series = series
+        target.issueDate = issueDate
+        target.dueDate = dueDate
+        target.postedAt = now
+        target.buyerSnapshot = buildBuyerSnapshot(account)
+        target.sellerSnapshot = buildSellerSnapshot(settings)
+        target.status = 'posted'
+        target.paidTotal = '0'
+        target.outstanding = target.totalGross
+        target.updatedAt = now
+        await tem.flush()
+        if (isCreditMemo && original) {
+          // Settle the corrected invoice first (P-D5), the remainder becomes
+          // account credit spent on other open receivables (D12).
+          const source = { type: 'credit_memo' as const, id: target.id }
+          const take = Math.min(toCents(target.totalGross), toCents(original.outstanding))
+          if (take > 0 && ['posted', 'partially_paid'].includes(original.status)) {
+            mergeEffects(
+              settlement,
+              await allocate(tem as EntityManager, scope, { source, invoiceId: original.id, amountCents: take, by: 'credit' }),
+            )
+          }
+          mergeEffects(
+            settlement,
+            await applyAccountCredit(tem as EntityManager, scope, { id: target.billAccountId, currencyCode: target.currencyCode }, {
+              onlySources: [source],
+            }),
+          )
+          const fresh = (await (tem as EntityManager).execute(
+            `SELECT status, outstanding FROM billing_invoices WHERE id = ?`,
+            [target.id],
+          )) as unknown as Array<{ status: string; outstanding: string }>
+          if (fresh?.[0]) {
+            target.status = fresh[0].status
+            target.outstanding = fresh[0].outstanding
+          }
+        }
+        Object.assign(invoice, {
+          number: target.number,
+          series: target.series,
+          issueDate: target.issueDate,
+          dueDate: target.dueDate,
+          metadata: target.metadata,
+          buyerSnapshot: target.buyerSnapshot,
+          sellerSnapshot: target.sellerSnapshot,
+          postedAt: target.postedAt,
+          status: target.status,
+          outstanding: target.outstanding,
+        })
+      })
+    } catch (err) {
+      if (err instanceof UniqueConstraintViolationException) {
+        // The mask produced a number already issued (e.g. after a mask change
+        // within a period). The transaction rolled back; nothing was posted.
+        throw new CrudHttpError(409, {
+          error: 'The invoice number mask produced a number that is already in use',
+          code: 'billing.invoice.number_conflict',
+        })
+      }
+      throw err
+    }
 
-    const lines = await em.find(SalesInvoiceLine, {
-      invoice,
-      tenantId: parsed.tenantId,
-      organizationId: parsed.organizationId,
+    const lines = await em.find(BillingInvoiceLine, {
+      invoiceId: invoice.id,
+      ...scope,
+      deletedAt: null,
     } as never)
 
-    // Side effects fire AFTER the DB commit so downstream subscribers
-    // (mailer, accounting bridge, analytics) never observe a "posted"
-    // event for an invoice the DB doesn't reflect.
-    await emitBillingEvent('billing.invoice.posted', {
+    // Spec B: freeze the PDF after the commit, before announcing the post (the
+    // auto-send subscriber attaches it). A render / storage failure never rolls
+    // the post back — the first download renders and freezes it instead.
+    try {
+      await freezeInvoicePdf(em, invoice)
+    } catch (err) {
+      console.error('[billing.invoices.post] PDF could not be frozen; it will be rendered on first download', invoice.id, err)
+    }
+
+    // Side effects fire AFTER the DB commit so downstream subscribers never
+    // observe a "posted" event for an invoice the DB doesn't reflect.
+    // `billing.invoice.posted` is for invoices only; memos have their own
+    // events with the same payload (Spec D, P-D9).
+    const postedEvent: BillingEventId =
+      invoice.documentType === 'credit_memo'
+        ? 'billing.credit_memo.posted'
+        : invoice.documentType === 'debit_memo'
+          ? 'billing.debit_memo.posted'
+          : 'billing.invoice.posted'
+    await emitAllocationEffects(scope, settlement)
+    await emitBillingEvent(postedEvent, {
+      correctsInvoiceId: invoice.correctsInvoiceId ?? null,
       invoiceId: invoice.id,
-      invoiceNumber: invoice.invoiceNumber,
+      invoiceNumber: invoice.number,
+      documentType: invoice.documentType,
       tenantId: invoice.tenantId,
       organizationId: invoice.organizationId,
-      grandTotalNet: invoice.grandTotalNetAmount,
-      grandTotalGross: invoice.grandTotalGrossAmount,
+      grandTotalNet: invoice.subtotalNet,
+      grandTotalGross: invoice.totalGross,
       currencyCode: invoice.currencyCode,
-      billRunId: (meta as { bill_run_id?: string }).bill_run_id ?? null,
-      billAccountId: (meta as { bill_account_id?: string }).bill_account_id ?? null,
-      billPeriodStart: (meta as { bill_period_start?: string }).bill_period_start ?? null,
-      billPeriodEnd: (meta as { bill_period_end?: string }).bill_period_end ?? null,
+      billRunId: invoice.billRunId ?? null,
+      billAccountId: invoice.billAccountId,
+      billDate: isoDate(invoice.billDate),
+      billPeriodStart: isoDate(invoice.periodStart),
+      billPeriodEnd: isoDate(invoice.periodEnd),
+      issueDate: isoDate(invoice.issueDate),
+      dueDate: isoDate(invoice.dueDate),
       lineCount: lines.length,
     })
     for (const line of lines) {
-      const lineMeta = (line.metadata as Record<string, unknown> | null) ?? {}
       await emitBillingEvent('billing.invoice.line_posted', {
         invoiceId: invoice.id,
         invoiceLineId: line.id,
-        billingItemId: lineMeta.billing_item_id ?? null,
-        billingType: lineMeta.billing_type ?? null,
-        description: line.description ?? null,
+        billingItemId: line.billingItemId ?? null,
+        billingType: line.billingType,
+        description: line.description,
         unitPriceNet: line.unitPriceNet,
         quantity: line.quantity,
-        totalNetAmount: line.totalNetAmount,
+        totalNetAmount: line.netAmount,
         tenantId: invoice.tenantId,
         organizationId: invoice.organizationId,
       })
     }
 
     // SPEC-002 P6: a newly-posted invoice raises the account's outstanding
-    // exposure — emit billing.credit.over_limit on the upward crossing. Billing
-    // never blocks; the consuming flow decides what to do.
-    const billAccountId = (meta as { bill_account_id?: string }).bill_account_id
-    if (billAccountId) {
-      const account = await em.findOne(BillingAccount, {
-        id: billAccountId,
-        tenantId: parsed.tenantId,
-        organizationId: parsed.organizationId,
-        deletedAt: null,
-      })
-      if (account) {
-        const creditEvents = await buildPostpaidCreditCrossingEvents(
-          em,
-          account,
-          invoice.outstandingAmount,
-        )
-        for (const ev of creditEvents) {
-          await emitBillingEvent(ev.id as BillingEventId, ev.payload, { persistent: true })
-        }
+    // exposure — emit billing.credit.over_limit on the upward crossing.
+    // Billing never blocks; the consuming flow decides what to do.
+    if (!isCreditMemo) {
+      const creditEvents = await buildPostpaidCreditCrossingEvents(em, account, invoice.outstanding)
+      for (const ev of creditEvents) {
+        await emitBillingEvent(ev.id as BillingEventId, ev.payload, { persistent: true })
       }
     }
 
     return {
       invoiceId: invoice.id,
-      invoiceNumber: invoice.invoiceNumber,
+      invoiceNumber: invoice.number,
       status: 'posted',
       lineCount: lines.length,
     }
   },
 }
 
-// ─── Draft edit / add / remove (Phase 4b) ────────────────────────
+// ─── Draft edit / add / remove ───────────────────────────────────
 //
 // Three commands sharing the same shape:
 //   1. Assert the invoice is still a draft (refuse otherwise).
 //   2. Mutate the line / collection.
 //   3. Write a `BillingDraftInvoiceEdit` audit row carrying before+after
-//      snapshots (`null` on the "no prior state" / "no resulting state"
-//      side per the spec — see entity column docs).
+//      snapshots (`null` on the "no prior state" / "no resulting state" side).
 //   4. Recompute the invoice totals from the surviving lines.
 //
-// The audit row is append-only; once written, never updated. Soft-
-// deleting the invoice does NOT delete the audit rows (compliance).
+// The audit row is append-only; once written, never updated.
 
 function roundHalfUp2dp(value: number): number {
-  return Math.round((value + Number.EPSILON) * 100) / 100
+  const sign = value < 0 ? -1 : 1
+  return (sign * Math.round((Math.abs(value) + Number.EPSILON) * 100)) / 100
 }
 
 function format4dp(value: number): string {
@@ -201,13 +360,13 @@ function format4dp(value: number): string {
 async function assertDraftInvoice(
   em: EntityManager,
   params: { invoiceId: string; tenantId: string; organizationId: string },
-): Promise<SalesInvoice> {
-  const invoice = await em.findOne(SalesInvoice, {
+): Promise<BillingInvoice> {
+  const invoice = await em.findOne(BillingInvoice, {
     id: params.invoiceId,
     tenantId: params.tenantId,
     organizationId: params.organizationId,
     deletedAt: null,
-  })
+  } as never)
   if (!invoice) {
     throw new CrudHttpError(404, { error: 'Invoice not found' })
   }
@@ -223,54 +382,63 @@ async function assertDraftInvoice(
 
 type LineSnapshot = {
   id: string
-  description: string | null
+  description: string
   quantity: string
   unitPriceNet: string
-  totalNetAmount: string
-  totalGrossAmount: string
+  taxRate: string
+  netAmount: string
+  taxAmount: string
+  grossAmount: string
   metadata: Record<string, unknown> | null
 }
 
-function snapshotLine(line: SalesInvoiceLine): LineSnapshot {
+function snapshotLine(line: BillingInvoiceLine): LineSnapshot {
   return {
     id: line.id,
-    description: line.description ?? null,
+    description: line.description,
     quantity: line.quantity,
     unitPriceNet: line.unitPriceNet,
-    totalNetAmount: line.totalNetAmount,
-    totalGrossAmount: line.totalGrossAmount,
-    metadata: (line.metadata as Record<string, unknown> | null) ?? null,
+    taxRate: line.taxRate,
+    netAmount: line.netAmount,
+    taxAmount: line.taxAmount,
+    grossAmount: line.grossAmount,
+    metadata: line.metadata ?? null,
   }
 }
 
-async function recomputeInvoiceTotals(
-  em: EntityManager,
-  invoice: SalesInvoice,
-): Promise<void> {
-  const lines = await em.find(SalesInvoiceLine, {
-    invoice,
+/** Sets net / tax / gross on a line from its net amount and tax rate. */
+function applyLineAmounts(line: BillingInvoiceLine, net: number): void {
+  const amounts = lineAmountsFromNet(net, Number.parseFloat(line.taxRate) || 0)
+  line.netAmount = format4dp(amounts.net)
+  line.taxAmount = format4dp(amounts.tax)
+  line.grossAmount = format4dp(amounts.gross)
+}
+
+async function recomputeInvoiceTotals(em: EntityManager, invoice: BillingInvoice): Promise<void> {
+  const lines = await em.find(BillingInvoiceLine, {
+    invoiceId: invoice.id,
     tenantId: invoice.tenantId,
     organizationId: invoice.organizationId,
+    deletedAt: null,
   } as never)
-  let totalNet = 0
-  for (const line of lines) {
-    totalNet += Number.parseFloat(line.totalNetAmount)
-  }
-  const formatted = format4dp(totalNet)
-  invoice.subtotalNetAmount = formatted
-  invoice.subtotalGrossAmount = formatted
-  invoice.grandTotalNetAmount = formatted
-  invoice.grandTotalGrossAmount = formatted
-  invoice.outstandingAmount = formatted
+  const totals = sumTotals(
+    lines.map((line) => ({
+      net: Number.parseFloat(line.netAmount),
+      tax: Number.parseFloat(line.taxAmount),
+      gross: Number.parseFloat(line.grossAmount),
+    })),
+  )
+  invoice.subtotalNet = totals.subtotalNet
+  invoice.taxTotal = totals.taxTotal
+  invoice.totalGross = totals.totalGross
+  invoice.outstanding = totals.totalGross
   invoice.updatedAt = new Date()
 }
 
 function getUserIdFromCtx(ctx: CommandRuntimeContext): string {
   const userId = (ctx.auth?.sub as string | undefined) ?? null
-  // The BillingDraftInvoiceEdit.user_id column is NOT NULL. For system-driven
-  // edits (e.g. catch-up flow that revises a value), we fall back to
-  // a sentinel UUID. Operator-driven edits always have a real
-  // ctx.auth.sub.
+  // `BillingDraftInvoiceEdit.user_id` is NOT NULL. System-driven edits fall
+  // back to a sentinel UUID; operator edits always have ctx.auth.sub.
   return userId ?? '00000000-0000-0000-0000-000000000000'
 }
 
@@ -286,18 +454,15 @@ const editDraftLineCommand: CommandHandler<
     ensureOrganizationScope(ctx, parsed.organizationId)
 
     const em = getEm(ctx)
-    const invoice = await assertDraftInvoice(em, {
-      invoiceId: parsed.invoiceId,
-      tenantId: parsed.tenantId,
-      organizationId: parsed.organizationId,
-    })
+    const invoice = await assertDraftInvoice(em, parsed)
 
-    const line = await em.findOne(SalesInvoiceLine, {
+    const line = await em.findOne(BillingInvoiceLine, {
       id: parsed.invoiceLineId,
-      invoice,
+      invoiceId: invoice.id,
       tenantId: parsed.tenantId,
       organizationId: parsed.organizationId,
-    })
+      deletedAt: null,
+    } as never)
     if (!line) {
       throw new CrudHttpError(404, { error: 'Invoice line not found' })
     }
@@ -307,38 +472,22 @@ const editDraftLineCommand: CommandHandler<
 
     await withAtomicFlush(em, [
       () => {
-        if (parsed.changes.description !== undefined) {
-          line.description = parsed.changes.description
-        }
-        if (parsed.changes.quantity !== undefined) {
-          line.quantity = format4dp(parsed.changes.quantity)
-          line.normalizedQuantity = line.quantity
-        }
-        if (parsed.changes.unitPriceNet !== undefined) {
-          line.unitPriceNet = format4dp(parsed.changes.unitPriceNet)
-          line.unitPriceGross = line.unitPriceNet
-        }
-
-        // Recompute the line total. If the operator supplied an explicit
-        // `totalNetAmount` override, honour it; otherwise compute from
-        // unit_price × quantity.
-        if (parsed.changes.totalNetAmount !== undefined) {
-          const total = format4dp(parsed.changes.totalNetAmount)
-          line.totalNetAmount = total
-          line.totalGrossAmount = total
-        } else {
-          const total = format4dp(
-            Number.parseFloat(line.unitPriceNet) * Number.parseFloat(line.quantity),
-          )
-          line.totalNetAmount = total
-          line.totalGrossAmount = total
-        }
+        if (parsed.changes.description !== undefined) line.description = parsed.changes.description
+        if (parsed.changes.quantity !== undefined) line.quantity = format4dp(parsed.changes.quantity)
+        if (parsed.changes.unitPriceNet !== undefined) line.unitPriceNet = format4dp(parsed.changes.unitPriceNet)
+        if (parsed.changes.taxRate !== undefined) line.taxRate = taxRateColumn(parsed.changes.taxRate)
+        // An explicit total override wins; otherwise unit price × quantity.
+        const net =
+          parsed.changes.totalNetAmount !== undefined
+            ? parsed.changes.totalNetAmount
+            : Number.parseFloat(line.unitPriceNet) * Number.parseFloat(line.quantity)
+        applyLineAmounts(line, net)
+        line.updatedAt = new Date()
       },
       async () => {
         await recomputeInvoiceTotals(em, invoice)
       },
       () => {
-        const after = snapshotLine(line)
         audit = em.create(BillingDraftInvoiceEdit, {
           tenantId: parsed.tenantId,
           organizationId: parsed.organizationId,
@@ -347,7 +496,7 @@ const editDraftLineCommand: CommandHandler<
           userId: getUserIdFromCtx(ctx),
           action: 'line_edited',
           beforeJson: before as Record<string, unknown>,
-          afterJson: after as Record<string, unknown>,
+          afterJson: snapshotLine(line) as Record<string, unknown>,
           createdAt: new Date(),
         })
         em.persist(audit)
@@ -370,44 +519,40 @@ const addDraftLineCommand: CommandHandler<
     ensureOrganizationScope(ctx, parsed.organizationId)
 
     const em = getEm(ctx)
-    const invoice = await assertDraftInvoice(em, {
-      invoiceId: parsed.invoiceId,
-      tenantId: parsed.tenantId,
-      organizationId: parsed.organizationId,
-    })
+    const invoice = await assertDraftInvoice(em, parsed)
 
-    const existing = await em.find(SalesInvoiceLine, {
-      invoice,
+    const existing = await em.find(BillingInvoiceLine, {
+      invoiceId: invoice.id,
       tenantId: parsed.tenantId,
       organizationId: parsed.organizationId,
+      deletedAt: null,
     } as never)
-    const nextLineNumber = existing.length + 1
+    const nextLineNumber = existing.reduce((max, l) => Math.max(max, l.lineNumber), 0) + 1
 
-    const total = format4dp(parsed.unitPriceNet * parsed.quantity)
-    const line = em.create(SalesInvoiceLine, {
-      invoice,
+    const now = new Date()
+    const line = em.create(BillingInvoiceLine, {
       organizationId: parsed.organizationId,
       tenantId: parsed.tenantId,
+      invoiceId: invoice.id,
       lineNumber: nextLineNumber,
-      kind: 'product',
+      billingItemId: parsed.billingItemId ?? null,
+      billingType: parsed.billingType ?? 'manual',
       description: parsed.description,
       quantity: format4dp(parsed.quantity),
-      normalizedQuantity: format4dp(parsed.quantity),
-      currencyCode: invoice.currencyCode,
       unitPriceNet: format4dp(parsed.unitPriceNet),
-      unitPriceGross: format4dp(parsed.unitPriceNet),
-      discountAmount: '0',
-      discountPercent: '0',
-      taxRate: '0',
+      // Spec B: explicit rate, else the organization default.
+      taxRate:
+        parsed.taxRate !== undefined
+          ? taxRateColumn(parsed.taxRate)
+          : (await getBillingSettings(em, parsed)).defaultTaxRate,
+      netAmount: '0',
       taxAmount: '0',
-      totalNetAmount: total,
-      totalGrossAmount: total,
-      metadata: {
-        billing_item_id: parsed.billingItemId ?? null,
-        billing_type: parsed.billingType ?? 'manual',
-        operator_added: true,
-      },
+      grossAmount: '0',
+      metadata: { operator_added: true },
+      createdAt: now,
+      updatedAt: now,
     })
+    applyLineAmounts(line, parsed.unitPriceNet * parsed.quantity)
     let audit: BillingDraftInvoiceEdit | null = null
 
     await withAtomicFlush(em, [
@@ -418,7 +563,6 @@ const addDraftLineCommand: CommandHandler<
         await recomputeInvoiceTotals(em, invoice)
       },
       () => {
-        const after = snapshotLine(line)
         audit = em.create(BillingDraftInvoiceEdit, {
           tenantId: parsed.tenantId,
           organizationId: parsed.organizationId,
@@ -427,7 +571,7 @@ const addDraftLineCommand: CommandHandler<
           userId: getUserIdFromCtx(ctx),
           action: 'line_added',
           beforeJson: null,
-          afterJson: after as Record<string, unknown>,
+          afterJson: snapshotLine(line) as Record<string, unknown>,
           createdAt: new Date(),
         })
         em.persist(audit)
@@ -450,17 +594,14 @@ const removeDraftLineCommand: CommandHandler<
     ensureOrganizationScope(ctx, parsed.organizationId)
 
     const em = getEm(ctx)
-    const invoice = await assertDraftInvoice(em, {
-      invoiceId: parsed.invoiceId,
-      tenantId: parsed.tenantId,
-      organizationId: parsed.organizationId,
-    })
-    const line = await em.findOne(SalesInvoiceLine, {
+    const invoice = await assertDraftInvoice(em, parsed)
+    const line = await em.findOne(BillingInvoiceLine, {
       id: parsed.invoiceLineId,
-      invoice,
+      invoiceId: invoice.id,
       tenantId: parsed.tenantId,
       organizationId: parsed.organizationId,
-    })
+      deletedAt: null,
+    } as never)
     if (!line) {
       throw new CrudHttpError(404, { error: 'Invoice line not found' })
     }
@@ -495,18 +636,14 @@ const removeDraftLineCommand: CommandHandler<
   },
 }
 
-// ─── Wipe test invoices (Phase 4b) ───────────────────────────────
+// ─── Wipe test invoices ──────────────────────────────────────────
 //
-// Hard-deletes invoices flagged `metadata.test_run=true` (and their
-// lines via cascade — the invoice's lines collection points at it
-// with ON DELETE CASCADE). Optionally scoped to a single `bill_run_id`
-// via the param so operators can wipe a specific test run without
-// risking other test data.
+// Hard-deletes test-run drafts (`test_run = true`) with their lines and
+// draft-edit audit rows (`lib/testRunCleanup`), optionally scoped to one Bill
+// Run so an operator can wipe a specific test run without touching other
+// test data.
 
-const wipeTestInvoicesCommand: CommandHandler<
-  BillingWipeTestInvoicesInput,
-  { invoicesRemoved: number }
-> = {
+const wipeTestInvoicesCommand: CommandHandler<BillingWipeTestInvoicesInput, { invoicesRemoved: number }> = {
   id: 'billing.invoices.wipe_test',
 
   async execute(rawInput, ctx) {
@@ -515,39 +652,14 @@ const wipeTestInvoicesCommand: CommandHandler<
     ensureOrganizationScope(ctx, parsed.organizationId)
 
     const em = getEm(ctx)
-    // The metadata->>'test_run' = 'true' predicate uses Postgres'
-    // JSONB ->> operator + the literal string 'true' (jsonb true is
-    // serialized as the JSON literal `true`, which ->> returns as the
-    // text "true").
-    const params: unknown[] = [parsed.tenantId, parsed.organizationId]
-    let billRunClause = ''
-    if (parsed.billRunId) {
-      billRunClause = ` AND metadata->>'bill_run_id' = ?`
-      params.push(parsed.billRunId)
-    }
-    const rows = (await em.execute(
-      `SELECT id FROM sales_invoices
-       WHERE tenant_id = ?
-         AND organization_id = ?
-         AND deleted_at IS NULL
-         AND metadata->>'test_run' = 'true'${billRunClause}`,
-      params,
-    )) as unknown as Array<{ id: string }> | undefined
-    if (!rows || rows.length === 0) {
-      return { invoicesRemoved: 0 }
-    }
-    const ids = rows.map((r) => r.id)
-    // Hard-delete lines first then invoices to avoid relying on
-    // cascade semantics that the migration may or may not encode.
-    await em.execute(
-      `DELETE FROM sales_invoice_lines WHERE invoice_id IN (${ids.map(() => '?').join(',')})`,
-      ids,
+    const removed = await em.transactional((tem) =>
+      deleteTestRunArtifacts(tem as EntityManager, {
+        tenantId: parsed.tenantId,
+        organizationId: parsed.organizationId,
+        billRunId: parsed.billRunId ?? null,
+      }),
     )
-    await em.execute(
-      `DELETE FROM sales_invoices WHERE id IN (${ids.map(() => '?').join(',')})`,
-      ids,
-    )
-    return { invoicesRemoved: ids.length }
+    return { invoicesRemoved: removed }
   },
 }
 
@@ -564,3 +676,24 @@ export {
   removeDraftLineCommand,
   wipeTestInvoicesCommand,
 }
+
+/**
+ * `billing.invoices.send` — emails a posted document with its frozen PDF
+ * (Spec B). Every attempt is logged in `metadata.deliveries`; a transport
+ * failure returns `status: 'failed'` instead of throwing. Not undoable: an
+ * email cannot be recalled.
+ */
+const sendInvoiceCommand: CommandHandler<BillingInvoiceSendInput, SendInvoiceResult> = {
+  id: 'billing.invoices.send',
+
+  async execute(rawInput, ctx) {
+    const parsed = billingInvoiceSendSchema.parse(rawInput)
+    ensureTenantScope(ctx, parsed.tenantId)
+    ensureOrganizationScope(ctx, parsed.organizationId)
+    return sendInvoice(getEm(ctx), { ...parsed, trigger: 'manual' })
+  },
+}
+
+registerCommand(sendInvoiceCommand)
+
+export { sendInvoiceCommand }

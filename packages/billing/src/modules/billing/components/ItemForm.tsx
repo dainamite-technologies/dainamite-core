@@ -13,6 +13,12 @@ import {
 import { Switch } from '@open-mercato/ui/primitives/switch'
 import { Kbd, KbdShortcut } from '@open-mercato/ui/primitives/kbd'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
+import Link from 'next/link'
+import { SegmentedControl, SegmentedControlItem } from '@open-mercato/ui/primitives/segmented-control'
+import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
+import { ItemPriceField } from './ItemPriceField'
+import { BILLING_SETTINGS_HREF } from './BillingSettingsLink'
+import { counterpartAmount, type PriceBasis } from '../lib/lineAmounts'
 
 /**
  * Shared form for Billing Item create + edit.
@@ -52,6 +58,13 @@ export type ItemFormValues = {
   subscriptionId: string
   subscriptionItemId: string
   isActive: boolean
+  // Spec A — recurring only.
+  chargeTiming: 'in_advance' | 'in_arrears'
+  prorate: boolean
+  // Spec B — VAT %. Empty on create → the organization default.
+  taxRate: string
+  // Spec F (F-D2) — the basis the price inputs are entered on.
+  priceBasis: PriceBasis
 }
 
 // The accounts list API (`/api/billing/accounts`) returns snake_case
@@ -62,6 +75,7 @@ export type AccountOption = {
   name: string
   customer_id: string
   currency_code: string
+  billing_mode?: 'postpaid' | 'prepaid'
 }
 
 export type ItemFormProps = {
@@ -69,6 +83,10 @@ export type ItemFormProps = {
   /** For create mode: full list of accounts the operator can attach to. */
   accountOptions?: AccountOption[]
   initial?: Partial<ItemFormValues>
+  /** Edit mode: the item's account mode (prepaid tax-point rules, Spec F). */
+  accountBillingMode?: 'postpaid' | 'prepaid'
+  /** Edit mode: the item's account currency, shown next to the rate (Spec F, F2). */
+  accountCurrency?: string
   submitting?: boolean
   /** Returns the assembled payload (with rate_json built). */
   onSubmit: (assembled: AssembledItemPayload) => Promise<void> | void
@@ -86,6 +104,10 @@ export type AssembledItemPayload = {
   subscriptionId?: string
   subscriptionItemId?: string
   isActive?: boolean
+  chargeTiming?: 'in_advance' | 'in_arrears'
+  prorate?: boolean
+  taxRate?: number
+  priceBasis?: PriceBasis
 }
 
 const EMPTY_VALUES: ItemFormValues = {
@@ -103,6 +125,10 @@ const EMPTY_VALUES: ItemFormValues = {
   subscriptionId: '',
   subscriptionItemId: '',
   isActive: true,
+  chargeTiming: 'in_advance',
+  prorate: true,
+  taxRate: '',
+  priceBasis: 'net',
 }
 
 function todayIso(): string {
@@ -127,12 +153,18 @@ export function ItemForm({
   mode,
   accountOptions,
   initial,
+  accountBillingMode,
+  accountCurrency,
   submitting = false,
   onSubmit,
   onCancel,
 }: ItemFormProps) {
   const t = useT()
   const [values, setValues] = React.useState<ItemFormValues>(() => mergeInitial(initial))
+  const selectedAccount = accountOptions?.find((option) => option.id === values.billAccountId)
+  const isPrepaidAccount = accountBillingMode === 'prepaid' || selectedAccount?.billing_mode === 'prepaid'
+  // Read-only: the currency always comes from the parent account.
+  const currencyCode = accountCurrency ?? selectedAccount?.currency_code ?? ''
   const [error, setError] = React.useState<string | null>(null)
   const isEdit = mode === 'edit'
 
@@ -140,6 +172,63 @@ export function ItemForm({
   React.useEffect(() => {
     setValues(mergeInitial(initial))
   }, [initialKey, initial])
+
+  // Spec B: prefill the VAT rate with the organization default on create.
+  // Spec F (F-D3): the prepaid tax point decides whether VAT applies to
+  // prepaid charges at all. Best effort — without settings access the server
+  // applies the default rate and the form assumes the `topup` default.
+  const [prepaidTaxPoint, setPrepaidTaxPoint] = React.useState<'topup' | 'consumption'>('topup')
+  React.useEffect(() => {
+    let cancelled = false
+    void apiCall<{ settings?: { defaultTaxRate?: number; prepaidTaxPoint?: 'topup' | 'consumption' } }>(
+      '/api/billing/settings',
+    ).then((call) => {
+      if (cancelled || !call.ok) return
+      const settings = call.result?.settings
+      if (settings?.prepaidTaxPoint === 'consumption') setPrepaidTaxPoint('consumption')
+      const rate = settings?.defaultTaxRate
+      if (!isEdit && typeof rate === 'number') {
+        setValues((prev) => (prev.taxRate === '' ? { ...prev, taxRate: String(rate) } : prev))
+      }
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [isEdit])
+
+  // Prepaid + tax at top-up: VAT was charged on the receipt, so the item
+  // price is debited as entered — the VAT rate and basis do not apply.
+  const taxLocked = isPrepaidAccount && prepaidTaxPoint === 'topup'
+  // Tiered usage rates are always net (P-D4).
+  const basisForcedNet = values.type === 'usage' && values.usageMode === 'tiered'
+  const effectiveBasis: PriceBasis = basisForcedNet ? 'net' : values.priceBasis
+
+  // Switching the basis converts the typed prices, so the price stays the same.
+  const handleBasisChange = React.useCallback((next: string) => {
+    const target: PriceBasis = next === 'gross' ? 'gross' : 'net'
+    setValues((prev) => {
+      if (prev.priceBasis === target) return prev
+      const rate = toNumber(prev.taxRate) ?? 0
+      const convert = (raw: string, decimals: number): string => {
+        const amount = toNumber(raw)
+        if (amount === null) return raw
+        const converted =
+          decimals > 2
+            ? prev.priceBasis === 'gross'
+              ? amount / (1 + rate / 100)
+              : amount * (1 + rate / 100)
+            : counterpartAmount(amount, prev.priceBasis, rate)
+        return String(Number(converted.toFixed(decimals)))
+      }
+      return {
+        ...prev,
+        priceBasis: target,
+        oneTimeAmount: convert(prev.oneTimeAmount, 2),
+        recurringUnitPrice: convert(prev.recurringUnitPrice, 2),
+        usageUnitPrice: convert(prev.usageUnitPrice, 6),
+      }
+    })
+  }, [])
 
   const set = React.useCallback(
     <K extends keyof ItemFormValues>(key: K, value: ItemFormValues[K]) => {
@@ -235,6 +324,11 @@ export function ItemForm({
       setError(t('billing.items.form.error.uom_required', 'UoM code is required for usage items'))
       return
     }
+    const taxRate = toNumber(values.taxRate)
+    if (values.taxRate.trim() !== '' && (taxRate == null || taxRate < 0 || taxRate > 100)) {
+      setError(t('billing.items.form.error.tax_rate_invalid', 'VAT rate must be between 0 and 100'))
+      return
+    }
     const rateJsonResult = buildRateJson()
     if (typeof rateJsonResult === 'string') {
       // builder returned an error message
@@ -258,18 +352,27 @@ export function ItemForm({
     if (values.subscriptionItemId.trim()) {
       payload.subscriptionItemId = values.subscriptionItemId.trim()
     }
+    if (values.type === 'recurring') {
+      payload.chargeTiming = values.chargeTiming
+      payload.prorate = values.prorate
+    }
+    if (taxRate != null) payload.taxRate = taxRate
+    payload.priceBasis = effectiveBasis
     if (isEdit) payload.isActive = values.isActive
     await onSubmit(payload)
-  }, [buildRateJson, isEdit, onSubmit, t, values])
+  }, [buildRateJson, effectiveBasis, isEdit, onSubmit, t, values])
 
   const handleKeyDown = React.useCallback(
     (event: React.KeyboardEvent<HTMLDivElement>) => {
       if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
         event.preventDefault()
         void handleSubmit()
+      } else if (event.key === 'Escape') {
+        event.preventDefault()
+        onCancel()
       }
     },
-    [handleSubmit],
+    [handleSubmit, onCancel],
   )
 
   return (
@@ -369,44 +472,138 @@ export function ItemForm({
         </label>
       </div>
 
-      <h3 className="text-sm font-semibold mt-6 mb-2">
-        {t('billing.items.form.rate.title', 'Rate')}
-      </h3>
+      <div className="mt-6 mb-2 flex flex-wrap items-center justify-between gap-3">
+        <h3 className="text-sm font-semibold">{t('billing.items.form.rate.title', 'Rate')}</h3>
+        <SegmentedControl
+          value={effectiveBasis}
+          onValueChange={handleBasisChange}
+          disabled={taxLocked || basisForcedNet}
+          aria-label={t('billing.items.form.price_basis', 'Price entered as')}
+        >
+          <SegmentedControlItem value="net">{t('billing.items.price_basis.net', 'Net')}</SegmentedControlItem>
+          <SegmentedControlItem value="gross">{t('billing.items.price_basis.gross', 'Gross')}</SegmentedControlItem>
+        </SegmentedControl>
+      </div>
+      {basisForcedNet && !taxLocked ? (
+        <p className="mb-2 text-xs text-muted-foreground">
+          {t('billing.items.form.price_basis.tiered_net', 'Tiered rates are always entered net.')}
+        </p>
+      ) : null}
       <div className="grid grid-cols-2 gap-4">
         {values.type === 'one_time' ? (
+          <ItemPriceField
+            label={t('billing.items.form.rate.amount', 'Amount')}
+            value={values.oneTimeAmount}
+            onChange={(next) => set('oneTimeAmount', next)}
+            step="0.01"
+            currencyCode={currencyCode}
+            priceBasis={effectiveBasis}
+            taxRate={values.taxRate}
+            showCounterpart={!taxLocked}
+            help={t('billing.items.form.rate.amount.help', 'Negative allowed for refunds / credits / proration credits.')}
+          />
+        ) : null}
+
+        {values.type === 'recurring' ? (
+          <ItemPriceField
+            label={t('billing.items.form.rate.unit_price_recurring', 'Unit price per cycle')}
+            value={values.recurringUnitPrice}
+            onChange={(next) => set('recurringUnitPrice', next)}
+            step="0.01"
+            currencyCode={currencyCode}
+            priceBasis={effectiveBasis}
+            taxRate={values.taxRate}
+            showCounterpart={!taxLocked}
+          />
+        ) : null}
+
+        {values.type === 'usage' && values.usageMode === 'simple' ? (
+          <ItemPriceField
+            label={t('billing.items.form.rate.unit_price_usage', 'Unit price per unit consumed')}
+            value={values.usageUnitPrice}
+            onChange={(next) => set('usageUnitPrice', next)}
+            step="0.000001"
+            currencyCode={currencyCode}
+            priceBasis={effectiveBasis}
+            taxRate={values.taxRate}
+            showCounterpart={!taxLocked}
+            precision={6}
+          />
+        ) : null}
+
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="text-muted-foreground">{t('billing.items.form.tax_rate', 'VAT rate (%)')}</span>
+          <Input
+            type="number"
+            min="0"
+            max="100"
+            step="0.01"
+            value={values.taxRate}
+            disabled={taxLocked}
+            onChange={(event) => set('taxRate', event.currentTarget.value)}
+          />
+          <span className="text-xs text-muted-foreground">
+            {taxLocked ? (
+              <>
+                {t('billing.items.form.tax_rate.prepaid_topup', 'For prepaid accounts, tax is allocated at top-up.')}{' '}
+                <Link href={BILLING_SETTINGS_HREF} className="text-primary hover:underline">
+                  {t('billing.settings.link', 'Billing settings')}
+                </Link>
+              </>
+            ) : isPrepaidAccount ? (
+              t('billing.items.form.tax_rate.prepaid_consumption', 'Charged from the balance including VAT.')
+            ) : isEdit ? (
+              t('billing.items.form.tax_rate.help_edit', 'Applies to future invoices; posted invoices keep their rate.')
+            ) : (
+              t('billing.items.form.tax_rate.help', 'Defaults to the organization VAT rate from billing settings.')
+            )}
+          </span>
+        </label>
+
+        {values.type === 'recurring' ? (
           <label className="flex flex-col gap-1 text-sm">
             <span className="text-muted-foreground">
-              {t('billing.items.form.rate.amount', 'Amount')}
-              <span className="text-destructive"> *</span>
+              {t('billing.items.form.charge_timing', 'Charge timing')}
             </span>
-            <Input
-              type="number"
-              step="0.0001"
-              value={values.oneTimeAmount}
-              onChange={(event) => set('oneTimeAmount', event.currentTarget.value)}
-            />
+            <Select
+              value={values.chargeTiming}
+              onValueChange={(next) => set('chargeTiming', next === 'in_arrears' ? 'in_arrears' : 'in_advance')}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="in_advance">
+                  {t('billing.items.charge_timing.in_advance', 'In advance')}
+                </SelectItem>
+                <SelectItem value="in_arrears">
+                  {t('billing.items.charge_timing.in_arrears', 'In arrears')}
+                </SelectItem>
+              </SelectContent>
+            </Select>
             <span className="text-xs text-muted-foreground">
-              {t(
-                'billing.items.form.rate.amount.help',
-                'Negative allowed for refunds / credits / proration credits.',
-              )}
+              {values.chargeTiming === 'in_arrears'
+                ? t('billing.items.form.charge_timing.help_arrears', 'Each bill date charges the period that just ended.')
+                : t('billing.items.form.charge_timing.help_advance', 'Each bill date charges the coming period.')}
             </span>
           </label>
         ) : null}
 
         {values.type === 'recurring' ? (
-          <label className="flex flex-col gap-1 text-sm">
-            <span className="text-muted-foreground">
-              {t('billing.items.form.rate.unit_price_recurring', 'Unit price per cycle')}
-              <span className="text-destructive"> *</span>
-            </span>
-            <Input
-              type="number"
-              step="0.0001"
-              value={values.recurringUnitPrice}
-              onChange={(event) => set('recurringUnitPrice', event.currentTarget.value)}
-            />
-          </label>
+          <div className="flex items-center justify-between gap-3 text-sm">
+            <div>
+              <div className="font-medium">
+                {t('billing.items.form.prorate', 'Prorate partial periods')}
+              </div>
+              <div className="text-xs text-muted-foreground">
+                {t(
+                  'billing.items.form.prorate.help',
+                  'Charge by calendar days when the item starts or ends mid-period, and credit unused days if it ends after being billed in advance.',
+                )}
+              </div>
+            </div>
+            <Switch checked={values.prorate} onCheckedChange={(next) => set('prorate', next)} />
+          </div>
         ) : null}
 
         {values.type === 'usage' ? (
@@ -433,20 +630,7 @@ export function ItemForm({
               </Select>
             </label>
 
-            {values.usageMode === 'simple' ? (
-              <label className="flex flex-col gap-1 text-sm">
-                <span className="text-muted-foreground">
-                  {t('billing.items.form.rate.unit_price_usage', 'Unit price per unit consumed')}
-                  <span className="text-destructive"> *</span>
-                </span>
-                <Input
-                  type="number"
-                  step="0.000001"
-                  value={values.usageUnitPrice}
-                  onChange={(event) => set('usageUnitPrice', event.currentTarget.value)}
-                />
-              </label>
-            ) : (
+            {values.usageMode === 'tiered' ? (
               <label className="flex flex-col gap-1 text-sm col-span-2">
                 <span className="text-muted-foreground">
                   {t('billing.items.form.rate.tiered_json', 'Tiered rate JSON')}
@@ -458,6 +642,11 @@ export function ItemForm({
                   placeholder='{ "model": "graduated", "tiers": [{ "up_to": 10000, "unit_price": 0 }, { "up_to": null, "unit_price": 0.001 }] }'
                   onChange={(event) => set('usageTieredJson', event.currentTarget.value)}
                 />
+                {currencyCode ? (
+                  <span className="text-xs text-muted-foreground">
+                    {t('billing.items.form.rate.prices_in', 'Prices in')} <span className="font-medium">{currencyCode}</span>
+                  </span>
+                ) : null}
                 <span className="text-xs text-muted-foreground">
                   {t(
                     'billing.items.form.rate.tiered_json.help',
@@ -465,7 +654,7 @@ export function ItemForm({
                   )}
                 </span>
               </label>
-            )}
+            ) : null}
 
             <label className="flex flex-col gap-1 text-sm">
               <span className="text-muted-foreground">

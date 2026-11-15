@@ -58,6 +58,13 @@ const EXPECTED_TABLES: Record<string, string> = {
   [billingEntityIds.transaction]: 'billing_account_transactions',
   [billingEntityIds.topup]: 'billing_topups',
   [billingEntityIds.statement]: 'billing_statements',
+  [billingEntityIds.invoice]: 'billing_invoices',
+  [billingEntityIds.invoiceLine]: 'billing_invoice_lines',
+  [billingEntityIds.documentSequence]: 'billing_document_sequences',
+  [billingEntityIds.settings]: 'billing_settings',
+  [billingEntityIds.payment]: 'billing_payments',
+  [billingEntityIds.allocation]: 'billing_allocations',
+  [billingEntityIds.paymentImport]: 'billing_payment_imports',
 }
 
 /** PascalCase of an id suffix — the class name the framework looks up. */
@@ -104,7 +111,7 @@ describe('shipped registry — generated/entities.ids.generated.ts', () => {
     // are what matters.
     const expected = Object.fromEntries(ALL_IDS.map((id) => [suffixOf(id), id]))
     expect(E.billing).toEqual(expected)
-    expect(Object.keys(E.billing)).toHaveLength(10)
+    expect(Object.keys(E.billing)).toHaveLength(17)
   })
 
   it('ships one column file per entity, matching the ORM columns', () => {

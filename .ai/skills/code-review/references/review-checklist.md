@@ -56,7 +56,7 @@
 - [ ] `RowActions` items have stable `id` values
 - [ ] i18n: `useT()` client-side — no hardcoded strings
 - [ ] `page.meta.ts` includes `pageGroup` + `pageGroupKey` for sidebar placement
-- [ ] Settings pages have `pageContext: 'settings' as const` + `navHidden: true`
+- [ ] Settings pages have `pageContext: 'settings' as const` and no `navHidden` (unless they are sub-pages reached from another settings page — `navHidden` hides them from the Settings sidebar too)
 - [ ] Sidebar icon uses `lucide-react` (not inline SVG)
 
 ## 7. Naming Conventions

@@ -1,13 +1,13 @@
 "use client"
 import * as React from 'react'
 import Link from 'next/link'
-import { useParams } from 'next/navigation'
+import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import type { LegacyColumnDef as ColumnDef } from '@tanstack/react-table/legacy'
-import { Pencil, Plus, Trash2 } from 'lucide-react'
+import { FileDown, Mail, Pencil, Plus, Trash2 } from 'lucide-react'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { Page, PageBody, PageHeader } from '@open-mercato/ui/backend/Page'
 import { FormHeader } from '@open-mercato/ui/backend/forms'
-import { DataTable } from '@open-mercato/ui/backend/DataTable'
+import { BillingDataTable as DataTable } from '../../../../components/BillingDataTable'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { IconButton } from '@open-mercato/ui/primitives/icon-button'
@@ -20,6 +20,7 @@ import {
 } from '@open-mercato/ui/backend/utils/apiCall'
 import { normalizeCrudServerError } from '@open-mercato/ui/backend/utils/serverErrors'
 import { LineFormDialog, type LineFormValues } from '../../../../components/LineFormDialog'
+import { BillingSettingsLink } from '../../../../components/BillingSettingsLink'
 import {
   DetailCard,
   DetailField,
@@ -27,51 +28,95 @@ import {
   StatCard,
 } from '../../../../components/DetailFields'
 import { billRunName } from '../../../../lib/billRunLabel'
+import { invoicePdfHref, resolveInvoiceReturnTarget } from '../../../../lib/navigation'
+import { CreateMemoDialog } from '../../../../components/CreateMemoDialog'
 
+// Spec 0: billing_invoices / billing_invoice_lines field names.
 type BillingInvoice = {
   id: string
-  invoice_number: string
-  status: 'draft' | 'posted' | 'paid' | 'void' | null
+  number: string
+  document_type: 'invoice' | 'credit_memo' | 'debit_memo' | 'receipt'
+  status: 'draft' | 'posted' | 'partially_paid' | 'paid' | 'credited'
+  test_run: boolean
+  bill_account_id: string
+  bill_account_name: string | null
+  bill_run_id: string | null
+  bill_date: string | null
+  period_start: string | null
+  period_end: string | null
   currency_code: string
   issue_date: string | null
   due_date: string | null
-  subtotal_net_amount: string
-  grand_total_net_amount: string
-  grand_total_gross_amount: string
-  paid_total_amount: string
-  outstanding_amount: string
-  metadata: {
-    bill_run_id?: string
-    bill_account_id?: string
-    bill_period_start?: string
-    bill_period_end?: string
-    test_run?: boolean
-  } | null
+  subtotal_net: string
+  tax_total: string
+  total_gross: string
+  paid_total: string
+  outstanding: string
+  days_overdue?: number
+  pdf_attachment_id?: string | null
+  // Spec D — corrective documents
+  corrects_invoice_id?: string | null
+  corrects_invoice_number?: string | null
+  correction_reason?: string | null
+  buyer_snapshot?: { invoice_email?: string } | null
+  metadata?: { draft_number?: string; deliveries?: InvoiceDelivery[] } | null
   created_at: string
   updated_at: string
+}
+
+// Spec B: one entry per email attempt (metadata.deliveries).
+type InvoiceDelivery = {
+  at: string
+  to: string
+  status: 'sent' | 'failed'
+  error?: string | null
+  trigger: 'manual' | 'auto'
 }
 
 type InvoiceLine = {
   id: string
   line_number: number
-  kind: string
+  billing_type: string
   description: string | null
   quantity: string
   currency_code: string
   unit_price_net: string
-  total_net_amount: string
-  total_gross_amount: string
-  metadata: {
-    billing_item_id?: string
-    billing_type?: 'one_time' | 'recurring' | 'usage'
-    operator_added?: boolean
-    usage_tier_breakdown?: unknown
-  } | null
+  tax_rate: string | number | null
+  net_amount: string
+  tax_amount: string
+  gross_amount: string
+  service_period_start: string | null
+  service_period_end: string | null
+  metadata: { operator_added?: boolean; usage_tier_breakdown?: unknown } | null
+}
+
+// Spec C: what settled this receivable (payments; Spec D: credit memos).
+type InvoiceAllocation = {
+  id: string
+  source_type: 'payment' | 'credit_memo'
+  source_id: string
+  source_label: string | null
+  amount: string
+  currency_code: string
+  allocated_by: string
+  created_at: string
 }
 
 type DetailResponse = {
   invoice: BillingInvoice
   lines: InvoiceLine[]
+  allocations?: InvoiceAllocation[]
+  corrections?: InvoiceCorrection[]
+}
+
+// Spec D: memos correcting this document.
+type InvoiceCorrection = {
+  id: string
+  number: string
+  document_type: 'credit_memo' | 'debit_memo'
+  status: string
+  total_gross: string
+  currency_code: string
 }
 
 function statusVariant(
@@ -79,11 +124,11 @@ function statusVariant(
 ): 'default' | 'success' | 'warning' | 'error' {
   switch (status) {
     case 'paid':
+    case 'credited':
       return 'success'
     case 'posted':
+    case 'partially_paid':
       return 'warning'
-    case 'void':
-      return 'error'
     case 'draft':
     default:
       return 'default'
@@ -91,11 +136,7 @@ function statusVariant(
 }
 
 function lineKindVariant(
-  type: InvoiceLine['metadata'] extends infer M
-    ? M extends { billing_type?: infer T }
-      ? T
-      : never
-    : never,
+  type: string,
 ): 'default' | 'success' | 'warning' | 'error' {
   switch (type) {
     case 'one_time':
@@ -135,7 +176,7 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
   const [error, setError] = React.useState<string | null>(null)
   const [loading, setLoading] = React.useState(true)
   const [posting, setPosting] = React.useState(false)
-  const [wiping, setWiping] = React.useState(false)
+  const [settingsIncomplete, setSettingsIncomplete] = React.useState(false)
 
   // Client-side pagination for invoice lines. Caps the table at 100 rows
   // per page (per the OM DataTable convention) — invoices typically have
@@ -154,9 +195,106 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
   const [dialogTargetLine, setDialogTargetLine] = React.useState<InvoiceLine | null>(null)
   const [dialogSubmitting, setDialogSubmitting] = React.useState(false)
 
-  // Confirm flows: wipe-test + remove-line both use ConfirmDialog
+  // Confirm flows (remove line, send, memo delete) use ConfirmDialog
   // (per UI AGENTS.md: NEVER `window.confirm`).
   const { confirm, ConfirmDialogElement } = useConfirmDialog()
+  const [allocations, setAllocations] = React.useState<InvoiceAllocation[]>([])
+  const [corrections, setCorrections] = React.useState<InvoiceCorrection[]>([])
+  const [memoDialog, setMemoDialog] = React.useState<'credit_memo' | 'debit_memo' | null>(null)
+  const router = useRouter()
+  const correctionColumns = React.useMemo<ColumnDef<InvoiceCorrection>[]>(
+    () => [
+      {
+        accessorKey: 'number',
+        header: t('billing.invoices.columns.number', 'Number'),
+        cell: ({ row }) => (
+          <Link href={`/backend/billing/invoices/${row.original.id}`} className="text-primary hover:underline">
+            {row.original.number}
+          </Link>
+        ),
+      },
+      {
+        accessorKey: 'document_type',
+        header: t('billing.invoices.columns.type', 'Type'),
+        cell: ({ row }) =>
+          row.original.document_type === 'credit_memo'
+            ? t('billing.invoices.document_type.credit_memo', 'Credit memo')
+            : t('billing.invoices.document_type.debit_memo', 'Debit memo'),
+      },
+      { accessorKey: 'status', header: t('billing.invoices.columns.status', 'Status') },
+      {
+        accessorKey: 'total_gross',
+        header: t('billing.invoices.columns.total', 'Total'),
+        cell: ({ row }) =>
+          formatMoney(
+            String((row.original.document_type === 'credit_memo' ? -1 : 1) * Number.parseFloat(row.original.total_gross)),
+            row.original.currency_code,
+          ),
+      },
+    ],
+    [t],
+  )
+  const handleDeleteDraftMemo = React.useCallback(async () => {
+    if (!invoice) return
+    const ok = await confirm({
+      title: t('billing.memo.delete.confirm', 'Delete this draft memo?'),
+      text: t('billing.memo.delete.text', 'The draft and its lines are removed. Posted documents are never deleted.'),
+      confirmText: t('billing.memo.delete.action', 'Delete draft'),
+      variant: 'destructive',
+    })
+    if (!ok) return
+    try {
+      await apiCallOrThrow('/api/billing/invoices/delete-draft', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ invoiceId: invoice.id }),
+      })
+      flash(t('billing.memo.deleted', 'Draft memo deleted'), 'success')
+      router.push(invoice.corrects_invoice_id ? `/backend/billing/invoices/${invoice.corrects_invoice_id}` : '/backend/billing/invoices')
+    } catch (err) {
+      flash(normalizeCrudServerError(err).message || t('billing.memo.delete.failed', 'Could not delete the draft'), 'error')
+    }
+  }, [confirm, invoice, router, t])
+  const allocationColumns = React.useMemo<ColumnDef<InvoiceAllocation>[]>(
+    () => [
+      {
+        accessorKey: 'source_label',
+        header: t('billing.invoices.payments.source', 'Source'),
+        cell: ({ row }) => (
+          <Link
+            href={
+              row.original.source_type === 'payment'
+                ? `/backend/billing/payments/${row.original.source_id}`
+                : `/backend/billing/invoices/${row.original.source_id}`
+            }
+            className="text-primary hover:underline"
+          >
+            {row.original.source_type === 'payment'
+              ? `${t('billing.invoices.payments.payment', 'Payment')}${row.original.source_label ? ` · ${row.original.source_label}` : ''}`
+              : `${t('billing.invoices.payments.credit_memo', 'Credit memo')} ${row.original.source_label ?? ''}`}
+          </Link>
+        ),
+        meta: { truncate: true, maxWidth: '320px' },
+      },
+      {
+        accessorKey: 'amount',
+        header: t('billing.payments.columns.amount', 'Amount'),
+        cell: ({ row }) => formatMoney(row.original.amount, row.original.currency_code),
+      },
+      {
+        accessorKey: 'created_at',
+        header: t('billing.payments.allocations.at', 'When'),
+        cell: ({ row }) => new Date(row.original.created_at).toLocaleDateString(),
+      },
+    ],
+    [t],
+  )
+  const searchParams = useSearchParams()
+  const backHref = resolveInvoiceReturnTarget({
+    from: searchParams?.get('from'),
+    accountId: searchParams?.get('accountId'),
+  })
+  const [sending, setSending] = React.useState(false)
 
   const load = React.useCallback(async () => {
     if (!invoiceId) return
@@ -168,6 +306,8 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
       )
       setInvoice(data.invoice)
       setLines(data.lines ?? [])
+      setAllocations(data.allocations ?? [])
+      setCorrections(data.corrections ?? [])
     } catch (err) {
       const { message } = normalizeCrudServerError(err)
       setError(message || t('billing.invoices.detail.error.load', 'Failed to load invoice'))
@@ -182,8 +322,8 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
 
   // Resolve the FK names once the invoice is loaded (one bounded
   // request each — Bill Run name is derived from its as-of date).
-  const billRunId = invoice?.metadata?.bill_run_id
-  const billAccountId = invoice?.metadata?.bill_account_id
+  const billRunId = invoice?.bill_run_id
+  const billAccountId = invoice?.bill_account_id
   React.useEffect(() => {
     if (billAccountId) {
       readApiResultOrThrow<{ items: Array<{ name: string }> }>(
@@ -218,55 +358,60 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
       )
       flash(
         t('billing.invoices.post.success', 'Invoice posted') +
-          ` (${call.result?.invoiceNumber ?? invoice.invoice_number})`,
+          ` (${call.result?.invoiceNumber ?? invoice.number})`,
         'success',
       )
       void load()
     } catch (err) {
       const { message } = normalizeCrudServerError(err)
-      flash(message || t('billing.invoices.post.error', 'Post failed'), 'error')
+      const code = (err as { body?: { code?: string } } | null)?.body?.code
+      if (code === 'billing.settings.incomplete') setSettingsIncomplete(true)
+      flash(
+        code === 'billing.settings.incomplete'
+          ? t(
+              'billing.invoices.post.settings_incomplete',
+              'Fill in the seller details in Settings → Billing before posting invoices.',
+            )
+          : message || t('billing.invoices.post.error', 'Post failed'),
+        'error',
+      )
     } finally {
       setPosting(false)
     }
   }, [invoice, load, t])
 
-  const handleWipeTest = React.useCallback(async () => {
+  const handleSend = React.useCallback(async () => {
     if (!invoice) return
+    const recipient = invoice.buyer_snapshot?.invoice_email ?? ''
+    const alreadySent = (invoice.metadata?.deliveries ?? []).some((d) => d.status === 'sent')
     const ok = await confirm({
-      title: t('billing.invoices.wipe.confirm.title', 'Wipe test invoices?'),
-      text: t(
-        'billing.invoices.wipe.confirm.text',
-        'Every test invoice from this Bill Run will be permanently deleted. This cannot be undone.',
-      ),
-      confirmText: t('billing.invoices.wipe.confirm.button', 'Delete test invoices'),
-      variant: 'destructive',
+      title: alreadySent
+        ? t('billing.invoices.send.confirm.title_resend', 'Resend invoice?')
+        : t('billing.invoices.send.confirm.title', 'Send invoice?'),
+      text: t('billing.invoices.send.confirm.text', 'The PDF is emailed to {email}.').replace('{email}', recipient),
+      confirmText: t('billing.invoices.send.action', 'Send'),
     })
     if (!ok) return
-    setWiping(true)
+    setSending(true)
     try {
-      const billRunId = invoice.metadata?.bill_run_id
-      const call = await apiCallOrThrow<{ invoicesRemoved: number }>(
-        '/api/billing/test-invoices/wipe',
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(billRunId ? { billRunId } : {}),
-        },
+      const call = await apiCallOrThrow<{ status: 'sent' | 'failed'; error?: string | null }>(
+        `/api/billing/invoices/${encodeURIComponent(invoice.id)}/send`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' },
       )
-      flash(
-        t('billing.invoices.wipe.success', 'Test invoices removed') +
-          ` (${call.result?.invoicesRemoved ?? 0})`,
-        'success',
-      )
-      // The invoice we were looking at is hard-deleted — navigate away
-      // on success by reloading; the detail load will 404 and the
-      // user clicks back.
+      if (call.result?.status === 'sent') {
+        flash(t('billing.invoices.send.success', 'Invoice sent'), 'success')
+      } else {
+        flash(
+          `${t('billing.invoices.send.failed', 'Sending failed')}${call.result?.error ? `: ${call.result.error}` : ''}`,
+          'error',
+        )
+      }
       void load()
     } catch (err) {
       const { message } = normalizeCrudServerError(err)
-      flash(message || t('billing.invoices.wipe.error', 'Wipe failed'), 'error')
+      flash(message || t('billing.invoices.send.failed', 'Sending failed'), 'error')
     } finally {
-      setWiping(false)
+      setSending(false)
     }
   }, [confirm, invoice, load, t])
 
@@ -286,6 +431,7 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
               description: values.description,
               quantity: values.quantity,
               unitPriceNet: values.unitPriceNet,
+              ...(values.taxRate !== undefined ? { taxRate: values.taxRate } : {}),
             }),
           })
           flash(t('billing.invoices.lines.add.success', 'Line added'), 'success')
@@ -303,6 +449,7 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
                 ...(values.totalNetAmount !== undefined
                   ? { totalNetAmount: values.totalNetAmount }
                   : {}),
+                ...(values.taxRate !== undefined ? { taxRate: values.taxRate } : {}),
               },
             }),
           })
@@ -355,6 +502,47 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
 
   const canEditLines = invoice?.status === 'draft'
 
+  // Newest first; deliveries are a short, append-only log on the invoice.
+  const deliveries = React.useMemo(
+    () => [...(invoice?.metadata?.deliveries ?? [])].reverse(),
+    [invoice?.metadata?.deliveries],
+  )
+  const deliveryColumns = React.useMemo<ColumnDef<InvoiceDelivery>[]>(
+    () => [
+      {
+        accessorKey: 'at',
+        header: t('billing.invoices.deliveries.columns.at', 'When'),
+        cell: ({ row }) => new Date(row.original.at).toLocaleString(),
+      },
+      { accessorKey: 'to', header: t('billing.invoices.deliveries.columns.to', 'Recipient') },
+      {
+        accessorKey: 'status',
+        header: t('billing.invoices.deliveries.columns.status', 'Status'),
+        cell: ({ row }) =>
+          row.original.status === 'sent' ? (
+            <Tag variant="success">{t('billing.invoices.deliveries.status.sent', 'Sent')}</Tag>
+          ) : (
+            <Tag variant="error">{t('billing.invoices.deliveries.status.failed', 'Failed')}</Tag>
+          ),
+      },
+      {
+        accessorKey: 'trigger',
+        header: t('billing.invoices.deliveries.columns.trigger', 'Trigger'),
+        cell: ({ row }) =>
+          row.original.trigger === 'auto'
+            ? t('billing.invoices.deliveries.trigger.auto', 'Automatic')
+            : t('billing.invoices.deliveries.trigger.manual', 'Manual'),
+      },
+      {
+        accessorKey: 'error',
+        header: t('billing.invoices.deliveries.columns.error', 'Error'),
+        cell: ({ row }) => row.original.error ?? '—',
+        meta: { truncate: true, maxWidth: '280px' },
+      },
+    ],
+    [t],
+  )
+
   const lineColumns = React.useMemo<ColumnDef<InvoiceLine>[]>(
     () => [
       {
@@ -365,7 +553,7 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
         accessorKey: 'description',
         header: t('billing.invoices.lines.columns.description', 'Description'),
         cell: ({ row }) => {
-          const type = row.original.metadata?.billing_type
+          const type = row.original.billing_type
           const operatorAdded = row.original.metadata?.operator_added === true
           return (
             <div className="flex flex-col gap-1">
@@ -393,10 +581,25 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
           formatMoney(row.original.unit_price_net, row.original.currency_code),
       },
       {
-        accessorKey: 'total_net_amount',
+        accessorKey: 'net_amount',
         header: t('billing.invoices.lines.columns.total', 'Total net'),
         cell: ({ row }) =>
-          formatMoney(row.original.total_net_amount, row.original.currency_code),
+          formatMoney(row.original.net_amount, row.original.currency_code),
+      },
+      {
+        accessorKey: 'tax_rate',
+        header: t('billing.invoices.lines.columns.tax_rate', 'VAT %'),
+        cell: ({ row }) => (row.original.tax_rate != null ? `${Number(row.original.tax_rate)} %` : '—'),
+      },
+      {
+        accessorKey: 'tax_amount',
+        header: t('billing.invoices.lines.columns.tax_amount', 'VAT'),
+        cell: ({ row }) => formatMoney(row.original.tax_amount, row.original.currency_code),
+      },
+      {
+        accessorKey: 'gross_amount',
+        header: t('billing.invoices.lines.columns.gross', 'Gross'),
+        cell: ({ row }) => formatMoney(row.original.gross_amount, row.original.currency_code),
       },
       {
         id: 'actions',
@@ -438,6 +641,7 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
       description: dialogTargetLine.description ?? '',
       quantity: Number.parseFloat(dialogTargetLine.quantity),
       unitPriceNet: Number.parseFloat(dialogTargetLine.unit_price_net),
+      taxRate: dialogTargetLine.tax_rate != null ? Number.parseFloat(String(dialogTargetLine.tax_rate)) : undefined,
     }
   }, [dialogMode, dialogTargetLine])
 
@@ -462,20 +666,38 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
     )
   }
 
-  const isTest = invoice.metadata?.test_run === true
+  const isTest = invoice.test_run === true
   const isDraft = invoice.status === 'draft'
 
   return (
     <Page>
       <FormHeader
         mode="detail"
-        backHref="/backend/billing/invoices"
+        backHref={backHref}
         entityTypeLabel={t('billing.invoices.detail.title', 'Billing Invoice')}
-        title={invoice.invoice_number}
+        title={invoice.number}
         statusBadge={
           <div className="flex items-center gap-2 flex-wrap">
-            <Tag variant={statusVariant(invoice.status)}>{invoice.status ?? '—'}</Tag>
-            {isTest ? <Tag variant="warning">TEST</Tag> : null}
+            <Tag variant={statusVariant(invoice.status)}>{invoice.status}</Tag>
+            {invoice.document_type === 'credit_memo' ? (
+              <Tag variant="info">{t('billing.invoices.document_type.credit_memo', 'Credit memo')}</Tag>
+            ) : invoice.document_type === 'debit_memo' ? (
+              <Tag variant="info">{t('billing.invoices.document_type.debit_memo', 'Debit memo')}</Tag>
+            ) : null}
+            {isTest ? (
+              invoice.bill_run_id ? (
+                <Link href={`/backend/billing/runs/${invoice.bill_run_id}`}>
+                  <Tag variant="warning">{t('billing.invoices.test_run_tag', 'Test run')}</Tag>
+                </Link>
+              ) : (
+                <Tag variant="warning">{t('billing.invoices.test_run_tag', 'Test run')}</Tag>
+              )
+            ) : null}
+            {(invoice.days_overdue ?? 0) > 0 ? (
+              <Tag variant="error">
+                {t('billing.invoices.overdue_days', 'Overdue {days} d').replace('{days}', String(invoice.days_overdue))}
+              </Tag>
+            ) : null}
           </div>
         }
         actionsContent={
@@ -487,15 +709,37 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
                   : t('billing.invoices.post.action', 'Post invoice')}
               </Button>
             ) : null}
-            {isTest ? (
-              <Button
-                variant="outline"
-                onClick={handleWipeTest}
-                disabled={wiping}
-              >
-                {wiping
-                  ? t('billing.invoices.wipe.in_progress', 'Wiping…')
-                  : t('billing.invoices.wipe.action', 'Wipe test invoices for this run')}
+            <Button type="button" variant="outline" asChild>
+              <a href={invoicePdfHref(invoice.id)} target="_blank" rel="noopener noreferrer">
+                <FileDown size={16} />
+                {isDraft
+                  ? t('billing.invoices.actions.pdf_preview', 'Preview PDF')
+                  : t('billing.invoices.actions.pdf', 'Download PDF')}
+              </a>
+            </Button>
+            {!isDraft && !isTest && invoice.document_type !== 'receipt' ? (
+              <Button type="button" variant="outline" onClick={() => void handleSend()} disabled={sending}>
+                <Mail size={16} />
+                {sending
+                  ? t('billing.invoices.send.in_progress', 'Sending…')
+                  : (invoice.metadata?.deliveries ?? []).some((d) => d.status === 'sent')
+                    ? t('billing.invoices.send.resend', 'Resend')
+                    : t('billing.invoices.send.action', 'Send')}
+              </Button>
+            ) : null}
+            {invoice.document_type === 'invoice' && !isTest && ['posted', 'partially_paid', 'paid'].includes(invoice.status) ? (
+              <Button type="button" variant="outline" onClick={() => setMemoDialog('credit_memo')}>
+                {t('billing.memo.create_credit.action', 'Create credit memo')}
+              </Button>
+            ) : null}
+            {invoice.document_type === 'invoice' && !isTest && ['posted', 'partially_paid', 'paid', 'credited'].includes(invoice.status) ? (
+              <Button type="button" variant="outline" onClick={() => setMemoDialog('debit_memo')}>
+                {t('billing.memo.create_debit.action', 'Create debit memo')}
+              </Button>
+            ) : null}
+            {isDraft && (invoice.document_type === 'credit_memo' || invoice.document_type === 'debit_memo') ? (
+              <Button type="button" variant="outline" onClick={() => void handleDeleteDraftMemo()}>
+                {t('billing.memo.delete.action', 'Delete draft')}
               </Button>
             ) : null}
           </>
@@ -503,18 +747,29 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
       />
       <PageBody>
         <div className="space-y-6">
+          {settingsIncomplete ? (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-status-warning-border bg-status-warning-bg px-4 py-3 text-sm text-status-warning-text">
+              <span>
+                {t(
+                  'billing.invoices.post.settings_incomplete',
+                  'Fill in the seller details in Settings → Billing before posting invoices.',
+                )}
+              </span>
+              <BillingSettingsLink />
+            </div>
+          ) : null}
           <DetailCard>
             <DetailField label={t('billing.invoices.detail.field.period', 'Bill period')}>
-              {invoice.metadata?.bill_period_start ?? '—'} →{' '}
-              {invoice.metadata?.bill_period_end ?? '—'}
+              {invoice.period_start?.slice(0, 10) ?? '—'} →{' '}
+              {invoice.period_end?.slice(0, 10) ?? '—'}
             </DetailField>
             <DetailField label={t('billing.invoices.detail.field.bill_run', 'Bill Run')}>
-              {invoice.metadata?.bill_run_id ? (
+              {invoice.bill_run_id ? (
                 <Link
-                  href={`/backend/billing/runs/${invoice.metadata.bill_run_id}`}
+                  href={`/backend/billing/runs/${invoice.bill_run_id}`}
                   className="text-primary hover:underline"
                 >
-                  {runName ?? invoice.metadata.bill_run_id}
+                  {runName ?? invoice.bill_run_id}
                 </Link>
               ) : (
                 '—'
@@ -523,12 +778,12 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
             <DetailField
               label={t('billing.invoices.detail.field.account', 'Billing Account')}
             >
-              {invoice.metadata?.bill_account_id ? (
+              {invoice.bill_account_id ? (
                 <Link
-                  href={`/backend/billing/accounts/${invoice.metadata.bill_account_id}`}
+                  href={`/backend/billing/accounts/${invoice.bill_account_id}`}
                   className="text-primary hover:underline"
                 >
-                  {accountName ?? invoice.metadata.bill_account_id}
+                  {accountName ?? invoice.bill_account_name ?? invoice.bill_account_id}
                 </Link>
               ) : (
                 '—'
@@ -537,6 +792,24 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
             <DetailField label={t('billing.invoices.detail.field.issued', 'Issued')}>
               {invoice.issue_date?.slice(0, 10) ?? '—'}
             </DetailField>
+            <DetailField label={t('billing.invoices.detail.field.due', 'Due')}>
+              {invoice.due_date?.slice(0, 10) ?? '—'}
+            </DetailField>
+            {invoice.corrects_invoice_id ? (
+              <DetailField label={t('billing.memo.corrects', 'Corrects')}>
+                <Link href={`/backend/billing/invoices/${invoice.corrects_invoice_id}`} className="text-primary hover:underline">
+                  {invoice.corrects_invoice_number ?? invoice.corrects_invoice_id}
+                </Link>
+              </DetailField>
+            ) : null}
+            {invoice.correction_reason ? (
+              <DetailField label={t('billing.memo.reason_label', 'Reason')}>{invoice.correction_reason}</DetailField>
+            ) : null}
+            {invoice.metadata?.draft_number ? (
+              <DetailField label={t('billing.invoices.detail.field.draft_number', 'Draft number')}>
+                <span className="font-mono text-xs">{invoice.metadata.draft_number}</span>
+              </DetailField>
+            ) : null}
             <DetailField label={t('billing.common.id', 'ID')}>
               <span className="font-mono text-xs">{invoice.id}</span>
             </DetailField>
@@ -545,19 +818,19 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
           <StatCard>
             <Stat
               label={t('billing.invoices.detail.subtotal', 'Subtotal net')}
-              value={formatMoney(invoice.subtotal_net_amount, invoice.currency_code)}
+              value={formatMoney(invoice.subtotal_net, invoice.currency_code)}
             />
             <Stat
               label={t('billing.invoices.detail.total', 'Grand total')}
-              value={formatMoney(invoice.grand_total_gross_amount, invoice.currency_code)}
+              value={formatMoney(invoice.total_gross, invoice.currency_code)}
             />
             <Stat
               label={t('billing.invoices.detail.paid', 'Paid')}
-              value={formatMoney(invoice.paid_total_amount, invoice.currency_code)}
+              value={formatMoney(invoice.paid_total, invoice.currency_code)}
             />
             <Stat
               label={t('billing.invoices.detail.outstanding', 'Outstanding')}
-              value={formatMoney(invoice.outstanding_amount, invoice.currency_code)}
+              value={formatMoney(invoice.outstanding, invoice.currency_code)}
             />
           </StatCard>
 
@@ -593,6 +866,64 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
               }}
             />
           </div>
+
+          {corrections.length > 0 ? (
+            <div>
+              <h2 className="text-base font-semibold mb-2">{t('billing.memo.corrections', 'Corrections')}</h2>
+              <DataTable
+                columns={correctionColumns}
+                data={corrections}
+                isLoading={false}
+                pagination={{
+                  page: 1,
+                  pageSize: Math.max(corrections.length, 1),
+                  total: corrections.length,
+                  totalPages: 1,
+                  onPageChange: () => undefined,
+                }}
+              />
+            </div>
+          ) : null}
+
+          {!isDraft ? (
+            <div>
+              <h2 className="text-base font-semibold mb-2">{t('billing.invoices.payments.title', 'Payments')}</h2>
+              <DataTable
+                columns={allocationColumns}
+                data={allocations}
+                isLoading={false}
+                emptyState={t('billing.invoices.payments.empty', 'No payments yet.')}
+                pagination={{
+                  page: 1,
+                  pageSize: Math.max(allocations.length, 1),
+                  total: allocations.length,
+                  totalPages: 1,
+                  onPageChange: () => undefined,
+                }}
+              />
+            </div>
+          ) : null}
+
+          {!isDraft ? (
+            <div>
+              <h2 className="text-base font-semibold mb-2">
+                {t('billing.invoices.deliveries.title', 'Email deliveries')}
+              </h2>
+              <DataTable
+                columns={deliveryColumns}
+                data={deliveries}
+                isLoading={false}
+                emptyState={t('billing.invoices.deliveries.empty', 'Not sent yet.')}
+                pagination={{
+                  page: 1,
+                  pageSize: Math.max(deliveries.length, 1),
+                  total: deliveries.length,
+                  totalPages: 1,
+                  onPageChange: () => undefined,
+                }}
+              />
+            </div>
+          ) : null}
         </div>
 
         <LineFormDialog
@@ -606,6 +937,24 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
           }}
           onSubmit={handleSubmitLine}
         />
+        {memoDialog ? (
+          <CreateMemoDialog
+            open
+            type={memoDialog}
+            invoiceId={invoice.id}
+            invoiceNumber={invoice.number}
+            currencyCode={invoice.currency_code}
+            lines={lines.map((line) => ({
+              id: line.id,
+              description: line.description,
+              quantity: line.quantity,
+              unit_price_net: line.unit_price_net,
+              tax_rate: line.tax_rate,
+            }))}
+            onClose={() => setMemoDialog(null)}
+            onCreated={(memoId) => router.push(`/backend/billing/invoices/${memoId}`)}
+          />
+        ) : null}
         {ConfirmDialogElement}
       </PageBody>
     </Page>

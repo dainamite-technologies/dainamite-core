@@ -6,14 +6,17 @@ import { BillingApiClient, type Scope } from '../lib/billingApiClient'
  * every billing item attached to the subscription.
  *
  * The connector uses the spec's `effectiveDate` (cancellation date)
- * minus one day as `bill_end_date` so the engine's recurring
- * selector stops including the item from the cycle containing the
- * cancellation onward.
+ * minus one day as `bill_end_date`. From there the billing engine
+ * (billing Spec A) handles the money:
+ *   - an item billed in arrears is charged pro rata up to the end date;
+ *   - an item already billed in advance past the end date gets an
+ *     automatic credit line for the unused days (when `prorate` is on).
  *
- * Final-period proration / refund credits (per spec) are issued by
- * CPQ — the connector does not invent them here. If a credit is
- * needed, CPQ posts a negative `one_time` Billing Item via this
- * same connector path (e.g. an `amend` event preceding the cancel).
+ * The cancellation POLICY belongs to CPQ: "cancel at the end of the
+ * current period, no refund" means CPQ sends an `effectiveDate` on the
+ * period boundary — then no credit arises. The connector never invents
+ * credits itself (billing does), so CPQ must NOT also post a negative
+ * `one_time` item for the same days.
  */
 
 export const metadata = {

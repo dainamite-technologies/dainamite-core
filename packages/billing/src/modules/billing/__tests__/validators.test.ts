@@ -20,6 +20,7 @@ import {
   rateJsonUsageVolume,
   validateRateJson,
 } from '../data/validators'
+import { DEFAULT_INVOICE_LANGUAGE, SUPPORTED_INVOICE_LANGUAGES } from '../lib/invoiceLanguages'
 
 describe('rate_json — one_time', () => {
   it('accepts a positive amount', () => {
@@ -293,9 +294,6 @@ describe('exported enums', () => {
     ])
   })
 
-  it('INVOICE_STATUSES matches the dictionary entries seeded by setup', () => {
-    expect([...INVOICE_STATUSES]).toEqual(['draft', 'posted', 'paid', 'void'])
-  })
 })
 
 // ─── Phase 1 — CRUD payload schemas ────────────────────────────────
@@ -304,6 +302,11 @@ import {
   billingAccountCreateSchema,
   billingAccountListQuerySchema,
   billingAccountUpdateSchema,
+  billingItemBulkCreateSchema,
+  billingRunTriggerSchema,
+  CHARGE_TIMING_RECURRING_ONLY_MESSAGE,
+  billingInvoiceListQuerySchema,
+  billingSettingsUpdateSchema,
   billingItemCreateSchema,
   billingItemListQuerySchema,
   billingItemUpdateSchema,
@@ -367,6 +370,45 @@ describe('billingAccountCreateSchema', () => {
     expect(() => billingAccountCreateSchema.parse(withoutTenant)).toThrow()
     void tenantId
   })
+  // Spec E — B2C accounts + invoice-language picklist.
+  it('defaults customerKind to company', () => {
+    expect(billingAccountCreateSchema.parse(validAccountCreate).customerKind).toBe('company')
+  })
+
+  it('accepts customerKind person', () => {
+    const parsed = billingAccountCreateSchema.parse({ ...validAccountCreate, customerKind: 'person' })
+    expect(parsed.customerKind).toBe('person')
+  })
+
+  it('rejects an unknown customerKind', () => {
+    expect(() =>
+      billingAccountCreateSchema.parse({ ...validAccountCreate, customerKind: 'household' }),
+    ).toThrow()
+  })
+
+  it('accepts every template-supported invoice language, case/space tolerant', () => {
+    for (const { code } of SUPPORTED_INVOICE_LANGUAGES) {
+      const parsed = billingAccountCreateSchema.parse({
+        ...validAccountCreate,
+        invoiceLanguage: ` ${code.toUpperCase()} `,
+      })
+      expect(parsed.invoiceLanguage).toBe(code)
+    }
+  })
+
+  it('rejects an invoice language the template does not support', () => {
+    expect(() =>
+      billingAccountCreateSchema.parse({ ...validAccountCreate, invoiceLanguage: 'de' }),
+    ).toThrow()
+  })
+
+  it('defaults invoiceLanguage when omitted', () => {
+    const { invoiceLanguage, ...withoutLanguage } = validAccountCreate
+    void invoiceLanguage
+    expect(billingAccountCreateSchema.parse(withoutLanguage).invoiceLanguage).toBe(
+      DEFAULT_INVOICE_LANGUAGE,
+    )
+  })
 })
 
 describe('billingAccountUpdateSchema', () => {
@@ -397,6 +439,16 @@ describe('billingAccountUpdateSchema', () => {
   it('does not declare customerId (immutable per spec)', () => {
     expect('customerId' in billingAccountUpdateSchema.shape).toBe(false)
   })
+
+  it('does not declare customerKind (immutable per spec)', () => {
+    expect('customerKind' in billingAccountUpdateSchema.shape).toBe(false)
+  })
+
+  it('validates invoiceLanguage against supported languages', () => {
+    const base = { tenantId: TENANT, organizationId: ORG, id: ACCOUNT }
+    expect(billingAccountUpdateSchema.parse({ ...base, invoiceLanguage: 'PL' }).invoiceLanguage).toBe('pl')
+    expect(() => billingAccountUpdateSchema.parse({ ...base, invoiceLanguage: 'fr' })).toThrow()
+  })
 })
 
 describe('billingAccountListQuerySchema', () => {
@@ -414,6 +466,11 @@ describe('billingAccountListQuerySchema', () => {
     const parsed = billingAccountListQuerySchema.parse({})
     expect(parsed.page).toBe(1)
     expect(parsed.pageSize).toBe(50)
+  })
+
+  it('accepts a customerKind filter and rejects unknown kinds', () => {
+    expect(billingAccountListQuerySchema.parse({ customerKind: 'person' }).customerKind).toBe('person')
+    expect(() => billingAccountListQuerySchema.parse({ customerKind: 'robot' })).toThrow()
   })
 })
 
@@ -592,3 +649,136 @@ describe('billingUsageListQuerySchema', () => {
     expect(() => billingUsageListQuerySchema.parse({ pageSize: '101' })).toThrow()
   })
 })
+
+// ─── Spec A — charge timing, proration, no catch-up flag ─────────
+
+describe('Spec A validators', () => {
+  const recurring = {
+    tenantId: TENANT,
+    organizationId: ORG,
+    billAccountId: ACCOUNT,
+    type: 'recurring' as const,
+    billStartDate: '2026-11-14',
+    description: 'Internet 300',
+    rateJson: { unit_price: 79 },
+  }
+
+  it('accepts chargeTiming / prorate on recurring items and leaves defaults to the command', () => {
+    expect(billingItemCreateSchema.parse(recurring)).not.toHaveProperty('chargeTiming')
+    const parsed = billingItemCreateSchema.parse({ ...recurring, chargeTiming: 'in_arrears', prorate: false })
+    expect(parsed).toMatchObject({ chargeTiming: 'in_arrears', prorate: false })
+  })
+
+  it('rejects an unknown charge timing', () => {
+    expect(() => billingItemCreateSchema.parse({ ...recurring, chargeTiming: 'whenever' })).toThrow()
+  })
+
+  it('rejects non-default timing / proration on non-recurring items', () => {
+    const oneTime = { ...recurring, type: 'one_time' as const, rateJson: { amount: 10 } }
+    expect(billingItemCreateSchema.parse({ ...oneTime, chargeTiming: 'in_advance', prorate: true })).toBeTruthy()
+    expect(() => billingItemCreateSchema.parse({ ...oneTime, chargeTiming: 'in_arrears' })).toThrow(
+      CHARGE_TIMING_RECURRING_ONLY_MESSAGE,
+    )
+    expect(() => billingItemCreateSchema.parse({ ...oneTime, prorate: false })).toThrow(
+      CHARGE_TIMING_RECURRING_ONLY_MESSAGE,
+    )
+  })
+
+  it('applies the same rule to bulk entries and allows both on update', () => {
+    const { tenantId, organizationId, ...entry } = recurring
+    expect(() =>
+      billingItemBulkCreateSchema.parse({
+        tenantId,
+        organizationId,
+        items: [{ ...entry, type: 'usage', uomCode: 'gb', rateJson: { unit_price: 1 }, prorate: false }],
+      }),
+    ).toThrow()
+    expect(
+      billingItemUpdateSchema.parse({ tenantId, organizationId, id: ACCOUNT, chargeTiming: 'in_arrears', prorate: false }),
+    ).toMatchObject({ chargeTiming: 'in_arrears', prorate: false })
+  })
+
+  it('strips a legacy catchUp flag from the run trigger', () => {
+    const parsed = billingRunTriggerSchema.parse({ tenantId: TENANT, organizationId: ORG, catchUp: true })
+    expect(parsed).not.toHaveProperty('catchUp')
+    expect(parsed.mode).toBe('real')
+  })
+})
+
+// ─── Spec 0 — ledger validators ──────────────────────────────────
+
+describe('Spec 0 validators', () => {
+  it('invoice statuses drop void and add partially_paid / credited', () => {
+    expect(INVOICE_STATUSES).toEqual(['draft', 'posted', 'partially_paid', 'paid', 'credited'])
+  })
+
+  it('parses testRun literally (false stays false)', () => {
+    expect(billingInvoiceListQuerySchema.parse({ testRun: 'false' }).testRun).toBe(false)
+    expect(billingInvoiceListQuerySchema.parse({ testRun: 'true' }).testRun).toBe(true)
+    expect(billingInvoiceListQuerySchema.parse({}).testRun).toBeUndefined()
+    expect(() => billingInvoiceListQuerySchema.parse({ status: 'void' })).toThrow()
+  })
+
+  it('validates number masks on settings update', () => {
+    const base = { tenantId: TENANT, organizationId: ORG }
+    expect(
+      billingSettingsUpdateSchema.parse({ ...base, numberMasks: { invoice: 'FV/{YYYY}/{SEQUENCE_NUM_YEAR:5}' } }).numberMasks,
+    ).toEqual({ invoice: 'FV/{YYYY}/{SEQUENCE_NUM_YEAR:5}' })
+    expect(() => billingSettingsUpdateSchema.parse({ ...base, numberMasks: { invoice: 'FV/{SEQUENCE_NUM_MONTH}' } })).toThrow(
+      'mask_month_scope_needs_year_and_month',
+    )
+    expect(() => billingSettingsUpdateSchema.parse({ ...base, numberMasks: { bogus: 'X{SEQUENCE_NUM}' } })).toThrow()
+    expect(() => billingSettingsUpdateSchema.parse({ ...base, topupTaxRate: 120 })).toThrow()
+  })
+})
+
+describe('Spec B validators', () => {
+  const base = { tenantId: TENANT, organizationId: ORG }
+  const item = {
+    ...base,
+    billAccountId: ACCOUNT,
+    type: 'recurring' as const,
+    billStartDate: '2026-11-14',
+    description: 'Internet 300',
+    rateJson: { unit_price: 79 },
+  }
+
+  it('item taxRate is optional on create (the command fills the default) and bounded 0–100', () => {
+    expect(billingItemCreateSchema.parse(item)).not.toHaveProperty('taxRate')
+    expect(billingItemCreateSchema.parse({ ...item, taxRate: '8' }).taxRate).toBe(8)
+    expect(() => billingItemCreateSchema.parse({ ...item, taxRate: -1 })).toThrow()
+    expect(() => billingItemCreateSchema.parse({ ...item, taxRate: 101 })).toThrow()
+  })
+
+  it('normalizes and checksum-validates the seller IBAN; empty clears it', () => {
+    expect(billingSettingsUpdateSchema.parse({ ...base, iban: 'pl61 1090 1014 0000 0712 1981 2874' }).iban).toBe(
+      'PL61109010140000071219812874',
+    )
+    expect(billingSettingsUpdateSchema.parse({ ...base, iban: '' }).iban).toBeNull()
+    expect(() => billingSettingsUpdateSchema.parse({ ...base, iban: 'PL61109010140000071219812875' })).toThrow(
+      'billing.settings.error.iban_invalid',
+    )
+    expect(() => billingSettingsUpdateSchema.parse({ ...base, bic: 'XX' })).toThrow('billing.settings.error.bic_invalid')
+  })
+
+  it('validates seller address, terms and default rate', () => {
+    const parsed = billingSettingsUpdateSchema.parse({
+      ...base,
+      legalName: '  Seller  ',
+      taxId: '',
+      sellerAddress: { line1: 'ul. A 1', city: 'Kraków', postal_code: '30-001', country: 'PL' },
+      defaultPaymentTermsDays: '30',
+      defaultTaxRate: 23,
+    })
+    expect(parsed).toMatchObject({ legalName: 'Seller', taxId: null, defaultPaymentTermsDays: 30, defaultTaxRate: 23 })
+    expect(() => billingSettingsUpdateSchema.parse({ ...base, sellerAddress: { line1: 'x' } })).toThrow()
+    expect(() => billingSettingsUpdateSchema.parse({ ...base, defaultPaymentTermsDays: 400 })).toThrow()
+  })
+
+  it('accepts overdue / due-date filters on the invoice list', () => {
+    const parsed = billingInvoiceListQuerySchema.parse({ overdue: 'true', dueFrom: '2026-11-01', dueTo: '2026-11-30' })
+    expect(parsed).toMatchObject({ overdue: true, dueFrom: '2026-11-01', dueTo: '2026-11-30' })
+    expect(() => billingInvoiceListQuerySchema.parse({ dueFrom: '01.11.2026' })).toThrow()
+  })
+})
+

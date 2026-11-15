@@ -1,5 +1,95 @@
 # @dainamite/billing
 
+## 0.21.0
+
+### Minor Changes
+
+- d126be2: Billing accounts for persons (B2C), an invoice-language picklist, and pages that return to their billing account.
+
+  **`@dainamite/billing`**
+
+  - **B2C accounts.** `BillingAccount.customer_kind` (`company` | `person`, default `company`) records which customers collection `customer_id` points into. It is set on create (`customerKind`) and immutable afterwards, like `customerId`. `GET /api/billing/accounts` returns `customer_kind` and accepts a `customerKind` filter. Migration `Migration20261114000000_billing_customer_kind` adds the column (additive; existing rows become `company`). Run `yarn mercato db migrate`.
+  - **Account form.** A Company / Person switch picks the customer lookup (`/api/customers/companies` or `/api/customers/people`). Picking a customer prefills name, invoice email and the primary address into empty fields only. Prefill that the operator has not edited is rolled back when they pick another customer.
+  - **Account list and detail** show the customer's name with a company / person icon (one batched lookup per kind per page) and add a Customer type filter. The detail links to the customer record. If the customers module is unavailable, the raw id is shown.
+  - **Invoice language** is now a picklist of the languages the invoice template supports (`en`, `pl`).
+    **Behaviour change:** `invoiceLanguage` values other than `en` / `pl` are now rejected with 400 on create and update. On create, `invoiceLanguage` is optional and defaults to `en`.
+  - **Navigation.** Item pages opened from a billing account return to that account (back link, after delete). Creating an item from an account returns to the account after save or cancel. Items opened from the global Items list (`?from=items`) still return to the list.
+
+  **`@dainamite/cpq-billing-connector`**
+
+  - Passes an optional `customerKind` from `cpq.subscription.activated` to the billing account it creates.
+  - Normalises `invoiceLanguage` and falls back to `en` for languages billing does not support, so onboarding never fails on an unsupported code.
+
+- 486db4d: Bill runs catch up on every due cycle, bill recurring items in advance or in arrears, and prorate partial periods (billing Spec A).
+
+  **`@dainamite/billing`**
+
+  - **Every run catches up.** Manual or scheduled, in real, test or dry mode, a run bills every due bill date up to `asOfDate`, with one draft per bill date (capped at 60 per account). Test and dry runs simulate every cycle in memory without changing the account. **Breaking:** the `catchUp` trigger flag and the `catch_up` run column/response field are removed. A `catchUp` sent by an old client is ignored.
+  - **Charge timing per item.** Recurring items carry `chargeTiming` (`in_advance` by default, or `in_arrears`). **Behaviour change:** recurring items are now billed in advance by default, so `next_bill_date` marks the start of the period billed.
+  - **Proration per item.** `prorate` defaults to `true`. A partial period (the item starts or ends mid-cycle) is charged by calendar days instead of being skipped. An in-advance item that ends after it was billed gets a negative credit line for the unused days. With `prorate: false`, partial periods are skipped and reported.
+  - **Run outcomes** carry `cycles` (bill date, service period, status, lines, net, invoice). `warnings.skipped_items` lists items that were not billed and why. The run summary adds `cycles_processed`. The run detail page shows a Cycles table and a Skipped items table.
+  - **Draft invoices** carry `metadata.bill_date`, the de-duplication key, together with `test_run`. Test drafts and real drafts never block each other. Lines carry `service_period_start` / `service_period_end`, plus `proration` and `credit_for` where they apply.
+  - **Item form** gets Charge timing and Prorate partial periods fields. The items list gets a Timing column.
+  - **Migration** `Migration20261114100000_billing_cycle_semantics`. Run `yarn mercato db migrate`. See `MIGRATION.md`; reseeding is recommended.
+
+  **`@dainamite/cpq-billing-connector`**
+
+  - **Proration moves to billing.** `cpq.subscription.amended` no longer posts `one_time` proration items, because the billing engine prorates. Release together with billing: an older connector would double-charge.
+  - **First bill date.** New billing accounts start billing on the activation date (they used to start one month later), so the first period is billed in advance.
+  - Removes `lib/prorationHelper` and the runtime import of billing's `cycleContaining`.
+
+- c8a1bf7: Billing invoices become real VAT documents with a PDF and email delivery (billing Spec B).
+
+  - **VAT per line.** Billing items carry `taxRate` (filled from the new organization default, 23 %, when omitted). Every invoice line gets net / VAT / gross; proration and credit lines inherit the item rate; manual lines accept `taxRate`. Existing items are migrated at 0 % (no silent re-pricing).
+  - **Seller settings.** Settings → Billing adds the seller block, bank / IBAN (checksum validated) / BIC, default payment terms and VAT rate, invoice footer and logo. **Posting is refused with 409 `billing.settings.incomplete` until legal name, address, tax id and IBAN are filled.**
+  - **Due dates and overdue.** Posting sets `due_date` (account terms or the default). The invoice list filters by `overdue`, `dueFrom`, `dueTo` and shows days overdue; the account page gets an Invoices section and `GET /api/billing/accounts/{id}/summary`.
+  - **PDF.** `GET /api/billing/invoices/{id}/pdf` — built-in A4 template in the account's invoice language (en / pl), frozen as an attachment at post; drafts are watermarked previews.
+  - **Email.** `POST /api/billing/invoices/{id}/send` (feature `billing.invoice.send`) and automatic sending per account (`autoSendInvoice`), through the platform `sendEmail()`. Deliveries are logged on the invoice; events `billing.invoice.sent` / `billing.invoice.send_failed`.
+  - **Dependencies:** `requires` adds `attachments`; new dependencies `pdf-lib` and `@pdf-lib/fontkit`.
+  - Connector: `ItemCreatePayload` accepts an optional `taxRate` (unused until CPQ exposes a per-charge rate).
+  - Run `yarn mercato db migrate` (`Migration20261116000000_billing_invoice_documents`).
+
+- 6c138f8: Billing owns its documents. Invoices, credit / debit memos and top-up receipts are no longer written to Open Mercato core `sales` (billing Spec 0).
+
+  - **New tables:** `billing_invoices`, `billing_invoice_lines`, `billing_document_sequences`, `billing_settings`. Run `yarn mercato db migrate`. No data is migrated: reseed, or see `MIGRATION.md` for removing old billing rows from `sales_invoices`.
+  - **Numbering at post.** Drafts carry `DRAFT-…`, and the series number is claimed when the invoice is posted (gap-free, inside the post transaction). A mask per series is set on the new **Billing settings** page (`/backend/config/billing`), using `{YYYY} {YY} {MM} {DD}` plus one counter token: `{SEQUENCE_NUM}` (never resets), `{SEQUENCE_NUM_YEAR}` or `{SEQUENCE_NUM_MONTH}`, with an optional `:N` zero-pad. The default is `INV/{YYYY}/{MM}/{SEQUENCE_NUM_MONTH:4}`. A mask that repeats an issued number fails the post with 409 `billing.invoice.number_conflict`.
+  - **Breaking:**
+    - Invoice API fields are renamed to billing names (`number`, `total_gross`, `outstanding`, `bill_date`, `period_start`, …). The full map is in `MIGRATION.md`.
+    - The `void` status is removed. Statuses are now `draft | posted | partially_paid | paid | credited`.
+    - The account export moves to `schemaVersion: 3`.
+  - **Top-up receipts** are billing documents (`document_type = 'receipt'`, `RC/…` series). VAT is split by billing's own `lib/vat.ts`.
+  - **Prepaid settings** move from core `configs` to per-organization billing settings (same defaults).
+  - **Dependencies:** `requires` is now `['auth', 'directory']`. `payment_gateways` is optional: without it, online top-ups return 501 `billing.topup.gateway_unavailable` and the Top up button is hidden. The unused `billing.uom` dictionary seed is removed. An isolation test fails the build if billing imports core `sales`, `configs`, `dictionaries` or `payment_gateways`.
+  - **New permissions:** `billing.settings.view` and `billing.settings.manage`.
+
+- 418d67c: Credit and debit memos (billing Spec D): posted invoices are corrected only by referenced corrective documents.
+
+  - Invoice page: **Create credit memo** (pick lines, edit quantity / unit net, "Full credit", required reason) and **Create debit memo**; draft memos can be deleted, posted ones never (no void). A Corrections section lists the memos of an invoice.
+  - Posting a credit memo (`CN/…` series) settles the corrected invoice through the allocation model; any remainder becomes account credit applied to the oldest open invoice. An invoice settled entirely by credit becomes `credited`. Debit memos (`invoice` series) are payable: due date, overdue, matched by number in bank imports.
+  - Guard: total credits on an invoice never exceed its gross plus its posted debit memos (409 `billing.memo.exceeds_invoice`).
+  - PDF memo variant ("Corrects invoice X of DATE", reason, settlement text); list Type filter / column (credit memo totals shown negative).
+  - Events `billing.credit_memo.posted`, `billing.debit_memo.posted`, `billing.invoice.credited`; `billing.invoice.posted` fires for invoices only. New permission `billing.invoice.correct`.
+  - Run `yarn mercato db migrate` (`Migration20261118000000_billing_memos`).
+
+- 3dc3fa5: Operator feedback round 1 (billing Spec F) and the Billing Account workspace (Spec E phases 2–3).
+
+  - Bill Runs: **Delete run** for test and dry runs (removes the run, its outcomes and its test invoices; real runs are never deleted — `DELETE /api/billing/runs/{id}`, permission `billing.run.delete`). "Wipe test invoices" moved to the run page; runs list gets a Mode filter and a row action.
+  - Items: the account currency is shown next to every price; a **Net | Gross** switch stores the price as typed (`priceBasis`) and the invoice reproduces a typed gross exactly. Fixed: editing an item's VAT rate is saved again.
+  - Prepaid: one run closes every due bill date (also in test / dry); recurring items honour in advance / in arrears and proration; run outcomes show prepaid cycles and skipped items; an existing statement no longer blocks the account.
+  - Prepaid VAT: new setting **When is VAT charged** — at top-up (default; item amounts debited as entered) or at billing (receipts without VAT, debits gross at the item rate, statement VAT summary).
+  - Account workspace: summary cards, deep-linkable tabs (Overview, Items, Usage, Invoices, Payments / Balance & top-ups, Statements, Bill runs), **Run billing** dialog with inline results; account list Balance due / Overdue columns and Has overdue filter.
+  - Settings → Billing is listed in the Settings sidebar; number-mask help explains `:N` zero-padding.
+  - Run `yarn mercato db migrate` (`Migration20261119000000_billing_operator_feedback`) and `yarn mercato auth sync-role-acls`.
+
+- 418d67c: Billing payments (Spec C): a billing-owned payment register with bank CSV import, auto-matching by invoice number, allocations and account credit.
+
+  - New **Billing → Payments** page: upload a bank CSV (`date,amount,currency,reference,payer_name,payer_account`) or record a payment; each payment shows its match outcome, allocations and actions (assign to account, allocate, un-allocate, ignore / restore, convert to a prepaid top-up). Upload batches keep counts and row errors.
+  - Invoices move `posted → partially_paid → paid` from allocations (always recomputed); overpayments become account credit that is applied to the oldest open invoice, on import and when an invoice is posted.
+  - Gateway captures (`payment_gateways.payment.captured`) now create a payment and allocate it instead of flipping the invoice status directly.
+  - Invoice detail shows a Payments section; the account page shows its payments and the unapplied credit.
+  - New permissions `billing.payment.view`, `billing.payment.manage`, `billing.payment.import`; CLI `mercato billing payments-sample` builds a demo bank file from posted invoices.
+  - Run `yarn mercato db migrate` (`Migration20261117000000_billing_payments`).
+
 ## 0.20.0
 
 ### Minor Changes

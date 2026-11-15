@@ -49,7 +49,7 @@ export const cancelRequestQuoteLineCostCommand: CommandHandler<z.infer<typeof ca
 const COSTS_FEATURES = ['cpq.costs.view', 'cpq.costs.manage']
 const APPLY_FEATURES = ['cpq.quotes.manage', 'cpq.costs.manage']
 
-export const answerQuoteLineCostCommand: CommandHandler<z.infer<typeof answerSchema>, CostAnswerWriteResult> = {
+export const answerQuoteLineCostCommand: CommandHandler<z.input<typeof answerSchema>, CostAnswerWriteResult> = {
   id: 'cpq.quote_line_cost.answer', isUndoable: false,
   async execute(input, ctx) {
     const parsed = answerSchema.parse(input)

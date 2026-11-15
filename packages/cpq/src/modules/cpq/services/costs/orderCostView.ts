@@ -1,5 +1,6 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
-import { CpqOrderConfiguration, CpqOrderLineConfiguration, CpqOrderLineCost, CpqQuoteConfiguration } from '../../data/entities'
+import { CpqOrderConfiguration, CpqOrderLineConfiguration, CpqOrderLineCost, CpqQuoteConfiguration, CpqQuoteLineConfiguration } from '../../data/entities'
+import { loadCancelExposure, type CancelExposure } from './cancelExposure'
 import { isArcTerminationLine } from '../arcLineRemoval'
 import { isArcMirrorLine } from '../arcPriceFreeze'
 import { QuotingError } from '../cpqQuotingService'
@@ -51,6 +52,8 @@ export type OrderCostsRead = {
   currencyCode?: string
   lines: Array<{ orderLineId: string; costs: Array<ReturnType<typeof redactedOrderCostView> | ReturnType<typeof fullOrderCostView>> }>
   margin?: QuoteMargin
+  /** Cancel exposure of the source quote's cancelled items (`cpq.costs.view` only; absent when the quote cancels nothing). */
+  exposure?: CancelExposure
 }
 
 /** The order (by CPQ order id or sales order id), its lines and its costs: 4 queries, all tenant scoped. */
@@ -88,5 +91,13 @@ export async function readOrderCosts(em: EntityManager, orderId: string, scope: 
     quoteLineId: row.orderLineId, chargeCode: row.chargeCode ?? null, costKey: row.costKey, role: row.role, costType: row.costType,
     valueStatus: row.valueStatus, instanceAmount: row.instanceAmount, currencyCode: row.currencyCode, fxRate: row.fxRate, validUntil: row.validUntil,
   }))
-  return { ...result, currencyCode: config.currencyCode, margin: computeQuoteMargin({ currencyCode: config.currencyCode, lines: marginLines, costs: marginCosts, today: today() }) }
+  // Cancel exposure (ARC costs spec step 17): measured from today until the order is active, from the change-log effective date after.
+  const cancelRead = sourceQuote
+    ? await loadCancelExposure(em, sourceQuote, await em.find(CpqQuoteLineConfiguration, { quoteConfigurationId: sourceQuote.id, ...scoped(scope) }), scope)
+    : { exposure: null }
+  return {
+    ...result, currencyCode: config.currencyCode,
+    margin: computeQuoteMargin({ currencyCode: config.currencyCode, lines: marginLines, costs: marginCosts, today: today() }),
+    ...(cancelRead.exposure ? { exposure: cancelRead.exposure } : {}),
+  }
 }

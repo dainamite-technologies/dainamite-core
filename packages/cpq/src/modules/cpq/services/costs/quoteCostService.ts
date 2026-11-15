@@ -41,6 +41,7 @@ import {
   convertedInstanceAmount, fullCostView, groupByLine, loadQuoteCosts, loadQuoteMargin, loadQuoteMarkupOverrides, markupOverrideView, redactedCostView,
   type FullCostView, type MarkupOverrideView,
 } from './quoteCostView'
+import { loadCancelExposure } from './cancelExposure'
 
 type Dependencies = {
   em: EntityManager
@@ -131,7 +132,17 @@ export class CpqQuoteCostService {
     }
     if (!includeCosts) return { lines: groupByLine(costs, (row) => redactedCostView(row, contextOf(row))), pricingRevision }
     const [overrides, margin] = await Promise.all([loadQuoteMarkupOverrides(em, quote.id, scope), loadQuoteMargin(em, quote, scope)])
-    return { lines: groupByLine(costs, (row) => fullCostView(row, contextOf(row))), markupOverrides: overrides.map(markupOverrideView), margin, pricingRevision }
+    const lines = groupByLine(costs, (row) => fullCostView(row, contextOf(row))) as Array<{ quoteLineId: string; costs: unknown[]; exposure?: unknown }>
+    // Cancel exposure (ARC costs spec step 17): on each cancel line (a cancel line holds no cost rows, so it may add an entry) and, for
+    // quotes that cancel something, once for the quote. Holders of `cpq.costs.view` only.
+    const cancelRead = await loadCancelExposure(em, quote, lineConfigs, scope)
+    for (const lineExposure of cancelRead.lines) {
+      const { quoteLineId, ...exposure } = lineExposure
+      const entry = lines.find((line) => line.quoteLineId === quoteLineId)
+      if (entry) entry.exposure = exposure
+      else lines.push({ quoteLineId, costs: [], exposure })
+    }
+    return { lines, markupOverrides: overrides.map(markupOverrideView), margin, pricingRevision, ...(cancelRead.exposure ? { exposure: cancelRead.exposure } : {}) }
   }
 
   /** Quote-independent costs and list price of a configuration. Persists nothing. */

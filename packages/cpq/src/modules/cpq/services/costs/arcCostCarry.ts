@@ -284,3 +284,55 @@ export async function reconcileRenewLine(
   })
   return { ...result, indexPatches }
 }
+
+// ─── Cancel exposure (App Spec US-6.4, ARC costs spec "Cancel shows supplier early-exit exposure") ──────────────
+
+/** The inventory-cost fields exposure reads (an item or an asset cost). */
+export type ExposureCostRow = Pick<CpqInventoryCost, 'id' | 'costKey' | 'name' | 'costType' | 'supplierName' | 'supplierTermEnd'>
+
+export type CancelExposureItem = {
+  inventoryCostId: string
+  costKey: string
+  name: string
+  supplierName: string | null
+  supplierTermEnd: string | null
+  /** Whole calendar months from the reference date to the supplier term end (at least 1); `null` while the term is unknown. */
+  exposureMonths: number | null
+  termUnknown: boolean
+}
+
+/**
+ * Whole calendar months from `from` to `to` (`YYYY-MM-DD`, `to` after `from`): the month difference, minus one when
+ * `to`'s day-of-month is before `from`'s, unless `to` is the last day of its month (so 2027-11-30 -> 2028-05-31 is 6, and
+ * 2027-11-30 -> 2028-11-30 is 12). A term ending a few days after the reference date still counts as 1 month.
+ */
+export function exposureMonthsBetween(from: string, to: string): number {
+  const [fy, fm, fd] = from.split('-').map(Number)
+  const [ty, tm, td] = to.split('-').map(Number)
+  const lastDayOfTarget = new Date(Date.UTC(ty, tm, 0)).getUTCDate()
+  let months = (ty - fy) * 12 + (tm - fm)
+  if (td < fd && td !== lastDayOfTarget) months -= 1
+  return Math.max(1, months)
+}
+
+/**
+ * Supplier commitments that outlive a cancellation: of the given open inventory costs (items and assets), every cost whose
+ * `supplier_term_end` is AFTER `referenceDate` with its months of exposure; a recurring (`mrc`) cost without a supplier term is
+ * listed as `termUnknown`. Costs whose term ended on or before the reference date, and one-off costs without a term, are not
+ * listed. No amount is part of the result and nothing is recorded as a cost (Q-D10). Sorted by term end, unknown last.
+ */
+export function computeCancelExposure(rows: readonly ExposureCostRow[], referenceDate: string | Date): CancelExposureItem[] {
+  const reference = day(referenceDate)
+  if (!reference) return []
+  const items: CancelExposureItem[] = []
+  for (const row of rows) {
+    const termEnd = day(row.supplierTermEnd)
+    const base = { inventoryCostId: row.id, costKey: row.costKey, name: row.name, supplierName: row.supplierName ?? null }
+    if (termEnd) {
+      if (termEnd > reference) items.push({ ...base, supplierTermEnd: termEnd, exposureMonths: exposureMonthsBetween(reference, termEnd), termUnknown: false })
+    } else if (row.costType === 'mrc') {
+      items.push({ ...base, supplierTermEnd: null, exposureMonths: null, termUnknown: true })
+    }
+  }
+  return items.sort((a, b) => (a.supplierTermEnd ?? '9999-12-31').localeCompare(b.supplierTermEnd ?? '9999-12-31') || a.name.localeCompare(b.name) || a.inventoryCostId.localeCompare(b.inventoryCostId))
+}

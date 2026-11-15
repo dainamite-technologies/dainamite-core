@@ -20,6 +20,11 @@ import { buildSellerSnapshot, getBillingSettings, missingSellerFields, numberMas
 import { claimDocumentNumber } from '../lib/numbering'
 import { buildBuyerSnapshot } from '../lib/documentParties'
 import { freezeInvoicePdf } from '../lib/pdf/invoicePdf'
+import { accountLockKey } from '../lib/accountLock'
+import { allocate, applyAccountCredit, emptyEffects, mergeEffects, toCents } from '../lib/allocation'
+import { emitAllocationEffects } from '../lib/allocationEvents'
+import { seriesFor } from '../lib/documentTypes'
+import { creditFits, loadCorrectionTotals } from '../lib/memoGuards'
 import { sendInvoice, type SendInvoiceResult } from '../lib/invoiceDelivery'
 import { computeDueDate, resolvePaymentTermsDays } from '../lib/dueDate'
 import { lineAmountsFromNet, sumTotals } from '../lib/vat'
@@ -132,12 +137,15 @@ const postInvoiceCommand: CommandHandler<BillingInvoicePostInput, PostResult> = 
         missing,
       })
     }
-    const series = invoice.documentType === 'credit_memo' ? 'credit_memo' : 'invoice'
+    const isCreditMemo = invoice.documentType === 'credit_memo'
+    const series = seriesFor(invoice.documentType)
     const issueDate = todayUtc()
-    const dueDate = computeDueDate(
-      issueDate,
-      resolvePaymentTermsDays(account.paymentTermsDays, settings.defaultPaymentTermsDays),
-    )
+    // Receivables (invoices, debit memos) are due after the terms; a credit
+    // memo is a credit source with no due date (Spec D).
+    const dueDate = isCreditMemo
+      ? null
+      : computeDueDate(issueDate, resolvePaymentTermsDays(account.paymentTermsDays, settings.defaultPaymentTermsDays))
+    const settlement = emptyEffects()
 
     try {
       await em.transactional(async (tem) => {
@@ -154,6 +162,28 @@ const postInvoiceCommand: CommandHandler<BillingInvoicePostInput, PostResult> = 
             code: 'billing.invoice.not_draft',
             currentStatus: target?.status ?? null,
           })
+        }
+        // Spec C/D: every receivables change of an account is serialised by
+        // the per-account lock (same key as `withAccountLock`).
+        await (tem as EntityManager).execute('SELECT pg_advisory_xact_lock(hashtextextended(?, 0))', [
+          accountLockKey({ tenantId: scope.tenantId, billAccountId: target.billAccountId }),
+        ])
+        let original: BillingInvoice | null = null
+        if (isCreditMemo) {
+          original = target.correctsInvoiceId
+            ? await (tem as EntityManager).findOne(BillingInvoice, { id: target.correctsInvoiceId, ...scope, deletedAt: null } as never)
+            : null
+          if (!original) {
+            throw new CrudHttpError(409, { error: 'The corrected invoice no longer exists', code: 'billing.memo.invalid_original' })
+          }
+          // Cumulative guard (P-D4), authoritative here under the lock.
+          const corrections = await loadCorrectionTotals(tem as EntityManager, scope, original.id, { excludeId: target.id })
+          if (!creditFits(toCents(original.totalGross), corrections, toCents(target.totalGross))) {
+            throw new CrudHttpError(409, {
+              error: 'The credit exceeds what is left to credit on this invoice',
+              code: 'billing.memo.exceeds_invoice',
+            })
+          }
         }
         const claimed = await claimDocumentNumber(
           tem as EntityManager,
@@ -176,6 +206,32 @@ const postInvoiceCommand: CommandHandler<BillingInvoicePostInput, PostResult> = 
         target.outstanding = target.totalGross
         target.updatedAt = now
         await tem.flush()
+        if (isCreditMemo && original) {
+          // Settle the corrected invoice first (P-D5), the remainder becomes
+          // account credit spent on other open receivables (D12).
+          const source = { type: 'credit_memo' as const, id: target.id }
+          const take = Math.min(toCents(target.totalGross), toCents(original.outstanding))
+          if (take > 0 && ['posted', 'partially_paid'].includes(original.status)) {
+            mergeEffects(
+              settlement,
+              await allocate(tem as EntityManager, scope, { source, invoiceId: original.id, amountCents: take, by: 'credit' }),
+            )
+          }
+          mergeEffects(
+            settlement,
+            await applyAccountCredit(tem as EntityManager, scope, { id: target.billAccountId, currencyCode: target.currencyCode }, {
+              onlySources: [source],
+            }),
+          )
+          const fresh = (await (tem as EntityManager).execute(
+            `SELECT status, outstanding FROM billing_invoices WHERE id = ?`,
+            [target.id],
+          )) as unknown as Array<{ status: string; outstanding: string }>
+          if (fresh?.[0]) {
+            target.status = fresh[0].status
+            target.outstanding = fresh[0].outstanding
+          }
+        }
         Object.assign(invoice, {
           number: target.number,
           series: target.series,
@@ -218,7 +274,17 @@ const postInvoiceCommand: CommandHandler<BillingInvoicePostInput, PostResult> = 
 
     // Side effects fire AFTER the DB commit so downstream subscribers never
     // observe a "posted" event for an invoice the DB doesn't reflect.
-    await emitBillingEvent('billing.invoice.posted', {
+    // `billing.invoice.posted` is for invoices only; memos have their own
+    // events with the same payload (Spec D, P-D9).
+    const postedEvent: BillingEventId =
+      invoice.documentType === 'credit_memo'
+        ? 'billing.credit_memo.posted'
+        : invoice.documentType === 'debit_memo'
+          ? 'billing.debit_memo.posted'
+          : 'billing.invoice.posted'
+    await emitAllocationEffects(scope, settlement)
+    await emitBillingEvent(postedEvent, {
+      correctsInvoiceId: invoice.correctsInvoiceId ?? null,
       invoiceId: invoice.id,
       invoiceNumber: invoice.number,
       documentType: invoice.documentType,
@@ -254,9 +320,11 @@ const postInvoiceCommand: CommandHandler<BillingInvoicePostInput, PostResult> = 
     // SPEC-002 P6: a newly-posted invoice raises the account's outstanding
     // exposure — emit billing.credit.over_limit on the upward crossing.
     // Billing never blocks; the consuming flow decides what to do.
-    const creditEvents = await buildPostpaidCreditCrossingEvents(em, account, invoice.outstanding)
-    for (const ev of creditEvents) {
-      await emitBillingEvent(ev.id as BillingEventId, ev.payload, { persistent: true })
+    if (!isCreditMemo) {
+      const creditEvents = await buildPostpaidCreditCrossingEvents(em, account, invoice.outstanding)
+      for (const ev of creditEvents) {
+        await emitBillingEvent(ev.id as BillingEventId, ev.payload, { persistent: true })
+      }
     }
 
     return {

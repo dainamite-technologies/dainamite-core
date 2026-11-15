@@ -64,6 +64,34 @@ const events = [
     category: 'lifecycle',
     clientBroadcast: true,
   },
+  // ─── Payments (Spec C) ───────────────────────────────────────
+  { id: 'billing.payment.created', label: 'Billing Payment Created', entity: 'payment', category: 'lifecycle' },
+  { id: 'billing.payment.allocated', label: 'Billing Payment Allocated', entity: 'payment', category: 'lifecycle' },
+  { id: 'billing.payment.unallocated', label: 'Billing Payment Unallocated', entity: 'payment', category: 'lifecycle' },
+  {
+    id: 'billing.payment.converted_to_topup',
+    label: 'Billing Payment Converted to Top-up',
+    entity: 'payment',
+    category: 'lifecycle',
+  },
+  {
+    id: 'billing.payment_import.completed',
+    label: 'Billing Payment Import Completed',
+    entity: 'payment_import',
+    category: 'lifecycle',
+    clientBroadcast: true,
+  },
+  { id: 'billing.invoice.paid', label: 'Billing Invoice Paid', entity: 'invoice', category: 'lifecycle', clientBroadcast: true },
+  // ─── Corrective documents (Spec D) ───────────────────────────
+  { id: 'billing.credit_memo.posted', label: 'Billing Credit Memo Posted', entity: 'credit_memo', category: 'lifecycle', clientBroadcast: true },
+  { id: 'billing.debit_memo.posted', label: 'Billing Debit Memo Posted', entity: 'debit_memo', category: 'lifecycle', clientBroadcast: true },
+  { id: 'billing.invoice.credited', label: 'Billing Invoice Credited', entity: 'invoice', category: 'lifecycle', clientBroadcast: true },
+  {
+    id: 'billing.invoice.partially_paid',
+    label: 'Billing Invoice Partially Paid',
+    entity: 'invoice',
+    category: 'lifecycle',
+  },
   {
     id: 'billing.invoice.line_posted',
     label: 'Billing Invoice Line Posted',

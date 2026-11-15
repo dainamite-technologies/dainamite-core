@@ -1,7 +1,7 @@
 "use client"
 import * as React from 'react'
 import Link from 'next/link'
-import { useParams, useSearchParams } from 'next/navigation'
+import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import type { LegacyColumnDef as ColumnDef } from '@tanstack/react-table/legacy'
 import { FileDown, Mail, Pencil, Plus, Trash2 } from 'lucide-react'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
@@ -28,6 +28,7 @@ import {
 } from '../../../../components/DetailFields'
 import { billRunName } from '../../../../lib/billRunLabel'
 import { invoicePdfHref, resolveInvoiceReturnTarget } from '../../../../lib/navigation'
+import { CreateMemoDialog } from '../../../../components/CreateMemoDialog'
 
 // Spec 0: billing_invoices / billing_invoice_lines field names.
 type BillingInvoice = {
@@ -52,6 +53,10 @@ type BillingInvoice = {
   outstanding: string
   days_overdue?: number
   pdf_attachment_id?: string | null
+  // Spec D — corrective documents
+  corrects_invoice_id?: string | null
+  corrects_invoice_number?: string | null
+  correction_reason?: string | null
   buyer_snapshot?: { invoice_email?: string } | null
   metadata?: { draft_number?: string; deliveries?: InvoiceDelivery[] } | null
   created_at: string
@@ -84,9 +89,33 @@ type InvoiceLine = {
   metadata: { operator_added?: boolean; usage_tier_breakdown?: unknown } | null
 }
 
+// Spec C: what settled this receivable (payments; Spec D: credit memos).
+type InvoiceAllocation = {
+  id: string
+  source_type: 'payment' | 'credit_memo'
+  source_id: string
+  source_label: string | null
+  amount: string
+  currency_code: string
+  allocated_by: string
+  created_at: string
+}
+
 type DetailResponse = {
   invoice: BillingInvoice
   lines: InvoiceLine[]
+  allocations?: InvoiceAllocation[]
+  corrections?: InvoiceCorrection[]
+}
+
+// Spec D: memos correcting this document.
+type InvoiceCorrection = {
+  id: string
+  number: string
+  document_type: 'credit_memo' | 'debit_memo'
+  status: string
+  total_gross: string
+  currency_code: string
 }
 
 function statusVariant(
@@ -168,6 +197,97 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
   // Confirm flows: wipe-test + remove-line both use ConfirmDialog
   // (per UI AGENTS.md: NEVER `window.confirm`).
   const { confirm, ConfirmDialogElement } = useConfirmDialog()
+  const [allocations, setAllocations] = React.useState<InvoiceAllocation[]>([])
+  const [corrections, setCorrections] = React.useState<InvoiceCorrection[]>([])
+  const [memoDialog, setMemoDialog] = React.useState<'credit_memo' | 'debit_memo' | null>(null)
+  const router = useRouter()
+  const correctionColumns = React.useMemo<ColumnDef<InvoiceCorrection>[]>(
+    () => [
+      {
+        accessorKey: 'number',
+        header: t('billing.invoices.columns.number', 'Number'),
+        cell: ({ row }) => (
+          <Link href={`/backend/billing/invoices/${row.original.id}`} className="text-primary hover:underline">
+            {row.original.number}
+          </Link>
+        ),
+      },
+      {
+        accessorKey: 'document_type',
+        header: t('billing.invoices.columns.type', 'Type'),
+        cell: ({ row }) =>
+          row.original.document_type === 'credit_memo'
+            ? t('billing.invoices.document_type.credit_memo', 'Credit memo')
+            : t('billing.invoices.document_type.debit_memo', 'Debit memo'),
+      },
+      { accessorKey: 'status', header: t('billing.invoices.columns.status', 'Status') },
+      {
+        accessorKey: 'total_gross',
+        header: t('billing.invoices.columns.total', 'Total'),
+        cell: ({ row }) =>
+          formatMoney(
+            String((row.original.document_type === 'credit_memo' ? -1 : 1) * Number.parseFloat(row.original.total_gross)),
+            row.original.currency_code,
+          ),
+      },
+    ],
+    [t],
+  )
+  const handleDeleteDraftMemo = React.useCallback(async () => {
+    if (!invoice) return
+    const ok = await confirm({
+      title: t('billing.memo.delete.confirm', 'Delete this draft memo?'),
+      text: t('billing.memo.delete.text', 'The draft and its lines are removed. Posted documents are never deleted.'),
+      confirmText: t('billing.memo.delete.action', 'Delete draft'),
+      variant: 'destructive',
+    })
+    if (!ok) return
+    try {
+      await apiCallOrThrow('/api/billing/invoices/delete-draft', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ invoiceId: invoice.id }),
+      })
+      flash(t('billing.memo.deleted', 'Draft memo deleted'), 'success')
+      router.push(invoice.corrects_invoice_id ? `/backend/billing/invoices/${invoice.corrects_invoice_id}` : '/backend/billing/invoices')
+    } catch (err) {
+      flash(normalizeCrudServerError(err).message || t('billing.memo.delete.failed', 'Could not delete the draft'), 'error')
+    }
+  }, [confirm, invoice, router, t])
+  const allocationColumns = React.useMemo<ColumnDef<InvoiceAllocation>[]>(
+    () => [
+      {
+        accessorKey: 'source_label',
+        header: t('billing.invoices.payments.source', 'Source'),
+        cell: ({ row }) => (
+          <Link
+            href={
+              row.original.source_type === 'payment'
+                ? `/backend/billing/payments/${row.original.source_id}`
+                : `/backend/billing/invoices/${row.original.source_id}`
+            }
+            className="text-primary hover:underline"
+          >
+            {row.original.source_type === 'payment'
+              ? `${t('billing.invoices.payments.payment', 'Payment')}${row.original.source_label ? ` · ${row.original.source_label}` : ''}`
+              : `${t('billing.invoices.payments.credit_memo', 'Credit memo')} ${row.original.source_label ?? ''}`}
+          </Link>
+        ),
+        meta: { truncate: true, maxWidth: '320px' },
+      },
+      {
+        accessorKey: 'amount',
+        header: t('billing.payments.columns.amount', 'Amount'),
+        cell: ({ row }) => formatMoney(row.original.amount, row.original.currency_code),
+      },
+      {
+        accessorKey: 'created_at',
+        header: t('billing.payments.allocations.at', 'When'),
+        cell: ({ row }) => new Date(row.original.created_at).toLocaleDateString(),
+      },
+    ],
+    [t],
+  )
   const searchParams = useSearchParams()
   const backHref = resolveInvoiceReturnTarget({
     from: searchParams?.get('from'),
@@ -185,6 +305,8 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
       )
       setInvoice(data.invoice)
       setLines(data.lines ?? [])
+      setAllocations(data.allocations ?? [])
+      setCorrections(data.corrections ?? [])
     } catch (err) {
       const { message } = normalizeCrudServerError(err)
       setError(message || t('billing.invoices.detail.error.load', 'Failed to load invoice'))
@@ -595,6 +717,11 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
         statusBadge={
           <div className="flex items-center gap-2 flex-wrap">
             <Tag variant={statusVariant(invoice.status)}>{invoice.status}</Tag>
+            {invoice.document_type === 'credit_memo' ? (
+              <Tag variant="info">{t('billing.invoices.document_type.credit_memo', 'Credit memo')}</Tag>
+            ) : invoice.document_type === 'debit_memo' ? (
+              <Tag variant="info">{t('billing.invoices.document_type.debit_memo', 'Debit memo')}</Tag>
+            ) : null}
             {isTest ? <Tag variant="warning">TEST</Tag> : null}
             {(invoice.days_overdue ?? 0) > 0 ? (
               <Tag variant="error">
@@ -628,6 +755,21 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
                   : (invoice.metadata?.deliveries ?? []).some((d) => d.status === 'sent')
                     ? t('billing.invoices.send.resend', 'Resend')
                     : t('billing.invoices.send.action', 'Send')}
+              </Button>
+            ) : null}
+            {invoice.document_type === 'invoice' && !isTest && ['posted', 'partially_paid', 'paid'].includes(invoice.status) ? (
+              <Button type="button" variant="outline" onClick={() => setMemoDialog('credit_memo')}>
+                {t('billing.memo.create_credit.action', 'Create credit memo')}
+              </Button>
+            ) : null}
+            {invoice.document_type === 'invoice' && !isTest && ['posted', 'partially_paid', 'paid', 'credited'].includes(invoice.status) ? (
+              <Button type="button" variant="outline" onClick={() => setMemoDialog('debit_memo')}>
+                {t('billing.memo.create_debit.action', 'Create debit memo')}
+              </Button>
+            ) : null}
+            {isDraft && (invoice.document_type === 'credit_memo' || invoice.document_type === 'debit_memo') ? (
+              <Button type="button" variant="outline" onClick={() => void handleDeleteDraftMemo()}>
+                {t('billing.memo.delete.action', 'Delete draft')}
               </Button>
             ) : null}
             {isTest ? (
@@ -683,6 +825,16 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
             <DetailField label={t('billing.invoices.detail.field.due', 'Due')}>
               {invoice.due_date?.slice(0, 10) ?? '—'}
             </DetailField>
+            {invoice.corrects_invoice_id ? (
+              <DetailField label={t('billing.memo.corrects', 'Corrects')}>
+                <Link href={`/backend/billing/invoices/${invoice.corrects_invoice_id}`} className="text-primary hover:underline">
+                  {invoice.corrects_invoice_number ?? invoice.corrects_invoice_id}
+                </Link>
+              </DetailField>
+            ) : null}
+            {invoice.correction_reason ? (
+              <DetailField label={t('billing.memo.reason_label', 'Reason')}>{invoice.correction_reason}</DetailField>
+            ) : null}
             {invoice.metadata?.draft_number ? (
               <DetailField label={t('billing.invoices.detail.field.draft_number', 'Draft number')}>
                 <span className="font-mono text-xs">{invoice.metadata.draft_number}</span>
@@ -745,6 +897,43 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
             />
           </div>
 
+          {corrections.length > 0 ? (
+            <div>
+              <h2 className="text-base font-semibold mb-2">{t('billing.memo.corrections', 'Corrections')}</h2>
+              <DataTable
+                columns={correctionColumns}
+                data={corrections}
+                isLoading={false}
+                pagination={{
+                  page: 1,
+                  pageSize: Math.max(corrections.length, 1),
+                  total: corrections.length,
+                  totalPages: 1,
+                  onPageChange: () => undefined,
+                }}
+              />
+            </div>
+          ) : null}
+
+          {!isDraft ? (
+            <div>
+              <h2 className="text-base font-semibold mb-2">{t('billing.invoices.payments.title', 'Payments')}</h2>
+              <DataTable
+                columns={allocationColumns}
+                data={allocations}
+                isLoading={false}
+                emptyState={t('billing.invoices.payments.empty', 'No payments yet.')}
+                pagination={{
+                  page: 1,
+                  pageSize: Math.max(allocations.length, 1),
+                  total: allocations.length,
+                  totalPages: 1,
+                  onPageChange: () => undefined,
+                }}
+              />
+            </div>
+          ) : null}
+
           {!isDraft ? (
             <div>
               <h2 className="text-base font-semibold mb-2">
@@ -778,6 +967,24 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
           }}
           onSubmit={handleSubmitLine}
         />
+        {memoDialog ? (
+          <CreateMemoDialog
+            open
+            type={memoDialog}
+            invoiceId={invoice.id}
+            invoiceNumber={invoice.number}
+            currencyCode={invoice.currency_code}
+            lines={lines.map((line) => ({
+              id: line.id,
+              description: line.description,
+              quantity: line.quantity,
+              unit_price_net: line.unit_price_net,
+              tax_rate: line.tax_rate,
+            }))}
+            onClose={() => setMemoDialog(null)}
+            onCreated={(memoId) => router.push(`/backend/billing/invoices/${memoId}`)}
+          />
+        ) : null}
         {ConfirmDialogElement}
       </PageBody>
     </Page>

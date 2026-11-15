@@ -53,6 +53,9 @@ export type PdfInvoice = {
   taxTotal: string
   totalGross: string
   correctsNumber?: string | null
+  /** Spec D: issue date of the corrected document and the correction reason. */
+  correctsIssueDate?: Date | string | null
+  correctionReason?: string | null
 }
 
 export type PdfLine = {
@@ -183,7 +186,15 @@ export function buildInvoiceDocumentModel(params: {
     ])
   }
   if (invoice.correctsNumber) {
-    meta.push([t('billing.pdf.meta.corrects', 'Corrects'), invoice.correctsNumber])
+    meta.push([
+      t('billing.pdf.meta.corrects', 'Corrects'),
+      invoice.correctsIssueDate
+        ? `${invoice.correctsNumber} ${t('billing.pdf.meta.of', 'of')} ${date(invoice.correctsIssueDate)}`
+        : invoice.correctsNumber,
+    ])
+  }
+  if (invoice.correctionReason) {
+    meta.push([t('billing.pdf.meta.reason', 'Reason'), invoice.correctionReason])
   }
 
   const sellerLines = [
@@ -231,10 +242,13 @@ export function buildInvoiceDocumentModel(params: {
     .sort(([a], [b]) => b - a)
     .map(([rate, sums]) => [plain(formatPercent(rate, locale)), money(sums.net), money(sums.tax), money(sums.gross)])
 
+  const isCredit = invoice.documentType === 'credit_memo'
   const totals: Array<[string, string]> = [
     [t('billing.pdf.totals.net', 'Total net'), money(invoice.subtotalNet)],
     [t('billing.pdf.totals.tax', 'Total VAT'), money(invoice.taxTotal)],
-    [t('billing.pdf.totals.gross', 'Total due'), money(invoice.totalGross)],
+    isCredit
+      ? [t('billing.pdf.totals.credited', 'Total credited'), money(invoice.totalGross)]
+      : [t('billing.pdf.totals.gross', 'Total due'), money(invoice.totalGross)],
   ]
 
   const payable = invoice.documentType === 'invoice' || invoice.documentType === 'debit_memo'
@@ -252,7 +266,22 @@ export function buildInvoiceDocumentModel(params: {
             `${t('billing.pdf.payment.title', 'Transfer title')}: ${invoice.number}`,
           ].filter((line) => line !== ''),
         }
-      : null
+      : isCredit
+        ? {
+            // A credit memo is not paid: it settles the corrected invoice and
+            // any remainder stays as credit on the customer's account (D-D10).
+            heading: t('billing.pdf.memo.settlement', 'Settlement'),
+            lines: [
+              `${t('billing.pdf.memo.amount_credited', 'Amount credited')}: ${money(invoice.totalGross)}`,
+              invoice.correctsNumber
+                ? t('billing.pdf.memo.settled_against', 'Settled against invoice {number}; any remainder is credited to your account.').replace(
+                    '{number}',
+                    invoice.correctsNumber,
+                  )
+                : t('billing.pdf.memo.credited_to_account', 'The amount is credited to your account.'),
+            ],
+          }
+        : null
 
   return {
     language: params.language,

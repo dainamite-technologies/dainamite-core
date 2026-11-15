@@ -22,6 +22,7 @@ import { AccountForm, type AccountFormValues } from '../../../../components/Acco
 import { DetailCard, DetailField } from '../../../../components/DetailFields'
 import { PrepaidPanel } from '../../../../components/PrepaidPanel'
 import { AccountInvoicesSection } from '../../../../components/AccountInvoicesSection'
+import { AccountPaymentsSection } from '../../../../components/AccountPaymentsSection'
 import { CustomerLabel } from '../../../../components/CustomerLabel'
 import { fetchCustomerNames } from '../../../../components/customerNames'
 import { SUPPORTED_INVOICE_LANGUAGES } from '../../../../lib/invoiceLanguages'
@@ -637,6 +638,9 @@ export default function BillingAccountDetailPage(props: { params?: { id?: string
         <AccountItemsSection accountId={row.id} />
         <AccountUsageSection accountId={row.id} />
         <AccountInvoicesSection accountId={row.id} />
+        {row.billing_mode !== 'prepaid' ? (
+          <AccountPaymentsSection accountId={row.id} currencyCode={row.currency_code} />
+        ) : null}
         {ConfirmDialogElement}
       </PageBody>
     </Page>

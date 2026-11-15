@@ -25,6 +25,9 @@ export const E = {
     billing_invoice_line: 'billing:billing_invoice_line',
     billing_document_sequence: 'billing:billing_document_sequence',
     billing_settings: 'billing:billing_settings',
+    billing_payment: 'billing:billing_payment',
+    billing_allocation: 'billing:billing_allocation',
+    billing_payment_import: 'billing:billing_payment_import',
   },
 } as const
 

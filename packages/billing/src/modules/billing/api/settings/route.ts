@@ -109,7 +109,7 @@ export const openApi = {
         '`{SEQUENCE_NUM_MONTH}` (monthly — needs year + month), with an optional `:N` zero-pad. ' +
         'Invalid masks → 400 with the mask error code. IBAN is normalised and mod-97 checked, ' +
         'BIC must be 8 or 11 characters; an empty string clears a text field.',
-      requestBody: { content: { 'application/json': { schema: billingSettingsUpdateSchema } } },
+      requestBody: { schema: billingSettingsUpdateSchema },
     },
   },
 }

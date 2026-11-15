@@ -86,4 +86,34 @@ const seed: ModuleCli = {
   },
 }
 
-export default [seed]
+/**
+ * `mercato billing payments-sample [--out <file>] [--tenant <id>] [--org <id>]`
+ *
+ * Spec C demo: writes a bank CSV built from the organization's posted,
+ * unpaid invoices (and a top-up receipt, if any) that shows every matcher
+ * outcome after one upload on Billing → Payments. Run a real bill run and
+ * post a few invoices first.
+ */
+const paymentsSample: ModuleCli = {
+  command: 'payments-sample',
+  async run(rest) {
+    const args = parseArgs(rest)
+    const container = await createRequestContainer()
+    const em = container.resolve<EntityManager>('em')
+    const scope = await resolveScope(em, args)
+    if (!scope) {
+      console.error('[billing payments-sample] No organization found. Pass --org <id>.')
+      return
+    }
+    const { buildPaymentsSampleCsv, loadSampleSources } = await import('./lib/seeds/paymentsSample')
+    const { writeFile } = await import('node:fs/promises')
+    const sources = await loadSampleSources(em, scope)
+    const out = typeof args.out === 'string' ? args.out : 'payments-sample.csv'
+    const sample = buildPaymentsSampleCsv({ ...sources, date: new Date().toISOString().slice(0, 10) })
+    await writeFile(out, sample.csv, 'utf8')
+    console.log(`[billing payments-sample] wrote ${sample.rows} rows to ${out}`)
+    for (const note of sample.missing) console.log(`  · skipped ${note}`)
+  },
+}
+
+export default [seed, paymentsSample]

@@ -1,6 +1,7 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
 import type { BillingAccount } from '../data/entities'
 import { isoDay, overdueSql } from './overdue'
+import { getAccountCredit } from './allocation'
 
 /**
  * Accounts-receivable summary of one billing account (Spec B; the endpoint
@@ -12,7 +13,8 @@ import { isoDay, overdueSql } from './overdue'
  *   - open_amount    Σ outstanding of posted / partially paid receivables
  *   - overdue_amount Σ outstanding of the overdue subset (B-D6)
  *   - overdue_count  number of overdue documents
- *   - credit_amount  unapplied credit — 0 until Spec C (payments)
+ *   - credit_amount  unapplied credit (Spec C): unallocated payments + open
+ *                    credit memos of the account
  * Test-run documents never count.
  */
 
@@ -62,6 +64,10 @@ export async function getAccountArSummary(
     open_amount: money(row?.open_amount),
     overdue_amount: money(row?.overdue_amount),
     overdue_count: Number(row?.overdue_count ?? 0) || 0,
-    credit_amount: money(0),
+    credit_amount: await getAccountCredit(
+      em,
+      { tenantId: account.tenantId, organizationId: account.organizationId },
+      { id: account.id, currencyCode: account.currencyCode },
+    ),
   }
 }

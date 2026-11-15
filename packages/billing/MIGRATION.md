@@ -12,6 +12,50 @@ billing data.
 
 ---
 
+## Spec D — Credit and debit memos
+
+**Migration:** `Migration20261118000000_billing_memos.ts` (additive:
+`billing_invoices.corrects_invoice_number`, `corrects_issue_date`).
+
+- **Corrections are documents.** From a posted / partially paid / paid invoice:
+  `POST /api/billing/invoices/{id}/memos` creates a draft credit or debit memo (reason
+  required, printed). Credit memos without lines = full credit; copied lines keep the
+  original VAT rate. Drafts can be deleted (`POST /api/billing/invoices/delete-draft`);
+  posted documents never are (no void).
+- **Posting** (`POST /api/billing/invoices/post`): credit memos use the `credit_memo`
+  series (`CN/…`), have no due date and are allocated to the corrected invoice
+  (`billing_allocations.source_type = 'credit_memo'`); any remainder is account credit.
+  An invoice settled entirely by credit memos becomes `credited`. Debit memos use the
+  `invoice` series, get a due date and are paid like invoices (matched by number).
+- **Guard:** Σ posted credit memos ≤ invoice gross + Σ posted debit memos → otherwise
+  409 `billing.memo.exceeds_invoice` (checked at creation and, under the account lock, at post).
+- **Events:** `billing.credit_memo.posted`, `billing.debit_memo.posted`,
+  `billing.invoice.credited`. `billing.invoice.posted` now fires for invoices only.
+- **New permission:** `billing.invoice.correct`.
+
+## Spec C — Payments (register, CSV import, allocation, credit)
+
+**Migration:** `Migration20261117000000_billing_payments.ts` (additive: `billing_payments`,
+`billing_allocations`, `billing_payment_imports`).
+
+- **Single path to "paid".** Invoice `paid_total` / `outstanding` / status (`posted →
+  partially_paid → paid`, and `credited` for Spec D) are recomputed from active
+  allocations. The `payment_gateways.payment.captured` subscriber no longer flips the
+  status: it records a `BillingPayment` (`source = gateway`, idempotent on the
+  transaction id) and allocates it.
+- **CSV upload** on **Billing → Payments** (`POST /api/billing/payments/import`, header
+  `date,amount,currency,reference,payer_name,payer_account`, ≤ 5,000 rows / 2 MB).
+  Matching uses only invoice numbers in the reference; overpayments become account
+  credit, applied to the oldest open invoice (also when an invoice is posted).
+- **Manual actions:** record, assign to account / unassign, allocate / un-allocate,
+  ignore / restore, convert to top-up (prepaid accounts). Each runs under a per-account
+  advisory lock.
+- **Account summary:** `credit_amount` is now the account's unapplied credit.
+- **New permissions:** `billing.payment.view`, `billing.payment.manage`,
+  `billing.payment.import` (run `yarn mercato auth sync-role-acls` for existing tenants).
+- **Demo:** `yarn mercato billing payments-sample [--org <id>] [--out file.csv]` writes a
+  bank CSV from your posted invoices that shows every matching outcome.
+
 ## Spec B — Invoice documents (VAT, due date, PDF, email)
 
 **Migration:** `Migration20261116000000_billing_invoice_documents.ts` (additive)

@@ -44,7 +44,8 @@ export async function GET(
               a.name AS bill_account_name, i.bill_run_id, i.bill_date, i.period_start, i.period_end,
               i.issue_date, i.due_date, i.posted_at, i.currency_code, i.subtotal_net, i.tax_total,
               i.total_gross, i.paid_total, i.credited_total, i.outstanding, i.corrects_invoice_id,
-              i.correction_reason, i.buyer_snapshot, i.seller_snapshot, i.topup_id, i.metadata,
+              i.correction_reason, i.corrects_invoice_number, i.corrects_issue_date,
+              i.buyer_snapshot, i.seller_snapshot, i.topup_id, i.metadata,
               i.pdf_attachment_id, ${daysOverdueSql('i')}::int AS days_overdue,
               i.created_at, i.updated_at
        FROM billing_invoices i
@@ -69,7 +70,32 @@ export async function GET(
       [invoiceId, auth.tenantId, organizationId],
     )) as unknown as InvoiceLineRow[]
 
+    // Spec C: what settled this receivable (payments; Spec D adds credit memos).
+    const allocations = await em.execute(
+      `SELECT al.id, al.source_type, al.source_id, al.amount, al.currency_code, al.allocated_by, al.created_at,
+              CASE WHEN al.source_type = 'payment' THEN COALESCE(p.reference, p.payer_name)
+                   ELSE m.number END AS source_label,
+              p.received_at AS payment_received_at
+         FROM billing_allocations al
+         LEFT JOIN billing_payments p ON al.source_type = 'payment' AND p.id = al.source_id
+         LEFT JOIN billing_invoices m ON al.source_type = 'credit_memo' AND m.id = al.source_id
+        WHERE al.invoice_id = ? AND al.tenant_id = ? AND al.organization_id = ? AND al.deleted_at IS NULL
+        ORDER BY al.created_at ASC`,
+      [invoiceId, auth.tenantId, organizationId],
+    )
+
+    // Spec D: memos correcting this document.
+    const corrections = await em.execute(
+      `SELECT id, number, document_type, status, total_gross, outstanding, currency_code, correction_reason, created_at
+         FROM billing_invoices
+        WHERE corrects_invoice_id = ? AND tenant_id = ? AND organization_id = ? AND deleted_at IS NULL
+        ORDER BY created_at ASC`,
+      [invoiceId, auth.tenantId, organizationId],
+    )
+
     return NextResponse.json({
+      corrections,
+      allocations,
       invoice,
       // Lines carry the document currency for display convenience.
       lines: lineRows.map((line) => ({ ...line, currency_code: invoice.currency_code })),
@@ -87,7 +113,9 @@ export const openApi = {
       summary: 'Get a billing document (with lines)',
       description:
         'Returns one billing document from `billing_invoices` (invoice, memo or receipt) with its ' +
-        'lines, the frozen buyer / seller snapshots and `bill_account_name`. 404 outside the ' +
+        'lines, the frozen buyer / seller snapshots, `bill_account_name` and `allocations[]` (Spec C: ' +
+        'payments / credit memos that settled it, with `source_label`) and `corrections[]` (Spec D memos). ' +
+        '404 outside the ' +
         'caller\'s organization.',
       parameters: [
         {

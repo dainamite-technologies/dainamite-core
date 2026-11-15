@@ -12,6 +12,15 @@ jest.mock('../../lib/pdf/invoicePdf', () => ({
   freezeInvoicePdf: jest.fn(async () => ({ attachmentId: 'pdf-1', bytes: null })),
 }))
 jest.mock('../../events', () => ({ emitBillingEvent: jest.fn(async () => undefined) }))
+jest.mock('../../lib/allocation', () => {
+  const actual = jest.requireActual('../../lib/allocation')
+  return {
+    ...actual,
+    allocate: jest.fn(async () => actual.emptyEffects()),
+    applyAccountCredit: jest.fn(async () => actual.emptyEffects()),
+  }
+})
+import { allocate, applyAccountCredit } from '../../lib/allocation'
 
 import { freezeInvoicePdf } from '../../lib/pdf/invoicePdf'
 import { emitBillingEvent } from '../../events'
@@ -128,6 +137,8 @@ function createEnv(options: {
   claimThrows?: Error
   settings?: Row
   account?: Row
+  original?: Row
+  corrections?: Array<{ document_type: string; gross: string }>
 } = {}) {
   const settings = { ...completeSettings, ...(options.settings ?? {}) }
   const accountRow = { ...account, ...(options.account ?? {}) }
@@ -138,7 +149,8 @@ function createEnv(options: {
   const lines = options.lines ?? (options.line ? [options.line] : [])
 
   const em = {
-    findOne: jest.fn(async (entity: unknown) => {
+    findOne: jest.fn(async (entity: unknown, where?: Row) => {
+      if (entity === BillingInvoice && options.original && where?.id === options.original.id) return options.original
       if (entity === BillingInvoice) return options.invoice ?? null
       if (entity === BillingInvoiceLine) return options.line ?? null
       if (entity === BillingAccount) return accountRow
@@ -165,6 +177,8 @@ function createEnv(options: {
         return [{ seq: options.seq ?? 1 }]
       }
       if (sql.includes('SUM(outstanding)')) return [{ total: '0' }]
+      if (sql.includes('SUM(total_gross)')) return options.corrections ?? []
+      if (sql.startsWith('SELECT status, outstanding FROM billing_invoices')) return [{ status: 'paid', outstanding: '0.0000' }]
       if (sql.startsWith('SELECT id FROM billing_invoices')) return (options.testInvoiceIds ?? []).map((id) => ({ id }))
       return []
     }),
@@ -438,3 +452,91 @@ describe('wipeTestInvoicesCommand', () => {
     expect(select.params).toContain(runId)
   })
 })
+
+describe('postInvoiceCommand — memos (Spec D)', () => {
+  beforeEach(() => jest.clearAllMocks())
+  const ORIGINAL_ID = '77777777-7777-4777-8777-777777777777'
+  const original = (overrides: Row = {}): Row => ({
+    id: ORIGINAL_ID,
+    tenantId: TENANT,
+    organizationId: ORG,
+    billAccountId: ACCOUNT_ID,
+    documentType: 'invoice',
+    status: 'posted',
+    number: 'INV/2026/11/0001',
+    totalGross: '123.0000',
+    outstanding: '123.0000',
+    currencyCode: 'EUR',
+    ...overrides,
+  })
+  const creditMemo = (overrides: Row = {}) =>
+    makeInvoice({ documentType: 'credit_memo', correctsInvoiceId: ORIGINAL_ID, totalGross: '23.0000', outstanding: '23.0000', ...overrides })
+
+  it('posts a credit memo on the credit series, without due date, allocating it to the original', async () => {
+    const memo = creditMemo()
+    const env = createEnv({ invoice: memo, original: original(), lines: [makeLine()] })
+    await postInvoiceCommand.execute(baseInput, env.ctx as never)
+    const claim = env.executed.find((e) => e.sql.includes('billing_document_sequences'))
+    expect(claim?.params.slice(0, 3)).toEqual([TENANT, ORG, 'credit_memo'])
+    expect(memo.dueDate).toBeNull()
+    expect(env.executed.some((e) => e.sql.includes('pg_advisory_xact_lock'))).toBe(true)
+    expect(allocate).toHaveBeenCalledWith(env.em, { tenantId: TENANT, organizationId: ORG }, {
+      source: { type: 'credit_memo', id: INVOICE_ID },
+      invoiceId: ORIGINAL_ID,
+      amountCents: 2300,
+      by: 'credit',
+    })
+    expect(applyAccountCredit).toHaveBeenCalledWith(env.em, { tenantId: TENANT, organizationId: ORG }, { id: ACCOUNT_ID, currencyCode: 'EUR' }, {
+      onlySources: [{ type: 'credit_memo', id: INVOICE_ID }],
+    })
+    const posted = (emitBillingEvent as jest.Mock).mock.calls.map(([id]) => id)
+    expect(posted).toContain('billing.credit_memo.posted')
+    expect(posted).not.toContain('billing.invoice.posted')
+  })
+
+  it('credits only the outstanding part of the original; a paid original gets nothing (all becomes account credit)', async () => {
+    const env = createEnv({ invoice: creditMemo(), original: original({ outstanding: '10.0000', status: 'partially_paid' }), lines: [makeLine()] })
+    await postInvoiceCommand.execute(baseInput, env.ctx as never)
+    expect((allocate as jest.Mock).mock.calls[0][2]).toMatchObject({ amountCents: 1000 })
+    jest.clearAllMocks()
+    const paid = createEnv({ invoice: creditMemo(), original: original({ outstanding: '0.0000', status: 'paid' }), lines: [makeLine()] })
+    await postInvoiceCommand.execute(baseInput, paid.ctx as never)
+    expect(allocate).not.toHaveBeenCalled()
+    expect(applyAccountCredit).toHaveBeenCalled()
+  })
+
+  it('refuses over-crediting (cumulative guard incl. debit memos) and claims no number', async () => {
+    const memo = creditMemo({ totalGross: '50.0000' })
+    const env = createEnv({
+      invoice: memo,
+      original: original({ totalGross: '100.0000' }),
+      corrections: [{ document_type: 'credit_memo', gross: '80.0000' }, { document_type: 'debit_memo', gross: '20.0000' }],
+    })
+    await expect(postInvoiceCommand.execute(baseInput, env.ctx as never)).rejects.toMatchObject({
+      status: 409,
+      body: expect.objectContaining({ code: 'billing.memo.exceeds_invoice' }),
+    })
+    expect(env.executed.some((e) => e.sql.includes('billing_document_sequences'))).toBe(false)
+    // 80 + 40 ≤ 100 + 20 → fits
+    const ok = createEnv({
+      invoice: creditMemo({ totalGross: '40.0000' }),
+      original: original({ totalGross: '100.0000' }),
+      corrections: [{ document_type: 'credit_memo', gross: '80.0000' }, { document_type: 'debit_memo', gross: '20.0000' }],
+      lines: [makeLine()],
+    })
+    await expect(postInvoiceCommand.execute(baseInput, ok.ctx as never)).resolves.toMatchObject({ status: 'posted' })
+  })
+
+  it('posts a debit memo like an invoice: invoice series, due date, outstanding, its own event', async () => {
+    const memo = makeInvoice({ documentType: 'debit_memo', correctsInvoiceId: ORIGINAL_ID })
+    const env = createEnv({ invoice: memo, original: original(), lines: [makeLine()] })
+    await postInvoiceCommand.execute(baseInput, env.ctx as never)
+    const claim = env.executed.find((e) => e.sql.includes('billing_document_sequences'))
+    expect(claim?.params.slice(0, 3)).toEqual([TENANT, ORG, 'invoice'])
+    expect(memo.dueDate).toBeInstanceOf(Date)
+    expect(memo.outstanding).toBe('100.0000')
+    expect(allocate).not.toHaveBeenCalled()
+    expect((emitBillingEvent as jest.Mock).mock.calls.map(([id]) => id)).toContain('billing.debit_memo.posted')
+  })
+})
+

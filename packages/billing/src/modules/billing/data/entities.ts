@@ -1017,6 +1017,8 @@ export class BillingInvoice {
     | 'outstanding'
     | 'correctsInvoiceId'
     | 'correctionReason'
+    | 'correctsInvoiceNumber'
+    | 'correctsIssueDate'
     | 'buyerSnapshot'
     | 'sellerSnapshot'
     | 'pdfAttachmentId'
@@ -1105,6 +1107,13 @@ export class BillingInvoice {
 
   @Property({ name: 'correction_reason', type: 'text', nullable: true })
   correctionReason?: string | null
+
+  // Spec D — snapshot of the corrected document (printed "Corrects invoice X of DATE").
+  @Property({ name: 'corrects_invoice_number', type: 'text', nullable: true })
+  correctsInvoiceNumber?: string | null
+
+  @Property({ name: 'corrects_issue_date', type: 'date', columnType: 'date', nullable: true })
+  correctsIssueDate?: Date | null
 
   // Frozen at post: who the document was issued to / by.
   @Property({ name: 'buyer_snapshot', type: 'jsonb', nullable: true })
@@ -1339,6 +1348,207 @@ export class BillingSettings {
 
   @Property({ name: 'default_tax_rate', type: 'numeric', columnType: 'numeric(7, 4)', default: '23' })
   defaultTaxRate: string = '23'
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+
+  @Property({ name: 'updated_at', type: Date, onUpdate: () => new Date() })
+  updatedAt: Date = new Date()
+
+  @Property({ name: 'deleted_at', type: Date, nullable: true })
+  deletedAt?: Date | null
+}
+
+// ─── Spec C — payments, allocations, imports ─────────────────────
+//
+// A billing-owned payment register (no core `SalesPayment`). One row per
+// money-in event (bank CSV line, manual entry, gateway capture). Invoice
+// `paid_total` / `outstanding` / status are always RECOMPUTED from the
+// active allocations (`lib/allocation.ts`), never incremented.
+// Partial unique indexes (source_ref, external_ref) are in the migration.
+
+@Entity({ tableName: 'billing_payments' })
+@Index({ name: 'billing_payments_status_idx', properties: ['tenantId', 'organizationId', 'status'] })
+@Index({ name: 'billing_payments_account_idx', properties: ['billAccountId', 'status'] })
+@Index({ name: 'billing_payments_import_idx', properties: ['importId'] })
+export class BillingPayment {
+  [OptionalProps]?:
+    | 'reference'
+    | 'payerName'
+    | 'payerAccount'
+    | 'importId'
+    | 'billAccountId'
+    | 'matchReason'
+    | 'externalRef'
+    | 'topupId'
+    | 'metadata'
+    | 'createdAt'
+    | 'updatedAt'
+    | 'deletedAt'
+
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @Property({ name: 'organization_id', type: 'uuid' })
+  organizationId!: string
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  @Property({ name: 'received_at', type: 'date', columnType: 'date' })
+  receivedAt!: Date
+
+  // Always > 0 (refunds are out of scope).
+  @Property({ type: 'numeric', columnType: 'numeric(18, 4)' })
+  amount!: string
+
+  @Property({ name: 'currency_code', type: 'text' })
+  currencyCode!: string
+
+  @Property({ type: 'text', nullable: true })
+  reference?: string | null
+
+  @Property({ name: 'payer_name', type: 'text', nullable: true })
+  payerName?: string | null
+
+  @Property({ name: 'payer_account', type: 'text', nullable: true })
+  payerAccount?: string | null
+
+  // csv | manual | gateway
+  @Property({ type: 'text' })
+  source!: string
+
+  @Property({ name: 'import_id', type: 'uuid', nullable: true })
+  importId?: string | null
+
+  // Null while unmatched; set by the matcher or "assign account".
+  @Property({ name: 'bill_account_id', type: 'uuid', nullable: true })
+  billAccountId?: string | null
+
+  // unmatched | matched | partially_allocated | allocated | ignored | converted_to_topup
+  @Property({ type: 'text' })
+  status!: string
+
+  @Property({ name: 'unallocated_amount', type: 'numeric', columnType: 'numeric(18, 4)' })
+  unallocatedAmount!: string
+
+  // no_reference | currency_mismatch | invoice_already_paid | prepaid_account | manual
+  @Property({ name: 'match_reason', type: 'text', nullable: true })
+  matchReason?: string | null
+
+  // Duplicate guard — sha256 of the row + occurrence index (unique per org).
+  @Property({ name: 'source_ref', type: 'text' })
+  sourceRef!: string
+
+  // Gateway transaction id (unique per org when set).
+  @Property({ name: 'external_ref', type: 'text', nullable: true })
+  externalRef?: string | null
+
+  // Set by "convert to top-up" (C-D3).
+  @Property({ name: 'topup_id', type: 'uuid', nullable: true })
+  topupId?: string | null
+
+  @Property({ type: 'jsonb', nullable: true })
+  metadata?: Record<string, unknown> | null
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+
+  @Property({ name: 'updated_at', type: Date, onUpdate: () => new Date() })
+  updatedAt: Date = new Date()
+
+  @Property({ name: 'deleted_at', type: Date, nullable: true })
+  deletedAt?: Date | null
+}
+
+// Source-typed allocation (Spec C, generalised for Spec D credit memos):
+// `source_type = 'payment' | 'credit_memo'`, `source_id` → billing_payments
+// or billing_invoices. Un-allocate = soft delete (history kept).
+@Entity({ tableName: 'billing_allocations' })
+@Index({ name: 'billing_allocations_source_idx', properties: ['sourceType', 'sourceId'] })
+@Index({ name: 'billing_allocations_invoice_idx', properties: ['invoiceId'] })
+@Index({ name: 'billing_allocations_account_idx', properties: ['billAccountId'] })
+export class BillingAllocation {
+  [OptionalProps]?: 'userId' | 'deallocatedByUserId' | 'createdAt' | 'updatedAt' | 'deletedAt'
+
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @Property({ name: 'organization_id', type: 'uuid' })
+  organizationId!: string
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  @Property({ name: 'source_type', type: 'text' })
+  sourceType!: string
+
+  @Property({ name: 'source_id', type: 'uuid' })
+  sourceId!: string
+
+  @Property({ name: 'invoice_id', type: 'uuid' })
+  invoiceId!: string
+
+  @Property({ name: 'bill_account_id', type: 'uuid' })
+  billAccountId!: string
+
+  @Property({ type: 'numeric', columnType: 'numeric(18, 4)' })
+  amount!: string
+
+  @Property({ name: 'currency_code', type: 'text' })
+  currencyCode!: string
+
+  // auto | credit | user | gateway
+  @Property({ name: 'allocated_by', type: 'text' })
+  allocatedBy!: string
+
+  @Property({ name: 'user_id', type: 'uuid', nullable: true })
+  userId?: string | null
+
+  @Property({ name: 'deallocated_by_user_id', type: 'uuid', nullable: true })
+  deallocatedByUserId?: string | null
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+
+  @Property({ name: 'updated_at', type: Date, onUpdate: () => new Date() })
+  updatedAt: Date = new Date()
+
+  @Property({ name: 'deleted_at', type: Date, nullable: true })
+  deletedAt?: Date | null
+}
+
+// One CSV upload (C-D4): counts per outcome + row errors.
+@Entity({ tableName: 'billing_payment_imports' })
+@Index({ name: 'billing_payment_imports_scope_idx', properties: ['tenantId', 'organizationId', 'createdAt'] })
+export class BillingPaymentImport {
+  [OptionalProps]?: 'userId' | 'counts' | 'errors' | 'createdAt' | 'updatedAt' | 'deletedAt'
+
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @Property({ name: 'organization_id', type: 'uuid' })
+  organizationId!: string
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  @Property({ name: 'file_name', type: 'text' })
+  fileName!: string
+
+  @Property({ name: 'row_count', type: 'integer' })
+  rowCount!: number
+
+  // { allocated, partially_allocated, matched, unmatched, duplicate, rejected }
+  @Property({ type: 'jsonb', nullable: true })
+  counts?: Record<string, number> | null
+
+  // [{ row, message }] — capped at 200 entries
+  @Property({ type: 'jsonb', nullable: true })
+  errors?: Array<{ row: number; message: string }> | null
+
+  @Property({ name: 'user_id', type: 'uuid', nullable: true })
+  userId?: string | null
 
   @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
   createdAt: Date = new Date()

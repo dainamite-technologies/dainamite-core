@@ -562,6 +562,78 @@ historii, 1 doładowanie Pending, limit kredytu 1000.
 
 ---
 
+## 8. Płatności (Spec C)
+
+Billing ma własny rejestr płatności: wyciąg z banku (CSV) jest dopasowywany do
+faktur po **numerze faktury w tytule przelewu**.
+
+### 8a. Przygotowanie
+1. Uzupełnij dane sprzedawcy (3e), uruchom przebieg i **zaksięguj** kilka faktur
+   (najlepiej dwie dla jednego konta).
+2. W terminalu: `yarn mercato billing payments-sample` — powstaje plik
+   `payments-sample.csv` z wierszami dla każdego przypadku (pełna kwota, połowa,
+   nadpłata, dwie faktury w jednym tytule, brak tytułu, doładowanie prepaid,
+   inna waluta, duplikat).
+
+### 8b. Import wyciągu
+1. **Billing → Payments → Upload CSV** → wybierz plik → **Upload**
+   (`Ctrl/Cmd + Enter`).
+2. Okno podsumowania: *Allocated*, *Partially allocated*, *Matched (credit)*,
+   *Unmatched*, *Duplicates*, *Rejected rows* (z numerem wiersza i powodem).
+3. Lista płatności: status, nierozliczona kwota, konto, tytuł. Filtr *Status*.
+4. Wgraj ten sam plik ponownie → wszystkie wiersze to *Duplicates*.
+
+### 8c. Faktury po imporcie
+1. Faktura opłacona w całości → status `paid`; w połowie → `partially_paid`
+   (pole *Outstanding* maleje).
+2. Nadpłata trafia jako **nadpłata (credit)** na najstarszą otwartą fakturę
+   konta; na koncie kafelek *Unapplied credit* pokazuje resztę.
+3. Szczegóły faktury → sekcja **Payments** z płatnościami, które ją rozliczyły.
+
+### 8d. Ręczna obsługa płatności
+1. Płatność *Unmatched* (np. bez tytułu) → **Assign to account** → wybierz konto →
+   kwota rozlicza najstarsze otwarte faktury.
+2. Płatność *Matched* z nierozliczoną kwotą → **Allocate** → wpisz kwoty przy
+   fakturach → **Allocate**.
+3. W tabeli *Allocations* menu wiersza → **Un-allocate** (faktura znów nieopłacona).
+4. **Ignore** / **Restore** — dla opłat bankowych i błędnych przelewów.
+5. Płatność dla konta prepaid (*Prepaid account — convert to a top-up*) →
+   **Convert to top-up** → saldo konta prepaid rośnie, powstaje paragon.
+6. **Record payment** (lista lub konto) — ręczne wprowadzenie wpłaty.
+
+## 9. Korekty: faktury korygujące i noty obciążeniowe (Spec D)
+
+Zaksięgowanej faktury nie da się edytować ani anulować — poprawia się ją
+dokumentem korygującym z odwołaniem do oryginału.
+
+### 9a. Faktura korygująca (credit memo)
+1. Otwórz zaksięgowaną fakturę → **Create credit memo**.
+2. W oknie zaznacz pozycje, popraw ilość / cenę netto (stawka VAT zostaje z
+   oryginału) albo kliknij **Full credit**; wpisz **przyczynę** (drukowana na
+   dokumencie). Na dole widać kwotę korekty.
+3. **Create draft** (`Ctrl/Cmd + Enter`) → otwiera się projekt `DRAFT-…` z odznaką
+   *Credit memo*, polem *Corrects* (link do oryginału) i *Reason*. Projekt można
+   edytować albo usunąć (**Delete draft**).
+4. **Post invoice** → numer z serii `CN/…`, PDF „Faktura korygująca” z
+   „Koryguje … z dnia …”, przyczyną i blokiem *Rozliczenie*.
+5. Oryginał: kwota *Outstanding* maleje o korektę (status `partially_paid`, a przy
+   korekcie do zera `credited`); sekcja **Corrections** i **Payments** pokazują
+   korektę.
+6. Korekta opłaconej faktury → kwota trafia jako nadpłata na konto (kafelek
+   *Unapplied credit*) i rozlicza najstarszą otwartą fakturę.
+7. Próba skorygowania więcej, niż zostało → komunikat „The credit is more than…”.
+
+### 9b. Nota obciążeniowa (debit memo)
+1. Na zaksięgowanej fakturze → **Create debit memo** → przyczyna → projekt.
+2. **Add line** (np. zapomniana opłata) → **Post invoice** → numer z serii faktur,
+   termin płatności, kwota do zapłaty.
+3. Nota jest opłacana jak faktura: przelew z jej numerem w tytule zostanie
+   dopasowany przy imporcie CSV (sekcja 8; `payments-sample` dodaje taki wiersz).
+
+### 9c. Lista faktur
+Filtr *Document type* ma *Credit memo* i *Debit memo*; kolumna *Type*; sumy
+faktur korygujących są pokazywane ze znakiem minus.
+
 ## Reset danych testowych *(operacja techniczna — opcjonalna)*
 
 Jeśli chcesz wyczyścić billing i wgrać dane od nowa, w terminalu:

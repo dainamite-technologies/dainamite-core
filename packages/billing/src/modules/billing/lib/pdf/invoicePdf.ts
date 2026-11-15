@@ -117,7 +117,9 @@ export async function renderBillingDocument(
       subtotalNet: invoice.subtotalNet,
       taxTotal: invoice.taxTotal,
       totalGross: invoice.totalGross,
-      correctsNumber,
+      correctsNumber: invoice.correctsInvoiceNumber ?? correctsNumber,
+      correctsIssueDate: invoice.correctsIssueDate ?? null,
+      correctionReason: invoice.correctionReason ?? null,
     },
     lines: lines.map((line) => ({
       description: line.description,

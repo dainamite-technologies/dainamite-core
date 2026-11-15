@@ -120,7 +120,7 @@ export async function GET(req: Request) {
       `SELECT i.id, i.number, i.document_type, i.status, i.test_run, i.bill_account_id,
               a.name AS bill_account_name, i.bill_run_id, i.bill_date, i.period_start, i.period_end,
               i.issue_date, i.due_date, i.currency_code, i.subtotal_net, i.tax_total, i.total_gross,
-              i.paid_total, i.credited_total, i.outstanding, i.corrects_invoice_id, i.topup_id,
+              i.paid_total, i.credited_total, i.outstanding, i.corrects_invoice_id, i.corrects_invoice_number, i.topup_id,
               ${daysOverdueSql('i')}::int AS days_overdue,
               i.created_at, i.updated_at
        FROM billing_invoices i

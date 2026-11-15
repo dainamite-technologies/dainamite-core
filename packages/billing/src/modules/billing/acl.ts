@@ -12,6 +12,12 @@ export const features = [
   { id: 'billing.invoice.edit_draft', title: 'Edit Draft Invoice', module: 'billing' },
   { id: 'billing.invoice.view', title: 'View Billing Invoices', module: 'billing' },
   { id: 'billing.invoice.send', title: 'Email Billing Invoices', module: 'billing' },
+  // Spec D — corrective documents
+  { id: 'billing.invoice.correct', title: 'Create Credit / Debit Memos', module: 'billing' },
+  // Spec C — payments
+  { id: 'billing.payment.view', title: 'View Billing Payments', module: 'billing' },
+  { id: 'billing.payment.manage', title: 'Manage Billing Payments (assign, allocate, ignore, convert)', module: 'billing' },
+  { id: 'billing.payment.import', title: 'Import Bank Payments (CSV)', module: 'billing' },
   // ─── Prepaid balance billing (SPEC-002) ──────────────────────
   { id: 'billing.balance.view', title: 'View Balance & Transactions', module: 'billing' },
   { id: 'billing.balance.adjust', title: 'Adjust Balance (manual credit/debit)', module: 'billing' },

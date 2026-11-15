@@ -52,6 +52,7 @@ export const setup: ModuleSetupConfig = {
       'billing.topup.view',
       'billing.statement.view',
       'billing.settings.view',
+      'billing.payment.view',
     ],
 
     // Narrow scope for external usage-ingestion API keys.

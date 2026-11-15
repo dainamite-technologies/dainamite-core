@@ -886,3 +886,139 @@ export const billingSettingsUpdateSchema = scopedSchema.extend({
 })
 
 export type BillingSettingsUpdateInput = z.infer<typeof billingSettingsUpdateSchema>
+
+// ─── Spec C — payments ───────────────────────────────────────────
+
+export const PAYMENT_STATUSES = [
+  'unmatched',
+  'matched',
+  'partially_allocated',
+  'allocated',
+  'ignored',
+  'converted_to_topup',
+] as const
+export type PaymentStatus = (typeof PAYMENT_STATUSES)[number]
+
+export const PAYMENT_SOURCES = ['csv', 'manual', 'gateway'] as const
+export type PaymentSource = (typeof PAYMENT_SOURCES)[number]
+
+export const PAYMENT_MATCH_REASONS = [
+  'no_reference',
+  'currency_mismatch',
+  'invoice_already_paid',
+  'prepaid_account',
+  'manual',
+] as const
+export type PaymentMatchReason = (typeof PAYMENT_MATCH_REASONS)[number]
+
+export const ALLOCATION_SOURCE_TYPES = ['payment', 'credit_memo'] as const
+export type AllocationSourceType = (typeof ALLOCATION_SOURCE_TYPES)[number]
+
+export const ALLOCATED_BY = ['auto', 'credit', 'user', 'gateway'] as const
+export type AllocatedBy = (typeof ALLOCATED_BY)[number]
+
+const isoDateString = z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
+const positiveMoney = z.coerce.number().finite().positive()
+
+export const billingPaymentCreateSchema = scopedSchema.extend({
+  receivedAt: isoDateString,
+  amount: positiveMoney,
+  currencyCode: z.string().trim().toUpperCase().length(3),
+  reference: z.string().trim().max(500).optional(),
+  payerName: z.string().trim().max(255).optional(),
+  payerAccount: z.string().trim().max(64).optional(),
+  // Known account → status `matched` and credit auto-apply; else `unmatched`.
+  billAccountId: z.string().uuid().optional(),
+})
+export type BillingPaymentCreateInput = z.infer<typeof billingPaymentCreateSchema>
+
+export const billingPaymentAssignSchema = scopedSchema.extend({
+  paymentId: z.string().uuid(),
+  billAccountId: z.string().uuid(),
+})
+export type BillingPaymentAssignInput = z.infer<typeof billingPaymentAssignSchema>
+
+export const billingPaymentAllocateSchema = scopedSchema.extend({
+  paymentId: z.string().uuid(),
+  allocations: z
+    .array(z.object({ invoiceId: z.string().uuid(), amount: positiveMoney }))
+    .min(1)
+    .max(100),
+})
+export type BillingPaymentAllocateInput = z.infer<typeof billingPaymentAllocateSchema>
+
+export const billingAllocationRemoveSchema = scopedSchema.extend({
+  allocationId: z.string().uuid(),
+})
+export type BillingAllocationRemoveInput = z.infer<typeof billingAllocationRemoveSchema>
+
+export const billingPaymentIdSchema = scopedSchema.extend({
+  paymentId: z.string().uuid(),
+})
+export type BillingPaymentIdInput = z.infer<typeof billingPaymentIdSchema>
+
+export const billingPaymentConvertSchema = scopedSchema.extend({
+  paymentId: z.string().uuid(),
+  billAccountId: z.string().uuid(),
+})
+export type BillingPaymentConvertInput = z.infer<typeof billingPaymentConvertSchema>
+
+// CSV upload: 2 MB of text, ≤ 5,000 data rows (checked by the parser).
+export const PAYMENT_IMPORT_MAX_BYTES = 2 * 1024 * 1024
+export const PAYMENT_IMPORT_MAX_ROWS = 5000
+
+export const billingPaymentImportSchema = scopedSchema.extend({
+  fileName: z.string().trim().min(1).max(255),
+  content: z.string().max(PAYMENT_IMPORT_MAX_BYTES),
+})
+export type BillingPaymentImportInput = z.infer<typeof billingPaymentImportSchema>
+
+export const billingPaymentListQuerySchema = z
+  .object({
+    ...listPaginationBase,
+    id: z.string().uuid().optional(),
+    status: z.enum(PAYMENT_STATUSES).optional(),
+    billAccountId: z.string().uuid().optional(),
+    importId: z.string().uuid().optional(),
+    receivedFrom: isoDateString.optional(),
+    receivedTo: isoDateString.optional(),
+    search: z.string().trim().max(100).optional(),
+  })
+  .passthrough()
+export type BillingPaymentListQuery = z.infer<typeof billingPaymentListQuerySchema>
+
+export const billingPaymentImportListQuerySchema = z
+  .object({ ...listPaginationBase, id: z.string().uuid().optional() })
+  .passthrough()
+export type BillingPaymentImportListQuery = z.infer<typeof billingPaymentImportListQuerySchema>
+
+// ─── Spec D — credit / debit memos ───────────────────────────────
+
+export const MEMO_TYPES = ['credit_memo', 'debit_memo'] as const
+export type MemoType = (typeof MEMO_TYPES)[number]
+
+const memoLineSchema = z.object({
+  // Copied from the original (credit prefill). The original line's VAT rate wins.
+  correctsLineId: z.string().uuid().optional(),
+  description: z.string().trim().min(1).max(500),
+  quantity: z.coerce.number().finite().positive(),
+  unitPriceNet: z.coerce.number().finite().nonnegative(),
+  // New lines: omitted → organization default rate.
+  taxRate: z.coerce.number().finite().min(0).max(100).optional(),
+})
+export type MemoLineInput = z.infer<typeof memoLineSchema>
+
+export const billingMemoCreateSchema = scopedSchema.extend({
+  invoiceId: z.string().uuid(),
+  type: z.enum(MEMO_TYPES),
+  reason: z.string().trim().min(1, 'billing.memo.error.reason_required').max(1000),
+  // Credit memo without lines = full credit (all original lines). Debit memo
+  // without lines = empty draft (lines are added on the draft).
+  lines: z.array(memoLineSchema).max(200).optional(),
+})
+export type BillingMemoCreateInput = z.infer<typeof billingMemoCreateSchema>
+
+export const billingDraftDeleteSchema = scopedSchema.extend({
+  invoiceId: z.string().uuid(),
+})
+export type BillingDraftDeleteInput = z.infer<typeof billingDraftDeleteSchema>

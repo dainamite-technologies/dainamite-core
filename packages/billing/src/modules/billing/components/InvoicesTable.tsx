@@ -9,6 +9,7 @@ import { RowActions } from '@open-mercato/ui/backend/RowActions'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
 import { invoiceDetailHref, invoicePdfHref } from '../lib/navigation'
+import { displaySign } from '../lib/documentTypes'
 
 /**
  * Billing documents table (Spec B) — shared by the global Invoices list and
@@ -142,6 +143,8 @@ export function InvoicesTable({ title, billAccountId, tableId, pageSize = 25 }: 
         type: 'select',
         options: [
           { value: 'invoice', label: t('billing.invoices.document_type.invoice', 'Invoice') },
+          { value: 'credit_memo', label: t('billing.invoices.document_type.credit_memo', 'Credit memo') },
+          { value: 'debit_memo', label: t('billing.invoices.document_type.debit_memo', 'Debit memo') },
           { value: 'receipt', label: t('billing.invoices.document_type.receipt', 'Top-up receipt') },
         ],
       },
@@ -201,6 +204,17 @@ export function InvoicesTable({ title, billAccountId, tableId, pageSize = 25 }: 
         ),
       },
       {
+        accessorKey: 'document_type',
+        header: t('billing.invoices.columns.type', 'Type'),
+        cell: ({ row }) =>
+          ({
+            invoice: t('billing.invoices.document_type.invoice', 'Invoice'),
+            credit_memo: t('billing.invoices.document_type.credit_memo', 'Credit memo'),
+            debit_memo: t('billing.invoices.document_type.debit_memo', 'Debit memo'),
+            receipt: t('billing.invoices.document_type.receipt', 'Top-up receipt'),
+          })[row.original.document_type] ?? row.original.document_type,
+      },
+      {
         accessorKey: 'status',
         header: t('billing.invoices.columns.status', 'Status'),
         cell: ({ row }) => (
@@ -239,7 +253,12 @@ export function InvoicesTable({ title, billAccountId, tableId, pageSize = 25 }: 
       {
         id: 'total',
         header: t('billing.invoices.columns.total', 'Total'),
-        cell: ({ row }) => formatMoney(row.original.total_gross, row.original.currency_code),
+        // Credit memos are stored positive (D-D5) and shown negative.
+        cell: ({ row }) =>
+          formatMoney(
+            String(displaySign(row.original.document_type) * Number.parseFloat(row.original.total_gross)),
+            row.original.currency_code,
+          ),
       },
       {
         accessorKey: 'outstanding',

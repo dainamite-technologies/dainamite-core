@@ -119,15 +119,32 @@ describe('buildInvoiceDocumentModel', () => {
     expect(model('pl', { status: 'draft', testRun: true }).watermark).toBe('TEST')
   })
 
-  it('has no payment block without an IBAN or for receipts / credit memos', () => {
+  it('has no payment block without an IBAN or for receipts; credit memos show their settlement', () => {
     expect(
       buildInvoiceDocumentModel({ invoice, lines, seller: { ...seller, iban: null }, buyer, language: 'en', translate: translator({}) }).payment,
     ).toBeNull()
     expect(model('en', { documentType: 'receipt' }).payment).toBeNull()
-    const memo = model('en', { documentType: 'credit_memo', correctsNumber: 'INV/2026/10/0003' })
+    const memo = model('en', {
+      documentType: 'credit_memo',
+      correctsNumber: 'INV/2026/10/0003',
+      correctsIssueDate: '2026-10-05',
+      correctionReason: 'Wrong price',
+    })
     expect(memo.title).toBe('Credit memo')
-    expect(memo.payment).toBeNull()
-    expect(memo.meta).toEqual(expect.arrayContaining([['Corrects', 'INV/2026/10/0003']]))
+    // Spec D: a credit memo shows how it settles instead of payment instructions.
+    expect(memo.payment?.heading).toBe('Settlement')
+    expect(memo.payment?.lines.join(' ')).toContain('Settled against invoice INV/2026/10/0003')
+    expect(memo.payment?.lines.join(' ')).not.toContain('IBAN')
+    expect(memo.totals[2][0]).toBe('Total credited')
+    expect(memo.meta).toEqual(
+      expect.arrayContaining([
+        ['Corrects', 'INV/2026/10/0003 of 05/10/2026'],
+        ['Reason', 'Wrong price'],
+      ]),
+    )
+    const debit = model('pl', { documentType: 'debit_memo', correctsNumber: 'INV/2026/10/0003' })
+    expect(debit.title).toBe('Nota obciążeniowa')
+    expect(debit.payment?.lines).toContain('Tytuł przelewu: INV/2026/11/0007')
   })
 
   it('splits the footer into lines and falls back to English for unknown languages', () => {

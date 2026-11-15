@@ -10,8 +10,9 @@ the price is cost, and lets a pricing manager see — and govern — the **margi
 of a quote. Everything downstream is unchanged: price rules and negotiated
 adjustments apply to a cost-plus price exactly as to any other list price.
 
-This release covers **known costs on quotes**, and their **carry-through to
-orders, subscriptions and assets**. See
+This release covers **known costs on quotes**, their **carry-through to
+orders, subscriptions and assets**, and **supplier cost sourcing** (asking a
+carrier for a cost and recording the answer). See
 [Coming with later features](#coming-with-later-features).
 
 ## Concepts
@@ -310,6 +311,243 @@ removes only the `costs` keys of the snapshots, is idempotent and pages through
 the rows. The order is **scrub, then code, then down-migration**; see
 `packages/cpq/MIGRATION.md`.
 
+## Supplier cost sourcing
+
+A third-party cost (a partner tail circuit, a carrier cross-connect) is unknown
+until the supplier quotes it. A **cost request** records who asked for it, when,
+and which answer belongs to it. A request is **a state of a cost line**, not a
+separate document: a cost line holds at most one open request, identified by a
+`costRequestId` and a sequence number (`requestSeq`).
+
+### Lifecycle
+
+| `sourcingStatus` | Meaning |
+|---|---|
+| `not_requested` | Nothing asked yet (also every cost line of a cloned quote). |
+| `requested` | A request is open; the Cost requests page lists it. |
+| `answered` | The supplier answered and the value is applied (or, on a locked quote, confirmed or waiting as a proposal). |
+| `declined` | The supplier cannot supply. |
+| `cancelled` | The request became meaningless (reason below). |
+
+**Opening a request.**
+- *Automatically*, on a **saved** recalculation, for every `on_request` cost line
+  whose element has **Requires sourcing**, whose value is not yet confirmed and
+  that was never requested (or was just reset by a reconfiguration). Previews
+  never open one; locked quotes, unreconfigured ARC mirror lines and a tenant with
+  the toggle off never auto-open. A cloned quote starts `not_requested`; its first
+  saved recalculation does not open requests either (a later one may).
+- *Manually*, with **Request cost** on the quote's Costs panel
+  (`POST /api/cpq/quotes/{quoteId}/costs/{costId}/request`). Allowed on any cost
+  line except those of a **Cancel line** and frozen cost lines that cannot be
+  re-priced (`422 LINE_NOT_ELIGIBLE`), and also on locked quotes. Requesting again
+  closes the open request as `re_requested` and opens the next sequence number.
+
+**Closing a request.** An open request is cancelled, in the same write as its
+cause, when:
+
+| `cancelReason` | Cause |
+|---|---|
+| `reconfigured` | A driving attribute changed and the cost was reset to its estimate. |
+| `line_removed` | The quote line was removed. |
+| `element_deactivated` | The cost element was deactivated (or no longer applies to the charge). |
+| `re_requested` | A new request replaced it. |
+| `manual_value` | Someone entered a value or status by hand (a note or supplier-data edit does not cancel). |
+| `quote_closed` | The quote was rejected, cancelled, deleted in CPQ, or **converted** to an order. |
+| `cancelled_by_user` | **Cancel request** on the Costs panel (`POST …/cancel-request`) — closes the request without touching the value. |
+
+Accepting a quote keeps its requests open: an accepted but still indicative quote
+needs its answer. Re-opening a closed quote does not re-open requests; request
+again. Element deactivation cancels each quote's requests in a write of its own
+right after the catalog change (best effort); the quote's next saved
+recalculation and the answer-side check below back it up.
+
+### Answering and declining
+
+An answer is posted by procurement on the **Cost requests** page or by a project
+workflow / integration through the API:
+
+```http
+POST /api/cpq/quotes/{quoteId}/costs/{costId}/answer
+{
+  "costRequestId": "…",          // the cost line's CURRENT request id
+  "unitAmount": 280,             // per instance, 0..999 999 999 999
+  "currencyCode": "EUR",         // ISO 4217 format, upper-case
+  "valueStatus": "confirmed",    // or "estimated" (a budgetary answer); default confirmed
+  "supplierQuoteRef": "CARR-889",// required, 1..100 chars: the idempotency key
+  "validUntil": "2026-12-31",    // optional, not before today
+  "supplierTermEnd": "…", "supplierMinTermMonths": 12,
+  "supplierId": "…", "supplierName": "…", "note": "…"
+}
+```
+
+The response is `{ outcome, cost, lineReady, pricingRevision }`; `cost` carries
+the amount only for holders of `cpq.costs.view` (the answer route needs it anyway).
+The answer takes the quote's lock itself, so there is no `expectedRevision`.
+
+| `outcome` | When |
+|---|---|
+| `applied` | Unlocked quote: the value is stored (`value_origin = supplier`) and the quote re-prices. |
+| `confirmed_unchanged` | Locked quote, same amount and currency: the line becomes confirmed, the price does not change. |
+| `proposed` | Locked quote, a different value: stored as a **proposal** only; see below. |
+| `noop` | An exact repeat (idempotency). No write, no revision bump, no event. |
+
+**Order of the checks** (the first that fails answers, nothing is written): cost
+line `404` -> `QUOTE_CLOSED` -> `QUOTE_CONVERTED` -> `COST_PLUS_DISABLED` ->
+`LINE_NOT_ELIGIBLE` -> `COST_REQUEST_SUPERSEDED` (a stale request id, or a cost
+element that is now inactive) -> **noop** (same `supplierQuoteRef` and same
+payload hash) -> `SUPPLIER_QUOTE_REF_CONFLICT` (same reference, different payload)
+-> `REQUEST_NOT_OPEN`. Only after these do the format checks `INVALID_CURRENCY_CODE`
+and `VALID_UNTIL_IN_PAST` run (`422`), so a retried answer never fails on a date
+that has passed in the meantime. The payload hash covers the request id, amount
+(4 decimals), currency, status, dates and supplier fields; it is stored on the
+cost line, so a retried answer is recognised even after the request was applied.
+A cloned quote accepts the reference its source used: the hash is per cost line.
+
+**Declining.** `POST …/decline` with `{ costRequestId, reason }` (1..500
+characters). On an unlocked quote the value becomes `none` (an estimate moves
+into the note) and the line is not ready until an alternative supplier's value is
+entered on the same cost line. On a locked quote the amount is kept and its
+status drops to `estimated`, so conversion is refused (`COSTS_NOT_CONFIRMED`)
+until the quote is reopened. `409 REQUEST_NOT_OPEN` when the request is already
+closed.
+
+**Foreign-currency answers.** An answer in a currency other than the quote's is
+recorded with the supplier's own amount and currency but stays `none` with
+`CURRENCY_NO_RATE`: nothing prices from it until FX support ships (the answered
+notification says "exchange rate missing"). Answer in the quote currency.
+
+**Margin-only costs** are exempt from the cost lock: an answer is always applied
+(never a proposal) and a decline follows the unlocked rule.
+
+### Locked quotes: proposals and "Reopen and apply"
+
+On a `with_customer` / `accepted` quote the price must not move under the
+customer. A different-value answer is therefore a **proposal**
+(`hasAnswerPending`): the line keeps its value, the page shows "Supplier answered
+with a different cost", and **conversion is refused with `422 COST_ANSWER_PENDING`**
+(listing the lines; checked before `COSTS_NOT_CONFIRMED`, because the proposal is
+the actionable reason). **Reopen and apply supplier answer**
+(`POST …/costs/{costId}/apply-answer` with the current `expectedRevision`, needs
+`cpq.quotes.manage` + `cpq.costs.manage`) moves the quote back to `ready`, applies
+the proposal under the same request id, clears it and re-prices in one write. The
+earlier customer acceptance must be repeated. A manual value entered on the line
+discards an unapplied proposal.
+
+### Conflicts (`409`) and who handles them
+
+| Code | Meaning | Integration should |
+|---|---|---|
+| `COST_REQUEST_SUPERSEDED` | The id is not the current one (reconfigured, re-requested, cancelled) or the element is inactive. | Stop; read the cost line (or wait for the new `cost_requested` event) and answer the new id. |
+| `QUOTE_CLOSED` | Quote rejected, cancelled or deleted. | Stop. |
+| `QUOTE_CONVERTED` | An order exists; the response carries **`orderId`**. | Stop; the cost is now an order cost and no longer changes the quote. |
+| `COST_PLUS_DISABLED` | Tenant toggle off (answer / decline only). | Retry later; the same call succeeds once the toggle is back on. |
+| `SUPPLIER_QUOTE_REF_CONFLICT` | Same reference, different payload. | Do not retry; use a new reference for a corrected answer. |
+| `REQUEST_NOT_OPEN` | Already answered, declined or cancelled. | Stop. |
+| `STALE_REVISION` | Request / cancel-request / apply-answer sent an outdated `expectedRevision`. | Reload and retry. |
+
+The other sourcing routes (`request`, `cancel-request`, `apply-answer`) answer
+`404` while the toggle is off; cancellation on quote close runs regardless of it.
+
+### The Cost requests page and the queue API
+
+**Cost requests** (`/backend/cpq/cost-requests`, group CPQ) lists requests across
+quotes: quote, customer, product, cost name, the line attributes that drive the
+cost, supplier, age in working days, an **Overdue** badge and an **Answer
+pending** badge; filters for status (default `requested`), cancel reason,
+supplier, quote id and **Overdue only**; row actions Answer, Decline (open
+requests) and Open quote. **Cancel request** and **Reopen and apply supplier
+answer** are on the quote's Costs panel. Notification links open the page
+filtered on the quote. Requests closed by a conversion
+appear under `cancelled` with reason `quote_closed`.
+
+- `GET /api/cpq/cost-requests` needs `cpq.quotes.view` + `cpq.costs.view`.
+  **Sales reps hold `cpq.costs.view` by default** (the `employee` role has it, the
+  `admin` role has both costs features), so they can read the queue and see what
+  procurement is working on. The list carries **no amounts, currencies or
+  supplier answers**: identity, status and timing only.
+- The **page** and the Answer / Decline dialogs need `cpq.costs.view` +
+  `cpq.costs.manage`, so a rep without `cpq.costs.manage` does not get the page
+  in the menu and cannot answer. Grant `cpq.costs.manage` to your procurement role.
+- `GET /api/cpq/cost-requests/{costId}` expands one row (configuration, request
+  history, current value and, for a proposal, the proposed answer).
+- Rows of deleted quotes are hidden by the queue itself. (Core does not emit
+  `sales.quote.deleted` today; CPQ listens for it, but the deleted-quote filter and
+  the `QUOTE_CLOSED` answer check are what actually cover a quote deleted through
+  the sales module.)
+- Deleting a quote through CPQ (`DELETE /api/cpq/quotes/{quoteId}`) now cancels its
+  open requests (`quote_closed`) in the same transaction. Behaviour is otherwise
+  unchanged: `409` for an `accepted`, `rejected` or `cancelled` quote, mutation
+  guards first.
+
+**Overdue.** A request is overdue when it has been open **strictly more than N
+working days** (Monday to Friday, UTC, no holiday calendar); N is the tenant
+feature toggle **`cpq.cost_requests.overdue_working_days`** (default **5**, a
+per-tenant number override under Settings -> Feature toggles).
+`overdueThresholdWorkingDays` in the list response shows the effective value.
+
+### Events and notifications
+
+Three events, all **non-broadcast** (never sent to browsers), emitted after the
+commit, and **carrying no amount, currency amount, markup or margin**:
+
+| Event | When | Notable fields |
+|---|---|---|
+| `cpq.quote.cost_requested` | A request opens. | `quoteId` (the CPQ quote id; `salesQuoteId` too), `costLineId`, `costKey`, `costRequestId`, `requestSeq`, `attributes`, `auto`. |
+| `cpq.quote.cost_request_cancelled` | A request closes without an answer. | `reason` (table above), `costRequestId`. |
+| `cpq.quote.cost_valued` | A sourcing action, manual value write or reset changes a value or status. Not for catalog re-resolution. | `cause` (`answer`, `decline`, `apply_answer`, `manual_value`, `reset`), `valueStatus`, `previousValueStatus`, `answerPending`, `lineReady`, `leadTimeHours`. |
+
+Four notification types (English texts ship in `i18n/en.json`; other locales fall
+back to them): `cpq.cost_request.opened` goes to **every user of the quote's
+organization holding both `cpq.costs.view` and `cpq.costs.manage`**;
+`answered`, `answer_pending` and `declined` go to the **user who opened the
+request** (for an auto-opened one, whose saved recalculation opened it). Texts
+carry the quote number and cost name, never an amount. The `notifications` module
+is optional: without it CPQ simply sends none.
+
+### Workflow recipe (project integration)
+
+CPQ never depends on a workflow existing; the events and the answer API are the
+contract. The `demo_gix` tenant ships a recipe, **`cpq_cost_sourcing`** ("CPQ -
+obtain carrier quote for partner tail"), **seeded disabled**:
+
+1. Trigger on `cpq.quote.cost_requested`, filtered to the partner-tail cost key.
+2. A user task for procurement ("Obtain carrier quote") with an outcome
+   (answer / decline), amount, currency, supplier quote reference, valid-until
+   and a decline reason.
+3. A `CALL_API` step posts the **answer** or **decline** to the cost routes with
+   the `costRequestId` the event carried, three attempts with backoff.
+
+To use it: open **Workflows -> Definitions**, review the definition and switch
+**Enabled** on. Its execution principal is granted exactly `cpq.costs.view` and
+`cpq.costs.manage` by the seed (an event-triggered run has no human initiator, so
+`CALL_API` needs the principal); re-save the definition in the studio if the
+grant ever needs re-provisioning. Notes for operators:
+
+- The task form fields are **optional** (the form cannot require a field only for
+  one outcome). A blank amount reaches the answer route as an unresolved value and
+  fails there with `422`, so the step fails visibly in the instance instead of
+  recording a wrong cost; fix it by completing a new request.
+- **Payload visibility:** the event payload becomes the workflow context and is
+  readable by everyone who can open the workflow instance. This is why the events
+  carry identity, keys and statuses only; the answer the procurement user types
+  into the task form (including the amount) is stored in the instance, like any
+  user-task data, so give the Workflows features only to people allowed to see
+  costs.
+- **Closing the task when the request is cancelled** is not automatic. A
+  reconfiguration, re-request or conversion cancels the request (event
+  `cpq.quote.cost_request_cancelled`), but the open user task stays until someone
+  completes or cancels it. Completing it late is safe: its answer or decline gets
+  `409 COST_REQUEST_SUPERSEDED` (or `QUOTE_CLOSED` / `QUOTE_CONVERTED`) and writes
+  nothing. A project that wants the task closed adds a second trigger on
+  `cost_request_cancelled` (same `costRequestId`) to its own definition.
+
+### Demo data
+
+The `demo_gix` seed adds three quotes in the IP Transit family for demos: a
+requested tail that is overdue, a declined one ("No coverage at site") and a
+`with_customer` quote whose supplier answer is pending as a proposal. Each is
+identified by its `quoteContext.scenario`.
+
 ## Margin
 
 Holders of `cpq.costs.view` see the **Margin card** on the quote page and
@@ -424,6 +662,13 @@ invalidate an earlier approval after a lock-exempt cost edit.
 | GET | `/api/cpq/orders/{orderId}/costs` | `cpq.orders.view` | Order line costs; status only without `cpq.costs.view`, with it the amounts and `margin`. |
 | GET | `/api/cpq/inventory/subscriptions/{subscriptionId}/costs` | `cpq.inventory.view` | Item and asset costs, margins, roll-up; `?includeEnded=true` adds ended costs. |
 | GET | `/api/cpq/inventory/assets/{assetId}/costs` | `cpq.inventory.view` | Costs and margin of one asset (`ownerItemId` for an asset under an item). |
+| POST | `/api/cpq/quotes/{quoteId}/costs/{costId}/request` | `cpq.quotes.manage` | Open (or re-open) a supplier cost request. Ids and statuses only in the response. |
+| POST | `/api/cpq/quotes/{quoteId}/costs/{costId}/cancel-request` | `cpq.quotes.manage` | Cancel the current request (`costRequestId`). |
+| POST | `/api/cpq/quotes/{quoteId}/costs/{costId}/answer` | `cpq.costs.view` + `cpq.costs.manage` | Answer the current request; idempotent on `supplierQuoteRef`. |
+| POST | `/api/cpq/quotes/{quoteId}/costs/{costId}/decline` | `cpq.costs.view` + `cpq.costs.manage` | Decline the current request with a reason. |
+| POST | `/api/cpq/quotes/{quoteId}/costs/{costId}/apply-answer` | `cpq.quotes.manage` + `cpq.costs.manage` | Reopen a locked quote and apply a pending proposal (`expectedRevision` required). |
+| GET | `/api/cpq/cost-requests` | `cpq.quotes.view` + `cpq.costs.view` | Request queue across quotes, no amounts. |
+| GET | `/api/cpq/cost-requests/{costId}` | same | One request: configuration, history, current value, proposal. |
 
 Full contracts: the `openApi` export on each route.
 
@@ -447,11 +692,17 @@ Full contracts: the `openApi` export on each route.
 | 422 | `NOTE_REQUIRED` / `VALIDITY_EVIDENCE_REQUIRED` | Overwrite or validity extension without a reason. |
 | 422 | `CATALOG_COST_NOT_DELETABLE` / `LINE_NOT_ELIGIBLE` / `CHARGE_NOT_FOUND` / `CHARGE_NOT_COST_PLUS` | Wrong target of a cost or markup write. |
 | 422 | `CURRENCY_NO_RATE` | Cost in a currency other than the quote's (no FX before a later feature). Also a line error on a cost line, and on a charge whose absolute markup is in another currency. |
+| 409 | `COST_REQUEST_SUPERSEDED` / `REQUEST_NOT_OPEN` / `SUPPLIER_QUOTE_REF_CONFLICT` | Sourcing: stale request id (or inactive element), request already closed, same supplier reference with a different answer. |
+| 409 | `QUOTE_CLOSED` / `QUOTE_CONVERTED` | Sourcing write on a rejected / cancelled / deleted quote, or one that has an order (`QUOTE_CONVERTED` carries `orderId`). |
+| 409 | `COST_PLUS_DISABLED` | Answer / decline while the toggle is off (retryable). |
+| 409 | `NO_PENDING_ANSWER` | `apply-answer` on a cost line without a proposal. |
+| 422 | `INVALID_CURRENCY_CODE` / `VALID_UNTIL_IN_PAST` | Answer format checks. |
+| 422 | `COST_ANSWER_PENDING` | Conversion blocked by an unapplied supplier proposal (`lines[]`). Checked before `COSTS_NOT_CONFIRMED`. |
 | 422 | `COSTS_NOT_CONFIRMED` | Conversion blocked by unconfirmed or expired price-basis costs, or an unpriced cost-plus charge (`lines[].costKeys` / `chargeCodes`). |
 | line error | `COST_PENDING` / `NO_PRICE_BASIS_COST` / `MARKUP_INVALID` / `TABLE_NO_MATCH` / `CURRENCY_NO_RATE` | On the charge or cost line; the line is not ready. |
 
 ## Coming with later features
 
-Supplier sourcing requests and answers, foreign-currency (FX) costs and
-index-linked costs are added by the later cost-plus features. Until then
-`CURRENCY_NO_RATE` is the answer to any non-quote-currency cost.
+Foreign-currency (FX) costs and index-linked costs are added by the later
+cost-plus features. Until then `CURRENCY_NO_RATE` is the answer to any
+non-quote-currency cost, including a supplier's answer in another currency.

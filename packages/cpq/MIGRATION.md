@@ -166,6 +166,78 @@ the `@dainamite/cpq` package, per
 
 ## Schema / API changelog (track breaking changes here)
 
+### 2026-11-15 — Supplier cost sourcing (cost-plus pricing, feature 3)
+
+Spec: `.ai/specs/2026-11-12-cpq-cost-plus-supplier-sourcing.md`. Minor release of
+`@dainamite/cpq`. Requires features 1 and 2. Operator documentation: the
+"Supplier cost sourcing" section of `manuals/cpq-cost-plus-pricing.md`.
+
+**Schema (additive; run `yarn mercato db migrate`).**
+- `Migration20261114192129`: new columns on `cpq_quote_line_costs`
+  (`proposed_answer` jsonb null, `request_history` jsonb not null default `'[]'`,
+  `request_supplier_id`, `request_supplier_name`, `last_answer_hash`,
+  `cancel_reason`) and two indexes (`cpq_quote_line_costs_request_idx` on
+  `cost_request_id`, `cpq_quote_line_costs_sourcing_queue_idx` on
+  `organization_id, tenant_id, sourcing_status, requested_at`). `cost_request_id`,
+  `request_seq`, `requested_at` and the other request columns already existed
+  (feature 1). Existing cost lines keep `sourcing_status = not_requested`.
+- `Migration20261115000100` (hand-written; the generator cannot express CHECK
+  constraints): widens `cpq_quote_line_costs_value_origin_check` to allow
+  `supplier` (a supplier-answered value). `down()` first maps `supplier` rows to
+  `manual`, then restores the narrow check.
+
+**Behaviour changes.**
+- **Quote DELETE moved into the service.** `DELETE /api/cpq/quotes/{id}` now runs
+  `cpqQuotingService.deleteQuote` under the quote's pricing lock and cancels the
+  quote's open cost requests in the same transaction. Observable behaviour is
+  unchanged: `409` for an `accepted`, `rejected` or `cancelled` quote, mutation
+  guards first, soft-delete of the quote, lines and the linked sales quote.
+- **Conversion** cancels every open cost request of the quote (`quote_closed`)
+  in its transaction and refuses a quote with an unapplied supplier proposal:
+  `422 COST_ANSWER_PENDING` (checked before `COSTS_NOT_CONFIRMED`).
+- **`withQuotePricingWrite` takes an options object** (`expectedRevision`,
+  `validate`, `events`, `marginTracker`, `shortCircuit`, `afterCommit`). The
+  positional overload is kept; existing callers are unaffected.
+- A manual cost write that changes a value or status cancels an open request
+  (`manual_value`); reconfiguration, line removal and element deactivation cancel
+  with `reconfigured`, `line_removed` and `element_deactivated`.
+- `value_origin` gains `supplier`; the catalog resolver treats it like `manual`
+  (kept until a driving attribute changes).
+- `GET /api/cpq/cost-plus/usage` now fills `openRequests`.
+- New numeric feature toggle `cpq.cost_requests.overdue_working_days` (default 5,
+  per-tenant override); working days are Monday to Friday, no holiday calendar.
+- New optional integration: notifications (peer, resolved at runtime; without the
+  `notifications` module CPQ sends none). New `i18n/en.json` (English only).
+
+**New routes** (all `openApi`, `requireFeatures`):
+`POST /api/cpq/quotes/{quoteId}/costs/{costId}/request` and `/cancel-request`
+(`cpq.quotes.manage`), `/answer` and `/decline` (`cpq.costs.view` +
+`cpq.costs.manage`), `/apply-answer` (`cpq.quotes.manage` + `cpq.costs.manage`);
+`GET /api/cpq/cost-requests` and `GET /api/cpq/cost-requests/{costId}`
+(`cpq.quotes.view` + `cpq.costs.view`, no amounts). New page
+`/backend/cpq/cost-requests` (`cpq.costs.view` + `cpq.costs.manage`). Default
+roles: `employee` holds `cpq.costs.view` (can read the queue API, not the page);
+`admin` holds both costs features. New error codes: `COST_REQUEST_SUPERSEDED`,
+`REQUEST_NOT_OPEN`, `SUPPLIER_QUOTE_REF_CONFLICT`, `NO_PENDING_ANSWER`,
+`COST_ANSWER_PENDING`, `INVALID_CURRENCY_CODE`, `VALID_UNTIL_IN_PAST`;
+`QUOTE_CLOSED` / `QUOTE_CONVERTED` (with `orderId`) on the sourcing routes.
+
+**New events** (non-broadcast, no amounts, after commit):
+`cpq.quote.cost_requested`, `cpq.quote.cost_request_cancelled`,
+`cpq.quote.cost_valued`. Four notification types: `cpq.cost_request.opened`,
+`answered`, `answer_pending`, `declined`. A persistent subscriber on
+`sales.quote.deleted` cancels requests of a quote deleted through the sales
+module; core does not emit that event today, so it is dormant (the queue filters
+deleted quotes and the answer routes return `QUOTE_CLOSED`).
+
+**Demo.** `demo_gix` seeds three sourcing demo quotes and the workflow recipe
+`cpq_cost_sourcing` **disabled** (enable it in the workflows studio).
+
+**Rollback.** Code first, then the down-migrations. `Migration20261115000100`
+down maps `supplier` origins to `manual`; `Migration20261114192129` down drops
+the request columns and indexes (the request history and any pending proposals
+are lost; an open proposal blocks conversion only while the new code runs).
+
 ### 2026-11-14 — Order and subscription costs (cost-plus pricing, feature 2, PR 1: backend)
 
 Spec: `.ai/specs/2026-11-12-cpq-cost-plus-order-subscription-costs.md`. Minor

@@ -1,5 +1,6 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
-import { CpqOrderConfiguration, CpqOrderLineConfiguration, CpqOrderLineCost, CpqQuoteConfiguration, CpqQuoteLineConfiguration } from '../../data/entities'
+import { CpqInventoryCost, CpqOrderConfiguration, CpqOrderLineConfiguration, CpqOrderLineCost, CpqQuoteConfiguration, CpqQuoteLineConfiguration } from '../../data/entities'
+import type { CarriedPrevious } from './arcCostRead'
 import { loadCancelExposure, type CancelExposure } from './cancelExposure'
 import { isArcTerminationLine } from '../arcLineRemoval'
 import { isArcMirrorLine } from '../arcPriceFreeze'
@@ -15,12 +16,15 @@ import { computeQuoteMargin, type MarginCost, type MarginLine, type QuoteMargin 
 const scoped = (scope: TenantScope) => ({ organizationId: scope.organizationId, tenantId: scope.tenantId, deletedAt: null })
 const today = () => new Date().toISOString().slice(0, 10)
 
+/** The item cost a carried order cost links to, as it stands before activation (`cpq.costs.view` only). */
+export type OrderCostPrevious = CarriedPrevious
+
 /** Identity and status only: no amount, currency, supplier, validity or margin. */
 export function redactedOrderCostView(row: CpqOrderLineCost) {
   return { id: row.id, costKey: row.costKey, name: row.name, role: row.role, costType: row.costType, valueStatus: row.valueStatus }
 }
 
-export function fullOrderCostView(row: CpqOrderLineCost) {
+export function fullOrderCostView(row: CpqOrderLineCost, previous?: OrderCostPrevious) {
   return {
     ...redactedOrderCostView(row),
     chargeCode: row.chargeCode ?? null,
@@ -44,6 +48,7 @@ export function fullOrderCostView(row: CpqOrderLineCost) {
     supplierMinTermMonths: row.supplierMinTermMonths ?? null,
     inventoryCostId: row.inventoryCostId ?? null,
     sourceQuoteLineCostId: row.sourceQuoteLineCostId,
+    ...(previous ? { previous } : {}),
   }
 }
 
@@ -72,7 +77,19 @@ export async function readOrderCosts(em: EntityManager, orderId: string, scope: 
     : null
   const quoteType = sourceQuote?.quoteType ?? 'new'
   const ordered = [...costs].sort((a, b) => a.orderLineId.localeCompare(b.orderLineId) || a.costKey.localeCompare(b.costKey))
-  const project = canViewCosts ? fullOrderCostView : redactedOrderCostView
+  // `previous` (the linked item cost's values) only while the order is not activated: afterwards the item cost holds the order's own values.
+  const activated = ['active', 'fulfilled'].includes(config.cpqStatus)
+  const linked = canViewCosts && !activated ? ordered.filter((row) => row.origin === 'carried' && row.inventoryCostId) : []
+  const itemCosts = linked.length > 0
+    ? await em.find(CpqInventoryCost, { id: { $in: [...new Set(linked.map((row) => row.inventoryCostId as string))] }, ...scoped(scope) })
+    : []
+  const itemCostById = new Map(itemCosts.map((item) => [item.id, item]))
+  const dayOf = (value: unknown) => (value ? (value instanceof Date ? value.toISOString().slice(0, 10) : String(value).slice(0, 10)) : null)
+  const previousOf = (row: CpqOrderLineCost): OrderCostPrevious | undefined => {
+    const item = row.origin === 'carried' && row.inventoryCostId ? itemCostById.get(row.inventoryCostId) : undefined
+    return item ? { unitAmount: item.unitAmount ?? null, currencyCode: item.currencyCode ?? null, supplierName: item.supplierName ?? null, validUntil: dayOf(item.validUntil), supplierTermEnd: dayOf(item.supplierTermEnd) } : undefined
+  }
+  const project = (row: CpqOrderLineCost) => (canViewCosts ? fullOrderCostView(row, previousOf(row)) : redactedOrderCostView(row))
   const groups = new Map<string, Array<ReturnType<typeof project>>>()
   for (const row of ordered) groups.set(row.orderLineId, [...(groups.get(row.orderLineId) ?? []), project(row)])
   const result: OrderCostsRead = { orderId: config.id, lines: [...groups].map(([orderLineId, lineCosts]) => ({ orderLineId, costs: lineCosts })) }

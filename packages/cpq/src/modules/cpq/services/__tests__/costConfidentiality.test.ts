@@ -716,3 +716,95 @@ describe('supplier sourcing surfaces (feature 3)', () => {
     expect(leaked(fullCostView(row as never))).toEqual(expect.arrayContaining(['7777.77', SUPPLIER]))
   })
 })
+
+// ─── ARC costs (feature 5, step 18): the Amend / Renew / Cancel read projections ───
+
+describe('ARC cost projections (feature 5, step 18)', () => {
+  const ARC_KEYS = /"(previous|droppedItemCosts|exposure|exposureMonths|termUnknown)"/
+  const itemCost = (over: Row = {}): Row => inventoryCostRow({ id: 'ic-1', status: 'active', supplierTermEnd: '2099-11-30', ...over })
+  const carriedRow = (over: Row = {}): Row => costRow({ origin: 'carried', valueOrigin: 'carried', carriedFromItemCostId: 'ic-1', renegotiationDue: true, valueStatus: 'estimated', ...over })
+
+  function arcService(type: 'amend' | 'renew' | 'cancel', lines: Row[], costs: Row[], inventory: Row[]) {
+    const quote = { id: ids.quote, quoteId: ids.quote, cpqStatus: 'ready', quoteType: type, currencyCode: 'USD', pricingRevision: 1 }
+    const lineRows = lines.map((line) => ({ ...SCOPE, quoteConfigurationId: ids.quote, quantity: '1', charges: [], termMonths: 12, parentLineId: null, offeringId: 'off', deletedAt: null, ...line }))
+    const em: Row = {
+      fork: jest.fn(() => em),
+      findOne: jest.fn(async (entity: unknown) => (entity === CpqQuoteConfiguration ? quote : null)),
+      find: jest.fn(async (entity: unknown) => (entity === CpqQuoteLineConfiguration ? lineRows : entity === CpqQuoteLineCost ? costs : entity === CpqInventoryCost ? inventory : [])),
+      count: jest.fn(async () => 0),
+    }
+    return new CpqQuoteCostService({ em: em as never, costService: { enabled: async () => true }, quotingService: { recalculateLockedQuote: async () => ({}) } as never })
+  }
+  const mirror = { _arcMirroredFromItemId: feat.item }
+
+  it('Amend: a frozen line with a carried, renegotiation-due cost shows flags only without cpq.costs.view; previous values are holder-only (control)', async () => {
+    const service = arcService('amend',
+      [{ quoteLineId: ids.line, action: 'modify', sourceSubscriptionItemId: feat.item, configuration: { ...mirror, _arcPriceFrozen: true, _arcCostsCarried: true } }],
+      [carriedRow()], [itemCost()])
+    const redacted = await service.read(ids.quote, SCOPE, false)
+    expect(redacted.lines[0]).toMatchObject({ quoteLineId: ids.line, frozen: true, renegotiationDue: true })
+    expect(redacted.lines[0].costs[0]).toMatchObject({ carried: true, renegotiationDue: true })
+    expectClean(redacted)
+    expectNoCostKeys(redacted)
+    expect(JSON.stringify(redacted)).not.toMatch(ARC_KEYS)
+    const full = await service.read(ids.quote, SCOPE, true)
+    expect(full.lines[0].costs[0]).toMatchObject({ previous: { unitAmount: COST, supplierName: SUPPLIER } })
+    expect(leaked(full)).toEqual(expect.arrayContaining(['7777.77', SUPPLIER]))
+  })
+
+  it('Renew: dropped item costs are listed for holders only (computed on read from the open item costs the line no longer carries)', async () => {
+    const service = arcService('renew',
+      [{ quoteLineId: ids.line, action: 'modify', sourceSubscriptionItemId: feat.item, configuration: { ...mirror, _arcCostsCarried: true } }],
+      [], [itemCost({ costKey: 'legacy', name: 'Legacy licence' })])
+    const redacted = await service.read(ids.quote, SCOPE, false)
+    expect(JSON.stringify(redacted)).not.toContain('Legacy licence')
+    expect(JSON.stringify(redacted)).not.toMatch(ARC_KEYS)
+    const full = await service.read(ids.quote, SCOPE, true)
+    expect(full.lines[0]).toMatchObject({ droppedItemCosts: [{ inventoryCostId: 'ic-1', costKey: 'legacy', name: 'Legacy licence', reason: 'no_longer_applies' }] })
+  })
+
+  it('Cancel: the exposure block (supplier, term, months) is absent without cpq.costs.view and carries no amount for a holder', async () => {
+    const service = arcService('cancel',
+      [{ quoteLineId: ids.line, action: 'cancel', sourceSubscriptionItemId: feat.item, targetSubscriptionId: feat.sub, configuration: { ...mirror } }],
+      [], [itemCost()])
+    const redacted = await service.read(ids.quote, SCOPE, false)
+    expect(JSON.stringify(redacted)).not.toMatch(ARC_KEYS)
+    expectClean(redacted)
+    const full: Row = await service.read(ids.quote, SCOPE, true)
+    expect(full.exposure?.items).toEqual([expect.objectContaining({ inventoryCostId: 'ic-1', supplierName: SUPPLIER, supplierTermEnd: '2099-11-30', termUnknown: false })])
+    expect(full.lines[0]).toMatchObject({ quoteLineId: ids.line, exposure: { items: [expect.objectContaining({ inventoryCostId: 'ic-1' })] } })
+    // The exposure block itself never holds a value: supplier name and dates only.
+    expect(leaked(full.exposure)).toEqual([SUPPLIER])
+    expect(JSON.stringify(full.exposure)).not.toMatch(/Amount|fxRate|currency/)
+  })
+
+  it('order costs read: exposure and previous are holder-only; the status-only projection is unchanged', async () => {
+    const { readOrderCosts } = await import('../costs/orderCostView')
+    const quote = { id: ids.quote, quoteType: 'cancel', currencyCode: 'USD' }
+    const cancelLine = { quoteLineId: ids.line, action: 'cancel', sourceSubscriptionItemId: feat.item, targetSubscriptionId: feat.sub, configuration: { ...mirror } }
+    const em: Row = {
+      findOne: jest.fn(async (entity: unknown) => (entity === CpqOrderConfiguration ? { ...orderConfigRow, cpqStatus: 'draft' } : entity === CpqQuoteConfiguration ? quote : null)),
+      find: jest.fn(async (entity: unknown) => (entity === CpqOrderLineCost ? [{ ...orderLineCostRow(), origin: 'carried' }] : entity === CpqOrderLineConfiguration ? [orderLineRow]
+        : entity === CpqQuoteLineConfiguration ? [cancelLine] : entity === CpqInventoryCost ? [itemCost()] : [])),
+    }
+    const redacted = await readOrderCosts(em as never, feat.order, SCOPE, false)
+    expectClean(redacted)
+    expect(JSON.stringify(redacted)).not.toMatch(ARC_KEYS)
+    const full = await readOrderCosts(em as never, feat.order, SCOPE, true)
+    expect(full.exposure?.items).toHaveLength(1)
+    expect(JSON.stringify(full.lines[0].costs[0])).toContain('previous')
+    expect(leaked(full)).toContain(SUPPLIER)
+  })
+
+  it('the re-confirmation command log carries ids, statuses, role and key only, even for a sentinel-laden cost', async () => {
+    const { reconfirmOrderLineCostCommand } = await import('../../commands/order-line-costs')
+    const { orderCostAudit } = await import('../costs/orderCostReconfirm')
+    const row = { ...orderLineCostRow(), reconfirmedAt: new Date(), valueOrigin: 'manual' }
+    const log = await reconfirmOrderLineCostCommand.buildLog!({ input: {}, result: { orderId: feat.order, cost: {}, audit: { before: orderCostAudit(row as never), after: orderCostAudit(row as never) } }, ctx: {} as never, snapshots: {} } as never)
+    expect(leaked(row)).toContain('7777.77') // control: the row held the sentinels
+    expectClean(log)
+    expectNoCostKeys(log)
+    expect((log as { replayable: boolean }).replayable).toBe(false)
+    expect(reconfirmOrderLineCostCommand.isUndoable).toBe(false)
+  })
+})

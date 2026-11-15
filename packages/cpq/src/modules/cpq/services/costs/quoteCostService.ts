@@ -42,6 +42,7 @@ import {
   type FullCostView, type MarkupOverrideView,
 } from './quoteCostView'
 import { loadCancelExposure } from './cancelExposure'
+import { lineArcFlags, loadCarriedPrevious, loadDroppedItemCosts } from './arcCostRead'
 
 type Dependencies = {
   em: EntityManager
@@ -122,19 +123,39 @@ export class CpqQuoteCostService {
     const linesById = new Map(lineConfigs.map((line) => [line.quoteLineId, line]))
     const threshold = this.deps.featureTogglesService ? await resolveOverdueThreshold(this.deps.featureTogglesService, scope.tenantId) : null
     const cutoff = threshold === null ? null : overdueCutoff(new Date(), threshold)
+    const previousByCost = includeCosts ? await loadCarriedPrevious(em, costs, scope) : new Map()
     const contextOf = (row: CpqQuoteLineCost) => {
       const line = linesById.get(row.quoteLineId)
       return {
         overdueCutoff: cutoff,
         quoteCurrencyCode: quote.currencyCode,
+        ...(previousByCost.has(row.id) ? { previous: previousByCost.get(row.id) } : {}),
         ...(line ? { requestEligible: costLineEligibility({ action: line.action ?? null, configuration: line.configuration }, row, quote.quoteType).eligible } : {}),
       }
     }
-    if (!includeCosts) return { lines: groupByLine(costs, (row) => redactedCostView(row, contextOf(row))), pricingRevision }
+    // Per-line ARC additions. `frozen` / `renegotiationDue` are flags for everyone; a frozen line without cost rows still gets an entry.
+    type LineEntry<T> = { quoteLineId: string; costs: T[]; frozen?: boolean; renegotiationDue?: boolean; exposure?: unknown; droppedItemCosts?: unknown[] }
+    const withFlags = <T,>(lines: Array<LineEntry<T>>) => {
+      for (const config of lineConfigs) {
+        const rows = costs.filter((row) => row.quoteLineId === config.quoteLineId)
+        const flags = lineArcFlags(quote, config, rows)
+        const entry = lines.find((line) => line.quoteLineId === config.quoteLineId)
+        if (entry) Object.assign(entry, flags)
+        else if (flags.frozen) lines.push({ quoteLineId: config.quoteLineId, costs: [], ...flags })
+      }
+      return lines
+    }
+    if (!includeCosts) return { lines: withFlags<ReturnType<typeof redactedCostView>>(groupByLine(costs, (row) => redactedCostView(row, contextOf(row)))), pricingRevision }
     const [overrides, margin] = await Promise.all([loadQuoteMarkupOverrides(em, quote.id, scope), loadQuoteMargin(em, quote, scope)])
-    const lines = groupByLine(costs, (row) => fullCostView(row, contextOf(row))) as Array<{ quoteLineId: string; costs: unknown[]; exposure?: unknown }>
-    // Cancel exposure (ARC costs spec step 17): on each cancel line (a cancel line holds no cost rows, so it may add an entry) and, for
-    // quotes that cancel something, once for the quote. Holders of `cpq.costs.view` only.
+    const lines = withFlags<ReturnType<typeof fullCostView>>(groupByLine(costs, (row) => fullCostView(row, contextOf(row))))
+    // Dropped-at-renewal item costs (computed on read) and Cancel exposure (step 17): cost data, `cpq.costs.view` only. A cancel line
+    // holds no cost rows, so exposure may add an entry.
+    const dropped = await loadDroppedItemCosts(em, quote, lineConfigs, costs, scope)
+    for (const [quoteLineId, items] of dropped) {
+      const entry = lines.find((line) => line.quoteLineId === quoteLineId)
+      if (entry) entry.droppedItemCosts = items
+      else lines.push({ quoteLineId, costs: [], droppedItemCosts: items })
+    }
     const cancelRead = await loadCancelExposure(em, quote, lineConfigs, scope)
     for (const lineExposure of cancelRead.lines) {
       const { quoteLineId, ...exposure } = lineExposure

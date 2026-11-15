@@ -29,7 +29,7 @@ Engine: om-auto-create-pr-loop (steps: 23, --loop: no)
 | E | 15 | Keep current cost | group:E1 | done | |
 | E | 16 | Refresh from subscription | group:E2 | done | |
 | E | 17 | Cancel exposure | group:E2 | done | |
-| E | 18 | Read projection additions | group:E2 | todo | |
+| E | 18 | Read projection additions | group:E2 | done | |
 | F | 19 | ArcLineDiff cost and margin rows | group:F1 | todo | |
 | F | 20 | Quote and order pages | group:F1 | todo | |
 | F | 21 | Docs, demo and E2E | group:F2 | todo | |

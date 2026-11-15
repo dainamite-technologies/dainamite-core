@@ -7,6 +7,7 @@ import {
 } from '../../data/entities'
 import { isArcTerminationLine } from '../arcLineRemoval'
 import { isArcMirrorLine } from '../arcPriceFreeze'
+import type { CarriedPrevious } from './arcCostRead'
 import type { ResolvedCharge, TenantScope } from '../types'
 import { computeQuoteMargin, priceBasisCostFlags, type MarginCost, type MarginLine, type MarginMarkup, type PriceBasisFlags, type QuoteMargin } from './quoteMargin'
 
@@ -79,6 +80,8 @@ export type CostViewContext = {
   requestEligible?: boolean
   /** The quote's currency: names the `to` of a missing pair and the target of `convertedInstanceAmount`. */
   quoteCurrencyCode?: string
+  /** The carried-from item cost's values (carried lines only; `cpq.costs.view` only, see `loadCarriedPrevious`). */
+  previous?: CarriedPrevious
 }
 
 export function redactedCostView(row: CpqQuoteLineCost, context: CostViewContext = {}) {
@@ -90,6 +93,9 @@ export function redactedCostView(row: CpqQuoteLineCost, context: CostViewContext
     role: row.role,
     valueStatus: row.valueStatus,
     expired: isCostExpired(row),
+    // ARC flags (booleans only, no values): a cost carried from the subscription, and one that needs renegotiation on a Renew.
+    carried: row.origin === 'carried',
+    renegotiationDue: row.renegotiationDue === true,
     ...(row.errorCode ? { error: row.errorCode } : {}),
     // Sourcing status projection (feature spec §API Contracts): ids and statuses only, never an amount, supplier or note.
     sourcingStatus: row.sourcingStatus ?? 'not_requested',
@@ -146,6 +152,7 @@ export function fullCostView(row: CpqQuoteLineCost, context: CostViewContext = {
     supplierTermEnd: row.supplierTermEnd,
     supplierMinTermMonths: row.supplierMinTermMonths,
     note: row.note,
+    ...(context.previous ? { previous: context.previous } : {}),
   }
 }
 export type FullCostView = ReturnType<typeof fullCostView>

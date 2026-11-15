@@ -99,7 +99,7 @@ describe('reads', () => {
       overrides: [{ id: 'o', quoteLineId: ids.line, chargeCode: 'tail', markupRule: 'markup_percent', markupValue: '31.0000', note: 'why' }],
     })
     const body = await service.read(ids.quote, SCOPE, false)
-    expect(body).toEqual({ lines: [{ quoteLineId: ids.line, costs: [{ id: ids.cost, costKey: 'tail', name: 'Tail', role: 'price_basis', valueStatus: 'estimated', expired: true,
+    expect(body).toEqual({ lines: [{ quoteLineId: ids.line, frozen: false, renegotiationDue: false, costs: [{ id: ids.cost, costKey: 'tail', name: 'Tail', role: 'price_basis', valueStatus: 'estimated', expired: true, carried: false, renegotiationDue: false,
       // sourcing status projection (statuses only)
       sourcingStatus: 'not_requested', requestSeq: null, requestedAt: null, hasAnswerPending: false, overdue: false, requestEligible: true }] }], pricingRevision: 4 })
     const json = JSON.stringify(body)

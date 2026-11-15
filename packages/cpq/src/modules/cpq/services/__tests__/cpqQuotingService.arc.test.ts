@@ -968,7 +968,7 @@ describe('Amend mirror carries the subscription item costs (ARC costs spec step 
       routeEm(em, cpqConfig, lineConfig)
       const baseFindOne = em.findOne.getMockImplementation()!
       const item = opts.item === undefined ? subscriptionItem() : opts.item
-      em.findOne.mockImplementation(async (entity: unknown, ...rest: unknown[]) => (entity === CpqInventorySubscriptionItem ? item : baseFindOne(entity, ...rest)))
+      em.findOne.mockImplementation(async (entity: unknown, ...rest: unknown[]) => (entity === CpqInventorySubscriptionItem ? item : (baseFindOne as (...args: unknown[]) => unknown)(entity, ...rest)))
       const previous = opts.previous ?? [
         { id: 'old-carried', quoteLineId: 'ql-1', origin: 'carried', sourcingStatus: 'not_requested', costRequestId: null, deletedAt: null },
         { id: 'old-catalog', quoteLineId: 'ql-1', origin: 'catalog', sourcingStatus: 'requested', costRequestId: 'req-1', requestSeq: 1, supplierId: null, requestHistory: [], deletedAt: null },

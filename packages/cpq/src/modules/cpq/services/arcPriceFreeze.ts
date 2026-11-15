@@ -88,16 +88,30 @@ export function isArcReconfigured(configuration: Record<string, unknown> | null 
 }
 
 /**
+ * A cost-managed STANDALONE Renew mirror line (ARC costs spec, R1c): a Renew mirror that is not frozen and carries
+ * `_arcCostsCarried` (set on every standalone Renew mirror, even for an item with no open costs). Its costs are
+ * reconciled with today's catalog on every saved recalculation. Phase 1 frozen lines and merge-renew lines never match.
+ */
+export function isCostManagedRenewLine(
+  configuration: Record<string, unknown> | null | undefined,
+  quoteType: string | null | undefined,
+): boolean {
+  return quoteType === 'renew' && typeof configuration?._arcMirroredFromItemId === 'string'
+    && configuration?.[ARC_COSTS_CARRIED_KEY] === true && !isArcPriceFrozen(configuration)
+}
+
+/**
  * Configuration for a mirror line: the item's configuration plus the ARC
- * markers. Amend lines are frozen; Renew lines are frozen only for a cost-plus
- * item (`options.costPlus`, feature spec Q4), otherwise Renew re-prices by
- * product decision. Cancel lines are not priced.
+ * markers. Amend lines are frozen; a merge-Renew line is frozen only for a cost-plus
+ * item (`options.costPlus` + `options.mergeMode`, ARC costs spec Q10); a STANDALONE Renew line is no longer frozen
+ * (ARC costs spec, "Renew mirror line pricing": it is re-priced at today's standard from reconciled costs).
+ * Cancel lines are not priced.
  */
 export function buildArcMirrorConfiguration(
   itemConfiguration: Record<string, unknown> | null | undefined,
   item: { id: string; name: string },
   quoteType: ArcMirrorQuoteType,
-  options: { costPlus?: boolean } = {},
+  options: { costPlus?: boolean; mergeMode?: boolean } = {},
 ): Record<string, unknown> {
   return {
     // An item's configuration can carry markers from an earlier ARC quote
@@ -106,7 +120,7 @@ export function buildArcMirrorConfiguration(
     _arcMirroredFromItemId: item.id,
     _arcMirroredName: item.name,
     ...(quoteType === 'amend' ? { [ARC_PRICE_FROZEN_KEY]: true } : {}),
-    ...(quoteType === 'renew' && options.costPlus === true
+    ...(quoteType === 'renew' && options.costPlus === true && options.mergeMode === true
       ? { [ARC_PRICE_FROZEN_KEY]: true, [ARC_COST_PLUS_FROZEN_KEY]: true }
       : {}),
   }

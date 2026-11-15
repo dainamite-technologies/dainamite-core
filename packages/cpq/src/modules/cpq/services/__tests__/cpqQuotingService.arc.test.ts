@@ -1,5 +1,6 @@
 import { DefaultCpqQuotingService } from '../cpqQuotingService'
 import { createMockEm, TEST_SCOPE as SCOPE } from './_helpers/mockEm'
+import { itemCostSetHash } from '../costs/itemCostState'
 import { SalesQuote, SalesQuoteLine } from '@open-mercato/core/modules/sales/data/entities'
 import {
   CpqInventoryCost,
@@ -349,7 +350,52 @@ describe('removeQuoteItem → ARC mirror line becomes a cancel line', () => {
   })
 })
 
-describe('Renew mirror lines of cost-plus items (Q4)', () => {
+describe('Renew mirror line pricing, standalone (ARC costs step 14; MODIFIES the Phase 1 freeze)', () => {
+  const MANAGED = { port_size: '1G', _arcMirroredFromItemId: 'item-1', _arcMirroredName: 'GIX Access Port', _arcCostsCarried: true, _arcCarriedCostSetHash: 'h' }
+  const renew = (cfg: Record<string, unknown>) => {
+    const fixture = amendFixture(cfg)
+    return { cpqConfig: { ...fixture.cpqConfig, quoteType: 'renew' }, lineConfig: fixture.lineConfig }
+  }
+
+  it('re-prices a cost-managed standalone Renew mirror line at today\'s standard price (not frozen, no Phase 1 banner marker)', async () => {
+    const { em, pricingService, service } = makePricedService()
+    const { cpqConfig, lineConfig } = renew({ ...MANAGED })
+    routeEm(em, cpqConfig, lineConfig)
+    pricingService.resolveProductCharges.mockResolvedValue([mrcCharge(120)])
+
+    await service.recalculate('cpq-1', { save: true }, SCOPE)
+
+    expect(pricingService.resolveProductCharges).toHaveBeenCalled()
+    expect(lineConfig.mrcTotal).toBe('120')
+    expect(lineConfig.configuration).not.toHaveProperty('_arcPriceFrozen')
+    expect(lineConfig.configuration).toMatchObject({ _arcCostsCarried: true })
+  })
+
+  it('keeps the cost-managed markers when the UI resubmits the line, and never freezes it', async () => {
+    const { em, pricingService, service } = makePricedService()
+    const { cpqConfig, lineConfig } = renew({ ...MANAGED })
+    routeEm(em, cpqConfig, lineConfig)
+    pricingService.resolveProductCharges.mockResolvedValue([mrcCharge(120)])
+
+    await service.updateQuoteItem('cpq-1', 'ql-1', { configuration: { port_size: '1G' }, quantity: 1 }, SCOPE)
+
+    expect(lineConfig.configuration).toMatchObject({ _arcCostsCarried: true, _arcCarriedCostSetHash: 'h' })
+    expect(lineConfig.configuration).not.toHaveProperty('_arcPriceFrozen')
+    expect(lineConfig.configuration).not.toHaveProperty('_arcCostPlusFrozen')
+  })
+
+  it('a Phase 1 frozen line keeps its contracted price (Q6, unchanged)', async () => {
+    const { em, pricingService, service } = makePricedService()
+    const { cpqConfig, lineConfig } = renew({ port_size: '1G', _arcMirroredFromItemId: 'item-1', _arcPriceFrozen: true, _arcCostPlusFrozen: true })
+    routeEm(em, cpqConfig, lineConfig)
+    pricingService.resolveProductCharges.mockResolvedValue([mrcCharge(120)])
+    await service.recalculate('cpq-1', { save: true }, SCOPE)
+    expect(pricingService.resolveProductCharges).not.toHaveBeenCalled()
+    expect(lineConfig.mrcTotal).toBe('100')
+  })
+})
+
+describe('Phase 1 frozen Renew mirror lines of cost-plus items (Q4; kept by ARC costs Q6 for lines created before step 14)', () => {
   const COST_PLUS_FROZEN = {
     port_size: '1G',
     _arcMirroredFromItemId: 'item-1',
@@ -757,12 +803,43 @@ describe('Amend mirror carries the subscription item costs (ARC costs spec step 
     expect(created(CpqQuoteLineConfiguration)[0].configuration).not.toHaveProperty('_arcCostsCarried')
   })
 
-  it.each(['renew', 'cancel'] as const)('a %s mirror carries nothing (merge and Phase 1 freeze rules stay)', async (type) => {
-    const { em, create, created } = mirrorFixture(type, [itemCost()])
+  it('a cancel mirror carries nothing', async () => {
+    const { em, create, created } = mirrorFixture('cancel', [itemCost()])
     await create()
     expect(created(CpqQuoteLineCost)).toHaveLength(0)
     expect(created(CpqQuoteLineConfiguration)[0].configuration).not.toHaveProperty('_arcCostsCarried')
     expect(em.find).not.toHaveBeenCalledWith(CpqInventoryCost, expect.anything())
+  })
+
+  // ARC costs step 14 (MODIFIES step 6: carry was Amend-only): a standalone Renew mirror carries the item's costs, is NOT frozen
+  // (re-priced at today's standard), and is cost-managed even for an item with no open costs (R1c reconciles it).
+  it('a standalone Renew mirror carries the open costs, is not frozen and is cost-managed (step 14)', async () => {
+    const { create, created } = mirrorFixture('renew', [itemCost()])
+    await create()
+    expect(created(CpqQuoteLineCost)).toHaveLength(1)
+    expect(created(CpqQuoteLineCost)[0]).toMatchObject({ origin: 'carried', costKey: 'tail', valueStatus: 'confirmed', renegotiationDue: false })
+    const [line] = created(CpqQuoteLineConfiguration)
+    expect(line.configuration).toMatchObject({ _arcMirroredFromItemId: 'item-1', _arcCostsCarried: true, _arcCarriedCostSetHash: expect.any(String) })
+    expect(line.configuration).not.toHaveProperty('_arcPriceFrozen')
+    expect(line.configuration).not.toHaveProperty('_arcCostPlusFrozen')
+  })
+
+  it('a standalone Renew mirror of an item without open costs is still marked cost-managed, with the empty set hash (step 14)', async () => {
+    const { create, created } = mirrorFixture('renew', [])
+    await create()
+    expect(created(CpqQuoteLineCost)).toHaveLength(0)
+    expect(created(CpqQuoteLineConfiguration)[0].configuration).toMatchObject({ _arcCostsCarried: true, _arcCarriedCostSetHash: itemCostSetHash([], { status: 'active' } as never) })
+  })
+
+  it('a standalone Renew mirror of a cost-plus item is no longer frozen (step 14 modifies the Phase 1 freeze)', async () => {
+    const { em, create, created } = mirrorFixture('renew', [itemCost()])
+    const costPlusItem = { ...subscriptionItem(), charges: [{ chargeCode: 'mrc', pricingMethod: 'cost_plus' }] }
+    em.find.mockImplementation(async (entity: unknown) => (entity === CpqInventorySubscriptionItem ? [costPlusItem] : entity === CpqInventoryCost ? [itemCost()] : []))
+    await create()
+    const [line] = created(CpqQuoteLineConfiguration)
+    expect(line.configuration).not.toHaveProperty('_arcPriceFrozen')
+    expect(line.configuration).not.toHaveProperty('_arcCostPlusFrozen')
+    expect(line.configuration).toMatchObject({ _arcCostsCarried: true })
   })
 
   it('a merge-renew attach mirrors the new target without carrying costs', async () => {
@@ -816,6 +893,34 @@ describe('Amend mirror carries the subscription item costs (ARC costs spec step 
     expect(line.targetSubscriptionId).toBeNull()
     expect(created(CpqQuoteLineCost)).toHaveLength(0)
     expect(em.find).not.toHaveBeenCalledWith(CpqInventoryCost, expect.anything())
+  })
+
+  it('step 14 / Q10: attaching a second Renew target turns the first target\'s standalone mirror into a merge mirror (carry markers and cost rows removed, cost-plus freeze back)', async () => {
+    const { em } = mirrorFixture('renew', [itemCost()])
+    const costPlusItem = { ...subscriptionItem(), charges: [{ chargeCode: 'mrc', pricingMethod: 'cost_plus' }] }
+    const first = { quoteLineId: 'ql-first', targetSubscriptionId: 'sub-1', sourceSubscriptionItemId: 'item-1', configuration: { _arcMirroredFromItemId: 'item-1', _arcCostsCarried: true, _arcCarriedCostSetHash: 'h' } }
+    const carriedRow = { id: 'qc-1', quoteLineId: 'ql-first', origin: 'carried', deletedAt: null }
+    em.findOne.mockImplementation(async (entity: unknown) => {
+      if (entity === CpqQuoteConfiguration) return { id: 'cpq-1', quoteId: 'sq-1', cpqStatus: 'new', quoteType: 'renew', customerId: 'cust-1', currencyCode: 'EUR', organizationId: SCOPE.organizationId, tenantId: SCOPE.tenantId }
+      if (entity === CpqInventorySubscription) return { id: 'sub-2', customerId: 'cust-1', currencyCode: 'EUR', billingCycle: 'monthly', status: 'active' }
+      if (entity === SalesQuote) return { id: 'sq-1', currencyCode: 'EUR' }
+      return null
+    })
+    em.find.mockImplementation(async (entity: unknown) => {
+      if (entity === CpqQuoteTargetSubscription) return [{ id: 't-1', subscriptionId: 'sub-1', mergeAction: 'standalone', quoteId: 'cpq-1' }, { id: 't-2', subscriptionId: 'sub-2', mergeAction: 'absorb', quoteId: 'cpq-1' }]
+      if (entity === CpqInventorySubscription) return [{ id: 'sub-1', billingCycle: 'monthly' }]
+      if (entity === CpqInventorySubscriptionItem) return [costPlusItem]
+      if (entity === CpqQuoteLineConfiguration) return [first]
+      if (entity === CpqQuoteLineCost) return [carriedRow]
+      return []
+    })
+    const service = new DefaultCpqQuotingService({
+      em: em as never, cpqPricingService: {} as never, cpqValidationService: {} as never, cpqProductService: {} as never, salesDocumentNumberGenerator: {} as never,
+    })
+    await service.attachTargetSubscription('cpq-1', { quoteType: 'renew', subscriptionId: 'sub-2' } as never, SCOPE)
+    expect(first.targetSubscriptionId).toBeNull()
+    expect(first.configuration).toEqual({ _arcMirroredFromItemId: 'item-1', _arcPriceFrozen: true, _arcCostPlusFrozen: true })
+    expect(carriedRow).toMatchObject({ deletedAt: expect.any(Date) })
   })
 
   it('restore re-carries the item costs of a removed Amend line (fresh markers, previous cost rows replaced)', async () => {

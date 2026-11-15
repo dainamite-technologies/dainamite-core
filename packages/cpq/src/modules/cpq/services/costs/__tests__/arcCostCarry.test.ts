@@ -1,7 +1,11 @@
 import { CpqInventoryCost, CpqQuoteLineCost } from '../../../data/entities'
 import { ARC_CARRIED_COST_SET_HASH_KEY, ARC_COSTS_CARRIED_KEY, stripQuoteOnlyArcMarkers } from '../../arcPriceFreeze'
 import { carriedCostLines, itemCostSetHash, itemCostStateHash } from '../itemCostState'
-import { carriedQuoteCostData, carryItemCosts, loadOpenItemCosts } from '../arcCostCarry'
+import {
+  carriedQuoteCostData, carryItemCosts, loadOpenItemCosts, reconcileRenewCosts, reconcileRenewLine, renewDuePatch, reevaluateCarriedIndexCosts, isIndexReevaluable,
+  type RenewCostRow,
+} from '../arcCostCarry'
+import { conversionCostBlockers } from '../conversionGuard'
 
 const SCOPE = { tenantId: 'tenant-1', organizationId: 'org-1' }
 const QUOTE = { id: 'cpq-1', quoteId: 'sq-1' }
@@ -115,5 +119,146 @@ describe('loadOpenItemCosts', () => {
     expect(em.find).not.toHaveBeenCalled()
     const grouped = await loadOpenItemCosts(em as never, ['item-1', 'item-2'], SCOPE)
     expect([...grouped.keys()]).toEqual(['item-1', 'item-2'])
+  })
+})
+
+// ─── ARC costs step 14: R1c reconciliation, renegotiation due, index re-evaluation seam ───
+
+const row = (over: Record<string, unknown> = {}) => ({
+  costKey: 'tail', origin: 'carried', role: 'price_basis', costType: 'mrc', source: 'fixed', chargeCode: 'mrc', costElementId: 'el-1', valueStatus: 'confirmed',
+  valueOrigin: 'carried', unitAmount: '320', validUntil: '2030-01-01', supplierTermEnd: '2030-01-01', renegotiationDue: false, sourcingStatus: 'not_requested', ...over,
+}) as unknown as RenewCostRow
+const reconcile = (rows: RenewCostRow[], over: Record<string, unknown> = {}) => reconcileRenewCosts({
+  rows, applicableKeys: new Set(['tail']), chargeCodes: new Set(['mrc']), newTermEnd: '2028-12-31', ...over,
+} as never)
+
+describe('carryItemCosts markEmpty (Renew)', () => {
+  it('marks a line cost-managed with the empty set hash when the item has no open costs', async () => {
+    const { em, persisted, line } = setup()
+    const result = await carryItemCosts(em as never, { quote: QUOTE as never, line: line as never, item: ITEM as never, scope: SCOPE, openCosts: [], markEmpty: true })
+    expect(result.rows).toHaveLength(0)
+    expect(persisted).toHaveLength(0)
+    expect(line.configuration).toMatchObject({ [ARC_COSTS_CARRIED_KEY]: true, [ARC_CARRIED_COST_SET_HASH_KEY]: itemCostSetHash([], ITEM as never) })
+  })
+})
+
+describe('reconcileRenewCosts (R1c)', () => {
+  it('matches a carried cost to an applicable element by cost key', () => {
+    const tail = row()
+    const out = reconcile([tail])
+    expect(out.matched).toEqual([tail])
+    expect(out.dropped).toEqual([])
+    expect(out.instantiate).toEqual([])
+  })
+
+  it('instantiates an applicable element the item lacks (sorted keys)', () => {
+    const out = reconcile([row()], { applicableKeys: new Set(['tail', 'setup', 'install']) })
+    expect(out.instantiate).toEqual(['install', 'setup'])
+    expect(reconcile([], { applicableKeys: new Set(['tail']) }).instantiate).toEqual(['tail'])
+  })
+
+  it('drops a carried cost whose element no longer applies, or whose charge code no longer resolves; carries one no element claimed', () => {
+    const gone = row({ costKey: 'old' })
+    const chargeGone = row({ costKey: 'tail', chargeCode: 'removed' })
+    const free = row({ costKey: 'free', costElementId: null, chargeCode: null })
+    const out = reconcile([gone, free, chargeGone])
+    expect(out.dropped).toEqual([gone, chargeGone])
+    expect(out.carried).toEqual([free])
+    expect(out.matched).toEqual([])
+  })
+
+  it('ignores non-carried rows (catalog, manual)', () => {
+    const out = reconcile([row({ origin: 'catalog', costKey: 'x' }), row({ origin: 'manual', costKey: 'y' })])
+    expect(out.matched).toEqual([])
+    expect(out.dropped).toEqual([])
+    expect(out.due).toEqual([])
+  })
+
+  it('flags due kept rows and never dropped ones', () => {
+    const dueRow = row({ validUntil: '2027-01-01' })
+    const dropped = row({ costKey: 'old', validUntil: '2027-01-01' })
+    const out = reconcile([dueRow, dropped])
+    expect(out.due).toEqual([{ row: dueRow, patch: { renegotiationDue: true, valueStatus: 'estimated' } }])
+  })
+})
+
+describe('renewDuePatch (R13)', () => {
+  it('is due when valid_until or supplier_term_end is before the new term end; the end date itself is not short', () => {
+    expect(renewDuePatch(row({ validUntil: '2028-12-30', supplierTermEnd: null }), '2028-12-31')).toEqual({ renegotiationDue: true, valueStatus: 'estimated' })
+    expect(renewDuePatch(row({ validUntil: null, supplierTermEnd: '2028-12-30' }), new Date('2028-12-31T00:00:00Z'))).toEqual({ renegotiationDue: true, valueStatus: 'estimated' })
+    expect(renewDuePatch(row({ validUntil: '2028-12-31', supplierTermEnd: '2028-12-31' }), '2028-12-31')).toBeNull()
+  })
+
+  it('is null without dates, without a term end, for NRC, for non-carried values and for answered requests', () => {
+    expect(renewDuePatch(row({ validUntil: null, supplierTermEnd: null }), '2028-12-31')).toBeNull()
+    expect(renewDuePatch(row({ validUntil: '2020-01-01' }), null)).toBeNull()
+    expect(renewDuePatch(row({ validUntil: '2020-01-01', costType: 'nrc' }), '2028-12-31')).toBeNull()
+    expect(renewDuePatch(row({ validUntil: '2020-01-01', valueOrigin: 'manual' }), '2028-12-31')).toBeNull()
+    expect(renewDuePatch(row({ validUntil: '2020-01-01', sourcingStatus: 'answered' }), '2028-12-31')).toBeNull()
+  })
+
+  it('does not rewrite an already-due row, and un-flags one that is no longer short', () => {
+    expect(renewDuePatch(row({ validUntil: '2020-01-01', renegotiationDue: true, valueStatus: 'estimated' }), '2028-12-31')).toBeNull()
+    expect(renewDuePatch(row({ renegotiationDue: true, valueStatus: 'estimated' }), '2028-12-31')).toEqual({ renegotiationDue: false, valueStatus: 'confirmed' })
+    expect(renewDuePatch(row({ renegotiationDue: true, valueStatus: 'none', unitAmount: null }), '2028-12-31')).toEqual({ renegotiationDue: false })
+  })
+})
+
+describe('reconcileRenewLine call order (reconciliation, then index re-evaluation)', () => {
+  const index = (over: Record<string, unknown> = {}) => row({ costKey: 'idx', source: 'index', ...over })
+  const run = (rows: RenewCostRow[], hook: jest.Mock, order: string[] = []) => reconcileRenewLine({
+    rows, applicableKeys: new Set(['tail', 'idx']), chargeCodes: new Set(['mrc']), newTermEnd: '2028-12-31', asOf: '2027-11-15',
+  }, { reevaluateCarriedIndexCosts: hook as never })
+
+  it('hands the hook only carried index lines with value_origin carried that are not due, post-reconciliation', async () => {
+    const order: string[] = []
+    const ok = index()
+    const due = index({ costKey: 'idx2', validUntil: '2027-01-01' })
+    const manual = index({ costKey: 'idx3', valueOrigin: 'manual' })
+    const dropped = index({ costKey: 'idx4' })
+    const nonIndex = row()
+    const hook = jest.fn(async ({ lines }: { lines: RenewCostRow[] }) => { order.push(`hook:${lines.map((l) => l.costKey).join(',')}`); return [] })
+    const out = await reconcileRenewLine({
+      rows: [ok, due, manual, dropped, nonIndex], applicableKeys: new Set(['tail', 'idx', 'idx2', 'idx3']), chargeCodes: new Set(['mrc']), newTermEnd: '2028-12-31', asOf: '2027-11-15',
+    }, { reevaluateCarriedIndexCosts: hook as never })
+    expect(hook).toHaveBeenCalledTimes(1)
+    expect(hook.mock.calls[0][0]).toMatchObject({ asOf: '2027-11-15' })
+    expect(order).toEqual(['hook:idx'])
+    // reconciliation ran first: the dropped row never reaches the hook, the due one was flagged before it
+    expect(out.dropped).toEqual([dropped])
+    expect(out.due.map((entry) => entry.row)).toEqual([due])
+    expect(isIndexReevaluable({ ...due, renegotiationDue: true } as never)).toBe(false)
+  })
+
+  it('does not call the hook when nothing qualifies, and the shipped seam is a no-op', async () => {
+    const hook = jest.fn(async () => [])
+    await run([row(), index({ validUntil: '2020-01-01' })], hook)
+    expect(hook).not.toHaveBeenCalled()
+    expect(await reevaluateCarriedIndexCosts({ lines: [index()], asOf: '2027-11-15' })).toEqual([])
+    const out = await reconcileRenewLine({ rows: [index()], applicableKeys: new Set(['idx']), chargeCodes: new Set(['mrc']), newTermEnd: '2028-12-31', asOf: '2027-11-15' })
+    expect(out.indexPatches).toEqual([])
+  })
+
+  it('reduces the hook result to value / snapshot fields and ignores rows it was not given', async () => {
+    const target = index()
+    const hook = jest.fn(async () => [
+      { row: target, patch: { unitAmount: '1', instanceAmount: '1', indexSnapshot: { v: 1 }, valueStatus: 'none', note: 'x' } },
+      { row: index({ costKey: 'stranger' }), patch: { unitAmount: '9' } },
+      { row: target, patch: { valueStatus: 'none' } },
+    ])
+    const out = await run([target], hook)
+    expect(out.indexPatches).toEqual([{ row: target, patch: { unitAmount: '1', instanceAmount: '1', indexSnapshot: { v: 1 } } }])
+  })
+})
+
+describe('conversion guard with renegotiation-due costs (R7 / R13)', () => {
+  const guardRow = (over: Record<string, unknown> = {}) => ({ quoteLineId: 'ql-1', costKey: 'tail', role: 'price_basis', valueStatus: 'estimated', validUntil: '2030-01-01', ...over }) as never
+  it('refuses a due price-basis cost (estimated) with its key; a due margin-only cost does not block', () => {
+    expect(conversionCostBlockers([{ quoteLineId: 'ql-1', charges: [] }], [guardRow()], '2027-11-15')).toEqual([{ quoteLineId: 'ql-1', costKeys: ['tail'], chargeCodes: [] }])
+    expect(conversionCostBlockers([{ quoteLineId: 'ql-1', charges: [] }], [guardRow({ role: 'margin_only', costKey: 'm' })], '2027-11-15')).toEqual([])
+  })
+
+  it('an answered / kept (confirmed) cost no longer blocks', () => {
+    expect(conversionCostBlockers([{ quoteLineId: 'ql-1', charges: [] }], [guardRow({ valueStatus: 'confirmed' })], '2027-11-15')).toEqual([])
   })
 })

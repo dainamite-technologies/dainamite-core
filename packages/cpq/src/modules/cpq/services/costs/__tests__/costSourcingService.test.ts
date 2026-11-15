@@ -385,6 +385,15 @@ describe('answer: unlocked quote', () => {
     expect(carried.costs[0]).toMatchObject({ sourcingStatus: 'answered', renegotiationDue: false })
   })
 
+  it('step 14: a supplier answer on a due carried cost of a standalone Renew line (not frozen) clears the flag and confirms it', async () => {
+    const { service, costs } = setup({
+      quoteType: 'renew', line: { configuration: { _arcMirroredFromItemId: 'item-1', _arcCostsCarried: true, _arcCarriedCostSetHash: 'h' } }, element: null,
+      costs: [requested({ origin: 'carried', costElementId: null, renegotiationDue: true, valueStatus: 'estimated', valueOrigin: 'carried' })],
+    })
+    await service.answer(ids.quote, ids.cost, answerInput(), ACTOR, SCOPE)
+    expect(costs[0]).toMatchObject({ sourcingStatus: 'answered', renegotiationDue: false, valueStatus: 'confirmed', valueOrigin: 'supplier' })
+  })
+
   it('a non-confirming answer or a non-carried cost keeps renegotiationDue untouched', async () => {
     const catalog = setup({ costs: [requested({ origin: 'catalog', renegotiationDue: true })] })
     await catalog.service.answer(ids.quote, ids.cost, answerInput(), ACTOR, SCOPE)

@@ -44,6 +44,11 @@ export type CarryItemCostsInput = {
   openCosts?: readonly CpqInventoryCost[]
   /** Soft-delete the line's existing cost rows first (restore, refresh). */
   replace?: boolean
+  /**
+   * Standalone Renew mirrors are cost-managed even when the item has no open costs (a catalog element may apply today,
+   * R1c): mark the line with the hash of the empty set so a cost added to the item later still counts as stale.
+   */
+  markEmpty?: boolean
 }
 
 export type CarryItemCostsResult = { rows: CpqQuoteLineCost[]; setHash: string | null }
@@ -127,11 +132,155 @@ export async function carryItemCosts(em: EntityManager, input: CarryItemCostsInp
       await withAtomicFlush(em, [() => { for (const row of existing) row.deletedAt = now }])
     }
   }
-  if (open.length === 0) return { rows: [], setHash: null }
+  if (open.length === 0) {
+    if (!input.markEmpty) return { rows: [], setHash: null }
+    const emptyHash = itemCostSetHash([], item)
+    line.configuration = { ...(line.configuration ?? {}), [ARC_COSTS_CARRIED_KEY]: true, [ARC_CARRIED_COST_SET_HASH_KEY]: emptyHash }
+    return { rows: [], setHash: emptyHash }
+  }
 
   const rows = open.map((cost) => em.create(CpqQuoteLineCost, carriedQuoteCostData(cost, quote, line.quoteLineId, scope) as never))
   for (const row of rows) em.persist(row)
   const setHash = itemCostSetHash(open, item)
   line.configuration = { ...(line.configuration ?? {}), [ARC_COSTS_CARRIED_KEY]: true, [ARC_CARRIED_COST_SET_HASH_KEY]: setHash }
   return { rows, setHash }
+}
+
+// ─── Renew reconciliation (R1c), renegotiation due (R13), index re-evaluation seam ─────────────────────────────
+
+/** The cost-line fields reconciliation reads (a quote cost row, or its plain-object projection). */
+export type RenewCostRow = Pick<
+  CpqQuoteLineCost,
+  'costKey' | 'origin' | 'role' | 'costType' | 'source' | 'chargeCode' | 'costElementId' | 'valueStatus' | 'valueOrigin' | 'unitAmount'
+  | 'validUntil' | 'supplierTermEnd' | 'renegotiationDue'
+> & Partial<Pick<CpqQuoteLineCost, 'sourcingStatus' | 'instanceAmount' | 'indexSnapshot'>>
+
+/** The only fields renegotiation-due flagging writes. */
+export type RenewDuePatch = { renegotiationDue: boolean; valueStatus?: 'estimated' | 'confirmed' }
+
+/**
+ * Renegotiation due (App Spec R13, ARC costs spec "Renegotiation due on Renew"). Only a RECURRING (`mrc`) cost still holding its
+ * carried value is evaluated (`origin = carried`, `value_origin = carried`, no answered request: a supplier answer, manual
+ * value or Keep current cost already confirmed it). It is due when its `valid_until` or `supplier_term_end` is before the
+ * renewal's new term end: `value_status = estimated`, value kept. Evaluated on every saved recalculation, so a changed term
+ * un-flags a cost that is no longer short (back to `confirmed` while it holds an amount). Margin-only costs are flagged
+ * too; they never block conversion (the guard reads price-basis rows only). `null` = nothing to change.
+ */
+export function renewDuePatch(row: RenewCostRow, newTermEnd: string | Date | null | undefined): RenewDuePatch | null {
+  const end = day(newTermEnd)
+  if (!end || row.origin !== 'carried' || row.valueOrigin !== 'carried' || row.costType !== 'mrc') return null
+  if (row.sourcingStatus === 'answered') return null
+  const validUntil = day(row.validUntil)
+  const termEnd = day(row.supplierTermEnd)
+  const short = (validUntil !== null && validUntil < end) || (termEnd !== null && termEnd < end)
+  const hasAmount = row.unitAmount !== null && row.unitAmount !== undefined
+  if (short) {
+    return row.renegotiationDue && row.valueStatus === 'estimated' ? null : { renegotiationDue: true, valueStatus: 'estimated' }
+  }
+  if (!row.renegotiationDue) return null
+  return hasAmount ? { renegotiationDue: false, valueStatus: 'confirmed' } : { renegotiationDue: false }
+}
+
+export type ReconcileRenewInput = {
+  /** The line's stored (non-deleted) cost rows. */
+  rows: readonly RenewCostRow[]
+  /** Cost keys of the catalog elements that apply to the line's configuration today. */
+  applicableKeys: ReadonlySet<string>
+  /** Codes of the charges the line's offering / product has today. */
+  chargeCodes: ReadonlySet<string>
+  newTermEnd: string | Date | null | undefined
+}
+
+export type ReconcileRenewResult = {
+  /** Carried rows whose key matches an applicable element: they keep their carried value. */
+  matched: RenewCostRow[]
+  /** Carried rows no element ever claimed (no `cost_element_id`) that still resolve to a charge: carried unchanged. */
+  carried: RenewCostRow[]
+  /** Applicable element keys the line has no row for: the catalog loop instantiates them. */
+  instantiate: string[]
+  /** Carried rows whose element no longer applies, or whose `charge_code` no longer resolves: soft-deleted, listed on read as dropped at renewal. */
+  dropped: RenewCostRow[]
+  /** Due-flag changes per kept row. */
+  due: Array<{ row: RenewCostRow; patch: RenewDuePatch }>
+}
+
+/**
+ * R1c reconciliation of a cost-managed standalone Renew line with today's catalog. Pure: classifies the line's carried rows
+ * (match / carried / drop) and the applicable elements (instantiate), and computes the renegotiation-due flags against
+ * `newTermEnd`. The catalog loop of `resolveQuoteCosts` performs the instantiation and the keep-value matching; the
+ * caller applies the drops and the due patches. Non-carried rows (catalog, manual) are not this function's concern.
+ */
+export function reconcileRenewCosts(input: ReconcileRenewInput): ReconcileRenewResult {
+  const result: ReconcileRenewResult = { matched: [], carried: [], instantiate: [], dropped: [], due: [] }
+  const present = new Set(input.rows.map((row) => row.costKey))
+  result.instantiate = [...input.applicableKeys].filter((key) => !present.has(key)).sort()
+  for (const row of input.rows) {
+    if (row.origin !== 'carried') continue
+    const chargeGone = !!row.chargeCode && !input.chargeCodes.has(row.chargeCode)
+    if (input.applicableKeys.has(row.costKey) && !chargeGone) { result.matched.push(row) }
+    else if (!row.costElementId && !chargeGone) { result.carried.push(row) }
+    else { result.dropped.push(row); continue }
+    const patch = renewDuePatch(row, input.newTermEnd)
+    if (patch) result.due.push({ row, patch })
+  }
+  return result
+}
+
+/** A carried `index` line as the index re-evaluation sees it, after reconciliation. */
+export type CarriedIndexLine = RenewCostRow
+
+/** What index re-evaluation may change: the value and the snapshot, nothing else. */
+export type IndexReevaluationPatch = { unitAmount?: string | null; instanceAmount?: string | null; indexSnapshot?: Record<string, unknown> | null }
+export type IndexReevaluation = { row: CarriedIndexLine; patch: IndexReevaluationPatch }
+export type ReevaluateCarriedIndexCosts = (input: { lines: readonly CarriedIndexLine[]; asOf: string }) => Promise<IndexReevaluation[]>
+
+/**
+ * Seam of the index-costs feature (`.ai/specs/2026-11-12-cpq-cost-plus-index-costs-expiry.md`): filled by the index-costs
+ * feature. The `index` cost source is not available yet (`AVAILABLE_COST_SOURCES`), so there is nothing to re-evaluate and
+ * this changes nothing. Contract it must keep: it receives ONLY carried `index` lines with `value_origin = carried` that
+ * are not renegotiation due, and may change only `unit_amount` / `instance_amount` / `index_snapshot` (anything else it
+ * returns is discarded by `reconcileRenewLine`).
+ */
+export const reevaluateCarriedIndexCosts: ReevaluateCarriedIndexCosts = async () => []
+
+/** Whether a (post-reconciliation) cost line may be handed to `reevaluateCarriedIndexCosts`. */
+export function isIndexReevaluable(row: RenewCostRow): boolean {
+  return row.origin === 'carried' && row.source === 'index' && row.valueOrigin === 'carried' && row.renegotiationDue !== true
+}
+
+const INDEX_PATCH_KEYS = ['unitAmount', 'instanceAmount', 'indexSnapshot'] as const
+
+export type ReconcileRenewLineInput = ReconcileRenewInput & {
+  /** The date the index values are read as of (the recalculation date, `YYYY-MM-DD`). */
+  asOf: string
+  /** Row state AFTER the catalog loop (stored row merged with its pending patch); defaults to the row itself. */
+  effective?: (row: RenewCostRow) => RenewCostRow
+}
+
+export type ReconcileRenewLineResult = ReconcileRenewResult & { indexPatches: IndexReevaluation[] }
+
+/**
+ * One Renew line: `reconcileRenewCosts` FIRST, then `reevaluateCarriedIndexCosts` on what survived. The second call sees only
+ * carried `index` lines with `value_origin = carried` whose due flag (as computed by the reconciliation) is false, and its
+ * result is reduced to the value / snapshot fields. `hooks` lets the index-costs feature (and the tests) supply the implementation.
+ */
+export async function reconcileRenewLine(
+  input: ReconcileRenewLineInput,
+  hooks: { reevaluateCarriedIndexCosts?: ReevaluateCarriedIndexCosts } = {},
+): Promise<ReconcileRenewLineResult> {
+  const result = reconcileRenewCosts(input)
+  const effective = input.effective ?? ((row: RenewCostRow) => row)
+  const dueByRow = new Map(result.due.map(({ row, patch }) => [row, patch]))
+  const kept = [...result.matched, ...result.carried].map((row) => ({ ...effective(row), ...(dueByRow.get(row) ?? {}) }) as CarriedIndexLine)
+  const eligible = kept.filter(isIndexReevaluable)
+  const reevaluate = hooks.reevaluateCarriedIndexCosts ?? reevaluateCarriedIndexCosts
+  const raw = eligible.length > 0 ? await reevaluate({ lines: eligible, asOf: input.asOf }) : []
+  const originalOf = new Map([...result.matched, ...result.carried].map((row) => [row.costKey, row]))
+  const indexPatches = raw.flatMap(({ row, patch }) => {
+    const original = originalOf.get(row.costKey)
+    if (!original) return []
+    const allowed = Object.fromEntries(INDEX_PATCH_KEYS.filter((key) => key in patch).map((key) => [key, patch[key]])) as IndexReevaluationPatch
+    return Object.keys(allowed).length > 0 ? [{ row: original as CarriedIndexLine, patch: allowed }] : []
+  })
+  return { ...result, indexPatches }
 }

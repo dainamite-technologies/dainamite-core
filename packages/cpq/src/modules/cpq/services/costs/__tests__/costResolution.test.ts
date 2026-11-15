@@ -1,6 +1,6 @@
 import {
   CpqChargeCostElement, CpqOrderConfiguration, CpqPricingTable, CpqPricingTableEntry, CpqProductCharge,
-  CpqQuoteConfiguration, CpqQuoteLineConfiguration, CpqQuoteLineCost, CpqPriceRule, CpqProductOffering,
+  CpqQuoteConfiguration, CpqQuoteLineConfiguration, CpqQuoteLineCost, CpqPriceRule, CpqProductOffering, CpqQuoteTargetSubscription,
 } from '../../../data/entities'
 import { DefaultCpqQuotingService } from '../../cpqQuotingService'
 import { isQuoteCostLocked, resolveCostPlusInputs, resolveQuoteCosts } from '../costResolution'
@@ -14,10 +14,11 @@ const OFFERING = 'offering-1'
 
 type Row = Record<string, unknown>
 
-function store(rows: { charges?: Row[]; elements?: Row[]; tables?: Row[]; entries?: Row[]; costs?: Row[]; orders?: Row[] }) {
+function store(rows: { charges?: Row[]; elements?: Row[]; tables?: Row[]; entries?: Row[]; costs?: Row[]; orders?: Row[]; targets?: Row[] }) {
   const byEntity = new Map<unknown, Row[]>([
     [CpqProductCharge, rows.charges ?? []], [CpqChargeCostElement, rows.elements ?? []], [CpqPricingTable, rows.tables ?? []],
     [CpqPricingTableEntry, rows.entries ?? []], [CpqQuoteLineCost, rows.costs ?? []], [CpqOrderConfiguration, rows.orders ?? []],
+    [CpqQuoteTargetSubscription, rows.targets ?? []],
   ])
   const matches = (row: Row, where: Row) => Object.entries(where).every(([key, value]) => {
     if (value && typeof value === 'object' && '$in' in value) return (value as { $in: unknown[] }).$in.includes(row[key])
@@ -44,10 +45,10 @@ const catalogCost = (over: Row = {}) => ({ id: 'c-1', ...SCOPE, deletedAt: null,
   origin: 'catalog', valueStatus: 'confirmed', valueOrigin: 'catalog', unitAmount: '100', instanceAmount: '100', currencyCode: 'USD',
   note: null, driverHash: null, errorCode: null, ...over })
 
-const run = (s: ReturnType<typeof store>, opts: { enabled?: boolean; config?: Row; quoteOver?: Row; lines?: Array<{ lineConfig: never; mergedConfig: Row }>; actorUserId?: string | null; signals?: SourcingSignal[]; autoOpen?: boolean; fxResolver?: CpqFxRateResolver } = {}) =>
+const run = (s: ReturnType<typeof store>, opts: { enabled?: boolean; config?: Row; quoteOver?: Row; lines?: Array<{ lineConfig: never; mergedConfig: Row }>; actorUserId?: string | null; signals?: SourcingSignal[]; autoOpen?: boolean; fxResolver?: CpqFxRateResolver; reevaluateCarriedIndexCosts?: never } = {}) =>
   resolveQuoteCosts({
     em: s.em as never, quote: quote(opts.quoteOver), scope: SCOPE,
-    isEnabled: async () => opts.enabled ?? true, fxResolver: opts.fxResolver, actorUserId: opts.actorUserId, signals: opts.signals, autoOpen: opts.autoOpen,
+    isEnabled: async () => opts.enabled ?? true, fxResolver: opts.fxResolver, actorUserId: opts.actorUserId, signals: opts.signals, autoOpen: opts.autoOpen, reevaluateCarriedIndexCosts: opts.reevaluateCarriedIndexCosts,
     lines: opts.lines ?? [{ lineConfig: lineConfig(), mergedConfig: opts.config ?? {} }],
   })
 
@@ -976,4 +977,144 @@ describe('foreign-currency catalog costs on a EUR quote', () => {
       expect(s.costs[0]).toMatchObject({ fxRate: '0.90000000', fxRateSource: 'Old' })
     })
   })
+})
+
+// ─── ARC costs step 14: R1c Renew reconciliation, renegotiation due ─────────────────────────────────────────
+
+describe('Renew reconciliation (ARC costs step 14)', () => {
+  const managed = (extra: Row = {}) => lineConfig({ targetSubscriptionId: 'sub-1', configuration: { _arcMirroredFromItemId: 'item-1', _arcCostsCarried: true, _arcCarriedCostSetHash: 'h', ...extra } })
+  const target = (newTermEnd: string | null) => ({ ...SCOPE, deletedAt: null, quoteId: QUOTE_ID, subscriptionId: 'sub-1', newTermEnd })
+  const carried = (over: Row = {}) => ({
+    id: 'k-1', ...SCOPE, deletedAt: null, quoteConfigurationId: QUOTE_ID, quoteLineId: LINE_ID, costKey: 'tail', chargeCode: 'mrc', origin: 'carried', valueOrigin: 'carried',
+    valueStatus: 'confirmed', role: 'price_basis', costType: 'mrc', source: 'fixed', costElementId: 'el-1', unitAmount: '320', instanceAmount: '320', currencyCode: 'USD',
+    validUntil: '2030-01-01', supplierTermEnd: '2030-01-01', renegotiationDue: false, sourcingStatus: 'not_requested', note: null, driverHash: null, errorCode: null, ...over,
+  })
+  const go = async (s: ReturnType<typeof store>, cfg: Row = {}) => run(s, { quoteOver: { quoteType: 'renew' }, lines: [{ lineConfig: managed(cfg), mergedConfig: {} }] })
+
+  it('match: a carried cost whose key matches an applicable element keeps its carried value (not the catalog 100)', async () => {
+    const s = store({ charges: [charge()], elements: [element()], costs: [carried()], targets: [target('2028-12-31')] })
+    await go(s)
+    expect(s.costs).toHaveLength(1)
+    expect(s.costs[0]).toMatchObject({ origin: 'carried', valueOrigin: 'carried', unitAmount: '320', valueStatus: 'confirmed', renegotiationDue: false, deletedAt: null })
+  })
+
+  it('instantiate: an applicable element the item lacks becomes a catalog cost line', async () => {
+    const s = store({ charges: [charge()], elements: [element(), element({ id: 'el-2', code: 'install', costType: 'nrc' })], costs: [carried()], targets: [target('2028-12-31')] })
+    await go(s)
+    expect(s.costs.map((row) => [row.costKey, row.origin])).toEqual([['tail', 'carried'], ['install', 'catalog']])
+  })
+
+  it('instantiate: an item with no costs at all gets the catalog lines (charge became cost-plus after the sale)', async () => {
+    const s = store({ charges: [charge()], elements: [element({ source: 'on_request', amount: null, estimateAmount: '90' })], targets: [target('2028-12-31')] })
+    await go(s)
+    expect(s.costs).toEqual([expect.objectContaining({ costKey: 'tail', origin: 'catalog', valueStatus: 'estimated', unitAmount: '90' })])
+  })
+
+  it('drop: a carried cost whose element no longer applies is soft-deleted', async () => {
+    const s = store({ charges: [charge()], elements: [element({ applicabilityCondition: { attribute: 'speed', operator: 'eq', value: '10G' } })], costs: [carried()], targets: [target('2028-12-31')] })
+    const stats = await go(s)
+    expect(stats.dropped).toBe(1)
+    expect(s.costs[0].deletedAt).toEqual(expect.any(Date))
+  })
+
+  it('drop: a carried cost whose element is gone / charge no longer resolves is dropped; one no element ever claimed is carried', async () => {
+    const s = store({
+      charges: [charge()], elements: [element({ isActive: false })],
+      costs: [carried(), carried({ id: 'k-2', costKey: 'old', chargeCode: 'gone_charge', costElementId: null }), carried({ id: 'k-3', costKey: 'free', chargeCode: null, costElementId: null })],
+      targets: [target('2028-12-31')],
+    })
+    await go(s)
+    expect(s.costs.map((row) => [row.costKey, row.deletedAt !== null])).toEqual([['tail', true], ['old', true], ['free', false]])
+  })
+
+  it('due by valid_until: an MRC cost valid before the new term end becomes estimated + renegotiation due, value kept', async () => {
+    const s = store({ charges: [charge()], elements: [element()], costs: [carried({ validUntil: '2027-06-30', supplierTermEnd: null })], targets: [target('2028-12-31')] })
+    await go(s)
+    expect(s.costs[0]).toMatchObject({ renegotiationDue: true, valueStatus: 'estimated', unitAmount: '320', instanceAmount: '320', valueOrigin: 'carried' })
+  })
+
+  it('due by supplier_term_end', async () => {
+    const s = store({ charges: [charge()], elements: [element()], costs: [carried({ validUntil: null, supplierTermEnd: '2027-06-30' })], targets: [target('2028-12-31')] })
+    await go(s)
+    expect(s.costs[0]).toMatchObject({ renegotiationDue: true, valueStatus: 'estimated', unitAmount: '320' })
+  })
+
+  it('not due when both dates reach the new term end; an NRC cost is never due; no dates means not due', async () => {
+    const s = store({
+      charges: [charge()], elements: [element(), element({ id: 'el-2', code: 'install', costType: 'nrc' })],
+      costs: [carried({ validUntil: '2028-12-31', supplierTermEnd: '2028-12-31' }), carried({ id: 'k-2', costKey: 'install', costType: 'nrc', costElementId: 'el-2', validUntil: '2020-01-01' })],
+      targets: [target('2028-12-31')],
+    })
+    await go(s)
+    expect(s.costs.map((row) => row.renegotiationDue)).toEqual([false, false])
+    expect(s.costs.map((row) => row.valueStatus)).toEqual(['confirmed', 'confirmed'])
+  })
+
+  it('a margin-only cost is flagged too (estimated) but the conversion guard ignores it', async () => {
+    const s = store({ charges: [charge()], elements: [element({ role: 'margin_only' })], costs: [carried({ role: 'margin_only', validUntil: '2027-01-01' })], targets: [target('2028-12-31')] })
+    await go(s)
+    expect(s.costs[0]).toMatchObject({ renegotiationDue: true, valueStatus: 'estimated', role: 'margin_only' })
+  })
+
+  it('re-evaluates the flag on the next recalculation: a later-extended term un-flags, a moved-up term end flags', async () => {
+    const s = store({ charges: [charge()], elements: [element()], costs: [carried({ validUntil: '2027-06-30' })], targets: [target('2028-12-31')] })
+    await go(s)
+    expect(s.costs[0]).toMatchObject({ renegotiationDue: true, valueStatus: 'estimated' })
+    s.em.find.mockImplementation(async (entity: unknown, where: Row) => {
+      if (entity === CpqQuoteTargetSubscription) return [target('2027-01-31')]
+      return store({ charges: [charge()], elements: [element()], costs: s.costs }).em.find(entity, where)
+    })
+    await go(s)
+    expect(s.costs[0]).toMatchObject({ renegotiationDue: false, valueStatus: 'confirmed', unitAmount: '320' })
+  })
+
+  it('does not touch a cost already answered / confirmed by a supplier (value origin supplier) or kept current', async () => {
+    const s = store({ charges: [charge()], elements: [element()], costs: [carried({ valueOrigin: 'supplier', validUntil: '2027-06-30' })], targets: [target('2028-12-31')] })
+    await go(s)
+    expect(s.costs[0]).toMatchObject({ renegotiationDue: false, valueStatus: 'confirmed' })
+  })
+
+  it('a Phase 1 frozen Renew line, a merge-renew line and an unmarked Renew line are not reconciled', async () => {
+    for (const cfg of [{ _arcPriceFrozen: true, _arcCostPlusFrozen: true }]) {
+      const s = store({ charges: [charge()], elements: [element()], costs: [carried({ validUntil: '2020-01-01' })], targets: [target('2028-12-31')] })
+      await run(s, { quoteOver: { quoteType: 'renew' }, lines: [{ lineConfig: managed(cfg), mergedConfig: {} }] })
+      expect(s.costs[0].renegotiationDue).toBe(false)
+    }
+    const s = store({ charges: [charge()], elements: [element()], costs: [carried({ validUntil: '2020-01-01' })], targets: [target('2028-12-31')] })
+    const unmarked = lineConfig({ configuration: { _arcMirroredFromItemId: 'item-1' } })
+    await run(s, { quoteOver: { quoteType: 'renew' }, lines: [{ lineConfig: unmarked, mergedConfig: {} }] })
+    expect(s.costs[0].renegotiationDue).toBe(false)
+  })
+
+  it('a preview computes the same due state in memory and persists nothing', async () => {
+    const s = store({ charges: [charge()], elements: [element()], costs: [carried({ validUntil: '2027-06-30' })], targets: [target('2028-12-31')] })
+    const out = await resolveCostPlusInputs({
+      em: s.em as never, quote: quote({ quoteType: 'renew' }), scope: SCOPE, lines: [{ lineConfig: managed(), mergedConfig: {} }], isEnabled: async () => true, save: false,
+    })
+    expect(out.costsByLine.get(LINE_ID)).toEqual([expect.objectContaining({ costKey: 'tail', valueStatus: 'estimated' })])
+    expect(s.costs[0]).toMatchObject({ renegotiationDue: false, valueStatus: 'confirmed' })
+  })
+
+  it('calls the index re-evaluation after reconciliation, with carried index lines only (stub), and applies only value / snapshot', async () => {
+    const seen: Row[][] = []
+    const stub = jest.fn(async ({ lines }: { lines: Row[] }) => {
+      seen.push(lines.map((line) => ({ ...line })))
+      return lines.map((row) => ({ row, patch: { unitAmount: '333', instanceAmount: '333', indexSnapshot: { index: 'cpi' }, note: 'x', valueStatus: 'none' } }))
+    })
+    const s = store({
+      charges: [charge()], elements: [element({ source: 'fixed' }), element({ id: 'el-2', code: 'indexed' })],
+      costs: [carried({ id: 'k-1', costKey: 'tail', source: 'index' }), carried({ id: 'k-2', costKey: 'indexed', costElementId: 'el-2', source: 'index', validUntil: '2020-01-01' })],
+      targets: [target('2028-12-31')],
+    })
+    await go2(s, stub)
+    // the due line (k-2) is skipped, the other is handed over with its post-reconciliation state
+    expect(stub).toHaveBeenCalledTimes(1)
+    expect(seen[0].map((line) => line.costKey)).toEqual(['tail'])
+    expect(s.costs[0]).toMatchObject({ unitAmount: '333', instanceAmount: '333', indexSnapshot: { index: 'cpi' }, note: null, valueStatus: 'confirmed' })
+    expect(s.costs[1]).toMatchObject({ unitAmount: '320', renegotiationDue: true })
+  })
+
+  async function go2(s: ReturnType<typeof store>, stub: unknown) {
+    return run(s, { quoteOver: { quoteType: 'renew' }, lines: [{ lineConfig: managed(), mergedConfig: {} }], reevaluateCarriedIndexCosts: stub as never })
+  }
 })

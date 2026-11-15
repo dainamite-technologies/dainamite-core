@@ -17,6 +17,7 @@ import type { SalesDocumentNumberGenerator } from '@open-mercato/core/modules/sa
 import {
   CpqQuoteConfiguration,
   CpqQuoteLineConfiguration,
+  CpqQuoteLineCost,
   CpqQuoteTargetSubscription,
   CpqInventorySubscription,
   CpqInventorySubscriptionItem,
@@ -722,7 +723,8 @@ export class DefaultCpqQuotingService {
     await withAtomicFlush(em, [() => {
       for (const { line, item } of restores) {
         line.action = 'modify'
-        line.configuration = buildArcMirrorConfiguration(item.configuration, item, arcType, { costPlus: isCostPlusItem(item) })
+        // A merge-renew line (no target subscription) keeps the cost-plus freeze (Q10); a standalone Renew line does not.
+        line.configuration = buildArcMirrorConfiguration(item.configuration, item, arcType, { costPlus: isCostPlusItem(item), mergeMode: !line.targetSubscriptionId })
         line.charges = pickArcMirrorCharges(item, cpqConfig.currencyCode)
         line.quantity = item.quantity
         line.nrcTotal = String(item.nrcAmount ?? 0)
@@ -733,11 +735,13 @@ export class DefaultCpqQuotingService {
         if (salesLine) salesLine.quantity = String(item.quantity)
       }
     }])
-    // Amend: the restored line is a fresh mirror again, so it re-carries the item's open costs (ARC costs spec).
-    if (arcType === 'amend') {
-      const openCosts = await loadOpenItemCosts(em, restores.map(({ item }) => item.id), scope)
-      for (const { line, item } of restores) {
-        await carryItemCosts(em, { quote: cpqConfig, line, item, scope, openCosts: openCosts.get(item.id) ?? [], replace: true })
+    // Amend and standalone Renew: the restored line is a fresh mirror again, so it re-carries the item's open costs
+    // (ARC costs spec). A merge-renew line (no target subscription) carries nothing (Q10).
+    const carrying = restores.filter(({ line }) => arcType === 'amend' || !!line.targetSubscriptionId)
+    if (carrying.length > 0) {
+      const openCosts = await loadOpenItemCosts(em, carrying.map(({ item }) => item.id), scope)
+      for (const { line, item } of carrying) {
+        await carryItemCosts(em, { quote: cpqConfig, line, item, scope, openCosts: openCosts.get(item.id) ?? [], replace: true, markEmpty: arcType === 'renew' })
       }
     }
 
@@ -2334,8 +2338,29 @@ DefaultCpqQuotingService.prototype.attachTargetSubscription = async function (
         tenantId: scope.tenantId,
         deletedAt: null,
       })
+      // Q10: a standalone Renew mirror that becomes a merge mirror stops carrying costs and, for a cost-plus item, takes the
+      // freeze back (merge-renew lines are frozen at the stored charges and carry no cost lines).
+      const demoted = existingLines.filter((lc) => (lc.configuration as Record<string, unknown> | null)?.[ARC_COSTS_CARRIED_KEY] === true)
+      const demotedItems = demoted.length
+        ? await em.find(CpqInventorySubscriptionItem, {
+          id: { $in: demoted.map((lc) => lc.sourceSubscriptionItemId).filter((id): id is string => !!id) },
+          organizationId: scope.organizationId, tenantId: scope.tenantId, deletedAt: null,
+        })
+        : []
+      const demotedItemById = new Map(demotedItems.map((item) => [item.id, item]))
+      if (demoted.length) {
+        const now = new Date()
+        const carriedRows = await em.find(CpqQuoteLineCost, {
+          quoteLineId: { $in: demoted.map((lc) => lc.quoteLineId) }, organizationId: scope.organizationId, tenantId: scope.tenantId, deletedAt: null,
+        })
+        for (const row of carriedRows) row.deletedAt = now
+      }
       for (const lc of existingLines) {
         if (lc.targetSubscriptionId !== null) lc.targetSubscriptionId = null
+        if (!demoted.includes(lc)) continue
+        const { [ARC_COSTS_CARRIED_KEY]: _carried, [ARC_CARRIED_COST_SET_HASH_KEY]: _hash, ...rest } = lc.configuration as Record<string, unknown>
+        const item = lc.sourceSubscriptionItemId ? demotedItemById.get(lc.sourceSubscriptionItemId) : undefined
+        lc.configuration = item && isCostPlusItem(item) ? { ...rest, [ARC_PRICE_FROZEN_KEY]: true, [ARC_COST_PLUS_FROZEN_KEY]: true } : rest
       }
     }
 
@@ -2930,9 +2955,9 @@ async function mirrorTargetSubscriptionItems(
 
   const lineAction: 'modify' | 'cancel' = quoteType === 'cancel' ? 'cancel' : 'modify'
 
-  // ARC costs spec: an Amend mirror of a standalone target carries the item's open costs (merge-renew mirrors and
-  // Cancel / Renew mirrors carry nothing here). One query for the whole subscription.
-  const carryCosts = quoteType === 'amend' && !options?.mergeMode
+  // ARC costs spec: an Amend or standalone-Renew mirror carries the item's open costs (merge-renew and Cancel mirrors carry
+  // nothing; a Renew line is then reconciled with today's catalog on its saved recalculations, R1c). One query for the whole subscription.
+  const carryCosts = (quoteType === 'amend' || quoteType === 'renew') && !options?.mergeMode
   const openCostsByItem = carryCosts ? await loadOpenItemCosts(em, items.map((item) => item.id), scope) : null
 
   for (const item of items) {
@@ -2980,7 +3005,7 @@ async function mirrorTargetSubscriptionItems(
       startDate: null,
       termMonths: null,
       endDate: null,
-      configuration: buildArcMirrorConfiguration(item.configuration, item, quoteType, { costPlus: isCostPlusItem(item) }),
+      configuration: buildArcMirrorConfiguration(item.configuration, item, quoteType, { costPlus: isCostPlusItem(item), mergeMode: options?.mergeMode === true }),
       quantity: item.quantity,
       charges: pickArcMirrorCharges(item, sub.currencyCode),
       nrcTotal: String(item.nrcAmount ?? 0),
@@ -2995,7 +3020,7 @@ async function mirrorTargetSubscriptionItems(
       sourceSubscriptionItemId: item.id,
     })
     em.persist(lineConfig)
-    if (openCostsByItem) await carryItemCosts(em, { quote: cpqConfig, line: lineConfig, item, scope, openCosts: openCostsByItem.get(item.id) ?? [] })
+    if (openCostsByItem) await carryItemCosts(em, { quote: cpqConfig, line: lineConfig, item, scope, openCosts: openCostsByItem.get(item.id) ?? [], markEmpty: quoteType === 'renew' })
   }
 }
 

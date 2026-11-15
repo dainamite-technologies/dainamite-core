@@ -399,9 +399,17 @@ describe('answer: refusals and idempotency (I-13) write nothing', () => {
   it('unknown cost line is 404; invalid currency format and a past validUntil are 422', async () => {
     const ctx = setup({ costs: [requested()] })
     await expect(ctx.service.answer(ids.quote, '99999999-9999-4999-8999-999999999999', answerInput() as never, ACTOR, SCOPE)).rejects.toMatchObject({ status: 404 })
-    expect((await attempt({ costs: [requested()] }, answerInput({ currencyCode: 'eur' }))).error).toMatchObject({ status: 422, message: 'INVALID_CURRENCY_CODE' })
+    expect((await attempt({ costs: [requested()] }, answerInput({ currencyCode: 'EU' }))).error).toMatchObject({ status: 422, message: 'INVALID_CURRENCY_CODE' })
+    expect((await attempt({ costs: [requested()] }, answerInput({ currencyCode: 'E1R' }))).error).toMatchObject({ status: 422, message: 'INVALID_CURRENCY_CODE' })
     expect((await attempt({ costs: [requested()] }, answerInput({ currencyCode: 'EURO' }))).error).toMatchObject({ status: 422 })
     expect((await attempt({ costs: [requested()] }, answerInput({ validUntil: '2000-01-01' }))).error).toMatchObject({ status: 422, message: 'VALID_UNTIL_IN_PAST' })
+  })
+
+  it('a lower-case currency code is accepted and stored upper-case', async () => {
+    const { service, costs } = setup({ costs: [requested()] })
+    const result = await service.answer(ids.quote, ids.cost, answerInput({ currencyCode: ' eur ' }), ACTOR, SCOPE)
+    expect(result.response.outcome).toBe('applied')
+    expect(costs[0].currencyCode).toBe('EUR')
   })
 
   it('a retried answer whose validUntil has passed meanwhile is still a noop (the date is checked after idempotency)', async () => {

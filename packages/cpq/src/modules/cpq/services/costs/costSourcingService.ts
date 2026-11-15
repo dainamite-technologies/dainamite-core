@@ -185,8 +185,8 @@ export class CpqCostSourcingService {
    */
   async answer(quoteId: string, costId: string, input: CostAnswerInput, actor: string, scope: TenantScope): Promise<CostAnswerWriteResult> {
     const parsed = cpqCostAnswerSchema.parse(input)
-    // ISO 4217 FORMAT only (Q15); no read of the currencies module.
-    if (!/^[A-Z]{3}$/.test(parsed.currencyCode)) throw new QuotingError(422, 'INVALID_CURRENCY_CODE')
+    // ISO 4217 FORMAT only (Q15); no read of the currencies module. Upper-cased first, like the stored / hashed form.
+    if (!/^[A-Z]{3}$/.test(parsed.currencyCode.trim().toUpperCase())) throw new QuotingError(422, 'INVALID_CURRENCY_CODE')
     const normalized = normalizeAnswer(parsed)
     const signals: SourcingSignal[] = []
     let verdict: AnswerVerdict | undefined

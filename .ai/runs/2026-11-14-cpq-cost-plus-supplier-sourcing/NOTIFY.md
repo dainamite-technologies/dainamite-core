@@ -68,3 +68,4 @@
 - 2026-11-15 review1-c: proposal demo scenario skips the ready transition when the quote is already ready; an abandoned scenario's quote (and marker) is deleted so the next run retries.
 - 2026-11-15 review1-d: request() refuses a catalog line whose element is inactive/deleted with 409 COST_REQUEST_SUPERSEDED (same as the answer path); manual/carried lines unaffected.
 - 2026-11-15 review1-e: apply-dialog copy no longer claims FX conversion; says a foreign-currency answer stays unpriced until an exchange rate is available.
+- 2026-11-15 review1-g: answer currency is upper-cased before the ISO format check (eur accepted as EUR, stored upper-case).

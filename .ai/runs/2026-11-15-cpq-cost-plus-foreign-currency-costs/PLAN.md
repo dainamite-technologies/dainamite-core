@@ -16,7 +16,7 @@ Engine: om-auto-create-pr-loop (steps: 12, --loop: no)
 | A | 2 | FX settings | group:A2 | done | |
 | A | 3 | FX rate resolver | group:A2 | done | |
 | A | 4 | DI registration | group:A2 | done | |
-| B | 5 | Entity: rate source and derivation | group:B1 | todo | |
+| B | 5 | Entity: rate source and derivation | group:B1 | done | |
 | B | 6 | Engine: snapshot policy, table currency, pricing and margin | group:B1 | todo | |
 | B | 7 | Writes in a foreign currency | group:B2 | todo | |
 | B | 8 | Read APIs and missingFxPairs | group:B2 | todo | |

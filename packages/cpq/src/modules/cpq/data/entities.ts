@@ -1765,6 +1765,14 @@ export class CpqQuoteLineCost {
   @Property({ name: 'fx_rate_date', type: 'date', nullable: true })
   fxRateDate: string | null = null
 
+  /** The `currencies` ExchangeRate.source the snapshot rate came from; set together with `fx_rate`. */
+  @Property({ name: 'fx_rate_source', type: 'text', nullable: true })
+  fxRateSource: string | null = null
+
+  /** direct | inverse; set together with `fx_rate`. */
+  @Property({ name: 'fx_rate_derivation', type: 'text', nullable: true })
+  fxRateDerivation: string | null = null
+
   /**
    * Hash of the configuration attributes that drive this cost (applicability
    * condition + table dimensions) when the value was last resolved; R1b resets an

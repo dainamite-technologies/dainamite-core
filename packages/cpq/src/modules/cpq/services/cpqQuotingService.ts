@@ -1,4 +1,6 @@
 import { cloneQuoteAdjustments, loadLineCostRows, removeQuoteLineTree } from './priceAdjustments/quoteAdjustmentLifecycle'
+import { cancelOpenRequests, cancelRowRequests } from './costs/costRequestCancel'
+import { isTerminalQuoteStatus } from './costs/costLock'
 import type { PriceAdjustment } from '../data/price-adjustments'
 import { withAtomicFlush } from '@open-mercato/shared/lib/commands/flush'
 import { loadQuoteAdjustments } from './priceAdjustments/loadQuoteAdjustments'
@@ -627,7 +629,7 @@ export class DefaultCpqQuotingService {
         throw new QuotingError(409, 'This subscription item is already marked for removal')
       }
       const plan = planArcLineRemoval(lineConfig, await loadLines(em, cpqConfig.id, scope), cpqConfig.quoteType)
-      for (const root of plan.removeRoots) await removeQuoteLineTree(em, cpqConfig.id, root, scope)
+      for (const root of plan.removeRoots) await removeQuoteLineTree(em, cpqConfig.id, root, scope, sourcing)
       // A cancel line sells nothing: its cost lines (catalog and manual) go now, whatever the
       // toggle or the cost lock, so they can never block conversion or reappear in the margin.
       const cancelledCosts: Awaited<ReturnType<typeof loadLineCostRows>> = []
@@ -636,6 +638,7 @@ export class DefaultCpqQuotingService {
       }
       await withAtomicFlush(em, [() => {
         const now = new Date()
+        cancelRowRequests(cancelledCosts as never, 'line_removed', sourcing ?? {})
         for (const row of cancelledCosts) row.deletedAt = now
         for (const line of plan.cancel) {
           line.action = 'cancel'
@@ -647,7 +650,7 @@ export class DefaultCpqQuotingService {
         }
       }])
     } else {
-      await removeQuoteLineTree(em, cpqConfig.id, lineConfig, scope)
+      await removeQuoteLineTree(em, cpqConfig.id, lineConfig, scope, sourcing)
     }
 
     return this.recalculateInternal(em, cpqConfig, salesQuote, scope, true, undefined, sourcing)
@@ -934,14 +937,47 @@ export class DefaultCpqQuotingService {
     return this.recalculateInternal(em, newCpqConfig, newSalesQuote, scope, true, undefined, { ...sourcing, autoOpen: false })
   }
 
+  // ─── Delete Quote ──────────────────────────────────────────────
+
+  /**
+   * Soft-deletes a quote with its lines and its sales quote. Runs under the aggregate lock (`writeQuote`), refuses
+   * accepted / rejected / cancelled quotes with 409, and cancels every open cost request (`quote_closed`) in the
+   * same transaction. The caller (route) runs the mutation guards first.
+   */
+  async deleteQuote(quoteId: string, scope: TenantScope, actorUserId: string | null = null): Promise<{ ok: true }> {
+    return this.writeQuote<{ ok: true }>(quoteId, scope, async (em, cpqConfig, sourcing) => {
+      if (TERMINAL_STATUSES.includes(cpqConfig.cpqStatus as CpqStatus)) {
+        throw new QuotingError(409, `Cannot delete a quote in '${cpqConfig.cpqStatus}' status`)
+      }
+      const scoped = { organizationId: scope.organizationId, tenantId: scope.tenantId }
+      // Reads first (lines, sales rows, open requests), then one flushed mutation phase.
+      await cancelOpenRequests(em, cpqConfig, scope, 'quote_closed', { actorUserId: sourcing.actorUserId, signals: sourcing.signals })
+      const lineConfigs = await em.find(CpqQuoteLineConfiguration, { quoteConfigurationId: cpqConfig.id, ...scoped, deletedAt: null })
+      const salesLines: SalesQuoteLine[] = []
+      for (const lc of lineConfigs) {
+        const salesLine = await em.findOne(SalesQuoteLine, { id: lc.quoteLineId })
+        if (salesLine) salesLines.push(salesLine)
+      }
+      const salesQuote = await em.findOne(SalesQuote, { id: cpqConfig.quoteId })
+      await withAtomicFlush(em, [() => {
+        const now = new Date()
+        for (const lc of lineConfigs) lc.deletedAt = now
+        for (const salesLine of salesLines) salesLine.deletedAt = now
+        cpqConfig.deletedAt = now
+        if (salesQuote) salesQuote.deletedAt = now
+      }])
+      return { ok: true }
+    }, undefined, undefined, { pricingCause: 'line', actorUserId })
+  }
+
   // ─── Transition Status ─────────────────────────────────────────
 
   async transitionStatus(quoteId: string, targetStatus: string, scope: TenantScope, actorUserId: string | null = null, expectedRevision?: number): Promise<QuoteResult> {
-    return this.writeQuote(quoteId, scope, (em, quote) => this.transitionStatusInTransaction(quoteId, targetStatus, scope, em, quote),
+    return this.writeQuote(quoteId, scope, (em, quote, sourcing) => this.transitionStatusInTransaction(quoteId, targetStatus, scope, em, quote, sourcing),
       expectedRevision, undefined, { pricingCause: 'recalculate', statusCause: 'manual', actorUserId })
   }
 
-  private async transitionStatusInTransaction(quoteId: string, targetStatus: string, scope: TenantScope, em: EntityManager, cpqConfig: CpqQuoteConfiguration): Promise<QuoteResult> {
+  private async transitionStatusInTransaction(quoteId: string, targetStatus: string, scope: TenantScope, em: EntityManager, cpqConfig: CpqQuoteConfiguration, sourcing?: RecalcSourcingContext): Promise<QuoteResult> {
 
     const salesQuote = await this.loadSalesQuote(em, cpqConfig.quoteId, scope)
 
@@ -979,6 +1015,11 @@ export class DefaultCpqQuotingService {
     // so it was removed. ARC validation above remains as the real guard
     // against semantic inconsistency on the submit-for-approval path.
 
+    // A closing status makes every open cost request meaningless (Q6): they are cancelled in this same
+    // transaction, before the status moves (read, then mutate). `accepted` keeps its requests open.
+    if (isTerminalQuoteStatus(targetStatus)) {
+      await cancelOpenRequests(em, cpqConfig, scope, 'quote_closed', { actorUserId: sourcing?.actorUserId, signals: sourcing?.signals })
+    }
     cpqConfig.cpqStatus = targetStatus
     await em.flush()
 
@@ -986,14 +1027,14 @@ export class DefaultCpqQuotingService {
     return this.buildQuoteResult(em, cpqConfig, salesQuote, lines)
   }
 
-  private async writeQuote(
+  private async writeQuote<T = QuoteResult>(
     quoteId: string,
     scope: TenantScope,
-    execute: (em: EntityManager, quote: CpqQuoteConfiguration, sourcing: RecalcSourcingContext) => Promise<QuoteResult>,
+    execute: (em: EntityManager, quote: CpqQuoteConfiguration, sourcing: RecalcSourcingContext) => Promise<T>,
     expectedRevision?: number,
     validate?: (quote: CpqQuoteConfiguration) => void,
     events: QuoteWriteEvents = { pricingCause: 'recalculate' },
-  ): Promise<QuoteResult> {
+  ): Promise<T> {
     // Cost requests opened / cancelled inside this write are collected here and published after it committed.
     const signals: SourcingSignal[] = []
     const sourcing: RecalcSourcingContext = { actorUserId: events.actorUserId ?? null, signals }
@@ -2296,6 +2337,9 @@ DefaultCpqQuotingService.prototype.detachTargetSubscription = async function (
   // Detaching removes priced lines (rep-added lines may carry negotiated
   // prices), so it takes the same aggregate lock and revision bump as any
   // other pricing write and re-prices the remaining lines.
+  // Open cost requests of the detached lines are cancelled (`line_removed`) and published after commit.
+  const signals: SourcingSignal[] = []
+  const publisher = (this as unknown as { sourcingPublisher?: SourcingSignalPublisher }).sourcingPublisher
   await withQuotePricingWrite(em, quoteId, scope, async (tx, cpqConfig) => {
     const target = await tx.findOne(CpqQuoteTargetSubscription, {
       id: targetId,
@@ -2317,7 +2361,7 @@ DefaultCpqQuotingService.prototype.detachTargetSubscription = async function (
     })
     for (const line of lines) {
       if (line.deletedAt) continue
-      await removeQuoteLineTree(tx, cpqConfig.id, line, scope)
+      await removeQuoteLineTree(tx, cpqConfig.id, line, scope, { signals })
     }
 
     // Read the remaining renew targets before mutating, so no query runs
@@ -2337,7 +2381,10 @@ DefaultCpqQuotingService.prototype.detachTargetSubscription = async function (
       if (remaining.length === 1) remaining[0].mergeAction = 'standalone'
     }])
     await this.recalculateLockedQuote(tx, cpqConfig, scope, true)
-  }, (status, message) => new QuotingError(status, message), undefined, ensureEditable, { pricingCause: 'line' })
+  }, (status, message) => new QuotingError(status, message), {
+    validate: ensureEditable, events: { pricingCause: 'line' },
+    afterCommit: publisher ? async (_result, quote) => { if (signals.length > 0) await publisher(signals, quote) } : undefined,
+  })
   return { ok: true }
 }
 

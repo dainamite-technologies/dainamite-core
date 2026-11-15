@@ -1,5 +1,5 @@
 import { LockMode } from '@mikro-orm/core'
-import { CpqOrderConfiguration, CpqOrderLineConfiguration, CpqOrderLineCost } from '../../data/entities'
+import { CpqOrderConfiguration, CpqOrderLineConfiguration, CpqOrderLineCost, CpqQuoteLineCost } from '../../data/entities'
 import { DefaultCpqOrderService, OrderError } from '../cpqOrderService'
 import * as eventsModule from '../../events'
 import type { TenantScope } from '../types'
@@ -1010,8 +1010,9 @@ describe('conversion copies quote costs to order line costs (MODIFIED by step 4)
     const { em, service } = createService()
     em.findOne.mockResolvedValueOnce({ id: 'quote', quoteId: 'sales', cpqStatus: 'accepted', currencyCode: 'USD', customerId: 'customer', pricingSummary: { nrcTotal: 10, mrcTotal: 80 } })
       .mockResolvedValueOnce(null)
-    // finds in order: quote lines, guard (price-basis costs), copy (all quote costs)
-    em.find.mockResolvedValueOnce(lines as never).mockResolvedValueOnce(costs.filter((row) => row.role === 'price_basis') as never).mockResolvedValueOnce(costs as never)
+    // finds in order: quote lines, guard (price-basis costs), open cost requests (cancelled on close), copy (all quote costs)
+    em.find.mockResolvedValueOnce(lines as never).mockResolvedValueOnce(costs.filter((row) => row.role === 'price_basis') as never)
+      .mockResolvedValueOnce(costs.filter((row) => row.sourcingStatus === 'requested') as never).mockResolvedValueOnce(costs as never)
     em.create.mockImplementation((_entity, values: Record<string, unknown>) => ({ createdAt: new Date(), ...values }))
     return { em, run: () => service.convertQuoteToOrder('quote', SCOPE) }
   }
@@ -1349,30 +1350,50 @@ describe('ARC write-back wiring in activateOrder (step 13)', () => {
   })
 })
 
-// Characterization (supplier-sourcing step 1): the conversion guard knows nothing about cost requests today.
-// Step 9 adds COST_ANSWER_PENDING; these scenarios then become MODIFIED.
-describe('conversion guard ignores the sourcing columns (characterization)', () => {
+// Supplier sourcing step 9 (MODIFIED from the step-1 characterization): conversion cancels the quote's remaining open
+// cost requests (`quote_closed`) in its transaction; COST_ANSWER_PENDING (step 7) refuses before anything is cancelled.
+describe('conversion and supplier cost requests (step 9)', () => {
   const charges = [{ chargeCode: 'fee', chargeType: 'mrc', pricingMethod: 'cost_plus', quantity: 1, unitPrice: 80, totalPrice: 80,
     listUnitPrice: 80, listTotalPrice: 80, standardUnitPrice: 80, standardTotalPrice: 80, currencyCode: 'USD', adjustmentErrors: [] }]
   const line = { quoteLineId: 'line', quantity: 1, action: 'add', nrcTotal: '0', mrcTotal: '80', charges, configuration: {}, offeringId: null }
   const pending = { sourcingStatus: 'requested', costRequestId: 'req-1', requestSeq: 1, proposedAmount: null, declineReason: null }
-  const cost = (over: Record<string, unknown>) => ({ quoteLineId: 'line', costKey: 'tail', role: 'price_basis', valueStatus: 'confirmed', validUntil: null, ...pending, ...over })
+  const cost = (over: Record<string, unknown>) => ({ id: 'qc-1', quoteConfigurationId: 'quote', quoteId: 'sales', name: 'Tail', chargeCode: 'fee', quoteLineId: 'line', costKey: 'tail', role: 'price_basis',
+    valueStatus: 'confirmed', validUntil: null, requestHistory: [], requestedAt: new Date('2026-01-01'), requestedByUserId: 'u1', ...pending, ...over })
 
   async function convert(costs: Array<Record<string, unknown>>) {
     const { em, service } = createService()
     em.findOne.mockResolvedValueOnce({ id: 'quote', quoteId: 'sales', cpqStatus: 'accepted', currencyCode: 'USD', customerId: 'customer', pricingSummary: { nrcTotal: 0, mrcTotal: 80 } })
       .mockResolvedValueOnce(null)
+    // finds in order: lines, guard rows, open cost requests (cancelled on close), copy of the cost lines
     em.find.mockResolvedValueOnce([line] as never).mockResolvedValueOnce(costs as never)
+      .mockResolvedValueOnce(costs.filter((row) => row.sourcingStatus === 'requested') as never).mockResolvedValueOnce(costs as never)
     em.create.mockImplementation((_entity, values: Record<string, unknown>) => ({ createdAt: new Date(), ...values }))
     return { em, run: () => service.convertQuoteToOrder('quote', SCOPE) }
   }
 
-  it('converts a quote whose confirmed price-basis cost still has an open request, and leaves the cost row untouched', async () => {
+  it('converts a quote whose confirmed cost still has an open request and cancels the request (quote_closed, history, no proposal)', async () => {
     const row = cost({})
     const { em, run } = await convert([row])
     await run()
     expect(em.create).toHaveBeenCalledWith(CpqOrderLineConfiguration, expect.anything())
-    expect(row).toMatchObject(pending)
+    expect(row).toMatchObject({ sourcingStatus: 'cancelled', cancelReason: 'quote_closed', costRequestId: 'req-1', proposedAmount: null })
+    expect(row.requestHistory).toEqual([expect.objectContaining({ outcome: 'cancelled', reason: 'quote_closed' })])
+  })
+
+  it('cancels a margin-only request (it never blocks) and still copies the cost line to the order', async () => {
+    const row = cost({ role: 'margin_only', valueStatus: 'estimated' })
+    const { em, run } = await convert([row])
+    await run()
+    expect(row).toMatchObject({ sourcingStatus: 'cancelled', cancelReason: 'quote_closed' })
+    expect(em.create.mock.calls.filter(([entity]) => entity === CpqOrderLineCost)).toHaveLength(1)
+  })
+
+  it('reads the open requests with their own query (the guard rows are not filtered on sourcing columns)', async () => {
+    const { em, run } = await convert([])
+    await run()
+    const [, guardWhere] = em.find.mock.calls.find(([, w]) => (w as Record<string, unknown>).role === 'price_basis')!
+    expect(Object.keys(guardWhere)).not.toEqual(expect.arrayContaining(['sourcingStatus']))
+    expect(em.find).toHaveBeenCalledWith(CpqQuoteLineCost, expect.objectContaining({ quoteConfigurationId: 'quote', sourcingStatus: 'requested', deletedAt: null }))
   })
 
   it('refuses on the value status only: an answered or declined request does not change the verdict, and rows stay unchanged', async () => {
@@ -1383,10 +1404,13 @@ describe('conversion guard ignores the sourcing columns (characterization)', () 
     expect(refused.em.create).not.toHaveBeenCalled()
   })
 
-  it('does not select or filter on sourcing columns when reading the guard rows', async () => {
-    const { em, run } = await convert([])
-    await run()
-    const [, where] = em.find.mock.calls.find(([, w]) => (w as Record<string, unknown>).role === 'price_basis')!
-    expect(Object.keys(where)).not.toEqual(expect.arrayContaining(['sourcingStatus']))
+  it('COST_ANSWER_PENDING refuses and cancels nothing: the other open requests and the proposal stay', async () => {
+    const proposal = cost({ sourcingStatus: 'answered', proposedAmount: '70.0000', proposedAnswer: { unitAmount: '70' } })
+    const open = cost({ id: 'qc-2', costKey: 'other', role: 'margin_only' })
+    const refused = await convert([proposal, open])
+    await expect(refused.run()).rejects.toMatchObject({ status: 422, message: 'COST_ANSWER_PENDING' })
+    expect(open).toMatchObject(pending)
+    expect(proposal).toMatchObject({ sourcingStatus: 'answered', proposedAmount: '70.0000' })
+    expect(refused.em.create).not.toHaveBeenCalled()
   })
 })

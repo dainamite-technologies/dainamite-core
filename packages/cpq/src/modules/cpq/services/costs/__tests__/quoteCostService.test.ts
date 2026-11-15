@@ -3,12 +3,16 @@ import {
 } from '../../../data/entities'
 
 jest.mock('../../priceAdjustments/quotePricingWrite', () => ({
-  withQuotePricingWrite: async (em: any, quoteId: string, _scope: unknown, execute: any, makeError: any, expectedRevision?: number) => {
+  withQuotePricingWrite: async (em: any, quoteId: string, _scope: unknown, execute: any, makeError: any, optionsOrRevision?: any) => {
+    const options = typeof optionsOrRevision === 'object' && optionsOrRevision !== null ? optionsOrRevision : { expectedRevision: optionsOrRevision }
+    const expectedRevision: number | undefined = options.expectedRevision
     const quote = em.__quote
     if (!quote || quote.id !== quoteId) throw makeError(404, 'Quote not found')
     if (expectedRevision !== undefined && expectedRevision !== (quote.pricingRevision ?? 0)) throw makeError(409, 'STALE_REVISION')
     quote.pricingRevision = (quote.pricingRevision ?? 0) + 1
-    return execute(em, quote)
+    const result = await execute(em, quote)
+    await options.afterCommit?.(result, quote)
+    return result
   },
 }))
 import { CpqQuoteCostService } from '../quoteCostService'
@@ -18,7 +22,7 @@ const SCOPE = { organizationId: 'org', tenantId: 'tenant' }
 const ids = { quote: '11111111-1111-4111-8111-111111111111', line: '22222222-2222-4222-8222-222222222222', cost: '33333333-3333-4333-8333-333333333333' }
 type Row = Record<string, any>
 
-function setup(opts: { status?: string; orders?: number; costs?: Row[]; overrides?: Row[]; line?: Row; charges?: Row[]; enabled?: boolean } = {}) {
+function setup(opts: { status?: string; orders?: number; costs?: Row[]; overrides?: Row[]; line?: Row; charges?: Row[]; enabled?: boolean; publisher?: jest.Mock } = {}) {
   const quote = { id: ids.quote, quoteId: ids.quote, cpqStatus: opts.status ?? 'ready', quoteType: 'new', currencyCode: 'EUR', pricingRevision: 4, quoteContext: {} }
   const line = { id: 'l', quoteLineId: ids.line, ...SCOPE, quoteConfigurationId: ids.quote, offeringId: 'off', productId: 'prod', configuration: {}, quantity: '1', charges: [], termMonths: 12, parentLineId: null, deletedAt: null, ...opts.line }
   const charges = opts.charges ?? [
@@ -57,6 +61,7 @@ function setup(opts: { status?: string; orders?: number; costs?: Row[]; override
     em: em as never,
     costService: { enabled: jest.fn(async () => opts.enabled ?? true) },
     quotingService: { recalculateLockedQuote: recalculate } as never,
+    publisher: opts.publisher as never,
   })
   return { service, em, quote, costs, overrides, recalculate, subquery }
 }
@@ -391,8 +396,8 @@ describe('markup overrides', () => {
   })
 })
 
-// Characterization (supplier-sourcing step 1): a manual value write leaves the sourcing columns alone today.
-describe('manual value writes and the sourcing columns (characterization)', () => {
+// Supplier sourcing: a manual VALUE write cancels the request (step 9); other edits leave the sourcing columns alone.
+describe('manual value writes and the sourcing columns', () => {
   const SOURCING = { sourcingStatus: 'requested', costRequestId: 'req-1', requestSeq: 2, requestedAt: new Date('2026-01-01'), requestedByUserId: 'u1',
     answeredAt: null, answeredByUserId: null, declineReason: null, proposedAmount: '70.0000' }
   const sourcingOf = (row: Row) => Object.fromEntries(Object.keys(SOURCING).map((key) => [key, row[key]]))
@@ -404,15 +409,25 @@ describe('manual value writes and the sourcing columns (characterization)', () =
     for (const key of ['costRequestId', 'requestSeq', 'requestedAt', 'answeredAt', 'proposedAmount', 'declineReason']) expect(costs[0][key] ?? null).toBeNull()
   })
 
-  it('entering or overwriting a value does not cancel, answer or clear an open request', async () => {
-    const row = catalogRow({ valueStatus: 'none', valueOrigin: null, unitAmount: null, instanceAmount: null, currencyCode: null, ...SOURCING })
-    const { service } = setup({ costs: [row] })
+  it('entering or overwriting a value cancels the open request (manual_value), clears the proposal and publishes request_cancelled (MODIFIED, step 9)', async () => {
+    const publisher = jest.fn()
+    const row = catalogRow({ valueStatus: 'none', valueOrigin: null, unitAmount: null, instanceAmount: null, currencyCode: null, requestHistory: [], ...SOURCING })
+    const { service } = setup({ costs: [row], publisher })
     await service.updateCost(ids.quote, ids.cost, { unitAmount: 280, valueStatus: 'confirmed', note: 'phone quote' }, ACTOR, SCOPE)
-    expect(row).toMatchObject({ unitAmount: '280', valueOrigin: 'manual', valueStatus: 'confirmed' })
-    expect(sourcingOf(row)).toEqual(SOURCING)
+    expect(row).toMatchObject({ unitAmount: '280', valueOrigin: 'manual', valueStatus: 'confirmed', sourcingStatus: 'cancelled', cancelReason: 'manual_value', costRequestId: 'req-1', proposedAmount: null, proposedAnswer: null, lastAnswerHash: null })
+    expect(row.requestHistory).toEqual([expect.objectContaining({ outcome: 'cancelled', reason: 'manual_value' })])
+    expect(publisher).toHaveBeenCalledWith([expect.objectContaining({ kind: 'request_cancelled', costRequestId: 'req-1', reason: 'manual_value', costLineId: ids.cost })], expect.anything())
+    expect(JSON.stringify(publisher.mock.calls)).not.toMatch(/280/)
   })
 
-  it('a note-only edit and a supplier-data edit leave the sourcing columns untouched', async () => {
+  it('a manual value on a line holding an unapplied proposal clears the proposal and keeps the closed request status', async () => {
+    const row = manualRow({ unitAmount: '100', instanceAmount: '100', sourcingStatus: 'answered', costRequestId: 'req-1', requestSeq: 2, proposedAmount: '70.0000', proposedAnswer: { unitAmount: '70' } })
+    const { service } = setup({ costs: [row], status: 'ready' })
+    await service.updateCost(ids.quote, ids.cost, { unitAmount: 90 }, ACTOR, SCOPE)
+    expect(row).toMatchObject({ unitAmount: '90', sourcingStatus: 'answered', proposedAmount: null, proposedAnswer: null })
+  })
+
+  it('a note-only edit and a supplier-data edit leave the sourcing columns untouched (no value written)', async () => {
     const row = manualRow(SOURCING)
     const { service } = setup({ costs: [row] })
     await service.updateCost(ids.quote, ids.cost, { note: 'n', supplierName: 'Other' }, ACTOR, SCOPE)

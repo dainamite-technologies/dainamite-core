@@ -1,79 +1,69 @@
-// Characterization (supplier-sourcing step 1): today's quote DELETE, frozen before step 9 adds the
-// cost-request cancellation side effect. Everything here must stay green on unchanged code.
-import { CpqQuoteConfiguration, CpqQuoteLineConfiguration, CpqQuoteLineCost } from '../../../../data/entities'
-import { SalesQuote, SalesQuoteLine } from '@open-mercato/core/modules/sales/data/entities'
-
-type Row = Record<string, unknown>
-const em = { findOne: jest.fn(), find: jest.fn(), flush: jest.fn() }
+// Supplier-sourcing step 9 (MODIFIED from the step-1 characterization): the quote DELETE route no longer writes
+// itself; it runs the mutation guards and hands the write to `cpqQuotingService.deleteQuote` (aggregate lock, terminal
+// refusal, soft-delete and request cancellation live there, see cpqQuotingService.test.ts).
+const deleteQuote = jest.fn()
+const runCpqMutationGuards = jest.fn()
+const runAfterSuccess = jest.fn()
 
 jest.mock('../../../context', () => ({
   resolveCpqRouteContext: jest.fn(async () => ({
-    auth: { sub: 'user-1', tenantId: 't-1' }, organizationId: 'org-1', tenantId: 't-1', em,
+    auth: { sub: '77777777-7777-4777-8777-777777777777', tenantId: 't-1' }, organizationId: 'org-1', tenantId: 't-1',
   })),
 }))
-jest.mock('../../../resolveQuotingService', () => ({ resolveQuotingService: () => ({}) }))
+jest.mock('../../../resolveQuotingService', () => ({ resolveQuotingService: () => ({ deleteQuote }) }))
+jest.mock('../../../_helpers/quoteMutationGuard', () => ({
+  CPQ_QUOTE_RESOURCE_KIND: 'cpq.quote',
+  runCpqMutationGuards: (...args: unknown[]) => runCpqMutationGuards(...args),
+}))
 
-import { DELETE } from '../route'
+import { DELETE, openApi } from '../route'
+import { QuotingError } from '../../../../services/cpqQuotingService'
 
 const params = { params: Promise.resolve({ quoteId: 'cpq-1' }) }
 const del = () => DELETE(new Request('http://localhost/api/cpq/quotes/cpq-1', { method: 'DELETE' }), params)
 
-function setup(cpqStatus: string) {
-  const config: Row = { id: 'cpq-1', quoteId: 'sales-1', cpqStatus, deletedAt: null }
-  const lines: Row[] = [{ id: 'lc-1', quoteLineId: 'sl-1', deletedAt: null }, { id: 'lc-2', quoteLineId: 'sl-2', deletedAt: null }]
-  const salesLines: Row[] = [{ id: 'sl-1', deletedAt: null }, { id: 'sl-2', deletedAt: null }]
-  const salesQuote: Row = { id: 'sales-1', deletedAt: null }
-  const costs: Row[] = [{ id: 'cost-1', quoteConfigurationId: 'cpq-1', sourcingStatus: 'not_requested', costRequestId: null, deletedAt: null }]
-  em.findOne.mockReset(); em.find.mockReset(); em.flush.mockReset().mockResolvedValue(undefined)
-  em.findOne.mockImplementation(async (entity: unknown, where: Row) => {
-    if (entity === CpqQuoteConfiguration) return where.id === 'cpq-1' || where.quoteId === 'cpq-1' ? config : null
-    if (entity === SalesQuoteLine) return salesLines.find((row) => row.id === where.id) ?? null
-    if (entity === SalesQuote) return where.id === 'sales-1' ? salesQuote : null
-    return null
-  })
-  em.find.mockImplementation(async (entity: unknown) => (entity === CpqQuoteLineConfiguration ? lines : []))
-  return { config, lines, salesLines, salesQuote, costs }
-}
+beforeEach(() => {
+  deleteQuote.mockReset().mockResolvedValue({ ok: true })
+  runAfterSuccess.mockReset()
+  runCpqMutationGuards.mockReset().mockResolvedValue({ ok: true, runAfterSuccess })
+})
 
-describe('DELETE /api/cpq/quotes/{quoteId} (characterization)', () => {
-  it.each(['accepted', 'rejected', 'cancelled'])('answers 409 for a quote in %s status and writes nothing', async (status) => {
-    const { config, lines, salesQuote } = setup(status)
-    const res = await del()
-    expect(res.status).toBe(409)
-    expect((await res.json()).error).toContain(status)
-    expect(config.deletedAt).toBeNull()
-    expect(salesQuote.deletedAt).toBeNull()
-    expect(lines.every((row) => row.deletedAt === null)).toBe(true)
-    expect(em.flush).not.toHaveBeenCalled()
-  })
-
-  it.each(['new', 'ready', 'with_customer'])('soft-deletes config, lines, sales quote and sales lines in %s status and answers { ok: true }', async (status) => {
-    const { config, lines, salesLines, salesQuote } = setup(status)
+describe('DELETE /api/cpq/quotes/{quoteId}', () => {
+  it('runs the guards, deletes through the service in the caller scope and answers { ok: true }', async () => {
     const res = await del()
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({ ok: true })
-    for (const row of [config, salesQuote, ...lines, ...salesLines]) expect(row.deletedAt).toBeInstanceOf(Date)
-    expect(em.flush).toHaveBeenCalledTimes(1)
+    expect(runCpqMutationGuards).toHaveBeenCalledWith(expect.anything(), expect.any(Request), {
+      resourceKind: 'cpq.quote', resourceId: 'cpq-1', operation: 'delete', mutationPayload: { action: 'delete' },
+    })
+    expect(deleteQuote).toHaveBeenCalledWith('cpq-1', { organizationId: 'org-1', tenantId: 't-1' }, '77777777-7777-4777-8777-777777777777')
+    expect(runAfterSuccess).toHaveBeenCalledTimes(1)
   })
 
-  it('does not touch cost lines or their sourcing columns today (feature 3 step 9 changes this)', async () => {
-    const { costs } = setup('ready')
-    await del()
-    expect(em.find).not.toHaveBeenCalledWith(CpqQuoteLineCost, expect.anything(), expect.anything())
-    expect(em.find.mock.calls.every(([entity]) => entity !== CpqQuoteLineCost)).toBe(true)
-    expect(costs[0]).toMatchObject({ sourcingStatus: 'not_requested', costRequestId: null, deletedAt: null })
+  it.each(['accepted', 'rejected', 'cancelled'])('keeps the 409 for a quote in %s status', async (status) => {
+    deleteQuote.mockRejectedValue(new QuotingError(409, `Cannot delete a quote in '${status}' status`))
+    const res = await del()
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toContain(status)
+    expect(runAfterSuccess).not.toHaveBeenCalled()
   })
 
-  it('answers 404 for an unknown quote and does not flush', async () => {
-    setup('ready')
-    const res = await DELETE(new Request('http://localhost/x', { method: 'DELETE' }), { params: Promise.resolve({ quoteId: 'nope' }) })
-    expect(res.status).toBe(404)
-    expect(em.flush).not.toHaveBeenCalled()
+  it('answers 404 for an unknown quote', async () => {
+    deleteQuote.mockRejectedValue(new QuotingError(404, 'Quote not found'))
+    expect((await del()).status).toBe(404)
   })
 
-  it('looks the quote up by configuration id first, then by sales quote id, scoped and not deleted', async () => {
-    setup('ready')
-    await del()
-    expect(em.findOne).toHaveBeenCalledWith(CpqQuoteConfiguration, { id: 'cpq-1', organizationId: 'org-1', tenantId: 't-1', deletedAt: null })
+  it('returns the guard response and writes nothing when a mutation guard blocks', async () => {
+    const blocked = new Response(JSON.stringify({ error: 'blocked' }), { status: 422 })
+    runCpqMutationGuards.mockResolvedValue({ ok: false, response: blocked })
+    const res = await del()
+    expect(res.status).toBe(422)
+    expect(deleteQuote).not.toHaveBeenCalled()
+  })
+
+  it('exports openApi for GET, PATCH and DELETE, and requires the manage feature', async () => {
+    expect(Object.keys(openApi.methods)).toEqual(expect.arrayContaining(['GET', 'PATCH', 'DELETE']))
+    const { metadata } = await import('../route')
+    expect(metadata.DELETE.requireFeatures).toEqual(['cpq.quotes.manage'])
   })
 })

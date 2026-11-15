@@ -36,6 +36,8 @@ import { emitCpqEvent } from '../events'
 import { isArcReconfigured, stripQuoteOnlyArcMarkers } from './arcPriceFreeze'
 import { isArcTerminationLine } from './arcLineRemoval'
 import type { CpqCostService } from './costs/costService'
+import { cancelOpenRequests } from './costs/costRequestCancel'
+import type { SourcingSignal, SourcingSignalPublisher } from './costs/sourcingSignals'
 import { summarizeOrderPricing, type OrderWaterfallSummary } from './orderPricingSummary'
 
 // ─── Types ──────────────────────────────────────────────────────
@@ -118,6 +120,8 @@ interface OrderServiceDeps {
   salesDocumentNumberGenerator: SalesDocumentNumberGenerator
   /** Optional: reads the `cpq.cost_plus` toggle at ARC activation. Absent behaves as toggle on. */
   cpqCostService?: Pick<CpqCostService, 'enabled'>
+  /** Publishes the sourcing signals (requests cancelled by the conversion) after commit; wired by step 12. */
+  sourcingPublisher?: SourcingSignalPublisher
 }
 
 const CPQ_TO_SALES_ORDER_STATUS: Record<CpqOrderStatus, string> = {
@@ -135,8 +139,10 @@ export class DefaultCpqOrderService {
   private inventoryService: DefaultCpqInventoryService
   private numberGenerator: SalesDocumentNumberGenerator
   private costService?: Pick<CpqCostService, 'enabled'>
+  private sourcingPublisher?: SourcingSignalPublisher
 
   constructor(deps: OrderServiceDeps) {
+    this.sourcingPublisher = deps.sourcingPublisher
     this.costService = deps.cpqCostService
     this.em = deps.em
     this.inventoryService = deps.cpqInventoryService
@@ -146,12 +152,16 @@ export class DefaultCpqOrderService {
   // ─── Convert Quote to Order ─────────────────────────────────
 
   async convertQuoteToOrder(quoteId: string, scope: TenantScope): Promise<OrderResult> {
+    const signals: SourcingSignal[] = []
+    const publisher = this.sourcingPublisher
     return withQuotePricingWrite(this.em, quoteId, scope,
-      (em, quote) => this.convertFromConfig(quote, scope, em),
-      (status, message) => new OrderError(status, message))
+      (em, quote) => this.convertFromConfig(quote, scope, em, signals),
+      (status, message) => new OrderError(status, message), {
+        afterCommit: publisher ? async (_result, quote) => { if (signals.length > 0) await publisher(signals, quote) } : undefined,
+      })
   }
 
-  private async convertFromConfig(cpqConfig: CpqQuoteConfiguration, scope: TenantScope, em: EntityManager): Promise<OrderResult> {
+  private async convertFromConfig(cpqConfig: CpqQuoteConfiguration, scope: TenantScope, em: EntityManager, signals: SourcingSignal[] = []): Promise<OrderResult> {
 
     const blockedStatuses = ['cancelled', 'rejected']
     if (blockedStatuses.includes(cpqConfig.cpqStatus)) {
@@ -198,6 +208,11 @@ export class DefaultCpqOrderService {
     // comes first, because such a line is usually also `estimated`.
     if (pendingAnswers.length > 0) throw new OrderError(422, 'COST_ANSWER_PENDING', { lines: pendingAnswers })
     if (unconfirmed.length > 0) throw new OrderError(422, 'COSTS_NOT_CONFIRMED', { lines: unconfirmed })
+
+    // The quote becomes an order: requests still open (margin-only ones never block) are meaningless now. They are
+    // cancelled in this same transaction, before anything is created (read, then mutate); the cost lines are
+    // copied to the order below as they are.
+    await cancelOpenRequests(em, cpqConfig, scope, 'quote_closed', { signals })
 
     const { number: orderNumber } = await this.numberGenerator.generate({
       kind: 'order',

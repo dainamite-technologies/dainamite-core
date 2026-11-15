@@ -29,6 +29,8 @@ import { isQuoteCostLocked, previewCatalogCosts } from './costResolution'
 import { computeCostPlusPrice, type MarkupRule } from './costPlusPrice'
 import type { QuoteMargin } from './quoteMargin'
 import { createMarginTracker } from './quoteMarginTracker'
+import { cancelRowRequests } from './costRequestCancel'
+import type { SourcingSignal, SourcingSignalPublisher } from './sourcingSignals'
 import {
   fullCostView, groupByLine, loadQuoteCosts, loadQuoteMargin, loadQuoteMarkupOverrides, markupOverrideView, redactedCostView,
   type FullCostView, type MarkupOverrideView,
@@ -38,6 +40,8 @@ type Dependencies = {
   em: EntityManager
   costService: Pick<CpqCostService, 'enabled'>
   quotingService: Pick<DefaultCpqQuotingService, 'recalculateLockedQuote'>
+  /** Publishes the sourcing signals (request cancelled by a manual value) of a committed write; wired by step 12. */
+  publisher?: SourcingSignalPublisher
 }
 
 const scoped = (scope: TenantScope) => ({ organizationId: scope.organizationId, tenantId: scope.tenantId, deletedAt: null })
@@ -231,6 +235,7 @@ export class CpqQuoteCostService {
   async updateCost(quoteId: string, costId: string, patch: QuoteLineCostUpdate, actor: string, scope: TenantScope): Promise<QuoteCostWriteResult> {
     const parsed = cpqQuoteLineCostUpdateSchema.parse(patch)
     await this.requireEnabled(scope)
+    const signals: SourcingSignal[] = []
     return this.write(quoteId, scope, parsed.expectedRevision, actor, async (em, quote) => {
       const row = await this.requireCost(em, quote, costId, scope)
       const line = await this.requireLine(em, quote, row.quoteLineId, scope, 'value')
@@ -284,14 +289,20 @@ export class CpqQuoteCostService {
           validUntil: next.validUntil ?? null, supplierTermEnd: next.supplierTermEnd ?? null, supplierMinTermMonths: next.supplierMinTermMonths ?? null,
         })
         // A human entered or confirmed it: the catalog resolver must stop re-resolving this value (until a driver changes).
-        if (valueChanged || statusChanged) row.valueOrigin = 'manual'
+        if (valueChanged || statusChanged) {
+          row.valueOrigin = 'manual'
+          // A human entered the value: an open supplier request is meaningless now and an unapplied proposal is
+          // superseded (sourcing spec Q6 / Q9). Same write, no flush of its own.
+          cancelRowRequests([row] as never, 'manual_value', { actorUserId: actor, signals })
+          if (row.proposedAmount !== null && row.proposedAmount !== undefined) Object.assign(row, { proposedAmount: null, proposedAnswer: null })
+        }
         if (parsed.supplierId !== undefined) row.supplierId = parsed.supplierId ?? null
         if (parsed.supplierName !== undefined) row.supplierName = clean(parsed.supplierName)
         if (parsed.supplierQuoteRef !== undefined) row.supplierQuoteRef = clean(parsed.supplierQuoteRef)
         if (parsed.note !== undefined) row.note = note
       })
       return { cost: fullCostView(row), audit: { before: auditBefore, after: costAudit(row) }, margin, pricingRevision: quote.pricingRevision ?? 0 }
-    })
+    }, signals)
   }
 
   async deleteCost(quoteId: string, costId: string, actor: string, scope: TenantScope, expectedRevision?: number): Promise<QuoteCostWriteResult> {
@@ -348,9 +359,13 @@ export class CpqQuoteCostService {
 
   // ─── Internals ─────────────────────────────────────────────────
 
-  private write<T>(quoteId: string, scope: TenantScope, revision: number | undefined, actor: string, execute: (em: EntityManager, quote: CpqQuoteConfiguration) => Promise<T>) {
-    return withQuotePricingWrite(this.deps.em, quoteId, scope, execute, (status, message) => new QuotingError(status, message), revision, undefined, { pricingCause: 'cost', actorUserId: actor },
-      createMarginTracker({ scope, isEnabled: (tenantId) => this.deps.costService.enabled(tenantId), force: true }))
+  private write<T>(quoteId: string, scope: TenantScope, revision: number | undefined, actor: string, execute: (em: EntityManager, quote: CpqQuoteConfiguration) => Promise<T>, signals: SourcingSignal[] = []) {
+    const publisher = this.deps.publisher
+    return withQuotePricingWrite(this.deps.em, quoteId, scope, execute, (status, message) => new QuotingError(status, message), {
+      expectedRevision: revision, events: { pricingCause: 'cost', actorUserId: actor },
+      marginTracker: createMarginTracker({ scope, isEnabled: (tenantId) => this.deps.costService.enabled(tenantId), force: true }),
+      afterCommit: publisher ? async (_result, quote) => { if (signals.length > 0) await publisher(signals, quote) } : undefined,
+    })
   }
 
   /**

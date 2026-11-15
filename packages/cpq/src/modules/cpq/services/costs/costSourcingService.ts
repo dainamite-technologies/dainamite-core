@@ -32,6 +32,7 @@ import { COST_CLOSED_STATUSES } from './costLock'
 import type { CpqCostService } from './costService'
 import { isQuoteCostLocked } from './costResolution'
 import { cancelRequestPatch, isRequestOpen, openRequestPatch } from './costRequestState'
+import { cancelOpenRequests as cancelOpenCostRequests } from './costRequestCancel'
 import {
   appendRequestHistory, buildHistoryEntry, classifyAnswer, costLineEligibility, declineEffect, hashAnswer, normalizeAnswer,
   type AnswerVerdict, type CancelReason, type NormalizedAnswer,
@@ -335,20 +336,7 @@ export class CpqCostSourcingService {
     em: EntityManager, quote: Pick<CpqQuoteConfiguration, 'id'>, scope: TenantScope, reason: CancelReason,
     options: { actorUserId?: string | null; costIds?: string[]; quoteLineIds?: string[]; signals?: SourcingSignal[] } = {},
   ): Promise<SourcingSignal[]> {
-    const rows = await em.find(CpqQuoteLineCost, {
-      ...scoped(scope), quoteConfigurationId: quote.id, sourcingStatus: 'requested',
-      ...(options.costIds ? { id: { $in: options.costIds } } : {}),
-      ...(options.quoteLineIds ? { quoteLineId: { $in: options.quoteLineIds } } : {}),
-    })
-    const now = new Date()
-    const cancelled: SourcingSignal[] = []
-    for (const row of rows) {
-      if (!isRequestOpen(row)) continue
-      Object.assign(row, cancelRequestPatch(row, { reason, now, closedByUserId: options.actorUserId ?? null }))
-      cancelled.push({ ...sourcingCostRef(row), kind: 'request_cancelled', costRequestId: row.costRequestId as string, requestSeq: row.requestSeq ?? 1, reason })
-    }
-    options.signals?.push(...cancelled)
-    return cancelled
+    return cancelOpenCostRequests(em, quote, scope, reason, options)
   }
 
   // ─── Internals ─────────────────────────────────────────────────

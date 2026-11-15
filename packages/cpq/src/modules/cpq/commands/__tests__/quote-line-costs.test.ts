@@ -61,7 +61,8 @@ it('rejects invalid input shapes before reaching the service', async () => {
   expect(service.createCost).not.toHaveBeenCalled()
 })
 
-// Characterization (supplier-sourcing step 1): the manual value write command is a thin pass-through today.
+// Supplier sourcing step 9: the manual value write command stays a thin pass-through; the cancellation of an open
+// request (manual_value) happens in the service's write (quoteCostService.test.ts), never through the command input or log.
 it('a manual value write forwards exactly the value patch and carries no sourcing fields in the command schema or the log', async () => {
   const { ctx, service } = setup()
   const patch = { unitAmount: 280, valueStatus: 'confirmed' as const, note: 'phone quote' }

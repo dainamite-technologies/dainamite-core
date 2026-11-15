@@ -14,7 +14,7 @@ Engine: om-auto-create-pr-loop (steps: 23, --loop: no)
 |-------|------|-------|------|--------|--------|
 | A | 1 | Characterize ARC pricing, conversion and activation | group:A1 | done | |
 | B | 2 | State hash helper and item cost state | group:B1 | done | |
-| B | 3 | Activation locks | group:B1 | todo | |
+| B | 3 | Activation locks | group:B1 | done | |
 | B | 4 | COST_SOURCE_CHANGED guard | group:B1 | todo | |
 | C | 5 | Entity: carried origin and renegotiation_due | group:C1 | todo | |
 | C | 6 | Carry on Amend mirror | group:C1 | todo | |

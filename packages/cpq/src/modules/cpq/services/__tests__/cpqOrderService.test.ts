@@ -1490,3 +1490,80 @@ describe('amended / renewed payload for an Amend with only modify lines (I-9 cha
     }))
   })
 })
+
+// ARC costs step 3: activation locks (spec Q2). Inside the activation transaction every path locks the source quote
+// row first (after the order row, which activateOrder reads for its status); ARC paths then lock the target
+// subscription rows sorted by id, before any inventory primitive writes. No quote revision bump, no event.
+describe('activateOrder locks (ARC costs step 3)', () => {
+  const newSale = () => ({
+    quoteType: 'new' as const,
+    orderLines: [{ orderLineId: 'ol-1', orderConfigurationId: 'oc-1', quantity: 1, configuration: { offeringName: 'Hosting' }, charges: [], parentLineId: null, startDate: null,
+      termMonths: null, offeringId: null, productId: null, specId: null, sourceQuoteLineId: null, nrcTotal: '10', mrcTotal: '100' }],
+    subscriptionItems: [{ id: 'item-1' }],
+  })
+  const subscription = { id: 'sub-1', customerId: 'cust-1', currentTermStart: new Date('2027-01-01'), currentTermEnd: new Date('2028-01-01') }
+  const arcResult = { changeLog: { effectiveAt: new Date('2026-06-01T00:00:00.000Z'), afterSnapshot: { items: [] }, lineChanges: [] }, subscription }
+  afterEach(() => jest.restoreAllMocks())
+
+  it('new sale: order row, then the source quote row, then the inventory write; no subscription lock', async () => {
+    const h = createActivationHarness(newSale())
+    await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+    expect(h.lockTrace).toEqual(['lock:order', 'lock:quote', 'createSubscription'])
+  })
+
+  it.each([
+    ['amend', 'applyAmendment', { mergeAction: 'standalone' }],
+    ['cancel', 'applyCancel', { mergeAction: 'standalone' }],
+    ['renew', 'applyRenewal', { mergeAction: 'standalone', newTermStart: '2027-01-01', newTermEnd: '2028-01-01', newTermMonths: 12 }],
+  ] as const)('%s: order row, source quote row, target subscription rows, then %s', async (quoteType, primitive, targetExtra) => {
+    const h = createActivationHarness({ quoteType, targets: [{ subscriptionId: 'sub-1', ...targetExtra }], quoteLines: [], inventory: { [primitive]: arcResult } })
+    await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+    expect(h.lockTrace).toEqual(['lock:order', 'lock:quote', 'lock:subscriptions[sub-1]', primitive])
+  })
+
+  it('merge renew: every absorbed subscription is locked in ascending id order, in one locking read, before applyMergeRenewal', async () => {
+    const h = createActivationHarness({
+      quoteType: 'renew',
+      quoteOver: { arcMergeNewTermStart: '2027-01-01', arcMergeNewTermEnd: '2028-01-01', arcMergeNewTermMonths: 12 },
+      targets: [{ subscriptionId: 'sub-b', mergeAction: 'absorb' }, { subscriptionId: 'sub-c', mergeAction: 'absorb' }, { subscriptionId: 'sub-a', mergeAction: 'absorb' }],
+      inventory: { applyMergeRenewal: { mergedSubscription: { id: 'sub-m', currentTermStart: new Date('2027-01-01') }, mergeResultChangeLog: {}, sourceChangeLogs: [] } },
+    })
+    await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+    expect(h.lockTrace).toEqual(['lock:order', 'lock:quote', 'lock:subscriptions[sub-a,sub-b,sub-c]', 'applyMergeRenewal'])
+  })
+
+  it('every lock is PESSIMISTIC_WRITE with a refresh on the transaction EM, scoped and ordered by id; the request EM is never used', async () => {
+    const h = createActivationHarness({ quoteType: 'amend', targets: [{ subscriptionId: 'sub-1', mergeAction: 'standalone' }], quoteLines: [], inventory: { applyAmendment: arcResult } })
+    await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+    expect(h.lockCalls).toHaveLength(3)
+    for (const call of h.lockCalls) expect(call.options).toMatchObject({ lockMode: LockMode.PESSIMISTIC_WRITE, refresh: true })
+    const [, quoteLock, subscriptionLock] = h.lockCalls
+    expect(quoteLock.where).toMatchObject({ id: 'quote-1', organizationId: ACTIVATION_SCOPE.organizationId, tenantId: ACTIVATION_SCOPE.tenantId, deletedAt: null })
+    expect(subscriptionLock.options).toMatchObject({ orderBy: { id: 'asc' } })
+    expect(subscriptionLock.where).toMatchObject({ id: { $in: ['sub-1'] }, organizationId: ACTIVATION_SCOPE.organizationId, tenantId: ACTIVATION_SCOPE.tenantId, deletedAt: null })
+    expect(h.em.find).not.toHaveBeenCalled()
+    expect(h.em.findOne).not.toHaveBeenCalled()
+  })
+
+  it('takes no quote or subscription lock when the order is not activatable (the status check comes first and fails fast)', async () => {
+    const h = createActivationHarness({ quoteType: 'amend', targets: [{ subscriptionId: 'sub-1', mergeAction: 'standalone' }], inventory: { applyAmendment: arcResult } })
+    h.orderConfig.cpqStatus = 'active'
+    await expect(h.service.activateOrder('oc-1', ACTIVATION_SCOPE)).rejects.toMatchObject({ status: 409 })
+    expect(h.lockTrace).toEqual(['lock:order'])
+  })
+
+  it('an order without a source quote is a new sale and locks no quote row', async () => {
+    const h = createActivationHarness(newSale())
+    h.orderConfig.sourceQuoteId = null
+    await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+    expect(h.lockTrace).toEqual(['lock:order', 'createSubscription'])
+  })
+
+  it('bumps no quote revision and emits no quote event: the quote row is only read under the lock', async () => {
+    const h = createActivationHarness({ quoteType: 'amend', targets: [{ subscriptionId: 'sub-1', mergeAction: 'standalone' }], quoteLines: [], inventory: { applyAmendment: arcResult } })
+    const emitSpy = jest.spyOn(eventsModule, 'emitCpqEvent').mockResolvedValue(undefined as never)
+    await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+    expect(emitSpy.mock.calls.map(([event]) => event)).toEqual(['cpq.subscription.amended'])
+    expect(h.txEm.persist).not.toHaveBeenCalled()
+  })
+})

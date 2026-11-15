@@ -2,6 +2,7 @@ import { storedAdjustmentFailure } from './priceAdjustments/storedAdjustmentFail
 import { loadConversionBlockers } from './costs/conversionGuard'
 import { copyQuoteCostsToOrder } from './costs/orderCostCopy'
 import { costSeedFromOrderLineCost, type CostSeed, type InventoryCostChange } from './costs/inventoryCostSync'
+import { lockSourceQuote, lockSubscriptions } from './costs/sourceQuoteLock'
 import { withQuotePricingWrite } from './priceAdjustments/quotePricingWrite'
 import { LockMode } from '@mikro-orm/core'
 import type { EntityManager } from '@mikro-orm/postgresql'
@@ -405,6 +406,13 @@ export class DefaultCpqOrderService {
         throw new OrderError(409, `Cannot activate order in '${currentStatus}' status`)
       }
 
+      // Lock order (ARC costs Q2): order row (above), then the source quote row on EVERY path, then, for ARC, the
+      // target subscription rows by id (in applyArcOrder). It serializes this activation with a cost re-confirmation
+      // and with another activation of the same subscriptions. No revision bump, no event: a lock is not a change.
+      // Branch on the locked quote's quoteType: ARC quotes mutate existing subscriptions; new-sale quotes
+      // materialize a fresh subscription.
+      const sourceQuote = await lockSourceQuote(tx, orderConfig.sourceQuoteId, scope)
+
       const salesOrder = await this.loadSalesOrder(tx, orderConfig.orderId, scope)
       const orderLines = await tx.find(CpqOrderLineConfiguration, {
         orderConfigurationId: orderConfig.id,
@@ -412,17 +420,6 @@ export class DefaultCpqOrderService {
         tenantId: scope.tenantId,
         deletedAt: null,
       })
-
-      // Branch on the source quote's quoteType. ARC quotes mutate existing
-      // subscriptions; new-sale quotes materialize a fresh subscription.
-      const sourceQuote = orderConfig.sourceQuoteId
-        ? await tx.findOne(CpqQuoteConfiguration, {
-            id: orderConfig.sourceQuoteId,
-            organizationId: scope.organizationId,
-            tenantId: scope.tenantId,
-            deletedAt: null,
-          })
-        : null
 
       const quoteType = sourceQuote?.quoteType ?? 'new'
 
@@ -496,6 +493,10 @@ export class DefaultCpqOrderService {
         `ARC quote ${sourceQuote.id} has no target subscriptions to activate`,
       )
     }
+
+    // Lock the target subscriptions (sorted by id) after the source quote (taken by activateOrder) and before any
+    // read that feeds a write or any write (ARC costs Q2). Merge-renew locks every absorbed source.
+    await lockSubscriptions(em, targets.map((target) => target.subscriptionId), scope)
 
     // Bound to the transaction EM: never the DI `this.em`.
     const inventory = this.inventoryService.withEntityManager(em)

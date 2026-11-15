@@ -5,6 +5,7 @@ import { Button } from '@open-mercato/ui/primitives/button'
 import { Input } from '@open-mercato/ui/primitives/input'
 import { Checkbox } from '@open-mercato/ui/primitives/checkbox'
 import { Tag } from '@open-mercato/ui/primitives/tag'
+import { useT } from '@open-mercato/shared/lib/i18n/context'
 import type { DependsOnEffect, DependsOnRule } from './page'
 
 // ─── Helpers ─────────────────────────────────────────────────────
@@ -68,6 +69,7 @@ export function DependsOnRulesEditor({
   parentOptions,
   childOptions,
 }: DependsOnRulesEditorProps) {
+  const t = useT()
   const updateRule = (index: number, patch: Partial<DependsOnRule>) => {
     const next = rules.map((r, i) => (i === index ? { ...r, ...patch } : r))
     onChange(next)
@@ -85,11 +87,11 @@ export function DependsOnRulesEditor({
     return (
       <div className="space-y-2">
         <p className="text-xs text-muted-foreground">
-          No rules yet. Add at least one to make this dependency effective.
+          {t('cpq.specifications.dependsOn.empty', 'No rules yet. Add at least one to make this dependency effective.')}
         </p>
         <Button type="button" variant="outline" size="sm" onClick={addRule}>
           <Plus className="h-3.5 w-3.5" />
-          Add rule
+          {t('cpq.specifications.dependsOn.addRule', 'Add rule')}
         </Button>
       </div>
     )
@@ -113,7 +115,7 @@ export function DependsOnRulesEditor({
       </div>
       <Button type="button" variant="outline" size="sm" onClick={addRule}>
         <Plus className="h-3.5 w-3.5" />
-        Add rule
+        {t('cpq.specifications.dependsOn.addRule', 'Add rule')}
       </Button>
     </div>
   )
@@ -140,11 +142,12 @@ function RuleRow({
   onThenChange,
   onRemove,
 }: RuleRowProps) {
+  const t = useT()
   return (
     <div className="grid grid-cols-[1fr_auto_1fr_auto] items-start gap-2 rounded-md border bg-muted/20 p-2">
       <div>
         <label className="block text-[10px] font-medium uppercase tracking-wide text-muted-foreground mb-0.5">
-          When parent =
+          {t('cpq.specifications.dependsOn.whenParent', 'When parent =')}
         </label>
         {parentOptions && parentOptions.length > 0 ? (
           <select
@@ -152,7 +155,7 @@ function RuleRow({
             onChange={(e) => onWhenChange(e.target.value)}
             className="w-full rounded-md border bg-background px-2 py-1.5 text-sm"
           >
-            <option value="">— Select value —</option>
+            <option value="">{t('cpq.specifications.dependsOn.selectValue', '— Select value —')}</option>
             {parentOptions.map((opt) => (
               <option key={opt.value} value={opt.value}>
                 {opt.label}
@@ -163,7 +166,7 @@ function RuleRow({
           <Input
             value={rule.when}
             onChange={(e) => onWhenChange(e.target.value)}
-            placeholder="Parent value"
+            placeholder={t('cpq.specifications.dependsOn.parentValuePlaceholder', 'Parent value')}
           />
         )}
       </div>
@@ -178,7 +181,7 @@ function RuleRow({
         type="button"
         onClick={onRemove}
         className="mt-5 self-start rounded p-1.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
-        title="Remove rule"
+        title={t('cpq.specifications.dependsOn.removeRule', 'Remove rule')}
       >
         <X className="h-4 w-4" />
       </button>
@@ -196,19 +199,20 @@ type ThenInputProps = {
 }
 
 function ThenInput({ effect, value, childOptions, onChange }: ThenInputProps) {
+  const t = useT()
   if (effect === 'toggle_required') {
     const isRequired = value === true
     return (
       <div>
         <label className="block text-[10px] font-medium uppercase tracking-wide text-muted-foreground mb-0.5">
-          Then required is
+          {t('cpq.specifications.dependsOn.thenRequiredIs', 'Then required is')}
         </label>
         <label className="flex items-center gap-2 rounded-md border bg-background px-2 py-1.5 text-sm cursor-pointer">
           <Checkbox
             checked={isRequired}
             onCheckedChange={(checked) => onChange(checked === true)}
           />
-          <span>{isRequired ? 'Required' : 'Optional'}</span>
+          <span>{isRequired ? t('cpq.specifications.dependsOn.required', 'Required') : t('cpq.specifications.dependsOn.optional', 'Optional')}</span>
         </label>
       </div>
     )
@@ -218,7 +222,7 @@ function ThenInput({ effect, value, childOptions, onChange }: ThenInputProps) {
     return (
       <div>
         <label className="block text-[10px] font-medium uppercase tracking-wide text-muted-foreground mb-0.5">
-          Then set value to
+          {t('cpq.specifications.dependsOn.thenSetValueTo', 'Then set value to')}
         </label>
         {childOptions && childOptions.length > 0 ? (
           <select
@@ -226,7 +230,7 @@ function ThenInput({ effect, value, childOptions, onChange }: ThenInputProps) {
             onChange={(e) => onChange(e.target.value)}
             className="w-full rounded-md border bg-background px-2 py-1.5 text-sm"
           >
-            <option value="">— Select value —</option>
+            <option value="">{t('cpq.specifications.dependsOn.selectValue', '— Select value —')}</option>
             {childOptions.map((opt) => (
               <option key={opt.value} value={opt.value}>
                 {opt.label}
@@ -237,7 +241,7 @@ function ThenInput({ effect, value, childOptions, onChange }: ThenInputProps) {
           <Input
             value={typeof value === 'string' ? value : ''}
             onChange={(e) => onChange(e.target.value)}
-            placeholder="Value"
+            placeholder={t('cpq.specifications.dependsOn.valuePlaceholder', 'Value')}
           />
         )}
       </div>
@@ -257,7 +261,7 @@ function ThenInput({ effect, value, childOptions, onChange }: ThenInputProps) {
     return (
       <div>
         <label className="block text-[10px] font-medium uppercase tracking-wide text-muted-foreground mb-0.5">
-          Then allow only
+          {t('cpq.specifications.dependsOn.thenAllowOnly', 'Then allow only')}
         </label>
         <div className="flex flex-wrap gap-1.5 rounded-md border bg-background px-2 py-1.5 text-sm min-h-[34px]">
           {childOptions.map((opt) => {
@@ -288,12 +292,12 @@ function ThenInput({ effect, value, childOptions, onChange }: ThenInputProps) {
   return (
     <div>
       <label className="block text-[10px] font-medium uppercase tracking-wide text-muted-foreground mb-0.5">
-        Then allow only (comma-separated)
+        {t('cpq.specifications.dependsOn.thenAllowOnlyCsv', 'Then allow only (comma-separated)')}
       </label>
       <Input
         value={thenAsCsv(value)}
         onChange={(e) => onChange(csvAsArray(e.target.value))}
-        placeholder="value1, value2, value3"
+        placeholder={t('cpq.specifications.dependsOn.csvPlaceholder', 'value1, value2, value3')}
       />
     </div>
   )

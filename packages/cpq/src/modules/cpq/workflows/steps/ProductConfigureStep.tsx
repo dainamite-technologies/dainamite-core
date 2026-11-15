@@ -1,6 +1,7 @@
 'use client'
 
 import React, { useState, useEffect, useCallback } from 'react'
+import { useT } from '@open-mercato/shared/lib/i18n/context'
 import type { WizardStepProps } from '../types'
 import { NumberInput } from '../../components/NumberInput'
 
@@ -34,6 +35,7 @@ function resolveOfferingId(config: Record<string, unknown>, stepData: Record<str
 }
 
 export function ProductConfigureStep({ config, onComplete, onBack, stepData, currentStepId, completedSteps, quoteId, customerId }: WizardStepProps) {
+  const t = useT()
   const [attributes, setAttributes] = useState<ConstrainedAttribute[]>([])
   const [values, setValues] = useState<Record<string, unknown>>({})
   const [loading, setLoading] = useState(true)
@@ -181,7 +183,7 @@ export function ProductConfigureStep({ config, onComplete, onBack, stepData, cur
           disabled={isReadonly}
           className="w-full rounded-md border px-3 py-2 text-sm disabled:opacity-50"
         >
-          <option value="">Select...</option>
+          <option value="">{t('cpq.wizard.selectPlaceholder', 'Select...')}</option>
           {attr.options?.map((opt) => (
             <option key={opt.value} value={opt.value}>{opt.label}</option>
           ))}
@@ -226,13 +228,13 @@ export function ProductConfigureStep({ config, onComplete, onBack, stepData, cur
   }
 
   if (loading) {
-    return <div className="text-sm text-muted-foreground">Loading attributes...</div>
+    return <div className="text-sm text-muted-foreground">{t('cpq.wizard.loadingAttributes', 'Loading attributes...')}</div>
   }
 
   if (!offeringId) {
     return (
       <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
-        No offering selected. Please go back and select an offering.
+        {t('cpq.wizard.steps.productConfigure.noOffering', 'No offering selected. Please go back and select an offering.')}
       </div>
     )
   }
@@ -264,13 +266,13 @@ export function ProductConfigureStep({ config, onComplete, onBack, stepData, cur
           return renderGroup(group.label, groupAttrs)
         })
       ) : (
-        renderGroup('Configuration', attributes)
+        renderGroup(t('cpq.lines.configuration', 'Configuration'), attributes)
       )}
 
       <div className="flex gap-2 justify-end pt-2">
         {completedSteps.length > 0 && (
           <button type="button" onClick={onBack} className="inline-flex items-center justify-center rounded-md border px-4 py-2 text-sm font-medium hover:bg-muted">
-            Back
+            {t('cpq.common.back', 'Back')}
           </button>
         )}
         <button
@@ -279,7 +281,7 @@ export function ProductConfigureStep({ config, onComplete, onBack, stepData, cur
           disabled={saving}
           className="inline-flex items-center justify-center rounded-md bg-primary px-5 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
         >
-          {saving ? 'Saving...' : 'Next'}
+          {saving ? t('cpq.common.saving', 'Saving...') : t('cpq.wizard.next', 'Next')}
         </button>
       </div>
     </div>

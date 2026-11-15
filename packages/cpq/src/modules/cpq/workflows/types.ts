@@ -97,6 +97,10 @@ export interface WizardStepProps {
 export interface WizardStepType {
   type: string
   label: string
+  /** i18n key for `label`; the English `label` is the fallback. */
+  labelKey?: string
   description: string
+  /** i18n key for `description`; the English `description` is the fallback. */
+  descriptionKey?: string
   component: React.ComponentType<WizardStepProps>
 }

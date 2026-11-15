@@ -25,8 +25,12 @@ describe('buildAccountSeed', () => {
     expect(buildAccountSeed(payload({ invoiceLanguage: ' PL ' })).invoiceLanguage).toBe('pl')
   })
 
+  it.each(['en', 'es', 'de', 'pl'])('passes every billing invoice language through (%s)', (code) => {
+    expect(buildAccountSeed(payload({ invoiceLanguage: code.toUpperCase() })).invoiceLanguage).toBe(code)
+  })
+
   it('falls back to the default language for unsupported or missing codes', () => {
-    expect(buildAccountSeed(payload({ invoiceLanguage: 'de' })).invoiceLanguage).toBe('en')
+    expect(buildAccountSeed(payload({ invoiceLanguage: 'fr' })).invoiceLanguage).toBe('en')
     expect(buildAccountSeed(payload()).invoiceLanguage).toBe('en')
   })
 

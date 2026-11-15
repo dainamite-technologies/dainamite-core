@@ -1,6 +1,7 @@
 'use client'
 
 import React from 'react'
+import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { WizardEngineProvider, useWizardEngine } from './engine'
 import { getStepType } from './registry'
 import type { WizardDefinitionResult, WizardStepProps } from './types'
@@ -9,6 +10,7 @@ import type { TenantScope } from '../services/types'
 // ─── Step renderer ──────────────────────────────────────────────
 
 function StepRenderer({ scope }: { scope: TenantScope }) {
+  const t = useT()
   const { state, completeStep, goBack, skipStep } = useWizardEngine()
   const { currentStep, stepData, completedSteps, currentStepId, params, quoteId, customerId } = state
 
@@ -33,18 +35,18 @@ function StepRenderer({ scope }: { scope: TenantScope }) {
     return (
       <div className="rounded-lg border bg-card p-6 text-center space-y-3">
         <p className="text-sm text-destructive">
-          Unknown step type: <strong>{currentStep.type}</strong>
+          {t('cpq.wizard.runner.unknownStepType', 'Unknown step type:')} <strong>{currentStep.type}</strong>
         </p>
-        <p className="text-sm text-muted-foreground">This step type is not registered. Register it via <code className="font-mono text-xs bg-muted px-1 py-0.5 rounded">registerStepType()</code>.</p>
+        <p className="text-sm text-muted-foreground">{t('cpq.wizard.runner.notRegistered', 'This step type is not registered. Register it via')} <code className="font-mono text-xs bg-muted px-1 py-0.5 rounded">{'registerStepType()'}</code>.</p>
         <div className="flex gap-2 justify-center pt-2">
           {state.canGoBack && (
             <button type="button" onClick={goBack} className="inline-flex items-center justify-center rounded-md border px-4 py-2 text-sm font-medium hover:bg-muted">
-              Back
+              {t('cpq.common.back', 'Back')}
             </button>
           )}
           {state.canSkip && (
             <button type="button" onClick={skipStep} className="inline-flex items-center justify-center rounded-md border px-4 py-2 text-sm font-medium hover:bg-muted">
-              Skip
+              {t('cpq.wizard.skip', 'Skip')}
             </button>
           )}
         </div>
@@ -98,6 +100,7 @@ function WizardProgress() {
 // ─── Header ─────────────────────────────────────────────────────
 
 function WizardHeader() {
+  const t = useT()
   const { state } = useWizardEngine()
 
   return (
@@ -105,7 +108,7 @@ function WizardHeader() {
       <div>
         <h2 className="text-lg font-semibold">{state.definition.name}</h2>
         <p className="text-sm text-muted-foreground">
-          Step: {state.currentStep.title}
+          {t('cpq.wizard.runner.currentStep', 'Step: {title}', { title: state.currentStep.title })}
         </p>
       </div>
     </div>

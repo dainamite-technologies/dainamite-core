@@ -57,6 +57,7 @@ type Offering = {
 const PAGE_SIZE = 50
 
 function ChargePopover({ charge }: { charge: Charge }) {
+  const t = useT()
   const [open, setOpen] = React.useState(false)
   const variant = chargeTypeMap[charge.chargeType as ChargeType] ?? 'neutral'
   return (
@@ -74,14 +75,14 @@ function ChargePopover({ charge }: { charge: Charge }) {
           <div className="text-muted-foreground font-mono">{charge.code}</div>
           {charge.description && <div className="text-muted-foreground">{charge.description}</div>}
           <div className="flex items-center justify-between pt-1 border-t">
-            <span>Pricing: {charge.pricingMethod}</span>
+            <span>{t('cpq.offerings.list.chargePopover.pricing', 'Pricing: {method}', { method: charge.pricingMethod })}</span>
             {charge.fixedPrice != null && (
               <span className="font-medium">
                 {charge.currencyCode ?? 'USD'} {charge.fixedPrice}
               </span>
             )}
           </div>
-          {!charge.isActive && <Tag variant="warning" dot>Inactive</Tag>}
+          {!charge.isActive && <Tag variant="warning" dot>{t('cpq.common.inactive', 'Inactive')}</Tag>}
           <div className="absolute left-1/2 -translate-x-1/2 top-full w-2 h-2 bg-popover border-b border-r rotate-45 -mt-1" />
         </div>
       )}
@@ -207,7 +208,7 @@ export default function OfferingsListPage() {
         })
         if (!res.ok) {
           const body = await res.json().catch(() => ({} as { error?: string }))
-          setError(body.error ?? `Failed to save charge for ${offering.name}`)
+          setError(body.error ?? t('cpq.offerings.bulk.error.saveChargeFor', 'Failed to save charge for {name}', { name: offering.name }))
           setSaving(false)
           return
         }
@@ -217,7 +218,7 @@ export default function OfferingsListPage() {
       setBulkChargeTargets([])
       data.reload()
     } catch {
-      setError('Failed to save charges')
+      setError(t('cpq.offerings.bulk.error.saveCharges', 'Failed to save charges'))
     } finally {
       setSaving(false)
     }
@@ -245,7 +246,7 @@ export default function OfferingsListPage() {
             {row.original.name}
             {row.original.offeringType === 'bundle' && (
               <Tag variant="brand" className="ml-2 px-2 text-[10px]">
-                bundle
+                {t('cpq.offerings.list.tag.bundle', 'bundle')}
               </Tag>
             )}
           </span>
@@ -319,30 +320,37 @@ export default function OfferingsListPage() {
       </h4>
 
       <Alert>
-        Bulk creation supports <strong>flat pricing only</strong>. For <em>per unit</em> or <em>tiered</em> pricing,
-        open each offering individually — those methods need a pricing table and a numeric attribute that lives on
-        the offering&apos;s spec, which usually differs between offerings.
+        {t('cpq.offerings.bulk.notice.supports', 'Bulk creation supports')}{' '}
+        <strong>{t('cpq.offerings.bulk.notice.flatOnly', 'flat pricing only')}</strong>
+        {t('cpq.offerings.bulk.notice.for', '. For')}{' '}
+        <em>{t('cpq.offerings.bulk.notice.perUnit', 'per unit')}</em>{' '}
+        {t('cpq.offerings.bulk.notice.or', 'or')}{' '}
+        <em>{t('cpq.offerings.bulk.notice.tiered', 'tiered')}</em>{' '}
+        {t(
+          'cpq.offerings.bulk.notice.rest',
+          "pricing, open each offering individually — those methods need a pricing table and a numeric attribute that lives on the offering's spec, which usually differs between offerings.",
+        )}
       </Alert>
 
       <div className="grid grid-cols-3 gap-3">
         <div>
-          <label className="block text-xs font-medium mb-1">Code</label>
+          <label className="block text-xs font-medium mb-1">{t('cpq.offerings.bulk.fields.code', 'Code')}</label>
           <Input
             value={chargeForm.code}
             onChange={(e) => setChargeForm({ ...chargeForm, code: e.target.value })}
-            placeholder="e.g. mrc-monthly"
+            placeholder={t('cpq.offerings.bulk.fields.codePlaceholder', 'e.g. mrc-monthly')}
           />
         </div>
         <div>
-          <label className="block text-xs font-medium mb-1">Name</label>
+          <label className="block text-xs font-medium mb-1">{t('cpq.offerings.bulk.fields.name', 'Name')}</label>
           <Input
             value={chargeForm.name}
             onChange={(e) => setChargeForm({ ...chargeForm, name: e.target.value })}
-            placeholder="e.g. Monthly Recurring"
+            placeholder={t('cpq.offerings.bulk.fields.namePlaceholder', 'e.g. Monthly Recurring')}
           />
         </div>
         <div>
-          <label className="block text-xs font-medium mb-1">Type</label>
+          <label className="block text-xs font-medium mb-1">{t('cpq.offerings.bulk.fields.type', 'Type')}</label>
           <Select
             value={chargeForm.chargeType}
             onValueChange={(value) => setChargeForm({ ...chargeForm, chargeType: value })}
@@ -351,26 +359,26 @@ export default function OfferingsListPage() {
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="nrc">NRC (Non-Recurring)</SelectItem>
-              <SelectItem value="mrc">MRC (Monthly Recurring)</SelectItem>
-              <SelectItem value="usage">Usage</SelectItem>
+              <SelectItem value="nrc">{t('cpq.offerings.chargeType.nrc', 'NRC (Non-Recurring)')}</SelectItem>
+              <SelectItem value="mrc">{t('cpq.offerings.chargeType.mrc', 'MRC (Monthly Recurring)')}</SelectItem>
+              <SelectItem value="usage">{t('cpq.offerings.chargeType.usage', 'Usage')}</SelectItem>
             </SelectContent>
           </Select>
         </div>
       </div>
 
       <div>
-        <label className="block text-xs font-medium mb-1">Description</label>
+        <label className="block text-xs font-medium mb-1">{t('cpq.offerings.bulk.fields.description', 'Description')}</label>
         <Input
           value={chargeForm.description}
           onChange={(e) => setChargeForm({ ...chargeForm, description: e.target.value })}
-          placeholder="User-facing charge description"
+          placeholder={t('cpq.offerings.bulk.fields.descriptionPlaceholder', 'User-facing charge description')}
         />
       </div>
 
       <div className="space-y-2">
         <div className="flex items-center gap-3">
-          <label className="text-xs font-medium">Currency</label>
+          <label className="text-xs font-medium">{t('cpq.offerings.bulk.fields.currency', 'Currency')}</label>
           <Input
             value={chargeCurrency}
             onChange={(e) => setChargeCurrency(e.target.value.toUpperCase())}
@@ -382,8 +390,8 @@ export default function OfferingsListPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b bg-muted/30">
-                <th className="px-3 py-2 text-left font-medium text-xs">Offering</th>
-                <th className="px-3 py-2 text-left font-medium text-xs">Price ({chargeCurrency})</th>
+                <th className="px-3 py-2 text-left font-medium text-xs">{t('cpq.offerings.bulk.table.offering', 'Offering')}</th>
+                <th className="px-3 py-2 text-left font-medium text-xs">{t('cpq.offerings.bulk.table.price', 'Price ({currency})', { currency: chargeCurrency })}</th>
               </tr>
             </thead>
             <tbody>
@@ -416,11 +424,13 @@ export default function OfferingsListPage() {
           disabled={saving || !chargeForm.code || !chargeForm.name}
         >
           {saving
-            ? 'Saving...'
-            : `Create Charge for ${bulkChargeTargets.length} Offering${bulkChargeTargets.length > 1 ? 's' : ''}`}
+            ? t('cpq.common.saving', 'Saving...')
+            : bulkChargeTargets.length > 1
+              ? t('cpq.offerings.bulk.submitPlural', 'Create Charge for {count} Offerings', { count: bulkChargeTargets.length })
+              : t('cpq.offerings.bulk.submitSingular', 'Create Charge for {count} Offering', { count: bulkChargeTargets.length })}
         </Button>
         <Button type="button" variant="outline" onClick={() => setBulkChargeOpen(false)}>
-          Cancel
+          {t('cpq.common.cancel', 'Cancel')}
         </Button>
       </div>
     </div>

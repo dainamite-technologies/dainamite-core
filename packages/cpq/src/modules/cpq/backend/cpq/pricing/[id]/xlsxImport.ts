@@ -7,6 +7,7 @@
 // absent from the file are treated as DELETES.
 
 import * as XLSX from 'xlsx'
+import type { TranslateFn } from '@open-mercato/shared/lib/i18n/context'
 
 type Dimension = { key: string; label: string }
 type PriceColumn = { key: string; label: string }
@@ -54,17 +55,23 @@ export async function parsePricingTableXlsx(
   file: File,
   table: TableShape,
   existingEntries: ImportEntry[],
+  t: TranslateFn,
 ): Promise<ImportResult> {
   let workbook: XLSX.WorkBook
   try {
     const buffer = await file.arrayBuffer()
     workbook = XLSX.read(buffer, { type: 'array' })
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? `Failed to read file: ${err.message}` : 'Failed to read file' }
+    return {
+      ok: false,
+      error: err instanceof Error
+        ? t('cpq.pricing.import.errors.readFailedWithReason', 'Failed to read file: {reason}', { reason: err.message })
+        : t('cpq.pricing.import.errors.readFailed', 'Failed to read file'),
+    }
   }
 
   const sheetName = workbook.SheetNames[0]
-  if (!sheetName) return { ok: false, error: 'Workbook has no sheets' }
+  if (!sheetName) return { ok: false, error: t('cpq.pricing.import.errors.noSheets', 'Workbook has no sheets') }
   const sheet = workbook.Sheets[sheetName]
 
   // Two-row header strategy: row 1 is human labels (from export), row 2+ is
@@ -78,7 +85,7 @@ export async function parsePricingTableXlsx(
   })
 
   if (rows.length === 0) {
-    return { ok: false, error: 'Sheet has no data rows' }
+    return { ok: false, error: t('cpq.pricing.import.errors.noDataRows', 'Sheet has no data rows') }
   }
 
   // Build label→key map for dimensions and price columns so we can match
@@ -131,20 +138,20 @@ export async function parsePricingTableXlsx(
     ...priceHeaders.map((p) => p.header),
   ].filter((h): h is string => h !== null))
   for (const h of headers) {
-    if (!knownHeaders.has(h)) warnings.push(`Ignored unknown column "${h}"`)
+    if (!knownHeaders.has(h)) warnings.push(t('cpq.pricing.import.warnings.unknownColumn', 'Ignored unknown column "{column}"', { column: h }))
   }
 
   // Missing required columns from the table → error.
   const missingDims = table.dimensions.filter((d) => !dimensionHeaders.some((h) => h.key === d.key))
   const missingPrices = table.priceColumns.filter((c) => !priceHeaders.some((h) => h.key === c.key))
   if (missingDims.length > 0) {
-    return { ok: false, error: `Missing dimension column(s): ${missingDims.map((d) => d.label).join(', ')}` }
+    return { ok: false, error: t('cpq.pricing.import.errors.missingDimensionColumns', 'Missing dimension column(s): {columns}', { columns: missingDims.map((d) => d.label).join(', ') }) }
   }
   if (missingPrices.length > 0) {
-    return { ok: false, error: `Missing price column(s): ${missingPrices.map((c) => c.label).join(', ')}` }
+    return { ok: false, error: t('cpq.pricing.import.errors.missingPriceColumns', 'Missing price column(s): {columns}', { columns: missingPrices.map((c) => c.label).join(', ') }) }
   }
   if (!currencyHeader) {
-    return { ok: false, error: 'Missing "currency_code" column' }
+    return { ok: false, error: t('cpq.pricing.import.errors.missingCurrencyColumn', 'Missing "currency_code" column') }
   }
 
   // ─── Parse rows ──────────────────────────────────────────────
@@ -161,15 +168,15 @@ export async function parsePricingTableXlsx(
     const currency = toStringOrNull(raw[currencyHeader]) ?? ''
 
     if (!currency) {
-      return { ok: false, error: `Row ${rowNumber}: missing currency_code` }
+      return { ok: false, error: t('cpq.pricing.import.errors.rowMissingCurrency', 'Row {row}: missing currency_code', { row: rowNumber }) }
     }
     if (!table.currencyCodeList.includes(currency.toUpperCase())) {
-      return { ok: false, error: `Row ${rowNumber}: currency "${currency}" is not in the table's currency list (${table.currencyCodeList.join(', ')})` }
+      return { ok: false, error: t('cpq.pricing.import.errors.rowCurrencyNotAllowed', 'Row {row}: currency "{currency}" is not in the table\'s currency list ({currencies})', { row: rowNumber, currency, currencies: table.currencyCodeList.join(', ') }) }
     }
 
     const tierNumber = tierStr ? Number(tierStr) : null
     if (tierNumber !== null && Number.isNaN(tierNumber)) {
-      return { ok: false, error: `Row ${rowNumber}: tier_number must be a number, got "${tierStr}"` }
+      return { ok: false, error: t('cpq.pricing.import.errors.rowTierNotNumber', 'Row {row}: tier_number must be a number, got "{value}"', { row: rowNumber, value: tierStr ?? '' }) }
     }
 
     const dimensionValues: Record<string, string> = {}
@@ -186,7 +193,7 @@ export async function parsePricingTableXlsx(
       }
       const num = Number(v)
       if (Number.isNaN(num)) {
-        return { ok: false, error: `Row ${rowNumber}: price column "${header}" must be a number, got "${String(v)}"` }
+        return { ok: false, error: t('cpq.pricing.import.errors.rowPriceNotNumber', 'Row {row}: price column "{column}" must be a number, got "{value}"', { row: rowNumber, column: header, value: String(v) }) }
       }
       prices[key] = num
     }
@@ -219,7 +226,7 @@ export async function parsePricingTableXlsx(
     }
     const existing = existingById.get(row.id)
     if (!existing) {
-      warnings.push(`Row ${row.rowNumber}: id "${row.id}" not found in current entries — will be inserted as new`)
+      warnings.push(t('cpq.pricing.import.warnings.idNotFound', 'Row {row}: id "{id}" not found in current entries — will be inserted as new', { row: row.rowNumber, id: row.id }))
       inserts.push({ ...row, id: null })
       continue
     }
@@ -243,6 +250,7 @@ export async function parsePricingTableXlsx(
 export async function commitImportDiff(
   pricingTableId: string,
   diff: ImportDiff,
+  t: TranslateFn,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   // INSERTS (batch — route accepts arrays)
   if (diff.inserts.length > 0) {
@@ -262,7 +270,7 @@ export async function commitImportDiff(
     })
     if (!res.ok) {
       const body = await res.json().catch(() => ({}))
-      return { ok: false, error: body.error ?? 'Failed to insert entries' }
+      return { ok: false, error: body.error ?? t('cpq.pricing.import.errors.insertFailed', 'Failed to insert entries') }
     }
   }
 
@@ -283,7 +291,7 @@ export async function commitImportDiff(
     })
     if (!res.ok) {
       const body = await res.json().catch(() => ({}))
-      return { ok: false, error: body.error ?? `Failed to update entry ${before.id}` }
+      return { ok: false, error: body.error ?? t('cpq.pricing.entries.errors.updateFailed', 'Failed to update entry {id}', { id: before.id }) }
     }
   }
 
@@ -296,7 +304,7 @@ export async function commitImportDiff(
     })
     if (!res.ok) {
       const body = await res.json().catch(() => ({}))
-      return { ok: false, error: body.error ?? `Failed to delete entry ${entry.id}` }
+      return { ok: false, error: body.error ?? t('cpq.pricing.entries.errors.deleteFailed', 'Failed to delete entry {id}', { id: entry.id }) }
     }
   }
 

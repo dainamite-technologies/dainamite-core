@@ -11,6 +11,7 @@ import {
   SelectValue,
 } from '@open-mercato/ui/primitives/select'
 import { Trash2 } from 'lucide-react'
+import { useT } from '@open-mercato/shared/lib/i18n/context'
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -54,6 +55,7 @@ export function EntriesEditor({
   initialEntries: Entry[]
   onSaved: (entries: Entry[]) => void
 }) {
+  const t = useT()
   const [drafts, setDrafts] = React.useState<DraftEntry[]>(() =>
     initialEntries.map((e) => ({ ...e, _state: null, _localId: e.id })),
   )
@@ -142,7 +144,7 @@ export function EntriesEditor({
         })
         if (!res.ok) {
           const body = await res.json().catch(() => ({}))
-          return { ok: false, error: body.error ?? 'Failed to create entries' }
+          return { ok: false, error: body.error ?? t('cpq.pricing.entries.errors.createFailed', 'Failed to create entries') }
         }
       }
 
@@ -164,7 +166,7 @@ export function EntriesEditor({
         })
         if (!res.ok) {
           const body = await res.json().catch(() => ({}))
-          return { ok: false, error: body.error ?? `Failed to update entry ${d.id}` }
+          return { ok: false, error: body.error ?? t('cpq.pricing.entries.errors.updateFailed', 'Failed to update entry {id}', { id: d.id }) }
         }
       }
 
@@ -178,13 +180,13 @@ export function EntriesEditor({
         })
         if (!res.ok) {
           const body = await res.json().catch(() => ({}))
-          return { ok: false, error: body.error ?? `Failed to delete entry ${d.id}` }
+          return { ok: false, error: body.error ?? t('cpq.pricing.entries.errors.deleteFailed', 'Failed to delete entry {id}', { id: d.id }) }
         }
       }
 
       return { ok: true }
     } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : 'Failed to save entries' }
+      return { ok: false, error: err instanceof Error ? err.message : t('cpq.pricing.entries.errors.saveFailed', 'Failed to save entries') }
     } finally {
       setSaving(false)
     }
@@ -208,26 +210,26 @@ export function EntriesEditor({
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold">
-          Entries ({visibleDrafts.length})
+          {t('cpq.pricing.entries.title', 'Entries ({count})', { count: visibleDrafts.length })}
         </h2>
         <div className="flex items-center gap-2">
           {mode === 'view' ? (
             <Button type="button" variant="outline" size="sm" onClick={() => setMode('edit')}>
-              Edit Entries
+              {t('cpq.pricing.entries.edit', 'Edit Entries')}
             </Button>
           ) : (
             <>
               <Button type="button" variant="outline" size="sm" onClick={() => addRow(false)}>
-                + Add Row
+                {t('cpq.pricing.entries.addRow', '+ Add Row')}
               </Button>
               <Button type="button" variant="outline" size="sm" onClick={() => addRow(true)}>
-                + Add Tier
+                {t('cpq.pricing.entries.addTier', '+ Add Tier')}
               </Button>
               <Button type="button" size="sm" onClick={handleSave} disabled={saving || !dirty}>
-                {saving ? 'Saving...' : 'Save'}
+                {saving ? t('cpq.common.saving', 'Saving...') : t('cpq.common.save', 'Save')}
               </Button>
               <Button type="button" variant="outline" size="sm" onClick={cancelEdit} disabled={saving}>
-                Cancel
+                {t('cpq.common.cancel', 'Cancel')}
               </Button>
             </>
           )}
@@ -239,8 +241,11 @@ export function EntriesEditor({
       {visibleDrafts.length === 0 ? (
         <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
           {mode === 'edit'
-            ? 'No entries yet — use "+ Add Row" (dimensions lookup) or "+ Add Tier" (range lookup).'
-            : 'No entries in this pricing table.'}
+            ? t(
+                'cpq.pricing.entries.emptyEditing',
+                'No entries yet — use "+ Add Row" (dimensions lookup) or "+ Add Tier" (range lookup).',
+              )
+            : t('cpq.pricing.entries.empty', 'No entries in this pricing table.')}
         </div>
       ) : (
         <div className="rounded-lg border overflow-x-auto">
@@ -256,9 +261,9 @@ export function EntriesEditor({
                     prices they qualify, so the row reads "what → how much". */}
                 {hasTieredEntries && (
                   <>
-                    <th className="px-3 py-3 text-left font-medium whitespace-nowrap">Tier #</th>
-                    <th className="px-3 py-3 text-left font-medium whitespace-nowrap">Range From</th>
-                    <th className="px-3 py-3 text-left font-medium whitespace-nowrap">Range To</th>
+                    <th className="px-3 py-3 text-left font-medium whitespace-nowrap">{t('cpq.pricing.entries.tierNumber', 'Tier #')}</th>
+                    <th className="px-3 py-3 text-left font-medium whitespace-nowrap">{t('cpq.pricing.entries.rangeFrom', 'Range From')}</th>
+                    <th className="px-3 py-3 text-left font-medium whitespace-nowrap">{t('cpq.pricing.entries.rangeTo', 'Range To')}</th>
                   </>
                 )}
                 {table.priceColumns.map((col) => (
@@ -266,8 +271,8 @@ export function EntriesEditor({
                     {col.label}
                   </th>
                 ))}
-                <th className="px-3 py-3 text-left font-medium">Currency</th>
-                {mode === 'edit' && <th className="px-3 py-3 w-8" aria-label="Actions" />}
+                <th className="px-3 py-3 text-left font-medium">{t('cpq.pricing.entries.currency', 'Currency')}</th>
+                {mode === 'edit' && <th className="px-3 py-3 w-8" aria-label={t('cpq.pricing.entries.actions', 'Actions')} />}
               </tr>
             </thead>
             <tbody>
@@ -307,6 +312,7 @@ function EntryRow({
   onChange: (patch: Partial<DraftEntry>) => void
   onDelete: () => void
 }) {
+  const t = useT()
   const readOnly = mode === 'view'
   const rowBg = entry._state === 'new'
     ? 'bg-success/5'
@@ -421,7 +427,7 @@ function EntryRow({
             type="button"
             onClick={onDelete}
             className="text-destructive hover:bg-destructive/10 rounded p-1"
-            aria-label="Delete row"
+            aria-label={t('cpq.pricing.entries.deleteRow', 'Delete row')}
           >
             <Trash2 className="h-4 w-4" />
           </button>

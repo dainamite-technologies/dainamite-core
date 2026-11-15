@@ -2,6 +2,7 @@
 import * as React from 'react'
 import { useRouter } from 'next/navigation'
 import { Alert } from '@open-mercato/ui/primitives/alert'
+import { useT, type TranslateFn } from '@open-mercato/shared/lib/i18n/context'
 import { RowActions } from '@open-mercato/ui/backend/RowActions'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import type {
@@ -11,9 +12,9 @@ import type {
   WizardApplicability,
 } from '../../../../../workflows/types'
 
-async function apiJson<T>(url: string): Promise<T> {
+async function apiJson<T>(url: string, t: TranslateFn): Promise<T> {
   const res = await fetch(url)
-  if (!res.ok) throw new Error(`API error ${res.status}`)
+  if (!res.ok) throw new Error(t('cpq.wizards.runner.errors.api', 'API error {status}', { status: res.status }))
   return res.json() as Promise<T>
 }
 
@@ -43,7 +44,8 @@ function KV({ label, children }: { label: string; children: React.ReactNode }) {
 }
 
 function JsonBlock({ data }: { data: unknown }) {
-  if (data == null) return <span className="text-xs text-muted-foreground">none</span>
+  const t = useT()
+  if (data == null) return <span className="text-xs text-muted-foreground">{t('cpq.wizards.detail.none', 'none')}</span>
   return (
     <pre className="rounded-md bg-muted/50 p-3 text-xs overflow-x-auto max-h-48">
       {JSON.stringify(data, null, 2)}
@@ -51,20 +53,24 @@ function JsonBlock({ data }: { data: unknown }) {
   )
 }
 
-function TransitionRow({ t, index }: { t: WizardTransition; index: number }) {
+function TransitionRow({ transition, index }: { transition: WizardTransition; index: number }) {
+  const t = useT()
   return (
     <div className="flex items-start gap-3 text-xs">
       <span className="font-mono text-muted-foreground w-4 shrink-0">{index + 1}.</span>
       <div className="space-y-0.5">
         <div className="flex items-center gap-2">
-          <span className="font-medium">-&gt; {t.targetStepId}</span>
-          {t.isDefault && <Badge variant="muted">default</Badge>}
-          {t.label && <span className="text-muted-foreground">({t.label})</span>}
+          <span className="font-medium">{'->'} {transition.targetStepId}</span>
+          {transition.isDefault && <Badge variant="muted">{t('cpq.wizards.detail.transitionDefault', 'default')}</Badge>}
+          {transition.label && <span className="text-muted-foreground">({transition.label})</span>}
         </div>
-        {t.condition && (
+        {transition.condition && (
           <div className="font-mono text-muted-foreground">
-            when {t.condition.field} {t.condition.operator}
-            {t.condition.value !== undefined ? ` ${JSON.stringify(t.condition.value)}` : ''}
+            {t('cpq.wizards.detail.transitionWhen', 'when {field} {operator}', {
+              field: transition.condition.field,
+              operator: transition.condition.operator,
+            })}
+            {transition.condition.value !== undefined ? ` ${JSON.stringify(transition.condition.value)}` : ''}
           </div>
         )}
       </div>
@@ -73,6 +79,7 @@ function TransitionRow({ t, index }: { t: WizardTransition; index: number }) {
 }
 
 function StepCard({ step, index }: { step: WizardStepDefinition; index: number }) {
+  const t = useT()
   const [open, setOpen] = React.useState(false)
   const configKeys = Object.keys(step.config)
 
@@ -90,7 +97,7 @@ function StepCard({ step, index }: { step: WizardStepDefinition; index: number }
           <div className="flex items-center gap-2">
             <span className="text-sm font-medium truncate">{step.title}</span>
             <Badge>{step.type}</Badge>
-            {step.isOptional && <Badge variant="muted">optional</Badge>}
+            {step.isOptional && <Badge variant="muted">{t('cpq.wizards.detail.optional', 'optional')}</Badge>}
           </div>
           {step.description && (
             <p className="text-xs text-muted-foreground truncate mt-0.5">{step.description}</p>
@@ -102,13 +109,13 @@ function StepCard({ step, index }: { step: WizardStepDefinition; index: number }
       {open && (
         <div className="border-t px-4 py-3 space-y-4">
           <div className="grid grid-cols-2 gap-4">
-            <KV label="Step ID"><span className="font-mono text-xs">{step.stepId}</span></KV>
-            <KV label="Type"><span className="font-mono text-xs">{step.type}</span></KV>
+            <KV label={t('cpq.wizards.detail.stepId', 'Step ID')}><span className="font-mono text-xs">{step.stepId}</span></KV>
+            <KV label={t('cpq.wizards.detail.type', 'Type')}><span className="font-mono text-xs">{step.type}</span></KV>
           </div>
 
           {configKeys.length > 0 && (
             <div className="space-y-1">
-              <span className="text-xs font-medium text-muted-foreground">Config</span>
+              <span className="text-xs font-medium text-muted-foreground">{t('cpq.wizards.detail.config', 'Config')}</span>
               <JsonBlock data={step.config} />
             </div>
           )}
@@ -116,23 +123,23 @@ function StepCard({ step, index }: { step: WizardStepDefinition; index: number }
           {step.transitions.length > 0 && (
             <div className="space-y-2">
               <span className="text-xs font-medium text-muted-foreground">
-                Transitions ({step.transitions.length})
+                {t('cpq.wizards.detail.transitions', 'Transitions ({count})', { count: step.transitions.length })}
               </span>
               <div className="space-y-1.5">
-                {step.transitions.map((t, i) => (
-                  <TransitionRow key={`${t.targetStepId}-${i}`} t={t} index={i} />
+                {step.transitions.map((transition, i) => (
+                  <TransitionRow key={`${transition.targetStepId}-${i}`} transition={transition} index={i} />
                 ))}
               </div>
             </div>
           )}
 
           {step.transitions.length === 0 && (
-            <div className="text-xs text-muted-foreground">No transitions (terminal step)</div>
+            <div className="text-xs text-muted-foreground">{t('cpq.wizards.detail.noTransitions', 'No transitions (terminal step)')}</div>
           )}
 
           {step.validationRules && step.validationRules.length > 0 && (
             <div className="space-y-1">
-              <span className="text-xs font-medium text-muted-foreground">Validation Rules</span>
+              <span className="text-xs font-medium text-muted-foreground">{t('cpq.wizards.detail.validationRules', 'Validation Rules')}</span>
               <JsonBlock data={step.validationRules} />
             </div>
           )}
@@ -143,16 +150,17 @@ function StepCard({ step, index }: { step: WizardStepDefinition; index: number }
 }
 
 function ApplicabilityPanel({ applicability }: { applicability: WizardApplicability | null }) {
+  const t = useT()
   if (!applicability) {
-    return <span className="text-sm text-muted-foreground">No applicability constraints</span>
+    return <span className="text-sm text-muted-foreground">{t('cpq.wizards.detail.noApplicability', 'No applicability constraints')}</span>
   }
   return (
     <div className="grid grid-cols-2 gap-4">
       {applicability.priority != null && (
-        <KV label="Priority">{applicability.priority}</KV>
+        <KV label={t('cpq.wizards.detail.priority', 'Priority')}>{applicability.priority}</KV>
       )}
       {applicability.specCodes?.length ? (
-        <KV label="Spec Codes">
+        <KV label={t('cpq.wizards.detail.specCodes', 'Spec Codes')}>
           <div className="flex flex-wrap gap-1">
             {applicability.specCodes.map((c) => (
               <span key={c} className="font-mono text-xs rounded bg-muted px-1.5 py-0.5">{c}</span>
@@ -161,7 +169,7 @@ function ApplicabilityPanel({ applicability }: { applicability: WizardApplicabil
         </KV>
       ) : null}
       {applicability.offeringCodes?.length ? (
-        <KV label="Offering Codes">
+        <KV label={t('cpq.wizards.detail.offeringCodes', 'Offering Codes')}>
           <div className="flex flex-wrap gap-1">
             {applicability.offeringCodes.map((c) => (
               <span key={c} className="font-mono text-xs rounded bg-muted px-1.5 py-0.5">{c}</span>
@@ -170,7 +178,7 @@ function ApplicabilityPanel({ applicability }: { applicability: WizardApplicabil
         </KV>
       ) : null}
       {applicability.customerSegments?.length ? (
-        <KV label="Customer Segments">
+        <KV label={t('cpq.wizards.detail.customerSegments', 'Customer Segments')}>
           <div className="flex flex-wrap gap-1">
             {applicability.customerSegments.map((c) => (
               <span key={c} className="font-mono text-xs rounded bg-muted px-1.5 py-0.5">{c}</span>
@@ -185,6 +193,7 @@ function ApplicabilityPanel({ applicability }: { applicability: WizardApplicabil
 // ─── Main Page ───────────────────────────────────────────────────
 
 export default function CpqWizardDetailPage({ params }: { params: Record<string, string | string[]> }) {
+  const t = useT()
   const router = useRouter()
   const definitionCode = params.definitionCode as string
 
@@ -200,19 +209,20 @@ export default function CpqWizardDetailPage({ params }: { params: Record<string,
       try {
         const def = await apiJson<WizardDefinitionResult>(
           `/api/cpq/wizards?code=${encodeURIComponent(definitionCode)}`,
+          t,
         )
         setDefinition(def)
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to load wizard')
+        setError(err instanceof Error ? err.message : t('cpq.wizards.runner.errors.load', 'Failed to load wizard'))
       } finally {
         setLoading(false)
       }
     }
     load()
-  }, [definitionCode])
+  }, [definitionCode, t])
 
   if (loading) {
-    return <div className="text-sm text-muted-foreground">Loading...</div>
+    return <div className="text-sm text-muted-foreground">{t('cpq.common.loading', 'Loading...')}</div>
   }
 
   if (error) {
@@ -220,7 +230,7 @@ export default function CpqWizardDetailPage({ params }: { params: Record<string,
       <div className="space-y-4">
         <Alert variant="destructive">{error}</Alert>
         <button type="button" onClick={() => router.push('/backend/cpq/wizards')} className="text-sm text-muted-foreground hover:text-foreground">
-          &larr; Back to Wizards
+          ← {t('cpq.wizards.runner.backToList', 'Back to Wizards')}
         </button>
       </div>
     )
@@ -229,7 +239,7 @@ export default function CpqWizardDetailPage({ params }: { params: Record<string,
   if (!definition) {
     return (
       <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
-        Wizard not found.
+        {t('cpq.wizards.runner.notFound', 'Wizard not found.')}
       </div>
     )
   }
@@ -243,7 +253,7 @@ export default function CpqWizardDetailPage({ params }: { params: Record<string,
           onClick={() => router.push('/backend/cpq/wizards')}
           className="text-sm text-muted-foreground hover:text-foreground"
         >
-          &larr; All Wizards
+          ← {t('cpq.wizards.runner.allWizards', 'All Wizards')}
         </button>
       </div>
 
@@ -261,7 +271,7 @@ export default function CpqWizardDetailPage({ params }: { params: Record<string,
             items={[
               {
                 id: 'preview',
-                label: 'Preview',
+                label: t('cpq.wizards.actions.preview', 'Preview'),
                 onSelect: () => router.push(`/backend/cpq/wizards/${definitionCode}`),
               },
             ]}
@@ -270,15 +280,15 @@ export default function CpqWizardDetailPage({ params }: { params: Record<string,
       </div>
 
       {/* General Info */}
-      <Section title="General">
+      <Section title={t('cpq.wizards.detail.sections.general', 'General')}>
         <div className="rounded-lg border p-4">
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-            <KV label="Code"><span className="font-mono text-xs">{definition.code}</span></KV>
-            <KV label="Version">v{definition.version}</KV>
-            <KV label="Surface">{definition.surface}</KV>
-            <KV label="Active">
+            <KV label={t('cpq.wizards.detail.code', 'Code')}><span className="font-mono text-xs">{definition.code}</span></KV>
+            <KV label={t('cpq.wizards.detail.version', 'Version')}>v{definition.version}</KV>
+            <KV label={t('cpq.wizards.detail.surface', 'Surface')}>{definition.surface}</KV>
+            <KV label={t('cpq.wizards.detail.active', 'Active')}>
               <Badge variant={definition.isActive ? 'success' : 'muted'}>
-                {definition.isActive ? 'Yes' : 'No'}
+                {definition.isActive ? t('cpq.common.yes', 'Yes') : t('cpq.common.no', 'No')}
               </Badge>
             </KV>
           </div>
@@ -286,7 +296,7 @@ export default function CpqWizardDetailPage({ params }: { params: Record<string,
       </Section>
 
       {/* Applicability */}
-      <Section title="Applicability">
+      <Section title={t('cpq.wizards.detail.sections.applicability', 'Applicability')}>
         <div className="rounded-lg border p-4">
           <ApplicabilityPanel applicability={definition.applicability} />
         </div>
@@ -294,13 +304,13 @@ export default function CpqWizardDetailPage({ params }: { params: Record<string,
 
       {/* Params Schema */}
       {definition.paramsSchema && Object.keys(definition.paramsSchema).length > 0 && (
-        <Section title="Parameters Schema">
+        <Section title={t('cpq.wizards.detail.sections.paramsSchema', 'Parameters Schema')}>
           <JsonBlock data={definition.paramsSchema} />
         </Section>
       )}
 
       {/* Steps */}
-      <Section title={`Steps (${definition.steps.length})`}>
+      <Section title={t('cpq.wizards.detail.sections.steps', 'Steps ({count})', { count: definition.steps.length })}>
         <div className="space-y-2">
           {definition.steps.map((step, i) => (
             <StepCard key={step.stepId} step={step} index={i} />
@@ -310,7 +320,7 @@ export default function CpqWizardDetailPage({ params }: { params: Record<string,
 
       {/* Metadata */}
       {definition.metadata && Object.keys(definition.metadata).length > 0 && (
-        <Section title="Metadata">
+        <Section title={t('cpq.wizards.detail.sections.metadata', 'Metadata')}>
           <JsonBlock data={definition.metadata} />
         </Section>
       )}

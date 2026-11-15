@@ -10,16 +10,24 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@open-mercato/ui/primitives/select'
+import { useT, type TranslateFn } from '@open-mercato/shared/lib/i18n/context'
 import { NumberInput } from '../../../components/NumberInput'
 
 // ─── Shared types ────────────────────────────────────────────────
 
-export const RULE_TYPE_LABELS: Record<string, string> = {
-  discount_percent: 'Discount %',
-  discount_absolute: 'Discount $',
-  surcharge_percent: 'Surcharge %',
-  surcharge_absolute: 'Surcharge $',
-  price_override: 'Override',
+/**
+ * Display labels for price-rule types, keyed by the persisted `ruleType`
+ * value. Single translatable source shared by the list, the create form and
+ * the detail page — call inside render with the component's `t`.
+ */
+export function buildRuleTypeLabels(t: TranslateFn): Record<string, string> {
+  return {
+    discount_percent: t('cpq.priceRules.ruleTypes.discountPercent', 'Discount %'),
+    discount_absolute: t('cpq.priceRules.ruleTypes.discountAbsolute', 'Discount $'),
+    surcharge_percent: t('cpq.priceRules.ruleTypes.surchargePercent', 'Surcharge %'),
+    surcharge_absolute: t('cpq.priceRules.ruleTypes.surchargeAbsolute', 'Surcharge $'),
+    price_override: t('cpq.priceRules.ruleTypes.priceOverride', 'Override'),
+  }
 }
 
 export type PriceRuleApplicabilityCondition = {
@@ -145,15 +153,17 @@ export function PriceRuleForm({
   onSave,
   onCancel,
 }: PriceRuleFormProps) {
+  const t = useT()
+  const ruleTypeLabels = buildRuleTypeLabels(t)
   return (
     <div className="rounded-lg border bg-card p-6 space-y-4">
-      <h2 className="text-lg font-semibold">{editingId ? 'Edit Rule' : 'New Rule'}</h2>
+      <h2 className="text-lg font-semibold">{editingId ? t('cpq.priceRules.form.editTitle', 'Edit Rule') : t('cpq.priceRules.form.newTitle', 'New Rule')}</h2>
       {error && (
         <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">{error}</div>
       )}
       <div className="grid grid-cols-2 gap-4">
         <label className="space-y-1">
-          <span className="text-sm font-medium">Code</span>
+          <span className="text-sm font-medium">{t('cpq.priceRules.form.code', 'Code')}</span>
           <Input
             value={form.code}
             onChange={(e) => onFormChange({ ...form, code: e.target.value })}
@@ -161,14 +171,14 @@ export function PriceRuleForm({
           />
         </label>
         <label className="space-y-1">
-          <span className="text-sm font-medium">Name</span>
+          <span className="text-sm font-medium">{t('cpq.priceRules.form.name', 'Name')}</span>
           <Input
             value={form.name}
             onChange={(e) => onFormChange({ ...form, name: e.target.value })}
           />
         </label>
         <label className="space-y-1">
-          <span className="text-sm font-medium">Rule Type</span>
+          <span className="text-sm font-medium">{t('cpq.priceRules.form.ruleType', 'Rule Type')}</span>
           <Select
             value={form.ruleType}
             onValueChange={(value) => onFormChange({ ...form, ruleType: value })}
@@ -177,7 +187,7 @@ export function PriceRuleForm({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {Object.entries(RULE_TYPE_LABELS).map(([k, v]) => (
+              {Object.entries(ruleTypeLabels).map(([k, v]) => (
                 <SelectItem key={k} value={k}>
                   {v}
                 </SelectItem>
@@ -186,14 +196,14 @@ export function PriceRuleForm({
           </Select>
         </label>
         <label className="space-y-1">
-          <span className="text-sm font-medium">Value</span>
+          <span className="text-sm font-medium">{t('cpq.priceRules.form.value', 'Value')}</span>
           <NumberInput
             value={form.value === '' ? null : Number(form.value)}
             onChange={(n) => onFormChange({ ...form, value: n == null ? '' : String(n) })}
           />
         </label>
         <label className="space-y-1">
-          <span className="text-sm font-medium">Charge Type Filter</span>
+          <span className="text-sm font-medium">{t('cpq.priceRules.form.chargeTypeFilter', 'Charge Type Filter')}</span>
           <Select
             value={form.chargeTypeFilter || '__all__'}
             onValueChange={(value) =>
@@ -204,23 +214,23 @@ export function PriceRuleForm({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="__all__">All charge types</SelectItem>
-              <SelectItem value="nrc">NRC only</SelectItem>
-              <SelectItem value="mrc">MRC only</SelectItem>
-              <SelectItem value="usage">Usage only</SelectItem>
+              <SelectItem value="__all__">{t('cpq.priceRules.form.allChargeTypes', 'All charge types')}</SelectItem>
+              <SelectItem value="nrc">{t('cpq.priceRules.form.nrcOnly', 'NRC only')}</SelectItem>
+              <SelectItem value="mrc">{t('cpq.priceRules.form.mrcOnly', 'MRC only')}</SelectItem>
+              <SelectItem value="usage">{t('cpq.priceRules.form.usageOnly', 'Usage only')}</SelectItem>
             </SelectContent>
           </Select>
         </label>
         <label className="space-y-1">
-          <span className="text-sm font-medium">Charge Code Filter</span>
+          <span className="text-sm font-medium">{t('cpq.priceRules.form.chargeCodeFilter', 'Charge Code Filter')}</span>
           <Input
-            placeholder="e.g. setup_fee (leave empty for all)"
+            placeholder={t('cpq.priceRules.form.chargeCodeFilterPlaceholder', 'e.g. setup_fee (leave empty for all)')}
             value={form.chargeCodeFilter}
             onChange={(e) => onFormChange({ ...form, chargeCodeFilter: e.target.value })}
           />
         </label>
         <label className="space-y-1">
-          <span className="text-sm font-medium">Sort Order</span>
+          <span className="text-sm font-medium">{t('cpq.priceRules.form.sortOrder', 'Sort Order')}</span>
           <NumberInput
             integer
             value={form.sortOrder === '' ? null : Number(form.sortOrder)}
@@ -228,15 +238,15 @@ export function PriceRuleForm({
           />
         </label>
         <label className="space-y-1">
-          <span className="text-sm font-medium">Description</span>
+          <span className="text-sm font-medium">{t('cpq.priceRules.form.description', 'Description')}</span>
           <Input
-            placeholder="Optional"
+            placeholder={t('cpq.priceRules.form.descriptionPlaceholder', 'Optional')}
             value={form.description}
             onChange={(e) => onFormChange({ ...form, description: e.target.value })}
           />
         </label>
         <label className="space-y-1 col-span-2">
-          <span className="text-sm font-medium">Product Offering</span>
+          <span className="text-sm font-medium">{t('cpq.priceRules.form.productOffering', 'Product Offering')}</span>
           <Select
             value={form.productOfferingId || '__global__'}
             onValueChange={(value) =>
@@ -247,7 +257,7 @@ export function PriceRuleForm({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="__global__">Global (all products)</SelectItem>
+              <SelectItem value="__global__">{t('cpq.priceRules.form.globalAllProducts', 'Global (all products)')}</SelectItem>
               {offerings.map((o) => (
                 <SelectItem key={o.id} value={o.id}>
                   {o.name} ({o.code})
@@ -256,17 +266,17 @@ export function PriceRuleForm({
             </SelectContent>
           </Select>
           <span className="text-xs text-muted-foreground">
-            Leave as &quot;Global&quot; to apply to all products, or select a specific offering
+            {t('cpq.priceRules.form.productOfferingHint', 'Leave as "Global" to apply to all products, or select a specific offering')}
           </span>
         </label>
         <div className="col-span-2 space-y-1">
-          <span className="text-sm font-medium">Applicability Condition</span>
+          <span className="text-sm font-medium">{t('cpq.priceRules.form.applicabilityCondition', 'Applicability Condition')}</span>
           <span className="ml-2 text-xs text-muted-foreground">
-            (optional — only apply when a product attribute matches)
+            {t('cpq.priceRules.form.applicabilityConditionHint', '(optional — only apply when a product attribute matches)')}
           </span>
           <div className="grid grid-cols-3 gap-2">
             <Input
-              placeholder="Attribute (e.g. port_size)"
+              placeholder={t('cpq.priceRules.form.conditionAttributePlaceholder', 'Attribute (e.g. port_size)')}
               value={form.conditionAttribute}
               onChange={(e) => onFormChange({ ...form, conditionAttribute: e.target.value })}
             />
@@ -278,12 +288,12 @@ export function PriceRuleForm({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="eq">equals (=)</SelectItem>
-                <SelectItem value="neq">not equals (≠)</SelectItem>
+                <SelectItem value="eq">{t('cpq.priceRules.form.operatorEq', 'equals (=)')}</SelectItem>
+                <SelectItem value="neq">{t('cpq.priceRules.form.operatorNeq', 'not equals (≠)')}</SelectItem>
               </SelectContent>
             </Select>
             <Input
-              placeholder="Value (e.g. 100G)"
+              placeholder={t('cpq.priceRules.form.conditionValuePlaceholder', 'Value (e.g. 100G)')}
               value={form.conditionValue}
               onChange={(e) => onFormChange({ ...form, conditionValue: e.target.value })}
             />
@@ -295,14 +305,18 @@ export function PriceRuleForm({
           checked={form.isActive}
           onCheckedChange={(checked) => onFormChange({ ...form, isActive: checked === true })}
         />
-        Active
+        {t('cpq.common.active', 'Active')}
       </label>
       <div className="flex gap-2">
         <Button type="button" onClick={onSave} disabled={saving}>
-          {saving ? 'Saving...' : editingId ? 'Update' : 'Create'}
+          {saving
+            ? t('cpq.common.saving', 'Saving...')
+            : editingId
+              ? t('cpq.priceRules.form.update', 'Update')
+              : t('cpq.priceRules.form.create', 'Create')}
         </Button>
         <Button type="button" variant="outline" onClick={onCancel}>
-          Cancel
+          {t('cpq.common.cancel', 'Cancel')}
         </Button>
       </div>
     </div>

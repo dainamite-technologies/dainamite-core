@@ -17,7 +17,7 @@ import { PricingSummaryCard, type PricingSummaryView } from '../../../../compone
 import { ArcLineDiff, LineActionBadge } from '../../../../components/ArcLineDiff'
 import { arcRecurringDelta } from '../../../../lib/quoteSummaryView'
 import { isArcCancelledLine } from '../../../../services/arcLineRemoval'
-import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { useT, type TranslateFn } from '@open-mercato/shared/lib/i18n/context'
 
 // ─── Types ───────────────────────────────────────────────────────
 
@@ -95,6 +95,19 @@ const ARC_BADGE_VARIANTS: Record<string, 'brand' | 'success' | 'error'> = {
   cancel: 'error',
 }
 
+function quoteTypeLabel(t: TranslateFn, quoteType: string): string {
+  switch (quoteType) {
+    case 'amend':
+      return t('cpq.quotes.type.amend', 'amend')
+    case 'renew':
+      return t('cpq.quotes.type.renew', 'renew')
+    case 'cancel':
+      return t('cpq.quotes.type.cancel', 'cancel')
+    default:
+      return quoteType
+  }
+}
+
 
 // ─── Constants ───────────────────────────────────────────────────
 
@@ -102,10 +115,10 @@ function fmt(amount: number, currency: string): string {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(amount)
 }
 
-async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
+async function apiJson<T>(t: TranslateFn, url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init)
   const json = await res.json()
-  if (!res.ok) throw new Error(json?.error ?? `Request failed (${res.status})`)
+  if (!res.ok) throw new Error(json?.error ?? t('cpq.common.requestFailed', 'Request failed ({status})', { status: res.status }))
   return json as T
 }
 
@@ -113,6 +126,7 @@ async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
 
 export default function CpqOrderDetailPage(props: { params?: { id?: string } }) {
   const router = useRouter()
+  const t = useT()
   const urlParams = useParams()
   const cpqOrderId = (props.params?.id ?? urlParams?.id) as string
 
@@ -151,8 +165,8 @@ export default function CpqOrderDetailPage(props: { params?: { id?: string } }) 
             .then(async (d) => {
               const targets: Array<{ subscriptionId: string }> = d?.items ?? []
               const fetched = await Promise.all(
-                targets.map((t) =>
-                  fetch(`/api/cpq/inventory/subscriptions?id=${t.subscriptionId}`)
+                targets.map((target) =>
+                  fetch(`/api/cpq/inventory/subscriptions?id=${target.subscriptionId}`)
                     .then((r) => (r.ok ? r.json() : null))
                     .catch(() => null),
                 ),
@@ -181,7 +195,7 @@ export default function CpqOrderDetailPage(props: { params?: { id?: string } }) 
     let cancelled = false
     async function load() {
       try {
-        const result = await apiJson<OrderResult>(`/api/cpq/orders/${cpqOrderId}`)
+        const result = await apiJson<OrderResult>(t, `/api/cpq/orders/${cpqOrderId}`)
         if (!cancelled) {
           setOrder(result)
           fetch(`/api/customers/companies?id=${result.customerId}&pageSize=1`)
@@ -204,14 +218,14 @@ export default function CpqOrderDetailPage(props: { params?: { id?: string } }) 
     }
     load()
     return () => { cancelled = true }
-  }, [cpqOrderId, fetchLinkedSubscriptions])
+  }, [cpqOrderId, fetchLinkedSubscriptions, t])
 
   const activateOrder = async () => {
     if (!order) return
     try {
       setActivating(true)
       setError(null)
-      const result = await apiJson<OrderResult>(`/api/cpq/orders/${order.id}/activate`, {
+      const result = await apiJson<OrderResult>(t, `/api/cpq/orders/${order.id}/activate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({}),
@@ -229,7 +243,7 @@ export default function CpqOrderDetailPage(props: { params?: { id?: string } }) 
     if (!order) return
     try {
       setError(null)
-      const result = await apiJson<OrderResult>(`/api/cpq/orders/${order.id}/status`, {
+      const result = await apiJson<OrderResult>(t, `/api/cpq/orders/${order.id}/status`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ targetStatus: 'cancelled' }),
@@ -249,7 +263,7 @@ export default function CpqOrderDetailPage(props: { params?: { id?: string } }) 
   if (loading) {
     return (
       <div className="flex items-center gap-2 py-12 justify-center text-sm text-muted-foreground">
-        <Spinner /> Loading…
+        <Spinner /> {t('cpq.orders.detail.loading', 'Loading…')}
       </div>
     )
   }
@@ -257,9 +271,9 @@ export default function CpqOrderDetailPage(props: { params?: { id?: string } }) 
   if (!order) {
     return (
       <div className="space-y-4">
-        <button onClick={() => router.push('/backend/cpq/orders')} className="text-sm text-muted-foreground hover:text-foreground">← Back to Orders</button>
+        <button onClick={() => router.push('/backend/cpq/orders')} className="text-sm text-muted-foreground hover:text-foreground">{t('cpq.orders.detail.backToOrders', '← Back to Orders')}</button>
         {error && <ErrorBanner message={error} />}
-        <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">Order not found.</div>
+        <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">{t('cpq.orders.detail.notFound', 'Order not found.')}</div>
       </div>
     )
   }
@@ -286,8 +300,8 @@ export default function CpqOrderDetailPage(props: { params?: { id?: string } }) 
       <FormHeader
         mode="detail"
         backHref="/backend/cpq/orders"
-        backLabel="Back to CPQ Orders"
-        entityTypeLabel="CPQ Order"
+        backLabel={t('cpq.orders.detail.backLabel', 'Back to CPQ Orders')}
+        entityTypeLabel={t('cpq.orders.detail.entityType', 'CPQ Order')}
         title={order.orderNumber || order.orderId.slice(0, 8)}
         statusBadge={
           <div className="flex flex-wrap items-center gap-2 pt-1">
@@ -296,7 +310,7 @@ export default function CpqOrderDetailPage(props: { params?: { id?: string } }) 
             </Tag>
             {order.quoteType && order.quoteType !== 'new' && (
               <Tag variant={ARC_BADGE_VARIANTS[order.quoteType] ?? 'neutral'} className="uppercase">
-                {order.quoteType}
+                {quoteTypeLabel(t, order.quoteType)}
               </Tag>
             )}
           </div>
@@ -309,7 +323,7 @@ export default function CpqOrderDetailPage(props: { params?: { id?: string } }) 
               onClick={() => router.push(`/backend/sales/orders/${order.orderId}`)}
             >
               <ExternalLink className="h-3.5 w-3.5" />
-              View Sales Order
+              {t('cpq.orders.detail.viewSalesOrder', 'View Sales Order')}
             </Button>
             {order.sourceQuoteId && (
               <Button
@@ -317,19 +331,19 @@ export default function CpqOrderDetailPage(props: { params?: { id?: string } }) 
                 variant="outline"
                 onClick={() => router.push(`/backend/cpq/quotes/${order.sourceQuoteId}`)}
               >
-                Source Quote
+                {t('cpq.orders.detail.sourceQuote', 'Source Quote')}
               </Button>
             )}
             {canActivate && (
               <Button type="button" onClick={activateOrder} disabled={activating}>
                 {activating ? <Spinner /> : <Play className="h-4 w-4" />}
-                Activate
+                {t('cpq.orders.detail.activate', 'Activate')}
               </Button>
             )}
             {canCancel && (
               <Button type="button" variant="destructive-outline" onClick={cancelOrder}>
                 <X className="h-4 w-4" />
-                Cancel
+                {t('cpq.common.cancel', 'Cancel')}
               </Button>
             )}
           </>
@@ -348,7 +362,7 @@ export default function CpqOrderDetailPage(props: { params?: { id?: string } }) 
           path={['draft', 'pending_activation', 'active', 'fulfilled']}
           terminals={['cancelled']}
           statusMap={orderCpqStatusMap}
-          ariaLabel="Order status path"
+          ariaLabel={t('cpq.orders.detail.statusPath', 'Order status path')}
         />
       </div>
 
@@ -368,7 +382,7 @@ export default function CpqOrderDetailPage(props: { params?: { id?: string } }) 
               <div className="flex-1 min-w-0 space-y-1">
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                    Linked Subscription
+                    {t('cpq.orders.detail.linkedSubscription', 'Linked Subscription')}
                   </span>
                   <Tag
                     variant={sub.status === 'active' ? 'success' : 'info'}
@@ -384,7 +398,7 @@ export default function CpqOrderDetailPage(props: { params?: { id?: string } }) 
                 </div>
                 {order.activatedAt && (
                   <div className="text-xs text-muted-foreground">
-                    Activated on {new Date(order.activatedAt).toLocaleString()}
+                    {t('cpq.orders.detail.activatedOn', 'Activated on {date}', { date: new Date(order.activatedAt).toLocaleString() })}
                   </div>
                 )}
               </div>
@@ -394,7 +408,7 @@ export default function CpqOrderDetailPage(props: { params?: { id?: string } }) 
                 onClick={() => router.push(`/backend/cpq/inventory/subscriptions/${sub.id}`)}
               >
                 <ArrowRight className="h-3.5 w-3.5" />
-                Open
+                {t('cpq.orders.actions.open', 'Open')}
               </Button>
             </div>
           ))}
@@ -403,7 +417,7 @@ export default function CpqOrderDetailPage(props: { params?: { id?: string } }) 
 
       {/* Meta cards — secondary reference info, matches the quote layout. */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-        <MetaCard label="Customer">
+        <MetaCard label={t('cpq.orders.detail.meta.customer', 'Customer')}>
           {customerName ? (
             <span className="font-medium">{customerName}</span>
           ) : (
@@ -412,10 +426,10 @@ export default function CpqOrderDetailPage(props: { params?: { id?: string } }) 
             </span>
           )}
         </MetaCard>
-        <MetaCard label="Created">
+        <MetaCard label={t('cpq.orders.detail.meta.created', 'Created')}>
           <span className="font-medium">{new Date(order.createdAt).toLocaleDateString()}</span>
         </MetaCard>
-        <MetaCard label="Currency">
+        <MetaCard label={t('cpq.orders.detail.meta.currency', 'Currency')}>
           <span className="font-medium">{currency}</span>
         </MetaCard>
       </div>
@@ -472,6 +486,7 @@ function OrderLineTree({
   onToggleLine: (id: string) => void
   onTogglePricingDetail: (lineIdx: number, chargeIdx: number) => void
 }) {
+  const t = useT()
   const rootLines = lines.filter((l) => !l.parentLineId)
   const childrenByParent = new Map<string, OrderLineResult[]>()
   for (const line of lines) {
@@ -489,10 +504,10 @@ function OrderLineTree({
 
   return (
     <div>
-      <h3 className="text-sm font-medium mb-2 px-1">Line Items ({lines.length})</h3>
+      <h3 className="text-sm font-medium mb-2 px-1">{t('cpq.orders.detail.lineItems', 'Line Items ({count})', { count: lines.length })}</h3>
       {lines.length === 0 ? (
         <div className="rounded-lg border bg-card py-8 text-center text-sm text-muted-foreground">
-          No line items.
+          {t('cpq.orders.detail.noLineItems', 'No line items.')}
         </div>
       ) : (
         <div className="rounded-lg border bg-card divide-y">
@@ -519,7 +534,7 @@ function OrderLineTree({
                 {isBundle && isExpanded && children.length > 0 && (
                   <div className="border-t border-dashed border-brand-violet/30 bg-brand-violet/5">
                     <div className="px-6 py-1.5">
-                      <span className="text-[10px] font-medium text-brand-violet uppercase tracking-wider">Bundle Components ({children.length})</span>
+                      <span className="text-[10px] font-medium text-brand-violet uppercase tracking-wider">{t('cpq.lines.bundleComponents', 'Bundle Components ({count})', { count: children.length })}</span>
                     </div>
                     {children.map((child) => {
                       const childIdx = indexOf.get(child.lineId) ?? 0
@@ -582,7 +597,7 @@ function OrderLineRow({ line, lineIdx, quoteType, currency, isExpanded, isBundle
           <div className="flex items-center gap-2">
             {indent > 0 && <span className="text-muted-foreground text-xs">└</span>}
             {isBundle && (
-              <Tag variant="brand" className="px-1.5 text-xs">bundle</Tag>
+              <Tag variant="brand" className="px-1.5 text-xs">{t('cpq.lines.bundle', 'bundle')}</Tag>
             )}
             <span className={`font-medium text-sm ${isRemoved ? 'text-muted-foreground line-through' : ''}`}>{line.offeringName}</span>
             {line.quantity > 1 && <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-medium">×{line.quantity}</span>}
@@ -591,19 +606,25 @@ function OrderLineRow({ line, lineIdx, quoteType, currency, isExpanded, isBundle
               label={isRemoved ? t('cpq.quotes.arc.lineRemoved', 'remove') : undefined}
               title={isRemoved ? t('cpq.quotes.arc.lineRemovedHint', 'This item is cancelled on the subscription when the order is activated') : undefined}
             />
-            {isBundle && <span className="text-xs text-muted-foreground">{childCount} component{childCount !== 1 ? 's' : ''}</span>}
+            {isBundle && (
+              <span className="text-xs text-muted-foreground">
+                {childCount !== 1
+                  ? t('cpq.lines.componentCount.other', '{count} components', { count: childCount })
+                  : t('cpq.lines.componentCount.one', '{count} component', { count: childCount })}
+              </span>
+            )}
           </div>
         </div>
 
         <div className="shrink-0 text-right text-xs space-y-0.5">
           {isRemoved && line.arcSource && line.arcSource.mrcAmount > 0 && (
             <div>
-              <span className="text-muted-foreground">MRC </span>
+              <span className="text-muted-foreground">{t('cpq.lines.mrc', 'MRC')} </span>
               <span className="font-mono text-muted-foreground line-through">{fmt(line.arcSource.mrcAmount, currency)}</span>
             </div>
           )}
-          {line.nrcTotal > 0 && <div><span className="text-muted-foreground">NRC </span><span className="font-mono font-medium">{fmt(line.nrcTotal, currency)}</span></div>}
-          {line.mrcTotal > 0 && <div><span className="text-muted-foreground">MRC </span><span className="font-mono font-medium">{fmt(line.mrcTotal, currency)}</span></div>}
+          {line.nrcTotal > 0 && <div><span className="text-muted-foreground">{t('cpq.lines.nrc', 'NRC')} </span><span className="font-mono font-medium">{fmt(line.nrcTotal, currency)}</span></div>}
+          {line.mrcTotal > 0 && <div><span className="text-muted-foreground">{t('cpq.lines.mrc', 'MRC')} </span><span className="font-mono font-medium">{fmt(line.mrcTotal, currency)}</span></div>}
         </div>
       </div>
 
@@ -627,16 +648,17 @@ function OrderLineRow({ line, lineIdx, quoteType, currency, isExpanded, isBundle
             {isEmpty ? (
               <div className="text-xs text-muted-foreground space-y-1">
                 <div>
-                  No detailed breakdown for this line.
-                  {mirroredFromItemId && ' Mirrored from existing subscription item.'}
+                  {t('cpq.orders.detail.noBreakdown', 'No detailed breakdown for this line.')}
+                  {mirroredFromItemId && ' '}
+                  {mirroredFromItemId && t('cpq.orders.detail.mirroredItem', 'Mirrored from existing subscription item.')}
                 </div>
                 {(line.nrcTotal > 0 || line.mrcTotal > 0) && (
                   <div className="flex gap-4">
                     {line.nrcTotal > 0 && (
-                      <span>NRC <span className="font-mono font-medium text-foreground">{fmt(line.nrcTotal, currency)}</span></span>
+                      <span>{t('cpq.lines.nrc', 'NRC')} <span className="font-mono font-medium text-foreground">{fmt(line.nrcTotal, currency)}</span></span>
                     )}
                     {line.mrcTotal > 0 && (
-                      <span>MRC <span className="font-mono font-medium text-foreground">{fmt(line.mrcTotal, currency)}</span></span>
+                      <span>{t('cpq.lines.mrc', 'MRC')} <span className="font-mono font-medium text-foreground">{fmt(line.mrcTotal, currency)}</span></span>
                     )}
                   </div>
                 )}
@@ -645,7 +667,7 @@ function OrderLineRow({ line, lineIdx, quoteType, currency, isExpanded, isBundle
               <>
                 {hasConfig && (
                   <div>
-                    <p className="text-xs font-medium text-muted-foreground mb-1">Configuration</p>
+                    <p className="text-xs font-medium text-muted-foreground mb-1">{t('cpq.lines.configuration', 'Configuration')}</p>
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-1">
                       {visibleConfigEntries.map(([key, value]) => (
                         <div key={key} className="text-xs">
@@ -668,9 +690,9 @@ function OrderLineRow({ line, lineIdx, quoteType, currency, isExpanded, isBundle
 
                 {hasTerm && (
                   <div className="flex gap-4 text-xs text-muted-foreground">
-                    {line.startDate && <span>Start: {new Date(line.startDate).toLocaleDateString()}</span>}
-                    {line.termMonths && <span>Term: {line.termMonths}mo</span>}
-                    {line.endDate && <span>End: {new Date(line.endDate).toLocaleDateString()}</span>}
+                    {line.startDate && <span>{t('cpq.lines.term.start', 'Start: {date}', { date: new Date(line.startDate).toLocaleDateString() })}</span>}
+                    {line.termMonths && <span>{t('cpq.lines.term.months', 'Term: {months}mo', { months: line.termMonths })}</span>}
+                    {line.endDate && <span>{t('cpq.lines.term.end', 'End: {date}', { date: new Date(line.endDate).toLocaleDateString() })}</span>}
                   </div>
                 )}
 
@@ -695,6 +717,7 @@ function Spinner() {
 }
 
 function ErrorBanner({ message, onDismiss }: { message: string; onDismiss?: () => void }) {
+  const t = useT()
   return (
     <Alert variant="destructive" className="flex items-start gap-2">
       <span className="flex-1">{message}</span>
@@ -702,7 +725,7 @@ function ErrorBanner({ message, onDismiss }: { message: string; onDismiss?: () =
         <button
           onClick={onDismiss}
           className="text-destructive/70 hover:text-destructive text-sm font-bold"
-          aria-label="Dismiss"
+          aria-label={t('cpq.common.dismiss', 'Dismiss')}
         >
           ×
         </button>

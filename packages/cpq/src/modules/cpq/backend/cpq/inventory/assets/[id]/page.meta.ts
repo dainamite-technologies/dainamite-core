@@ -4,6 +4,6 @@ export const metadata = {
   navHidden: true,
   breadcrumb: [
     { label: 'Customer Inventory', labelKey: 'cpq.inventory.title', href: '/backend/cpq/inventory' },
-    { label: 'Asset Detail' },
+    { label: 'Asset Detail', labelKey: 'cpq.inventory.assets.detail.breadcrumb' },
   ],
 } as const

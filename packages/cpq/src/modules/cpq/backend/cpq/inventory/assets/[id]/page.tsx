@@ -1,16 +1,17 @@
 "use client"
 import * as React from 'react'
 import { useRouter, useParams } from 'next/navigation'
+import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { Alert } from '@open-mercato/ui/primitives/alert'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { FormHeader } from '@open-mercato/ui/backend/forms'
 import {
   assetStatusMap,
-  formatStatusLabel,
   type AssetStatus,
 } from '../../../../../components/statusMaps'
 import { StatusPath } from '../../../../../components/StatusPath'
+import { buildInventoryStatusLabels, inventoryStatusLabel } from '../../shared'
 
 type AssetDetail = {
   id: string
@@ -48,19 +49,14 @@ const ALLOWED_TRANSITIONS: Record<string, string[]> = {
   cancelled: [],
 }
 
-const STATUS_LABELS: Record<string, string> = {
-  pending: 'Pending',
-  delivered: 'Delivered',
-  active: 'Active',
-  returned: 'Returned',
-  cancelled: 'Cancelled',
-}
+const ASSET_STATUSES = ['pending', 'delivered', 'active', 'returned', 'cancelled'] as const
 
 function fmt(amount: number | string, currency: string): string {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(Number(amount))
 }
 
 export default function AssetDetailPage(props: { params?: { id?: string } }) {
+  const t = useT()
   const router = useRouter()
   const urlParams = useParams()
   const assetId = (props.params?.id ?? urlParams?.id) as string
@@ -89,7 +85,7 @@ export default function AssetDetailPage(props: { params?: { id?: string } }) {
         body: JSON.stringify({ id: asset.id, targetStatus }),
       })
       const data = await res.json()
-      if (!res.ok) throw new Error(data?.error ?? 'Status transition failed')
+      if (!res.ok) throw new Error(data?.error ?? t('cpq.inventory.assets.detail.error.transitionFailed', 'Status transition failed'))
       setAsset((prev) => prev ? { ...prev, ...data } : prev)
     } catch (err) {
       setError((err as Error).message)
@@ -103,7 +99,7 @@ export default function AssetDetailPage(props: { params?: { id?: string } }) {
     async function load() {
       try {
         const res = await fetch(`/api/cpq/inventory/assets?id=${assetId}`)
-        if (!res.ok) throw new Error('Asset not found')
+        if (!res.ok) throw new Error(t('cpq.inventory.assets.detail.error.notFound', 'Asset not found'))
         const data: AssetDetail = await res.json()
         if (!cancelled) {
           setAsset(data)
@@ -182,12 +178,12 @@ export default function AssetDetailPage(props: { params?: { id?: string } }) {
     }
     load()
     return () => { cancelled = true }
-  }, [assetId])
+  }, [assetId, t])
 
   if (loading) {
     return (
       <div className="flex items-center gap-2 py-12 justify-center text-sm text-muted-foreground">
-        <Spinner /> Loading…
+        <Spinner /> {t('cpq.inventory.assets.detail.loading', 'Loading…')}
       </div>
     )
   }
@@ -195,15 +191,16 @@ export default function AssetDetailPage(props: { params?: { id?: string } }) {
   if (!asset) {
     return (
       <div className="space-y-4">
-        <button onClick={() => router.push('/backend/cpq/inventory')} className="text-sm text-muted-foreground hover:text-foreground">← Back</button>
+        <button onClick={() => router.push('/backend/cpq/inventory')} className="text-sm text-muted-foreground hover:text-foreground">← {t('cpq.common.back', 'Back')}</button>
         {error && <ErrorBanner message={error} />}
-        <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">Asset not found.</div>
+        <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">{t('cpq.inventory.assets.detail.notFound', 'Asset not found.')}</div>
       </div>
     )
   }
 
   const currency = asset.currencyCode || 'USD'
   const statusTransitions = ALLOWED_TRANSITIONS[asset.status] ?? []
+  const statusLabels = buildInventoryStatusLabels(t, ASSET_STATUSES)
 
   return (
     <div className="space-y-6">
@@ -214,13 +211,13 @@ export default function AssetDetailPage(props: { params?: { id?: string } }) {
       <FormHeader
         mode="detail"
         backHref="/backend/cpq/inventory"
-        backLabel="Back to Customer Inventory"
-        entityTypeLabel="Asset"
+        backLabel={t('cpq.inventory.detail.backToInventory', 'Back to Customer Inventory')}
+        entityTypeLabel={t('cpq.inventory.assets.detail.entityType', 'Asset')}
         title={asset.name}
         statusBadge={
           <div className="flex flex-wrap items-center gap-2 pt-1">
             <Tag variant={assetStatusMap[asset.status as AssetStatus] ?? 'neutral'} dot>
-              {STATUS_LABELS[asset.status] ?? formatStatusLabel(asset.status)}
+              {inventoryStatusLabel(t, asset.status)}
             </Tag>
             <Tag variant="brand" className="capitalize">{asset.assetType.replace(/_/g, ' ')}</Tag>
             {transitioning && <Spinner />}
@@ -236,11 +233,11 @@ export default function AssetDetailPage(props: { params?: { id?: string } }) {
           path={['pending', 'delivered', 'active', 'returned']}
           terminals={['cancelled']}
           statusMap={assetStatusMap}
-          labels={STATUS_LABELS}
+          labels={statusLabels}
           onTransition={transitionStatus}
           allowedTransitions={statusTransitions}
           disabled={transitioning}
-          ariaLabel="Asset status path"
+          ariaLabel={t('cpq.inventory.assets.detail.statusPath', 'Asset status path')}
         />
         {transitioning && <Spinner />}
       </div>
@@ -250,36 +247,36 @@ export default function AssetDetailPage(props: { params?: { id?: string } }) {
       {/* Detail Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div className="rounded-lg border bg-card p-4 space-y-3">
-          <h3 className="text-sm font-medium">Asset Details</h3>
+          <h3 className="text-sm font-medium">{t('cpq.inventory.assets.detail.sections.details', 'Asset Details')}</h3>
           <div className="grid grid-cols-2 gap-x-4 gap-y-2">
-            <Field label="Code" value={asset.code} mono />
-            <Field label="Status" value={asset.status} />
-            <Field label="Asset Type" value={asset.assetType.replace(/_/g, ' ')} />
-            <Field label="Currency" value={currency} />
-            <Field label="Quantity" value={String(asset.quantity)} />
-            {asset.purchaseDate && <Field label="Purchase Date" value={new Date(asset.purchaseDate).toLocaleDateString()} />}
-            {asset.deliveryDate && <Field label="Delivery Date" value={new Date(asset.deliveryDate).toLocaleDateString()} />}
+            <Field label={t('cpq.inventory.assets.detail.fields.code', 'Code')} value={asset.code} mono />
+            <Field label={t('cpq.inventory.assets.detail.fields.status', 'Status')} value={asset.status} />
+            <Field label={t('cpq.inventory.assets.detail.fields.assetType', 'Asset Type')} value={asset.assetType.replace(/_/g, ' ')} />
+            <Field label={t('cpq.inventory.assets.detail.fields.currency', 'Currency')} value={currency} />
+            <Field label={t('cpq.inventory.assets.detail.fields.quantity', 'Quantity')} value={String(asset.quantity)} />
+            {asset.purchaseDate && <Field label={t('cpq.inventory.assets.detail.fields.purchaseDate', 'Purchase Date')} value={new Date(asset.purchaseDate).toLocaleDateString()} />}
+            {asset.deliveryDate && <Field label={t('cpq.inventory.assets.detail.fields.deliveryDate', 'Delivery Date')} value={new Date(asset.deliveryDate).toLocaleDateString()} />}
           </div>
           {asset.description && (
             <div className="pt-1">
-              <p className="text-xs text-muted-foreground">Description</p>
+              <p className="text-xs text-muted-foreground">{t('cpq.inventory.assets.detail.fields.description', 'Description')}</p>
               <p className="text-sm">{asset.description}</p>
             </div>
           )}
         </div>
 
         <div className="rounded-lg border bg-card p-4 space-y-3">
-          <h3 className="text-sm font-medium">Pricing & References</h3>
+          <h3 className="text-sm font-medium">{t('cpq.inventory.assets.detail.sections.pricing', 'Pricing & References')}</h3>
           <div>
-            <p className="text-xs text-muted-foreground">Purchase Price</p>
+            <p className="text-xs text-muted-foreground">{t('cpq.inventory.assets.detail.fields.purchasePrice', 'Purchase Price')}</p>
             <p className="text-lg font-semibold font-mono">{fmt(asset.purchasePrice, currency)}</p>
           </div>
           <div className="grid grid-cols-2 gap-x-4 gap-y-2 pt-1">
-            <Field label="Customer" value={customerName ?? `${asset.customerId.slice(0, 12)}…`} />
-            <Field label="Created" value={new Date(asset.createdAt).toLocaleString()} />
+            <Field label={t('cpq.inventory.assets.detail.fields.customer', 'Customer')} value={customerName ?? `${asset.customerId.slice(0, 12)}…`} />
+            <Field label={t('cpq.inventory.assets.detail.fields.created', 'Created')} value={new Date(asset.createdAt).toLocaleString()} />
             {asset.subscriptionId && (
               <RefField
-                label="Linked Subscription"
+                label={t('cpq.inventory.assets.detail.fields.linkedSubscription', 'Linked Subscription')}
                 name={subscriptionName ?? undefined}
                 fallback={asset.subscriptionId}
                 onClick={() => router.push(`/backend/cpq/inventory/subscriptions/${asset.subscriptionId}`)}
@@ -287,7 +284,7 @@ export default function AssetDetailPage(props: { params?: { id?: string } }) {
             )}
             {asset.offeringId && (
               <RefField
-                label="Offering"
+                label={t('cpq.inventory.assets.detail.fields.offering', 'Offering')}
                 name={offeringName ?? undefined}
                 fallback={asset.offeringId}
                 onClick={() => router.push(`/backend/cpq/offerings/${asset.offeringId}`)}
@@ -295,7 +292,7 @@ export default function AssetDetailPage(props: { params?: { id?: string } }) {
             )}
             {asset.specId && (
               <RefField
-                label="Specification"
+                label={t('cpq.inventory.assets.detail.fields.specification', 'Specification')}
                 name={specName ?? undefined}
                 fallback={asset.specId}
                 onClick={() => router.push(`/backend/cpq/specifications/${asset.specId}`)}
@@ -303,7 +300,7 @@ export default function AssetDetailPage(props: { params?: { id?: string } }) {
             )}
             {asset.productId && (
               <RefField
-                label="Product"
+                label={t('cpq.inventory.assets.detail.fields.product', 'Product')}
                 name={productName ?? undefined}
                 fallback={asset.productId}
                 onClick={() => router.push(`/backend/catalog/products/${asset.productId}`)}
@@ -311,7 +308,7 @@ export default function AssetDetailPage(props: { params?: { id?: string } }) {
             )}
             {asset.sourceQuoteId && (
               <RefField
-                label="Source Quote"
+                label={t('cpq.inventory.assets.detail.fields.sourceQuote', 'Source Quote')}
                 name={sourceQuoteNumber ?? undefined}
                 fallback={asset.sourceQuoteId}
                 onClick={() => router.push(`/backend/cpq/quotes/${asset.sourceQuoteId}`)}
@@ -319,7 +316,7 @@ export default function AssetDetailPage(props: { params?: { id?: string } }) {
             )}
             {asset.sourceOrderId && (
               <RefField
-                label="Source Order"
+                label={t('cpq.inventory.assets.detail.fields.sourceOrder', 'Source Order')}
                 name={sourceOrderNumber ?? undefined}
                 fallback={asset.sourceOrderId}
                 onClick={() => router.push(`/backend/cpq/orders/${asset.sourceOrderId}`)}
@@ -332,7 +329,7 @@ export default function AssetDetailPage(props: { params?: { id?: string } }) {
       {/* Configuration */}
       {asset.configuration && Object.keys(asset.configuration).length > 0 && (
         <div className="rounded-lg border bg-card p-4">
-          <h3 className="text-sm font-medium mb-2">Configuration</h3>
+          <h3 className="text-sm font-medium mb-2">{t('cpq.inventory.assets.detail.sections.configuration', 'Configuration')}</h3>
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-1">
             {Object.entries(asset.configuration).map(([key, value]) => (
               <div key={key} className="text-xs">
@@ -347,15 +344,15 @@ export default function AssetDetailPage(props: { params?: { id?: string } }) {
       {/* Charges */}
       {asset.charges && asset.charges.length > 0 && (
         <div className="rounded-lg border bg-card p-4">
-          <h3 className="text-sm font-medium mb-2">Charges</h3>
+          <h3 className="text-sm font-medium mb-2">{t('cpq.inventory.assets.detail.sections.charges', 'Charges')}</h3>
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b bg-muted/50 text-muted-foreground">
-                <th className="text-left px-3 py-2 font-medium">Charge</th>
-                <th className="text-left px-3 py-2 font-medium">Type</th>
-                <th className="text-right px-3 py-2 font-medium">Unit Price</th>
-                <th className="text-right px-3 py-2 font-medium">Qty</th>
-                <th className="text-right px-3 py-2 font-medium">Total</th>
+                <th className="text-left px-3 py-2 font-medium">{t('cpq.inventory.assets.detail.charges.charge', 'Charge')}</th>
+                <th className="text-left px-3 py-2 font-medium">{t('cpq.inventory.assets.detail.charges.type', 'Type')}</th>
+                <th className="text-right px-3 py-2 font-medium">{t('cpq.inventory.assets.detail.charges.unitPrice', 'Unit Price')}</th>
+                <th className="text-right px-3 py-2 font-medium">{t('cpq.inventory.assets.detail.charges.qty', 'Qty')}</th>
+                <th className="text-right px-3 py-2 font-medium">{t('cpq.inventory.assets.detail.charges.total', 'Total')}</th>
               </tr>
             </thead>
             <tbody>
@@ -376,7 +373,7 @@ export default function AssetDetailPage(props: { params?: { id?: string } }) {
       {/* Metadata */}
       {asset.metadata && Object.keys(asset.metadata).length > 0 && (
         <div className="rounded-lg border bg-card p-4">
-          <h3 className="text-sm font-medium mb-2">Metadata</h3>
+          <h3 className="text-sm font-medium mb-2">{t('cpq.inventory.assets.detail.sections.metadata', 'Metadata')}</h3>
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-1">
             {Object.entries(asset.metadata).map(([key, value]) => (
               <div key={key} className="text-xs">

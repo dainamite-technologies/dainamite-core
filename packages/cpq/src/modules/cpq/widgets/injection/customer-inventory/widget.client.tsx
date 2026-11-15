@@ -2,14 +2,15 @@
 import * as React from 'react'
 import type { InjectionWidgetComponentProps } from '@open-mercato/shared/modules/widgets/injection'
 import { useRouter } from 'next/navigation'
+import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import {
   assetStatusMap,
-  formatStatusLabel,
   subscriptionStatusMap,
   type AssetStatus,
   type SubscriptionStatus,
 } from '../../../components/statusMaps'
+import { inventoryStatusLabel } from '../../../backend/cpq/inventory/shared'
 
 // ─── Types ───────────────────────────────────────────────────────
 
@@ -79,13 +80,14 @@ function fmt(amount: number, currency: string): string {
 }
 
 function StatusBadge({ status }: { status: string }) {
+  const t = useT()
   const variant =
     subscriptionStatusMap[status as SubscriptionStatus] ??
     assetStatusMap[status as AssetStatus] ??
     'neutral'
   return (
     <Tag variant={variant} dot>
-      {formatStatusLabel(status)}
+      {inventoryStatusLabel(t, status)}
     </Tag>
   )
 }
@@ -93,6 +95,7 @@ function StatusBadge({ status }: { status: string }) {
 // ─── Main Widget ─────────────────────────────────────────────────
 
 export default function CustomerInventoryWidget({ data, context }: InjectionWidgetComponentProps & { context?: Record<string, unknown> }) {
+  const t = useT()
   const router = useRouter()
   const record = data as Record<string, unknown> | null
   const companyRecord = record?.company as Record<string, unknown> | undefined
@@ -121,12 +124,12 @@ export default function CustomerInventoryWidget({ data, context }: InjectionWidg
     return () => { cancelled = true }
   }, [customerId])
 
-  if (!customerId) return <div className="p-4 text-sm text-muted-foreground">No customer context available.</div>
+  if (!customerId) return <div className="p-4 text-sm text-muted-foreground">{t('cpq.widgets.customerInventory.noContext', 'No customer context available.')}</div>
 
   if (loading) {
     return (
       <div className="flex items-center gap-2 p-6 text-sm text-muted-foreground">
-        <Spinner /> Loading inventory…
+        <Spinner /> {t('cpq.widgets.customerInventory.loading', 'Loading inventory…')}
       </div>
     )
   }
@@ -139,7 +142,7 @@ export default function CustomerInventoryWidget({ data, context }: InjectionWidg
             <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 7.5l-.625 10.632a2.25 2.25 0 01-2.247 2.118H6.622a2.25 2.25 0 01-2.247-2.118L3.75 7.5M10 11.25h4M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125z" />
           </svg>
         </div>
-        <p className="text-sm text-muted-foreground">No inventory records found.</p>
+        <p className="text-sm text-muted-foreground">{t('cpq.widgets.customerInventory.empty', 'No inventory records found.')}</p>
       </div>
     )
   }
@@ -148,19 +151,19 @@ export default function CustomerInventoryWidget({ data, context }: InjectionWidg
   const currency = summary.currencyCode || 'USD'
 
   const tabs: { key: TabKey; label: string; count: number }[] = [
-    { key: 'subscriptions', label: 'Subscriptions', count: inventory.subscriptions.length },
-    { key: 'items', label: 'Subscription Items', count: inventory.subscriptionItems.length },
-    { key: 'assets', label: 'Assets', count: inventory.assets.length },
+    { key: 'subscriptions', label: t('cpq.widgets.customerInventory.tabs.subscriptions', 'Subscriptions'), count: inventory.subscriptions.length },
+    { key: 'items', label: t('cpq.widgets.customerInventory.tabs.items', 'Subscription Items'), count: inventory.subscriptionItems.length },
+    { key: 'assets', label: t('cpq.widgets.customerInventory.tabs.assets', 'Assets'), count: inventory.assets.length },
   ]
 
   return (
     <div className="space-y-4">
       {/* Summary Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <SummaryCard label="Active Subscriptions" value={String(summary.activeSubscriptions)} />
-        <SummaryCard label="Total MRC" value={fmt(summary.totalMrc, currency)} mono />
-        <SummaryCard label="Active Assets" value={String(summary.activeAssets)} />
-        <SummaryCard label="Pending Items" value={String(summary.pendingItems)} />
+        <SummaryCard label={t('cpq.widgets.customerInventory.summary.activeSubscriptions', 'Active Subscriptions')} value={String(summary.activeSubscriptions)} />
+        <SummaryCard label={t('cpq.widgets.customerInventory.summary.totalMrc', 'Total MRC')} value={fmt(summary.totalMrc, currency)} mono />
+        <SummaryCard label={t('cpq.widgets.customerInventory.summary.activeAssets', 'Active Assets')} value={String(summary.activeAssets)} />
+        <SummaryCard label={t('cpq.widgets.customerInventory.summary.pendingItems', 'Pending Items')} value={String(summary.pendingItems)} />
       </div>
 
       {/* Tab Switcher */}
@@ -189,7 +192,7 @@ export default function CustomerInventoryWidget({ data, context }: InjectionWidg
       {/* Link to full page */}
       <div className="pt-2 text-right">
         <a href="/backend/cpq/inventory" className="text-sm text-primary hover:underline">
-          View full inventory →
+          {t('cpq.widgets.customerInventory.viewFull', 'View full inventory →')}
         </a>
       </div>
     </div>
@@ -210,18 +213,19 @@ function SummaryCard({ label, value, mono }: { label: string; value: string; mon
 // ─── Subscriptions Table ─────────────────────────────────────────
 
 function SubscriptionsTable({ items, currency, onOpen }: { items: Subscription[]; currency: string; onOpen: (id: string) => void }) {
+  const t = useT()
   if (items.length === 0) return <EmptyTab />
   return (
     <div className="rounded-lg border bg-card overflow-hidden">
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b border-border bg-muted/40 text-muted-foreground">
-            <th className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wide">Name</th>
-            <th className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wide">Status</th>
-            <th className="px-4 py-2.5 text-right text-xs font-medium uppercase tracking-wide">MRC</th>
-            <th className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wide">Billing</th>
-            <th className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wide">Start Date</th>
-            <th className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wide">Term End</th>
+            <th className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wide">{t('cpq.widgets.customerInventory.table.name', 'Name')}</th>
+            <th className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wide">{t('cpq.widgets.customerInventory.table.status', 'Status')}</th>
+            <th className="px-4 py-2.5 text-right text-xs font-medium uppercase tracking-wide">{t('cpq.widgets.customerInventory.table.mrc', 'MRC')}</th>
+            <th className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wide">{t('cpq.widgets.customerInventory.table.billing', 'Billing')}</th>
+            <th className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wide">{t('cpq.widgets.customerInventory.table.startDate', 'Start Date')}</th>
+            <th className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wide">{t('cpq.widgets.customerInventory.table.termEnd', 'Term End')}</th>
           </tr>
         </thead>
         <tbody>
@@ -248,17 +252,18 @@ function SubscriptionsTable({ items, currency, onOpen }: { items: Subscription[]
 // ─── Subscription Items Table ────────────────────────────────────
 
 function SubscriptionItemsTable({ items, currency, onOpen }: { items: SubscriptionItem[]; currency: string; onOpen: (subscriptionId: string) => void }) {
+  const t = useT()
   if (items.length === 0) return <EmptyTab />
   return (
     <div className="rounded-lg border bg-card overflow-hidden">
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b border-border bg-muted/40 text-muted-foreground">
-            <th className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wide">Name</th>
-            <th className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wide">Status</th>
-            <th className="px-4 py-2.5 text-right text-xs font-medium uppercase tracking-wide">MRC</th>
-            <th className="px-4 py-2.5 text-right text-xs font-medium uppercase tracking-wide">NRC</th>
-            <th className="px-4 py-2.5 text-right text-xs font-medium uppercase tracking-wide">Qty</th>
+            <th className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wide">{t('cpq.widgets.customerInventory.table.name', 'Name')}</th>
+            <th className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wide">{t('cpq.widgets.customerInventory.table.status', 'Status')}</th>
+            <th className="px-4 py-2.5 text-right text-xs font-medium uppercase tracking-wide">{t('cpq.widgets.customerInventory.table.mrc', 'MRC')}</th>
+            <th className="px-4 py-2.5 text-right text-xs font-medium uppercase tracking-wide">{t('cpq.widgets.customerInventory.table.nrc', 'NRC')}</th>
+            <th className="px-4 py-2.5 text-right text-xs font-medium uppercase tracking-wide">{t('cpq.widgets.customerInventory.table.qty', 'Qty')}</th>
           </tr>
         </thead>
         <tbody>
@@ -284,17 +289,18 @@ function SubscriptionItemsTable({ items, currency, onOpen }: { items: Subscripti
 // ─── Assets Table ────────────────────────────────────────────────
 
 function AssetsTable({ items, currency, onOpen }: { items: Asset[]; currency: string; onOpen: (id: string) => void }) {
+  const t = useT()
   if (items.length === 0) return <EmptyTab />
   return (
     <div className="rounded-lg border bg-card overflow-hidden">
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b border-border bg-muted/40 text-muted-foreground">
-            <th className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wide">Name</th>
-            <th className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wide">Type</th>
-            <th className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wide">Status</th>
-            <th className="px-4 py-2.5 text-right text-xs font-medium uppercase tracking-wide">Price</th>
-            <th className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wide">Linked To</th>
+            <th className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wide">{t('cpq.widgets.customerInventory.table.name', 'Name')}</th>
+            <th className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wide">{t('cpq.widgets.customerInventory.table.type', 'Type')}</th>
+            <th className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wide">{t('cpq.widgets.customerInventory.table.status', 'Status')}</th>
+            <th className="px-4 py-2.5 text-right text-xs font-medium uppercase tracking-wide">{t('cpq.widgets.customerInventory.table.price', 'Price')}</th>
+            <th className="px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wide">{t('cpq.widgets.customerInventory.table.linkedTo', 'Linked To')}</th>
           </tr>
         </thead>
         <tbody>
@@ -309,7 +315,7 @@ function AssetsTable({ items, currency, onOpen }: { items: Asset[]; currency: st
               <td className="px-4 py-3"><StatusBadge status={a.status} /></td>
               <td className="px-4 py-3 text-right font-mono">{fmt(a.purchasePrice, a.currencyCode || currency)}</td>
               <td className="px-4 py-3 text-muted-foreground">
-                {a.subscriptionId ? `Sub ${a.subscriptionId.slice(0, 8)}…` : '—'}
+                {a.subscriptionId ? t('cpq.widgets.customerInventory.table.linkedSubscription', 'Sub {id}…', { id: a.subscriptionId.slice(0, 8) }) : '—'}
               </td>
             </tr>
           ))}
@@ -322,9 +328,10 @@ function AssetsTable({ items, currency, onOpen }: { items: Asset[]; currency: st
 // ─── Shared ──────────────────────────────────────────────────────
 
 function EmptyTab() {
+  const t = useT()
   return (
     <div className="rounded-lg border bg-card py-8 text-center text-sm text-muted-foreground">
-      No records in this category.
+      {t('cpq.widgets.customerInventory.emptyTab', 'No records in this category.')}
     </div>
   )
 }

@@ -8,7 +8,7 @@ import { RowActions } from '@open-mercato/ui/backend/RowActions'
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
 import { useCpqListData } from '../../../components/CpqListView'
 import { useCpqRowActions } from '../../../components/useCpqRowActions'
-import { StatusBadge, formatCurrency } from './shared'
+import { StatusBadge, buildInventoryStatusOptions, formatCurrency } from './shared'
 
 type Asset = {
   id: string
@@ -23,13 +23,7 @@ type Asset = {
 
 const PAGE_SIZE = 50
 
-const ASSET_STATUS_OPTIONS = [
-  { value: 'pending', label: 'Pending' },
-  { value: 'delivered', label: 'Delivered' },
-  { value: 'active', label: 'Active' },
-  { value: 'returned', label: 'Returned' },
-  { value: 'cancelled', label: 'Cancelled' },
-] as const
+const ASSET_STATUSES = ['pending', 'delivered', 'active', 'returned', 'cancelled'] as const
 
 function buildFilterParams(values: FilterValues, params: URLSearchParams) {
   if (typeof values.status === 'string' && values.status) {
@@ -67,7 +61,7 @@ export function AssetsTable() {
         id: 'status',
         label: t('cpq.inventory.filters.status', 'Status'),
         type: 'select',
-        options: [...ASSET_STATUS_OPTIONS],
+        options: buildInventoryStatusOptions(t, ASSET_STATUSES),
       },
       {
         id: 'assetType',

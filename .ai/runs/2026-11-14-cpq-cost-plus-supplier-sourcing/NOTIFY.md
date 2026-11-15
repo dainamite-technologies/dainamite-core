@@ -65,3 +65,4 @@
 - Manual states what is true: reps (`employee`) hold `cpq.costs.view` only, so they read `GET /api/cpq/cost-requests` but neither see the Cost requests page nor answer; closing the workflow task on `cost_request_cancelled` is NOT automatic (documented as a project add-on trigger).
 - 2026-11-15 review1-a: E2E ref-conflict assertion moved before the re-request (a re-request clears lastAnswerHash by design).
 - 2026-11-15 review1-b: deleteCost now cancels the row's open request (line_removed) with history + request_cancelled signal before the soft delete.
+- 2026-11-15 review1-c: proposal demo scenario skips the ready transition when the quote is already ready; an abandoned scenario's quote (and marker) is deleted so the next run retries.

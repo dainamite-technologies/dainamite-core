@@ -63,9 +63,13 @@ export async function seedGixCostSourcingExamples(em: EntityManager, container: 
       quoteContext: { demo_marker: 'cpq-seed-v1', scenario: demo.scenario, label: demo.label },
     }, scope)
     quote = await quoting.addQuoteItem(quote.id, { offeringId: offering.id, configuration: { data_centre: demo.dataCentre }, quantity: 1, termMonths: 12 }, scope)
-    await quoting.recalculate(quote.id, { save: true }, scope)
-    return quote
+    const priced = await quoting.recalculate(quote.id, { save: true }, scope)
+    // The saved recalculation settles the status (a valid quote is already `ready`): callers read it from here.
+    return { id: quote.id, cpqStatus: (priced as { cpqStatus?: string } | undefined)?.cpqStatus }
   }
+  /** Same guard as examples.ts: a transition to the current status is a 409, so skip it. */
+  const safeTransition = async (current: { id: string; cpqStatus?: string }, target: string) =>
+    current.cpqStatus === target ? current : (await quoting.transitionStatus(current.id, target, scope)) as { id: string; cpqStatus?: string }
 
   // 1. Requested and overdue: the request opened `OVERDUE_WORKING_DAYS` working days ago.
   const overdue = COST_SOURCING_SCENARIOS.requestedOverdue
@@ -103,10 +107,12 @@ export async function seedGixCostSourcingExamples(em: EntityManager, container: 
     if (!tail) log(`"${proposal.scenario}": no open partner-tail request — left as is.`)
     else {
       try {
-        await quoting.transitionStatus(quote.id, 'ready', scope)
-        await quoting.transitionStatus(quote.id, 'with_customer', scope)
+        const ready = await safeTransition(quote, 'ready')
+        await safeTransition(ready, 'with_customer')
       } catch (error) {
         log(`"${proposal.scenario}": could not move the quote to with_customer (${error instanceof Error ? error.message : String(error)}) — answer not applied.`)
+        // The scenario marker lives on the quote: drop the half-built quote so the next seed run retries the scenario.
+        await quoting.deleteQuote(quote.id, scope).catch(() => undefined)
         return
       }
       await sourcing.answer(quote.id, tail.id, {

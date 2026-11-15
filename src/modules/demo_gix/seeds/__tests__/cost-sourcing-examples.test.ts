@@ -10,7 +10,7 @@ const scope = { tenantId: 't', organizationId: 'o' }
 type Tail = { id: string; costKey: string; sourcingStatus: string; costRequestId: string | null }
 
 /** In-memory stand-ins: the quote store, a per-quote partner-tail cost whose sourcing state the fake services move like the real ones. */
-function setup(opts: { autoOpen?: boolean; failTransition?: boolean } = {}) {
+function setup(opts: { autoOpen?: boolean; failTransition?: boolean; settledStatus?: string } = {}) {
   const quotes: Array<Record<string, unknown>> = []
   const tails = new Map<string, Tail>()
   const nativeUpdates: Array<{ where: Record<string, unknown>; data: Record<string, unknown> }> = []
@@ -30,7 +30,12 @@ function setup(opts: { autoOpen?: boolean; failTransition?: boolean } = {}) {
     addQuoteItem: jest.fn(async (id: string) => ({ id })),
     recalculate: jest.fn(async (id: string) => {
       if (opts.autoOpen) Object.assign(tails.get(id) as Tail, { sourcingStatus: 'requested', costRequestId: `req-${id}` })
-      return { id }
+      return { id, cpqStatus: opts.settledStatus }
+    }),
+    deleteQuote: jest.fn(async (id: string) => {
+      const at = quotes.findIndex((quote) => quote.id === id)
+      if (at >= 0) quotes.splice(at, 1)
+      return { ok: true }
     }),
     transitionStatus: jest.fn(async (id: string, status: string) => {
       if (opts.failTransition) throw new Error('blocked')
@@ -106,6 +111,16 @@ describe('seedGixCostSourcingExamples', () => {
     const t = setup({ failTransition: true })
     await seedGixCostSourcingExamples(t.em as never, t.container as never, scope)
     expect(t.sourcing.answer).not.toHaveBeenCalled()
+    // The abandoned scenario leaves no marker behind, so a later run retries it.
+    expect(t.quotes.map((quote) => (quote.quoteContext as Record<string, unknown>).scenario)).not.toContain(COST_SOURCING_SCENARIOS.answeredProposal.scenario)
+  })
+
+  it('skips the ready transition when the saved recalculation already settled the quote to ready', async () => {
+    const t = setup({ settledStatus: 'ready' })
+    await seedGixCostSourcingExamples(t.em as never, t.container as never, scope)
+    const proposalQuote = byScenario(t.quotes, COST_SOURCING_SCENARIOS.answeredProposal.scenario)
+    expect(t.quoting.transitionStatus.mock.calls.map((call) => [call[0], call[1]])).toEqual([[proposalQuote.id, 'with_customer']])
+    expect(t.sourcing.answer).toHaveBeenCalledTimes(1)
   })
 
   it('skips when Acme or the offering is missing', async () => {

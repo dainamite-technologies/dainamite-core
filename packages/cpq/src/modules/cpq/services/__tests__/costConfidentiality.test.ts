@@ -25,12 +25,27 @@ import { setMarkupOverrideCommand, clearMarkupOverrideCommand } from '../../comm
 
 const mockCanView = jest.fn()
 jest.mock('../priceAdjustments/quotePricingWrite', () => ({
-  withQuotePricingWrite: async (em: any, quoteId: string, _scope: unknown, execute: any, makeError: any) => {
+  withQuotePricingWrite: async (em: any, quoteId: string, _scope: unknown, execute: any, makeError: any, options?: any) => {
     const quote = em.__quote
     if (!quote || quote.id !== quoteId) throw makeError(404, 'Quote not found')
+    const opts = typeof options === 'object' && options !== null ? options : {}
+    const early = opts.shortCircuit ? await opts.shortCircuit(em, quote) : undefined
+    if (early !== undefined) return early
     quote.pricingRevision = (quote.pricingRevision ?? 0) + 1
-    return execute(em, quote)
+    const result = await execute(em, quote)
+    await opts.afterCommit?.(result, quote)
+    return result
   },
+}))
+const mockCreateBatch = jest.fn(async (..._args: unknown[]) => [])
+jest.mock('@open-mercato/core/modules/notifications/lib/notificationService', () => ({ resolveNotificationService: () => ({ createBatch: (...args: unknown[]) => mockCreateBatch(...args) }) }))
+jest.mock('@open-mercato/core/modules/notifications/lib/notificationRecipients', () => ({
+  getRecipientUserIdsForFeature: async () => ['manager-1'],
+  getScopedNotificationRecipientUserIds: async (_db: unknown, _t: string, _o: string, ids: string[]) => ids,
+}))
+const mockRouteResult: { current: unknown } = { current: null }
+jest.mock('../../api/_helpers/sourcingCommandRoute', () => ({
+  sourcingCommandRoute: async (_req: unknown, _ctx: unknown, options: any) => new Response(JSON.stringify(await options.respond(mockRouteResult.current))),
 }))
 jest.mock('../../api/_helpers/costAccess', () => ({ canViewCosts: (...args: unknown[]) => mockCanView(...args) }))
 jest.mock('../../api/_helpers/quoteMutationGuard', () => ({
@@ -497,5 +512,190 @@ describe('subscription lifecycle events (feature 2)', () => {
         ])
       }
     } finally { emitSpy.mockRestore() }
+  })
+})
+
+
+// ─── Feature 3: supplier cost sourcing (sentinel 7777.77 across events, notifications, logs, history, list, status) ───
+describe('supplier sourcing surfaces (feature 3)', () => {
+  const REQ = '55555555-5555-4555-8555-555555555555'
+  const ACTOR = '44444444-4444-4444-8444-444444444444'
+  const sourcingScope = { ...SCOPE }
+
+  async function harness(over: Row = {}) {
+    const { CpqCostSourcingService } = await import('../costs/costSourcingService')
+    const { createSourcingPublisher } = await import('../costs/sourcingPublisher')
+    const quote = { id: ids.quote, ...SCOPE, quoteId: 'sales-1', cpqStatus: 'ready', quoteType: 'new', currencyCode: 'USD', pricingRevision: 3, validationResult: { errors: [] } }
+    const line = { quoteLineId: ids.line, ...SCOPE, quoteConfigurationId: ids.quote, action: null, productId: 'prod', offeringId: 'off', configuration: {}, deletedAt: null }
+    const costs: Row[] = [costRow({
+      source: 'on_request', valueStatus: 'estimated', quoteId: 'sales-1', sourcingStatus: 'requested', costRequestId: REQ, requestSeq: 2,
+      requestedAt: new Date('2026-01-01T00:00:00Z'), requestedByUserId: 'requester-1', requestSupplierId: 'sup-1', requestHistory: [],
+      proposedAmount: null, ...over,
+    })]
+    const em: Row = {
+      __quote: quote, fork: jest.fn(() => em), getKysely: jest.fn(() => ({})), flush: jest.fn(async () => undefined), persist: jest.fn(),
+      findOne: jest.fn(async (entity: unknown, where: Row) => {
+        if (entity === CpqQuoteLineConfiguration) return where.quoteLineId === ids.line ? line : null
+        if (entity === CpqQuoteLineCost) return costs.find((c) => c.id === where.id && !c.deletedAt) ?? null
+        if (entity === CpqQuoteConfiguration) return quote
+        if (entity === CpqOrderConfiguration) return null
+        if (where?.id === 'sales-1') return { quoteNumber: 'Q-123' }
+        return { id: 'x', name: 'Product', defaultSupplierId: null, defaultSupplierName: null }
+      }),
+      find: jest.fn(async (entity: unknown, where: Row) => (entity === CpqQuoteLineConfiguration ? [line]
+        : entity === CpqQuoteLineCost ? (where.id?.$in ? costs : costs.filter((c) => c.sourcingStatus === where.sourcingStatus)) : [])),
+      count: jest.fn(async () => 0),
+    }
+    const emit = jest.fn(async () => undefined)
+    const service = new CpqCostSourcingService({
+      em: em as never, costService: { enabled: async () => true }, publisher: createSourcingPublisher({ em: em as never, emit }),
+      quotingService: { recalculateLockedQuote: async () => ({}) } as never,
+    })
+    return { service, costs, em, emit, quote }
+  }
+  const answer = { costRequestId: REQ, unitAmount: 7777.77, currencyCode: 'USD', supplierQuoteRef: 'CARR-1', supplierName: SUPPLIER, note: NOTE }
+  const emittedEvents = (emit: jest.Mock) => emit.mock.calls.map(([id, payload]) => ({ id: id as string, payload: payload as Row }))
+
+  async function runSubscribers(events: Array<{ id: string; payload: Row }>, em: Row) {
+    const valued = (await import('../../subscribers/cost-request-notifications')).default
+    const opened = (await import('../../subscribers/cost-request-opened-notification')).default
+    const ctx = { resolve: (name: string) => (name === 'em' ? em : { userHasAllFeatures: async () => true }) } as never
+    for (const { id, payload } of events) {
+      if (id === 'cpq.quote.cost_valued') await valued(payload as never, ctx)
+      if (id === 'cpq.quote.cost_requested') await opened(payload as never, ctx)
+    }
+  }
+
+  it('events: request, re-request, cancel, answer and decline emit no sentinel; the answer amount is in no event key or value', async () => {
+    const a = await harness()
+    await a.service.answer(ids.quote, ids.cost, answer as never, ACTOR, sourcingScope)
+    const b = await harness()
+    await b.service.decline(ids.quote, ids.cost, { costRequestId: REQ, reason: 'cannot supply' }, ACTOR, sourcingScope)
+    const c = await harness()
+    await c.service.request(ids.quote, ids.cost, {}, ACTOR, sourcingScope) // re-request: cancelled + requested
+    const d = await harness()
+    await d.service.cancelRequest(ids.quote, ids.cost, { costRequestId: REQ }, ACTOR, sourcingScope)
+    const all = [a, b, c, d].flatMap((h) => emittedEvents(h.emit))
+    expect(all.map((e) => e.id).sort()).toEqual(['cpq.quote.cost_request_cancelled', 'cpq.quote.cost_request_cancelled', 'cpq.quote.cost_requested', 'cpq.quote.cost_valued', 'cpq.quote.cost_valued'])
+    expectClean(all)
+    expect(JSON.stringify(all)).not.toMatch(/"[A-Za-z]*(amount|Amount|markup|margin|instance)[A-Za-z]*"/)
+    // Positive control: the write itself held the sentinel.
+    expect(leaked(fullCostView(a.costs[0] as never))).toContain(SUPPLIER)
+  })
+
+  it('notifications: title, body variables, keys and data of all four types carry no sentinel; the requester and manager variants are produced', async () => {
+    mockCreateBatch.mockClear()
+    const a = await harness()
+    await a.service.answer(ids.quote, ids.cost, answer as never, ACTOR, sourcingScope)
+    const b = await harness()
+    await b.service.decline(ids.quote, ids.cost, { costRequestId: REQ, reason: NOTE }, ACTOR, sourcingScope)
+    const pending = await harness({ valueStatus: 'confirmed', unitAmount: COST })
+    pending.quote.cpqStatus = 'accepted'
+    await pending.service.answer(ids.quote, ids.cost, { ...answer, unitAmount: 7777.78 } as never, ACTOR, sourcingScope)
+    const c = await harness()
+    await c.service.request(ids.quote, ids.cost, {}, ACTOR, sourcingScope)
+    for (const h of [a, b, pending, c]) await runSubscribers(emittedEvents(h.emit), h.em)
+    const types = mockCreateBatch.mock.calls.map(([input]) => (input as Row).type)
+    expect(types).toEqual(expect.arrayContaining(['cpq.cost_request.answered', 'cpq.cost_request.answer_pending', 'cpq.cost_request.declined', 'cpq.cost_request.opened']))
+    expectClean(mockCreateBatch.mock.calls)
+    expect(JSON.stringify(mockCreateBatch.mock.calls)).not.toMatch(/7777/)
+    expect(mockCreateBatch.mock.calls.length).toBe(4)
+  })
+
+  it('command logs of request / cancel / answer / decline / apply carry no sentinel and are not replayable or undoable', async () => {
+    const cmds = await import('../../commands/quote-line-cost-sourcing')
+    const a = await harness()
+    const answered = await a.service.answer(ids.quote, ids.cost, answer as never, ACTOR, sourcingScope)
+    const b = await harness()
+    const declined = await b.service.decline(ids.quote, ids.cost, { costRequestId: REQ, reason: 'no' }, ACTOR, sourcingScope)
+    const c = await harness()
+    const requestedAgain = await c.service.request(ids.quote, ids.cost, {}, ACTOR, sourcingScope)
+    const d = await harness()
+    const cancelled = await d.service.cancelRequest(ids.quote, ids.cost, { costRequestId: REQ }, ACTOR, sourcingScope)
+    const e = await harness({ proposedAmount: COST, proposedAnswer: { unitAmount: COST, supplierName: SUPPLIER }, sourcingStatus: 'answered' })
+    e.quote.cpqStatus = 'accepted'
+    const applied = await e.service.applyAnswer(ids.quote, ids.cost, { expectedRevision: 3 } as never, ACTOR, sourcingScope)
+    const ctx = {} as never
+    const logs = await Promise.all([
+      cmds.requestQuoteLineCostCommand.buildLog!({ input: {}, result: requestedAgain, ctx, snapshots: {} } as never),
+      cmds.cancelRequestQuoteLineCostCommand.buildLog!({ input: {}, result: cancelled, ctx, snapshots: {} } as never),
+      cmds.answerQuoteLineCostCommand.buildLog!({ input: {}, result: answered, ctx, snapshots: {} } as never),
+      cmds.declineQuoteLineCostCommand.buildLog!({ input: {}, result: declined, ctx, snapshots: {} } as never),
+      cmds.applyAnswerQuoteLineCostCommand.buildLog!({ input: {}, result: applied, ctx, snapshots: {} } as never),
+    ])
+    expectClean(logs)
+    for (const command of [cmds.requestQuoteLineCostCommand, cmds.cancelRequestQuoteLineCostCommand, cmds.answerQuoteLineCostCommand, cmds.declineQuoteLineCostCommand, cmds.applyAnswerQuoteLineCostCommand]) {
+      expect(command.isUndoable).toBe(false)
+    }
+    expect(logs.every((log) => (log as { replayable?: boolean }).replayable === false)).toBe(true)
+  })
+
+  it('request_history entries (after answer, decline, cancel and re-request) carry no amount, supplier name or note', async () => {
+    const a = await harness()
+    await a.service.answer(ids.quote, ids.cost, answer as never, ACTOR, sourcingScope)
+    const c = await harness()
+    await c.service.request(ids.quote, ids.cost, {}, ACTOR, sourcingScope)
+    const b = await harness()
+    await b.service.cancelRequest(ids.quote, ids.cost, { costRequestId: REQ }, ACTOR, sourcingScope)
+    const histories = [a, b, c].map((h) => h.costs[0].requestHistory)
+    expect(histories.every((history) => (history as unknown[]).length === 1)).toBe(true)
+    expectClean(histories)
+  })
+
+  it('request / cancel responses (callers without cpq.costs.view) are ids and statuses only', async () => {
+    const a = await harness()
+    const requestedAgain = await a.service.request(ids.quote, ids.cost, {}, ACTOR, sourcingScope)
+    const b = await harness()
+    const cancelled = await b.service.cancelRequest(ids.quote, ids.cost, { costRequestId: REQ }, ACTOR, sourcingScope)
+    expect(Object.keys(requestedAgain.response).sort()).toEqual(['costId', 'costRequestId', 'pricingRevision', 'requestSeq', 'sourcingStatus'])
+    expect(Object.keys(cancelled.response).sort()).toEqual(['costId', 'costRequestId', 'pricingRevision', 'requestSeq', 'sourcingStatus'])
+    expectClean([requestedAgain.response, cancelled.response])
+  })
+
+  it('answer / decline routes require cpq.costs.view; apply-answer redacts the cost line for a holder of cpq.costs.manage only', async () => {
+    const answerRoute = await import('../../api/quotes/[quoteId]/costs/[costId]/answer/route')
+    const declineRoute = await import('../../api/quotes/[quoteId]/costs/[costId]/decline/route')
+    for (const route of [answerRoute, declineRoute]) expect(route.metadata.POST.requireFeatures).toEqual(expect.arrayContaining(['cpq.costs.view', 'cpq.costs.manage']))
+    const applyRoute = await import('../../api/quotes/[quoteId]/costs/[costId]/apply-answer/route')
+    const { resolveCpqRouteContext } = await import('../../api/context')
+    ;(resolveCpqRouteContext as jest.Mock).mockResolvedValue({ auth: { sub: 'user' }, tenantId: 'tenant', organizationId: 'org' })
+    mockRouteResult.current = { response: { id: ids.quote, cost: fullCostView(costRow({ proposedAmount: COST, proposedAnswer: { unitAmount: COST } }) as never) } }
+    const call = async () => (await applyRoute.POST(new Request('http://localhost/x', { method: 'POST', body: JSON.stringify({ expectedRevision: 1 }) }), { params: Promise.resolve({ quoteId: ids.quote, costId: ids.cost }) })).json()
+    mockCanView.mockResolvedValue(false)
+    const redacted = await call()
+    expect(redacted.cost.costKey).toBe('tail')
+    expectClean(redacted)
+    mockCanView.mockResolvedValue(true)
+    expect(leaked(await call())).toContain(SUPPLIER) // control
+  })
+
+  it('queue list projection and the quote status projection carry no sentinel; the detail expansion is the cost-holder surface (control)', async () => {
+    const { CpqCostRequestQueueService } = await import('../costs/costRequestQueue')
+    const { cpqCostRequestListQuerySchema } = await import('../../data/costRequests')
+    const { CustomerEntity } = await import('@open-mercato/core/modules/customers/data/entities')
+    const { SalesQuote, SalesQuoteLine } = await import('@open-mercato/core/modules/sales/data/entities')
+    const row = costRow({ quoteId: 'sq-1', sourcingStatus: 'requested', costRequestId: REQ, requestSeq: 1, requestedAt: new Date('2026-11-13T09:00:00Z'), requestSupplierId: 'sup-1',
+      requestSupplierName: 'Acme', proposedAmount: '7777.7700', proposedAnswer: { unitAmount: '7777.77', supplierName: SUPPLIER }, requestHistory: [] })
+    const data = new Map<unknown, Row[]>([
+      [CpqQuoteConfiguration, [{ id: ids.quote, quoteId: 'sq-1', customerId: 'c1', cpqStatus: 'ready' }]], [SalesQuote, [{ id: 'sq-1', quoteNumber: 'Q-1' }]],
+      [CustomerEntity, [{ id: 'c1', displayName: 'Globex' }]], [SalesQuoteLine, [{ id: ids.line, name: 'Link' }]],
+      [CpqQuoteLineConfiguration, [{ quoteLineId: ids.line, offeringId: 'off', configuration: {} }]],
+    ])
+    const sub: Row = {}
+    sub.select = () => sub
+    sub.where = () => sub
+    const em: Row = { fork: () => em, find: async (entity: unknown) => data.get(entity) ?? [], findAndCount: async () => [[row], 1], findOne: async () => row, createQueryBuilder: () => sub }
+    const queue = new CpqCostRequestQueueService({ em: em as never, featureTogglesService: { getNumberConfig: async () => ({ ok: true, value: 5 }) } as never })
+    const list = await queue.list(SCOPE, cpqCostRequestListQuerySchema.parse({}))
+    expect(list.items).toHaveLength(1)
+    expect(list.items[0].hasAnswerPending).toBe(true)
+    expectClean(list)
+    // Status projection (what a caller without cpq.costs.view reads on the quote): sourcing fields are statuses only.
+    const redacted = redactedCostView(row as never)
+    expect(redacted).toMatchObject({ costKey: 'tail' })
+    expectClean(redacted)
+    // Control: the cost-holder surfaces do carry the sentinels.
+    expect(leaked(await queue.detail(ids.cost, SCOPE))).toContain('7777.77')
+    expect(leaked(fullCostView(row as never))).toEqual(expect.arrayContaining(['7777.77', SUPPLIER]))
   })
 })

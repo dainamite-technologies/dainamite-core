@@ -70,3 +70,4 @@
 - 2026-11-15 review1-e: apply-dialog copy no longer claims FX conversion; says a foreign-currency answer stays unpriced until an exchange rate is available.
 - 2026-11-15 review1-g: answer currency is upper-cased before the ISO format check (eur accepted as EUR, stored upper-case).
 - 2026-11-15 review1-f: deleteQuote reads the sales lines in one tenant/org-scoped query and scopes the sales quote read.
+- 2026-11-15 review1-h: clone route now exports openApi.

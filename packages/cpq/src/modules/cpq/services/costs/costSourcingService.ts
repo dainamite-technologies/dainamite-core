@@ -12,11 +12,13 @@ import {
 } from '../../data/entities'
 import {
   cpqCostAnswerSchema,
+  cpqCostApplyAnswerSchema,
   cpqCostCancelRequestSchema,
   cpqCostDeclineSchema,
   cpqCostRequestSchema,
   type CostAnswerInput,
   type CostAnswerOutcome,
+  type CostApplyAnswerInput,
   type CostCancelRequestInput,
   type CostDeclineInput,
   type CostRequestInput,
@@ -70,6 +72,13 @@ export interface CostDeclineWriteResult {
   audit: { before: SourcingAudit; after: SourcingAudit }
   signals: SourcingSignal[]
 }
+export interface CostApplyAnswerWriteResult {
+  /** The quote result (as the status route returns it) plus the cost line. */
+  response: Record<string, unknown> & { cost: FullCostView; pricingRevision: number }
+  audit: { before: SourcingAudit; after: SourcingAudit }
+  signals: SourcingSignal[]
+}
+
 type AnswerPayload = Omit<NormalizedAnswer, 'costRequestId'>
 const money = (value: number) => String(Math.round((value + Number.EPSILON) * 10_000) / 10_000)
 const today = () => new Date().toISOString().slice(0, 10)
@@ -281,6 +290,39 @@ export class CpqCostSourcingService {
         return undefined
       },
     })
+  }
+
+  /**
+   * Reopen and apply the supplier answer (#22a): ONE write that moves the quote to `ready`, applies the stored
+   * proposal under the same request id (`value_origin = supplier`), clears it and re-prices (the status settles to
+   * `ready` or `incomplete`). `expectedRevision` is required; `status_changed (manual)` fires when the status moved.
+   * Toggle off -> 404 like the other management routes.
+   */
+  async applyAnswer(quoteId: string, costId: string, input: CostApplyAnswerInput, actor: string, scope: TenantScope): Promise<CostApplyAnswerWriteResult> {
+    const parsed = cpqCostApplyAnswerSchema.parse(input)
+    await this.requireEnabled(scope)
+    const signals: SourcingSignal[] = []
+    return this.write(quoteId, scope, parsed.expectedRevision, actor, async (em, quote) => {
+      const row = await this.requireCost(em, quote, costId, scope)
+      await assertQuoteOpenForSourcing(em, quote, scope)
+      const proposal = row.proposedAnswer as AnswerPayload | null
+      if (row.proposedAmount === null || row.proposedAmount === undefined || !proposal) throw new QuotingError(409, 'NO_PENDING_ANSWER')
+      const line = await em.findOne(CpqQuoteLineConfiguration, { ...scoped(scope), quoteConfigurationId: quote.id, quoteLineId: row.quoteLineId })
+      if (!line) throw new QuotingError(404, 'Quote line not found')
+      const before = audit(row)
+      const prior = { valueStatus: row.valueStatus, unitAmount: row.unitAmount ?? null, currencyCode: row.currencyCode ?? null }
+      let quoteResult: Record<string, unknown> = {}
+      await this.persistAndPrice(em, quote, scope, true, signals, actor, async () => {
+        quote.cpqStatus = 'ready'
+        Object.assign(row, { proposedAmount: null, proposedAnswer: null }, await this.valuePatch(em, quote, line, row, proposal, scope))
+        this.confirmRenegotiation(row, proposal.valueStatus)
+      }, (value) => { quoteResult = value as unknown as Record<string, unknown> })
+      this.valuedSignal(signals, row, quote, 'apply_answer', prior, new Date())
+      return {
+        response: { ...quoteResult, cpqStatus: quote.cpqStatus, pricingRevision: quote.pricingRevision ?? 0, cost: fullCostView(row) },
+        audit: { before, after: audit(row, 'apply_answer') }, signals,
+      }
+    }, { marginTracker: true, events: { pricingCause: 'cost', statusCause: 'manual', actorUserId: actor } })
   }
 
   /**

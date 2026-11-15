@@ -65,5 +65,9 @@ export const cpqCostDeclineSchema = z.object({
 }).strict()
 export type CostDeclineInput = z.infer<typeof cpqCostDeclineSchema>
 
+/** `POST …/costs/{costId}/apply-answer`: `expectedRevision` is required (the write moves a locked quote). */
+export const cpqCostApplyAnswerSchema = z.object({ expectedRevision }).strict()
+export type CostApplyAnswerInput = z.infer<typeof cpqCostApplyAnswerSchema>
+
 export const COST_ANSWER_OUTCOMES = ['applied', 'confirmed_unchanged', 'proposed', 'noop'] as const
 export type CostAnswerOutcome = (typeof COST_ANSWER_OUTCOMES)[number]

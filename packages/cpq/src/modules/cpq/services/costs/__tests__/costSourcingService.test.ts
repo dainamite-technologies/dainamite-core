@@ -462,3 +462,65 @@ describe('decline (Q3)', () => {
     expect(await run({ costs: [requested()], enabled: false })).toMatchObject({ status: 409, message: 'COST_PLUS_DISABLED' })
   })
 })
+
+describe('applyAnswer (#22a)', () => {
+  const proposal = {
+    unitAmount: '310.0000', currencyCode: 'EUR', valueStatus: 'confirmed', supplierId: null, supplierName: 'Carrier', supplierQuoteRef: REF,
+    validUntil: '2999-01-01', supplierTermEnd: null, supplierMinTermMonths: null, note: null,
+  }
+  const pending = (over: Row = {}) => requested({
+    sourcingStatus: 'answered', unitAmount: '276.0000', instanceAmount: '276.0000', proposedAmount: '310.0000', proposedAnswer: proposal,
+    lastAnswerHash: 'h'.repeat(64), answeredAt: new Date(), ...over,
+  })
+
+  it('moves the quote to ready, applies the proposal under the same request id, clears it and re-prices in ONE write', async () => {
+    const { service, quote, costs, recalculate } = setup({ costs: [pending()], status: 'with_customer' })
+    const order: string[] = []
+    recalculate.mockImplementation(async () => { order.push(`recalc:${quote.cpqStatus}`); return { id: ids.quote, cpqStatus: 'ready', lines: [] } as never })
+    const result = await service.applyAnswer(ids.quote, ids.cost, { expectedRevision: 4 }, ACTOR, SCOPE)
+    expect(order).toEqual(['recalc:ready'])
+    expect(quote.cpqStatus).toBe('ready')
+    expect(costs[0]).toMatchObject({
+      unitAmount: '310', instanceAmount: '310', valueStatus: 'confirmed', valueOrigin: 'supplier', proposedAmount: null, proposedAnswer: null,
+      costRequestId: ids.req, sourcingStatus: 'answered', supplierQuoteRef: REF, validUntil: '2999-01-01', supplierName: 'Carrier',
+    })
+    expect(result.response).toMatchObject({ cpqStatus: 'ready', pricingRevision: 5, cost: { unitAmount: '310', hasAnswerPending: false } })
+    expect(result.signals.find((signal) => signal.kind === 'valued')).toMatchObject({ cause: 'apply_answer', answerPending: false, valueChanged: true })
+  })
+
+  it('takes the status event cause manual and the cost pricing cause; the margin tracker is wired', async () => {
+    const { service } = setup({ costs: [pending()], status: 'with_customer' })
+    await service.applyAnswer(ids.quote, ids.cost, { expectedRevision: 4 }, ACTOR, SCOPE)
+    const options = writeCalls[writeCalls.length - 1].options
+    expect(options).toMatchObject({ expectedRevision: 4, events: { pricingCause: 'cost', statusCause: 'manual', actorUserId: ACTOR } })
+    expect(options.marginTracker).toBeDefined()
+  })
+
+  it('a retried answer after apply is a noop (the hash and the applied ref are kept)', async () => {
+    const first = setup({ costs: [requested({ unitAmount: '276.0000' })], status: 'with_customer' })
+    await first.service.answer(ids.quote, ids.cost, answerInput({ unitAmount: 310 }), ACTOR, SCOPE)
+    const second = setup({ costs: [first.costs[0]], status: 'with_customer' })
+    await second.service.applyAnswer(ids.quote, ids.cost, { expectedRevision: 4 }, ACTOR, SCOPE)
+    const third = setup({ costs: [second.costs[0]], status: 'ready' })
+    expect((await third.service.answer(ids.quote, ids.cost, answerInput({ unitAmount: 310 }), ACTOR, SCOPE)).response.outcome).toBe('noop')
+  })
+
+  it('refusals write nothing: STALE_REVISION, NO_PENDING_ANSWER, QUOTE_CLOSED, QUOTE_CONVERTED, unknown cost 404, toggle off 404', async () => {
+    const run = async (opts: Parameters<typeof setup>[0], revision = 4, id = ids.cost) => {
+      const ctx = setup(opts)
+      const snapshot = JSON.stringify(ctx.costs)
+      const error = await ctx.service.applyAnswer(ids.quote, id, { expectedRevision: revision }, ACTOR, SCOPE).then(() => null, (e) => e)
+      expect(JSON.stringify(ctx.costs)).toBe(snapshot)
+      expect(ctx.recalculate).not.toHaveBeenCalled()
+      expect(ctx.quote.cpqStatus).toBe(opts?.status ?? 'ready')
+      return error
+    }
+    expect(await run({ costs: [pending()], status: 'with_customer' }, 3)).toMatchObject({ status: 409, message: 'STALE_REVISION' })
+    expect(await run({ costs: [requested()], status: 'with_customer' })).toMatchObject({ status: 409, message: 'NO_PENDING_ANSWER' })
+    expect(await run({ costs: [pending({ proposedAmount: null })], status: 'with_customer' })).toMatchObject({ status: 409, message: 'NO_PENDING_ANSWER' })
+    expect(await run({ costs: [pending()], status: 'rejected' })).toMatchObject({ status: 409, message: 'QUOTE_CLOSED' })
+    expect(await run({ costs: [pending()], status: 'accepted', orders: [{ id: 'order-1' }] })).toMatchObject({ status: 409, message: 'QUOTE_CONVERTED', details: { orderId: 'order-1' } })
+    expect(await run({ costs: [pending()], status: 'with_customer' }, 4, '99999999-9999-4999-8999-999999999999')).toMatchObject({ status: 404 })
+    expect(await run({ costs: [pending()], status: 'with_customer', enabled: false })).toMatchObject({ status: 404 })
+  })
+})

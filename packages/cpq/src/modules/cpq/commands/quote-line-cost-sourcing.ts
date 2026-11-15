@@ -1,14 +1,15 @@
 import { z } from 'zod'
 import { resolveTranslations } from '@open-mercato/shared/lib/i18n/server'
 import { registerCommand, type CommandHandler } from '@open-mercato/shared/lib/commands'
-import { cpqCostAnswerSchema, cpqCostCancelRequestSchema, cpqCostDeclineSchema, cpqCostRequestSchema } from '../data/cost-sourcing'
+import { cpqCostAnswerSchema, cpqCostApplyAnswerSchema, cpqCostCancelRequestSchema, cpqCostDeclineSchema, cpqCostRequestSchema } from '../data/cost-sourcing'
 import { sourcingCommandContext } from '../lib/sourcingCommandContext'
-import type { CostAnswerWriteResult, CostDeclineWriteResult, CostRequestWriteResult } from '../services/costs/costSourcingService'
+import type { CostAnswerWriteResult, CostApplyAnswerWriteResult, CostDeclineWriteResult, CostRequestWriteResult } from '../services/costs/costSourcingService'
 
 const id = z.string().uuid()
 const requestSchema = z.object({ quoteId: id, costId: id, request: cpqCostRequestSchema }).strict()
 const answerSchema = z.object({ quoteId: id, costId: id, answer: cpqCostAnswerSchema }).strict()
 const declineSchema = z.object({ quoteId: id, costId: id, decline: cpqCostDeclineSchema }).strict()
+const applySchema = z.object({ quoteId: id, costId: id, apply: cpqCostApplyAnswerSchema }).strict()
 const cancelSchema = z.object({ quoteId: id, costId: id, cancel: cpqCostCancelRequestSchema }).strict()
 
 /**
@@ -44,8 +45,9 @@ export const cancelRequestQuoteLineCostCommand: CommandHandler<z.infer<typeof ca
   },
   buildLog: ({ result }) => buildLog(result),
 }
-// Answer / decline need cost visibility AND management (Q13).
+// Answer / decline need cost visibility AND management (Q13); apply-answer reopens the quote, so it also needs quote management.
 const COSTS_FEATURES = ['cpq.costs.view', 'cpq.costs.manage']
+const APPLY_FEATURES = ['cpq.quotes.manage', 'cpq.costs.manage']
 
 export const answerQuoteLineCostCommand: CommandHandler<z.infer<typeof answerSchema>, CostAnswerWriteResult> = {
   id: 'cpq.quote_line_cost.answer', isUndoable: false,
@@ -65,7 +67,17 @@ export const declineQuoteLineCostCommand: CommandHandler<z.infer<typeof declineS
   },
   buildLog: ({ result }) => buildLog(result),
 }
+export const applyAnswerQuoteLineCostCommand: CommandHandler<z.infer<typeof applySchema>, CostApplyAnswerWriteResult> = {
+  id: 'cpq.quote_line_cost.apply_answer', isUndoable: false,
+  async execute(input, ctx) {
+    const parsed = applySchema.parse(input)
+    const { actor, scope, service } = await sourcingCommandContext(ctx, APPLY_FEATURES)
+    return service.applyAnswer(parsed.quoteId, parsed.costId, parsed.apply, actor, scope)
+  },
+  buildLog: ({ result }) => buildLog(result),
+}
 registerCommand(requestQuoteLineCostCommand)
 registerCommand(cancelRequestQuoteLineCostCommand)
 registerCommand(answerQuoteLineCostCommand)
 registerCommand(declineQuoteLineCostCommand)
+registerCommand(applyAnswerQuoteLineCostCommand)

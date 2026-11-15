@@ -12,6 +12,13 @@ export const COST_PLUS_TOGGLE = 'cpq.cost_plus'
 export const COST_REQUEST_OVERDUE_TOGGLE = 'cpq.cost_requests.overdue_working_days'
 export const COST_REQUEST_OVERDUE_DEFAULT_DAYS = 5
 
+/** Numeric tenant toggle (FX Q1): how many days the FX rate lookup goes back from today (clamped 0-30). */
+export const FX_MAX_DAYS_BACK_TOGGLE = 'cpq.cost_plus.fx_max_days_back'
+export const FX_MAX_DAYS_BACK_DEFAULT = 7
+export const FX_MAX_DAYS_BACK_LIMIT = 30
+/** JSON tenant toggle (FX Q2): ordered `ExchangeRate.source` names; the first one with a rate wins. Default `[]`. */
+export const FX_SOURCE_PRIORITY_TOGGLE = 'cpq.cost_plus.fx_source_priority'
+
 /** See cost values, suppliers, markup and margin (App Spec §1.4.10). */
 export const COSTS_VIEW_FEATURE = 'cpq.costs.view'
 /** Add / edit manual costs, enter or confirm costs, markup overrides. */

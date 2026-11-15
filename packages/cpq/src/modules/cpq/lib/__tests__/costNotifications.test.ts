@@ -45,7 +45,7 @@ describe('notifyCostManagers (Q16)', () => {
     expect(await resolveCostManagerUserIds(scope, 'org', deps)).toEqual(['local'])
     await notifyCostManagers(scope, 'org', content, deps)
     expect((notificationService.createBatch.mock.calls[0] as unknown as [{ recipientUserIds: string[] }])[0].recipientUserIds).toEqual(['local'])
-    expect(deps.rbacService.userHasAllFeatures).not.toHaveBeenCalledWith('foreign', expect.anything(), expect.anything())
+    expect((deps.rbacService as unknown as { userHasAllFeatures: jest.Mock }).userHasAllFeatures).not.toHaveBeenCalledWith('foreign', expect.anything(), expect.anything())
   })
 
   it('does not call the notification service without candidates', async () => {

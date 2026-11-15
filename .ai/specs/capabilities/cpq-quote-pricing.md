@@ -131,7 +131,7 @@ Source: .ai/specs/2026-11-12-cpq-cost-plus-order-subscription-costs.md
 Source: .ai/specs/2026-11-12-cpq-cost-plus-supplier-sourcing.md
 
 ## Requirement: Cost-plus list price
-The system SHALL price a cost-plus charge at list total = markup(Σ known price-basis costs per instance, converted to the quote currency), where `markup_percent` m gives C × (1 + m/100), `target_margin_percent` gives C ÷ (1 − m/100) and `markup_absolute` gives C + a, rounded once to the currency precision (per-unit: unit = total ÷ quantity at 4 dp). Price rules and manual adjustments SHALL then apply unchanged; percent price rules on a cost-plus charge SHALL scale the exact per-instance total, so no unit × quantity drift appears. An absolute markup is in the charge currency (a markup override's in the quote currency). A charge with an unknown price-basis cost (`COST_PENDING`), with no applicable one (`NO_PRICE_BASIS_COST`), with an invalid markup (`MARKUP_INVALID`) or with an absolute markup in a currency other than the quote's (`CURRENCY_NO_RATE`, never a 1:1 add) SHALL have no price, and its line SHALL NOT be ready. `estimated` costs price the charge and make the quote indicative.
+The system SHALL price a cost-plus charge at list total = markup(Σ known price-basis costs per instance, each converted to the quote currency at its stored or freshly resolved `fx_rate`), where `markup_percent` m gives C × (1 + m/100), `target_margin_percent` gives C ÷ (1 − m/100) and `markup_absolute` gives C + a, rounded once to the currency precision (per-unit: unit = total ÷ quantity at 4 dp). Price rules and manual adjustments SHALL then apply unchanged; percent price rules on a cost-plus charge SHALL scale the exact per-instance total, so no unit × quantity drift appears. An absolute markup is in the charge currency (a markup override's in the quote currency). A charge with an unknown price-basis cost (`COST_PENDING`), with no applicable one (`NO_PRICE_BASIS_COST`), with an invalid markup (`MARKUP_INVALID`) or with an absolute markup in a currency other than the quote's (`CURRENCY_NO_RATE`, never a 1:1 add) SHALL have no price, and its line SHALL NOT be ready. A cost in a currency other than the quote currency SHALL be converted only with a rate from the `currencies` module; when none is available the cost SHALL be `none` + `CURRENCY_NO_RATE` (its entered amount and currency kept) and SHALL never be converted 1:1. `estimated` costs price the charge and make the quote indicative.
 
 ### Scenario: Markup percent
 - WHEN price-basis costs are 300 and 100 per instance and the markup is `markup_percent` 25
@@ -141,9 +141,13 @@ The system SHALL price a cost-plus charge at list total = markup(Σ known price-
 - WHEN one price-basis cost line has `value_status = none`
 - THEN the charge has no price, the line error is `COST_PENDING`, and a `ready` quote becomes `incomplete`
 
-### Scenario: Foreign-currency cost before FX ships
-- WHEN a price-basis cost is in USD on a EUR quote
-- THEN the cost line is `none` with `CURRENCY_NO_RATE`, and the line is not ready
+### Scenario: Foreign-currency cost converts at a dated rate
+- WHEN a price-basis cost is 300 USD on a EUR quote, the markup is `markup_percent` 25, and `currencies` holds a USD→EUR rate of 0.92 dated 2026-11-11 (the saved recalculation runs on 2026-11-12)
+- THEN the cost line keeps `unit_amount` 300 / `currency_code` USD, stores `fx_rate` 0.92000000, `fx_rate_date` 2026-11-11, its `fx_rate_source` and `fx_rate_derivation = direct`, and `listTotalPrice` is 345.00
+
+### Scenario: No rate in the look-back window
+- WHEN a price-basis cost is in USD on a EUR quote and no USD→EUR or EUR→USD rate exists within `cpq.cost_plus.fx_max_days_back` days
+- THEN the cost line is `none` with `CURRENCY_NO_RATE`, its entered amount and currency are kept, and the line is not ready
 
 ### Scenario: Absolute markup in another currency
 - WHEN a charge with `markup_absolute` 50 EUR is quoted in USD
@@ -157,9 +161,10 @@ The system SHALL price a cost-plus charge at list total = markup(Σ known price-
 - WHEN a quote has no cost-plus charges and no cost lines
 - THEN `charges`, `pricingSummary` and `snapshotHash` are byte-identical to the values produced before this change
 
-Frozen by: `packages/cpq/src/modules/cpq/services/__tests__/costPlusGolden.test.ts`
+Frozen by: `packages/cpq/src/modules/cpq/services/__tests__/costPlusGolden.test.ts`, `packages/cpq/src/modules/cpq/services/costs/__tests__/costPlusPrice.test.ts`, `costResolution.test.ts`
 
 Source: .ai/specs/2026-11-12-cpq-cost-plus-quote-pricing-margin.md
+Source: .ai/specs/2026-11-12-cpq-cost-plus-foreign-currency-costs.md
 
 ## Requirement: Manual costs, cost confirmation and markup override
 The system SHALL let a user with `cpq.quotes.manage` and `cpq.costs.manage`:
@@ -238,3 +243,71 @@ The system SHALL copy cost lines and markup overrides when a quote is cloned (ne
 
 Source: .ai/specs/2026-11-12-cpq-cost-plus-quote-pricing-margin.md
 Source: .ai/specs/2026-11-12-cpq-cost-plus-supplier-sourcing.md
+
+## Requirement: Exchange-rate snapshot follows the cost lock
+The system SHALL take a foreign-currency cost line's rate as of the current UTC date at a saved recalculation or cost write while the quote is mutable (`new` / `incomplete` / `ready`, no order), and store it with its actual date, source and derivation (`direct` or `inverse`). The rate is the direct pair's when any source has one (the first source of `cpq.cost_plus.fx_source_priority` that has a rate, else the only rate, else the lowest source name), and only otherwise `1 / rate` of the inverse pair at 8 decimals. While the cost lock applies, or once an order exists, the system SHALL reuse the stored snapshot. Lines carried from a subscription item and every ARC mirror line SHALL keep their carried snapshot in every context. Unsaved recalculations and previews SHALL compute in memory and store nothing. A new or re-valued foreign-currency cost written while the quote is locked (a margin-only cost) SHALL take the rate of the write day without moving the price, while a same-value confirmation keeps the stored snapshot. A foreign-currency value that had no rate SHALL become `estimated` (catalog `fixed` / `table` lines `confirmed`) when a rate arrives. `margin_hash` SHALL include the FX fields only when a rate is set, so a quote with no FX snapshot keeps a byte-identical hash.
+
+### Scenario: Refresh while unlocked
+- WHEN a `ready` quote with a 300 USD tail at 0.92 (2026-11-11) is recalculated and saved on 2026-11-13, and the newest rate is 0.93 (2026-11-13)
+- THEN `fx_rate` becomes 0.93, the price moves, `pricing_changed` and `margin_changed` are emitted
+
+### Scenario: Frozen while locked
+- WHEN the same quote is `with_customer` and a newer rate exists
+- THEN a saved recalculation leaves `fx_rate`, `fx_rate_date`, `charges` and `margin_hash` unchanged
+
+### Scenario: Preview stores nothing
+- WHEN a user runs an unsaved recalculation or the cost preview
+- THEN the response uses today's rate and no cost line row changes
+
+### Scenario: Carried mirror line keeps its rate
+- WHEN an unlocked Amend or Renew quote has a mirror line whose carried USD cost holds `fx_rate` 0.90, and today's rate is 0.93
+- THEN a saved recalculation leaves the line's `fx_rate`, `fx_rate_date`, `fx_rate_source` and `fx_rate_derivation` unchanged
+
+### Scenario: Null-stable margin hash
+- WHEN a quote whose cost lines are all in the quote currency is recalculated after this change ships
+- THEN its `margin_hash` is byte-identical to the value before this change, and no `margin_changed` is emitted
+
+### Scenario: Rate arrives after entry
+- WHEN a manual 300 USD cost was entered while no rate existed (stored `none` + `CURRENCY_NO_RATE`) and a rate is maintained afterwards
+- THEN the next saved recalculation of the unlocked quote resolves it and the line becomes `estimated` with the note "Rate applied after entry.", for a pricing manager to confirm
+
+Frozen by: `packages/cpq/src/modules/cpq/services/costs/__tests__/costResolution.test.ts`, `quoteMargin.test.ts`, `fxRateResolver.test.ts`
+
+Source: .ai/specs/2026-11-12-cpq-cost-plus-foreign-currency-costs.md
+
+## Requirement: Cost table currency precedence
+The system SHALL look up a `table` cost element in entries of the quote currency first. Only when no matching entry exists there SHALL it use entries in the element's `currency_code` (the fallback table currency) and convert them; with neither, the line SHALL be `none` + `CURRENCY_NO_RATE`.
+
+### Scenario: USD-only cost table on a EUR quote
+- WHEN the cross-connect cost table holds only USD entries, the element's `currency_code` is USD, and a USD→EUR rate exists
+- THEN the cost line holds the USD entry value with `currency_code` USD and the stored rate
+
+### Scenario: Quote-currency entry wins
+- WHEN the table holds both a EUR and a USD entry for the same dimensions
+- THEN the EUR entry is used and no FX columns are set
+
+Frozen by: `packages/cpq/src/modules/cpq/services/costs/__tests__/costResolution.test.ts`
+
+Source: .ai/specs/2026-11-12-cpq-cost-plus-foreign-currency-costs.md
+
+## Requirement: Foreign-currency costs without the currencies module
+The system SHALL treat every non-quote-currency cost as `none` + `CURRENCY_NO_RATE` when the `currencies` module is not installed (the rate resolver reports itself unavailable and is never called), and SHALL start without errors. CPQ SHALL NOT import from `currencies`; the exchange-rate service is resolved by its DI name only when registered.
+
+### Scenario: Standalone CPQ
+- WHEN CPQ runs in an app without `@open-mercato/core` `currencies` registered and a USD cost is added to a EUR quote
+- THEN the cost line is `none` + `CURRENCY_NO_RATE` and no error is logged at startup
+
+Frozen by: `packages/cpq/src/modules/cpq/__tests__/di.test.ts`, `services/costs/__tests__/fxRateResolver.test.ts`
+
+Source: .ai/specs/2026-11-12-cpq-cost-plus-foreign-currency-costs.md
+
+## Requirement: Missing exchange-rate pairs are reported
+The system SHALL report in `GET /api/cpq/cost-plus/usage`, as `missingFxPairs`, every (cost currency, quote currency) pair on which a cost line of an open, unconverted quote is `CURRENCY_NO_RATE`, together with the number of affected quotes, most affected first. Converted and terminal quotes SHALL NOT count.
+
+### Scenario: Operator checks missing rates
+- WHEN two open EUR quotes have USD cost lines without a rate
+- THEN the usage response contains `missingFxPairs: [{ from: 'USD', to: 'EUR', openQuotes: 2 }]`
+
+Frozen by: `packages/cpq/src/modules/cpq/api/__tests__/quoteCostReadRoutes.test.ts`, `services/costs/__tests__/quoteCostService.test.ts`
+
+Source: .ai/specs/2026-11-12-cpq-cost-plus-foreign-currency-costs.md

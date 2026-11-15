@@ -161,3 +161,14 @@ The system SHALL refuse to delete a quote in `accepted`, `rejected` or `cancelle
 Frozen by: `packages/cpq/src/modules/cpq/api/quotes/[quoteId]/__tests__/route.delete.test.ts`
 
 Source: .ai/specs/2026-11-12-cpq-cost-plus-supplier-sourcing.md
+
+## Requirement: Exchange-rate snapshots carry to orders and subscriptions
+The system SHALL copy `fx_rate`, `fx_rate_date`, `fx_rate_source` and `fx_rate_derivation` unchanged from quote cost lines to `CpqOrderLineCost` at conversion and from order line costs to `CpqInventoryCost` at activation, and SHALL include them in the `items[].costs[]` change-log snapshot. It SHALL NOT look up a rate on these paths. Order and inventory cost `total_amount` SHALL be in the document currency (`instance_amount × quantity × fx_rate`, rounded once, null when a foreign cost has no rate) while unit and instance amounts stay in the cost currency.
+
+### Scenario: Activation keeps the quote rate
+- WHEN a quote with a 300 USD tail at 0.92 is converted and activated after the rate moved to 0.95
+- THEN the order line cost and the subscription item cost hold `fx_rate` 0.92 with the quote's date, source and derivation
+
+Frozen by: `packages/cpq/src/modules/cpq/services/__tests__/cpqOrderService.test.ts`, `cpqInventoryService` activation / snapshot tests
+
+Source: .ai/specs/2026-11-12-cpq-cost-plus-foreign-currency-costs.md

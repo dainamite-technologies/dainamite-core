@@ -69,3 +69,14 @@ The system SHALL omit `markup_rule` and `markup_value` from product-charge respo
 - THEN the response has `pricingMethod: 'cost_plus'` and no markup fields
 
 Source: .ai/specs/2026-11-12-cpq-cost-plus-quote-pricing-margin.md
+
+## Requirement: Cost preview shows conversion
+The system SHALL return, for each previewed foreign-currency cost, the original amount and currency, the rate, its date and source, and the converted amount, for holders of `cpq.costs.view`. It SHALL store nothing. The preview SHALL also answer a rate hint for a cost currency alone (`fxFrom`), for the cost dialog.
+
+### Scenario: Preview a USD element
+- WHEN a pricing admin previews a charge whose fixed element is 300 USD for a EUR configuration, and a rate of 0.92 exists
+- THEN the preview shows `unitAmount` 300 USD, `fxRate` 0.92, `fxRateDate`, `fxRateSource`, `convertedInstanceAmount` 276.00 EUR
+
+Frozen by: `packages/cpq/src/modules/cpq/api/__tests__/quoteCostReadRoutes.test.ts`
+
+Source: .ai/specs/2026-11-12-cpq-cost-plus-foreign-currency-costs.md

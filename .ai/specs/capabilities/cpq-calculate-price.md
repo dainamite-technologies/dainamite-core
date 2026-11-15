@@ -12,7 +12,7 @@ The calculate-price API SHALL return `listUnitPrice`, `listTotalPrice`, `standar
 Source: .ai/specs/2026-11-10-cpq-manual-price-adjustments.md
 
 ## Requirement: Cost-plus charges in the calculate-price API
-The system SHALL return a cost-plus charge's list price when all its applicable price-basis costs resolve without a quote (catalog costs resolved in memory, nothing persisted). It SHALL mark the charge `indicative: true` when any of them is an estimated price-basis cost, and return `priceOnRequest: true` with `unitPrice` and `totalPrice` null, excluded from the totals, when it cannot be priced (pending cost, no price basis) or when the tenant toggle is off. It SHALL never return a cost, supplier or markup, and SHALL leave the Puffin public proxy's response unchanged.
+The system SHALL return a cost-plus charge's list price when all its applicable price-basis costs resolve without a quote (catalog costs resolved in memory, nothing persisted), converting foreign-currency costs at today's rate in memory. It SHALL mark the charge `indicative: true` when any of them is an estimated price-basis cost, and return `priceOnRequest: true` with `unitPrice` and `totalPrice` null, excluded from the totals, when it cannot be priced (pending cost, no price basis, a needed exchange rate missing) or when the tenant toggle is off. It SHALL never return a cost, supplier, markup or exchange rate, and SHALL leave the Puffin public proxy's response unchanged.
 
 ### Scenario: On-request without estimate
 - WHEN the Puffin calculator prices an offering whose cost-plus charge has an `on_request` element without an estimate
@@ -22,4 +22,15 @@ The system SHALL return a cost-plus charge's list price when all its applicable 
 - WHEN a cost-plus charge is priced from an `on_request` estimate of 100 at 25% markup
 - THEN the charge has `unitPrice` 125 and `indicative: true`, and no cost or markup field appears
 
+### Scenario: Foreign-currency cost
+- WHEN the offering's price-basis cost is a fixed 300 USD, the request currency is EUR, and a rate exists
+- THEN the charge has a list price computed from the converted cost, and the response contains no rate, currency of cost or cost amount
+
+### Scenario: Foreign-currency cost without a rate
+- WHEN the same request finds no USD→EUR rate within the look-back window
+- THEN the charge has `priceOnRequest: true` with no price
+
+Frozen by: `packages/cpq/src/modules/cpq/api/quotes/price/__tests__/route.test.ts`
+
 Source: .ai/specs/2026-11-12-cpq-cost-plus-quote-pricing-margin.md
+Source: .ai/specs/2026-11-12-cpq-cost-plus-foreign-currency-costs.md

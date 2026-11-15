@@ -19,7 +19,7 @@ Engine: om-auto-create-pr-loop (steps: 23, --loop: no)
 | C | 5 | Entity: carried origin and renegotiation_due | group:C1 | done | |
 | C | 6 | Carry on Amend mirror | group:C1 | done | |
 | C | 7 | Frozen-line lock rule | group:C1 | done | |
-| C | 8 | Conversion link and write-back | group:C2 | todo | |
+| C | 8 | Conversion link and write-back | group:C2 | done | |
 | C | 9 | Cost-only Amend and I-9 | group:C2 | todo | |
 | C | 10 | Merge rule | group:C2 | todo | |
 | C | 11 | Forward compatibility | group:C2 | todo | |

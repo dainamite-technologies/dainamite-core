@@ -1317,6 +1317,31 @@ describe('ARC write-back wiring in activateOrder (step 13)', () => {
     expect(h.trace.at(-1)).toBe('tx:commit')
   })
 
+  describe('cost-managed (carried) mirror lines (ARC costs step 8, Q5)', () => {
+    const carriedFixture = (costPlusEnabled: boolean) => ({
+      ...fixture('amend', 'applyAmendment', []),
+      orderLines: [orderLine('ol-c', 'ql-c')],
+      orderLineCosts: [{ ...olc('c-tail', 'ol-c', 'tail'), origin: 'carried', valueOrigin: 'carried', inventoryCostId: 'ic-1' }],
+      quoteLines: [quoteLine('ql-c', 'modify', { _arcMirroredFromItemId: 'i', _arcPriceFrozen: true, _arcCostsCarried: true })],
+      costPlusEnabled,
+    })
+
+    it.each([[true], [false]])('a carried line always syncs in replace mode as a full image (toggle on=%s); seeds carry the inventory cost id', async (on) => {
+      const h = createActivationHarness(carriedFixture(on))
+      await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+      const [input] = h.inventory.applyAmendment.mock.calls[0] as [{ lineChanges: Array<{ costSync?: { mode: string; fullImage?: boolean; seeds: Array<{ orderLineCostId: string; inventoryCostId?: string }> } }> }]
+      expect(input.lineChanges[0].costSync).toMatchObject({ mode: 'replace', fullImage: true })
+      expect(input.lineChanges[0].costSync?.seeds.map((seed) => [seed.orderLineCostId, seed.inventoryCostId])).toEqual([['c-tail', 'ic-1']])
+    })
+
+    it('a mirror line without the carried marker never gets fullImage', async () => {
+      const h = createActivationHarness(fixture('amend', 'applyAmendment', []))
+      await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+      const [input] = h.inventory.applyAmendment.mock.calls[0] as [{ lineChanges: Array<{ costSync?: { fullImage?: boolean } }> }]
+      expect(input.lineChanges[0].costSync?.fullImage).toBeUndefined()
+    })
+  })
+
   describe('cpq.cost_plus toggle at activation (review1-b, spec Q5 + R14)', () => {
     it.each([[true, 'replace'], [false, 'upsert']] as const)('toggle on=%s: the reconfigured mirror line syncs in %s mode, read once', async (on, mode) => {
       const h = createActivationHarness({ ...fixture('amend', 'applyAmendment', []), costPlusEnabled: on })

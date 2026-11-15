@@ -46,6 +46,15 @@ describe('copyQuoteCostsToOrder', () => {
     expect(em.persist).toHaveBeenCalledTimes(1)
   })
 
+  it('links a carried cost line to the item cost it was carried from (ARC costs Q5); other lines stay unlinked', async () => {
+    const { em, created } = setup([
+      quoteCost({ id: 'qc-c', costKey: 'carried', origin: 'carried', carriedFromItemCostId: 'ic-9' }),
+      quoteCost({ id: 'qc-k', costKey: 'catalog', carriedFromItemCostId: null }),
+    ])
+    await run(em)
+    expect(created.map((row) => [row.costKey, row.inventoryCostId])).toEqual([['carried', 'ic-9'], ['catalog', null]])
+  })
+
   it('takes total_amount from the margin rule: instance amount x line quantity, null while the cost is unknown', async () => {
     const { em, created } = setup([
       quoteCost({ fxRate: null, fxRateDate: null, fxRateSource: null, fxRateDerivation: null }),

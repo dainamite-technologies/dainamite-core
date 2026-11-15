@@ -22,6 +22,12 @@ import type { TenantScope } from '../types'
 export type CostSeed = {
   /** The order line cost this seed was built from (set on `last_order_line_cost_id` and reported back as a link). */
   orderLineCostId: string | null
+  /**
+   * Set only for a `carried` order line cost (ARC costs Q5): the inventory cost it was carried from. A replace asserts the
+   * row matched by `cost_key` is exactly this one, and keeps that row's `origin` (a quote-side `carried` is not a
+   * provenance of the inventory cost) and its `value_origin` while the seed's is still `carried`.
+   */
+  inventoryCostId?: string | null
   costKey: string
   chargeCode: string | null
   origin: string
@@ -51,7 +57,7 @@ export type CostSeed = {
   note: string | null
 }
 
-type ValueField = Exclude<keyof CostSeed, 'orderLineCostId' | 'costKey'>
+type ValueField = Exclude<keyof CostSeed, 'orderLineCostId' | 'inventoryCostId' | 'costKey'>
 
 const VALUE_FIELDS: readonly ValueField[] = [
   'chargeCode', 'origin', 'costElementId', 'name', 'role', 'costType', 'source', 'costModel', 'valueStatus', 'valueOrigin',
@@ -91,7 +97,16 @@ export type InventoryCostSyncResult = {
   links: InventoryCostLink[]
 }
 
-export type ItemCostOwner = { subscriptionId: string; subscriptionItemId: string; seeds: CostSeed[] }
+export type ItemCostOwner = {
+  subscriptionId: string
+  subscriptionItemId: string
+  seeds: CostSeed[]
+  /**
+   * Replace only: the seeds are the full image of the item's costs (a cost-managed mirror line carries every open item
+   * cost, ARC costs Q5), so EVERY open row whose key is missing is ended, not only catalog ones.
+   */
+  fullImage?: boolean
+}
 export type AssetCostOwner = { subscriptionId: string; assetId: string; seeds: CostSeed[] }
 export type InventoryCostSyncContext = {
   scope: TenantScope
@@ -105,6 +120,7 @@ export type InventoryCostSyncContext = {
 export function costSeedFromOrderLineCost(row: CpqOrderLineCost): CostSeed {
   return {
     orderLineCostId: row.id,
+    ...(row.inventoryCostId && row.origin === 'carried' ? { inventoryCostId: row.inventoryCostId } : {}),
     costKey: row.costKey,
     chargeCode: row.chargeCode ?? null,
     origin: row.origin,
@@ -154,8 +170,18 @@ export function isInventoryCostUnchanged(row: CpqInventoryCost, seed: CostSeed):
   return row.status === 'active' && VALUE_FIELDS.every((field) => sameValue(field, row[field], seed[field]))
 }
 
+/**
+ * The value fields a seed writes onto an existing row. A carried seed (`inventoryCostId`) must hit exactly its source row
+ * (asserted by the caller) and keeps the row's own `origin`; its `value_origin` stays the row's until the quote
+ * renegotiated the value (`supplier` / `manual`), so an untouched carried cost is a no-op rather than a rewrite.
+ */
+function effectiveSeed(row: CpqInventoryCost | undefined, seed: CostSeed): CostSeed {
+  if (!row || !seed.inventoryCostId) return seed
+  return { ...seed, origin: row.origin, valueOrigin: seed.valueOrigin === 'carried' ? row.valueOrigin ?? null : seed.valueOrigin }
+}
+
 type OwnerKind = 'subscription_item' | 'asset'
-type AnyOwner = { subscriptionId: string; subscriptionItemId?: string; assetId?: string; seeds: CostSeed[] }
+type AnyOwner = { subscriptionId: string; subscriptionItemId?: string; assetId?: string; seeds: CostSeed[]; fullImage?: boolean }
 
 function assertOwner(kind: OwnerKind, owner: AnyOwner): string {
   const ownerId = kind === 'subscription_item' ? owner.subscriptionItemId : owner.assetId
@@ -196,8 +222,13 @@ async function upsertOwnerCosts(
 
   seeded.forEach((owner, index) => {
     const ownerId = ownerIds[index]
-    for (const seed of owner.seeds) {
-      let row = byOwnerKey.get(`${ownerId}\u0000${seed.costKey}`)
+    for (const rawSeed of owner.seeds) {
+      let row = byOwnerKey.get(`${ownerId}\u0000${rawSeed.costKey}`)
+      if (rawSeed.inventoryCostId && row?.id !== rawSeed.inventoryCostId) {
+        // The conversion link and the owner + key match must name the same row; anything else is a corrupt write-back.
+        throw new Error(`Carried cost ${rawSeed.costKey} of ${kind} ${ownerId} is linked to inventory cost ${rawSeed.inventoryCostId}, which does not match the row for that key (${row?.id ?? 'none'})`)
+      }
+      const seed = effectiveSeed(row, rawSeed)
       let kindOfChange: InventoryCostChange['kind'] | null = null
       if (!row) {
         row = em.create(CpqInventoryCost, {
@@ -232,11 +263,13 @@ async function upsertOwnerCosts(
     }
     if (replace) {
       // Replace semantics (Q5): an open CATALOG row whose key is missing from the seeds is ended; ended rows stay
-      // ended. Manual rows are never ended here: a mirror line cannot carry manual costs, so their absence from the
-      // seeds says nothing (review1-b).
+      // ended. Manual rows are never ended by a reconfigured line's replace: it cannot carry manual costs, so their
+      // absence from the seeds says nothing (review1-b). A `fullImage` owner (a cost-managed mirror line, whose carried
+      // rows ARE the item's costs, ARC costs Q5) ends every open row whose key is missing, whatever its origin.
       const seededKeys = new Set(owner.seeds.map((seed) => seed.costKey))
       for (const row of existing ?? []) {
-        if (row[ownerField] !== ownerId || seededKeys.has(row.costKey) || row.status !== 'active' || row.origin !== 'catalog') continue
+        if (row[ownerField] !== ownerId || seededKeys.has(row.costKey) || row.status !== 'active') continue
+        if (!owner.fullImage && row.origin !== 'catalog') continue
         endRow(row, ctx)
         result.rows.push(row)
         result.changes.push(changeOf(row, kind, 'ended'))
@@ -306,7 +339,8 @@ export function createAssetCosts(em: EntityManager, owners: AssetCostOwner[], ct
  * Replaces the item costs of the given items with their seeds, by `cost_key` (Q5): changed rows are updated in
  * place, new keys created, ended keys that return reactivated (Q9), catalog keys that are gone ended, unchanged
  * rows left alone (no write, no change). An owner with no seeds has all its open catalog costs ended; open manual
- * costs (`origin !== 'catalog'`) are never ended by a replace.
+ * costs (`origin !== 'catalog'`) are never ended by a replace, unless the owner is a `fullImage` one (a cost-managed
+ * mirror line: its seeds are the whole cost set, so every missing open key ends).
  */
 export function replaceItemCosts(em: EntityManager, owners: ItemCostOwner[], ctx: InventoryCostSyncContext): Promise<InventoryCostSyncResult> {
   return upsertOwnerCosts(em, 'subscription_item', owners, ctx, true)

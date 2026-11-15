@@ -21,3 +21,8 @@
 
 ## 2026-11-15T16:45:00Z — step 7 review fix
 - Supersedes the step 7 note on `classifyAnswer`: a supplier answer / decline on a frozen mirror line (`isFrozenMirrorLine`, the predicate `updateCost` uses) is now lock-exempt like a margin-only cost (applies, no proposal, no locked downgrade); a reconfigured (un-frozen) line keeps the lock.
+
+## 2026-11-15T17:10:00Z — step 8 scope decisions (replace semantics vs review1-b)
+- A cost-managed line (`_arcCostsCarried`) ALWAYS syncs in `replace` mode with `fullImage: true`, whatever the `cpq.cost_plus` toggle (its carried rows exist regardless). Full image: every open item cost whose key is missing from the seeds ends, whatever its origin (catalog, manual, carried) — a carried key removed on the quote ends that item cost.
+- review1-b is unchanged for every other line: a reconfigured, non-carried line ends only missing CATALOG-origin costs, and is upsert-only with the toggle off; manual item costs are never ended there.
+- Carried seeds carry `inventoryCostId` (from `orderCostCopy`); `replaceItemCosts` throws if it differs from (or no row matches) the row found by owner + key. The inventory row keeps its own `origin` (quote-side `carried` is not an inventory provenance) and keeps its `value_origin` while the seed's is still `carried`; no inventory CHECK constrains origin (only owner and status), so nothing needs widening. Known nit: a carried `confirmed` status over an `estimated` margin-only item cost with an amount counts as a change.

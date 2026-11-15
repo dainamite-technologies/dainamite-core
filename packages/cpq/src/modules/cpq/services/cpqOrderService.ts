@@ -35,7 +35,7 @@ import {
   type TenantScope,
 } from './types'
 import { emitCpqEvent } from '../events'
-import { isArcReconfigured, stripQuoteOnlyArcMarkers } from './arcPriceFreeze'
+import { ARC_COSTS_CARRIED_KEY, isArcReconfigured, stripQuoteOnlyArcMarkers } from './arcPriceFreeze'
 import { isArcTerminationLine } from './arcLineRemoval'
 import type { CpqCostService } from './costs/costService'
 import { cancelOpenRequests } from './costs/costRequestCancel'
@@ -1257,15 +1257,23 @@ function buildArcLineChange(
       sourceSubscriptionItemId: line.sourceSubscriptionItemId ?? null,
     }
   }
-  // modify. Only a RECONFIGURED mirror line (marker read here, from the source quote line, before the quote-only
-  // markers are stripped) replaces its item's costs (Q5); any other mirror line leaves them untouched.
+  // modify. Markers are read here, from the source quote line, before the quote-only markers are stripped.
+  //  - A cost-managed mirror line (`_arcCostsCarried`, ARC costs Q5) ALWAYS replaces: its carried rows are the full image
+  //    of the item's costs (a removed carried key ends that item cost), whatever the `cpq.cost_plus` toggle says now.
+  //    Unchanged rows stay unwritten (the sync's no-op rule), so an untouched carried line writes nothing.
+  //  - Otherwise only a RECONFIGURED mirror line replaces (Q5 of the sibling; catalog-only ending, upsert when the toggle
+  //    is off); any other mirror line (frozen, never reconfigured) leaves item costs untouched.
+  const costManaged = line.configuration?.[ARC_COSTS_CARRIED_KEY] === true
+  const costSync = costManaged
+    ? { mode: 'replace' as const, seeds: seedsForQuoteLine(line.quoteLineId), fullImage: true }
+    : isArcReconfigured(line.configuration)
+      ? { mode: costPlusOn ? 'replace' as const : 'upsert' as const, seeds: seedsForQuoteLine(line.quoteLineId) }
+      : undefined
   return {
     quoteLineId: line.quoteLineId,
     action,
     sourceSubscriptionItemId: line.sourceSubscriptionItemId ?? null,
-    ...(isArcReconfigured(line.configuration)
-      ? { costSync: { mode: costPlusOn ? 'replace' as const : 'upsert' as const, seeds: seedsForQuoteLine(line.quoteLineId) } }
-      : {}),
+    ...(costSync ? { costSync } : {}),
     modifyPatch: {
       configuration: stripQuoteOnlyArcMarkers(line.configuration) ?? undefined,
       charges: (line.charges ?? undefined) as Array<Record<string, unknown>> | undefined,

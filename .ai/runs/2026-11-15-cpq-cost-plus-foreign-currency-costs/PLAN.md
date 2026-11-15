@@ -19,7 +19,7 @@ Engine: om-auto-create-pr-loop (steps: 12, --loop: no)
 | B | 5 | Entity: rate source and derivation | group:B1 | done | |
 | B | 6 | Engine: snapshot policy, table currency, pricing and margin | group:B1 | done | |
 | B | 7 | Writes in a foreign currency | group:B2 | done | |
-| B | 8 | Read APIs and missingFxPairs | group:B2 | todo | |
+| B | 8 | Read APIs and missingFxPairs | group:B2 | done | |
 | C | 9 | Carry-through to order and inventory costs | group:C1 | todo | |
 | D | 10 | UI | group:D1 | todo | |
 | E | 11 | Seed, docs, migration notes and E2E | group:E1 | todo | |

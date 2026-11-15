@@ -77,6 +77,8 @@ export type CostViewContext = {
   overdueCutoff?: Date | null
   /** Q14 eligibility of the cost line's quote line; absent = not computed (the UI then assumes eligible). */
   requestEligible?: boolean
+  /** The quote's currency: names the `to` of a missing pair and the target of `convertedInstanceAmount`. */
+  quoteCurrencyCode?: string
 }
 
 export function redactedCostView(row: CpqQuoteLineCost, context: CostViewContext = {}) {
@@ -99,6 +101,12 @@ export function redactedCostView(row: CpqQuoteLineCost, context: CostViewContext
   }
 }
 
+/** Per-instance amount in the quote currency, 4 dp (`null` without a snapshot: a quote-currency or unconverted cost). */
+export function convertedInstanceAmount(instanceAmount: string | number | null | undefined, fxRate: string | number | null | undefined): string | null {
+  if (instanceAmount === null || instanceAmount === undefined || fxRate === null || fxRate === undefined || fxRate === '') return null
+  return String(Math.round((Number(instanceAmount) * Number(fxRate) + Number.EPSILON) * 10_000) / 10_000)
+}
+
 /** The full cost line, for holders of `cpq.costs.view`. */
 export function fullCostView(row: CpqQuoteLineCost, context: CostViewContext = {}) {
   return {
@@ -114,6 +122,15 @@ export function fullCostView(row: CpqQuoteLineCost, context: CostViewContext = {
     unitAmount: row.unitAmount,
     instanceAmount: row.instanceAmount,
     currencyCode: row.currencyCode,
+    // FX snapshot (cost data: only here, never in the redacted view). `convertedInstanceAmount` is in the quote currency.
+    quoteCurrencyCode: context.quoteCurrencyCode ?? null,
+    fxRate: row.fxRate ?? null,
+    fxRateDate: row.fxRateDate ?? null,
+    fxRateSource: row.fxRateSource ?? null,
+    fxRateDerivation: row.fxRateDerivation ?? null,
+    convertedInstanceAmount: convertedInstanceAmount(row.instanceAmount, row.fxRate),
+    ...(row.errorCode === 'CURRENCY_NO_RATE' && row.currencyCode && context.quoteCurrencyCode
+      ? { errorDetail: { code: row.errorCode, from: row.currencyCode, to: context.quoteCurrencyCode, date: today() } } : {}),
     sourcingStatus: row.sourcingStatus,
     costRequestId: row.costRequestId ?? null,
     requestSeq: row.requestSeq ?? null,

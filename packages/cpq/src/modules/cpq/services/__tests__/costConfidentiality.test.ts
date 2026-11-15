@@ -57,7 +57,10 @@ const SUPPLIER = 'ZXQ-Sentinel-Supplier'
 const NOTE = 'ZXQ-sentinel-note'
 const MARKUP = '41.3737'
 const OVERRIDE_MARKUP = '63.6363'
-const SENTINELS = ['7777.77', SUPPLIER, NOTE, MARKUP, OVERRIDE_MARKUP]
+// FX step 8: the rate snapshot (rate, provider) is cost data too: only for cpq.costs.view holders.
+const FX_RATE = '0.77777777'
+const FX_SOURCE = 'SentinelFX'
+const SENTINELS = ['7777.77', SUPPLIER, NOTE, MARKUP, OVERRIDE_MARKUP, FX_RATE, FX_SOURCE]
 type Row = Record<string, any>
 
 const leaked = (value: unknown) => { const json = JSON.stringify(value) ?? ''; return SENTINELS.filter((s) => json.includes(s)) }
@@ -68,7 +71,8 @@ const costRow = (over: Row = {}): Row => ({
   id: ids.cost, ...SCOPE, quoteConfigurationId: ids.quote, quoteLineId: ids.line, costKey: 'tail', chargeCode: 'tail', origin: 'catalog',
   costElementId: 'el', name: 'Tail', role: 'price_basis', costType: 'mrc', source: 'fixed', costModel: 'flat', valueStatus: 'confirmed',
   valueOrigin: 'catalog', unitAmount: COST, instanceAmount: COST, currencyCode: 'USD', supplierId: null, supplierName: SUPPLIER,
-  supplierQuoteRef: null, validUntil: null, supplierTermEnd: null, supplierMinTermMonths: null, note: NOTE, errorCode: null, deletedAt: null, ...over,
+  supplierQuoteRef: null, validUntil: null, supplierTermEnd: null, supplierMinTermMonths: null, note: NOTE, errorCode: null, deletedAt: null,
+  fxRate: FX_RATE, fxRateDate: '2026-11-11', fxRateSource: FX_SOURCE, fxRateDerivation: 'direct', ...over,
 })
 const overrideRow = (): Row => ({ id: 'ov-1', ...SCOPE, quoteConfigurationId: ids.quote, quoteLineId: ids.line, chargeCode: 'tail', markupRule: 'markup_percent', markupValue: OVERRIDE_MARKUP, note: NOTE, deletedAt: null })
 const costPlusCharge = (): Row => ({
@@ -196,9 +200,24 @@ describe('quote cost API', () => {
     const redacted = await service.read(ids.quote, SCOPE, false)
     expect(redacted.lines[0].costs).toHaveLength(1)
     expectClean(redacted)
-    expect(leaked(await service.read(ids.quote, SCOPE, true)).sort()).toEqual([COST.slice(0, 7), SUPPLIER, NOTE, OVERRIDE_MARKUP].sort())
+    expect(leaked(await service.read(ids.quote, SCOPE, true)).sort()).toEqual([COST.slice(0, 7), SUPPLIER, NOTE, OVERRIDE_MARKUP, FX_RATE, FX_SOURCE].sort())
     expectClean(redactedCostView(costRow() as never))
     expect(leaked(fullCostView(costRow() as never))).toContain(SUPPLIER)
+  })
+
+  it('FX snapshot: the rate, its source and the currency pair of a missing rate are cost data (holders only)', async () => {
+    const { service } = costService([costRow(), costRow({ id: 'c2', costKey: 'gbp', currencyCode: 'GBP', valueStatus: 'none', errorCode: 'CURRENCY_NO_RATE', fxRate: null, fxRateSource: null, fxRateDate: null, fxRateDerivation: null })], [])
+    const redacted = await service.read(ids.quote, SCOPE, false)
+    expectClean(redacted)
+    const flat = JSON.stringify(redacted)
+    expect(flat).toContain('CURRENCY_NO_RATE') // the badge needs the code, nothing else
+    expect(flat).not.toMatch(/GBP|USD|fxRate|errorDetail|convertedInstanceAmount|quoteCurrencyCode|2026-11/)
+    const full = await service.read(ids.quote, SCOPE, true)
+    const costs = full.lines[0].costs as Array<Record<string, unknown>>
+    expect(costs[1]).toMatchObject({ fxRate: FX_RATE, fxRateSource: FX_SOURCE, fxRateDate: '2026-11-11', fxRateDerivation: 'direct', quoteCurrencyCode: 'USD' })
+    expect(costs[0]).toMatchObject({ error: 'CURRENCY_NO_RATE', errorDetail: { code: 'CURRENCY_NO_RATE', from: 'GBP', to: 'USD' }, convertedInstanceAmount: null })
+    // The write-route whitelist drops every FX field for a non-holder (control above: holders see them).
+    expectClean(Object.fromEntries(['id', 'costKey', 'name', 'role', 'valueStatus', 'expired', 'error'].map((key) => [key, (fullCostView(costRow() as never) as Record<string, unknown>)[key]])))
   })
 
   it('cost write routes redact the response for a user without cpq.costs.view', async () => {

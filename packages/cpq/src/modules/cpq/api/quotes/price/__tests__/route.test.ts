@@ -98,10 +98,12 @@ describe('cost-plus charges', () => {
   })
   it('never leaks cost, supplier or markup keys or values anywhere in the response', async () => {
     resolveProductCharges.mockResolvedValue([costPlusCharge(), unpriced])
-    previewCatalogCosts.mockResolvedValue([basis('estimated', { supplierName: 'Acme', unitAmount: '100' })])
+    previewCatalogCosts.mockResolvedValue([basis('estimated', {
+      supplierName: 'Acme', unitAmount: '100', currencyCode: 'USD', fxRate: '0.77777777', fxRateDate: '2026-11-11', fxRateSource: 'SentinelFX', fxRateDerivation: 'direct',
+    })])
     const text = await (await POST(request({ ...body, includeWaterfall: true }))).text()
-    for (const key of keys(JSON.parse(text))) expect(key).not.toMatch(/cost|supplier|markup|instanceAmount|unitAmount/i)
-    expect(text).not.toMatch(/Secret supplier|Acme/)
+    for (const key of keys(JSON.parse(text))) expect(key).not.toMatch(/cost|supplier|markup|instanceAmount|unitAmount|fx|rate|derivation/i)
+    expect(text).not.toMatch(/Secret supplier|Acme|0\.77777777|SentinelFX/)
   })
   it('keeps priced usage charges and drops price-on-request usage from the totals', async () => {
     resolveProductCharges.mockResolvedValue([costPlusCharge({ chargeType: 'usage', unitPrice: null, totalPrice: null }), { ...charge, chargeCode: 'u', chargeType: 'usage', totalPrice: null }])

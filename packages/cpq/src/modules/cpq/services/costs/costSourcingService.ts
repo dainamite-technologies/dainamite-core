@@ -197,7 +197,7 @@ export class CpqCostSourcingService {
     let verdict: AnswerVerdict | undefined
     let locked = false
     const result = (quote: CpqQuoteConfiguration, row: CpqQuoteLineCost, outcome: CostAnswerOutcome, before: SourcingAudit): CostAnswerWriteResult => ({
-      response: { outcome, cost: fullCostView(row), lineReady: lineReady(quote, row.quoteLineId), pricingRevision: quote.pricingRevision ?? 0 },
+      response: { outcome, cost: fullCostView(row, { quoteCurrencyCode: quote.currencyCode }), lineReady: lineReady(quote, row.quoteLineId), pricingRevision: quote.pricingRevision ?? 0 },
       audit: { before, after: audit(row, outcome) }, signals,
     })
     return this.write(quoteId, scope, undefined, actor, async (em, quote) => {
@@ -281,7 +281,7 @@ export class CpqCostSourcingService {
       })
       this.valuedSignal(signals, row, quote, 'decline', prior, now)
       return {
-        response: { outcome: 'declined' as const, cost: fullCostView(row), pricingRevision: quote.pricingRevision ?? 0 },
+        response: { outcome: 'declined' as const, cost: fullCostView(row, { quoteCurrencyCode: quote.currencyCode }), pricingRevision: quote.pricingRevision ?? 0 },
         audit: { before, after: audit(row, 'declined') }, signals,
       }
     }, {
@@ -324,7 +324,7 @@ export class CpqCostSourcingService {
       }, (value) => { quoteResult = value as unknown as Record<string, unknown> })
       this.valuedSignal(signals, row, quote, 'apply_answer', prior, new Date())
       return {
-        response: { ...quoteResult, cpqStatus: quote.cpqStatus, pricingRevision: quote.pricingRevision ?? 0, cost: fullCostView(row) },
+        response: { ...quoteResult, cpqStatus: quote.cpqStatus, pricingRevision: quote.pricingRevision ?? 0, cost: fullCostView(row, { quoteCurrencyCode: quote.currencyCode }) },
         audit: { before, after: audit(row, 'apply_answer') }, signals,
       }
     }, { marginTracker: true, events: { pricingCause: 'cost', statusCause: 'manual', actorUserId: actor } })

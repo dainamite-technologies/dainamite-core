@@ -23,7 +23,7 @@ const SCOPE = { organizationId: 'org', tenantId: 'tenant' }
 const ids = { quote: '11111111-1111-4111-8111-111111111111', line: '22222222-2222-4222-8222-222222222222', cost: '33333333-3333-4333-8333-333333333333' }
 type Row = Record<string, any>
 
-function setup(opts: { status?: string; orders?: number; costs?: Row[]; overrides?: Row[]; line?: Row; charges?: Row[]; enabled?: boolean; publisher?: jest.Mock; fx?: jest.Mock } = {}) {
+function setup(opts: { status?: string; orders?: number; costs?: Row[]; overrides?: Row[]; line?: Row; charges?: Row[]; enabled?: boolean; publisher?: jest.Mock; fx?: jest.Mock; fxPairs?: Row[] } = {}) {
   const quote = { id: ids.quote, quoteId: ids.quote, cpqStatus: opts.status ?? 'ready', quoteType: 'new', currencyCode: 'EUR', pricingRevision: 4, quoteContext: {} }
   const line = { id: 'l', quoteLineId: ids.line, ...SCOPE, quoteConfigurationId: ids.quote, offeringId: 'off', productId: 'prod', configuration: {}, quantity: '1', charges: [], termMonths: 12, parentLineId: null, deletedAt: null, ...opts.line }
   const charges = opts.charges ?? [
@@ -31,6 +31,7 @@ function setup(opts: { status?: string; orders?: number; costs?: Row[]; override
     { code: 'fixed_fee', pricingMethod: 'fixed', chargeType: 'nrc', quantityAttributeCode: null, offeringId: 'off' },
   ]
   const costs: Row[] = opts.costs ?? []
+  const fxPairs = jest.fn(async (..._args: unknown[]): Promise<Row[]> => opts.fxPairs ?? [])
   const overrides: Row[] = opts.overrides ?? []
   const live = <T extends Row>(rows: T[]) => rows.filter((row) => !row.deletedAt)
   const subquery: Row = { select: jest.fn(() => subquery), where: jest.fn(() => subquery) }
@@ -56,6 +57,7 @@ function setup(opts: { status?: string; orders?: number; costs?: Row[]; override
     create: jest.fn((entity: unknown, data: Row) => ({ createdAt: new Date(), updatedAt: new Date(), deletedAt: null, ...data })),
     persist: jest.fn((row: Row) => { (row.costKey !== undefined ? costs : overrides).push(row) }),
     flush: jest.fn(async () => undefined),
+    getConnection: jest.fn(() => ({ execute: fxPairs })),
   }
   const recalculate = jest.fn(async () => ({}))
   const service = new CpqQuoteCostService({
@@ -65,7 +67,7 @@ function setup(opts: { status?: string; orders?: number; costs?: Row[]; override
     publisher: opts.publisher as never,
     fxRateResolver: opts.fx ? { resolve: opts.fx } as never : undefined,
   })
-  return { service, em, quote, costs, overrides, recalculate, subquery }
+  return { service, em, quote, costs, overrides, recalculate, subquery, fxPairs }
 }
 
 const catalogRow = (over: Row = {}): Row => ({
@@ -110,12 +112,12 @@ describe('reads', () => {
   })
   it('usage works with the toggle off', async () => {
     const { service } = setup({ enabled: false })
-    await expect(service.usage(SCOPE)).resolves.toEqual({ enabled: false, costPlusCharges: 0, openQuotes: 0, openRequests: 0, liveSubscriptions: 0 })
+    await expect(service.usage(SCOPE)).resolves.toEqual({ enabled: false, costPlusCharges: 0, openQuotes: 0, openRequests: 0, liveSubscriptions: 0, missingFxPairs: [] })
   })
   it('usage counts with one aggregate query per figure: no cost row hydrated, no bound id list', async () => {
     const { service, em, subquery } = setup({ costs: [catalogRow()] })
     em.count.mockImplementation(async (entity: unknown) => (entity === CpqProductCharge ? 3 : entity === CpqQuoteConfiguration ? 2 : entity === CpqInventorySubscription ? 4 : entity === CpqQuoteLineCost ? 5 : 0))
-    await expect(service.usage(SCOPE)).resolves.toEqual({ enabled: true, costPlusCharges: 3, openQuotes: 2, openRequests: 5, liveSubscriptions: 4 })
+    await expect(service.usage(SCOPE)).resolves.toEqual({ enabled: true, costPlusCharges: 3, openQuotes: 2, openRequests: 5, liveSubscriptions: 4, missingFxPairs: [] })
     expect(em.find).not.toHaveBeenCalled()
     expect(em.count).toHaveBeenCalledTimes(4)
     // Open requests: one COUNT of status-requested rows, restricted to quotes alive on both sides by a semi-join.
@@ -152,6 +154,54 @@ describe('reads', () => {
     expect(subquery.select).toHaveBeenCalledWith('oc.sourceQuoteId')
     expect(subquery.select).toHaveBeenCalledWith('qlc.quoteConfigurationId')
     expect(subquery.where).toHaveBeenCalledWith({ ...SCOPE, deletedAt: null })
+  })
+})
+
+describe('FX projection (FX step 8)', () => {
+  const snapshot = { currencyCode: 'USD', unitAmount: '300', instanceAmount: '300', fxRate: '0.92000000', fxRateDate: '2026-11-11', fxRateSource: 'ECB', fxRateDerivation: 'inverse' }
+  it('a costs.view holder gets the snapshot, the converted amount (quote currency, 4 dp) and the pair of a missing rate; a non-holder only the code', async () => {
+    const costs = [
+      catalogRow({ costKey: 'a', ...snapshot }),
+      catalogRow({ id: 'c2', costKey: 'b', currencyCode: 'GBP', unitAmount: '10', instanceAmount: null, valueStatus: 'none', errorCode: 'CURRENCY_NO_RATE' }),
+    ]
+    const holder = await setup({ costs }).service.read(ids.quote, SCOPE, true) as any
+    expect(holder.lines[0].costs[0]).toMatchObject({ currencyCode: 'USD', fxRate: '0.92000000', fxRateDate: '2026-11-11', fxRateSource: 'ECB', fxRateDerivation: 'inverse', convertedInstanceAmount: '276', quoteCurrencyCode: 'EUR' })
+    expect(holder.lines[0].costs[0]).not.toHaveProperty('errorDetail')
+    expect(holder.lines[0].costs[1]).toMatchObject({ error: 'CURRENCY_NO_RATE', convertedInstanceAmount: null, errorDetail: { code: 'CURRENCY_NO_RATE', from: 'GBP', to: 'EUR', date: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/) } })
+    const other = await setup({ costs }).service.read(ids.quote, SCOPE, false) as any
+    expect(other.lines[0].costs[1]).toMatchObject({ error: 'CURRENCY_NO_RATE' })
+    expect(JSON.stringify(other)).not.toMatch(/fx|GBP|USD|0\.92|ECB|errorDetail|converted/)
+  })
+  it('a write result carries the snapshot of the written line', async () => {
+    const fx = jest.fn(async () => FX_OK)
+    const { service } = setup({ fx })
+    const result = await service.createCost(ids.quote, { ...create, currencyCode: 'USD' }, ACTOR, SCOPE)
+    expect(result.cost).toMatchObject({ currencyCode: 'USD', fxRate: '0.92000000', fxRateSource: 'ECB', convertedInstanceAmount: '1380', quoteCurrencyCode: 'EUR' })
+  })
+})
+
+describe('usage: missingFxPairs (FX step 8)', () => {
+  it('groups the pairs with open-quote counts in ONE grouped query scoped to the tenant, excluding closed and converted quotes', async () => {
+    const { service, fxPairs, em } = setup({ fxPairs: [{ from: 'USD', to: 'EUR', openQuotes: '2' }, { from: 'GBP', to: 'EUR', openQuotes: 1 }] })
+    const usage = await service.usage(SCOPE)
+    expect(usage.missingFxPairs).toEqual([{ from: 'USD', to: 'EUR', openQuotes: 2 }, { from: 'GBP', to: 'EUR', openQuotes: 1 }])
+    expect(fxPairs).toHaveBeenCalledTimes(1)
+    const [sql, params] = fxPairs.mock.calls[0] as [string, unknown[]]
+    expect(params).toEqual([SCOPE.organizationId, SCOPE.tenantId, ...COST_CLOSED_STATUSES])
+    const flat = sql.replace(/\s+/g, ' ')
+    expect(flat).toMatch(/group by c\.currency_code, q\.currency_code/)
+    expect(flat).toMatch(/count\(distinct c\.quote_configuration_id\)/)
+    expect(flat).toMatch(/c\.error_code = 'CURRENCY_NO_RATE'/)
+    expect(flat).toMatch(/c\.deleted_at is null/)
+    expect(flat).toMatch(/q\.deleted_at is null/)
+    expect(flat).toMatch(/q\.cpq_status not in \(\?, \?\)/)
+    expect(flat).toMatch(/not exists \(select 1 from cpq_order_configurations o where o\.source_quote_id = q\.id/)
+    expect(flat).toMatch(/o\.organization_id = q\.organization_id and o\.tenant_id = q\.tenant_id and o\.deleted_at is null/)
+    expect(em.find).not.toHaveBeenCalled() // no cost row is hydrated
+  })
+  it('is empty without pairs and also works with the toggle off', async () => {
+    const { service } = setup({ enabled: false })
+    expect((await service.usage(SCOPE)).missingFxPairs).toEqual([])
   })
 })
 
@@ -195,7 +245,7 @@ describe('createCost', () => {
       fxRate: '0.92000000', fxRateDate: '2026-11-11', fxRateSource: 'ECB', fxRateDerivation: 'direct',
     })
     expect(recalculate).toHaveBeenCalledTimes(1)
-    expect(result.cost).toMatchObject({ currencyCode: 'USD', valueStatus: 'confirmed' })
+    expect(result.cost).toMatchObject({ currencyCode: 'USD', fxRate: '0.92000000' })
   })
   it('no rate: the value is stored (entered amount and currency) as none + CURRENCY_NO_RATE, never converted 1:1', async () => {
     const fx = jest.fn(async () => ({ ok: false, code: 'CURRENCY_NO_RATE', reason: 'not_found' }))

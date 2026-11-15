@@ -15,3 +15,7 @@
 - Manual create / value edit resolves the rate in the write itself (unlocked and locked alike) when the value is new or changed (a currency change counts); a same-value confirmation or a note-only edit keeps the stored snapshot; no rate -> `none` + CURRENCY_NO_RATE with the entered amount / currency kept and `value_origin = manual`. The unlocked saved recalculation then refreshes it as usual (step 6).
 - A note-only PATCH of a stored `none` + CURRENCY_NO_RATE line no longer fails with FIELD_NOT_ALLOWED: the line is left as it is.
 - PR #95 supplier answers (`valuePatch`) resolve the rate in the same write and keep the answered status; no rate keeps the PR #95 shape. Locked-quote comparison already ran in the cost's own currency plus currency code (`classifyAnswer`), so it is unchanged: a different currency is a proposal.
+
+## 2026-11-15T11:00:00Z — step 8 decisions
+- `error` stays the string code on every cost projection (CostsPanel and the PR #93 clients read it as a string), so the spec's `error: {code, from, to, date}` is delivered as an additive `errorDetail` (cost.view holders only; redacted views and the write-route whitelist never carry it). Reversible: step 10 reads `errorDetail`.
+- `missingFxPairs` is one grouped raw-SQL query (`cpq_quote_line_costs` x `cpq_quote_configurations`, NOT EXISTS order), ordered by open-quote count desc; no ORM relation spans the two entities.

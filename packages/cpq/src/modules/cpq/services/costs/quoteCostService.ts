@@ -36,7 +36,7 @@ import { costLineEligibility, overdueCutoff } from './costSourcing'
 import type { CpqFxRateResolver } from './fxRateResolver'
 import { lineReady, sourcingCostRef, type SourcingSignal, type SourcingSignalPublisher } from './sourcingSignals'
 import {
-  fullCostView, groupByLine, loadQuoteCosts, loadQuoteMargin, loadQuoteMarkupOverrides, markupOverrideView, redactedCostView,
+  convertedInstanceAmount, fullCostView, groupByLine, loadQuoteCosts, loadQuoteMargin, loadQuoteMarkupOverrides, markupOverrideView, redactedCostView,
   type FullCostView, type MarkupOverrideView,
 } from './quoteCostView'
 
@@ -62,6 +62,8 @@ const notFound = () => new QuotingError(404, 'Not found')
 /** What an action-log entry may carry of a cost line: ids, statuses, roles and the cost key. Never an amount, supplier or note. */
 export type QuoteCostAudit = { id: string; quoteLineId: string; costKey: string; role: string; origin: string; valueStatus: string; valueOrigin: string | null }
 export type MarkupOverrideAudit = { id: string; quoteLineId: string; chargeCode: string }
+
+export type MissingFxPair = { from: string; to: string; openQuotes: number }
 
 export interface QuoteCostWriteResult {
   cost: FullCostView | null
@@ -121,6 +123,7 @@ export class CpqQuoteCostService {
       const line = linesById.get(row.quoteLineId)
       return {
         overdueCutoff: cutoff,
+        quoteCurrencyCode: quote.currencyCode,
         ...(line ? { requestEligible: costLineEligibility({ action: line.action ?? null, configuration: line.configuration }, row, quote.quoteType).eligible } : {}),
       }
     }
@@ -175,7 +178,13 @@ export class CpqQuoteCostService {
         costs: own.map((cost) => ({
           costKey: cost.costKey, name: cost.name, role: cost.role, source: cost.source, valueStatus: cost.valueStatus,
           unitAmount: cost.unitAmount ?? null, instanceAmount: cost.instanceAmount ?? null, currencyCode: cost.currencyCode ?? null,
+          // In-memory FX snapshot of this preview (nothing is stored); the route requires cpq.costs.view.
+          fxRate: cost.fxRate ?? null, fxRateDate: cost.fxRateDate ?? null, fxRateSource: cost.fxRateSource ?? null,
+          fxRateDerivation: cost.fxRateDerivation ?? null,
+          convertedInstanceAmount: convertedInstanceAmount(cost.instanceAmount as string | null | undefined, cost.fxRate as string | null | undefined),
           ...(cost.errorCode ? { error: cost.errorCode } : {}),
+          ...(cost.errorCode === 'CURRENCY_NO_RATE' && cost.currencyCode
+            ? { errorDetail: { code: cost.errorCode, from: cost.currencyCode, to: currency, date: new Date().toISOString().slice(0, 10) } } : {}),
         })),
         costTotal: money(costTotal),
         markupRule: costPlus ? charge.markupRule ?? null : null,
@@ -221,7 +230,31 @@ export class CpqQuoteCostService {
     const openRequests = await em.count(CpqQuoteLineCost, {
       ...scoped(scope), sourcingStatus: 'requested', quoteConfigurationId: { $in: liveQuoteConfigurationIds(em, scope) },
     })
-    return { enabled, costPlusCharges, openQuotes, openRequests, liveSubscriptions }
+    return { enabled, costPlusCharges, openQuotes, openRequests, liveSubscriptions, missingFxPairs: await this.missingFxPairs(em, scope) }
+  }
+
+  /**
+   * Operator signal (FX spec §API Contracts, Q14): the currency pairs open quotes are missing a rate for, grouped, with
+   * the number of distinct quotes. ONE grouped query (no row hydrated): cost lines stored as `none` + CURRENCY_NO_RATE,
+   * on live quotes that are not closed (rejected / cancelled) and not yet converted to an order. Raw SQL because the
+   * pair spans two modules' tables without an ORM relation; every table is tenant-scoped and soft-delete filtered.
+   */
+  private async missingFxPairs(em: EntityManager, scope: TenantScope): Promise<MissingFxPair[]> {
+    const closed = [...COST_CLOSED_STATUSES]
+    const rows = await em.getConnection().execute(
+      `select c.currency_code as "from", q.currency_code as "to", count(distinct c.quote_configuration_id)::int as "openQuotes"
+       from cpq_quote_line_costs c
+       join cpq_quote_configurations q on q.id = c.quote_configuration_id and q.organization_id = c.organization_id and q.tenant_id = c.tenant_id
+       where c.organization_id = ? and c.tenant_id = ? and c.deleted_at is null
+         and c.error_code = 'CURRENCY_NO_RATE' and c.value_status = 'none' and c.currency_code is not null
+         and q.deleted_at is null and q.cpq_status not in (${closed.map(() => '?').join(', ')})
+         and not exists (select 1 from cpq_order_configurations o
+           where o.source_quote_id = q.id and o.organization_id = q.organization_id and o.tenant_id = q.tenant_id and o.deleted_at is null)
+       group by c.currency_code, q.currency_code
+       order by count(distinct c.quote_configuration_id) desc, c.currency_code, q.currency_code`,
+      [scope.organizationId, scope.tenantId, ...closed],
+    ) as Array<{ from: string; to: string; openQuotes: number | string }>
+    return rows.map((row) => ({ from: row.from, to: row.to, openQuotes: Number(row.openQuotes) }))
   }
 
   // ─── Cost line writes ──────────────────────────────────────────
@@ -257,7 +290,7 @@ export class CpqQuoteCostService {
         supplierMinTermMonths: parsed.supplierMinTermMonths ?? null, note: clean(parsed.note), errorCode: noRate ? 'CURRENCY_NO_RATE' : null, sourcingStatus: 'not_requested',
       } as never)
       const margin = await this.persistAndPrice(em, quote, scope, locked, () => { em.persist(row) }, signals)
-      return { cost: fullCostView(row), audit: { before: null, after: costAudit(row) }, margin, pricingRevision: quote.pricingRevision ?? 0 }
+      return { cost: fullCostView(row, { quoteCurrencyCode: quote.currencyCode }), audit: { before: null, after: costAudit(row) }, margin, pricingRevision: quote.pricingRevision ?? 0 }
     })
   }
 
@@ -353,7 +386,7 @@ export class CpqQuoteCostService {
           requestedByUserId: row.requestedByUserId ?? null,
         })
       }
-      return { cost: fullCostView(row), audit: { before: auditBefore, after: costAudit(row) }, margin, pricingRevision: quote.pricingRevision ?? 0 }
+      return { cost: fullCostView(row, { quoteCurrencyCode: quote.currencyCode }), audit: { before: auditBefore, after: costAudit(row) }, margin, pricingRevision: quote.pricingRevision ?? 0 }
     })
   }
 

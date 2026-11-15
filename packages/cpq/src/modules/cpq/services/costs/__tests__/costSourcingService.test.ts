@@ -128,6 +128,20 @@ describe('request', () => {
     }
   })
 
+  it('refuses a request on a catalog line whose element is inactive or deleted (409 COST_REQUEST_SUPERSEDED) and writes nothing', async () => {
+    const { service, costs, publisher, quote } = setup({ element: null })
+    await expect(service.request(ids.quote, ids.cost, {}, ACTOR, SCOPE)).rejects.toMatchObject({ status: 409, message: 'COST_REQUEST_SUPERSEDED' })
+    expect(costs[0]).toMatchObject({ sourcingStatus: 'not_requested', costRequestId: null, requestSeq: null })
+    expect(publisher).not.toHaveBeenCalled()
+    expect(quote.pricingRevision).toBe(4)
+  })
+
+  it('a manual line (no catalog element) can still be requested', async () => {
+    const { service, costs } = setup({ costs: [cost({ origin: 'manual', costElementId: null })], element: null })
+    await service.request(ids.quote, ids.cost, {}, ACTOR, SCOPE)
+    expect(costs[0]).toMatchObject({ sourcingStatus: 'requested', requestSeq: 1 })
+  })
+
   it('a carried cost line on a Renew mirror is eligible (R13)', async () => {
     const { service, costs } = setup({ quoteType: 'renew', line: { configuration: { _arcMirroredFromItemId: 'item-1', _arcCostPlusFrozen: true } }, costs: [cost({ origin: 'carried', costElementId: null })], element: null })
     await service.request(ids.quote, ids.cost, {}, ACTOR, SCOPE)

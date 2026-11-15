@@ -132,7 +132,10 @@ export class CpqCostSourcingService {
       const eligibility = costLineEligibility(line, row, quote.quoteType)
       if (!eligibility.eligible) throw new QuotingError(422, 'LINE_NOT_ELIGIBLE', undefined, { reason: eligibility.reason })
       // The target supplier defaults from the catalog element (Q-D3); an explicit one wins.
-      const element = row.costElementId ? await em.findOne(CpqChargeCostElement, { id: row.costElementId, organizationId: scope.organizationId, tenantId: scope.tenantId }) : null
+      // Only an active catalog element can be sourced; an inactive / deleted one could never be answered (the answer and
+      // decline paths refuse it as COST_REQUEST_SUPERSEDED), so nothing is opened. Manual / carried lines have no element.
+      const element = row.costElementId ? await em.findOne(CpqChargeCostElement, { id: row.costElementId, isActive: true, organizationId: scope.organizationId, tenantId: scope.tenantId, deletedAt: null }) : null
+      if (row.origin === 'catalog' && row.costElementId && !element) throw new QuotingError(409, 'COST_REQUEST_SUPERSEDED')
       const supplierId = parsed.supplierId ?? (parsed.supplierName ? null : element?.defaultSupplierId ?? null)
       const supplierName = parsed.supplierName?.trim() || (parsed.supplierId ? null : element?.defaultSupplierName ?? null)
 

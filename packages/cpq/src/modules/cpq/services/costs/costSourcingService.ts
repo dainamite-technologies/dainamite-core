@@ -532,11 +532,10 @@ export class CpqCostSourcingService {
   }
 
   /**
-   * A confirming answer on a renegotiation-due `carried` cost clears the ARC spec's `renegotiation_due`. The column
-   * exists only once that spec ships, so until then this is a no-op (guarded on the property).
+   * A confirming answer on a renegotiation-due `carried` cost clears the ARC spec's `renegotiation_due`.
    */
   private confirmRenegotiation(row: CpqQuoteLineCost, valueStatus: string) {
-    if (row.origin === 'carried' && valueStatus === 'confirmed' && 'renegotiationDue' in row) (row as unknown as { renegotiationDue: boolean }).renegotiationDue = false
+    if (row.origin === 'carried' && valueStatus === 'confirmed') row.renegotiationDue = false
   }
 
   /** Q11: the value / status change of a sourcing action, as an amount-free signal for step 12's `cost_valued` event. */

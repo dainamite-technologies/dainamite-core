@@ -16,7 +16,7 @@ Engine: om-auto-create-pr-loop (steps: 23, --loop: no)
 | B | 2 | State hash helper and item cost state | group:B1 | done | |
 | B | 3 | Activation locks | group:B1 | done | |
 | B | 4 | COST_SOURCE_CHANGED guard | group:B1 | done | |
-| C | 5 | Entity: carried origin and renegotiation_due | group:C1 | todo | |
+| C | 5 | Entity: carried origin and renegotiation_due | group:C1 | done | |
 | C | 6 | Carry on Amend mirror | group:C1 | todo | |
 | C | 7 | Frozen-line lock rule | group:C1 | todo | |
 | C | 8 | Conversion link and write-back | group:C2 | todo | |

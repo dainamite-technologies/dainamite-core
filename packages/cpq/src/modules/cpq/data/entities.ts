@@ -1681,8 +1681,9 @@ export class CpqQuotePriceAdjustment {
 // Sourcing queue (feature spec §Data Model) and request-id lookups.
 @Index({ name: 'cpq_quote_line_costs_sourcing_queue_idx', properties: ['organizationId', 'tenantId', 'sourcingStatus', 'requestedAt'] })
 @Index({ name: 'cpq_quote_line_costs_request_idx', properties: ['costRequestId'] })
+// Open quotes carrying a given item cost (usage endpoint, support): the partial index is hand-added in the migration.
 export class CpqQuoteLineCost {
-  [OptionalProps]?: 'sourcingStatus' | 'requestHistory' | 'createdAt' | 'updatedAt' | 'deletedAt'
+  [OptionalProps]?: 'sourcingStatus' | 'requestHistory' | 'renegotiationDue' | 'createdAt' | 'updatedAt' | 'deletedAt'
 
   @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
   id!: string
@@ -1709,7 +1710,7 @@ export class CpqQuoteLineCost {
   @Property({ name: 'charge_code', type: 'text', nullable: true })
   chargeCode: string | null = null
 
-  /** catalog | manual (carried arrives with the ARC feature) */
+  /** catalog | manual | carried (carried is server-set: ARC Amend mirror carry-over) */
   @Property({ type: 'text' })
   origin!: string
 
@@ -1745,7 +1746,7 @@ export class CpqQuoteLineCost {
   @Property({ name: 'value_status', type: 'text' })
   valueStatus!: string
 
-  /** catalog | manual (supplier / carried arrive later) */
+  /** catalog | manual | supplier | carried */
   @Property({ name: 'value_origin', type: 'text', nullable: true })
   valueOrigin: string | null = null
 
@@ -1865,6 +1866,10 @@ export class CpqQuoteLineCost {
 
   @Property({ name: 'updated_at', type: Date, onUpdate: () => new Date() })
   updatedAt: Date = new Date()
+
+  /** Renew carried MRC costs only (ARC spec R13): the supplier term ends before the renewal's term. Cleared by an answer or Keep current cost. */
+  @Property({ name: 'renegotiation_due', type: 'boolean', default: false })
+  renegotiationDue: boolean = false
 
   @Property({ name: 'deleted_at', type: Date, nullable: true })
   deletedAt: Date | null = null

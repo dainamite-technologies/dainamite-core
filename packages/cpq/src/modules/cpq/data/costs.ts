@@ -31,11 +31,11 @@ export const isCostTable = (table: { purpose?: string | null }): boolean => tabl
 
 // ─── Quote line costs (App Spec §1.4.6) ─────────────────────────
 
-/** `carried` arrives with the ARC feature. */
-export const COST_LINE_ORIGINS = ['catalog', 'manual'] as const
+/** `carried` is server-set only (ARC Amend mirror); no client schema accepts `origin` / `valueOrigin`. */
+export const COST_LINE_ORIGINS = ['catalog', 'manual', 'carried'] as const
 export const COST_VALUE_STATUSES = ['none', 'estimated', 'confirmed'] as const
-/** `supplier`: a supplier answer (sourcing). `carried` cost lines arrive with the ARC feature. */
-export const COST_VALUE_ORIGINS = ['catalog', 'manual', 'supplier'] as const
+/** `supplier`: a supplier answer (sourcing). `carried`: copied from the subscription item cost (ARC), server-set. */
+export const COST_VALUE_ORIGINS = ['catalog', 'manual', 'supplier', 'carried'] as const
 export const COST_SOURCING_STATUSES = ['not_requested', 'requested', 'answered', 'declined', 'cancelled'] as const
 export const COST_LINE_ERROR_CODES = ['TABLE_NO_MATCH', 'CURRENCY_NO_RATE', 'INDEX_NO_VALUE', 'CHARGE_NOT_FOUND', 'COST_PLUS_DISABLED'] as const
 export type CostValueStatus = (typeof COST_VALUE_STATUSES)[number]

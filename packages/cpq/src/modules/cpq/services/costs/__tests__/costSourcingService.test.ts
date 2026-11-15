@@ -362,14 +362,16 @@ describe('answer: unlocked quote', () => {
     expect(recalculate).not.toHaveBeenCalled()
   })
 
-  it('a carried line is accepted; a confirming answer clears renegotiationDue only where the column exists', async () => {
-    const withColumn = setup({ costs: [requested({ origin: 'carried', costElementId: null, renegotiationDue: true })] })
-    await withColumn.service.answer(ids.quote, ids.cost, answerInput(), ACTOR, SCOPE)
-    expect(withColumn.costs[0]).toMatchObject({ sourcingStatus: 'answered', renegotiationDue: false })
-    const without = setup({ costs: [requested({ origin: 'carried', costElementId: null })] })
-    await without.service.answer(ids.quote, ids.cost, answerInput(), ACTOR, SCOPE)
-    expect(without.costs[0]).not.toHaveProperty('renegotiationDue')
-    expect(without.costs[0].sourcingStatus).toBe('answered')
+  it('a carried line is accepted; a confirming answer clears renegotiationDue (ARC step 5: the column exists)', async () => {
+    const carried = setup({ costs: [requested({ origin: 'carried', costElementId: null, renegotiationDue: true })] })
+    await carried.service.answer(ids.quote, ids.cost, answerInput(), ACTOR, SCOPE)
+    expect(carried.costs[0]).toMatchObject({ sourcingStatus: 'answered', renegotiationDue: false })
+  })
+
+  it('a non-confirming answer or a non-carried cost keeps renegotiationDue untouched', async () => {
+    const catalog = setup({ costs: [requested({ origin: 'catalog', renegotiationDue: true })] })
+    await catalog.service.answer(ids.quote, ids.cost, answerInput(), ACTOR, SCOPE)
+    expect(catalog.costs[0]).toMatchObject({ renegotiationDue: true })
   })
 
   it('a margin-only cost applies even on a locked quote, without re-pricing', async () => {

@@ -146,6 +146,10 @@ test.describe('TC-CPQ-COST-FX-001 — foreign-currency costs', () => {
       await login(page, 'admin')
       await page.goto(`/backend/cpq/quotes/${quote.id}`, { waitUntil: 'domcontentloaded' })
       await hideFloatingOverlays(page)
+      // The Costs sub-panel renders inside an expanded quote line: expand it with the row's toggle (first button).
+      const lineRow = page.getByTestId('cpq-quote-line').first()
+      await expect(lineRow).toBeVisible({ timeout: 20_000 })
+      await lineRow.getByRole('button').first().click()
       await expect(page.getByTestId('cpq-cost-row').filter({ hasText: 'USD tail' })).toContainText('≈ 276.00 EUR', { timeout: 20_000 })
 
       // 3. Unlocked (`ready`): a rate that outranks the first one moves the snapshot on the next saved recalculation.

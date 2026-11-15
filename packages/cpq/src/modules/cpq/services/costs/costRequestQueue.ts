@@ -80,14 +80,19 @@ export type CostRequestDetail = CostRequestItem & {
   proposedAnswer: Record<string, unknown> | null
 }
 
+/** Overdue threshold in working days (Q10); shared by the queue and the quote costs read. */
+export async function resolveOverdueThreshold(featureTogglesService: Pick<FeatureTogglesService, 'getNumberConfig'>, tenantId: string): Promise<number> {
+  const flag = await featureTogglesService.getNumberConfig(COST_REQUEST_OVERDUE_TOGGLE, tenantId)
+  const value = flag.ok ? Number(flag.value) : NaN
+  return Number.isFinite(value) && value >= 0 ? Math.floor(value) : COST_REQUEST_OVERDUE_DEFAULT_DAYS
+}
+
 export class CpqCostRequestQueueService {
   constructor(private readonly deps: Dependencies) {}
 
   /** Threshold in working days (Q10); a missing / invalid toggle falls back to the default. */
-  async overdueThreshold(tenantId: string): Promise<number> {
-    const flag = await this.deps.featureTogglesService.getNumberConfig(COST_REQUEST_OVERDUE_TOGGLE, tenantId)
-    const value = flag.ok ? Number(flag.value) : NaN
-    return Number.isFinite(value) && value >= 0 ? Math.floor(value) : COST_REQUEST_OVERDUE_DEFAULT_DAYS
+  overdueThreshold(tenantId: string): Promise<number> {
+    return resolveOverdueThreshold(this.deps.featureTogglesService, tenantId)
   }
 
   async list(scope: TenantScope, query: CostRequestListQuery, now = new Date()) {
@@ -106,7 +111,8 @@ export class CpqCostRequestQueueService {
     }
     if (query.cancelReason) conditions.push({ cancelReason: query.cancelReason })
     if (query.supplierId) conditions.push({ requestSupplierId: query.supplierId })
-    if (query.quoteId) conditions.push({ quoteId: query.quoteId })
+    // The id of the sales quote or of the CPQ quote (the notification links carry the CPQ one).
+    if (query.quoteId) conditions.push({ $or: [{ quoteId: query.quoteId }, { quoteConfigurationId: query.quoteId }] })
     if (query.search) {
       const pattern = `%${escapeLike(query.search)}%`
       const numbered = em.createQueryBuilder(SalesQuote, 'sq').select('sq.id').where({ ...scoped(scope), quoteNumber: { $ilike: pattern } })

@@ -135,7 +135,7 @@ describe('list', () => {
     await service.list(SCOPE, query({ status: 'cancelled', cancelReason: 'quote_closed', supplierId: '11111111-1111-4111-8111-111111111111', quoteId: '22222222-2222-4222-8222-222222222222' }), NOW)
     expect(whereOf(em).$and).toEqual(expect.arrayContaining([
       { sourcingStatus: 'cancelled' }, { cancelReason: 'quote_closed' },
-      { requestSupplierId: '11111111-1111-4111-8111-111111111111' }, { quoteId: '22222222-2222-4222-8222-222222222222' },
+      { requestSupplierId: '11111111-1111-4111-8111-111111111111' }, { $or: [{ quoteId: '22222222-2222-4222-8222-222222222222' }, { quoteConfigurationId: '22222222-2222-4222-8222-222222222222' }] },
     ]))
     const all = setup()
     await all.service.list(SCOPE, query({ status: 'all' }), NOW)

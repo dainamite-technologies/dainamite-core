@@ -5,6 +5,7 @@ import {
 import { DefaultCpqQuotingService } from '../../cpqQuotingService'
 import { isQuoteCostLocked, resolveCostPlusInputs, resolveQuoteCosts } from '../costResolution'
 import type { SourcingSignal } from '../sourcingSignals'
+import type { CpqFxRateResolver, FxResolveResult } from '../fxRateResolver'
 
 const SCOPE = { organizationId: 'org', tenantId: 'tenant' }
 const QUOTE_ID = 'quote-cfg'
@@ -43,10 +44,10 @@ const catalogCost = (over: Row = {}) => ({ id: 'c-1', ...SCOPE, deletedAt: null,
   origin: 'catalog', valueStatus: 'confirmed', valueOrigin: 'catalog', unitAmount: '100', instanceAmount: '100', currencyCode: 'USD',
   note: null, driverHash: null, errorCode: null, ...over })
 
-const run = (s: ReturnType<typeof store>, opts: { enabled?: boolean; config?: Row; quoteOver?: Row; lines?: Array<{ lineConfig: never; mergedConfig: Row }>; actorUserId?: string | null; signals?: SourcingSignal[]; autoOpen?: boolean } = {}) =>
+const run = (s: ReturnType<typeof store>, opts: { enabled?: boolean; config?: Row; quoteOver?: Row; lines?: Array<{ lineConfig: never; mergedConfig: Row }>; actorUserId?: string | null; signals?: SourcingSignal[]; autoOpen?: boolean; fxResolver?: CpqFxRateResolver } = {}) =>
   resolveQuoteCosts({
     em: s.em as never, quote: quote(opts.quoteOver), scope: SCOPE,
-    isEnabled: async () => opts.enabled ?? true, actorUserId: opts.actorUserId, signals: opts.signals, autoOpen: opts.autoOpen,
+    isEnabled: async () => opts.enabled ?? true, fxResolver: opts.fxResolver, actorUserId: opts.actorUserId, signals: opts.signals, autoOpen: opts.autoOpen,
     lines: opts.lines ?? [{ lineConfig: lineConfig(), mergedConfig: opts.config ?? {} }],
   })
 
@@ -199,7 +200,8 @@ describe('resolveQuoteCosts', () => {
   it('flags a fixed cost in another currency as CURRENCY_NO_RATE (no 1:1 conversion)', async () => {
     const s = store({ charges: [charge()], elements: [element({ currencyCode: 'EUR' })] })
     await run(s)
-    expect(s.costs[0]).toMatchObject({ valueStatus: 'none', unitAmount: null, errorCode: 'CURRENCY_NO_RATE' })
+    // Step 6: the foreign amount and currency are kept (no amounts were kept before FX); no rate, so never 1:1.
+    expect(s.costs[0]).toMatchObject({ valueStatus: 'none', unitAmount: '100', instanceAmount: null, currencyCode: 'EUR', fxRate: null, errorCode: 'CURRENCY_NO_RATE' })
   })
 
   it('resolves on_request costs to estimated with an estimate, else none', async () => {
@@ -667,23 +669,228 @@ describe('cost requests on saved recalculations (Q12, R1a, R1b)', () => {
   })
 })
 
-// Characterization for the FX feature (step 1): outcomes of foreign-currency catalog costs BEFORE rate lookup. Step 6 modifies these.
-describe('foreign-currency catalog costs on a EUR quote (pre-FX behaviour)', () => {
-  const eurQuote = { currencyCode: 'EUR' }
+// ─── Foreign-currency costs (FX spec step 6) ───────────────────────────────
 
-  it('a USD fixed cost is none + CURRENCY_NO_RATE with no amounts', async () => {
-    const s = store({ charges: [charge()], elements: [element({ currencyCode: 'USD', amount: '100' })] })
-    await run(s, { quoteOver: eurQuote })
+const RATE_USD_EUR: FxResolveResult = { ok: true, rate: '0.92000000', rateDate: '2026-11-11', source: 'Manual', derivation: 'direct' }
+const NO_RATE: FxResolveResult = { ok: false, code: 'CURRENCY_NO_RATE', reason: 'not_found' }
+/** Resolver stub: a rate per "FROM>TO" pair, none otherwise. */
+const fxStub = (pairs: Record<string, FxResolveResult> = { 'USD>EUR': RATE_USD_EUR }) => {
+  const resolve = jest.fn(async ({ from, to }: { from: string; to: string }) => pairs[`${from}>${to}`] ?? NO_RATE)
+  return { resolve, available: () => true } as unknown as CpqFxRateResolver & { resolve: jest.Mock }
+}
+const SNAPSHOT = { fxRate: '0.92000000', fxRateDate: '2026-11-11', fxRateSource: 'Manual', fxRateDerivation: 'direct' }
+const NO_SNAPSHOT = { fxRate: null, fxRateDate: null, fxRateSource: null, fxRateDerivation: null }
+
+describe('foreign-currency catalog costs on a EUR quote', () => {
+  const eurQuote = { currencyCode: 'EUR' }
+  const costTable = () => ({
+    tables: [{ id: 'tbl', ...SCOPE, deletedAt: null, purpose: 'cost', dimensions: [{ key: 'speed' }] }],
+    entries: (rows: Array<{ currency: string; price: number }>) => rows.map(({ currency, price }) => ({
+      ...SCOPE, deletedAt: null, isActive: true, pricingTableId: 'tbl', dimensionValues: { speed: '10G' }, prices: { cost: price }, currencyCode: currency,
+    })),
+  })
+  const tableElement = (over: Row = {}) => element({ source: 'table', amount: null, currencyCode: 'USD', costTableId: 'tbl', costColumnKey: 'cost', ...over })
+
+  it('a USD fixed cost keeps its amount and currency and stores the rate snapshot (spec: converts at a dated rate)', async () => {
+    const s = store({ charges: [charge()], elements: [element({ currencyCode: 'USD', amount: '300' })] })
+    const fx = fxStub()
+    await run(s, { quoteOver: eurQuote, fxResolver: fx })
     expect(s.costs).toHaveLength(1)
-    expect(s.costs[0]).toMatchObject({ valueStatus: 'none', unitAmount: null, instanceAmount: null, errorCode: 'CURRENCY_NO_RATE' })
+    expect(s.costs[0]).toMatchObject({ valueStatus: 'confirmed', valueOrigin: 'catalog', unitAmount: '300', instanceAmount: '300', currencyCode: 'USD', errorCode: null, ...SNAPSHOT })
+    expect(fx.resolve).toHaveBeenCalledWith({ from: 'USD', to: 'EUR', scope: SCOPE })
   })
 
-  it('a USD-only cost table is none + CURRENCY_NO_RATE (the table row is priced, but in another currency)', async () => {
-    const tables = [{ id: 'tbl', ...SCOPE, deletedAt: null, purpose: 'cost', dimensions: [{ key: 'speed' }] }]
-    const entries = [{ ...SCOPE, deletedAt: null, isActive: true, pricingTableId: 'tbl', dimensionValues: { speed: '10G' }, prices: { cost: 40 }, currencyCode: 'USD' }]
-    const el = element({ source: 'table', amount: null, currencyCode: null, costTableId: 'tbl', costColumnKey: 'cost' })
-    const s = store({ charges: [charge()], elements: [el], tables, entries })
-    await run(s, { quoteOver: eurQuote, config: { speed: '10G' } })
-    expect(s.costs[0]).toMatchObject({ valueStatus: 'none', unitAmount: null, instanceAmount: null, errorCode: 'CURRENCY_NO_RATE' })
+  it('a USD fixed cost without any rate is none + CURRENCY_NO_RATE with the unit amount and currency kept', async () => {
+    const s = store({ charges: [charge()], elements: [element({ currencyCode: 'USD', amount: '100' })] })
+    await run(s, { quoteOver: eurQuote, fxResolver: fxStub({}) })
+    expect(s.costs[0]).toMatchObject({ valueStatus: 'none', unitAmount: '100', instanceAmount: null, currencyCode: 'USD', errorCode: 'CURRENCY_NO_RATE', ...NO_SNAPSHOT })
+  })
+
+  it('without a resolver (currencies module absent) it is the same none + CURRENCY_NO_RATE', async () => {
+    const s = store({ charges: [charge()], elements: [element({ currencyCode: 'USD', amount: '100' })] })
+    await run(s, { quoteOver: eurQuote })
+    expect(s.costs[0]).toMatchObject({ valueStatus: 'none', errorCode: 'CURRENCY_NO_RATE', ...NO_SNAPSHOT })
+  })
+
+  it('a cost in the quote currency never looks up a rate and carries no FX columns', async () => {
+    const s = store({ charges: [charge()], elements: [element({ currencyCode: 'EUR', amount: '100' })] })
+    const fx = fxStub()
+    await run(s, { quoteOver: eurQuote, fxResolver: fx })
+    expect(fx.resolve).not.toHaveBeenCalled()
+    expect(s.costs[0]).toMatchObject({ valueStatus: 'confirmed', currencyCode: 'EUR', ...NO_SNAPSHOT })
+  })
+
+  it('an on_request USD estimate converts and stays estimated', async () => {
+    const s = store({ charges: [charge()], elements: [element({ source: 'on_request', amount: null, estimateAmount: '50', currencyCode: 'USD' })] })
+    await run(s, { quoteOver: eurQuote, fxResolver: fxStub() })
+    expect(s.costs[0]).toMatchObject({ valueStatus: 'estimated', unitAmount: '50', currencyCode: 'USD', ...SNAPSHOT })
+  })
+
+  it('a per_unit USD cost multiplies in the cost currency; the rate is only a snapshot beside it', async () => {
+    const s = store({ charges: [charge()], elements: [element({ costModel: 'per_unit', amount: '10', currencyCode: 'USD' })] })
+    await run(s, { quoteOver: eurQuote, fxResolver: fxStub(), config: { qty: 3 } })
+    expect(s.costs[0]).toMatchObject({ unitAmount: '10', instanceAmount: '30', currencyCode: 'USD', ...SNAPSHOT })
+  })
+
+  it('two lines on the same pair both get the snapshot (the DI-scoped resolver memoizes the pair itself, fxRateResolver.test.ts)', async () => {
+    const s = store({ charges: [charge()], elements: [element({ currencyCode: 'USD', amount: '10' }), element({ id: 'el-2', code: 'tail2', currencyCode: 'USD', amount: '20' })] })
+    const fx = fxStub()
+    await run(s, { quoteOver: eurQuote, fxResolver: fx })
+    expect(s.costs).toHaveLength(2)
+    expect(s.costs.every((cost) => cost.fxRate === '0.92000000')).toBe(true)
+  })
+
+  describe('cost table currency precedence (Q10)', () => {
+    it('a USD-only table with a USD element currency converts the USD entry', async () => {
+      const { tables, entries } = costTable()
+      const s = store({ charges: [charge()], elements: [tableElement()], tables, entries: entries([{ currency: 'USD', price: 40 }]) })
+      await run(s, { quoteOver: eurQuote, config: { speed: '10G' }, fxResolver: fxStub() })
+      expect(s.costs[0]).toMatchObject({ valueStatus: 'confirmed', unitAmount: '40', instanceAmount: '40', currencyCode: 'USD', ...SNAPSHOT })
+    })
+
+    it('a quote-currency entry wins over a USD one and sets no FX columns', async () => {
+      const { tables, entries } = costTable()
+      const s = store({ charges: [charge()], elements: [tableElement()], tables, entries: entries([{ currency: 'USD', price: 40 }, { currency: 'EUR', price: 35 }]) })
+      const fx = fxStub()
+      await run(s, { quoteOver: eurQuote, config: { speed: '10G' }, fxResolver: fx })
+      expect(s.costs[0]).toMatchObject({ valueStatus: 'confirmed', unitAmount: '35', currencyCode: 'EUR', ...NO_SNAPSHOT })
+      expect(fx.resolve).not.toHaveBeenCalled()
+    })
+
+    it('a USD entry with no element currency stays CURRENCY_NO_RATE (unchanged outcome)', async () => {
+      const { tables, entries } = costTable()
+      const s = store({ charges: [charge()], elements: [tableElement({ currencyCode: null })], tables, entries: entries([{ currency: 'USD', price: 40 }]) })
+      await run(s, { quoteOver: eurQuote, config: { speed: '10G' }, fxResolver: fxStub() })
+      expect(s.costs[0]).toMatchObject({ valueStatus: 'none', unitAmount: null, errorCode: 'CURRENCY_NO_RATE', ...NO_SNAPSHOT })
+    })
+
+    it('a USD entry with a USD fallback currency but no rate is none + CURRENCY_NO_RATE with the entry kept', async () => {
+      const { tables, entries } = costTable()
+      const s = store({ charges: [charge()], elements: [tableElement()], tables, entries: entries([{ currency: 'USD', price: 40 }]) })
+      await run(s, { quoteOver: eurQuote, config: { speed: '10G' }, fxResolver: fxStub({}) })
+      expect(s.costs[0]).toMatchObject({ valueStatus: 'none', unitAmount: '40', currencyCode: 'USD', errorCode: 'CURRENCY_NO_RATE', ...NO_SNAPSHOT })
+    })
+  })
+
+  describe('snapshot policy (R4, Q6)', () => {
+    const stored = (over: Row = {}) => catalogCost({ currencyCode: 'USD', unitAmount: '300', instanceAmount: '300', fxRate: '0.90000000', fxRateDate: '2026-11-10', fxRateSource: 'Old', fxRateDerivation: 'inverse', ...over })
+
+    it('saved + mutable: the stored rate is refreshed to the newest one', async () => {
+      const s = store({ charges: [charge()], elements: [element({ amount: '300', currencyCode: 'USD' })], costs: [stored()] })
+      await run(s, { quoteOver: { ...eurQuote, cpqStatus: 'ready' }, fxResolver: fxStub() })
+      expect(s.costs[0]).toMatchObject({ currencyCode: 'USD', ...SNAPSHOT })
+    })
+
+    it.each(['with_customer', 'accepted', 'ordered'])('a quote in status %s is locked: the snapshot is reused, no rate is read', async (status) => {
+      const s = store({ charges: [charge()], elements: [element({ amount: '300', currencyCode: 'USD' })], costs: [stored()] })
+      const fx = fxStub()
+      const stats = await run(s, { quoteOver: { ...eurQuote, cpqStatus: status }, fxResolver: fx })
+      expect(stats.skipped).toBe('locked')
+      expect(fx.resolve).not.toHaveBeenCalled()
+      expect(s.costs[0]).toMatchObject({ fxRate: '0.90000000', fxRateDate: '2026-11-10', fxRateSource: 'Old' })
+    })
+
+    it('a mutable quote with an order is locked: the snapshot is reused', async () => {
+      const s = store({ charges: [charge()], elements: [element({ amount: '300', currencyCode: 'USD' })], costs: [stored()], orders: [{ ...SCOPE, deletedAt: null, sourceQuoteId: QUOTE_ID }] })
+      const fx = fxStub()
+      const stats = await run(s, { quoteOver: { ...eurQuote, cpqStatus: 'ready' }, fxResolver: fx })
+      expect(stats.skipped).toBe('locked')
+      expect(fx.resolve).not.toHaveBeenCalled()
+    })
+
+    it('a preview resolves the new rate in memory and stores nothing; the cost inputs carry the rate', async () => {
+      const s = store({ charges: [charge()], elements: [element({ amount: '300', currencyCode: 'USD' })], costs: [stored()] })
+      const inputs = await resolveCostPlusInputs({
+        em: s.em as never, quote: quote({ ...eurQuote, cpqStatus: 'ready' }), scope: SCOPE, save: false, isEnabled: async () => true, fxResolver: fxStub(),
+        lines: [{ lineConfig: lineConfig(), mergedConfig: {} }],
+      })
+      expect(s.costs[0]).toMatchObject({ fxRate: '0.90000000' })
+      expect(s.em.flush).not.toHaveBeenCalled()
+      expect(inputs.costsByLine.get(LINE_ID)?.[0]).toMatchObject({ fxRate: '0.92000000', instanceAmount: '300' })
+    })
+
+    it('a locked quote reads the stored rate into the cost inputs and never calls the resolver', async () => {
+      const s = store({ charges: [charge()], elements: [element({ amount: '300', currencyCode: 'USD' })], costs: [stored()] })
+      const fx = fxStub()
+      const inputs = await resolveCostPlusInputs({
+        em: s.em as never, quote: quote({ ...eurQuote, cpqStatus: 'with_customer' }), scope: SCOPE, save: true, isEnabled: async () => true, fxResolver: fx,
+        lines: [{ lineConfig: lineConfig(), mergedConfig: {} }],
+      })
+      expect(fx.resolve).not.toHaveBeenCalled()
+      expect(inputs.costsByLine.get(LINE_ID)?.[0]).toMatchObject({ fxRate: '0.90000000' })
+    })
+
+    it('a carried mirror line keeps its rate, date, source and derivation (Q6) even though today\'s rate differs', async () => {
+      const mirror = lineConfig({ configuration: { _arcMirroredFromItemId: 'item-1', _arcReconfigured: true } })
+      const s = store({ charges: [charge()], elements: [element({ amount: '300', currencyCode: 'USD' })], costs: [stored()] })
+      const fx = fxStub()
+      await run(s, { quoteOver: { ...eurQuote, quoteType: 'amend' }, fxResolver: fx, lines: [{ lineConfig: mirror, mergedConfig: {} }] })
+      expect(fx.resolve).not.toHaveBeenCalled()
+      expect(s.costs[0]).toMatchObject({ valueStatus: 'confirmed', currencyCode: 'USD', fxRate: '0.90000000', fxRateDate: '2026-11-10', fxRateSource: 'Old', fxRateDerivation: 'inverse' })
+    })
+
+    it('a line with origin carried keeps its snapshot too', async () => {
+      const s = store({ charges: [charge()], elements: [element({ amount: '300', currencyCode: 'USD' })], costs: [stored({ origin: 'carried' })] })
+      const fx = fxStub()
+      await run(s, { quoteOver: eurQuote, fxResolver: fx })
+      expect(fx.resolve).not.toHaveBeenCalled()
+      expect(s.costs[0]).toMatchObject({ fxRate: '0.90000000', fxRateSource: 'Old' })
+    })
+
+    it('a new line on a reconfigured mirror (no snapshot to reuse) is resolved at the write', async () => {
+      const mirror = lineConfig({ configuration: { _arcMirroredFromItemId: 'item-1', _arcReconfigured: true } })
+      const s = store({ charges: [charge()], elements: [element({ amount: '300', currencyCode: 'USD' })] })
+      await run(s, { quoteOver: { ...eurQuote, quoteType: 'amend' }, fxResolver: fxStub(), lines: [{ lineConfig: mirror, mergedConfig: {} }] })
+      expect(s.costs[0]).toMatchObject(SNAPSHOT)
+    })
+
+    it('a rate that disappears (older than the look-back) turns the refreshed line none + CURRENCY_NO_RATE and clears the snapshot', async () => {
+      const s = store({ charges: [charge()], elements: [element({ amount: '300', currencyCode: 'USD' })], costs: [stored()] })
+      await run(s, { quoteOver: { ...eurQuote, cpqStatus: 'ready' }, fxResolver: fxStub({}) })
+      expect(s.costs[0]).toMatchObject({ valueStatus: 'none', unitAmount: '300', errorCode: 'CURRENCY_NO_RATE', ...NO_SNAPSHOT })
+    })
+
+    it('a line whose currency is now the quote currency drops its stale snapshot', async () => {
+      const s = store({ charges: [charge()], elements: [element({ amount: '300', currencyCode: 'EUR' })], costs: [stored()] })
+      await run(s, { quoteOver: { ...eurQuote, cpqStatus: 'ready' }, fxResolver: fxStub() })
+      expect(s.costs[0]).toMatchObject({ currencyCode: 'EUR', ...NO_SNAPSHOT })
+    })
+  })
+
+  describe('status on rate arrival (Q13)', () => {
+    const noRate = (over: Row = {}) => catalogCost({ origin: 'manual', valueOrigin: 'manual', valueStatus: 'none', currencyCode: 'USD', unitAmount: '300', instanceAmount: null, errorCode: 'CURRENCY_NO_RATE', chargeCode: 'mrc', ...over })
+
+    it('a manual foreign value stored without a rate becomes estimated with a note once a rate exists', async () => {
+      const s = store({ charges: [charge()], costs: [noRate()] })
+      await run(s, { quoteOver: eurQuote, fxResolver: fxStub() })
+      expect(s.costs[0]).toMatchObject({ valueStatus: 'estimated', errorCode: null, unitAmount: '300', instanceAmount: '300', note: 'Rate applied after entry.', ...SNAPSHOT })
+    })
+
+    it('a PR #95 supplier answer (none + CURRENCY_NO_RATE, value_origin supplier, no instance amount) converts and becomes estimated', async () => {
+      const s = store({ charges: [charge()], elements: [element({ source: 'on_request', amount: null, currencyCode: 'USD' })], costs: [noRate({ origin: 'catalog', valueOrigin: 'supplier', supplierId: 'sup-1' })] })
+      await run(s, { quoteOver: eurQuote, fxResolver: fxStub() })
+      expect(s.costs[0]).toMatchObject({ valueStatus: 'estimated', valueOrigin: 'supplier', errorCode: null, unitAmount: '300', instanceAmount: '300', ...SNAPSHOT })
+    })
+
+    it('stays none + CURRENCY_NO_RATE while there is still no rate (value kept)', async () => {
+      const s = store({ charges: [charge()], costs: [noRate()] })
+      await run(s, { quoteOver: eurQuote, fxResolver: fxStub({}) })
+      expect(s.costs[0]).toMatchObject({ valueStatus: 'none', errorCode: 'CURRENCY_NO_RATE', unitAmount: '300', ...NO_SNAPSHOT })
+    })
+
+    it('a confirmed manual foreign value keeps its status; only the rate is refreshed', async () => {
+      const s = store({ charges: [charge()], costs: [noRate({ valueStatus: 'confirmed', errorCode: null, instanceAmount: '300', fxRate: '0.90000000', fxRateDate: '2026-11-10', fxRateSource: 'Old', fxRateDerivation: 'direct' })] })
+      await run(s, { quoteOver: eurQuote, fxResolver: fxStub() })
+      expect(s.costs[0]).toMatchObject({ valueStatus: 'confirmed', note: null, ...SNAPSHOT })
+    })
+
+    it('a mirror line holding a rate keeps it even for a value awaiting nothing', async () => {
+      const mirror = lineConfig({ configuration: { _arcMirroredFromItemId: 'item-1', _arcReconfigured: true } })
+      const s = store({ charges: [charge()], costs: [noRate({ valueStatus: 'confirmed', errorCode: null, instanceAmount: '300', fxRate: '0.90000000', fxRateDate: '2026-11-10', fxRateSource: 'Old', fxRateDerivation: 'direct' })] })
+      const fx = fxStub()
+      await run(s, { quoteOver: { ...eurQuote, quoteType: 'amend' }, fxResolver: fx, lines: [{ lineConfig: mirror, mergedConfig: {} }] })
+      expect(fx.resolve).not.toHaveBeenCalled()
+      expect(s.costs[0]).toMatchObject({ fxRate: '0.90000000', fxRateSource: 'Old' })
+    })
   })
 })

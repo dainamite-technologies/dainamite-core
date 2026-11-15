@@ -63,7 +63,13 @@ const round4 = (value: number) => (Math.round((value + Number.EPSILON) * 10_000)
 const money = (value: number) => String(round4(value))
 const scoped = (scope: TenantScope) => ({ organizationId: scope.organizationId, tenantId: scope.tenantId, deletedAt: null })
 
-type ResolvedValue = {
+/** The FX snapshot columns of a cost line: all null or all set (FX spec §Data Model invariants). */
+type FxFields = { fxRate: string | null; fxRateDate: string | null; fxRateSource: string | null; fxRateDerivation: string | null }
+const NO_FX: FxFields = { fxRate: null, fxRateDate: null, fxRateSource: null, fxRateDerivation: null }
+/** Rate for one cost currency into the quote currency, or `null` when none is available (never a 1:1 conversion). */
+type FxLookup = (currency: string) => Promise<FxFields | null>
+
+type ResolvedValue = FxFields & {
   valueStatus: 'none' | 'estimated' | 'confirmed'
   valueOrigin: 'catalog' | null
   unitAmount: string | null
@@ -75,7 +81,7 @@ type ResolvedValue = {
 /** A value a person entered (`manual`) or a supplier answered (`supplier`): the catalog resolver never overwrites it until a driver changes. */
 const isEnteredOrigin = (origin: string | null | undefined): boolean => origin === 'manual' || origin === 'supplier'
 
-const NO_VALUE: ResolvedValue = { valueStatus: 'none', valueOrigin: null, unitAmount: null, instanceAmount: null, currencyCode: null, errorCode: null }
+const NO_VALUE: ResolvedValue = { valueStatus: 'none', valueOrigin: null, unitAmount: null, instanceAmount: null, currencyCode: null, errorCode: null, ...NO_FX }
 
 /** Driver attributes of an element: its applicability attribute (table dimensions are added by the caller). */
 export function driverAttributes(element: CpqChargeCostElement, table: CpqPricingTable | null): string[] {
@@ -96,22 +102,35 @@ function quantityOf(charge: CpqProductCharge, configuration: Record<string, unkn
   return Number.isFinite(quantity) ? quantity : 0
 }
 
-function resolveValue(
+async function resolveValue(
   element: CpqChargeCostElement,
   charge: CpqProductCharge,
   table: { dimensions: Array<{ key: string }>; entries: CpqPricingTableEntry[] } | null,
   configuration: Record<string, unknown>,
   quoteCurrency: string,
-): ResolvedValue {
+  lookup: FxLookup,
+): Promise<ResolvedValue> {
   const quantity = element.costModel === 'flat' ? 1 : quantityOf(charge, configuration)
   const instanceOf = (unit: number) => (element.costModel === 'per_unit' ? unit * quantity : unit)
+  const inQuote = (status: 'confirmed' | 'estimated', unit: number, instance: number): ResolvedValue => ({
+    valueStatus: status, valueOrigin: 'catalog', unitAmount: money(unit), instanceAmount: money(instance), currencyCode: quoteCurrency, errorCode: null, ...NO_FX,
+  })
+  // A cost in another currency keeps its own amount and currency; the rate is a snapshot beside it (FX spec §Proposed Solution).
+  // No rate: `none` + CURRENCY_NO_RATE with the unit amount and currency kept, never a 1:1 conversion (R3).
+  const foreign = async (status: 'confirmed' | 'estimated', currency: string, unit: number, instance: number): Promise<ResolvedValue> => {
+    const fx = await lookup(currency)
+    if (!fx) {
+      return { valueStatus: 'none', valueOrigin: 'catalog', unitAmount: money(unit), instanceAmount: null, currencyCode: currency, errorCode: 'CURRENCY_NO_RATE', ...NO_FX }
+    }
+    return { valueStatus: status, valueOrigin: 'catalog', unitAmount: money(unit), instanceAmount: money(instance), currencyCode: currency, errorCode: null, ...fx }
+  }
 
   if (element.source === 'fixed') {
     if (element.amount === null || element.amount === undefined) return NO_VALUE
-    // No FX before the FX feature: never a silent 1:1 conversion (R3).
-    if (element.currencyCode !== quoteCurrency) return { ...NO_VALUE, errorCode: 'CURRENCY_NO_RATE' }
     const unit = Number(element.amount)
-    return { valueStatus: 'confirmed', valueOrigin: 'catalog', unitAmount: money(unit), instanceAmount: money(instanceOf(unit)), currencyCode: quoteCurrency, errorCode: null }
+    if (element.currencyCode === quoteCurrency) return inQuote('confirmed', unit, instanceOf(unit))
+    if (!element.currencyCode) return { ...NO_VALUE, errorCode: 'CURRENCY_NO_RATE' }
+    return foreign('confirmed', element.currencyCode, unit, instanceOf(unit))
   }
 
   if (element.source === 'table') {
@@ -120,28 +139,55 @@ function resolveValue(
     const model = element.costModel as LookupModel
     // R5: a matching row without the element's cost column is an unknown cost, never a confirmed 0.
     const strict = { requireColumn: true }
+    // Q10 precedence: an entry in the quote currency always wins (no FX columns).
     const inQuoteCurrency = lookupTablePrice(lookupTable, element.costColumnKey, model, configuration, quantity, quoteCurrency, strict)
     if (inQuoteCurrency.outcome === 'miss') {
-      // CURRENCY_NO_RATE only when the quote currency has no matching row at all and another currency prices it.
+      // Otherwise the element's currency is the fallback table currency, converted.
       const rowInQuoteCurrency = lookupTablePrice(lookupTable, element.costColumnKey, model, configuration, quantity, quoteCurrency).outcome !== 'miss'
+      const fallbackCurrency = element.currencyCode && element.currencyCode !== quoteCurrency ? element.currencyCode : null
+      if (!rowInQuoteCurrency && fallbackCurrency) {
+        const inFallback = lookupTablePrice(lookupTable, element.costColumnKey, model, configuration, quantity, fallbackCurrency, strict)
+        if (inFallback.outcome === 'zero_quantity') return foreign('confirmed', fallbackCurrency, 0, 0)
+        if (inFallback.outcome !== 'miss') return foreign('confirmed', fallbackCurrency, inFallback.unitPrice, inFallback.totalPrice)
+      }
+      // CURRENCY_NO_RATE only when the quote currency has no matching row at all and another currency prices it.
       const anyCurrency = rowInQuoteCurrency ? null : lookupTablePrice(lookupTable, element.costColumnKey, model, configuration, quantity, undefined, strict)
       return { ...NO_VALUE, errorCode: !anyCurrency || anyCurrency.outcome === 'miss' ? 'TABLE_NO_MATCH' : 'CURRENCY_NO_RATE' }
     }
-    if (inQuoteCurrency.outcome === 'zero_quantity') {
-      return { valueStatus: 'confirmed', valueOrigin: 'catalog', unitAmount: money(0), instanceAmount: money(0), currencyCode: quoteCurrency, errorCode: null }
-    }
-    return {
-      valueStatus: 'confirmed', valueOrigin: 'catalog', unitAmount: money(inQuoteCurrency.unitPrice),
-      instanceAmount: money(inQuoteCurrency.totalPrice), currencyCode: quoteCurrency, errorCode: null,
-    }
+    if (inQuoteCurrency.outcome === 'zero_quantity') return inQuote('confirmed', 0, 0)
+    return inQuote('confirmed', inQuoteCurrency.unitPrice, inQuoteCurrency.totalPrice)
   }
 
   // on_request: the catalog estimate (Q-D2), else no value.
   if (element.estimateAmount === null || element.estimateAmount === undefined) return NO_VALUE
-  if (element.currencyCode !== quoteCurrency) return { ...NO_VALUE, errorCode: 'CURRENCY_NO_RATE' }
   const estimate = Number(element.estimateAmount)
-  return { valueStatus: 'estimated', valueOrigin: 'catalog', unitAmount: money(estimate), instanceAmount: money(instanceOf(estimate)), currencyCode: quoteCurrency, errorCode: null }
+  if (element.currencyCode === quoteCurrency) return inQuote('estimated', estimate, instanceOf(estimate))
+  if (!element.currencyCode) return { ...NO_VALUE, errorCode: 'CURRENCY_NO_RATE' }
+  return foreign('estimated', element.currencyCode, estimate, instanceOf(estimate))
 }
+
+/**
+ * FX snapshot of a value a person entered or a supplier answered (origin `manual` / `supplier`), which stays in its own
+ * currency (spec Q6 / Q13). Rate found: the snapshot is stored; a value that had no rate (`none` + CURRENCY_NO_RATE, the PR #95
+ * supplier answer or a manual foreign value) becomes `estimated` with a note, because the status entered is not kept
+ * (it was stored as `none`) and nobody has seen the converted price: a pricing manager confirms it (R7). No rate: `none` +
+ * CURRENCY_NO_RATE, the entered amount and currency kept. A value in the quote currency carries no FX columns.
+ */
+async function enteredFxPatch(row: CpqQuoteLineCost, quoteCurrency: string, lookup: FxLookup): Promise<RowPatch> {
+  if (row.unitAmount === null || row.unitAmount === undefined || !row.currencyCode) return {}
+  if (row.currencyCode === quoteCurrency) return row.fxRate === null || row.fxRate === undefined ? {} : { ...NO_FX }
+  const fx = await lookup(row.currencyCode)
+  if (!fx) return { ...NO_FX, valueStatus: 'none', errorCode: 'CURRENCY_NO_RATE' }
+  const patch: RowPatch = { ...fx }
+  if (row.valueStatus === 'none' && row.errorCode === 'CURRENCY_NO_RATE') {
+    patch.valueStatus = 'estimated'
+    patch.errorCode = null
+    patch.note = truncate(row.note ? `${RATE_APPLIED_NOTE} ${row.note}` : RATE_APPLIED_NOTE)
+  }
+  return patch
+}
+
+const RATE_APPLIED_NOTE = 'Rate applied after entry.'
 
 const truncate = (text: string) => (text.length > COST_NOTE_MAX ? text.slice(0, COST_NOTE_MAX) : text)
 
@@ -153,7 +199,7 @@ function resetNote(row: CpqQuoteLineCost, attributes: string[]): string {
 }
 
 export type CostResolutionParams = {
-  /** Dated FX rates for foreign-currency catalog costs; absent = none (FX spec, consumed from step 6). */
+  /** Dated FX rates for foreign-currency costs (FX spec); absent = none (every foreign cost is CURRENCY_NO_RATE). */
   fxResolver?: CpqFxRateResolver
   em: EntityManager
   quote: Pick<CpqQuoteConfiguration, 'id' | 'quoteId' | 'cpqStatus' | 'quoteType' | 'currencyCode'>
@@ -180,6 +226,8 @@ export type CostLineValue = {
   role: string
   valueStatus: string
   instanceAmount: string | null
+  /** FX snapshot (cost currency into the quote currency); null for a cost in the quote currency. */
+  fxRate: string | null
   errorCode: string | null
 }
 
@@ -205,6 +253,7 @@ const toCostLineValue = (source: Record<string, unknown>): CostLineValue => ({
   role: source.role as string,
   valueStatus: source.valueStatus as string,
   instanceAmount: (source.instanceAmount as string | null | undefined) ?? null,
+  fxRate: (source.fxRate as string | null | undefined) ?? null,
   errorCode: (source.errorCode as string | null | undefined) ?? null,
 })
 
@@ -317,6 +366,21 @@ async function planQuoteCosts(params: CostResolutionParams & { save?: boolean })
       || (isArcMirrorLine(lineConfig.configuration, quote.quoteType) && !isArcReconfigured(lineConfig.configuration)))
     .map(({ lineConfig }) => lineConfig.quoteLineId))
 
+  // FX snapshot policy (spec §Proposed Solution, R4). This plan only runs for an UNLOCKED quote (locked / ordered
+  // quotes reuse the stored rows and never reach it) and is only persisted by a SAVED recalculation; a preview resolves
+  // the same rates in memory and writes nothing. Lines carried from a subscription item or belonging to an ARC mirror
+  // line (Q6) keep their stored snapshot: no rate is read for them while one is stored. The resolver memoizes per
+  // currency pair, so one recalculation costs one lookup per pair.
+  const lookupFor = (row: CpqQuoteLineCost | undefined, lineConfig: CpqQuoteLineConfiguration): FxLookup => async (currency) => {
+    const frozen = row !== undefined && (row.origin === 'carried' || isArcMirrorLine(lineConfig.configuration, quote.quoteType))
+    if (frozen && row.fxRate !== null && row.fxRate !== undefined && row.currencyCode === currency) {
+      return { fxRate: row.fxRate, fxRateDate: row.fxRateDate ?? null, fxRateSource: row.fxRateSource ?? null, fxRateDerivation: row.fxRateDerivation ?? null }
+    }
+    if (!params.fxResolver) return null
+    const result = await params.fxResolver.resolve({ from: currency, to: quote.currencyCode, scope })
+    return result.ok ? { fxRate: result.rate, fxRateDate: result.rateDate, fxRateSource: result.source, fxRateDerivation: result.derivation } : null
+  }
+
   // ── Reads first (no mutation before the last query) ──
   const existing = await em.find(CpqQuoteLineCost, { ...scoped(scope), quoteConfigurationId: quote.id })
   const cancelledDrops = existing.filter((row) => cancelledLineIds.has(row.quoteLineId))
@@ -388,7 +452,8 @@ async function planQuoteCosts(params: CostResolutionParams & { save?: boolean })
         const tableEntry = element.costTableId ? tableById.get(element.costTableId) ?? null : null
         const attributes = driverAttributes(element, tableEntry?.table ?? null)
         const hash = driverHash(attributes, mergedConfig)
-        const resolved = resolveValue(element, charge, tableEntry, mergedConfig, quote.currencyCode)
+        const lookup = lookupFor(row, lineConfig)
+        const resolved = await resolveValue(element, charge, tableEntry, mergedConfig, quote.currencyCode, lookup)
         const structure = {
           chargeCode: charge.code, costElementId: element.id, name: element.name, role: element.role,
           costType: element.costType, source: element.source, costModel: element.costModel,
@@ -435,6 +500,8 @@ async function planQuoteCosts(params: CostResolutionParams & { save?: boolean })
           // An entered / confirmed value survives, but its per-instance amount follows the quantity.
           const unit = Number(row.unitAmount)
           patch.instanceAmount = money(element.costModel === 'per_unit' ? unit * quantityOf(charge, mergedConfig) : unit)
+          // Q6 / Q13: a foreign value keeps its currency and amount; its rate snapshot is refreshed (or kept for a carried / mirror line).
+          Object.assign(patch, await enteredFxPatch(row, quote.currencyCode, lookup))
         }
         patch.driverHash = hash
         // R1b (sourcing part): a reconfiguration that resets an on_request / entered value makes the open request
@@ -482,15 +549,20 @@ async function planQuoteCosts(params: CostResolutionParams & { save?: boolean })
       stats.dropped += 1
     }
 
-    // A manual `per_unit` cost keeps its entered unit amount; its per-instance amount follows the
-    // charge quantity, so a reconfigured quantity re-prices from the right cost.
+    // A manual cost keeps its entered unit amount (and currency); a `per_unit` one's per-instance amount follows the
+    // charge quantity, so a reconfigured quantity re-prices from the right cost. A foreign-currency value also gets its
+    // FX snapshot refreshed (Q6; a carried / mirror line keeps its stored one) and the Q13 status on rate arrival.
     for (const row of rows) {
-      if (row.origin !== 'manual' || row.costModel !== 'per_unit' || row.unitAmount === null || row.unitAmount === undefined) continue
+      if (row.origin !== 'manual' || row.unitAmount === null || row.unitAmount === undefined) continue
       const charge = ownerCharges.find((candidate) => candidate.code === row.chargeCode)
-      if (!charge) continue
-      const instanceAmount = money(Number(row.unitAmount) * quantityOf(charge, mergedConfig))
-      if (instanceAmount === row.instanceAmount) continue
-      updates.push({ row, patch: { instanceAmount } })
+      const patch: RowPatch = {}
+      if (row.costModel === 'per_unit' && charge) patch.instanceAmount = money(Number(row.unitAmount) * quantityOf(charge, mergedConfig))
+      Object.assign(patch, await enteredFxPatch(row, quote.currencyCode, lookupFor(row, lineConfig)))
+      // A foreign value stored without a per-instance amount (a PR #95 supplier answer without a rate) gets it with its rate.
+      if (patch.instanceAmount === undefined && (row.instanceAmount === null || row.instanceAmount === undefined) && patch.fxRate) patch.instanceAmount = money(Number(row.unitAmount))
+      const changed = Object.fromEntries(Object.entries(patch).filter(([key, value]) => (row as unknown as Record<string, unknown>)[key] !== value))
+      if (Object.keys(changed).length === 0) continue
+      updates.push({ row, patch: changed })
       stats.updated += 1
     }
   }
@@ -501,5 +573,6 @@ function toFields(value: ResolvedValue) {
   return {
     valueStatus: value.valueStatus, valueOrigin: value.valueOrigin, unitAmount: value.unitAmount,
     instanceAmount: value.instanceAmount, currencyCode: value.currencyCode, errorCode: value.errorCode,
+    fxRate: value.fxRate, fxRateDate: value.fxRateDate, fxRateSource: value.fxRateSource, fxRateDerivation: value.fxRateDerivation,
   }
 }

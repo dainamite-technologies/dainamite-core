@@ -39,6 +39,7 @@ export async function resolveCalculatePriceCostContexts(params: {
       costs: costs.map((cost) => ({
         chargeCode: (cost.chargeCode as string | null | undefined) ?? null, role: cost.role as string,
         valueStatus: cost.valueStatus as string, instanceAmount: (cost.instanceAmount as string | null | undefined) ?? null,
+        fxRate: (cost.fxRate as string | null | undefined) ?? null,
       })),
     })
   }

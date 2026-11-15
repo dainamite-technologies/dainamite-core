@@ -38,7 +38,7 @@ async function cloneQuoteCosts(em: EntityManager, sourceId: string, target: { id
         carriedFromItemCostId: row.carriedFromItemCostId, carriedFromHash: row.carriedFromHash,
         name: row.name, role: row.role, costType: row.costType, source: row.source, costModel: row.costModel,
         valueStatus: row.valueStatus, valueOrigin: row.valueOrigin, unitAmount: row.unitAmount, instanceAmount: row.instanceAmount,
-        currencyCode: row.currencyCode, fxRate: row.fxRate, fxRateDate: row.fxRateDate, driverHash: row.driverHash,
+        currencyCode: row.currencyCode, fxRate: row.fxRate, fxRateDate: row.fxRateDate, fxRateSource: row.fxRateSource, fxRateDerivation: row.fxRateDerivation, driverHash: row.driverHash,
         indexSnapshot: row.indexSnapshot, supplierId: row.supplierId, supplierName: row.supplierName,
         supplierQuoteRef: row.supplierQuoteRef, validUntil: row.validUntil, supplierTermEnd: row.supplierTermEnd,
         supplierMinTermMonths: row.supplierMinTermMonths, note: row.note, errorCode: row.errorCode, ...SOURCING_RESET,

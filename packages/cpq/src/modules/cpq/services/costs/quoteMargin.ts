@@ -39,9 +39,10 @@ export type MarginCost = {
   role: string
   costType: 'nrc' | 'mrc' | string
   valueStatus: 'none' | 'estimated' | 'confirmed' | string
-  /** Per-instance amount (cost model applied), numeric string or number. */
+  /** Per-instance amount (cost model applied) in the cost's own currency, numeric string or number. */
   instanceAmount: string | number | null
   currencyCode?: string | null
+  /** FX snapshot into the quote currency (null / absent for a cost in the quote currency). */
   fxRate?: string | number | null
   /** ISO date `YYYY-MM-DD`. */
   validUntil?: string | null
@@ -147,7 +148,9 @@ function costAcc(costs: MarginCost[], line: MarginLine, today: string): Acc {
     if (!isKnown(cost)) { acc.pending = true; continue }
     if (cost.valueStatus === 'estimated') acc.estimated = true
     if (cost.validUntil && cost.validUntil < today) acc.expired = true
-    const total = Number(cost.instanceAmount) * line.quantity
+    // Converted at the stored FX snapshot, full precision (FX spec R2); a cost in the quote currency carries no rate.
+    const hasRate = cost.fxRate !== null && cost.fxRate !== undefined && cost.fxRate !== ''
+    const total = (hasRate ? Number(cost.instanceAmount) * Number(cost.fxRate) : Number(cost.instanceAmount)) * line.quantity
     if (cost.costType === 'nrc') {
       acc.nrcCost += total
       if (line.includeInDeal !== false) acc.contractCost += total

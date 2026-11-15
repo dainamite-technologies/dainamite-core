@@ -155,7 +155,7 @@ export class CpqQuoteCostService {
       const costPlus = charge.pricingMethod === 'cost_plus'
       if (!costPlus && own.length === 0) continue
       const basis = own.filter((cost) => cost.role === 'price_basis')
-      const costTotal = basis.reduce((sum, cost) => sum + Number(cost.instanceAmount ?? 0), 0)
+      const costTotal = basis.reduce((sum, cost) => sum + Number(cost.instanceAmount ?? 0) * (cost.fxRate ? Number(cost.fxRate) : 1), 0)
       let listTotalPrice: number | null = null
       let error: string | undefined
       if (costPlus) {

@@ -10,9 +10,10 @@ import { loadQuoteCosts } from './quoteCostView'
  * conversion transaction, after the order lines were created: a throw here rolls the whole conversion back.
  *
  * Order line costs never touch an order price: this writes cost rows only. `total_amount` is the per-line cost
- * total `computeQuoteMargin` uses (instance amount x line quantity; null while the cost is unknown), so the
- * order shows the margin the quote showed. A cost line whose quote line has no order line (a soft-deleted
- * line) is skipped. Persists the rows on `em`; the caller flushes.
+ * total `computeQuoteMargin` uses in the document currency (instance amount x line quantity x fx_rate when the cost
+ * is foreign; null while the cost is unknown), so the order shows the margin the quote showed. The four `fx_*`
+ * fields, unit / instance amounts and the cost currency are copied verbatim: no rate lookup happens here.
+ * A cost line whose quote line has no order line (a soft-deleted line) is skipped. Persists the rows on `em`; the caller flushes.
  */
 export async function copyQuoteCostsToOrder(
   em: EntityManager,
@@ -53,6 +54,8 @@ export async function copyQuoteCostsToOrder(
       currencyCode: cost.currencyCode ?? null,
       fxRate: cost.fxRate ?? null,
       fxRateDate: cost.fxRateDate ?? null,
+      fxRateSource: cost.fxRateSource ?? null,
+      fxRateDerivation: cost.fxRateDerivation ?? null,
       indexSnapshot: cost.indexSnapshot ?? null,
       supplierId: cost.supplierId ?? null,
       supplierName: cost.supplierName ?? null,

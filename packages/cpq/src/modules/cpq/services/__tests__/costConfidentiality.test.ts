@@ -339,7 +339,7 @@ describe('ce.ts registrations (App Spec Q7)', () => {
  * would leak them. For a caller without `cpq.costs.view`, cost routes return only ids, cost keys, names, roles, types
  * and statuses: no sentinel, no supplier name, and none of the keys below. Each surface has a positive control.
  */
-const FORBIDDEN_KEYS = /"(unitAmount|instanceAmount|totalAmount|fxRate|fxRateDate|supplier\w*|margin\w*|mrcCost|nrcCost)"/
+const FORBIDDEN_KEYS = /"(unitAmount|instanceAmount|totalAmount|fxRate|fxRateDate|fxRateSource|fxRateDerivation|supplier\w*|margin\w*|mrcCost|nrcCost)"/
 const expectNoCostKeys = (value: unknown) => expect(JSON.stringify(value) ?? '').not.toMatch(FORBIDDEN_KEYS)
 /** Cost routes without the feature also drop the currency (it is part of the value fields). */
 const expectStatusOnly = (value: unknown) => { expectNoCostKeys(value); expect(JSON.stringify(value) ?? '').not.toContain('currencyCode') }
@@ -351,7 +351,7 @@ const feat = {
 const inventoryCostRow = (over: Row = {}): Row => ({
   id: 'ic-1', ...SCOPE, subscriptionId: feat.sub, subscriptionItemId: feat.item, assetId: null, status: 'active', startedAt: '2026-11-01', endedAt: null, lastChangeId: 'log-1',
   costKey: 'tail', chargeCode: 'tail', origin: 'catalog', name: 'Tail', role: 'price_basis', costType: 'mrc', source: 'fixed', costModel: 'flat', valueStatus: 'confirmed',
-  valueOrigin: 'catalog', unitAmount: COST, instanceAmount: COST, totalAmount: COST, currencyCode: 'USD', fxRate: '1.0000', supplierId: null, supplierName: SUPPLIER,
+  valueOrigin: 'catalog', unitAmount: COST, instanceAmount: COST, totalAmount: COST, currencyCode: 'USD', fxRate: FX_RATE, fxRateDate: '2026-11-11', fxRateSource: FX_SOURCE, fxRateDerivation: 'direct', supplierId: null, supplierName: SUPPLIER,
   supplierQuoteRef: null, validUntil: null, supplierTermEnd: null, supplierMinTermMonths: null, note: NOTE, deletedAt: null, ...over,
 })
 const orderLineCostRow = (): Row => ({ ...costRow(), orderConfigurationId: feat.order, orderLineId: feat.orderLine, sourceQuoteLineCostId: ids.cost, inventoryCostId: 'ic-1', totalAmount: COST })
@@ -396,7 +396,7 @@ describe('order surfaces (feature 2)', () => {
     expectStatusOnly(redacted)
     useCtx(routeCtx(poisonedEm(), true))
     const full = await (await GET(get(), params)).json()
-    expect(leaked(full)).toEqual(expect.arrayContaining(['7777.77', SUPPLIER]))
+    expect(leaked(full)).toEqual(expect.arrayContaining(['7777.77', SUPPLIER, FX_RATE, FX_SOURCE]))
     expect(full.margin).toBeDefined()
   })
 
@@ -433,7 +433,7 @@ describe('inventory surfaces (feature 2)', () => {
     expectStatusOnly(redacted)
     useCtx(routeCtx(poisonedEm(), true))
     const full = await (await GET(get(), params)).json()
-    expect(leaked(full)).toEqual(expect.arrayContaining(['7777.77', SUPPLIER]))
+    expect(leaked(full)).toEqual(expect.arrayContaining(['7777.77', SUPPLIER, FX_RATE, FX_SOURCE]))
     expect(full.margin).toBeDefined()
   })
 
@@ -446,7 +446,7 @@ describe('inventory surfaces (feature 2)', () => {
     expectClean(redacted)
     expectStatusOnly(redacted)
     useCtx(routeCtx(poisonedEm(), true))
-    expect(leaked(await (await GET(get(), params)).json())).toEqual(expect.arrayContaining(['7777.77', SUPPLIER]))
+    expect(leaked(await (await GET(get(), params)).json())).toEqual(expect.arrayContaining(['7777.77', SUPPLIER, FX_RATE, FX_SOURCE]))
   })
 
   it('subscription, item and asset routes carry no cost data even for a cost holder', async () => {
@@ -490,7 +490,7 @@ describe('change log (feature 2, Q7)', () => {
     for (const owner of [...redacted.items[0].afterSnapshot.items, ...redacted.items[0].afterSnapshot.assets, ...redacted.items[0].beforeSnapshot.items]) expect(owner).not.toHaveProperty('costs')
     expect(JSON.stringify(stripSnapshotCosts(snapshot()))).not.toContain('"costs"')
     useCtx(routeCtx(poisonedEm(), true, { cpqInventoryService: { listChangeLog } }))
-    expect(leaked(await (await GET(get(), { params: Promise.resolve({ subscriptionId: feat.sub }) })).json())).toEqual(expect.arrayContaining(['7777.77', SUPPLIER]))
+    expect(leaked(await (await GET(get(), { params: Promise.resolve({ subscriptionId: feat.sub }) })).json())).toEqual(expect.arrayContaining(['7777.77', SUPPLIER, FX_RATE, FX_SOURCE]))
   })
 })
 

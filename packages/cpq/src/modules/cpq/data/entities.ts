@@ -2030,6 +2030,14 @@ export class CpqOrderLineCost {
   @Property({ name: 'fx_rate_date', type: 'date', nullable: true })
   fxRateDate: string | null = null
 
+  /** Copied verbatim from the quote cost line (no lookup); see `CpqQuoteLineCost.fxRateSource`. */
+  @Property({ name: 'fx_rate_source', type: 'text', nullable: true })
+  fxRateSource: string | null = null
+
+  /** direct | inverse; copied verbatim from the quote cost line. */
+  @Property({ name: 'fx_rate_derivation', type: 'text', nullable: true })
+  fxRateDerivation: string | null = null
+
   @Property({ name: 'index_snapshot', type: 'jsonb', nullable: true })
   indexSnapshot: Record<string, unknown> | null = null
 
@@ -2188,6 +2196,14 @@ export class CpqInventoryCost {
 
   @Property({ name: 'fx_rate_date', type: 'date', nullable: true })
   fxRateDate: string | null = null
+
+  /** Copied verbatim from the quote cost line (no lookup); see `CpqQuoteLineCost.fxRateSource`. */
+  @Property({ name: 'fx_rate_source', type: 'text', nullable: true })
+  fxRateSource: string | null = null
+
+  /** direct | inverse; copied verbatim from the quote cost line. */
+  @Property({ name: 'fx_rate_derivation', type: 'text', nullable: true })
+  fxRateDerivation: string | null = null
 
   @Property({ name: 'index_snapshot', type: 'jsonb', nullable: true })
   indexSnapshot: Record<string, unknown> | null = null

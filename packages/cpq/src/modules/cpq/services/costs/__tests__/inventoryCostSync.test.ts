@@ -12,7 +12,7 @@ type Row = Record<string, any>
 const seed = (over: Partial<CostSeed> = {}): CostSeed => ({
   orderLineCostId: 'olc-1', costKey: 'tail', chargeCode: 'mrc', origin: 'catalog', costElementId: 'el-1', name: 'Tail', role: 'price_basis', costType: 'mrc',
   source: 'table', costModel: 'per_unit', valueStatus: 'confirmed', valueOrigin: 'catalog', unitAmount: '270.0000', instanceAmount: '270.0000', totalAmount: '270.0000',
-  currencyCode: 'EUR', fxRate: null, fxRateDate: null, indexSnapshot: null, supplierId: 'sup-1', supplierName: 'Carrier X', supplierQuoteRef: null,
+  currencyCode: 'EUR', fxRate: null, fxRateDate: null, fxRateSource: null, fxRateDerivation: null, indexSnapshot: null, supplierId: 'sup-1', supplierName: 'Carrier X', supplierQuoteRef: null,
   validUntil: null, supplierTermEnd: null, supplierMinTermMonths: null, note: null, ...over,
 })
 
@@ -103,6 +103,22 @@ describe('createItemCosts', () => {
     expect(isInventoryCostUnchanged(row as never, seed({ indexSnapshot: { a: 2, b: 1 } }))).toBe(true)
   })
 
+  it('carries the four fx fields: a re-rated seed writes (changed), an identical one does not', async () => {
+    const fx = { currencyCode: 'USD', fxRate: '0.92000000', fxRateDate: '2026-11-10', fxRateSource: 'ECB', fxRateDerivation: 'direct', totalAmount: '248.4000' }
+    const row = stored(fx)
+    expect(isInventoryCostUnchanged(row as never, seed(fx))).toBe(true)
+    for (const change of [{ fxRate: '0.93000000' }, { fxRateDate: '2026-11-11' }, { fxRateSource: 'NBP' }, { fxRateDerivation: 'inverse' }]) {
+      expect(isInventoryCostUnchanged(row as never, seed({ ...fx, ...change }))).toBe(false)
+    }
+    const { em } = setup([row])
+    const result = await createItemCosts(em as never, [item([seed({ ...fx, fxRateSource: 'NBP', fxRateDerivation: 'inverse' })])], CTX)
+    expect(row).toMatchObject({ fxRateSource: 'NBP', fxRateDerivation: 'inverse' })
+    expect(result.changes).toEqual([expect.objectContaining({ kind: 'changed' })])
+    const same = stored(fx)
+    const second = await createItemCosts(setup([same]).em as never, [item([seed(fx)])], CTX)
+    expect(second.changes).toEqual([])
+  })
+
   it('writes only the rows that differ when several seeds are synced', async () => {
     const same = stored()
     const differs = stored({ id: 'ic-2', costKey: 'install' })
@@ -176,6 +192,12 @@ describe('costSeedFromOrderLineCost', () => {
   it('maps an order line cost to a seed that remembers its id', () => {
     const row = Object.assign(new CpqOrderLineCost(), { id: 'olc-5', ...seed({ orderLineCostId: null }), note: undefined })
     expect(costSeedFromOrderLineCost(row)).toEqual(seed({ orderLineCostId: 'olc-5' }))
+  })
+
+  it('carries total_amount (document currency) and all four fx fields verbatim', () => {
+    const fx = { currencyCode: 'USD', fxRate: '0.92000000', fxRateDate: '2026-11-10', fxRateSource: 'ECB', fxRateDerivation: 'inverse', totalAmount: '248.4000' }
+    const row = Object.assign(new CpqOrderLineCost(), { id: 'olc-6', ...seed({ orderLineCostId: null, ...fx }) })
+    expect(costSeedFromOrderLineCost(row)).toMatchObject({ orderLineCostId: 'olc-6', ...fx })
   })
 })
 

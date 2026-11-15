@@ -33,6 +33,8 @@ export function fullOrderCostView(row: CpqOrderLineCost) {
     currencyCode: row.currencyCode ?? null,
     fxRate: row.fxRate ?? null,
     fxRateDate: row.fxRateDate ?? null,
+    fxRateSource: row.fxRateSource ?? null,
+    fxRateDerivation: row.fxRateDerivation ?? null,
     supplierId: row.supplierId ?? null,
     supplierName: row.supplierName ?? null,
     supplierQuoteRef: row.supplierQuoteRef ?? null,

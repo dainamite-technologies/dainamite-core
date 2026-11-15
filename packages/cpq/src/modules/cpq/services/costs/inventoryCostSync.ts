@@ -39,6 +39,8 @@ export type CostSeed = {
   currencyCode: string | null
   fxRate: string | null
   fxRateDate: string | null
+  fxRateSource: string | null
+  fxRateDerivation: string | null
   indexSnapshot: Record<string, unknown> | null
   supplierId: string | null
   supplierName: string | null
@@ -53,7 +55,7 @@ type ValueField = Exclude<keyof CostSeed, 'orderLineCostId' | 'costKey'>
 
 const VALUE_FIELDS: readonly ValueField[] = [
   'chargeCode', 'origin', 'costElementId', 'name', 'role', 'costType', 'source', 'costModel', 'valueStatus', 'valueOrigin',
-  'unitAmount', 'instanceAmount', 'totalAmount', 'currencyCode', 'fxRate', 'fxRateDate', 'indexSnapshot',
+  'unitAmount', 'instanceAmount', 'totalAmount', 'currencyCode', 'fxRate', 'fxRateDate', 'fxRateSource', 'fxRateDerivation', 'indexSnapshot',
   'supplierId', 'supplierName', 'supplierQuoteRef', 'validUntil', 'supplierTermEnd', 'supplierMinTermMonths', 'note',
 ]
 const NUMERIC_FIELDS = new Set<ValueField>(['unitAmount', 'instanceAmount', 'totalAmount', 'fxRate'])
@@ -120,6 +122,8 @@ export function costSeedFromOrderLineCost(row: CpqOrderLineCost): CostSeed {
     currencyCode: row.currencyCode ?? null,
     fxRate: row.fxRate ?? null,
     fxRateDate: row.fxRateDate ?? null,
+    fxRateSource: row.fxRateSource ?? null,
+    fxRateDerivation: row.fxRateDerivation ?? null,
     indexSnapshot: row.indexSnapshot ?? null,
     supplierId: row.supplierId ?? null,
     supplierName: row.supplierName ?? null,

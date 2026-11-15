@@ -19,3 +19,7 @@
 ## 2026-11-15T11:00:00Z — step 8 decisions
 - `error` stays the string code on every cost projection (CostsPanel and the PR #93 clients read it as a string), so the spec's `error: {code, from, to, date}` is delivered as an additive `errorDetail` (cost.view holders only; redacted views and the write-route whitelist never carry it). Reversible: step 10 reads `errorDetail`.
 - `missingFxPairs` is one grouped raw-SQL query (`cpq_quote_line_costs` x `cpq_quote_configurations`, NOT EXISTS order), ordered by open-quote count desc; no ORM relation spans the two entities.
+
+## 2026-11-15T11:30:00Z — step 9 decisions
+- `costLineTotal` now takes `fxRate`: `total_amount = round4(instance x qty x fx_rate)` (rate omitted when unset), one rounding; unit / instance / currency stay in the cost currency, all four `fx_*` fields are copied verbatim, no resolver call at conversion or activation. A foreign cost with no rate is `none` and so has a null total.
+- Snapshot cost shape always includes `fxRateSource` / `fxRateDerivation` (null when unset), like the existing `fxRate` / `fxRateDate`; the pricing golden and subscription event payload golden stay green (costs are not in the event payloads).

@@ -607,7 +607,7 @@ describe('change-log snapshots carry inventory costs', () => {
     orderLineCostId: `olc-${costKey}`, costKey, chargeCode: null, origin: 'catalog', costElementId: null,
     name: `Cost ${costKey}`, role: 'price_basis', costType: 'one_off', source: 'supplier', costModel: 'fixed',
     valueStatus: 'known', valueOrigin: null, unitAmount: '270.0000', instanceAmount: '270.0000', totalAmount: '270.0000',
-    currencyCode: 'EUR', fxRate: null, fxRateDate: null, indexSnapshot: null, supplierId: 'sup-1', supplierName: 'Acme',
+    currencyCode: 'EUR', fxRate: null, fxRateDate: null, fxRateSource: null, fxRateDerivation: null, indexSnapshot: null, supplierId: 'sup-1', supplierName: 'Acme',
     supplierQuoteRef: 'Q-9', validUntil: null, supplierTermEnd: null, supplierMinTermMonths: null, note: null,
     ...over,
   })
@@ -678,7 +678,7 @@ describe('ARC inventory cost write-back', () => {
     orderLineCostId: `olc-${costKey}`, costKey, chargeCode: null, origin: 'catalog', costElementId: null,
     name: `Cost ${costKey}`, role: 'price_basis', costType: 'one_off', source: 'supplier', costModel: 'fixed',
     valueStatus: 'known', valueOrigin: null, unitAmount: amount, instanceAmount: amount, totalAmount: amount,
-    currencyCode: 'EUR', fxRate: null, fxRateDate: null, indexSnapshot: null, supplierId: 'sup-1', supplierName: 'Acme',
+    currencyCode: 'EUR', fxRate: null, fxRateDate: null, fxRateSource: null, fxRateDerivation: null, indexSnapshot: null, supplierId: 'sup-1', supplierName: 'Acme',
     supplierQuoteRef: null, validUntil: null, supplierTermEnd: null, supplierMinTermMonths: null, note: null,
     ...over,
   })

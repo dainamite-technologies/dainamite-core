@@ -1035,6 +1035,22 @@ describe('conversion copies quote costs to order line costs (MODIFIED by step 4)
     expect(em.persist.mock.calls.filter(([row]) => (row as { sourceQuoteLineCostId?: string }).sourceQuoteLineCostId)).toHaveLength(2)
   })
 
+  it('a foreign cost is copied verbatim with total_amount in the document currency, and no FX rate lookup happens', async () => {
+    const { em, service } = createService()
+    const resolver = { resolve: jest.fn(), resolveForQuote: jest.fn(), getRate: jest.fn() }
+    ;(service as unknown as { fxRateResolver: unknown }).fxRateResolver = resolver
+    const cost = quoteCost({ currencyCode: 'USD', unitAmount: '50', instanceAmount: '135', fxRate: '0.9', fxRateDate: '2026-11-10', fxRateSource: 'ECB', fxRateDerivation: 'inverse' })
+    em.findOne.mockResolvedValueOnce({ id: 'quote', quoteId: 'sales', cpqStatus: 'accepted', currencyCode: 'EUR', customerId: 'customer', pricingSummary: { nrcTotal: 10, mrcTotal: 80 } }).mockResolvedValueOnce(null)
+    em.find.mockResolvedValueOnce([quoteLine('line')] as never).mockResolvedValueOnce([cost] as never).mockResolvedValueOnce([] as never).mockResolvedValueOnce([cost] as never)
+    em.create.mockImplementation((_entity, values: Record<string, unknown>) => ({ createdAt: new Date(), ...values }))
+    await service.convertQuoteToOrder('quote', SCOPE)
+    // quantity 2: 135 x 2 x 0.9 = 243 in the order currency; amounts and currency stay in the cost currency
+    expect(costCreates(em)[0]).toMatchObject({ currencyCode: 'USD', unitAmount: '50', instanceAmount: '135', totalAmount: '243', fxRate: '0.9', fxRateDate: '2026-11-10', fxRateSource: 'ECB', fxRateDerivation: 'inverse' })
+    expect(resolver.resolve).not.toHaveBeenCalled()
+    expect(resolver.resolveForQuote).not.toHaveBeenCalled()
+    expect(resolver.getRate).not.toHaveBeenCalled()
+  })
+
   it('skips cost lines of a quote line that has no order line (deleted line)', async () => {
     const { em, run } = await convert([quoteLine('line')], [quoteCost({}), quoteCost({ id: 'qc-x', quoteLineId: 'deleted-line' })])
     await run()

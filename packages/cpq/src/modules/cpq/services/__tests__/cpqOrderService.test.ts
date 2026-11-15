@@ -1685,6 +1685,15 @@ describe('COST_SOURCE_CHANGED (ARC costs step 4)', () => {
       expect(emitSpy).not.toHaveBeenCalled()
     })
 
+    it('stale after merge (ARC costs Q10): an Amend on A that carried A\'s tail is refused once a merge re-pointed the cost to the clone', async () => {
+      // `repointItemCosts` moved ic-1 onto the merged subscription's clone: same id and key, new item / subscription.
+      const repointed = tailCost({ subscriptionItemId: 'item-clone' }) as unknown as Record<string, unknown>
+      const h = createActivationHarness(amend({ inventoryCosts: [repointed], subscriptionItems: [{ id: 'item-1', status: 'superseded', deletedAt: null }] }))
+      await expect(h.service.activateOrder('oc-1', ACTIVATION_SCOPE)).rejects.toMatchObject({ status: 409, message: 'COST_SOURCE_CHANGED', details: body(['tail']) })
+      expect(h.inventory.applyAmendment).not.toHaveBeenCalled()
+      expect(h.store.committed).toEqual([])
+    })
+
     it('a terminated item is stale against a recorded non-empty set', async () => {
       const h = createActivationHarness(amend({ subscriptionItems: [{ id: 'item-1', status: 'terminated', deletedAt: null }] }))
       await expect(h.service.activateOrder('oc-1', ACTIVATION_SCOPE)).rejects.toMatchObject({ status: 409, message: 'COST_SOURCE_CHANGED' })

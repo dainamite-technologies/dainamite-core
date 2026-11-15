@@ -789,6 +789,35 @@ describe('Amend mirror carries the subscription item costs (ARC costs spec step 
     expect(created(CpqQuoteLineCost)).toHaveLength(0)
   })
 
+  it('ARC costs Q10: a merge-renew mirror of a cost-plus item keeps the Phase 1 freeze and carries no cost lines or markers', async () => {
+    const { em, created } = mirrorFixture('renew', [itemCost()])
+    const costPlusItem = { ...subscriptionItem(), charges: [{ chargeCode: 'mrc', pricingMethod: 'cost_plus' }] }
+    em.findOne.mockImplementation(async (entity: unknown) => {
+      if (entity === CpqQuoteConfiguration) return { id: 'cpq-1', quoteId: 'sq-1', cpqStatus: 'new', quoteType: 'renew', customerId: 'cust-1', currencyCode: 'EUR', organizationId: SCOPE.organizationId, tenantId: SCOPE.tenantId }
+      if (entity === CpqInventorySubscription) return { id: 'sub-2', customerId: 'cust-1', currencyCode: 'EUR', billingCycle: 'monthly', status: 'active' }
+      if (entity === SalesQuote) return { id: 'sq-1', currencyCode: 'EUR' }
+      return null
+    })
+    em.find.mockImplementation(async (entity: unknown) => {
+      if (entity === CpqQuoteTargetSubscription) return [{ id: 't-1', subscriptionId: 'sub-1', mergeAction: 'standalone', quoteId: 'cpq-1' }]
+      if (entity === CpqInventorySubscription) return [{ id: 'sub-1', billingCycle: 'monthly' }]
+      if (entity === CpqInventorySubscriptionItem) return [costPlusItem]
+      if (entity === CpqInventoryCost) return [itemCost()]
+      return []
+    })
+    const service = new DefaultCpqQuotingService({
+      em: em as never, cpqPricingService: {} as never, cpqValidationService: {} as never, cpqProductService: {} as never, salesDocumentNumberGenerator: {} as never,
+    })
+    await service.attachTargetSubscription('cpq-1', { quoteType: 'renew', subscriptionId: 'sub-2' } as never, SCOPE)
+    const [line] = created(CpqQuoteLineConfiguration)
+    expect(line.configuration).toMatchObject({ _arcPriceFrozen: true, _arcCostPlusFrozen: true })
+    expect(line.configuration).not.toHaveProperty('_arcCostsCarried')
+    expect(line.configuration).not.toHaveProperty('_arcCarriedCostSetHash')
+    expect(line.targetSubscriptionId).toBeNull()
+    expect(created(CpqQuoteLineCost)).toHaveLength(0)
+    expect(em.find).not.toHaveBeenCalledWith(CpqInventoryCost, expect.anything())
+  })
+
   it('restore re-carries the item costs of a removed Amend line (fresh markers, previous cost rows replaced)', async () => {
     const em = Object.assign(createMockEm(), { assign: jest.fn((e: Record<string, unknown>, u: Record<string, unknown>) => Object.assign(e, u)), fork: jest.fn() })
     em.fork.mockReturnValue(em)

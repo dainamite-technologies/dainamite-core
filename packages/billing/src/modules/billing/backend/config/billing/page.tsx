@@ -7,6 +7,8 @@ import { Input } from '@open-mercato/ui/primitives/input'
 import { Textarea } from '@open-mercato/ui/primitives/textarea'
 import { Switch } from '@open-mercato/ui/primitives/switch'
 import { Tag } from '@open-mercato/ui/primitives/tag'
+import { RadioGroup } from '@open-mercato/ui/primitives/radio'
+import { RadioField } from '@open-mercato/ui/primitives/radio-field'
 import { KbdShortcut } from '@open-mercato/ui/primitives/kbd'
 import { LoadingMessage, ErrorMessage } from '@open-mercato/ui/backend/detail'
 import { flash } from '@open-mercato/ui/backend/FlashMessages'
@@ -32,6 +34,7 @@ type Settings = {
   nearLimitBufferDefault: number
   statementEnabled: boolean
   topupTaxRate: number
+  prepaidTaxPoint: 'topup' | 'consumption'
   topupProvider: string
   numberMasks: Record<DocumentSeries, string>
   legalName: string
@@ -168,6 +171,28 @@ export default function BillingSettingsPage() {
   const set = <K extends keyof Settings>(key: K, value: Settings[K]) =>
     setValues((prev) => (prev ? { ...prev, [key]: value } : prev))
 
+  const fieldLabel = React.useCallback(
+    (field: string): string => {
+      const labels: Record<string, string> = {
+        legalName: t('billing.settings.seller.legal_name', 'Legal name'),
+        sellerAddress: t('billing.settings.seller.address', 'Address'),
+        taxId: t('billing.settings.seller.tax_id', 'Tax ID'),
+        iban: 'IBAN',
+        bic: 'BIC',
+        bankName: t('billing.settings.payment.bank_name', 'Bank'),
+        topupProvider: t('billing.settings.prepaid.topup_provider', 'Top-up payment provider'),
+        topupTaxRate: t('billing.settings.prepaid.topup_tax_rate', 'VAT on top-up receipts (%)'),
+        defaultPaymentTermsDays: t('billing.settings.payment.terms', 'Default payment terms (days)'),
+        defaultTaxRate: t('billing.settings.payment.tax_rate', 'Default VAT rate (%)'),
+        numberMasks: t('billing.settings.numbering.title', 'Document numbering'),
+      }
+      const root = field.split('.')[0]
+      const rest = field.slice(root.length + 1)
+      return `${labels[root] ?? root}${rest ? ` (${rest})` : ''}`
+    },
+    [t],
+  )
+
   const handleSave = React.useCallback(async () => {
     if (!values) return
     setSaving(true)
@@ -180,11 +205,27 @@ export default function BillingSettingsPage() {
       flash(t('billing.settings.saved', 'Billing settings saved'), 'success')
       await load()
     } catch (err) {
-      flash(normalizeCrudServerError(err).message || t('billing.settings.error.save', 'Saving failed'), 'error')
+      // Name the failing fields — the API's top-level message is just
+      // "Invalid input". Codes such as `billing.settings.error.iban_invalid`
+      // and mask error codes are translated; anything else is shown as sent.
+      const { message, fieldErrors } = normalizeCrudServerError(err)
+      const details = Object.entries(fieldErrors ?? {})
+        .map(([field, fieldMessage]) => {
+          const text = String(fieldMessage)
+          const translated = text.startsWith('billing.') ? t(text, text) : text
+          return `${fieldLabel(field)}: ${translated}`
+        })
+        .join('; ')
+      flash(
+        details
+          ? `${t('billing.settings.error.fields', 'Check these fields')} — ${details}`
+          : message || t('billing.settings.error.save', 'Saving failed'),
+        'error',
+      )
     } finally {
       setSaving(false)
     }
-  }, [load, t, values])
+  }, [fieldLabel, load, t, values])
 
   const [uploading, setUploading] = React.useState(false)
   const handleLogoUpload = React.useCallback(
@@ -381,7 +422,8 @@ export default function BillingSettingsPage() {
                     ['{YYYY} {YY} {MM} {DD}', t('billing.settings.token.date', 'Issue date parts')],
                     ['{SEQUENCE_NUM}', t('billing.settings.mask.scope.none', 'Counter never resets')],
                     ['{SEQUENCE_NUM_YEAR}', t('billing.settings.mask.scope.year', 'Counter resets every year')],
-                    ['{SEQUENCE_NUM_MONTH:4}', t('billing.settings.mask.scope.month', 'Counter resets every month')],
+                    ['{SEQUENCE_NUM_MONTH}', t('billing.settings.mask.scope.month', 'Counter resets every month')],
+                    [':N  ({SEQUENCE_NUM_MONTH:4} → 0007)', t('billing.settings.token.pad', 'Zero-pad the counter to N digits')],
                   ].map(([token, label]) => (
                     <li key={token}>
                       <span className="font-mono">{token}</span> — {label}
@@ -422,17 +464,52 @@ export default function BillingSettingsPage() {
                   onChange={(e) => set('nearLimitBufferDefault', Number(e.currentTarget.value) || 0)}
                 />
               </label>
-              <label className="flex flex-col gap-1 text-sm">
-                <span className="text-muted-foreground">{t('billing.settings.prepaid.topup_tax_rate', 'VAT on top-up receipts (%)')}</span>
-                <Input
-                  type="number"
-                  min="0"
-                  max="100"
-                  step="0.01"
-                  value={String(values.topupTaxRate)}
-                  onChange={(e) => set('topupTaxRate', Number(e.currentTarget.value) || 0)}
-                />
-              </label>
+              <div className="flex flex-col gap-2 text-sm sm:col-span-2">
+                <span className="text-muted-foreground">{t('billing.settings.prepaid.tax_point', 'When is VAT charged on prepaid accounts?')}</span>
+                <RadioGroup
+                  value={values.prepaidTaxPoint ?? 'topup'}
+                  onValueChange={(next) => set('prepaidTaxPoint', next === 'consumption' ? 'consumption' : 'topup')}
+                  className="grid grid-cols-1 gap-3 sm:grid-cols-2"
+                >
+                  <RadioField
+                    value="topup"
+                    label={t('billing.settings.prepaid.tax_point.topup', 'At top-up')}
+                    description={t(
+                      'billing.settings.prepaid.tax_point.topup_help',
+                      'The top-up receipt includes VAT. Charges take the item amount from the balance as entered; item VAT rates do not apply.',
+                    )}
+                  />
+                  <RadioField
+                    value="consumption"
+                    label={t('billing.settings.prepaid.tax_point.consumption', 'At billing')}
+                    description={t(
+                      'billing.settings.prepaid.tax_point.consumption_help',
+                      'Top-ups carry no VAT. Each charge takes its gross amount (at the item VAT rate) from the balance; statements show the VAT. Check with your accountant.',
+                    )}
+                  />
+                </RadioGroup>
+                {(values.prepaidTaxPoint ?? 'topup') !== (loaded.settings.prepaidTaxPoint ?? 'topup') ? (
+                  <div className="rounded-md border border-status-warning-border bg-status-warning-bg px-3 py-2 text-xs text-status-warning-text">
+                    {t(
+                      'billing.settings.prepaid.tax_point.change_warning',
+                      'Applies to new top-ups and charges only. Balances topped up under the other setting keep their tax treatment; switching from top-up to billing taxes the remaining balance again when it is used.',
+                    )}
+                  </div>
+                ) : null}
+              </div>
+              {(values.prepaidTaxPoint ?? 'topup') === 'topup' ? (
+                <label className="flex flex-col gap-1 text-sm">
+                  <span className="text-muted-foreground">{t('billing.settings.prepaid.topup_tax_rate', 'VAT on top-up receipts (%)')}</span>
+                  <Input
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="0.01"
+                    value={String(values.topupTaxRate)}
+                    onChange={(e) => set('topupTaxRate', Number(e.currentTarget.value) || 0)}
+                  />
+                </label>
+              ) : null}
               <label className="flex flex-col gap-1 text-sm">
                 <span className="text-muted-foreground">{t('billing.settings.prepaid.topup_provider', 'Top-up payment provider')}</span>
                 <Input value={values.topupProvider} onChange={(e) => set('topupProvider', e.currentTarget.value)} />

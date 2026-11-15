@@ -66,7 +66,7 @@ export default function CreateBillingItemPage() {
         const id = call.result?.id
         flash(t('billing.items.create.success', 'Billing item created'), 'success')
         if (preselectedAccountId) {
-          router.push(accountHref(preselectedAccountId))
+          router.push(accountHref(preselectedAccountId, 'items'))
         } else if (id) {
           router.push(itemDetailHref(id, { fromItemsList: true }))
         } else {
@@ -86,7 +86,7 @@ export default function CreateBillingItemPage() {
   )
 
   const handleCancel = React.useCallback(() => {
-    router.push(preselectedAccountId ? accountHref(preselectedAccountId) : ITEMS_LIST_HREF)
+    router.push(preselectedAccountId ? accountHref(preselectedAccountId, 'items') : ITEMS_LIST_HREF)
   }, [preselectedAccountId, router])
 
   return (

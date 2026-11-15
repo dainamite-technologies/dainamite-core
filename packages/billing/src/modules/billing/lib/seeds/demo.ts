@@ -2,7 +2,7 @@ import type { EntityManager } from '@mikro-orm/postgresql'
 import { BillingAccount, BillingItem, BillingAccountUsage } from '../../data/entities'
 import type { CustomerKind } from '../../data/validators'
 import type { InvoiceLanguageCode } from '../invoiceLanguages'
-import { getBillingSettings } from '../billingSettings'
+import { DEFAULT_DEMO_SELLER, applySellerDefaults } from './sellerSettings'
 
 /**
  * Self-contained billing test-data seed.
@@ -55,6 +55,8 @@ type DemoItemSpec = {
   taxRate?: string
   // Spec A. Default 'in_advance'.
   chargeTiming?: 'in_advance' | 'in_arrears'
+  // Spec F. Default 'net'. Consumer (B2C) prices are quoted gross.
+  priceBasis?: 'net' | 'gross'
   // When the item starts, relative to the seeded bill date:
   //   'billDate' (default) — 1st of this month, billed in advance from day one;
   //   'prevMonth'          — 1st of last month (in-arrears items bill it now);
@@ -130,21 +132,19 @@ const ACCOUNTS: Array<{
       invoiceLanguage: 'pl',
     },
     items: [
-      { ref: `${SRC}-jk-rec`, type: 'recurring', description: 'Internet 300 Mb/s (miesięcznie)', unitPrice: 79 },
+      // B2C price quoted gross (79.00 PLN incl. 23 % VAT) — Spec F, F-D2.
+      {
+        ref: `${SRC}-jk-rec`,
+        type: 'recurring',
+        description: 'Internet 300 Mb/s (miesięcznie)',
+        unitPrice: 79,
+        priceBasis: 'gross',
+      },
     ],
     usage: [],
   },
 ]
 
-const DEMO_SELLER = {
-  legalName: 'Dainamite Demo sp. z o.o.',
-  sellerAddress: { line1: 'ul. Przykładowa 10', city: 'Kraków', postal_code: '30-001', country: 'PL' },
-  taxId: 'PL1234563218',
-  bankName: 'Demo Bank S.A.',
-  iban: 'PL61109010140000071219812874',
-  bic: 'WBKPPLPP',
-  invoiceFooter: 'Sąd Rejonowy dla Krakowa-Śródmieścia, KRS 0000000000. Kapitał zakładowy 5 000 zł.',
-} as const
 
 /** Delete every row this seed owns within the scope (reset before re-seed). */
 export async function resetBillingDemo(em: EntityManager, scope: BillingDemoScope): Promise<void> {
@@ -185,13 +185,7 @@ export async function seedBillingDemo(
 
   // ── Seller settings (Spec B: posting needs them). Only empty fields are
   // filled, so an operator's real details are never overwritten. ──
-  const settings = await getBillingSettings(em, scope)
-  for (const [field, value] of Object.entries(DEMO_SELLER) as Array<[keyof typeof DEMO_SELLER, unknown]>) {
-    const current = settings[field]
-    if (current === null || current === undefined || current === '') {
-      Object.assign(settings, { [field]: value })
-    }
-  }
+  await applySellerDefaults(em, scope, DEFAULT_DEMO_SELLER)
 
   for (const spec of ACCOUNTS) {
     // ── Account (idempotent by name within scope) ──
@@ -236,6 +230,7 @@ export async function seedBillingDemo(
           chargeTiming: item.chargeTiming ?? 'in_advance',
           prorate: true,
           taxRate: item.taxRate ?? '23',
+          priceBasis: item.priceBasis ?? 'net',
           description: item.description,
           rateJson: { unit_price: item.unitPrice },
           uomCode: item.uomCode ?? null,

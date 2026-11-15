@@ -26,7 +26,7 @@ Make the Bill Run bill what an operator expects:
 
 | # | Decision |
 |---|---|
-| A-D1 | **Prepaid keeps today's behaviour in this spec.** Period close stays in arrears and full-cycle only, and ignores `charge_timing`/`prorate`. Only the `catchUp` gate is removed. **Known follow-up:** prepaid accounts commonly use in-advance items (debit the fee at the start of the period). The fields are stored on prepaid items now, and the ItemForm shows the hint "Prepaid accounts currently charge recurring items at period end". Honouring them in prepaid close is a separate spec (touches statement math). |
+| A-D1 | **Superseded 2026-11-15 by [Spec F](2026-11-15-billing-operator-feedback.md) F-D4** (prepaid honours `charge_timing` / `prorate`). Original decision: **Prepaid keeps today's behaviour in this spec.** Period close stays in arrears and full-cycle only, and ignores `charge_timing`/`prorate`. Only the `catchUp` gate is removed. **Known follow-up:** prepaid accounts commonly use in-advance items (debit the fee at the start of the period). The fields are stored on prepaid items now, and the ItemForm shows the hint "Prepaid accounts currently charge recurring items at period end". Honouring them in prepaid close is a separate spec (touches statement math). |
 | A-D2 | Ending an already-billed in-advance item with `prorate=true` produces an automatic **negative credit line** for the unused days on the next invoice. The cancellation *policy* (for example "cancel at end of current period, no refund") belongs to CPQ / the connector: they set `bill_end_date` to the period end, and then no credit line arises. The engine just honours `bill_end_date`. |
 | A-D3 | Catch-up emits **one invoice per bill date**. Periods are never combined. |
 
@@ -201,6 +201,7 @@ Breaking changes are noted in `packages/billing/CHANGELOG.md` (0.21.0).
 - 2026-11-14 — A-Q1..A-Q3 resolved → A-D1..A-D3. Prepaid in-advance recorded as a follow-up.
 - 2026-11-14 — Amended by Spec 0 (billing-owned invoice ledger).
 - 2026-11-14 — Execution plan: `.ai/runs/2026-11-14-billing-cycle-semantics/PLAN.md`. Runs **before** Spec 0 at the user's request; storage-specific code is isolated in the writer + dedupe helper. Prepaid test/dry stay single-cycle (A-D1).
+- 2026-11-15 — A-D1 superseded by Spec F (F-D4): prepaid period close uses `computeRecurringLines`; test / dry simulate every cycle.
 
 ## Implementation Status
 

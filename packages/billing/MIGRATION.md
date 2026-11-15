@@ -12,6 +12,39 @@ billing data.
 
 ---
 
+## Spec F — Operator feedback round 1
+
+**Migration:** `Migration20261119000000_billing_operator_feedback.ts` (additive:
+`billing_items.price_basis` default `'net'`, `billing_settings.prepaid_tax_point` default
+`'topup'`, `billing_statements.vat_summary`). Run `yarn mercato auth sync-role-acls` for the
+new `billing.run.delete` permission.
+
+- **Item price basis.** Prices are stored as typed with `priceBasis` (`net` | `gross`);
+  lines are computed with `lib/lineAmounts.ts`, so a typed gross is the invoice gross.
+  Tiered usage rates are always net (422 `billing.item.gross_tiered_unsupported`).
+  Internal: `InvoiceLineDescriptor.totalNetAmount` / `unitPriceNet` became `lineAmount` /
+  `unitPrice` + `priceBasis` (the writer derives `unit_price_net`).
+- **Prepaid period close reworked.** Recurring items honour `charge_timing` and `prorate`
+  (same `computeRecurringLines` as postpaid); one-time items use the postpaid window;
+  test / dry simulate every due cycle; outcomes carry `cycles` (`charged` / `previewed` /
+  `empty` / `skipped_existing`, `total_debit`, `statement_id`) and `skipped_items`. An
+  existing statement no longer blocks the account: the run skips the statement, applies
+  (idempotent) charges and advances. Charge `source_ref` format changed to
+  `recurring-{item}-{charge|credit}-{start}-{end}` / `one_time-{item}` — reseed (D14);
+  the `billed_to_date` watermark remains the primary guard.
+- **Prepaid tax point.** `prepaidTaxPoint = 'topup'` (default, today's behaviour made
+  explicit): receipts carry VAT at `topupTaxRate`, debits are the item amount. `'consumption'`:
+  receipts VAT 0, debits are gross at the item rate (period close and real-time usage);
+  transactions carry `metadata.{net,tax,tax_rate,tax_point}`; statements get `vat_summary`.
+  Prepaid usage `ratedAmount` (API + event) is now the amount debited.
+- **Runs.** `DELETE /api/billing/runs/{id}` deletes test / dry runs with their test
+  invoices and outcomes (real runs: 422). `GET /api/billing/runs?mode=`. The wipe also
+  deletes draft-edit audit rows. New event `billing.run.deleted`.
+- **Accounts.** `GET /api/billing/accounts` rows gain `balance_due`, `overdue_amount`
+  and a `hasOverdue=true` filter; `GET /api/billing/accounts/{id}/summary` gains
+  `billing_mode`, `bill_cycle`, `next_bill_date`, `last_invoice`, `prepaid`.
+- **Settings page** is listed in the Settings sidebar (no `navHidden`).
+
 ## Spec D — Credit and debit memos
 
 **Migration:** `Migration20261118000000_billing_memos.ts` (additive:

@@ -3,7 +3,7 @@ import type { EntityManager } from '@mikro-orm/postgresql'
 import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
 import { BillingAccount } from '../../../../data/entities'
-import { getAccountArSummary } from '../../../../lib/accountSummary'
+import { getAccountWorkspaceSummary } from '../../../../lib/accountSummary'
 
 /**
  * `GET /api/billing/accounts/[id]/summary` — what the customer owes (Spec B
@@ -37,7 +37,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     if (!account) {
       return NextResponse.json({ error: 'Account not found' }, { status: 404 })
     }
-    return NextResponse.json(await getAccountArSummary(em, account))
+    return NextResponse.json(await getAccountWorkspaceSummary(em, account))
   } catch (err) {
     console.error('[billing/accounts/summary.GET]', err)
     return NextResponse.json({ error: 'Internal error' }, { status: 500 })
@@ -53,7 +53,10 @@ export const openApi = {
       description:
         'Returns `{ bill_account_id, currency_code, open_amount, overdue_amount, overdue_count, ' +
         'credit_amount }` over posted / partially paid invoices and debit memos (test runs excluded). ' +
-        'Overdue = past due date with outstanding > 0. `credit_amount` is 0 until payments (Spec C).',
+        'Overdue = past due date with outstanding > 0. `credit_amount` = unallocated payments + open credit memos. ' +
+        'Spec F (account workspace) adds `billing_mode`, `bill_cycle`, `next_bill_date`, `last_invoice` ' +
+        '(`{ id, number, issue_date, total_gross }` or null) and, for prepaid accounts, `prepaid { balance, ' +
+        'balance_status, credit_limit, last_statement }` (null for postpaid).',
     },
   },
 }

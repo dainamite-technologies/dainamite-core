@@ -21,12 +21,16 @@ import {
   prepaidCreditUsed,
 } from './creditStatus'
 import { buildBalanceCrossingEvents, type DomainEvent } from './balanceEvents'
-import { absMoney, negateMoney } from './money'
+import { absMoney, fromUnits, negateMoney } from './money'
 import {
   getLowBalanceThresholdDefault,
   getNearLimitBufferDefault,
+  getPrepaidTaxPoint,
 } from './prepaidConfig'
 import { rateUsageForItem, type TierBreakdownEntry } from './usageRater'
+import { priceBasisOf } from './lineAmounts'
+import { resolvePrepaidDebit } from './prepaidTaxPoint'
+import { isTieredRate } from '../data/validators'
 
 /**
  * Real-time prepaid consume (SPEC-002 P1).
@@ -190,6 +194,18 @@ export async function consumePrepaidUsage(
     }
   }
 
+  // ─── 4b. Spec F (F-D3): the debit through the org's tax point ──
+  // `topup` → the rated amount as is; `consumption` → its gross at the item's
+  // rate (tiered rates are always net, a simple rate keeps the item basis).
+  const taxPoint = await getPrepaidTaxPoint(em, { tenantId: input.tenantId, organizationId: input.organizationId })
+  const debit = resolvePrepaidDebit({
+    lineAmount: ratedAmount,
+    priceBasis: item && !isTieredRate(item.rateJson) ? priceBasisOf(item.priceBasis) : 'net',
+    taxRate: item?.taxRate ?? '0',
+    taxPoint,
+  })
+  const debitAmount = fromUnits(Math.round(debit.debit * 10000))
+
   // ─── 5–7. Atomic debit + paired transaction (signed amount) ────
   const movement = await applyBalanceMovement(em, {
     organizationId: input.organizationId,
@@ -197,7 +213,7 @@ export async function consumePrepaidUsage(
     billAccountId: input.billAccountId,
     currencyCode,
     type: 'usage',
-    amount: negateMoney(ratedAmount),
+    amount: negateMoney(debitAmount),
     description: buildDescription(item, input, warning),
     usageId: usage.id,
     billingItemId: item?.id ?? null,
@@ -205,6 +221,11 @@ export async function consumePrepaidUsage(
     metadata: {
       uom_code: input.uomCode,
       usage_tier_breakdown: breakdown,
+      rated_amount: ratedAmount,
+      net: fromUnits(Math.round(debit.net * 10000)),
+      tax: fromUnits(Math.round(debit.tax * 10000)),
+      tax_rate: String(debit.taxRate),
+      tax_point: taxPoint,
       ...(warning ? { warning } : {}),
     },
   })
@@ -236,7 +257,7 @@ export async function consumePrepaidUsage(
       balance: balanceAfter,
       usageId: usage.id,
       transactionId: movement.transaction.id,
-      ratedAmount,
+      ratedAmount: debitAmount,
       balanceStatus,
     },
   })
@@ -252,7 +273,9 @@ export async function consumePrepaidUsage(
     result: {
       id: usage.id,
       deduplicated: false,
-      ratedAmount,
+      // What left the balance (equals the rating in `topup` mode) — the same
+      // value the dedup path reads back from the transaction.
+      ratedAmount: debitAmount,
       currencyCode,
       balance: balanceAfter,
       balanceStatus,

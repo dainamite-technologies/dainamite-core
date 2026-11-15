@@ -109,7 +109,8 @@ type AccountWarnings = {
   skipped_items?: SkippedItemWarning[]
 }
 
-export type CycleStatus = 'invoiced' | 'previewed' | 'empty' | 'skipped_existing'
+/** `charged` is the prepaid analogue of `invoiced` (Spec F, P-D6). */
+export type CycleStatus = 'invoiced' | 'charged' | 'previewed' | 'empty' | 'skipped_existing'
 
 export type CycleRecord = {
   bill_date: string
@@ -119,6 +120,9 @@ export type CycleRecord = {
   line_count: number
   total_net: string
   invoice_id: string | null
+  /** Prepaid only: what left the balance, and the statement for the period. */
+  total_debit?: string
+  statement_id?: string | null
 }
 
 type AccountProcessSuccess = {
@@ -303,6 +307,7 @@ async function processAccount(
       statementId: result.statementId,
       statementEvents: result.statementEvents,
       cyclesEmitted: result.cyclesEmitted,
+      cycles: result.cycles,
       usageRecordsRated: 0,
     }
   }

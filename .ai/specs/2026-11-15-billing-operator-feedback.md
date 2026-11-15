@@ -1,7 +1,7 @@
 # Billing — Operator Feedback Round 1 (Spec F)
 
 **Date**: 2026-11-15
-**Status**: Draft. Decisions agreed, ready for implementation planning review
+**Status**: Implemented (2026-11-15). Integration tests pending the migration (Phase 6.1)
 **Owner**: Mac
 **Target package**: `@dainamite/billing` (`packages/billing/`)
 **Umbrella**: [`2026-11-14-billing-improvements-requirements.md`](2026-11-14-billing-improvements-requirements.md)
@@ -240,6 +240,8 @@ All routes export `openApi`. Writes go through commands, with mutation guards on
 - 2026-11-15 — Skeleton from operator feedback (F1–F6) + leftovers audit. Open questions F-Q1..F-Q6.
 - 2026-11-15 — F-Q1..F-Q6 answered → F-D1..F-D5. F7 (mask help) added. Spec E Phases 2–3 folded in as F8. Integration-test backlog as F9. Full design + phases.
 - 2026-11-15 — F-D3 revised: prepaid tax point becomes an org setting (`topup` default / `consumption`). In `topup` mode item VAT + NET/GROSS are disabled for prepaid accounts. `topup_tax_rate` kept.
+- 2026-11-15 — Implemented phases 1–5 and the docs; see Implementation Status for deviations.
+- 2026-11-15 — Operator tweaks: account Items tab shows rate, term, billed-through and a billing state vs today (`lib/itemBillingState.ts`); Postpaid / Prepaid pill in the account header; account Bill runs tab shows run mode + as-of date (`run_mode`, `run_as_of_date` on run outcomes) with wipe / delete row actions; Run billing dialog closes on success and opens the Bill runs tab (fixes the dialog re-appearing after the account reload — the reload is now silent); prepaid statement ledger window is `(previous bill date, bill date]`, so a top-up on the bill date funds the statement whose charges are taken that day.
 
 ## Implementation Status
 
@@ -247,9 +249,17 @@ Plan: [`.ai/runs/2026-11-15-billing-operator-feedback/PLAN.md`](../runs/2026-11-
 
 | Phase | Status | Date | Notes |
 |-------|--------|------|-------|
-| Phase 1 — Quick fixes | Not Started | — | — |
-| Phase 2 — Runs | Not Started | — | — |
-| Phase 3 — Price basis | Not Started | — | — |
-| Phase 4 — Prepaid engine | Not Started | — | — |
-| Phase 5 — Account workspace | Not Started | — | — |
-| Phase 6 — QA + docs | Not Started | — | — |
+| Phase 1 — Quick fixes | Done | 2026-11-15 | Settings in the sidebar (+ header links, post-guard notice), `:N` help, currency suffix |
+| Phase 2 — Runs | Done | 2026-11-15 | `billing.runs.delete`, `DELETE /api/billing/runs/{id}`, `mode` filter, shared cleanup + hook |
+| Phase 3 — Price basis | Done | 2026-11-15 | `lib/lineAmounts.ts`, descriptor `lineAmount` / `unitPrice` / `priceBasis`, ItemForm switch |
+| Phase 4 — Prepaid engine | Done | 2026-11-15 | Prepaid close on `computeRecurringLines`, multi-cycle test / dry, tax point (`lib/prepaidTaxPoint.ts`) |
+| Phase 5 — Account workspace | Done | 2026-11-15 | Tabs, summary cards, Run billing dialog, list financials |
+| Phase 6 — QA + docs | In Progress | 2026-11-15 | Docs + TC-BILL-011/012/013 written; running the integration suite waits on `yarn mercato db migrate` |
+
+### Deviations from the text above
+- **F4 root cause not reproduced in unit tests.** The pre-Spec F close, run against the operator's scenario with DB-shaped string dates in a mock, closes both bill dates, so the defect is environment / data specific. The rewrite removes both suspects: date-only query parameters are ISO strings (`lib/dateOnly.ts`), and an existing statement no longer stops the account (the old code returned without advancing — the only path that matches the report: one cycle advanced, nothing charged). TC-BILL-011 asserts the scenario against the real DB.
+- **Prorated credits** (an item ended inside an already-charged period) credit the balance as a positive `recurring` transaction, not `adjustment` (P-D7): adjustments are summed by date window on statements and would be counted twice.
+- **One-time prepaid charges** use the postpaid window (first bill date whose `[D − cycle, D + cycle − 1]` window overlaps the item), not "first D ≥ start" (P-D8), so both modes agree.
+- **No `warnings` on the item API** for gross / VAT in prepaid `topup` mode (P-D13): the form disables the fields; the API stores them for a later mode switch.
+- **Prepaid usage `ratedAmount`** (API response + `billing.usage.rated`) is the amount debited — equal to the rating in `topup` mode, gross in `consumption` mode — matching what the dedup path already read back from the transaction.
+- Fixed on the way: item edit never sent `taxRate` (VAT edits were lost); ItemForm `Esc` did not cancel; wipe left orphan `billing_draft_invoice_edits`.

@@ -19,11 +19,19 @@ type AccountSummary = {
   credit_amount: string
 }
 
-export function AccountInvoicesSection({ accountId }: { accountId: string }) {
+export function AccountInvoicesSection({
+  accountId,
+  showSummary = true,
+}: {
+  accountId: string
+  /** False inside the account workspace, whose header already shows these figures. */
+  showSummary?: boolean
+}) {
   const t = useT()
   const [summary, setSummary] = React.useState<AccountSummary | null>(null)
 
   React.useEffect(() => {
+    if (!showSummary) return
     let cancelled = false
     readApiResultOrThrow<AccountSummary>(`/api/billing/accounts/${encodeURIComponent(accountId)}/summary`)
       .then((result) => {
@@ -36,11 +44,11 @@ export function AccountInvoicesSection({ accountId }: { accountId: string }) {
     return () => {
       cancelled = true
     }
-  }, [accountId])
+  }, [accountId, showSummary])
 
   return (
-    <div className="mt-6 space-y-3">
-      {summary ? (
+    <div className={showSummary ? 'mt-6 space-y-3' : 'space-y-3'}>
+      {showSummary && summary ? (
         <StatCard>
           <Stat
             label={t('billing.accounts.summary.open', 'Open receivables')}

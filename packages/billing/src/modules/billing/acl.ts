@@ -8,6 +8,8 @@ export const features = [
   { id: 'billing.run.trigger', title: 'Trigger Bill Run', module: 'billing' },
   { id: 'billing.run.dry_run', title: 'Trigger Bill Run (dry-run)', module: 'billing' },
   { id: 'billing.run.view', title: 'View Bill Run History', module: 'billing' },
+  // Spec F — delete test / dry runs (real runs are never deleted)
+  { id: 'billing.run.delete', title: 'Delete Test / Dry Bill Runs', module: 'billing' },
   { id: 'billing.invoice.post', title: 'Post Draft Invoice', module: 'billing' },
   { id: 'billing.invoice.edit_draft', title: 'Edit Draft Invoice', module: 'billing' },
   { id: 'billing.invoice.view', title: 'View Billing Invoices', module: 'billing' },

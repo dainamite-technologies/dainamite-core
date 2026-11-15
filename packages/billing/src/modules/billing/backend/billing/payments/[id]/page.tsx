@@ -6,7 +6,7 @@ import type { LegacyColumnDef as ColumnDef } from '@tanstack/react-table/legacy'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
 import { FormHeader } from '@open-mercato/ui/backend/forms'
-import { DataTable } from '@open-mercato/ui/backend/DataTable'
+import { BillingDataTable as DataTable } from '../../../../components/BillingDataTable'
 import { RowActions } from '@open-mercato/ui/backend/RowActions'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { Button } from '@open-mercato/ui/primitives/button'
@@ -132,11 +132,13 @@ function AccountActionDialog({
   )
 }
 
-export default function PaymentDetailPage() {
+export default function PaymentDetailPage(props: { params?: { id?: string } }) {
   const t = useT()
   const labels = usePaymentLabels()
-  const params = useParams<{ id: string }>()
-  const id = params?.id
+  // OM serves backend pages through a catch-all route — the dynamic `[id]`
+  // segment arrives as a page prop; `useParams()` is only the fallback.
+  const urlParams = useParams<{ id: string }>()
+  const id = props.params?.id ?? urlParams?.id
   const { confirm, ConfirmDialogElement } = useConfirmDialog()
   const [data, setData] = React.useState<DetailResponse | null>(null)
   const [error, setError] = React.useState<string | null>(null)

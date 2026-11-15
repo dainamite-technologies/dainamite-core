@@ -1,5 +1,5 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
-import { getBillingSettings, type SettingsScope } from './billingSettings'
+import { getBillingSettings, receiptTaxRate, type SettingsScope } from './billingSettings'
 
 /**
  * Typed readers for the prepaid billing settings (SPEC-002), stored per
@@ -38,8 +38,12 @@ export async function getStatementEnabled(em: EntityManager, scope: SettingsScop
   return (await getBillingSettings(em, scope)).statementEnabled !== false
 }
 
-/** VAT percent on top-up receipts (default 0). */
+/** VAT percent on top-up receipts (default 0; always 0 when tax is charged at consumption). */
 export async function getTopupTaxRate(em: EntityManager, scope: SettingsScope): Promise<number> {
-  const n = Number((await getBillingSettings(em, scope)).topupTaxRate)
-  return Number.isFinite(n) && n >= 0 ? n : 0
+  return receiptTaxRate(await getBillingSettings(em, scope))
+}
+
+/** Where prepaid VAT is charged (Spec F, F-D3). Default `topup`. */
+export async function getPrepaidTaxPoint(em: EntityManager, scope: SettingsScope): Promise<'topup' | 'consumption'> {
+  return (await getBillingSettings(em, scope)).prepaidTaxPoint === 'consumption' ? 'consumption' : 'topup'
 }

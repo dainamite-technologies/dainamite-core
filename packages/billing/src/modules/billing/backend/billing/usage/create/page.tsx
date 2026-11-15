@@ -15,6 +15,7 @@ import {
   type UsageAccountOption,
   type AssembledUsagePayload,
 } from '../../../../components/UsageForm'
+import { accountHref } from '../../../../lib/navigation'
 
 /**
  * `/backend/billing/usage/create` — manually record a usage entry.
@@ -75,7 +76,7 @@ export default function CreateBillingUsagePage() {
         } else {
           flash(t('billing.usage.create.success', 'Usage record created'), 'success')
         }
-        router.push(`/backend/billing/accounts/${payload.billAccountId}`)
+        router.push(accountHref(payload.billAccountId, 'usage'))
       } catch (err) {
         const { message } = normalizeCrudServerError(err)
         flash(
@@ -91,7 +92,7 @@ export default function CreateBillingUsagePage() {
 
   const handleCancel = React.useCallback(() => {
     if (preselectedAccountId) {
-      router.push(`/backend/billing/accounts/${preselectedAccountId}`)
+      router.push(accountHref(preselectedAccountId, 'usage'))
     } else {
       router.push('/backend/billing/accounts')
     }

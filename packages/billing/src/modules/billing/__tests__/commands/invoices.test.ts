@@ -439,7 +439,11 @@ describe('wipeTestInvoicesCommand', () => {
     const res = await wipeTestInvoicesCommand.execute({ tenantId: TENANT, organizationId: ORG }, env.ctx as never)
     expect(res.invoicesRemoved).toBe(2)
     const deletes = env.executed.filter((e) => e.sql.startsWith('DELETE'))
-    expect(deletes.map((d) => d.sql.split(' ')[2])).toEqual(['billing_invoice_lines', 'billing_invoices'])
+    expect(deletes.map((d) => d.sql.split(' ')[2])).toEqual([
+      'billing_draft_invoice_edits',
+      'billing_invoice_lines',
+      'billing_invoices',
+    ])
     expect(env.executed.some((e) => e.sql.includes('sales_invoices'))).toBe(false)
   })
 

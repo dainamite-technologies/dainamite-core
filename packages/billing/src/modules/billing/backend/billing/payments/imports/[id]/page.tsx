@@ -21,10 +21,12 @@ type ImportRecord = {
   created_at: string
 }
 
-export default function PaymentImportPage() {
+export default function PaymentImportPage(props: { params?: { id?: string } }) {
   const t = useT()
-  const params = useParams<{ id: string }>()
-  const id = params?.id
+  // OM serves backend pages through a catch-all route — the dynamic `[id]`
+  // segment arrives as a page prop; `useParams()` is only the fallback.
+  const urlParams = useParams<{ id: string }>()
+  const id = props.params?.id ?? urlParams?.id
   const [record, setRecord] = React.useState<ImportRecord | null>(null)
   const [error, setError] = React.useState<string | null>(null)
   const [notFound, setNotFound] = React.useState(false)

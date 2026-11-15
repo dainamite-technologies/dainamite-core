@@ -117,8 +117,15 @@ cache'owane).
    - **Usage (metered)** → pole *UoM code* (np. `gb`, `api_request`)
      oraz *Rate model*: `Simple flat rate` (jedna stawka) lub
      `Tiered` (JSON progowy — volume / graduated / flat).
-4. Wpisz *Description* i *Bill start date*.
-5. Kliknij **Create item**.
+4. Obok pól ceny widać **walutę konta** (tylko do odczytu). Przełącznik
+   **Net | Gross** nad sekcją *Rate* decyduje, czy wpisujesz cenę netto czy
+   brutto; pod polem widać drugą stronę ceny (np. „Gross 60.27 PLN · VAT
+   23 %"). Przełączenie przelicza wpisaną kwotę, więc cena się nie zmienia.
+   Stawki progowe (*Tiered*) są zawsze netto. Na kontach prepaid z VAT
+   naliczanym przy doładowaniu (sekcja 10d) stawka VAT i przełącznik są
+   wyszarzone.
+5. Wpisz *Description* i *Bill start date*.
+6. Kliknij **Create item**.
 
 ### 2c. Szczegóły pozycji
 1. Kliknij wiersz pozycji (lub **Open**) → strona szczegółów. Pozycja
@@ -173,15 +180,19 @@ przebieg rozliczeniowy) — zwykłe faktury sprzedaży się tu nie pokazują.
    ustawień). Pole *Draft number* pokazuje dawny numer `DRAFT-…`.
 
 ### 3d. Ustawienia rozliczeń (numeracja, prepaid)
-1. Otwórz **Settings → Billing** (`/backend/config/billing`).
+1. Otwórz **Settings → Billing** — pozycja jest w menu ustawień w grupie
+   *Module Configs* (`/backend/config/billing`); skrót **Billing settings**
+   jest też w nagłówku list *Invoices* i *Bill Runs*.
 2. *Document numbering* — maska numeru dla faktur, faktur korygujących i
    paragonów. Tokeny: `{YYYY}` `{YY}` `{MM}` `{DD}` oraz jeden licznik:
    `{SEQUENCE_NUM}` (nigdy się nie zeruje), `{SEQUENCE_NUM_YEAR}` (co rok),
    `{SEQUENCE_NUM_MONTH}` (co miesiąc); `:4` dopełnia zerami. Pod polem
    widać podgląd następnego numeru albo błąd (np. licznik miesięczny bez
    `{MM}`).
-3. *Prepaid defaults* — próg niskiego salda, bufor limitu, VAT na
-   paragonach doładowań, dostawca płatności, generowanie zestawień.
+3. *Prepaid defaults* — próg niskiego salda, bufor limitu, **kiedy naliczać
+   VAT** (*At top-up* / *At billing*, sekcja 10d), VAT na paragonach
+   doładowań (tylko przy *At top-up*), dostawca płatności, generowanie
+   zestawień.
 4. **Save** (albo `Ctrl/Cmd + Enter`; `Esc` cofa zmiany).
 
 ### 3e. Dane sprzedawcy, płatności i logo (Spec B)
@@ -633,6 +644,76 @@ dokumentem korygującym z odwołaniem do oryginału.
 ### 9c. Lista faktur
 Filtr *Document type* ma *Credit memo* i *Debit memo*; kolumna *Type*; sumy
 faktur korygujących są pokazywane ze znakiem minus.
+
+## 10. Uwagi operatora — runda 1 (Spec F)
+
+> Wymaga migracji `Migration20261119000000_billing_operator_feedback`
+> (`yarn mercato db migrate`) i odświeżenia uprawnień
+> (`yarn mercato auth sync-role-acls` — nowe `billing.run.delete`).
+
+### 10a. Usuwanie przebiegów testowych
+1. **Bill Runs** → uruchom przebieg w trybie **Test**.
+2. Na stronie przebiegu: **Wipe test invoices** usuwa faktury testowe
+   (przebieg zostaje), **Delete run** usuwa przebieg razem z wynikami i
+   fakturami testowymi (okno potwierdzenia podaje liczbę faktur).
+3. Na liście przebiegów to samo jest w menu wiersza (**Delete run**) dla
+   przebiegów *Test* i *Dry-run*. Filtr **Mode** zawęża listę; domyślnie
+   pokazane są wszystkie.
+4. Przebiegów *Real* nie da się usunąć (brak akcji; API zwraca 422).
+5. Faktura testowa nie ma już przycisku *Wipe* — znacznik **Test run**
+   prowadzi do jej przebiegu.
+
+### 10b. Konto jako przestrzeń robocza
+1. Otwórz konto — u góry kafelki: *Balance due*, *Overdue*, *Unapplied
+   credit* (postpaid) albo *Balance* ze statusem i *Credit limit* (prepaid),
+   oraz *Next bill* i ostatnia faktura / zestawienie.
+2. Zakładki: *Overview*, *Items*, *Usage*, *Invoices*, *Payments*
+   (postpaid) lub *Balance & top-ups* i *Statements* (prepaid), *Bill runs*.
+   Adres zawiera `?tab=…`, więc link otwiera właściwą zakładkę; powrót z
+   pozycji / faktury wraca na zakładkę, z której przyszedłeś.
+3. Obok *Active* w nagłówku jest drugi znacznik: **Postpaid** / **Prepaid**.
+4. Zakładka *Items*: stawka z walutą i podstawą (Net / Gross), okres
+   pozycji, *Billed through* i status rozliczenia względem dzisiejszej daty —
+   *Starts …*, *Not billed yet*, *Billed through …* (opłacona z góry),
+   *Due since …* (następny przebieg ją naliczy), *Billed*, *Fully billed*.
+5. **Run billing** w nagłówku: tryb (domyślnie *Test*) i data → **Run
+   billing**; okno się zamyka, komunikat podaje liczbę dat z opłatami, a
+   strona przechodzi na zakładkę *Bill runs*. Tam każdy przebieg ma kolumny
+   *Mode* (Real / Test / Dry-run) i *As-of date*; menu wiersza przebiegu
+   testowego ma *Wipe test invoices* i *Delete run*.
+6. Lista kont: kolumny **Balance due** i **Overdue** (na czerwono) oraz
+   filtr **Has overdue**.
+
+### 10c. Prepaid — z góry / z dołu, wiele cykli naraz
+1. Konto prepaid z *Next bill date* `2026-11-14`, pozycje: jednorazowa 99 i
+   abonament 49 (*In advance*), obie od `2026-11-14`.
+2. **Run billing** → *Real*, data `2026-12-14` → dwa cykle *Charged to
+   balance*: 14.11 (99 + 49 za 14.11–13.12) i 14.12 (49 za 14.12–13.01);
+   *Next bill* = `2027-01-14`. Transakcje pokazują okres usługi.
+3. Ta sama konfiguracja z *In arrears*: 14.11 pobiera tylko 99, 14.12 —
+   49 za 14.11–13.12.
+4. Pozycja zaczynająca się w środku okresu jest liczona proporcjonalnie
+   (np. 20.11–13.12 = 24/30 × 49 = 39,20); z wyłączonym *Prorate* — pominięta
+   i widoczna w tabeli *Skipped items* przebiegu.
+5. *Test* i *Dry-run* pokazują wszystkie należne cykle (*Preview*), nie
+   zmieniając salda ani konta.
+6. Zestawienie dla daty rozliczenia D obejmuje ruchy od dnia po
+   poprzedniej dacie rozliczenia **do D włącznie** — opłaty pobierane w dniu
+   D i doładowanie wykonane tego samego dnia trafiają do jednego zestawienia.
+   Przykład: rozliczenie 15.11, doładowanie 300 tego dnia, opłaty z 15.11 →
+   pierwsze zestawienie: otwarcie 0, doładowania 300, zamknięcie dodatnie;
+   kolejne zaczyna się od tego salda (nie od wartości ujemnej).
+
+### 10d. Prepaid — kiedy naliczany jest VAT
+**At top-up** (domyślnie): paragon doładowania 123 przy VAT 23 % pokazuje
+100 + 23; saldo rośnie o 123; abonament 49 pobiera 49 (VAT pozycji nie
+ma zastosowania — pole jest wyszarzone z notką).
+
+**At billing**: paragon doładowania 100 bez VAT; saldo +100; abonament
+10 netto przy 23 % pobiera **12,30**; zestawienie pokazuje kolumny Net / VAT i
+tabelę *VAT summary*. Zmiana ustawienia dotyczy tylko nowych doładowań i
+opłat (ostrzeżenie na stronie ustawień). *At billing* wymaga akceptacji
+księgowego — zestawienie nie jest dokumentem fiskalnym.
 
 ## Reset danych testowych *(operacja techniczna — opcjonalna)*
 

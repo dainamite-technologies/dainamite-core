@@ -16,6 +16,14 @@ export type BillCycle = (typeof BILL_CYCLES)[number]
 export const CHARGE_TIMINGS = ['in_advance', 'in_arrears'] as const
 export type ChargeTiming = (typeof CHARGE_TIMINGS)[number]
 
+// Spec F (F-D2): the basis the item price was entered on.
+export const PRICE_BASES = ['net', 'gross'] as const
+export type PriceBasis = (typeof PRICE_BASES)[number]
+
+// Spec F (F-D3): where prepaid VAT is charged.
+export const PREPAID_TAX_POINTS = ['topup', 'consumption'] as const
+export type PrepaidTaxPoint = (typeof PREPAID_TAX_POINTS)[number]
+
 export const BILL_RUN_TRIGGERS = ['schedule', 'manual'] as const
 export type BillRunTrigger = (typeof BILL_RUN_TRIGGERS)[number]
 
@@ -363,6 +371,11 @@ export const billingAccountListQuerySchema = z
     billingMode: z.enum(BILLING_MODES).optional(),
     isActive: z.coerce.boolean().optional(),
     search: z.string().optional(),
+    // Spec F (F8): only accounts with at least one overdue receivable.
+    hasOverdue: z
+      .union([z.boolean(), z.enum(['true', 'false'])])
+      .transform((value) => value === true || value === 'true')
+      .optional(),
   })
   .passthrough()
 
@@ -380,6 +393,21 @@ const taxRateSchema = z.coerce.number().finite().min(0).max(100)
 const chargeTimingFields = {
   chargeTiming: z.enum(CHARGE_TIMINGS).optional(),
   prorate: z.boolean().optional(),
+  // Spec F (F-D2). Omitted → 'net' on create; unchanged on update.
+  priceBasis: z.enum(PRICE_BASES).optional(),
+}
+
+export const GROSS_TIERED_UNSUPPORTED_MESSAGE = 'billing.item.gross_tiered_unsupported'
+
+/** Tiered usage rates (`{ model, tiers }`) are always net (Spec F, P-D4). */
+export function isTieredRate(rateJson: unknown): boolean {
+  return typeof rateJson === 'object' && rateJson !== null && 'model' in rateJson && 'tiers' in rateJson
+}
+
+function refinePriceBasis(val: { priceBasis?: PriceBasis; rateJson: unknown }, ctx: z.RefinementCtx): void {
+  if (val.priceBasis === 'gross' && isTieredRate(val.rateJson)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['priceBasis'], message: GROSS_TIERED_UNSUPPORTED_MESSAGE })
+  }
 }
 
 export const CHARGE_TIMING_RECURRING_ONLY_MESSAGE =
@@ -435,6 +463,7 @@ export const billingItemCreateSchema = scopedSchema
   })
   .superRefine((val, ctx) => {
     refineChargeTiming(val, ctx)
+    refinePriceBasis(val, ctx)
     try {
       validateRateJson(val.type, val.rateJson)
     } catch (err) {
@@ -476,6 +505,7 @@ const billingItemBulkEntrySchema = z
   })
   .superRefine((val, ctx) => {
     refineChargeTiming(val, ctx)
+    refinePriceBasis(val, ctx)
     try {
       validateRateJson(val.type, val.rateJson)
     } catch (err) {
@@ -525,6 +555,16 @@ export const billingItemUpdateSchema = scopedSchema.extend({
 })
 
 export type BillingItemUpdateInput = z.infer<typeof billingItemUpdateSchema>
+
+// Change a recurring item's price from a date on: end the item the day
+// before, start a copy with the new price (see lib/itemPriceChange.ts).
+export const billingItemChangePriceSchema = scopedSchema.extend({
+  id: z.string().uuid(),
+  effectiveDate: z.coerce.date(),
+  unitPrice: z.coerce.number().finite().nonnegative(),
+})
+
+export type BillingItemChangePriceInput = z.infer<typeof billingItemChangePriceSchema>
 
 export const billingItemDeleteSchema = scopedSchema.extend({
   id: z.string().uuid(),
@@ -625,6 +665,8 @@ export const billingRunListQuerySchema = z
     parentRunId: z.string().uuid().optional(),
     asOfDateFrom: z.coerce.date().optional(),
     asOfDateTo: z.coerce.date().optional(),
+    // Spec F (F1): narrow the list to one run mode.
+    mode: z.enum(['real', 'test', 'dry']).optional(),
   })
   .passthrough()
 
@@ -704,6 +746,24 @@ export const billingWipeTestInvoicesSchema = scopedSchema.extend({
 })
 
 export type BillingWipeTestInvoicesInput = z.infer<typeof billingWipeTestInvoicesSchema>
+
+// Spec F (F-D1): test and dry runs can be deleted (real runs never).
+export const billingRunDeleteSchema = scopedSchema.extend({
+  billRunId: z.string().uuid(),
+})
+
+export type BillingRunDeleteInput = z.infer<typeof billingRunDeleteSchema>
+
+// Post the draft invoices of a REAL run, one bounded batch per call; the
+// caller passes back `nextCursor` until `remaining` is 0.
+export const billingRunPostDraftsSchema = scopedSchema.extend({
+  billRunId: z.string().uuid(),
+  /** Continue after this invoice id (ids are processed in ascending order). */
+  afterInvoiceId: z.string().uuid().optional(),
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+})
+
+export type BillingRunPostDraftsInput = z.infer<typeof billingRunPostDraftsSchema>
 
 // ─── Prepaid: top-ups (SPEC-002 P2) ──────────────────────────────
 
@@ -883,6 +943,8 @@ export const billingSettingsUpdateSchema = scopedSchema.extend({
   logoAttachmentId: z.string().uuid().nullable().optional(),
   defaultPaymentTermsDays: paymentTermsDaysSchema.optional(),
   defaultTaxRate: taxRateSchema.optional(),
+  // Spec F (F-D3).
+  prepaidTaxPoint: z.enum(PREPAID_TAX_POINTS).optional(),
 })
 
 export type BillingSettingsUpdateInput = z.infer<typeof billingSettingsUpdateSchema>

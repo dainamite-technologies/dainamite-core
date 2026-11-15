@@ -2,7 +2,13 @@ import { z } from 'zod'
 import { makeCrudRoute } from '@open-mercato/shared/lib/crud/factory'
 import { withScopedPayload } from '@open-mercato/shared/lib/api/scoped'
 import { resolveTranslations } from '@open-mercato/shared/lib/i18n/server'
+import type { EntityManager } from '@mikro-orm/postgresql'
+import type { AwilixContainer } from 'awilix'
 import { BillingAccount } from '../../data/entities'
+import { fetchAccountFinancials, fetchOverdueAccountIds, financialsOrZero } from '../../lib/accountFinancials'
+
+/** A uuid no row has — narrows an `$in` filter to nothing. */
+const NO_MATCH_ID = '00000000-0000-4000-8000-000000000000'
 import { billingEntityIds } from '../../data/entityIds'
 import {
   billingAccountCreateSchema,
@@ -48,6 +54,9 @@ const billingAccountListItemSchema = z.object({
   credit_limit: z.string(),
   payment_terms_days: z.number().int().nullable(),
   auto_send_invoice: z.boolean(),
+  /** Spec F (F8): Σ outstanding of open receivables and its overdue subset (batched per page). */
+  balance_due: z.string(),
+  overdue_amount: z.string(),
   is_active: z.boolean(),
   organization_id: z.string().uuid(),
   tenant_id: z.string().uuid(),
@@ -101,12 +110,21 @@ const crud = makeCrudRoute({
       updatedAt: 'updated_at',
       nextBillDate: 'next_bill_date',
     },
-    buildFilters: async (query) => {
+    buildFilters: async (query, ctx) => {
       const filters: Record<string, unknown> = {}
+      // Spec F (F8): accounts with an overdue receivable — one indexed
+      // DISTINCT over billing_invoices, intersected with any `id` filter.
+      if (query.hasOverdue === true && ctx.auth?.tenantId) {
+        const organizationIds = ctx.organizationIds ?? (ctx.selectedOrganizationId ? [ctx.selectedOrganizationId] : [])
+        const em = ctx.container.resolve<EntityManager>('em')
+        const overdueIds = await fetchOverdueAccountIds(em, { tenantId: ctx.auth.tenantId, organizationIds })
+        filters.id = { $in: overdueIds.length > 0 ? overdueIds : [NO_MATCH_ID] }
+      }
       // `?id=<uuid>` narrows the list to one row — the detail page
       // reads a single account through this filter.
       if (typeof query.id === 'string' && query.id) {
-        filters.id = { $eq: query.id }
+        const current = filters.id as { $in?: string[] } | undefined
+        filters.id = current?.$in ? { $in: current.$in.includes(query.id) ? [query.id] : [NO_MATCH_ID] } : { $eq: query.id }
       }
       if (typeof query.customerId === 'string' && query.customerId) {
         filters.customer_id = { $eq: query.customerId }
@@ -131,6 +149,30 @@ const crud = makeCrudRoute({
         filters.name = { $ilike: pattern }
       }
       return filters
+    },
+  },
+  hooks: {
+    // Spec F (F8): balance due / overdue per row — one GROUP BY for the page.
+    afterList: async (payload: unknown, ctx: unknown) => {
+      const items = ((payload as { items?: unknown[] } | null)?.items ?? []) as Array<Record<string, unknown>>
+      if (items.length === 0) return
+      const first = items[0]
+      const tenantId = typeof first.tenant_id === 'string' ? first.tenant_id : null
+      const organizationId = typeof first.organization_id === 'string' ? first.organization_id : null
+      const ids = items.map((row) => row.id).filter((id): id is string => typeof id === 'string')
+      const financials =
+        tenantId && organizationId
+          ? await fetchAccountFinancials(
+              (ctx as { container: AwilixContainer }).container.resolve<EntityManager>('em'),
+              { tenantId, organizationId },
+              ids,
+            )
+          : new Map()
+      for (const row of items) {
+        const values = financialsOrZero(financials, String(row.id))
+        row.balance_due = values.balance_due
+        row.overdue_amount = values.overdue_amount
+      }
     },
   },
   actions: {

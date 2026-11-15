@@ -58,8 +58,8 @@ export const metadata = {
   pageGroupKey: 'settings.sections.moduleConfigs',
   pageOrder: 10,
   icon: <Settings className="size-4" />,
-  pageContext: 'settings' as const,           // ← Places in Settings hub
-  navHidden: true,                            // ← MUST set — prevents duplicate in main sidebar
+  pageContext: 'settings' as const,           // ← Places in Settings hub (the main sidebar skips non-'main' contexts)
+  // No navHidden — it would hide the page from the Settings sidebar too
 }
 ```
 
@@ -91,7 +91,7 @@ export const metadata = {
 | Mismatched `pageGroupKey` across pages | Items from same module split into separate sidebar sections | Use identical `pageGroupKey` on all module pages |
 | Missing `icon` | Blank space in sidebar next to title | Add `lucide-react` icon component |
 | Inline SVG via `React.createElement` | Broken/wrong icon after `yarn generate` | Use `import { X } from 'lucide-react'` |
-| `pageContext: 'settings'` without `navHidden: true` | Page appears in both main sidebar AND settings hub | Always pair both fields |
+| `pageContext: 'settings'` with `navHidden: true` | Page missing from the Settings sidebar (reachable by URL only) | Drop `navHidden`; the main sidebar already filters out `pageContext !== 'main'` |
 | Missing `as const` on `pageContext` | TypeScript error — type widened to `string` | Use `pageContext: 'settings' as const` |
 | Missing `pageOrder` | Unpredictable sort position (defaults to 10000) | Set explicit order value |
 | Missing `requireFeatures` | Page visible to users without permission | Add feature IDs from `acl.ts` |

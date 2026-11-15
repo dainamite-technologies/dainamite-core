@@ -1,12 +1,12 @@
 "use client"
 import * as React from 'react'
 import Link from 'next/link'
-import { useParams } from 'next/navigation'
+import { useParams, useRouter } from 'next/navigation'
 import type { LegacyColumnDef as ColumnDef } from '@tanstack/react-table/legacy'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { Page, PageBody, PageHeader } from '@open-mercato/ui/backend/Page'
 import { FormHeader } from '@open-mercato/ui/backend/forms'
-import { DataTable } from '@open-mercato/ui/backend/DataTable'
+import { BillingDataTable as DataTable } from '../../../../components/BillingDataTable'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { LoadingMessage, ErrorMessage } from '@open-mercato/ui/backend/detail'
@@ -18,6 +18,8 @@ import {
 import { normalizeCrudServerError } from '@open-mercato/ui/backend/utils/serverErrors'
 import { billRunName } from '../../../../lib/billRunLabel'
 import { RunCyclesSection, type RunCycle } from '../../../../components/RunCyclesSection'
+import { TestRunActions, billRunMode } from '../../../../components/TestRunActions'
+import { PostRunDraftsButton } from '../../../../components/PostRunDraftsButton'
 import {
   DetailCard,
   DetailField,
@@ -182,6 +184,7 @@ export default function BillRunDetailPage(props: { params?: { id?: string } }) {
     void loadOutcomes()
   }, [loadOutcomes])
 
+  const router = useRouter()
   const failedCount = run?.summary?.accounts_failed ?? 0
 
   const handleRetryFailed = React.useCallback(async () => {
@@ -304,14 +307,37 @@ export default function BillRunDetailPage(props: { params?: { id?: string } }) {
           <Tag variant={runStatusVariant(run.status)}>{run.status}</Tag>
         }
         actionsContent={
-          failedCount > 0 ? (
-            <Button disabled={retrying} onClick={handleRetryFailed}>
-              {retrying
-                ? t('billing.runs.retry.in_progress', 'Retrying…')
-                : t('billing.runs.retry.action', 'Retry failed accounts')}
-              {` (${failedCount})`}
-            </Button>
-          ) : null
+          <>
+            {failedCount > 0 ? (
+              <Button disabled={retrying} onClick={handleRetryFailed}>
+                {retrying
+                  ? t('billing.runs.retry.in_progress', 'Retrying…')
+                  : t('billing.runs.retry.action', 'Retry failed accounts')}
+                {` (${failedCount})`}
+              </Button>
+            ) : null}
+            {run.status !== 'running' && billRunMode(run) === 'real' ? (
+              <PostRunDraftsButton
+                runId={run.id}
+                onPosted={() => {
+                  void loadRun()
+                  void loadOutcomes()
+                }}
+              />
+            ) : null}
+            {run.status !== 'running' ? (
+              <TestRunActions
+                runId={run.id}
+                mode={billRunMode(run)}
+                draftsCount={run.summary?.drafts_created}
+                onWiped={() => {
+                  void loadRun()
+                  void loadOutcomes()
+                }}
+                onDeleted={() => router.push('/backend/billing/runs')}
+              />
+            ) : null}
+          </>
         }
       />
       <PageBody>

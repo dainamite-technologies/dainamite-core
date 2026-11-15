@@ -33,6 +33,9 @@ const billingItemListItemSchema = z.object({
   id: z.string().uuid(),
   bill_account_id: z.string().uuid(),
   bill_account_name: z.string().nullable(),
+  /** Spec F (F2): the owning account's currency and mode, for the form. */
+  bill_account_currency: z.string().nullable(),
+  bill_account_mode: z.enum(['postpaid', 'prepaid']).nullable(),
   type: z.string(),
   bill_start_date: z.string(),
   bill_end_date: z.string().nullable(),
@@ -47,6 +50,7 @@ const billingItemListItemSchema = z.object({
   charge_timing: z.enum(['in_advance', 'in_arrears']),
   prorate: z.boolean(),
   tax_rate: z.union([z.string(), z.number()]),
+  price_basis: z.enum(['net', 'gross']),
   is_active: z.boolean(),
   organization_id: z.string().uuid(),
   tenant_id: z.string().uuid(),
@@ -93,6 +97,7 @@ const crud = makeCrudRoute({
       'charge_timing',
       'prorate',
       'tax_rate',
+      'price_basis',
       'is_active',
       'organization_id',
       'tenant_id',
@@ -202,7 +207,7 @@ const crud = makeCrudRoute({
   },
   hooks: {
     // Items reference their account by FK id only; the list + detail UI
-    // wants the human-readable account name. One bounded query
+    // wants the account name, currency and mode. One bounded query
     // (≤ pageSize ids) resolves it after the page is fetched.
     afterList: async (payload: unknown, ctx: unknown) => {
       const items = ((payload as { items?: unknown[] } | null)?.items ?? []) as Array<
@@ -218,11 +223,12 @@ const crud = makeCrudRoute({
       if (accountIds.length === 0) return
       const em = (ctx as { container: AwilixContainer }).container.resolve<EntityManager>('em')
       const accounts = await em.find(BillingAccount, { id: { $in: accountIds } })
-      const nameById = new Map(
-        accounts.map((a) => [String(a.id), a.name] as [string, unknown]),
-      )
+      const byId = new Map(accounts.map((a) => [String(a.id), a] as const))
       for (const row of items) {
-        row.bill_account_name = nameById.get(String(row.bill_account_id)) ?? null
+        const account = byId.get(String(row.bill_account_id))
+        row.bill_account_name = account?.name ?? null
+        row.bill_account_currency = account?.currencyCode ?? null
+        row.bill_account_mode = account?.billingMode ?? null
       }
     },
   },

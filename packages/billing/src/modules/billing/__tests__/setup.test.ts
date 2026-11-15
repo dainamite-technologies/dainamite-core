@@ -85,8 +85,8 @@ describe('billing setup — contract', () => {
 })
 
 describe('billing acl — surface', () => {
-  it('exports exactly 26 features (12 Phase 0 + 7 SPEC-002 prepaid + 2 Spec 0 settings + 1 Spec B send + 3 Spec C payments + 1 Spec D memos)', () => {
-    expect(features).toHaveLength(26)
+  it('exports exactly 27 features (12 Phase 0 + 7 SPEC-002 prepaid + 2 Spec 0 settings + 1 Spec B send + 3 Spec C payments + 1 Spec D memos + 1 Spec F run delete)', () => {
+    expect(features).toHaveLength(27)
   })
 
   it('all feature IDs are prefixed `billing.` (no leaking module boundary)', () => {
@@ -106,6 +106,7 @@ describe('billing acl — surface', () => {
     'billing.run.trigger',
     'billing.run.dry_run',
     'billing.run.view',
+    'billing.run.delete',
     'billing.invoice.post',
     'billing.invoice.edit_draft',
     'billing.invoice.view',

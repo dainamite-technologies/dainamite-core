@@ -33,7 +33,7 @@ import {
   type ArScope,
 } from '../lib/allocation'
 import { emitAllocationEffects } from '../lib/allocationEvents'
-import { getBillingSettings } from '../lib/billingSettings'
+import { getBillingSettings, receiptTaxRate } from '../lib/billingSettings'
 import { importPayments, type ImportSummary } from '../lib/paymentImport'
 import { captureTopup } from '../lib/topupCapture'
 import { createHash } from 'node:crypto'
@@ -391,7 +391,7 @@ const convertToTopupCommand: CommandHandler<BillingPaymentConvertInput, PaymentC
     await captureTopup(em, {
       topup,
       account: { id: account.id, organizationId: account.organizationId, tenantId: account.tenantId, currencyCode: account.currencyCode },
-      taxRate: Number.parseFloat(settings.topupTaxRate) || 0,
+      taxRate: receiptTaxRate(settings),
       gatewayTransactionId: payment.reference ?? null,
     })
     await em.execute(

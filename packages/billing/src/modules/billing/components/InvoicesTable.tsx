@@ -4,7 +4,7 @@ import { useRouter } from 'next/navigation'
 import type { LegacyColumnDef as ColumnDef } from '@tanstack/react-table/legacy'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
-import { DataTable } from '@open-mercato/ui/backend/DataTable'
+import { BillingDataTable as DataTable } from './BillingDataTable'
 import { RowActions } from '@open-mercato/ui/backend/RowActions'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
@@ -61,6 +61,8 @@ export type InvoicesTableProps = {
   /** Stable perspective / extension id. */
   tableId: string
   pageSize?: number
+  /** Extra header actions (e.g. the billing settings shortcut). */
+  actions?: React.ReactNode
 }
 
 function formatDate(value: string | null | undefined): string {
@@ -93,7 +95,7 @@ export function invoiceStatusVariant(status: BillingInvoiceRow['status']): 'defa
   }
 }
 
-export function InvoicesTable({ title, billAccountId, tableId, pageSize = 25 }: InvoicesTableProps) {
+export function InvoicesTable({ title, billAccountId, tableId, pageSize = 25, actions }: InvoicesTableProps) {
   const t = useT()
   const router = useRouter()
   const [rows, setRows] = React.useState<BillingInvoiceRow[]>([])
@@ -292,6 +294,7 @@ export function InvoicesTable({ title, billAccountId, tableId, pageSize = 25 }: 
   return (
     <DataTable
       title={title}
+      actions={actions}
       refreshButton={{ label: t('billing.common.refresh', 'Refresh'), onRefresh: loadRows, isRefreshing: loading }}
       columnChooser={{ auto: true }}
       perspective={{ tableId }}

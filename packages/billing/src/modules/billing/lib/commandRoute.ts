@@ -26,6 +26,8 @@ export type CommandRouteOptions<TBody> = {
   bodySchema: ZodType<TBody>
   resourceKind: string
   resourceId: (body: TBody) => string | null
+  /** Mutation-guard operation (default `update`, the usual one for action routes). */
+  operation?: 'create' | 'update' | 'delete'
   /** Optional input mapping (default: body + scope). */
   toInput?: (body: TBody, scope: { tenantId: string; organizationId: string }) => Record<string, unknown>
   logLabel: string
@@ -69,7 +71,7 @@ export async function runCommandRoute<TBody>(
       userId: auth.sub ?? '',
       resourceKind: options.resourceKind,
       resourceId: options.resourceId(parsed.data),
-      operation: 'update' as const,
+      operation: options.operation ?? ('update' as const),
       requestMethod: req.method,
       requestHeaders: req.headers,
     }

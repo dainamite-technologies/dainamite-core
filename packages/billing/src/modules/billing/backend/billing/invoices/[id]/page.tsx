@@ -7,7 +7,7 @@ import { FileDown, Mail, Pencil, Plus, Trash2 } from 'lucide-react'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { Page, PageBody, PageHeader } from '@open-mercato/ui/backend/Page'
 import { FormHeader } from '@open-mercato/ui/backend/forms'
-import { DataTable } from '@open-mercato/ui/backend/DataTable'
+import { BillingDataTable as DataTable } from '../../../../components/BillingDataTable'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { IconButton } from '@open-mercato/ui/primitives/icon-button'
@@ -20,6 +20,7 @@ import {
 } from '@open-mercato/ui/backend/utils/apiCall'
 import { normalizeCrudServerError } from '@open-mercato/ui/backend/utils/serverErrors'
 import { LineFormDialog, type LineFormValues } from '../../../../components/LineFormDialog'
+import { BillingSettingsLink } from '../../../../components/BillingSettingsLink'
 import {
   DetailCard,
   DetailField,
@@ -175,7 +176,7 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
   const [error, setError] = React.useState<string | null>(null)
   const [loading, setLoading] = React.useState(true)
   const [posting, setPosting] = React.useState(false)
-  const [wiping, setWiping] = React.useState(false)
+  const [settingsIncomplete, setSettingsIncomplete] = React.useState(false)
 
   // Client-side pagination for invoice lines. Caps the table at 100 rows
   // per page (per the OM DataTable convention) — invoices typically have
@@ -194,7 +195,7 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
   const [dialogTargetLine, setDialogTargetLine] = React.useState<InvoiceLine | null>(null)
   const [dialogSubmitting, setDialogSubmitting] = React.useState(false)
 
-  // Confirm flows: wipe-test + remove-line both use ConfirmDialog
+  // Confirm flows (remove line, send, memo delete) use ConfirmDialog
   // (per UI AGENTS.md: NEVER `window.confirm`).
   const { confirm, ConfirmDialogElement } = useConfirmDialog()
   const [allocations, setAllocations] = React.useState<InvoiceAllocation[]>([])
@@ -364,6 +365,7 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
     } catch (err) {
       const { message } = normalizeCrudServerError(err)
       const code = (err as { body?: { code?: string } } | null)?.body?.code
+      if (code === 'billing.settings.incomplete') setSettingsIncomplete(true)
       flash(
         code === 'billing.settings.incomplete'
           ? t(
@@ -410,46 +412,6 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
       flash(message || t('billing.invoices.send.failed', 'Sending failed'), 'error')
     } finally {
       setSending(false)
-    }
-  }, [confirm, invoice, load, t])
-
-  const handleWipeTest = React.useCallback(async () => {
-    if (!invoice) return
-    const ok = await confirm({
-      title: t('billing.invoices.wipe.confirm.title', 'Wipe test invoices?'),
-      text: t(
-        'billing.invoices.wipe.confirm.text',
-        'Every test invoice from this Bill Run will be permanently deleted. This cannot be undone.',
-      ),
-      confirmText: t('billing.invoices.wipe.confirm.button', 'Delete test invoices'),
-      variant: 'destructive',
-    })
-    if (!ok) return
-    setWiping(true)
-    try {
-      const billRunId = invoice.bill_run_id
-      const call = await apiCallOrThrow<{ invoicesRemoved: number }>(
-        '/api/billing/test-invoices/wipe',
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(billRunId ? { billRunId } : {}),
-        },
-      )
-      flash(
-        t('billing.invoices.wipe.success', 'Test invoices removed') +
-          ` (${call.result?.invoicesRemoved ?? 0})`,
-        'success',
-      )
-      // The invoice we were looking at is hard-deleted — navigate away
-      // on success by reloading; the detail load will 404 and the
-      // user clicks back.
-      void load()
-    } catch (err) {
-      const { message } = normalizeCrudServerError(err)
-      flash(message || t('billing.invoices.wipe.error', 'Wipe failed'), 'error')
-    } finally {
-      setWiping(false)
     }
   }, [confirm, invoice, load, t])
 
@@ -722,7 +684,15 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
             ) : invoice.document_type === 'debit_memo' ? (
               <Tag variant="info">{t('billing.invoices.document_type.debit_memo', 'Debit memo')}</Tag>
             ) : null}
-            {isTest ? <Tag variant="warning">TEST</Tag> : null}
+            {isTest ? (
+              invoice.bill_run_id ? (
+                <Link href={`/backend/billing/runs/${invoice.bill_run_id}`}>
+                  <Tag variant="warning">{t('billing.invoices.test_run_tag', 'Test run')}</Tag>
+                </Link>
+              ) : (
+                <Tag variant="warning">{t('billing.invoices.test_run_tag', 'Test run')}</Tag>
+              )
+            ) : null}
             {(invoice.days_overdue ?? 0) > 0 ? (
               <Tag variant="error">
                 {t('billing.invoices.overdue_days', 'Overdue {days} d').replace('{days}', String(invoice.days_overdue))}
@@ -772,22 +742,22 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
                 {t('billing.memo.delete.action', 'Delete draft')}
               </Button>
             ) : null}
-            {isTest ? (
-              <Button
-                variant="outline"
-                onClick={handleWipeTest}
-                disabled={wiping}
-              >
-                {wiping
-                  ? t('billing.invoices.wipe.in_progress', 'Wiping…')
-                  : t('billing.invoices.wipe.action', 'Wipe test invoices for this run')}
-              </Button>
-            ) : null}
           </>
         }
       />
       <PageBody>
         <div className="space-y-6">
+          {settingsIncomplete ? (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-status-warning-border bg-status-warning-bg px-4 py-3 text-sm text-status-warning-text">
+              <span>
+                {t(
+                  'billing.invoices.post.settings_incomplete',
+                  'Fill in the seller details in Settings → Billing before posting invoices.',
+                )}
+              </span>
+              <BillingSettingsLink />
+            </div>
+          ) : null}
           <DetailCard>
             <DetailField label={t('billing.invoices.detail.field.period', 'Bill period')}>
               {invoice.period_start?.slice(0, 10) ?? '—'} →{' '}

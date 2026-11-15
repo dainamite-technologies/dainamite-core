@@ -181,6 +181,7 @@ export class BillingItem {
     | 'chargeTiming'
     | 'prorate'
     | 'taxRate'
+    | 'priceBasis'
     | 'isActive'
     | 'createdAt'
     | 'updatedAt'
@@ -263,6 +264,12 @@ export class BillingItem {
   // never looked up live, so a default change never re-prices subscriptions.
   @Property({ name: 'tax_rate', type: 'numeric', columnType: 'numeric(7, 4)', default: '0' })
   taxRate: string = '0'
+
+  // Spec F (F-D2) — the `rate_json` amounts are stored as typed, on this
+  // basis. Invoice lines are computed from it (`lib/lineAmounts.ts`), so a
+  // typed gross is reproduced exactly. Tiered usage rates are always 'net'.
+  @Property({ name: 'price_basis', type: 'text', default: 'net' })
+  priceBasis: 'net' | 'gross' = 'net'
 
   @Property({ name: 'is_active', type: 'boolean', default: true })
   isActive: boolean = true
@@ -893,6 +900,7 @@ export class BillingStatement {
   [OptionalProps]?:
     | 'billRunId'
     | 'totalAdjustments'
+    | 'vatSummary'
     | 'createdAt'
     | 'updatedAt'
 
@@ -951,6 +959,11 @@ export class BillingStatement {
   // Per billing_item_id: { billing_type, uom_code?, quantity, amount }.
   @Property({ name: 'debit_breakdown', type: 'jsonb' })
   debitBreakdown!: Record<string, unknown>
+
+  // Spec F (F5) — `[{ rate, net, tax, gross }]` per VAT rate of the period's
+  // prepaid debits. Empty in `topup` tax-point mode (VAT was on the receipt).
+  @Property({ name: 'vat_summary', type: 'jsonb', nullable: true })
+  vatSummary?: Array<{ rate: string; net: string; tax: string; gross: string }> | null
 
   // 'generated' | 'sent'.
   @Property({ type: 'text' })
@@ -1270,6 +1283,7 @@ export class BillingSettings {
     | 'nearLimitBufferDefault'
     | 'statementEnabled'
     | 'topupTaxRate'
+    | 'prepaidTaxPoint'
     | 'topupProvider'
     | 'numberMasks'
     | 'legalName'
@@ -1307,6 +1321,12 @@ export class BillingSettings {
 
   @Property({ name: 'topup_tax_rate', type: 'numeric', columnType: 'numeric(7, 4)', default: '0' })
   topupTaxRate: string = '0'
+
+  // Spec F (F-D3) — where prepaid VAT is charged: 'topup' (VAT split on the
+  // top-up receipt; consumption debits carry no VAT) or 'consumption'
+  // (receipts carry no VAT; debits are gross at the item's tax rate).
+  @Property({ name: 'prepaid_tax_point', type: 'text', default: 'topup' })
+  prepaidTaxPoint: 'topup' | 'consumption' = 'topup'
 
   @Property({ name: 'topup_provider', type: 'text', default: 'stripe' })
   topupProvider: string = 'stripe'

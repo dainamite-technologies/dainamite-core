@@ -96,7 +96,8 @@ export const openApi = {
       summary: 'Get billing settings',
       description:
         'Billing settings of the caller organization (prepaid defaults, number masks per series, ' +
-        'seller / bank / document fields, default payment terms and VAT rate), ' +
+        'seller / bank / document fields, default payment terms and VAT rate, `prepaidTaxPoint` ' +
+        '(`topup` = VAT on the top-up receipt, `consumption` = VAT on each prepaid debit)), ' +
         '`capabilities.gatewayTopups` and `completeness { ready, missing[] }` (posting needs ' +
         '`legalName`, `sellerAddress`, `taxId`, `iban`). The row is created with defaults on first read.',
     },

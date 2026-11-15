@@ -105,6 +105,14 @@ const events = [
     category: 'lifecycle',
     clientBroadcast: true,
   },
+  // Spec F — a test / dry run and its test invoices were deleted.
+  {
+    id: 'billing.run.deleted',
+    label: 'Bill Run Deleted',
+    entity: 'bill_run',
+    category: 'lifecycle',
+    clientBroadcast: true,
+  },
   // ─── Prepaid balance billing (SPEC-002) ──────────────────────
   {
     id: 'billing.balance.topped_up',

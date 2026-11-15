@@ -8,7 +8,7 @@ import { Page, PageBody } from '@open-mercato/ui/backend/Page'
 import { FormHeader } from '@open-mercato/ui/backend/forms'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { Button } from '@open-mercato/ui/primitives/button'
-import { DataTable } from '@open-mercato/ui/backend/DataTable'
+import { BillingDataTable as DataTable } from '../../../../components/BillingDataTable'
 import { LoadingMessage, ErrorMessage } from '@open-mercato/ui/backend/detail'
 import { readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
 import { DetailCard, DetailField } from '../../../../components/DetailFields'
@@ -19,8 +19,18 @@ type BreakdownEntry = {
   billing_type: string
   uom_code?: string
   quantity: string
+  /** What left the balance. */
   amount: string
+  // Spec F — older statements do not carry these.
+  description?: string
+  net?: string
+  tax?: string
+  tax_rate?: string
+  service_period_start?: string | null
+  service_period_end?: string | null
 }
+
+type VatSummaryEntry = { rate: string; net: string; tax: string; gross: string }
 
 type StatementRow = {
   id: string
@@ -36,6 +46,7 @@ type StatementRow = {
   total_adjustments: string
   closing_balance: string
   debit_breakdown: { items?: BreakdownEntry[] } | null
+  vat_summary?: VatSummaryEntry[] | null
   status: string
 }
 
@@ -80,6 +91,9 @@ export default function BillingStatementDetailPage(props: { params?: { id?: stri
   }, [statementId, t])
 
   const breakdown = row?.debit_breakdown?.items ?? []
+  const vatSummary = row?.vat_summary ?? []
+  // Spec F: VAT columns only when VAT was charged at consumption.
+  const showVat = vatSummary.length > 0
   const columns = React.useMemo<ColumnDef<BreakdownEntry>[]>(
     () => [
       {
@@ -90,17 +104,73 @@ export default function BillingStatementDetailPage(props: { params?: { id?: stri
       {
         accessorKey: 'billing_item_id',
         header: t('billing.statements.breakdown.item', 'Item'),
-        cell: ({ row }) => <span className="font-mono text-xs">{row.original.billing_item_id}</span>,
+        cell: ({ row }) => (
+          <Link href={`/backend/billing/items/${row.original.billing_item_id}`} className="text-sm text-primary hover:underline">
+            {row.original.description ?? row.original.billing_item_id}
+          </Link>
+        ),
+      },
+      {
+        accessorKey: 'service_period_start',
+        header: t('billing.statements.breakdown.service_period', 'Service period'),
+        cell: ({ row }) =>
+          row.original.service_period_start
+            ? `${row.original.service_period_start} – ${row.original.service_period_end ?? '…'}`
+            : '—',
       },
       {
         accessorKey: 'quantity',
         header: t('billing.statements.breakdown.quantity', 'Qty'),
         cell: ({ row }) => <span className="font-mono tabular-nums">{row.original.quantity}</span>,
       },
+      ...(showVat
+        ? [
+            {
+              accessorKey: 'net',
+              header: t('billing.statements.breakdown.net', 'Net'),
+              cell: ({ row }: { row: { original: BreakdownEntry } }) => (
+                <span className="font-mono tabular-nums">{row.original.net ?? '—'}</span>
+              ),
+            } satisfies ColumnDef<BreakdownEntry>,
+            {
+              accessorKey: 'tax',
+              header: t('billing.statements.breakdown.vat', 'VAT'),
+              cell: ({ row }: { row: { original: BreakdownEntry } }) =>
+                row.original.tax !== undefined ? (
+                  <span className="font-mono tabular-nums">
+                    {row.original.tax} ({row.original.tax_rate ?? '0'} %)
+                  </span>
+                ) : (
+                  '—'
+                ),
+            } satisfies ColumnDef<BreakdownEntry>,
+          ]
+        : []),
       {
         accessorKey: 'amount',
-        header: t('billing.statements.breakdown.amount', 'Amount'),
+        header: t('billing.statements.breakdown.charged', 'Charged to balance'),
         cell: ({ row }) => <span className="font-mono tabular-nums">{row.original.amount}</span>,
+      },
+    ],
+    [showVat, t],
+  )
+  const vatColumns = React.useMemo<ColumnDef<VatSummaryEntry>[]>(
+    () => [
+      { accessorKey: 'rate', header: t('billing.statements.vat.rate', 'VAT rate'), cell: ({ row }) => `${row.original.rate} %` },
+      {
+        accessorKey: 'net',
+        header: t('billing.statements.breakdown.net', 'Net'),
+        cell: ({ row }) => <span className="font-mono tabular-nums">{row.original.net}</span>,
+      },
+      {
+        accessorKey: 'tax',
+        header: t('billing.statements.breakdown.vat', 'VAT'),
+        cell: ({ row }) => <span className="font-mono tabular-nums">{row.original.tax}</span>,
+      },
+      {
+        accessorKey: 'gross',
+        header: t('billing.statements.vat.gross', 'Gross'),
+        cell: ({ row }) => <span className="font-mono tabular-nums">{row.original.gross}</span>,
       },
     ],
     [t],
@@ -156,7 +226,7 @@ export default function BillingStatementDetailPage(props: { params?: { id?: stri
           <DetailField label={t('billing.statements.columns.usage', 'Usage')}>
             <span className="font-mono tabular-nums">{row.total_usage}</span>
           </DetailField>
-          <DetailField label={t('billing.statements.columns.recurring', 'Recurring')}>
+          <DetailField label={t('billing.statements.columns.charges', 'Charges')}>
             <span className="font-mono tabular-nums">{row.total_recurring}</span>
           </DetailField>
           <DetailField label={t('billing.statements.columns.adjustments', 'Adjustments')}>
@@ -185,13 +255,24 @@ export default function BillingStatementDetailPage(props: { params?: { id?: stri
             title={t('billing.statements.detail.breakdown', 'Period-close charges')}
             columns={columns}
             data={breakdown}
+            pagination={{ page: 1, pageSize: 100, total: breakdown.length, totalPages: 1, onPageChange: () => undefined }}
             emptyState={
               <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
-                {t('billing.statements.detail.no_charges', 'No recurring charges this period.')}
+                {t('billing.statements.detail.no_charges', 'No charges at this bill date.')}
               </div>
             }
           />
         </div>
+        {showVat ? (
+          <div className="mt-6">
+            <DataTable
+              title={t('billing.statements.detail.vat_summary', 'VAT summary')}
+              columns={vatColumns}
+              data={vatSummary}
+              pagination={{ page: 1, pageSize: 100, total: vatSummary.length, totalPages: 1, onPageChange: () => undefined }}
+            />
+          </div>
+        ) : null}
       </PageBody>
     </Page>
   )

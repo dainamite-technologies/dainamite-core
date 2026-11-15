@@ -162,6 +162,7 @@ export function createPrepaidMockEm(options: MockEmOptions = {}): MockEm {
         nearLimitBufferDefault: String(pick('credit.near_limit_buffer_default', '0')),
         statementEnabled: pick('prepaid.statement_enabled', true),
         topupTaxRate: String(pick('prepaid.topup_tax_rate', '0')),
+        prepaidTaxPoint: pick('prepaid.tax_point', 'topup'),
         topupProvider: pick('prepaid.topup_provider', 'stripe'),
         numberMasks: null,
       }

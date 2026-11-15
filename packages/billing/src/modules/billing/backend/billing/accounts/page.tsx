@@ -7,7 +7,7 @@ import type { LegacyColumnDef as ColumnDef } from '@tanstack/react-table/legacy'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
-import { DataTable } from '@open-mercato/ui/backend/DataTable'
+import { BillingDataTable as DataTable } from '../../../components/BillingDataTable'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
@@ -37,6 +37,9 @@ type BillingAccountRow = {
   next_bill_date: string
   last_bill_date: string | null
   billing_mode: 'postpaid' | 'prepaid'
+  // Spec F (F8): open receivables and the overdue subset.
+  balance_due?: string
+  overdue_amount?: string
   is_active: boolean
   created_at: string
 }
@@ -103,6 +106,12 @@ export default function BillingAccountsListPage() {
         ],
       },
       {
+        id: 'hasOverdue',
+        label: t('billing.accounts.filters.has_overdue', 'Has overdue'),
+        type: 'select',
+        options: [{ value: 'true', label: t('billing.common.yes', 'Yes') }],
+      },
+      {
         id: 'isActive',
         label: t('billing.accounts.filters.active', 'Active'),
         type: 'select',
@@ -137,6 +146,7 @@ export default function BillingAccountsListPage() {
       if (typeof filters.customerKind === 'string' && filters.customerKind) {
         params.set('customerKind', filters.customerKind)
       }
+      if (filters.hasOverdue === 'true') params.set('hasOverdue', 'true')
       if (filters.isActive === 'true') params.set('isActive', 'true')
       if (filters.isActive === 'false') params.set('isActive', 'false')
       const result = await readApiResultOrThrow<ListResponse>(
@@ -160,6 +170,7 @@ export default function BillingAccountsListPage() {
     filters.billingMode,
     filters.customerKind,
     filters.isActive,
+    filters.hasOverdue,
     page,
     pageSize,
     search,
@@ -222,6 +233,33 @@ export default function BillingAccountsListPage() {
         accessorKey: 'last_bill_date',
         header: t('billing.accounts.columns.last_bill', 'Last bill'),
         cell: ({ row }) => formatDate(row.original.last_bill_date),
+      },
+      {
+        accessorKey: 'balance_due',
+        header: t('billing.accounts.columns.balance_due', 'Balance due'),
+        cell: ({ row }) =>
+          row.original.billing_mode === 'prepaid' ? (
+            <span className="text-muted-foreground">—</span>
+          ) : (
+            <span className="tabular-nums">
+              {Number(row.original.balance_due ?? 0).toFixed(2)} {row.original.currency_code}
+            </span>
+          ),
+      },
+      {
+        accessorKey: 'overdue_amount',
+        header: t('billing.accounts.columns.overdue', 'Overdue'),
+        cell: ({ row }) => {
+          const overdue = Number(row.original.overdue_amount ?? 0)
+          if (row.original.billing_mode === 'prepaid' || !(overdue > 0)) {
+            return <span className="text-muted-foreground">—</span>
+          }
+          return (
+            <span className="font-medium tabular-nums text-status-error-text">
+              {overdue.toFixed(2)} {row.original.currency_code}
+            </span>
+          )
+        },
       },
       {
         accessorKey: 'is_active',

@@ -3,6 +3,7 @@ import { type BillingAccount, type BillingItem } from '../data/entities'
 import type { BillPeriod } from './billPeriod'
 import { itemTaxRate, type InvoiceLineDescriptor } from './invoiceWriter'
 import { format4dp, formatUnitPrice, rateUsageForItem, type UsageRate } from './usageRater'
+import { priceBasisOf } from './lineAmounts'
 
 /**
  * Per-account usage processing — Phase 3.
@@ -175,9 +176,11 @@ export async function processUsageForAccount(
       billingItemId: item.id,
       billingType: 'usage',
       description: item.description,
-      unitPriceNet,
+      unitPrice: unitPriceNet,
       quantity: format4dp(totalQuantity),
-      totalNetAmount: rated.amount,
+      lineAmount: rated.amount,
+      // Tiered rates are always net (P-D4); a simple rate keeps the item basis.
+      priceBasis: isSimpleFlat ? priceBasisOf(item.priceBasis) : 'net',
       taxRate: itemTaxRate(item),
       metadataExtra: {
         uom_code: uom,

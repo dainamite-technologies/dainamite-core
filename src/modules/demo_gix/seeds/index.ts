@@ -12,6 +12,7 @@ import {
   seedGixSpecsAndOfferings,
 } from './seeders'
 import { seedGixWizards } from './wizards'
+import { seedGixBillingSettings } from './billing'
 
 /**
  * Seed the GIX catalog into the given tenant scope. Idempotent.
@@ -31,6 +32,8 @@ export async function seedGixDefaults(ctx: CpqUseCaseSeedContext): Promise<void>
   await seedGixPriceRules(em, scope)
   await seedGixBundleData(em, scope)
   await seedGixWizards(em, scope)
+  // Billing seller details, so the demo tenant can post invoices out of the box.
+  await seedGixBillingSettings(em, scope)
 }
 
 /**

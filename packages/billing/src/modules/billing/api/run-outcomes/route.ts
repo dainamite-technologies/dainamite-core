@@ -2,7 +2,8 @@ import { z } from 'zod'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import type { AwilixContainer } from 'awilix'
 import { makeCrudRoute } from '@open-mercato/shared/lib/crud/factory'
-import { BillingAccount, BillingRunOutcome, BillingInvoice } from '../../data/entities'
+import { BillingAccount, BillingRun, BillingRunOutcome, BillingInvoice } from '../../data/entities'
+import { toIsoDate } from '../../lib/dateOnly'
 import { billingEntityIds } from '../../data/entityIds'
 import {
   BILL_RUN_OUTCOME_STATUSES,
@@ -51,16 +52,23 @@ const billRunOutcomeListItemSchema = z.object({
         bill_date: z.string(),
         period_start: z.string().nullable(),
         period_end: z.string().nullable(),
-        status: z.enum(['invoiced', 'previewed', 'empty', 'skipped_existing']),
+        // Spec F: `charged` = prepaid charges debited from the balance.
+        status: z.enum(['invoiced', 'charged', 'previewed', 'empty', 'skipped_existing']),
         line_count: z.number(),
         total_net: z.string(),
         invoice_id: z.string().uuid().nullable(),
         invoice_number: z.string().nullable(),
+        // Spec F (prepaid): what left the balance, and the period's statement.
+        total_debit: z.string().optional(),
+        statement_id: z.string().uuid().nullable().optional(),
       }),
     )
     .nullable(),
   bill_account_name: z.string().nullable(),
   invoice_number: z.string().nullable(),
+  /** Spec F: mode and as-of date of the run this outcome belongs to. */
+  run_mode: z.enum(['real', 'test', 'dry']).nullable(),
+  run_as_of_date: z.string().nullable(),
   organizationId: z.string().uuid(),
   tenantId: z.string().uuid(),
   createdAt: z.string(),
@@ -133,14 +141,20 @@ const crud = makeCrudRoute({
             .filter((v): v is string => typeof v === 'string' && v.length > 0),
         ),
       )
-      const [accounts, invoices] = await Promise.all([
+      const runIds = Array.from(
+        new Set(items.map((row) => row.bill_run_id).filter((v): v is string => typeof v === 'string' && v.length > 0)),
+      )
+      const [accounts, invoices, runs] = await Promise.all([
         accountIds.length
           ? em.find(BillingAccount, { id: { $in: accountIds } })
           : [],
         invoiceIds.length
           ? em.find(BillingInvoice, { id: { $in: invoiceIds } })
           : [],
+        // Spec F: the run's mode and as-of date (account Bill runs tab).
+        runIds.length ? em.find(BillingRun, { id: { $in: runIds } }) : [],
       ])
+      const runById = new Map(runs.map((run) => [String(run.id), run] as const))
       const accountName = new Map(
         accounts.map((a) => [String(a.id), a.name] as [string, unknown]),
       )
@@ -149,6 +163,9 @@ const crud = makeCrudRoute({
       )
       for (const row of items) {
         row.bill_account_name = accountName.get(String(row.bill_account_id)) ?? null
+        const run = runById.get(String(row.bill_run_id))
+        row.run_mode = run ? (run.dryRun ? 'dry' : run.testMode ? 'test' : 'real') : null
+        row.run_as_of_date = run?.asOfDate ? toIsoDate(run.asOfDate) : null
         row.invoice_number =
           typeof row.draft_invoice_id === 'string'
             ? invoiceNumber.get(row.draft_invoice_id) ?? null

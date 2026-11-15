@@ -45,6 +45,7 @@ const updateSettingsCommand: CommandHandler<
     if (parsed.statementEnabled !== undefined) settings.statementEnabled = parsed.statementEnabled
     if (parsed.topupTaxRate !== undefined) settings.topupTaxRate = parsed.topupTaxRate.toFixed(4)
     if (parsed.topupProvider !== undefined) settings.topupProvider = parsed.topupProvider
+    if (parsed.prepaidTaxPoint !== undefined) settings.prepaidTaxPoint = parsed.prepaidTaxPoint
     if (parsed.numberMasks !== undefined) {
       settings.numberMasks = { ...(settings.numberMasks ?? {}), ...stripUndefined(parsed.numberMasks) }
     }

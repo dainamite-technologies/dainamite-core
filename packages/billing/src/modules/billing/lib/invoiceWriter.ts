@@ -4,7 +4,8 @@ import type { BillingAccount, BillingItem } from '../data/entities'
 import type { BillPeriod } from './billPeriod'
 import type { RecurringLine } from './servicePeriods'
 import { draftNumber, testNumber } from './numbering'
-import { lineAmountsFromNet, sumTotals } from './vat'
+import { sumTotals } from './vat'
+import { lineVat, priceBasisOf, unitPriceNetOf, type PriceBasis } from './lineAmounts'
 
 /**
  * Writes a billing-owned draft invoice (`billing_invoices` +
@@ -17,6 +18,8 @@ import { lineAmountsFromNet, sumTotals } from './vat'
  *   - Test drafts get `TEST-…` and `test_run = true`; they are never posted.
  *   - Spec B (B-D2): every line carries its item's VAT rate; tax is rounded
  *     per line (half-up, 2 dp) and totals are sums of the rounded lines.
+ *   - Spec F (F-D2): line amounts are on the item's `price_basis`; net / tax
+ *     / gross come from `lineVat`, so a typed gross is reproduced exactly.
  */
 
 export type WriteMode = 'real' | 'test' | 'dry'
@@ -27,12 +30,14 @@ export type InvoiceLineDescriptor = {
   /** From the spec's `metadata.billing_type` for traceability. */
   billingType: 'one_time' | 'recurring' | 'usage'
   description: string
-  /** Net unit price (numeric string for `billing_invoice_lines.unit_price_net`). */
-  unitPriceNet: string
+  /** Unit price on `priceBasis` (numeric string). The writer derives `unit_price_net`. */
+  unitPrice: string
   /** Quantity (string for the numeric(18,4) column). */
   quantity: string
-  /** Total net (string). */
-  totalNetAmount: string
+  /** Extended line amount on `priceBasis` (unit × quantity × proration). */
+  lineAmount: string
+  /** Spec F: the basis `unitPrice` / `lineAmount` are on (the item's `price_basis`). */
+  priceBasis: PriceBasis
   /** Spec B: VAT rate in percent (numeric string), from the item. */
   taxRate: string
   /** Optional per-line metadata extension — e.g. usage tier breakdown. */
@@ -91,7 +96,7 @@ export async function writeDraftInvoice(
   params: WriteInvoiceParams,
 ): Promise<WrittenInvoice> {
   const amounts = params.lines.map((line) =>
-    lineAmountsFromNet(Number.parseFloat(line.totalNetAmount), Number.parseFloat(line.taxRate)),
+    lineVat({ amount: line.lineAmount, priceBasis: line.priceBasis, taxRate: line.taxRate }),
   )
   const totals = sumTotals(amounts)
 
@@ -142,7 +147,8 @@ export async function writeDraftInvoice(
         billingType: line.billingType,
         description: line.description,
         quantity: line.quantity,
-        unitPriceNet: line.unitPriceNet,
+        unitPriceNet:
+          line.priceBasis === 'gross' ? unitPriceNetOf(line.unitPrice, 'gross', line.taxRate) : line.unitPrice,
         taxRate: line.taxRate,
         netAmount: format4dp(amount.net),
         taxAmount: format4dp(amount.tax),
@@ -188,9 +194,10 @@ export function buildInvoiceLinesFromItems(
         billingItemId: item.id,
         billingType: 'one_time',
         description: item.description,
-        unitPriceNet: amount,
+        unitPrice: amount,
         quantity: '1',
-        totalNetAmount: amount,
+        lineAmount: amount,
+        priceBasis: priceBasisOf(item.priceBasis),
         taxRate: itemTaxRate(item),
       })
     } else if (item.type === 'recurring') {
@@ -201,9 +208,10 @@ export function buildInvoiceLinesFromItems(
         billingItemId: item.id,
         billingType: 'recurring',
         description: item.description,
-        unitPriceNet: unitPrice,
+        unitPrice,
         quantity: '1',
-        totalNetAmount: unitPrice,
+        lineAmount: unitPrice,
+        priceBasis: priceBasisOf(item.priceBasis),
         taxRate: itemTaxRate(item),
       })
     }
@@ -234,7 +242,7 @@ export function displayPeriod(lines: readonly InvoiceLineDescriptor[], fallback:
  * localized labels later).
  */
 export function buildRecurringLineDescriptors(
-  item: Pick<BillingItem, 'id' | 'description' | 'chargeTiming' | 'taxRate'>,
+  item: Pick<BillingItem, 'id' | 'description' | 'chargeTiming' | 'taxRate' | 'priceBasis'>,
   lines: readonly RecurringLine[],
 ): InvoiceLineDescriptor[] {
   return lines.map((line) => {
@@ -246,10 +254,11 @@ export function buildRecurringLineDescriptors(
       description: dated
         ? `${item.description} · ${isoDate(line.servicePeriodStart)} – ${isoDate(line.servicePeriodEnd)}`
         : item.description,
-      unitPriceNet: amount,
+      unitPrice: amount,
       quantity: '1',
-      totalNetAmount: amount,
-      // Proration and credit lines inherit the item's rate (Spec B).
+      lineAmount: amount,
+      // Proration and credit lines inherit the item's rate (Spec B) and basis (Spec F).
+      priceBasis: priceBasisOf(item.priceBasis),
       taxRate: itemTaxRate(item),
       servicePeriodStart: line.servicePeriodStart,
       servicePeriodEnd: line.servicePeriodEnd,

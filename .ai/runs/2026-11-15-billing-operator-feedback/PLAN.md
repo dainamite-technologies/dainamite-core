@@ -12,36 +12,36 @@ Work top-down through the task table. After each step: update its status here (`
 
 | Phase | Step | Title | Status |
 |-------|------|-------|--------|
-| 1 | 1.1 | F6: settings page visible in the Settings sidebar (`navHidden` removed), header links, post-guard link, `AGENTS.md` rule corrected | todo |
-| 1 | 1.2 | F7: number-mask help (bare tokens + `:N` row) and live next-number preview | todo |
-| 1 | 1.3 | F2: currency suffix on ItemForm money inputs (create: selected account; edit: `accountCurrency` prop) | todo |
-| 2 | 2.1 | Wipe command also deletes `billing_draft_invoice_edits`; shared `lib/testRunCleanup.ts` | todo |
-| 2 | 2.2 | Command `billing.runs.delete` + ACL `billing.run.delete` + event `billing.run.deleted` + unit tests | todo |
-| 2 | 2.3 | API `DELETE /api/billing/runs/{id}` (route file `api/runs/[id]/route.ts`), `GET /api/billing/runs` `mode` filter, OpenAPI | todo |
-| 2 | 2.4 | UI: run detail Wipe / Delete actions, runs list row action + Mode filter, invoice page wipe removed + "Test run" tag | todo |
-| 3 | 3.1 | Migration `Migration20261119000000_billing_operator_feedback` (item `price_basis`, settings `prepaid_tax_point`, statement `vat_summary`) + entities | todo |
-| 3 | 3.2 | Validators: `priceBasis`, tiered + gross guard, `prepaidTaxPoint`; item / settings API + OpenAPI | todo |
-| 3 | 3.3 | `lib/lineAmounts.ts`: basis-aware line VAT; descriptors carry `priceBasis`; writer, dry / test previews, manual lines use it | todo |
-| 3 | 3.4 | Unit tests: gross round-trip, proration on a gross basis, quantity > 1, net regression | todo |
-| 3 | 3.5 | ItemForm NET / GROSS switch + live counterpart; item list / detail basis tag; demo seed gross item | todo |
-| 4 | 4.1 | F4: reproduce the prepaid catch-up stop (DB-backed integration test TC-BILL-011a; operator re-run if not reproduced) | todo |
-| 4 | 4.2 | F4: root-cause fix + date normalisation helpers (`lib/dateOnly.ts`) in prepaid close and engine | todo |
-| 4 | 4.3 | Prepaid outcome `cycles` + `skipped_items`; run detail renders them for prepaid | todo |
-| 4 | 4.4 | F4b: prepaid close on `computeRecurringLines` (timing, proration, credits), one-time at first bill date ≥ start, new `source_ref` | todo |
-| 4 | 4.5 | F4b: multi-cycle test / dry for prepaid (in-memory `next_bill_date`, watermarks, running balance) | todo |
-| 4 | 4.6 | F5: `lib/prepaidTaxPoint.ts` `resolvePrepaidDebit` used by period close + `prepaidConsume`; transaction metadata; receipt rate 0 in `consumption` | todo |
-| 4 | 4.7 | F5: statement `vat_summary` + statement detail / PDF section; settings radio + warning; ItemForm VAT disabled for prepaid in `topup` mode | todo |
-| 4 | 4.8 | Unit tests for 4.2–4.7 (operator scenario, advance / arrears, timing switch, proration, both tax-point modes, mode switch forward-only) | todo |
-| 5 | 5.1 | Account "Run billing" dialog + inline outcome (cycles, documents, skipped items, Wipe / Delete for test runs) | todo |
-| 5 | 5.2 | Summary endpoint: prepaid fields + `next_bill_date`; header cards component | todo |
-| 5 | 5.3 | Tabs shell (`?tab=`, lazy) — move Items, Usage, Invoices, Payments, Prepaid panel, Statements; Overview tab; navigation `returnTo` with tab | todo |
-| 5 | 5.4 | Bill runs tab (account-scoped outcomes; `GET /api/billing/run-outcomes?billAccountId=`) | todo |
-| 5 | 5.5 | Account list `balance_due`, `overdue_amount` (batched aggregate) + `hasOverdue` filter | todo |
-| 5 | 5.6 | i18n en / pl for phases 1–5 | todo |
+| 1 | 1.1 | F6: settings page visible in the Settings sidebar (`navHidden` removed), header links, post-guard link, `AGENTS.md` rule corrected | done |
+| 1 | 1.2 | F7: number-mask help (bare tokens + `:N` row) and live next-number preview | done |
+| 1 | 1.3 | F2: currency suffix on ItemForm money inputs (create: selected account; edit: `accountCurrency` prop) | done |
+| 2 | 2.1 | Wipe command also deletes `billing_draft_invoice_edits`; shared `lib/testRunCleanup.ts` | done |
+| 2 | 2.2 | Command `billing.runs.delete` + ACL `billing.run.delete` + event `billing.run.deleted` + unit tests | done |
+| 2 | 2.3 | API `DELETE /api/billing/runs/{id}` (route file `api/runs/[id]/route.ts`), `GET /api/billing/runs` `mode` filter, OpenAPI | done |
+| 2 | 2.4 | UI: run detail Wipe / Delete actions, runs list row action + Mode filter, invoice page wipe removed + "Test run" tag | done |
+| 3 | 3.1 | Migration `Migration20261119000000_billing_operator_feedback` (item `price_basis`, settings `prepaid_tax_point`, statement `vat_summary`) + entities | done |
+| 3 | 3.2 | Validators: `priceBasis`, tiered + gross guard, `prepaidTaxPoint`; item / settings API + OpenAPI | done |
+| 3 | 3.3 | `lib/lineAmounts.ts`: basis-aware line VAT; descriptors carry `priceBasis`; writer, dry / test previews, manual lines use it | done |
+| 3 | 3.4 | Unit tests: gross round-trip, proration on a gross basis, quantity > 1, net regression | done |
+| 3 | 3.5 | ItemForm NET / GROSS switch + live counterpart; item list / detail basis tag; demo seed gross item | done |
+| 4 | 4.1 | F4: reproduce the prepaid catch-up stop (DB-backed integration test TC-BILL-011a; operator re-run if not reproduced) | done |
+| 4 | 4.2 | F4: root-cause fix + date normalisation helpers (`lib/dateOnly.ts`) in prepaid close and engine | done |
+| 4 | 4.3 | Prepaid outcome `cycles` + `skipped_items`; run detail renders them for prepaid | done |
+| 4 | 4.4 | F4b: prepaid close on `computeRecurringLines` (timing, proration, credits), one-time at first bill date ≥ start, new `source_ref` | done |
+| 4 | 4.5 | F4b: multi-cycle test / dry for prepaid (in-memory `next_bill_date`, watermarks, running balance) | done |
+| 4 | 4.6 | F5: `lib/prepaidTaxPoint.ts` `resolvePrepaidDebit` used by period close + `prepaidConsume`; transaction metadata; receipt rate 0 in `consumption` | done |
+| 4 | 4.7 | F5: statement `vat_summary` + statement detail / PDF section; settings radio + warning; ItemForm VAT disabled for prepaid in `topup` mode | done |
+| 4 | 4.8 | Unit tests for 4.2–4.7 (operator scenario, advance / arrears, timing switch, proration, both tax-point modes, mode switch forward-only) | done |
+| 5 | 5.1 | Account "Run billing" dialog + inline outcome (cycles, documents, skipped items, Wipe / Delete for test runs) | done |
+| 5 | 5.2 | Summary endpoint: prepaid fields + `next_bill_date`; header cards component | done |
+| 5 | 5.3 | Tabs shell (`?tab=`, lazy) — move Items, Usage, Invoices, Payments, Prepaid panel, Statements; Overview tab; navigation `returnTo` with tab | done |
+| 5 | 5.4 | Bill runs tab (account-scoped outcomes; `GET /api/billing/run-outcomes?billAccountId=`) | done |
+| 5 | 5.5 | Account list `balance_due`, `overdue_amount` (batched aggregate) + `hasOverdue` filter | done |
+| 5 | 5.6 | i18n en / pl for phases 1–5 | done |
 | 6 | 6.1 | Ask, then apply migrations locally; run TC-BILL-004/005/006/009/010 and fix | todo |
-| 6 | 6.2 | New integration tests TC-BILL-011 (prepaid), TC-BILL-012 (delete test run), TC-BILL-013 (gross item → invoice) | todo |
-| 6 | 6.3 | Docs: manual (prepaid both modes, delete run, NET / GROSS, settings location, workspace), MIGRATION.md, changeset, CHANGELOG, Spec E + umbrella status | todo |
-| 6 | 6.4 | Gate: build:packages, generate, typecheck ×3, test, build | todo |
+| 6 | 6.2 | New integration tests TC-BILL-011 (prepaid), TC-BILL-012 (delete test run), TC-BILL-013 (gross item → invoice) | done (written, not run) |
+| 6 | 6.3 | Docs: manual (prepaid both modes, delete run, NET / GROSS, settings location, workspace), MIGRATION.md, changeset, CHANGELOG, Spec E + umbrella status | done (CHANGELOG comes from the changeset at release) |
+| 6 | 6.4 | Gate: build:packages, generate, typecheck ×3, test, build | partial — packages, generate, typecheck ×3, 1623 tests green; app build pending (dev server) |
 
 ## Goal
 
@@ -144,3 +144,7 @@ Ask the user before `yarn mercato db migrate`. Run the five pending specs one by
 | The prepaid close rewrite changes `source_ref` format, so old refs are not deduped against new ones | D14 reseed. `billed_to_date` stays the primary guard. Documented in MIGRATION.md. |
 | The account page refactor breaks existing Phase-1 navigation tests (TC-BILL-004) | 6.1 runs TC-BILL-004 after the refactor. `returnTo` tests in 5.3. |
 | The tax-point switch with live balances | Forward-only, warning on the settings page, `metadata.tax_point` on every debit. |
+
+## Completion notes (2026-11-15)
+
+Phases 1–5 implemented; billing unit suite green. Deviations are recorded in the spec's Implementation Status (F4 diagnosis, P-D7 credits typed `recurring`, P-D8 one-time window, P-D13 no API warnings, prepaid `ratedAmount` = debit). Open: 6.1 (apply migrations — needs the user's go-ahead — then run TC-BILL-004/005/006/009/010/011/012/013) and the app `yarn build` in 6.4 (shares `.mercato/next` with a running dev server).

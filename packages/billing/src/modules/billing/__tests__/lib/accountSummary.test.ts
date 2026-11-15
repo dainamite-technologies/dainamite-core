@@ -1,4 +1,11 @@
-import { ACCOUNT_SUMMARY_SQL, getAccountArSummary } from '../../lib/accountSummary'
+import {
+  ACCOUNT_SUMMARY_SQL,
+  BALANCE_SQL,
+  LAST_INVOICE_SQL,
+  LAST_STATEMENT_SQL,
+  getAccountArSummary,
+  getAccountWorkspaceSummary,
+} from '../../lib/accountSummary'
 
 const account = { id: 'acc-1', tenantId: 't-1', organizationId: 'o-1', currencyCode: 'PLN' }
 
@@ -35,5 +42,56 @@ describe('getAccountArSummary', () => {
     expect(ACCOUNT_SUMMARY_SQL).toContain('i.test_run = false')
     expect(ACCOUNT_SUMMARY_SQL).toContain("i.document_type IN ('invoice', 'debit_memo')")
     expect(ACCOUNT_SUMMARY_SQL).toContain("i.status IN ('posted', 'partially_paid')")
+  })
+})
+
+describe('getAccountWorkspaceSummary (Spec F, F8)', () => {
+  const settingsRow = { id: 's-1', lowBalanceThresholdDefault: '10' }
+  function fakeEm(rows: Record<string, unknown[]>) {
+    return {
+      execute: jest.fn(async (sql: string) => rows[sql] ?? []),
+      findOne: jest.fn(async () => settingsRow),
+    }
+  }
+
+  it('postpaid: AR + cycle state + last invoice, no prepaid block', async () => {
+    const em = fakeEm({
+      [ACCOUNT_SUMMARY_SQL]: [{ open_amount: '50', overdue_amount: '0', overdue_count: 0 }],
+      [LAST_INVOICE_SQL]: [{ id: 'inv-1', number: 'INV/2026/11/0001', issue_date: '2026-11-14', total_gross: '61.5' }],
+    })
+    const result = await getAccountWorkspaceSummary(
+      em as never,
+      { ...account, billingMode: 'postpaid', billCycle: 'monthly', nextBillDate: '2026-12-14' as never, creditLimit: '0' },
+      new Date('2026-11-15T00:00:00Z'),
+    )
+    expect(result).toMatchObject({
+      billing_mode: 'postpaid',
+      next_bill_date: '2026-12-14',
+      last_invoice: { id: 'inv-1', number: 'INV/2026/11/0001', issue_date: '2026-11-14', total_gross: '61.5000' },
+      prepaid: null,
+    })
+    expect(em.execute).not.toHaveBeenCalledWith(BALANCE_SQL, expect.anything())
+  })
+
+  it('prepaid: balance with status from the threshold, credit limit and last statement', async () => {
+    const em = fakeEm({
+      [ACCOUNT_SUMMARY_SQL]: [{ open_amount: '0', overdue_amount: '0', overdue_count: 0 }],
+      [BALANCE_SQL]: [{ balance: '8.5', low_balance_threshold: null }],
+      [LAST_STATEMENT_SQL]: [{ id: 'st-1', period_start: '2026-10-14', period_end: '2026-11-13', closing_balance: '8.5' }],
+    })
+    const result = await getAccountWorkspaceSummary(em as never, {
+      ...account,
+      billingMode: 'prepaid',
+      billCycle: 'monthly',
+      nextBillDate: new Date('2026-12-14T00:00:00Z'),
+      creditLimit: '100',
+    })
+    expect(result.prepaid).toEqual({
+      balance: '8.5000',
+      balance_status: 'low', // 8.50 ≤ the 10.00 org default threshold
+      credit_limit: '100.0000',
+      last_statement: { id: 'st-1', period_start: '2026-10-14', period_end: '2026-11-13', closing_balance: '8.5000' },
+    })
+    expect(result.last_invoice).toBeNull()
   })
 })

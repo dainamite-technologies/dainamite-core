@@ -23,7 +23,19 @@ export const BILLING_SETTINGS_DEFAULTS = {
   numberMasks: { ...DEFAULT_NUMBER_MASKS } as Record<string, string>,
   defaultPaymentTermsDays: 14,
   defaultTaxRate: '23',
+  prepaidTaxPoint: 'topup',
 } as const
+
+/**
+ * VAT rate printed on top-up receipts (Spec F, P-D11): `topup_tax_rate` when
+ * the prepaid tax point is `topup`, 0 in `consumption` mode (VAT is charged
+ * on each debit instead — never twice).
+ */
+export function receiptTaxRate(settings: Pick<BillingSettings, 'topupTaxRate' | 'prepaidTaxPoint'>): number {
+  if (settings.prepaidTaxPoint === 'consumption') return 0
+  const n = Number.parseFloat(String(settings.topupTaxRate ?? '0'))
+  return Number.isFinite(n) && n > 0 ? n : 0
+}
 
 /** numeric(7,4) column value for a VAT percentage. */
 export function taxRateColumn(ratePercent: number): string {
@@ -112,6 +124,7 @@ export function serializeBillingSettings(settings: BillingSettings) {
     nearLimitBufferDefault: numberOr(settings.nearLimitBufferDefault, 0),
     statementEnabled: settings.statementEnabled,
     topupTaxRate: numberOr(settings.topupTaxRate, 0),
+    prepaidTaxPoint: settings.prepaidTaxPoint === 'consumption' ? ('consumption' as const) : ('topup' as const),
     topupProvider: settings.topupProvider,
     numberMasks: {
       invoice: numberMaskFor(settings, 'invoice'),

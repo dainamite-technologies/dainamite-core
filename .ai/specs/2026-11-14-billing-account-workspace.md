@@ -160,8 +160,8 @@ Invoices tab with Spec 0/B. Payments tab + Record payment with Spec C. Memos in 
 | Phase | Status | Date | Notes |
 |-------|--------|------|-------|
 | Phase 1 — Quick wins (B2C, language picklist, navigation) | Done | 2026-11-14 | Unit tests + typecheck + build green. TC-BILL-004 written, run pending the migration. |
-| Phase 2 — Workspace shell | Not Started | — | — |
-| Phase 3 — Tabs per spec | In Progress | 2026-11-14 | Spec B delivered `GET /api/billing/accounts/{id}/summary` (AR part) and `components/AccountInvoicesSection.tsx` — move it into the Invoices tab |
+| Phase 2 — Workspace shell | Done (via Spec F) | 2026-11-15 | Delivered by [Spec F](2026-11-15-billing-operator-feedback.md) F8: Run billing dialog, tabs, summary cards, list financial columns |
+| Phase 3 — Tabs per spec | Done (via Spec F) | 2026-11-15 | Invoices (incl. memos / receipts), Payments, Balance & top-ups, Statements, Bill runs tabs — Spec F F8 |
 
 ### Phase 1 — Detailed Progress
 - [x] `lib/invoiceLanguages.ts` registry. `invoiceLanguage` validated against it (create defaults to `en`).

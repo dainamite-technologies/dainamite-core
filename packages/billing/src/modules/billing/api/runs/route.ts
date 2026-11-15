@@ -109,6 +109,14 @@ const crud = makeCrudRoute({
       if (typeof query.status === 'string') filters.status = { $eq: query.status }
       if (typeof query.triggeredBy === 'string') filters.triggered_by = { $eq: query.triggeredBy }
       if (typeof query.parentRunId === 'string') filters.parent_run_id = { $eq: query.parentRunId }
+      if (query.mode === 'real') {
+        filters.dry_run = { $eq: false }
+        filters.test_mode = { $eq: false }
+      } else if (query.mode === 'test') {
+        filters.test_mode = { $eq: true }
+      } else if (query.mode === 'dry') {
+        filters.dry_run = { $eq: true }
+      }
       if (query.asOfDateFrom instanceof Date) {
         filters.as_of_date = Object.assign(
           (filters.as_of_date as Record<string, unknown>) ?? {},

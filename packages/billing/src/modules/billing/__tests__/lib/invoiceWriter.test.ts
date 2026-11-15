@@ -26,6 +26,7 @@ function makeItem(overrides: Partial<BillingItem>): BillingItem {
     currencyMismatch: overrides.currencyMismatch ?? false,
     billedToDate: overrides.billedToDate ?? null,
     taxRate: overrides.taxRate ?? '0',
+    priceBasis: overrides.priceBasis ?? 'net',
     isActive: overrides.isActive ?? true,
     createdAt: overrides.createdAt ?? new Date(),
     updatedAt: overrides.updatedAt ?? new Date(),
@@ -45,12 +46,13 @@ describe('buildInvoiceLinesFromItems — recurring', () => {
       billingItemId: 'a',
       billingType: 'recurring',
       description: 'MRC A',
-      unitPriceNet: '49.9900',
+      unitPrice: '49.9900',
       quantity: '1',
-      totalNetAmount: '49.9900',
+      lineAmount: '49.9900',
+      priceBasis: 'net',
       taxRate: '0',
     })
-    expect(lines[1].unitPriceNet).toBe('29.0000')
+    expect(lines[1].unitPrice).toBe('29.0000')
   })
 
   it('rounds unit_price half-up to 2dp before persisting', () => {
@@ -59,8 +61,8 @@ describe('buildInvoiceLinesFromItems — recurring', () => {
       makeItem({ type: 'recurring', rateJson: { unit_price: 1.004 } }), // half-down → 1.00
     ]
     const lines = buildInvoiceLinesFromItems(items)
-    expect(lines[0].unitPriceNet).toBe('1.0100')
-    expect(lines[1].unitPriceNet).toBe('1.0000')
+    expect(lines[0].unitPrice).toBe('1.0100')
+    expect(lines[1].unitPrice).toBe('1.0000')
   })
 
   it('skips a recurring item with malformed rateJson (defensive)', () => {
@@ -90,9 +92,10 @@ describe('buildInvoiceLinesFromItems — one_time', () => {
       billingItemId: 'fee',
       billingType: 'one_time',
       description: 'Activation fee',
-      unitPriceNet: '99.0000',
+      unitPrice: '99.0000',
       quantity: '1',
-      totalNetAmount: '99.0000',
+      lineAmount: '99.0000',
+      priceBasis: 'net',
       taxRate: '0',
     })
   })
@@ -106,7 +109,7 @@ describe('buildInvoiceLinesFromItems — one_time', () => {
       }),
     ]
     const lines = buildInvoiceLinesFromItems(items)
-    expect(lines[0].unitPriceNet).toBe('-25.5000')
+    expect(lines[0].unitPrice).toBe('-25.5000')
   })
 })
 
@@ -150,7 +153,7 @@ describe('line builders carry the item VAT rate (Spec B)', () => {
   })
 
   it('proration and credit lines inherit the item rate', () => {
-    const item = { id: 'r', description: 'Plan', chargeTiming: 'in_advance' as const, taxRate: '23' }
+    const item = { id: 'r', description: 'Plan', chargeTiming: 'in_advance' as const, taxRate: '23', priceBasis: 'net' as const }
     const lines = buildRecurringLineDescriptors(item, [
       {
         kind: 'charge',
@@ -194,14 +197,15 @@ const account = {
   currencyCode: 'PLN',
 } as BillingAccount
 
-function line(net: string, taxRate: string): InvoiceLineDescriptor {
+function line(amount: string, taxRate: string, priceBasis: 'net' | 'gross' = 'net'): InvoiceLineDescriptor {
   return {
     billingItemId: 'item',
     billingType: 'recurring',
     description: 'x',
-    unitPriceNet: net,
+    unitPrice: amount,
     quantity: '1',
-    totalNetAmount: net,
+    lineAmount: amount,
+    priceBasis,
     taxRate,
   }
 }
@@ -266,5 +270,52 @@ describe('writeDraftInvoice — VAT (Spec B, B-D2)', () => {
     const written = await writeDraftInvoice(em, { ...baseParams, mode: 'dry', lines: [line('10.0000', '23')] })
     expect(created).toHaveLength(0)
     expect(written).toEqual({ invoiceId: null, invoiceNumber: null, totalNet: '10.0000', totalGross: '12.3000' })
+  })
+})
+
+// ─── Spec F: price basis (F-D2) ──────────────────────────────────
+
+describe('writeDraftInvoice — gross price basis (Spec F)', () => {
+  it('reproduces a typed gross exactly (49.99 @ 23 %) and derives the net unit price', async () => {
+    const { em, created } = writerEm()
+    await writeDraftInvoice(em, { ...baseParams, mode: 'real', lines: [line('49.9900', '23', 'gross')] })
+    const persisted = created.find((c) => c.entity === 'BillingInvoiceLine')!.data
+    expect([persisted.netAmount, persisted.taxAmount, persisted.grossAmount]).toEqual(['40.6400', '9.3500', '49.9900'])
+    expect(persisted.unitPriceNet).toBe('40.6423')
+    expect(created.find((c) => c.entity === 'BillingInvoice')!.data.totalGross).toBe('49.9900')
+  })
+
+  it('keeps the net path unchanged (regression)', async () => {
+    const { em, created } = writerEm()
+    await writeDraftInvoice(em, { ...baseParams, mode: 'real', lines: [line('40.6400', '23')] })
+    const persisted = created.find((c) => c.entity === 'BillingInvoiceLine')!.data
+    expect([persisted.netAmount, persisted.taxAmount, persisted.grossAmount, persisted.unitPriceNet]).toEqual([
+      '40.6400',
+      '9.3500',
+      '49.9900',
+      '40.6400',
+    ])
+  })
+
+  it('carries the item basis on one-time, recurring and prorated lines', () => {
+    const built = buildInvoiceLinesFromItems([
+      makeItem({ id: 'g', type: 'recurring', priceBasis: 'gross', rateJson: { unit_price: 60 } }),
+      makeItem({ id: 'n', type: 'one_time', rateJson: { amount: 10 } }),
+    ])
+    expect(built.map((l) => l.priceBasis)).toEqual(['gross', 'net'])
+    const prorated = buildRecurringLineDescriptors(
+      { id: 'g', description: 'Plan', chargeTiming: 'in_advance', taxRate: '23', priceBasis: 'gross' },
+      [
+        {
+          billingItemId: 'g',
+          kind: 'charge',
+          servicePeriodStart: new Date('2026-11-15T00:00:00Z'),
+          servicePeriodEnd: new Date('2026-11-30T00:00:00Z'),
+          amount: 32,
+          proration: { activeDays: 16, periodDays: 30 },
+        },
+      ],
+    )
+    expect(prorated[0]).toMatchObject({ priceBasis: 'gross', lineAmount: '32.0000' })
   })
 })

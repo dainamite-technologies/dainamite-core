@@ -3,7 +3,7 @@ import * as React from 'react'
 import Link from 'next/link'
 import type { LegacyColumnDef as ColumnDef } from '@tanstack/react-table/legacy'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
-import { DataTable } from '@open-mercato/ui/backend/DataTable'
+import { BillingDataTable as DataTable } from './BillingDataTable'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 
 /**
@@ -21,11 +21,15 @@ export type RunCycle = {
   bill_date: string
   period_start: string | null
   period_end: string | null
-  status: 'invoiced' | 'previewed' | 'empty' | 'skipped_existing'
+  /** `charged` = prepaid charges debited from the balance (Spec F). */
+  status: 'invoiced' | 'charged' | 'previewed' | 'empty' | 'skipped_existing'
   line_count: number
   total_net: string
   invoice_id: string | null
   invoice_number?: string | null
+  /** Prepaid only: what left the balance, and the period's statement. */
+  total_debit?: string
+  statement_id?: string | null
 }
 
 export type RunCycleOutcome = {
@@ -52,6 +56,7 @@ const PAGE_SIZE = 50
 function cycleVariant(status: RunCycle['status']): 'success' | 'info' | 'neutral' | 'warning' {
   switch (status) {
     case 'invoiced':
+    case 'charged':
       return 'success'
     case 'previewed':
       return 'info'
@@ -106,15 +111,19 @@ export function RunCyclesSection({ outcomes }: { outcomes: RunCycleOutcome[] }) 
     [outcomes],
   )
 
+  const hasPrepaid = React.useMemo(() => cycleRows.some((row) => row.total_debit !== undefined), [cycleRows])
+
   const statusLabel = React.useCallback(
     (status: RunCycle['status']) => {
       switch (status) {
         case 'invoiced':
           return t('billing.runs.cycles.status.invoiced', 'Invoiced')
+        case 'charged':
+          return t('billing.runs.cycles.status.charged', 'Charged to balance')
         case 'previewed':
           return t('billing.runs.cycles.status.previewed', 'Preview')
         case 'skipped_existing':
-          return t('billing.runs.cycles.status.skipped_existing', 'Skipped — draft exists')
+          return t('billing.runs.cycles.status.skipped_existing', 'Skipped — already billed')
         default:
           return t('billing.runs.cycles.status.empty', 'Nothing to bill')
       }
@@ -175,20 +184,38 @@ export function RunCyclesSection({ outcomes }: { outcomes: RunCycleOutcome[] }) 
         header: t('billing.runs.cycles.columns.total_net', 'Net total'),
         cell: ({ row }) => <span className="font-mono tabular-nums">{row.original.total_net}</span>,
       },
+      ...(hasPrepaid
+        ? [
+            {
+              accessorKey: 'total_debit',
+              header: t('billing.runs.cycles.columns.total_debit', 'Charged to balance'),
+              cell: ({ row }: { row: { original: CycleRow } }) =>
+                row.original.total_debit !== undefined ? (
+                  <span className="font-mono tabular-nums">{row.original.total_debit}</span>
+                ) : (
+                  '—'
+                ),
+            } satisfies ColumnDef<CycleRow>,
+          ]
+        : []),
       {
         accessorKey: 'invoice_id',
-        header: t('billing.runs.outcomes.columns.invoice', 'Invoice'),
+        header: t('billing.runs.cycles.columns.document', 'Document'),
         cell: ({ row }) =>
           row.original.invoice_id ? (
             <Link href={`/backend/billing/invoices/${row.original.invoice_id}`} className="text-sm text-primary hover:underline">
               {row.original.invoice_number ?? row.original.invoice_id}
+            </Link>
+          ) : row.original.statement_id ? (
+            <Link href={`/backend/billing/statements/${row.original.statement_id}`} className="text-sm text-primary hover:underline">
+              {t('billing.runs.cycles.statement', 'Statement')}
             </Link>
           ) : (
             '—'
           ),
       },
     ],
-    [statusLabel, t],
+    [hasPrepaid, statusLabel, t],
   )
 
   const skippedColumns = React.useMemo<ColumnDef<SkippedRow>[]>(

@@ -28,6 +28,7 @@ import { creditFits, loadCorrectionTotals } from '../lib/memoGuards'
 import { sendInvoice, type SendInvoiceResult } from '../lib/invoiceDelivery'
 import { computeDueDate, resolvePaymentTermsDays } from '../lib/dueDate'
 import { lineAmountsFromNet, sumTotals } from '../lib/vat'
+import { deleteTestRunArtifacts } from '../lib/testRunCleanup'
 import {
   billingInvoiceAddLineSchema,
   billingInvoiceEditLineSchema,
@@ -637,9 +638,10 @@ const removeDraftLineCommand: CommandHandler<
 
 // ─── Wipe test invoices ──────────────────────────────────────────
 //
-// Hard-deletes test-run drafts (`test_run = true`) and their lines,
-// optionally scoped to one Bill Run so an operator can wipe a specific test
-// run without touching other test data.
+// Hard-deletes test-run drafts (`test_run = true`) with their lines and
+// draft-edit audit rows (`lib/testRunCleanup`), optionally scoped to one Bill
+// Run so an operator can wipe a specific test run without touching other
+// test data.
 
 const wipeTestInvoicesCommand: CommandHandler<BillingWipeTestInvoicesInput, { invoicesRemoved: number }> = {
   id: 'billing.invoices.wipe_test',
@@ -650,25 +652,13 @@ const wipeTestInvoicesCommand: CommandHandler<BillingWipeTestInvoicesInput, { in
     ensureOrganizationScope(ctx, parsed.organizationId)
 
     const em = getEm(ctx)
-    const params: unknown[] = [parsed.tenantId, parsed.organizationId]
-    let billRunClause = ''
-    if (parsed.billRunId) {
-      billRunClause = ' AND bill_run_id = ?'
-      params.push(parsed.billRunId)
-    }
-    const removed = await em.transactional(async (tem) => {
-      const rows = (await tem.execute(
-        `SELECT id FROM billing_invoices
-         WHERE tenant_id = ? AND organization_id = ? AND test_run = true${billRunClause}`,
-        params,
-      )) as unknown as Array<{ id: string }> | undefined
-      const ids = (rows ?? []).map((r) => r.id)
-      if (ids.length === 0) return 0
-      const placeholders = ids.map(() => '?').join(',')
-      await tem.execute(`DELETE FROM billing_invoice_lines WHERE invoice_id IN (${placeholders})`, ids)
-      await tem.execute(`DELETE FROM billing_invoices WHERE id IN (${placeholders})`, ids)
-      return ids.length
-    })
+    const removed = await em.transactional((tem) =>
+      deleteTestRunArtifacts(tem as EntityManager, {
+        tenantId: parsed.tenantId,
+        organizationId: parsed.organizationId,
+        billRunId: parsed.billRunId ?? null,
+      }),
+    )
     return { invoicesRemoved: removed }
   },
 }

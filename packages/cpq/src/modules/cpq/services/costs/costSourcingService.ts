@@ -339,6 +339,71 @@ export class CpqCostSourcingService {
     return cancelOpenCostRequests(em, quote, scope, reason, options)
   }
 
+  /**
+   * Element deactivation fan-out (Q4). Called AFTER the catalog write committed: finds the quotes holding an open
+   * request on one of `elementIds` and cancels those requests (`element_deactivated`), each quote in its OWN
+   * `withQuotePricingWrite`, best effort. A quote whose write fails is logged and skipped (the others still run);
+   * R1a on the quote's next saved recalculation and the answer-side inactive-element check back it up. Never throws.
+   */
+  async cancelRequestsForElements(elementIds: string[], scope: TenantScope, actorUserId: string | null = null): Promise<{ quotes: number; cancelled: number; failed: number }> {
+    const summary = { quotes: 0, cancelled: 0, failed: 0 }
+    if (elementIds.length === 0) return summary
+    const costIdsByQuote = new Map<string, string[]>()
+    try {
+      let after: string | undefined
+      for (;;) {
+        const rows: CpqQuoteLineCost[] = await this.deps.em.find(CpqQuoteLineCost, {
+          ...scoped(scope), costElementId: { $in: elementIds }, sourcingStatus: 'requested', ...(after ? { id: { $gt: after } } : {}),
+        }, { limit: 500, orderBy: { id: 'asc' } })
+        for (const row of rows) costIdsByQuote.set(row.quoteConfigurationId, [...(costIdsByQuote.get(row.quoteConfigurationId) ?? []), row.id])
+        if (rows.length < 500) break
+        after = rows[rows.length - 1].id
+      }
+    } catch (error) {
+      console.error('[cpq] cost request fan-out: reading the open requests failed', error)
+      return { ...summary, failed: 1 }
+    }
+    for (const [quoteId, costIds] of costIdsByQuote) {
+      summary.quotes += 1
+      try {
+        const result = await this.write(quoteId, scope, undefined, actorUserId ?? '', async (em, quote, signals) => ({
+          cancelled: (await this.cancelOpenRequests(em, quote, scope, 'element_deactivated', { actorUserId, costIds, signals })).length,
+        }), {
+          // Someone else already closed them (answer, R1a, ...): nothing to write, no revision bump.
+          shortCircuit: async (em) => {
+            const open = await em.count(CpqQuoteLineCost, { ...scoped(scope), id: { $in: costIds }, sourcingStatus: 'requested' })
+            return open === 0 ? { cancelled: 0 } : undefined
+          },
+        })
+        summary.cancelled += result.cancelled
+      } catch (error) {
+        summary.failed += 1
+        console.error(`[cpq] cost request fan-out: cancelling the requests of quote ${quoteId} failed`, error)
+      }
+    }
+    return summary
+  }
+
+  /**
+   * A quote deleted through the SALES module (Q7, `sales.quote.deleted`): cancels the open requests of the CPQ quote
+   * that wraps it (`quote_closed`) in one quote write. Idempotent (nothing open: no write, no revision bump) and a
+   * no-op for a sales quote without a live CPQ quote. Returns the number of cancelled requests; errors propagate so
+   * the persistent subscriber is retried.
+   */
+  async cancelRequestsForSalesQuote(salesQuoteId: string, scope: TenantScope): Promise<number> {
+    const quote = await this.deps.em.findOne(CpqQuoteConfiguration, { ...scoped(scope), quoteId: salesQuoteId })
+    if (!quote) return 0
+    const result = await this.write(quote.id, scope, undefined, '', async (em, locked, signals) => ({
+      cancelled: (await this.cancelOpenRequests(em, locked, scope, 'quote_closed', { signals })).length,
+    }), {
+      shortCircuit: async (em, locked) => {
+        const open = await em.count(CpqQuoteLineCost, { ...scoped(scope), quoteConfigurationId: locked.id, sourcingStatus: 'requested' })
+        return open === 0 ? { cancelled: 0 } : undefined
+      },
+    })
+    return result.cancelled
+  }
+
   // ─── Internals ─────────────────────────────────────────────────
 
   private result(row: CpqQuoteLineCost, before: SourcingAudit, quote: CpqQuoteConfiguration, signals: SourcingSignal[], reason?: string): CostRequestWriteResult {

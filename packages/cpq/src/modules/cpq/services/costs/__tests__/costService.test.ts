@@ -215,3 +215,37 @@ describe('CpqCostService charge-side helpers', () => {
     expect(margin.deletedAt).toBeInstanceOf(Date)
   })
 })
+
+describe('CpqCostService element deactivation fan-out (sourcing Q4)', () => {
+  const withHook = (em: unknown, hook: jest.Mock) => new CpqCostService({ em: em as never, featureTogglesService: { getBoolConfig: jest.fn() }, onElementsDeactivated: hook })
+
+  it('calls the hook after the deactivation committed, with the element id', async () => {
+    const em = store({ charges: [charge()], elements: [element(), element({ id: 'other', code: 'router' })] })
+    const hook = jest.fn(async () => undefined)
+    await withHook(em, hook).updateElement({ id: elementId, isActive: false }, SCOPE)
+    expect(hook).toHaveBeenCalledWith([elementId], SCOPE)
+    expect(em.flush.mock.invocationCallOrder[0]).toBeLessThan(hook.mock.invocationCallOrder[0])
+  })
+
+  it('also fans out on delete, but not on edits that keep the element active or on refusals', async () => {
+    const hook = jest.fn(async () => undefined)
+    const deleted = store({ charges: [charge()], elements: [element(), element({ id: 'other', code: 'router' })] })
+    await withHook(deleted, hook).deleteElement(elementId, SCOPE)
+    expect(hook).toHaveBeenCalledWith([elementId], SCOPE)
+    hook.mockClear()
+    const edited = store({ charges: [charge()], elements: [element()] })
+    await withHook(edited, hook).updateElement({ id: elementId, name: 'Renamed' }, SCOPE)
+    const refused = store({ charges: [charge()], elements: [element()] })
+    await expect(withHook(refused, hook).updateElement({ id: elementId, isActive: false }, SCOPE)).rejects.toMatchObject({ message: 'NO_PRICE_BASIS_ELEMENT' })
+    expect(hook).not.toHaveBeenCalled()
+  })
+
+  it('a failing fan-out is logged and never fails the catalog write', async () => {
+    const em = store({ charges: [charge()], elements: [element(), element({ id: 'other', code: 'router' })] })
+    const errors = jest.spyOn(console, 'error').mockImplementation(() => undefined)
+    const hook = jest.fn(async () => { throw new Error('boom') })
+    await expect(withHook(em, hook).updateElement({ id: elementId, isActive: false }, SCOPE)).resolves.toMatchObject({ isActive: false })
+    expect(errors).toHaveBeenCalled()
+    errors.mockRestore()
+  })
+})

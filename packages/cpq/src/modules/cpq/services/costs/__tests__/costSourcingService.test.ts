@@ -7,7 +7,7 @@ const writeCalls: Array<{ options: Record<string, any> }> = []
 jest.mock('../../priceAdjustments/quotePricingWrite', () => ({
   withQuotePricingWrite: async (em: any, quoteId: string, _scope: unknown, execute: any, makeError: any, options: any) => {
     writeCalls.push({ options })
-    const quote = em.__quote
+    const quote = em.__quotes?.[quoteId] ?? em.__quote
     if (!quote || quote.id !== quoteId) throw makeError(404, 'Quote not found')
     if (options.expectedRevision !== undefined && options.expectedRevision !== (quote.pricingRevision ?? 0)) throw makeError(409, 'STALE_REVISION')
     const before = quote.pricingRevision
@@ -56,10 +56,17 @@ function setup(opts: { status?: string; orders?: Row[]; costs?: Row[]; line?: Ro
       return null
     }),
     find: jest.fn(async (entity: unknown, where: Row) => {
+      if (entity === CpqQuoteConfiguration) return []
       if (entity !== CpqQuoteLineCost) return []
       return costs.filter((row) => !row.deletedAt && row.sourcingStatus === where.sourcingStatus
-        && (!where.id || where.id.$in.includes(row.id)) && (!where.quoteLineId || where.quoteLineId.$in.includes(row.quoteLineId)))
+        && (!where.quoteConfigurationId || row.quoteConfigurationId === where.quoteConfigurationId)
+        && (!where.costElementId || where.costElementId.$in.includes(row.costElementId))
+        && (!where.id?.$in || where.id.$in.includes(row.id)) && (!where.id?.$gt || row.id > where.id.$gt) && (!where.quoteLineId || where.quoteLineId.$in.includes(row.quoteLineId)))
     }),
+    count: jest.fn(async (entity: unknown, where: Row) => (entity !== CpqQuoteLineCost ? 0
+      : costs.filter((row) => !row.deletedAt && row.sourcingStatus === where.sourcingStatus
+        && (!where.quoteConfigurationId || row.quoteConfigurationId === where.quoteConfigurationId)
+        && (!where.id?.$in || where.id.$in.includes(row.id))).length)),
   }
   const publisher = jest.fn()
   const recalculate = jest.fn(async () => ({ id: ids.quote, cpqStatus: quote.cpqStatus, lines: [] }))
@@ -524,5 +531,84 @@ describe('applyAnswer (#22a)', () => {
     expect(await run({ costs: [pending()], status: 'accepted', orders: [{ id: 'order-1' }] })).toMatchObject({ status: 409, message: 'QUOTE_CONVERTED', details: { orderId: 'order-1' } })
     expect(await run({ costs: [pending()], status: 'with_customer' }, 4, '99999999-9999-4999-8999-999999999999')).toMatchObject({ status: 404 })
     expect(await run({ costs: [pending()], status: 'with_customer', enabled: false })).toMatchObject({ status: 404 })
+  })
+})
+
+describe('element deactivation fan-out (Q4)', () => {
+  const quoteB = '66666666-6666-4666-8666-666666666666'
+  const costB = '77777777-7777-4777-8777-777777777777'
+
+  it('cancels the open requests on the element per quote in its own write; a failing quote is logged and does not stop the others', async () => {
+    const quotes = { [ids.quote]: { id: ids.quote, quoteId: 'sales-1', cpqStatus: 'ready', pricingRevision: 4 }, [quoteB]: { id: quoteB, quoteId: 'sales-b', cpqStatus: 'ready', pricingRevision: 9 } }
+    const a = open({ id: ids.cost, requestHistory: [] })
+    const b = open({ id: costB, quoteConfigurationId: quoteB, requestHistory: [] })
+    const other = open({ id: 'other-cost', costElementId: 'other-el', requestHistory: [] })
+    const { service, em, publisher, costs } = setup({ costs: [a, b, other] })
+    em.__quotes = quotes
+    const find = em.find as jest.Mock
+    const inner = find.getMockImplementation()!
+    // quote B's per-quote cancel read fails (its own write): the fan-out query itself carries `costElementId`
+    find.mockImplementation(async (entity: unknown, where: Row, ...rest: unknown[]) => {
+      if (entity === CpqQuoteLineCost && where.quoteConfigurationId === quoteB && !where.costElementId) throw new Error('boom')
+      return inner(entity, where, ...rest)
+    })
+    const errors = jest.spyOn(console, 'error').mockImplementation(() => undefined)
+    writeCalls.length = 0
+    const out = await service.cancelRequestsForElements(['el'], SCOPE, ACTOR)
+    expect(out).toEqual({ quotes: 2, cancelled: 1, failed: 1 })
+    expect(a).toMatchObject({ sourcingStatus: 'cancelled', cancelReason: 'element_deactivated', costRequestId: ids.req, proposedAmount: null })
+    expect(a.requestHistory).toEqual([expect.objectContaining({ outcome: 'cancelled', reason: 'element_deactivated', closedByUserId: ACTOR })])
+    expect(b.sourcingStatus).toBe('requested')
+    expect(costs.find((row) => row.id === 'other-cost')!.sourcingStatus).toBe('requested')
+    expect(errors).toHaveBeenCalledWith(expect.stringContaining(quoteB), expect.any(Error))
+    expect(publisher).toHaveBeenCalledTimes(1)
+    expect(publisher).toHaveBeenCalledWith([expect.objectContaining({ kind: 'request_cancelled', reason: 'element_deactivated', costLineId: ids.cost })], expect.objectContaining({ id: ids.quote }))
+    // one write (own lock + revision) per quote
+    expect(writeCalls).toHaveLength(2)
+    expect(quotes[ids.quote].pricingRevision).toBe(5)
+    errors.mockRestore()
+  })
+
+  it('does nothing without elements or open requests, and a request closed meanwhile is a no-op without a revision bump', async () => {
+    const { service, quote, em } = setup({ costs: [cost()] })
+    expect(await service.cancelRequestsForElements([], SCOPE)).toEqual({ quotes: 0, cancelled: 0, failed: 0 })
+    expect(await service.cancelRequestsForElements(['el'], SCOPE)).toEqual({ quotes: 0, cancelled: 0, failed: 0 })
+    // the quote's request is answered between the fan-out read and its write
+    const racing = setup({ costs: [open()] })
+    const count = racing.em.count as jest.Mock
+    count.mockResolvedValue(0)
+    expect(await racing.service.cancelRequestsForElements(['el'], SCOPE)).toEqual({ quotes: 1, cancelled: 0, failed: 0 })
+    expect(racing.quote.pricingRevision).toBe(4)
+    expect(quote.pricingRevision).toBe(4)
+    expect(em.count).not.toHaveBeenCalled()
+  })
+
+  it('never throws when reading the open requests fails', async () => {
+    const { service, em } = setup({ costs: [open()] })
+    ;(em.find as jest.Mock).mockRejectedValue(new Error('db down'))
+    const errors = jest.spyOn(console, 'error').mockImplementation(() => undefined)
+    await expect(service.cancelRequestsForElements(['el'], SCOPE)).resolves.toEqual({ quotes: 0, cancelled: 0, failed: 1 })
+    errors.mockRestore()
+  })
+})
+
+describe('cancelRequestsForSalesQuote (Q7)', () => {
+  it('cancels the open requests of the CPQ quote wrapping the sales quote (quote_closed)', async () => {
+    const row = open({ requestHistory: [] })
+    const { service, em, quote, publisher } = setup({ costs: [row] })
+    ;(em.findOne as jest.Mock).mockImplementation(async (entity: unknown) => (entity === CpqQuoteConfiguration ? quote : null))
+    expect(await service.cancelRequestsForSalesQuote('sales-1', SCOPE)).toBe(1)
+    expect(row).toMatchObject({ sourcingStatus: 'cancelled', cancelReason: 'quote_closed', proposedAmount: null })
+    expect(publisher).toHaveBeenCalledWith([expect.objectContaining({ kind: 'request_cancelled', reason: 'quote_closed' })], expect.anything())
+    expect(em.findOne).toHaveBeenCalledWith(CpqQuoteConfiguration, expect.objectContaining({ quoteId: 'sales-1', organizationId: 'org', tenantId: 'tenant', deletedAt: null }))
+  })
+
+  it('is idempotent: nothing open means no write and no revision bump; no CPQ quote means a no-op', async () => {
+    const closed = setup({ costs: [cost({ sourcingStatus: 'cancelled' })] })
+    ;(closed.em.findOne as jest.Mock).mockImplementation(async (entity: unknown) => (entity === CpqQuoteConfiguration ? closed.quote : null))
+    expect(await closed.service.cancelRequestsForSalesQuote('sales-1', SCOPE)).toBe(0)
+    expect(closed.quote.pricingRevision).toBe(4)
+    const none = setup()
+    expect(await none.service.cancelRequestsForSalesQuote('sales-x', SCOPE)).toBe(0)
   })
 })

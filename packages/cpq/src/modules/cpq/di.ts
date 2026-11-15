@@ -33,6 +33,9 @@ export function register(container: AppContainer) {
     cpqCostService: asFunction(() => new CpqCostService({
       em: container.resolve('em'),
       featureTogglesService: container.resolve('featureTogglesService'),
+      // Resolved lazily: the sourcing service depends on the cost service (toggle check).
+      onElementsDeactivated: (elementIds: string[], scope: { organizationId: string; tenantId: string }) =>
+        (container.resolve('cpqCostSourcingService') as CpqCostSourcingService).cancelRequestsForElements(elementIds, scope),
     })).scoped(),
     cpqQuoteCostService: asFunction(() => new CpqQuoteCostService({
       em: container.resolve('em'),

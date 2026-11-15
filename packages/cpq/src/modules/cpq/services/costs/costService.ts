@@ -24,6 +24,12 @@ export const COST_PLUS_PRICING_AVAILABLE = true
 type Dependencies = {
   em: EntityManager
   featureTogglesService: Pick<FeatureTogglesService, 'getBoolConfig'>
+  /**
+   * Called AFTER an element write committed, with the ids of the elements it deactivated (or deleted): the supplier
+   * sourcing fan-out that cancels their open cost requests, one quote write each (sourcing spec Q4). Best effort:
+   * a failure is logged and never fails the catalog write. Absent = no fan-out (hosts without sourcing).
+   */
+  onElementsDeactivated?: (elementIds: string[], scope: TenantScope) => Promise<unknown>
 }
 
 type ChargeState = { id?: string; pricingMethod: string; isActive: boolean; deletedAt?: Date | null }
@@ -171,7 +177,9 @@ export class CpqCostService {
 
   async updateElement(input: ChargeCostElementPatch, scope: TenantScope): Promise<CostElementView> {
     const { id, ...patch } = cpqChargeCostElementUpdateSchema.parse(input)
-    return this.inElementLock(id, scope, async (tx, row, charge) => {
+    let deactivated = false
+    const view = await this.inElementLock(id, scope, async (tx, row, charge) => {
+      deactivated = row.isActive && patch.isActive === false
       const merged = { ...row, ...patch, amount: patch.amount !== undefined ? patch.amount : row.amount,
         estimateAmount: patch.estimateAmount !== undefined ? patch.estimateAmount : row.estimateAmount }
       // Context rules bind active elements; a price-basis element deactivated
@@ -189,6 +197,8 @@ export class CpqCostService {
       await tx.flush()
       return serializeCostElement(row)
     })
+    if (deactivated) await this.fanOutDeactivation([id], scope)
+    return view
   }
 
   async deleteElement(id: string, scope: TenantScope): Promise<void> {
@@ -197,6 +207,18 @@ export class CpqCostService {
       row.deletedAt = new Date()
       await tx.flush()
     })
+    // A deleted element can no longer answer a request: same fan-out as a deactivation.
+    await this.fanOutDeactivation([id], scope)
+  }
+
+  /** Post-commit, best effort (Q4): the catalog write stands whatever happens here. */
+  private async fanOutDeactivation(elementIds: string[], scope: TenantScope): Promise<void> {
+    if (!this.deps.onElementsDeactivated) return
+    try {
+      await this.deps.onElementsDeactivated(elementIds, scope)
+    } catch (error) {
+      console.error('[cpq] cost request fan-out after element deactivation failed', error)
+    }
   }
 
   /** §1.4.4 combination rules against the field shape, the charge and the cost table. */

@@ -31,6 +31,7 @@ import type { TenantScope } from '../types'
 import { COST_CLOSED_STATUSES } from './costLock'
 import type { CpqCostService } from './costService'
 import { isQuoteCostLocked } from './costResolution'
+import { isFrozenMirrorLine } from '../arcPriceFreeze'
 import { cancelRequestPatch, isRequestOpen, openRequestPatch } from './costRequestState'
 import { cancelOpenRequests as cancelOpenCostRequests } from './costRequestCancel'
 import {
@@ -239,6 +240,7 @@ export class CpqCostSourcingService {
         locked = await isQuoteCostLocked(em, quote, scope)
         verdict = classifyAnswer({
           answer: parsed, elementActive: await this.elementActive(em, row, scope), locked,
+          frozenMirror: isFrozenMirrorLine(line.configuration, quote.quoteType),
           cost: {
             sourcingStatus: row.sourcingStatus, costRequestId: row.costRequestId ?? null, lastAnswerHash: row.lastAnswerHash ?? null,
             supplierQuoteRef: row.supplierQuoteRef ?? null, unitAmount: row.unitAmount ?? null, currencyCode: row.currencyCode ?? null,
@@ -265,10 +267,12 @@ export class CpqCostSourcingService {
     const signals: SourcingSignal[] = []
     return this.write(quoteId, scope, undefined, actor, async (em, quote) => {
       const row = await this.requireCost(em, quote, costId, scope)
+      const line = await em.findOne(CpqQuoteLineConfiguration, { ...scoped(scope), quoteConfigurationId: quote.id, quoteLineId: row.quoteLineId })
       const locked = await isQuoteCostLocked(em, quote, scope)
       const before = audit(row)
       const prior = { valueStatus: row.valueStatus, unitAmount: row.unitAmount ?? null, currencyCode: row.currencyCode ?? null }
-      const effect = declineEffect({ unitAmount: row.unitAmount ?? null, valueStatus: row.valueStatus, note: row.note ?? null, role: row.role }, locked)
+      const effect = declineEffect({ unitAmount: row.unitAmount ?? null, valueStatus: row.valueStatus, note: row.note ?? null, role: row.role }, locked,
+        isFrozenMirrorLine(line?.configuration, quote.quoteType))
       const now = new Date()
       const history = this.closedHistory(row, 'declined', now, actor, { declineReason: parsed.reason })
       await this.persistAndPrice(em, quote, scope, !locked, signals, actor, () => {

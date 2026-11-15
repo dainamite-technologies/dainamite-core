@@ -383,6 +383,37 @@ describe('answer: unlocked quote', () => {
   })
 })
 
+describe('answer / decline: frozen ARC mirror line (ARC costs Q4)', () => {
+  const frozen = { configuration: { _arcMirroredFromItemId: 'item-1', _arcPriceFrozen: true } }
+
+  it('a different-value answer on a locked quote\'s frozen carried price-basis line applies (no proposal), without re-pricing', async () => {
+    const { service, costs, recalculate } = setup({ costs: [requested({ origin: 'carried', valueOrigin: 'carried' })], status: 'with_customer', quoteType: 'amend', line: frozen })
+    const result = await service.answer(ids.quote, ids.cost, answerInput({ unitAmount: 999 }), ACTOR, SCOPE)
+    expect(result.response.outcome).toBe('applied')
+    expect(costs[0]).toMatchObject({ unitAmount: '999', proposedAmount: null, proposedAnswer: null, sourcingStatus: 'answered' })
+    expect(recalculate).not.toHaveBeenCalled()
+  })
+
+  it('a reconfigured (un-frozen) mirror line keeps the lock: a different value stays a proposal', async () => {
+    const { service, costs } = setup({
+      costs: [requested({ origin: 'carried', valueOrigin: 'carried', unitAmount: '300.0000' })], status: 'with_customer', quoteType: 'amend',
+      line: { configuration: { _arcMirroredFromItemId: 'item-1', _arcReconfigured: true } },
+    })
+    const result = await service.answer(ids.quote, ids.cost, answerInput({ unitAmount: 999 }), ACTOR, SCOPE)
+    expect(result.response.outcome).toBe('proposed')
+    expect(costs[0]).toMatchObject({ unitAmount: '300.0000', proposedAmount: '999.0000' })
+  })
+
+  it('decline on a locked quote\'s frozen carried line follows the unlocked rule: no locked downgrade', async () => {
+    const { service, costs, recalculate } = setup({
+      costs: [requested({ origin: 'carried', valueOrigin: 'carried', unitAmount: '300.0000', valueStatus: 'confirmed' })], status: 'with_customer', quoteType: 'amend', line: frozen,
+    })
+    await service.decline(ids.quote, ids.cost, { costRequestId: ids.req, reason: 'No coverage' }, ACTOR, SCOPE)
+    expect(costs[0]).toMatchObject({ sourcingStatus: 'declined', valueStatus: 'none', unitAmount: null })
+    expect(recalculate).not.toHaveBeenCalled()
+  })
+})
+
 describe('answer: refusals and idempotency (I-13) write nothing', () => {
   const attempt = async (setupOpts: Parameters<typeof setup>[0], input: Row = answerInput()) => {
     const ctx = setup(setupOpts)

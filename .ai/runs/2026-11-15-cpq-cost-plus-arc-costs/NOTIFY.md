@@ -18,3 +18,6 @@
 
 ## 2026-11-15T16:30:00Z — step 7 scope decisions
 - Q4 lives in `quoteCostService.updateCost` only: a cost change on a frozen mirror line (`isFrozenMirrorLine`) is never price-affecting for the lock, and the cost PATCH accepts any ARC mirror line for a `carried` cost (catalog costs on unreconfigured mirrors, cancel lines and structure writes stay LINE_NOT_ELIGIBLE). Carried lines refuse structural edits and deletion. The supplier answer path (`classifyAnswer`) is unchanged: an answer on a locked frozen carried price-basis line is still a proposal (revisit with the Renew renegotiation steps 14-15).
+
+## 2026-11-15T16:45:00Z — step 7 review fix
+- Supersedes the step 7 note on `classifyAnswer`: a supplier answer / decline on a frozen mirror line (`isFrozenMirrorLine`, the predicate `updateCost` uses) is now lock-exempt like a margin-only cost (applies, no proposal, no locked downgrade); a reconfigured (un-frozen) line keeps the lock.

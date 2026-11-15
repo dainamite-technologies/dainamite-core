@@ -51,9 +51,9 @@ const readResponse = z.object({
 const writeResponse = z.object({ cost: z.record(z.string(), z.unknown()), pricingRevision: z.number(), margin: z.record(z.string(), z.unknown()).optional() })
 export const openApi: OpenApiRouteDoc = { tag: 'CPQ Quotes', pathParams: cpqQuoteIdPathParams, methods: {
   GET: { summary: 'Read the cost lines of a quote (status only without cpq.costs.view)', responses: [{ status: 200, description: 'Cost lines per quote line and the pricing revision', schema: readResponse }], errors: [cpqErrorDoc(403, 'Missing permission'), toggleOff] },
-  POST: { summary: 'Add a manual cost line to a quote line', requestBody: { schema: cpqQuoteLineCostCreateSchema },
+  POST: { summary: 'Add a manual cost line to a quote line (a foreign currencyCode takes the rate resolved at the write, or is stored none + CURRENCY_NO_RATE; a rate is never accepted in the body)', requestBody: { schema: cpqQuoteLineCostCreateSchema },
     responses: [{ status: 201, description: 'Created cost line, margin (cpq.costs.view only) and new pricing revision', schema: writeResponse }],
     errors: [cpqErrorDoc(400, 'Validation error'), cpqErrorDoc(403, 'Missing permission'), toggleOff,
       cpqErrorDoc(409, 'COST_LOCKED or STALE_REVISION'),
-      cpqErrorDoc(422, 'PRICE_BASIS_REQUIRES_COST_PLUS, CHARGE_NOT_FOUND, COST_TYPE_MISMATCH, LINE_NOT_ELIGIBLE, AMOUNT_REQUIRED, CURRENCY_NO_RATE, QUANTITY_ATTRIBUTE_REQUIRED or a mutation-guard rejection')] },
+      cpqErrorDoc(422, 'PRICE_BASIS_REQUIRES_COST_PLUS, CHARGE_NOT_FOUND, COST_TYPE_MISMATCH, LINE_NOT_ELIGIBLE, AMOUNT_REQUIRED, QUANTITY_ATTRIBUTE_REQUIRED or a mutation-guard rejection')] },
 } }

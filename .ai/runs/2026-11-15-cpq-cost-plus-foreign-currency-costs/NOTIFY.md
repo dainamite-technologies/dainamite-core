@@ -10,3 +10,8 @@
 
 ## 2026-11-15T10:13:14Z — main session: amounts and currencies (for step 9)
 - As built in step 6: quote cost `unit_amount` / `instance_amount` stay in the cost currency; `fx_rate` is applied when costs are summed (list price, margin). Feature 2 Q3 requires order line / inventory cost `total_amount` in the document (subscription) currency, and item / asset margins (itemMargin.ts) subtract it from item amounts — so step 9 must compute `total_amount = instance × qty × fx_rate` (rounded once) when an fx_rate is set, keep unit / instance in the cost currency, and copy all four fx_* fields verbatim. `costLineTotal` must therefore take the rate.
+
+## 2026-11-15T10:45:00Z — step 7 decisions
+- Manual create / value edit resolves the rate in the write itself (unlocked and locked alike) when the value is new or changed (a currency change counts); a same-value confirmation or a note-only edit keeps the stored snapshot; no rate -> `none` + CURRENCY_NO_RATE with the entered amount / currency kept and `value_origin = manual`. The unlocked saved recalculation then refreshes it as usual (step 6).
+- A note-only PATCH of a stored `none` + CURRENCY_NO_RATE line no longer fails with FIELD_NOT_ALLOWED: the line is left as it is.
+- PR #95 supplier answers (`valuePatch`) resolve the rate in the same write and keep the answered status; no rate keeps the PR #95 shape. Locked-quote comparison already ran in the cost's own currency plus currency code (`classifyAnswer`), so it is unchanged: a different currency is a proposal.

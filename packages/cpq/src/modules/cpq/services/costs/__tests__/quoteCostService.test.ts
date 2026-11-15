@@ -23,7 +23,7 @@ const SCOPE = { organizationId: 'org', tenantId: 'tenant' }
 const ids = { quote: '11111111-1111-4111-8111-111111111111', line: '22222222-2222-4222-8222-222222222222', cost: '33333333-3333-4333-8333-333333333333' }
 type Row = Record<string, any>
 
-function setup(opts: { status?: string; orders?: number; costs?: Row[]; overrides?: Row[]; line?: Row; charges?: Row[]; enabled?: boolean; publisher?: jest.Mock } = {}) {
+function setup(opts: { status?: string; orders?: number; costs?: Row[]; overrides?: Row[]; line?: Row; charges?: Row[]; enabled?: boolean; publisher?: jest.Mock; fx?: jest.Mock } = {}) {
   const quote = { id: ids.quote, quoteId: ids.quote, cpqStatus: opts.status ?? 'ready', quoteType: 'new', currencyCode: 'EUR', pricingRevision: 4, quoteContext: {} }
   const line = { id: 'l', quoteLineId: ids.line, ...SCOPE, quoteConfigurationId: ids.quote, offeringId: 'off', productId: 'prod', configuration: {}, quantity: '1', charges: [], termMonths: 12, parentLineId: null, deletedAt: null, ...opts.line }
   const charges = opts.charges ?? [
@@ -63,6 +63,7 @@ function setup(opts: { status?: string; orders?: number; costs?: Row[]; override
     costService: { enabled: jest.fn(async () => opts.enabled ?? true) },
     quotingService: { recalculateLockedQuote: recalculate } as never,
     publisher: opts.publisher as never,
+    fxRateResolver: opts.fx ? { resolve: opts.fx } as never : undefined,
   })
   return { service, em, quote, costs, overrides, recalculate, subquery }
 }
@@ -75,6 +76,7 @@ const catalogRow = (over: Row = {}): Row => ({
 })
 const manualRow = (over: Row = {}) => catalogRow({ costKey: 'manual:abcd1234', origin: 'manual', costElementId: null, valueOrigin: 'manual', source: 'fixed', valueStatus: 'confirmed', ...over })
 const create = { quoteLineId: ids.line, name: 'Special build', role: 'margin_only' as const, costType: 'nrc' as const, source: 'fixed' as const, costModel: 'flat' as const, unitAmount: 1500 }
+const FX_OK = { ok: true, rate: '0.92000000', rateDate: '2026-11-11', source: 'ECB', derivation: 'direct' }
 const ACTOR = '44444444-4444-4444-8444-444444444444'
 
 describe('reads', () => {
@@ -183,9 +185,47 @@ describe('createCost', () => {
     expect(costs[0]).toMatchObject({ role: 'price_basis', chargeCode: 'tail', valueStatus: 'confirmed' })
     expect(recalculate).toHaveBeenCalled()
   })
-  it('[FX step 1 characterization; step 7 replaces it] refuses a foreign-currency amount (no silent FX)', async () => {
-    const { service } = setup()
-    await expect(service.createCost(ids.quote, { ...create, currencyCode: 'USD' }, ACTOR, SCOPE)).rejects.toMatchObject({ status: 422, message: 'CURRENCY_NO_RATE' })
+  it('[FX step 7: replaces the step-1 refusal] a foreign-currency amount is stored as entered with the rate resolved at the write', async () => {
+    const fx = jest.fn(async () => FX_OK)
+    const { service, costs, recalculate } = setup({ fx })
+    const result = await service.createCost(ids.quote, { ...create, currencyCode: 'USD' }, ACTOR, SCOPE)
+    expect(fx).toHaveBeenCalledWith({ from: 'USD', to: 'EUR', scope: SCOPE })
+    expect(costs[0]).toMatchObject({
+      unitAmount: '1500', instanceAmount: '1500', currencyCode: 'USD', valueStatus: 'confirmed', valueOrigin: 'manual', errorCode: null,
+      fxRate: '0.92000000', fxRateDate: '2026-11-11', fxRateSource: 'ECB', fxRateDerivation: 'direct',
+    })
+    expect(recalculate).toHaveBeenCalledTimes(1)
+    expect(result.cost).toMatchObject({ currencyCode: 'USD', valueStatus: 'confirmed' })
+  })
+  it('no rate: the value is stored (entered amount and currency) as none + CURRENCY_NO_RATE, never converted 1:1', async () => {
+    const fx = jest.fn(async () => ({ ok: false, code: 'CURRENCY_NO_RATE', reason: 'not_found' }))
+    const { service, costs } = setup({ fx })
+    await service.createCost(ids.quote, { ...create, currencyCode: 'USD' }, ACTOR, SCOPE)
+    expect(costs[0]).toMatchObject({ valueStatus: 'none', unitAmount: '1500', instanceAmount: null, currencyCode: 'USD', errorCode: 'CURRENCY_NO_RATE', valueOrigin: 'manual', fxRate: null, fxRateDate: null, fxRateSource: null, fxRateDerivation: null })
+    // Without any resolver (currencies not installed) the outcome is the same.
+    const bare = setup()
+    await bare.service.createCost(ids.quote, { ...create, currencyCode: 'USD' }, ACTOR, SCOPE)
+    expect(bare.costs[0]).toMatchObject({ valueStatus: 'none', errorCode: 'CURRENCY_NO_RATE', unitAmount: '1500', currencyCode: 'USD' })
+  })
+  it('a quote-currency amount never calls the resolver and carries no FX columns', async () => {
+    const fx = jest.fn(async () => FX_OK)
+    const { service, costs } = setup({ fx })
+    await service.createCost(ids.quote, create, ACTOR, SCOPE)
+    expect(fx).not.toHaveBeenCalled()
+    expect(costs[0]).toMatchObject({ fxRate: null, fxRateSource: null })
+  })
+  it('Q9: a new lock-exempt margin-only foreign line on a locked quote takes the rate at the write and does not re-price', async () => {
+    const fx = jest.fn(async () => FX_OK)
+    const { service, costs, recalculate } = setup({ status: 'with_customer', fx })
+    await service.createCost(ids.quote, { ...create, currencyCode: 'GBP' }, ACTOR, SCOPE)
+    expect(costs[0]).toMatchObject({ currencyCode: 'GBP', fxRate: '0.92000000', valueStatus: 'confirmed' })
+    expect(recalculate).not.toHaveBeenCalled()
+  })
+  it('a foreign price-basis create on a locked quote is still COST_LOCKED (price never moves while locked)', async () => {
+    const fx = jest.fn(async () => FX_OK)
+    const { service, costs } = setup({ status: 'with_customer', fx })
+    await expect(service.createCost(ids.quote, { ...create, role: 'price_basis', chargeCode: 'tail', costType: 'mrc', currencyCode: 'USD' }, ACTOR, SCOPE)).rejects.toMatchObject({ status: 409, message: 'COST_LOCKED' })
+    expect(costs).toHaveLength(0)
   })
   it('refuses cancel / mirror lines', async () => {
     const mirror = setup({ line: { configuration: { _arcMirroredFromItemId: 'i' } } })
@@ -350,6 +390,78 @@ describe('updateCost rules', () => {
   })
   it('404 for an unknown cost line', async () => {
     await expect(setup().service.updateCost(ids.quote, ids.cost, { note: 'x' }, ACTOR, SCOPE)).rejects.toMatchObject({ status: 404 })
+  })
+})
+
+describe('foreign-currency value edits (FX spec Q9)', () => {
+  const fxFrozen = { fxRate: '0.90000000', fxRateDate: '2026-10-01', fxRateSource: 'ECB', fxRateDerivation: 'direct' }
+  const usdRow = (over: Row = {}) => manualRow({ role: 'margin_only', chargeCode: null, unitAmount: '300', instanceAmount: '300', currencyCode: 'USD', ...fxFrozen, ...over })
+  const FX_NEW = { ok: true, rate: '0.95000000', rateDate: '2026-11-14', source: 'Manual', derivation: 'inverse' }
+
+  it('unlocked: re-entering a value in a foreign currency refreshes the snapshot at the write date', async () => {
+    const row = usdRow()
+    const fx = jest.fn(async () => FX_NEW)
+    const { service, recalculate } = setup({ costs: [row], fx })
+    await service.updateCost(ids.quote, ids.cost, { unitAmount: 400 }, ACTOR, SCOPE)
+    expect(fx).toHaveBeenCalledWith({ from: 'USD', to: 'EUR', scope: SCOPE })
+    expect(row).toMatchObject({ unitAmount: '400', instanceAmount: '400', currencyCode: 'USD', fxRate: '0.95000000', fxRateDate: '2026-11-14', fxRateSource: 'Manual', fxRateDerivation: 'inverse', valueStatus: 'confirmed', errorCode: null })
+    expect(recalculate).toHaveBeenCalledTimes(1)
+  })
+  it('locked: a margin-only value re-entered takes the rate at the write date; the price is not re-priced', async () => {
+    const row = usdRow()
+    const fx = jest.fn(async () => FX_NEW)
+    const { service, recalculate } = setup({ status: 'with_customer', costs: [row], fx })
+    await service.updateCost(ids.quote, ids.cost, { unitAmount: 400 }, ACTOR, SCOPE)
+    expect(row).toMatchObject({ unitAmount: '400', fxRate: '0.95000000' })
+    expect(recalculate).not.toHaveBeenCalled()
+  })
+  it('locked: a same-value confirmation keeps the stored snapshot and never reads a rate', async () => {
+    const row = usdRow({ valueStatus: 'estimated' })
+    const fx = jest.fn(async () => FX_NEW)
+    const { service } = setup({ status: 'with_customer', costs: [row], fx })
+    await service.updateCost(ids.quote, ids.cost, { valueStatus: 'confirmed' }, ACTOR, SCOPE)
+    expect(fx).not.toHaveBeenCalled()
+    expect(row).toMatchObject({ valueStatus: 'confirmed', ...fxFrozen })
+  })
+  it('locked: a currency change counts as a value change (not a confirmation): margin-only re-rates, price-basis is COST_LOCKED', async () => {
+    const margin = usdRow({ currencyCode: 'EUR', fxRate: null, fxRateDate: null, fxRateSource: null, fxRateDerivation: null })
+    const fx = jest.fn(async () => FX_NEW)
+    const a = setup({ status: 'with_customer', costs: [margin], fx })
+    await a.service.updateCost(ids.quote, ids.cost, { currencyCode: 'GBP' }, ACTOR, SCOPE)
+    expect(fx).toHaveBeenCalledWith({ from: 'GBP', to: 'EUR', scope: SCOPE })
+    expect(margin).toMatchObject({ currencyCode: 'GBP', fxRate: '0.95000000' })
+    const basis = manualRow({ unitAmount: '300', currencyCode: 'USD', ...fxFrozen })
+    const b = setup({ status: 'with_customer', costs: [basis], fx })
+    await expect(b.service.updateCost(ids.quote, ids.cost, { currencyCode: 'GBP' }, ACTOR, SCOPE)).rejects.toMatchObject({ status: 409, message: 'COST_LOCKED' })
+    expect(basis).toMatchObject({ currencyCode: 'USD', ...fxFrozen })
+  })
+  it('locked: a price-basis foreign value is COST_LOCKED and keeps its snapshot (R4)', async () => {
+    const basis = manualRow({ unitAmount: '300', currencyCode: 'USD', ...fxFrozen })
+    const { service } = setup({ status: 'with_customer', costs: [basis], fx: jest.fn(async () => FX_NEW) })
+    await expect(service.updateCost(ids.quote, ids.cost, { unitAmount: 100 }, ACTOR, SCOPE)).rejects.toMatchObject({ status: 409, message: 'COST_LOCKED' })
+    expect(basis).toMatchObject({ unitAmount: '300', ...fxFrozen })
+  })
+  it('a value moved back to the quote currency clears the snapshot', async () => {
+    const row = usdRow()
+    const fx = jest.fn(async () => FX_NEW)
+    const { service } = setup({ costs: [row], fx })
+    await service.updateCost(ids.quote, ids.cost, { currencyCode: 'EUR' }, ACTOR, SCOPE)
+    expect(fx).not.toHaveBeenCalled()
+    expect(row).toMatchObject({ currencyCode: 'EUR', fxRate: null, fxRateDate: null, fxRateSource: null, fxRateDerivation: null })
+  })
+  it('no rate on edit: none + CURRENCY_NO_RATE with the entered amount kept and the old snapshot dropped', async () => {
+    const row = usdRow()
+    const { service } = setup({ costs: [row], fx: jest.fn(async () => ({ ok: false, code: 'CURRENCY_NO_RATE', reason: 'not_found' })) })
+    await service.updateCost(ids.quote, ids.cost, { unitAmount: 400 }, ACTOR, SCOPE)
+    expect(row).toMatchObject({ valueStatus: 'none', unitAmount: '400', instanceAmount: null, currencyCode: 'USD', errorCode: 'CURRENCY_NO_RATE', fxRate: null, fxRateSource: null })
+  })
+  it('a note-only edit of a none + CURRENCY_NO_RATE line keeps it as it is (no FX_NOT_ALLOWED, no re-rate)', async () => {
+    const row = usdRow({ valueStatus: 'none', errorCode: 'CURRENCY_NO_RATE', instanceAmount: null, fxRate: null, fxRateDate: null, fxRateSource: null, fxRateDerivation: null })
+    const fx = jest.fn(async () => FX_NEW)
+    const { service } = setup({ costs: [row], fx })
+    await service.updateCost(ids.quote, ids.cost, { note: 'waiting for treasury' }, ACTOR, SCOPE)
+    expect(fx).not.toHaveBeenCalled()
+    expect(row).toMatchObject({ valueStatus: 'none', errorCode: 'CURRENCY_NO_RATE', unitAmount: '300', note: 'waiting for treasury' })
   })
 })
 

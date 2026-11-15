@@ -68,6 +68,7 @@ export function register(container: AppContainer) {
     })).scoped(),
     cpqCostSourcingService: asFunction(() => new CpqCostSourcingService({
       em: container.resolve('em'),
+      fxRateResolver: container.resolve('cpqFxRateResolver'),
       costService: container.resolve('cpqCostService'),
       quotingService: container.resolve('cpqQuotingService'),
       publisher: sourcingPublisher(),

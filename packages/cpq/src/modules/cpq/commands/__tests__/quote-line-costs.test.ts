@@ -75,3 +75,18 @@ it('a manual value write forwards exactly the value patch and carries no sourcin
   const log = await updateQuoteLineCostCommand.buildLog!({ input: { quoteId, costId, patch }, result, ctx, snapshots: {} } as never)
   expect(JSON.stringify(log)).not.toMatch(/sourcing|costRequest|proposed/i)
 })
+
+// FX step 7: a rate is never accepted from the client (anti-corruption, App Spec 1.4.9) and never lands in the action log.
+it('refuses an fx rate in the create / update body and keeps the rate out of the log', async () => {
+  const { ctx, service } = setup()
+  await expect(createQuoteLineCostCommand.execute({ quoteId, cost: { ...cost, currencyCode: 'USD', fxRate: '0.5' } } as never, ctx)).rejects.toThrow()
+  await expect(updateQuoteLineCostCommand.execute({ quoteId, costId, patch: { currencyCode: 'USD', fxRateSource: 'x' } } as never, ctx)).rejects.toThrow()
+  expect(service.createCost).not.toHaveBeenCalled()
+  expect(service.updateCost).not.toHaveBeenCalled()
+  const result = {
+    cost: { id: costId, currencyCode: 'USD', fxRate: '0.77777777', fxRateSource: 'SentinelFX' }, margin: null, pricingRevision: 1,
+    audit: { before: null, after: { id: costId, quoteLineId: lineId, costKey: 'manual:ab12cd34', role: 'margin_only', origin: 'manual', valueStatus: 'confirmed', valueOrigin: 'manual' } },
+  }
+  const log = await createQuoteLineCostCommand.buildLog!({ input: { quoteId, cost: { ...cost, currencyCode: 'USD' } }, result, ctx, snapshots: {} } as never)
+  expect(JSON.stringify(log)).not.toMatch(/0\.7777|SentinelFX|fxRate|USD/)
+})

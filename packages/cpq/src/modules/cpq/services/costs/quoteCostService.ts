@@ -52,6 +52,8 @@ type Dependencies = {
   fxRateResolver?: CpqFxRateResolver
 }
 
+type FxColumns = { fxRate: string | null; fxRateDate: string | null; fxRateSource: string | null; fxRateDerivation: string | null }
+const NO_FX: FxColumns = { fxRate: null, fxRateDate: null, fxRateSource: null, fxRateDerivation: null }
 const scoped = (scope: TenantScope) => ({ organizationId: scope.organizationId, tenantId: scope.tenantId, deletedAt: null })
 const money = (value: number) => String(Math.round((value + Number.EPSILON) * 10_000) / 10_000)
 const clean = (value: string | null | undefined) => (value === undefined || value === null || value.trim() === '' ? null : value.trim())
@@ -240,16 +242,19 @@ export class CpqQuoteCostService {
       }
       const locked = await isQuoteCostLocked(em, quote, scope)
       this.assertWritable(quote, locked, affectsPrice(null, candidate))
+      // Q9: a new line has no snapshot to freeze, so it takes the rate at the write date (locked or not).
+      const fx = await this.fxPatch(quote, scope, value.unitAmount === null ? null : value.currencyCode)
+      const noRate = fx.attempted && !fx.found
       const row = em.create(CpqQuoteLineCost, {
         ...scope, id: randomUUID(), quoteConfigurationId: quote.id, quoteId: quote.quoteId, quoteLineId: line.quoteLineId,
         costKey: `${MANUAL_COST_KEY_PREFIX}${randomUUID().replace(/-/g, '').slice(0, 8)}`,
         chargeCode: charge?.code ?? null, origin: 'manual', costElementId: null, name: parsed.name, role: parsed.role,
         costType: parsed.costType, source: parsed.source, costModel: parsed.costModel,
-        valueStatus: value.valueStatus, valueOrigin: value.valueStatus === 'none' ? null : 'manual',
-        unitAmount: value.unitAmount === null ? null : String(value.unitAmount), instanceAmount: instance === null ? null : money(instance),
-        currencyCode: value.currencyCode, supplierId: parsed.supplierId ?? null, supplierName: clean(parsed.supplierName),
+        valueStatus: noRate ? 'none' : value.valueStatus, valueOrigin: value.valueStatus === 'none' ? null : 'manual',
+        unitAmount: value.unitAmount === null ? null : String(value.unitAmount), instanceAmount: instance === null || noRate ? null : money(instance),
+        currencyCode: value.currencyCode, ...fx.fields, supplierId: parsed.supplierId ?? null, supplierName: clean(parsed.supplierName),
         supplierQuoteRef: clean(parsed.supplierQuoteRef), validUntil: parsed.validUntil ?? null, supplierTermEnd: parsed.supplierTermEnd ?? null,
-        supplierMinTermMonths: parsed.supplierMinTermMonths ?? null, note: clean(parsed.note), errorCode: null, sourcingStatus: 'not_requested',
+        supplierMinTermMonths: parsed.supplierMinTermMonths ?? null, note: clean(parsed.note), errorCode: noRate ? 'CURRENCY_NO_RATE' : null, sourcingStatus: 'not_requested',
       } as never)
       const margin = await this.persistAndPrice(em, quote, scope, locked, () => { em.persist(row) }, signals)
       return { cost: fullCostView(row), audit: { before: null, after: costAudit(row) }, margin, pricingRevision: quote.pricingRevision ?? 0 }
@@ -278,11 +283,16 @@ export class CpqQuoteCostService {
 
       const amountGiven = parsed.unitAmount !== undefined
       const nextAmount = amountGiven ? parsed.unitAmount ?? null : row.unitAmount === null ? null : Number(row.unitAmount)
-      const value = this.valueFields({
-        source,
-        status: parsed.valueStatus ?? (amountGiven ? (nextAmount === null ? 'none' : row.valueStatus === 'none' ? undefined : row.valueStatus) : row.valueStatus),
-        amount: nextAmount, currency: parsed.currencyCode !== undefined ? parsed.currencyCode : row.currencyCode, quoteCurrency: quote.currencyCode,
-      })
+      // A stored `none` + CURRENCY_NO_RATE line keeps its amount: an edit that touches no value field leaves it as it is.
+      const keepNoRate = !amountGiven && parsed.valueStatus === undefined && parsed.currencyCode === undefined
+        && row.valueStatus === 'none' && row.errorCode === 'CURRENCY_NO_RATE' && nextAmount !== null
+      const value = keepNoRate
+        ? { unitAmount: nextAmount, currencyCode: row.currencyCode, valueStatus: 'none' }
+        : this.valueFields({
+          source,
+          status: parsed.valueStatus ?? (amountGiven ? (nextAmount === null ? 'none' : row.valueStatus === 'none' ? undefined : row.valueStatus) : row.valueStatus),
+          amount: nextAmount, currency: parsed.currencyCode !== undefined ? parsed.currencyCode : row.currencyCode, quoteCurrency: quote.currencyCode,
+        })
       const next: CostLockState = {
         role, chargeCode: charge?.code ?? null, costType, costModel, source, unitAmount: value.unitAmount, currencyCode: value.currencyCode,
         valueStatus: value.valueStatus,
@@ -303,12 +313,22 @@ export class CpqQuoteCostService {
         if (!(newRef && newRef !== row.supplierQuoteRef) && !note) throw new QuotingError(422, 'VALIDITY_EVIDENCE_REQUIRED')
       }
 
-      const instance = value.unitAmount === null ? null : await this.instanceAmount(em, quote, line, charge, costModel, value.unitAmount)
+      // Q9: a changed value (a currency change counts as one) takes the rate at the write date, locked or not; a lock-exempt
+      // same-value confirmation keeps the stored snapshot; a price-basis line of a locked quote never gets a new one (R4).
+      const foreign = value.unitAmount !== null && value.currencyCode !== null && value.currencyCode !== quote.currencyCode
+      const needsSnapshot = foreign && (valueChanged || (!keepNoRate && (row.fxRate === null || row.fxRate === undefined) && !(locked && role === 'price_basis')))
+      const fx = needsSnapshot ? await this.fxPatch(quote, scope, value.currencyCode) : null
+      const hasStoredFx = row.fxRate !== null && row.fxRate !== undefined
+      const fxFields = fx ? fx.fields : !foreign && hasStoredFx ? { ...NO_FX } : null
+      const noRate = fx !== null && fx.attempted && !fx.found
+      const finalStatus = noRate ? 'none' : value.valueStatus
+      const instance = value.unitAmount === null || noRate ? null : await this.instanceAmount(em, quote, line, charge, costModel, value.unitAmount)
       const margin = await this.persistAndPrice(em, quote, scope, locked, () => {
         if (row.origin === 'manual') Object.assign(row, { name: parsed.name ?? row.name, role, costType, source, costModel, chargeCode: charge?.code ?? null })
         Object.assign(row, {
-          valueStatus: value.valueStatus, unitAmount: value.unitAmount === null ? null : String(value.unitAmount),
-          instanceAmount: instance === null ? null : money(instance), currencyCode: value.currencyCode, errorCode: valueChanged || statusChanged ? null : row.errorCode,
+          valueStatus: finalStatus, unitAmount: value.unitAmount === null ? null : String(value.unitAmount),
+          instanceAmount: keepNoRate ? row.instanceAmount : instance === null ? null : money(instance), currencyCode: value.currencyCode,
+          errorCode: noRate ? 'CURRENCY_NO_RATE' : valueChanged || statusChanged ? null : row.errorCode, ...(fxFields ?? {}),
           validUntil: next.validUntil ?? null, supplierTermEnd: next.supplierTermEnd ?? null, supplierMinTermMonths: next.supplierMinTermMonths ?? null,
         })
         // A human entered or confirmed it: the catalog resolver must stop re-resolving this value (until a driver changes).
@@ -443,11 +463,22 @@ export class CpqQuoteCostService {
       return { unitAmount: null, currencyCode: null, valueStatus: 'none' }
     }
     if (args.status === 'none') throw new QuotingError(422, 'FIELD_NOT_ALLOWED')
+    // A foreign currency is stored as entered; its FX snapshot is resolved by the caller (`fxPatch`, Q9). Never 1:1 (R3).
     const currency = args.currency ?? args.quoteCurrency
-    // No FX before the FX feature: never a silent 1:1 conversion (R3).
-    if (currency !== args.quoteCurrency) throw new QuotingError(422, 'CURRENCY_NO_RATE')
     const status = args.status ?? (args.source === 'fixed' ? 'confirmed' : 'estimated')
     return { unitAmount: amount, currencyCode: currency, valueStatus: status }
+  }
+
+  /**
+   * FX snapshot of a written foreign-currency value (Q9): the dated rate at the write date, from the DI-scoped resolver.
+   * `attempted` is false for a quote-currency / empty value (no FX columns) and when no resolver is wired. A missing rate
+   * is `found: false` (the caller stores the value as `none` + CURRENCY_NO_RATE, never 1:1). The resolver never throws.
+   */
+  private async fxPatch(quote: CpqQuoteConfiguration, scope: TenantScope, currency: string | null): Promise<{ attempted: boolean; found: boolean; fields: FxColumns }> {
+    if (!currency || currency === quote.currencyCode) return { attempted: false, found: false, fields: { ...NO_FX } }
+    const result = this.deps.fxRateResolver ? await this.deps.fxRateResolver.resolve({ from: currency, to: quote.currencyCode, scope }) : null
+    if (!result?.ok) return { attempted: true, found: false, fields: { ...NO_FX } }
+    return { attempted: true, found: true, fields: { fxRate: result.rate, fxRateDate: result.rateDate, fxRateSource: result.source, fxRateDerivation: result.derivation } }
   }
 
   /** Per-instance amount: `per_unit` multiplies by the charge's quantity attribute of the line. */

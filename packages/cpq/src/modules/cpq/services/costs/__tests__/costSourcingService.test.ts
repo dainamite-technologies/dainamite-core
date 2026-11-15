@@ -39,7 +39,7 @@ const ids = { quote: '11111111-1111-4111-8111-111111111111', line: '22222222-222
 const ACTOR = '44444444-4444-4444-8444-444444444444'
 type Row = Record<string, any>
 
-function setup(opts: { status?: string; orders?: Row[]; costs?: Row[]; line?: Row; quoteType?: string; sales?: boolean; element?: Row | null; enabled?: boolean } = {}) {
+function setup(opts: { status?: string; orders?: Row[]; costs?: Row[]; line?: Row; quoteType?: string; sales?: boolean; element?: Row | null; enabled?: boolean; fx?: jest.Mock } = {}) {
   const quote = { id: ids.quote, quoteId: 'sales-1', cpqStatus: opts.status ?? 'ready', quoteType: opts.quoteType ?? 'new', currencyCode: 'EUR', pricingRevision: 4 }
   const line = { quoteLineId: ids.line, ...SCOPE, quoteConfigurationId: ids.quote, action: null, configuration: {}, deletedAt: null, ...opts.line }
   const costs: Row[] = opts.costs ?? [cost()]
@@ -70,7 +70,7 @@ function setup(opts: { status?: string; orders?: Row[]; costs?: Row[]; line?: Ro
   }
   const publisher = jest.fn()
   const recalculate = jest.fn(async () => ({ id: ids.quote, cpqStatus: quote.cpqStatus, lines: [] }))
-  const service = new CpqCostSourcingService({ em: em as never, costService: { enabled: jest.fn(async () => opts.enabled ?? true) }, quotingService: { recalculateLockedQuote: recalculate } as never, publisher })
+  const service = new CpqCostSourcingService({ em: em as never, costService: { enabled: jest.fn(async () => opts.enabled ?? true) }, quotingService: { recalculateLockedQuote: recalculate } as never, publisher, fxRateResolver: opts.fx ? { resolve: opts.fx } as never : undefined })
   return { service, em, quote, costs, publisher, recalculate }
 }
 
@@ -298,7 +298,7 @@ describe('answer: unlocked quote', () => {
     expect(JSON.stringify(result.signals)).not.toMatch(/280|7777/)
   })
 
-  it('[FX step 1 characterization; steps 6-7 modify the foreign leg] an estimated answer applies as estimated; a non-quote currency is stored and resolves to none + CURRENCY_NO_RATE', async () => {
+  it('[FX step 7: foreign leg without a rate is unchanged] an estimated answer applies as estimated; a non-quote currency with no rate is stored and resolves to none + CURRENCY_NO_RATE', async () => {
     const a = setup({ costs: [requested()] })
     await a.service.answer(ids.quote, ids.cost, answerInput({ valueStatus: 'estimated' }), ACTOR, SCOPE)
     expect(a.costs[0].valueStatus).toBe('estimated')
@@ -307,6 +307,51 @@ describe('answer: unlocked quote', () => {
     // The supplier's amount is kept in its own currency (for the FX feature); no instance amount, so nothing prices from it.
     expect(b.costs[0]).toMatchObject({ valueStatus: 'none', instanceAmount: null, currencyCode: 'USD', errorCode: 'CURRENCY_NO_RATE', sourcingStatus: 'answered' })
     expect(Number(b.costs[0].unitAmount)).toBe(280)
+    expect(b.costs[0]).toMatchObject({ fxRate: null, fxRateSource: null })
+  })
+
+  it('FX step 7: a foreign answer resolves its rate in the same write, like a manual value, and keeps the answered status', async () => {
+    const fx = jest.fn(async () => ({ ok: true, rate: '0.92000000', rateDate: '2026-11-11', source: 'ECB', derivation: 'direct' }))
+    const a = setup({ costs: [requested()], fx })
+    await a.service.answer(ids.quote, ids.cost, answerInput({ currencyCode: 'USD', valueStatus: 'confirmed' }), ACTOR, SCOPE)
+    expect(fx).toHaveBeenCalledWith({ from: 'USD', to: 'EUR', scope: SCOPE })
+    expect(a.costs[0]).toMatchObject({
+      valueStatus: 'confirmed', valueOrigin: 'supplier', currencyCode: 'USD', unitAmount: '280', instanceAmount: '280', errorCode: null,
+      fxRate: '0.92000000', fxRateDate: '2026-11-11', fxRateSource: 'ECB', fxRateDerivation: 'direct',
+    })
+    // A quote-currency answer never reads a rate and clears a snapshot left by an earlier foreign value.
+    const b = setup({ costs: [requested({ currencyCode: 'USD', fxRate: '0.9', fxRateDate: '2026-10-01', fxRateSource: 'ECB', fxRateDerivation: 'direct' })], fx })
+    fx.mockClear()
+    await b.service.answer(ids.quote, ids.cost, answerInput(), ACTOR, SCOPE)
+    expect(fx).not.toHaveBeenCalled()
+    expect(b.costs[0]).toMatchObject({ currencyCode: 'EUR', fxRate: null, fxRateDate: null, fxRateSource: null, fxRateDerivation: null })
+  })
+
+  it('FX step 7: locked quote, price-basis: a foreign answer is a proposal (compared in the cost currency + code), same amount and currency confirms and keeps the snapshot', async () => {
+    const fx = jest.fn(async () => ({ ok: true, rate: '0.95000000', rateDate: '2026-11-14', source: 'Manual', derivation: 'direct' }))
+    const frozen = { currencyCode: 'USD', unitAmount: '280.0000', instanceAmount: '280.0000', fxRate: '0.92000000', fxRateDate: '2026-11-11', fxRateSource: 'ECB', fxRateDerivation: 'direct' }
+    const proposal = setup({ costs: [requested({ ...frozen })], status: 'with_customer', fx })
+    const result = await proposal.service.answer(ids.quote, ids.cost, answerInput({ currencyCode: 'USD', unitAmount: 300 }), ACTOR, SCOPE)
+    expect(result.response.outcome).toBe('proposed')
+    expect(fx).not.toHaveBeenCalled()
+    expect(proposal.costs[0]).toMatchObject({ fxRate: '0.92000000', unitAmount: '280.0000', proposedAmount: '300.0000' })
+    const same = setup({ costs: [requested({ ...frozen })], status: 'with_customer', fx })
+    const confirmed = await same.service.answer(ids.quote, ids.cost, answerInput({ currencyCode: 'USD', unitAmount: 280 }), ACTOR, SCOPE)
+    expect(confirmed.response.outcome).toBe('confirmed_unchanged')
+    expect(fx).not.toHaveBeenCalled()
+    expect(same.costs[0]).toMatchObject({ fxRate: '0.92000000', fxRateDate: '2026-11-11', fxRateSource: 'ECB' })
+    // A different currency is a different value, even with the same number.
+    const other = setup({ costs: [requested({ ...frozen })], status: 'with_customer', fx })
+    expect((await other.service.answer(ids.quote, ids.cost, answerInput({ currencyCode: 'GBP', unitAmount: 280 }), ACTOR, SCOPE)).response.outcome).toBe('proposed')
+  })
+
+  it('FX step 7: a locked margin-only foreign answer takes the rate at the write date, without re-pricing', async () => {
+    const fx = jest.fn(async () => ({ ok: true, rate: '0.95000000', rateDate: '2026-11-14', source: 'Manual', derivation: 'direct' }))
+    const { service, costs, recalculate } = setup({ costs: [requested({ role: 'margin_only' })], status: 'with_customer', fx })
+    const result = await service.answer(ids.quote, ids.cost, answerInput({ currencyCode: 'USD', unitAmount: 100 }), ACTOR, SCOPE)
+    expect(result.response.outcome).toBe('applied')
+    expect(costs[0]).toMatchObject({ currencyCode: 'USD', fxRate: '0.95000000', valueStatus: 'confirmed' })
+    expect(recalculate).not.toHaveBeenCalled()
   })
 
   it('a carried line is accepted; a confirming answer clears renegotiationDue only where the column exists', async () => {

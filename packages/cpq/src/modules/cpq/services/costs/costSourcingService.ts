@@ -37,6 +37,7 @@ import {
   appendRequestHistory, buildHistoryEntry, classifyAnswer, costLineEligibility, declineEffect, hashAnswer, normalizeAnswer,
   type AnswerVerdict, type CancelReason, type NormalizedAnswer,
 } from './costSourcing'
+import type { CpqFxRateResolver } from './fxRateResolver'
 import { createMarginTracker } from './quoteMarginTracker'
 import { costInstanceAmount } from './quoteCostService'
 import { fullCostView, type FullCostView } from './quoteCostView'
@@ -49,8 +50,12 @@ type Dependencies = {
   quotingService: Pick<DefaultCpqQuotingService, 'recalculateLockedQuote'>
   /** Publishes the signals of a committed write (the sourcing events, step 12). Absent = nothing is published. */
   publisher?: SourcingSignalPublisher
+  /** Dated FX rates for a foreign-currency answer (FX spec Q9); absent = every foreign answer stays `CURRENCY_NO_RATE`. */
+  fxRateResolver?: CpqFxRateResolver
 }
 
+type FxColumns = { fxRate: string | null; fxRateDate: string | null; fxRateSource: string | null; fxRateDerivation: string | null }
+const NO_FX: FxColumns = { fxRate: null, fxRateDate: null, fxRateSource: null, fxRateDerivation: null }
 const scoped = (scope: TenantScope) => ({ organizationId: scope.organizationId, tenantId: scope.tenantId, deletedAt: null })
 
 /** What an action-log entry may carry of a sourcing write: ids, statuses, sequence numbers, reasons. Never an amount, supplier or note. */
@@ -488,15 +493,22 @@ export class CpqCostSourcingService {
   }
 
   /**
-   * The value fields an answer writes (`value_origin = supplier`). An answer in a non-quote currency is STORED (the
-   * supplier's unit amount in its own currency, so the FX feature can convert it) but resolves to `none` +
-   * `CURRENCY_NO_RATE` with no instance amount (no FX yet, Q15; spec edge case "Answer in a non-quote currency"):
-   * pricing and margin ignore a `none` cost, so there is never a silent 1:1 conversion.
+   * The value fields an answer writes (`value_origin = supplier`). The supplier's unit amount is stored in its own
+   * currency. A foreign-currency answer resolves its dated rate in the same write like a manual value (FX spec Q9; a
+   * locked margin-only cost takes the rate at the write date, a locked price-basis answer never gets here: it is a
+   * proposal or an unchanged confirmation, which keeps the stored snapshot). Rate found: the answered status is kept and
+   * the snapshot stored. No rate: `none` + `CURRENCY_NO_RATE` with no instance amount, so pricing and margin ignore it
+   * (never 1:1).
    */
   private async valuePatch(em: EntityManager, quote: CpqQuoteConfiguration, line: CpqQuoteLineConfiguration, row: CpqQuoteLineCost, answer: AnswerPayload, scope: TenantScope) {
     const supplier = this.supplierFields(row, answer)
+    let fx: FxColumns = { ...NO_FX }
     if (answer.currencyCode !== quote.currencyCode) {
-      return { ...supplier, valueStatus: 'none', valueOrigin: 'supplier', unitAmount: money(Number(answer.unitAmount)), instanceAmount: null, currencyCode: answer.currencyCode, errorCode: 'CURRENCY_NO_RATE' }
+      const result = this.deps.fxRateResolver ? await this.deps.fxRateResolver.resolve({ from: answer.currencyCode, to: quote.currencyCode, scope }) : null
+      if (!result?.ok) {
+        return { ...supplier, valueStatus: 'none', valueOrigin: 'supplier', unitAmount: money(Number(answer.unitAmount)), instanceAmount: null, currencyCode: answer.currencyCode, errorCode: 'CURRENCY_NO_RATE', ...NO_FX }
+      }
+      fx = { fxRate: result.rate, fxRateDate: result.rateDate, fxRateSource: result.source, fxRateDerivation: result.derivation }
     }
     const unit = Number(answer.unitAmount)
     let quantityAttributeCode: string | null = null
@@ -507,7 +519,7 @@ export class CpqCostSourcingService {
     const instance = await costInstanceAmount(em, quote, line, quantityAttributeCode, row.costModel, unit)
     return {
       ...supplier, valueStatus: answer.valueStatus, valueOrigin: 'supplier', unitAmount: money(unit), instanceAmount: money(instance),
-      currencyCode: answer.currencyCode, errorCode: null,
+      currencyCode: answer.currencyCode, errorCode: null, ...fx,
     }
   }
 

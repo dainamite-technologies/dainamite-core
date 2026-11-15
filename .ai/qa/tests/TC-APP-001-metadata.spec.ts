@@ -36,9 +36,10 @@ test.describe('TC-APP-001: Template metadata', () => {
     await page.goto('/backend/users', { waitUntil: 'domcontentloaded' })
     await expect(page).toHaveTitle('Benutzer', { timeout: 30_000 })
 
-    // ...while CPQ pages have no German translation and fall back to the
-    // literal English title under the `de` locale.
+    // ...and so does a page from a Dainamite package: CPQ ships its own `de`
+    // dictionary (spec 2026-11-15-cpq-multi-language), so `pageTitleKey`
+    // `cpq.quotes.title` resolves to German instead of the English `pageTitle`.
     await page.goto('/backend/cpq/quotes', { waitUntil: 'domcontentloaded' })
-    await expect(page).toHaveTitle('CPQ Quotes', { timeout: 30_000 })
+    await expect(page).toHaveTitle('CPQ-Angebote', { timeout: 30_000 })
   })
 })

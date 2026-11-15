@@ -132,7 +132,8 @@ test.describe('TC-BILL-004: B2C accounts + navigation', () => {
   test('rejects an invoice language the template does not support', async ({ request }) => {
     const res = await apiRequest(request, 'POST', '/api/billing/accounts', {
       token,
-      data: accountPayload({ invoiceLanguage: 'de' }),
+      // `fr` has no document template (spec 2026-11-15-billing-multi-language).
+      data: accountPayload({ invoiceLanguage: 'fr' }),
     })
     expect(res.status()).toBe(400)
   })

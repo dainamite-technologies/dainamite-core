@@ -9,7 +9,7 @@ const empty: Pair = { rates: [], actualDate: null }
 
 /** Mock service keyed by "FROM>TO". */
 function service(pairs: Record<string, Pair | Error>) {
-  const getRate = jest.fn(async (params: { fromCurrencyCode: string; toCurrencyCode: string }) => {
+  const getRate = jest.fn(async (params: Parameters<FxExchangeRateService['getRate']>[0]) => {
     const hit = pairs[`${params.fromCurrencyCode}>${params.toCurrencyCode}`] ?? empty
     if (hit instanceof Error) throw hit
     return hit

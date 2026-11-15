@@ -4,6 +4,7 @@ import type { CpqQuoteLineConfiguration } from '../../data/entities'
 import type { CostPlusLineContext } from '../cpqPricingService'
 import type { ResolvedCharge, TenantScope } from '../types'
 import { previewCatalogCosts } from './costResolution'
+import type { CpqFxRateResolver } from './fxRateResolver'
 
 export type PriceItemInput = { offeringId?: string | null; productId?: string | null; configuration: Record<string, unknown> }
 
@@ -15,6 +16,8 @@ export type PriceItemInput = { offeringId?: string | null; productId?: string | 
 export async function resolveCalculatePriceCostContexts(params: {
   em: EntityManager
   isEnabled: (tenantId: string) => Promise<boolean>
+  /** Dated FX rates (FX spec Q12: today's rate, in memory); absent = no FX. */
+  fxResolver?: CpqFxRateResolver
   items: PriceItemInput[]
   currencyCode: string
   scope: TenantScope
@@ -28,7 +31,7 @@ export async function resolveCalculatePriceCostContexts(params: {
   for (const item of items) {
     const lineConfig = { quoteLineId: randomUUID(), offeringId: item.offeringId ?? null, productId: item.productId ?? null, configuration: item.configuration } as unknown as CpqQuoteLineConfiguration
     const costs = await previewCatalogCosts({
-      em, scope, lines: [{ lineConfig, mergedConfig: item.configuration }],
+      em, scope, fxResolver: params.fxResolver, lines: [{ lineConfig, mergedConfig: item.configuration }],
       quote: { id: randomUUID(), quoteId: randomUUID(), cpqStatus: 'new', quoteType: 'new', currencyCode },
     })
     contexts.push({

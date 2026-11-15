@@ -33,6 +33,7 @@ import { createMarginTracker } from './quoteMarginTracker'
 import { cancelRowRequests } from './costRequestCancel'
 import { liveQuoteConfigurationIds, resolveOverdueThreshold } from './costRequestQueue'
 import { costLineEligibility, overdueCutoff } from './costSourcing'
+import type { CpqFxRateResolver } from './fxRateResolver'
 import { lineReady, sourcingCostRef, type SourcingSignal, type SourcingSignalPublisher } from './sourcingSignals'
 import {
   fullCostView, groupByLine, loadQuoteCosts, loadQuoteMargin, loadQuoteMarkupOverrides, markupOverrideView, redactedCostView,
@@ -47,6 +48,8 @@ type Dependencies = {
   publisher?: SourcingSignalPublisher
   /** Overdue threshold source for the read projection (Q10); without it `overdue` is never set. */
   featureTogglesService?: Pick<FeatureTogglesService, 'getNumberConfig'>
+  /** Dated FX rates for the in-memory cost preview (FX spec); absent = no FX. */
+  fxRateResolver?: CpqFxRateResolver
 }
 
 const scoped = (scope: TenantScope) => ({ organizationId: scope.organizationId, tenantId: scope.tenantId, deletedAt: null })
@@ -142,7 +145,7 @@ export class CpqQuoteCostService {
     }
     const lineConfig = { quoteLineId: randomUUID(), offeringId: parsed.offeringId ?? null, productId: parsed.productId ?? null, configuration } as unknown as CpqQuoteLineConfiguration
     const costs = await previewCatalogCosts({
-      em, scope, lines: [{ lineConfig, mergedConfig: configuration }],
+      em, scope, fxResolver: this.deps.fxRateResolver, lines: [{ lineConfig, mergedConfig: configuration }],
       quote: { id: randomUUID(), quoteId: randomUUID(), cpqStatus: 'new', quoteType: 'new', currencyCode: currency },
     })
     const result = []

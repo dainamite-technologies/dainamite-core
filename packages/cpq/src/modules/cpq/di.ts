@@ -16,6 +16,7 @@ import { CpqQuoteCostService } from './services/costs/quoteCostService'
 import { CpqCostSourcingService } from './services/costs/costSourcingService'
 import { CpqCostRequestQueueService } from './services/costs/costRequestQueue'
 import { createSourcingPublisher } from './services/costs/sourcingPublisher'
+import { CpqFxRateResolver, type FxExchangeRateService } from './services/costs/fxRateResolver'
 
 /**
  * Resolve dependencies from the container closure rather than via destructured
@@ -29,6 +30,15 @@ export function register(container: AppContainer) {
   // instance per scope; every producer (sourcing, quote costs, adjustments, quoting, orders) receives the same one.
   const sourcingPublisher = () => createSourcingPublisher({ em: container.resolve('em') })
   container.register({
+    // Dated FX rates (FX spec Q7): `exchangeRateService` belongs to the optional `currencies` module, so it is resolved only
+    // when registered; without it the resolver is "unavailable" and foreign costs stay CURRENCY_NO_RATE. One instance per
+    // scope, so its memo lives for one request / write.
+    cpqFxRateResolver: asFunction(() => new CpqFxRateResolver({
+      exchangeRateService: container.hasRegistration('exchangeRateService')
+        ? container.resolve('exchangeRateService') as FxExchangeRateService
+        : null,
+      featureTogglesService: container.resolve('featureTogglesService'),
+    })).scoped(),
     cpqAdjustmentService: asFunction(() => new CpqAdjustmentService({
       em: container.resolve('em'),
       quotingService: container.resolve('cpqQuotingService'),
@@ -39,6 +49,7 @@ export function register(container: AppContainer) {
     cpqCostService: asFunction(() => new CpqCostService({
       em: container.resolve('em'),
       featureTogglesService: container.resolve('featureTogglesService'),
+      fxRateResolver: container.resolve('cpqFxRateResolver'),
       // Resolved lazily: the sourcing service depends on the cost service (toggle check).
       onElementsDeactivated: (elementIds: string[], scope: { organizationId: string; tenantId: string }) =>
         (container.resolve('cpqCostSourcingService') as CpqCostSourcingService).cancelRequestsForElements(elementIds, scope),
@@ -49,6 +60,7 @@ export function register(container: AppContainer) {
       quotingService: container.resolve('cpqQuotingService'),
       publisher: sourcingPublisher(),
       featureTogglesService: container.resolve('featureTogglesService'),
+      fxRateResolver: container.resolve('cpqFxRateResolver'),
     })).scoped(),
     cpqCostRequestQueueService: asFunction(() => new CpqCostRequestQueueService({
       em: container.resolve('em'),
@@ -89,6 +101,7 @@ export function register(container: AppContainer) {
         cpqProductService: container.resolve('cpqProductService'),
         salesDocumentNumberGenerator: container.resolve('salesDocumentNumberGenerator'),
         cpqCostService: container.resolve('cpqCostService'),
+        cpqFxRateResolver: container.resolve('cpqFxRateResolver'),
         sourcingPublisher: sourcingPublisher(),
       })
     }).scoped().proxy(),

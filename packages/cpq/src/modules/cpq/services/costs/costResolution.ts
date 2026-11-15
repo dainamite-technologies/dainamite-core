@@ -22,6 +22,7 @@ import { lookupTablePrice, type LookupEntry, type LookupModel } from './costLook
 import { shouldAutoOpenRequest, type CancelReason } from './costSourcing'
 import { cancelRequestPatch, isRequestOpen, openRequestPatch, type RequestRowState } from './costRequestState'
 import { sourcingCostRef, type SourcingSignal } from './sourcingSignals'
+import type { CpqFxRateResolver } from './fxRateResolver'
 
 /**
  * Catalog cost resolution on SAVED recalculations (App Spec §1.4.7 R1, R3, R4,
@@ -152,6 +153,8 @@ function resetNote(row: CpqQuoteLineCost, attributes: string[]): string {
 }
 
 export type CostResolutionParams = {
+  /** Dated FX rates for foreign-currency catalog costs; absent = none (FX spec, consumed from step 6). */
+  fxResolver?: CpqFxRateResolver
   em: EntityManager
   quote: Pick<CpqQuoteConfiguration, 'id' | 'quoteId' | 'cpqStatus' | 'quoteType' | 'currencyCode'>
   lines: CostResolutionLine[]

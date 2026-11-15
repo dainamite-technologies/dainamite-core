@@ -63,6 +63,7 @@ import {
   stripQuoteOnlyArcMarkers,
 } from './arcPriceFreeze'
 import type { CpqCostService } from './costs/costService'
+import type { CpqFxRateResolver } from './costs/fxRateResolver'
 import { isQuoteCostLocked, resolveCostPlusInputs } from './costs/costResolution'
 import { isCostPlusItem } from './costs/costPlusItem'
 import type { SourcingSignal, SourcingSignalPublisher } from './costs/sourcingSignals'
@@ -76,6 +77,8 @@ interface QuotingServiceDeps {
   salesDocumentNumberGenerator: SalesDocumentNumberGenerator
   /** Cost-plus toggle check (R14); absent in tests / hosts without cost-plus, which disables cost resolution. */
   cpqCostService?: Pick<CpqCostService, 'enabled'>
+  /** Dated FX rates for foreign-currency cost lines (FX spec); absent = no FX. */
+  cpqFxRateResolver?: CpqFxRateResolver
   /** Publishes the sourcing signals (requests opened / cancelled) of a committed quote write; wired by the sourcing events (step 12). */
   sourcingPublisher?: SourcingSignalPublisher
 }
@@ -93,6 +96,7 @@ export class DefaultCpqQuotingService {
   private productService: DefaultCpqProductService
   private numberGenerator: SalesDocumentNumberGenerator
   private costService?: Pick<CpqCostService, 'enabled'>
+  private fxRateResolver?: CpqFxRateResolver
   private sourcingPublisher?: SourcingSignalPublisher
 
   constructor(deps: QuotingServiceDeps) {
@@ -102,6 +106,7 @@ export class DefaultCpqQuotingService {
     this.productService = deps.cpqProductService
     this.numberGenerator = deps.salesDocumentNumberGenerator
     this.costService = deps.cpqCostService
+    this.fxRateResolver = deps.cpqFxRateResolver
     this.sourcingPublisher = deps.sourcingPublisher
   }
 
@@ -1123,7 +1128,7 @@ export class DefaultCpqQuotingService {
     const costService = this.costService
     const costInputs = costService
       ? await resolveCostPlusInputs({
-        em, quote: cpqConfig, scope, save, isEnabled: (tenantId) => costService.enabled(tenantId),
+        em, quote: cpqConfig, scope, save, isEnabled: (tenantId) => costService.enabled(tenantId), fxResolver: this.fxRateResolver,
         actorUserId: sourcing?.actorUserId ?? null, signals: sourcing?.signals, autoOpen: sourcing?.autoOpen,
         lines: prepared.map(({ lineConfig, mergedConfig }) => ({ lineConfig, mergedConfig })),
       })

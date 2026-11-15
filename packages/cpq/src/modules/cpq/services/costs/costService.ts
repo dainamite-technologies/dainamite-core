@@ -13,6 +13,7 @@ import {
 } from '../../data/costs'
 import { CpqChargeCostElement, CpqPricingTable, CpqProductCharge } from '../../data/entities'
 import { QuotingError } from '../cpqQuotingService'
+import type { CpqFxRateResolver } from './fxRateResolver'
 import type { TenantScope } from '../types'
 
 /**
@@ -24,6 +25,8 @@ export const COST_PLUS_PRICING_AVAILABLE = true
 type Dependencies = {
   em: EntityManager
   featureTogglesService: Pick<FeatureTogglesService, 'getBoolConfig'>
+  /** Dated FX rates for foreign-currency costs (FX spec). Absent = no FX (every foreign cost stays CURRENCY_NO_RATE). */
+  fxRateResolver?: CpqFxRateResolver
   /**
    * Called AFTER an element write committed, with the ids of the elements it deactivated (or deleted): the supplier
    * sourcing fan-out that cancels their open cost requests, one quote write each (sourcing spec Q4). Best effort:
@@ -74,6 +77,11 @@ const needsPriceBasis = (charge: ChargeState) => charge.pricingMethod === 'cost_
  */
 export class CpqCostService {
   constructor(private readonly deps: Dependencies) {}
+
+  /** The request-scoped FX rate resolver, when wired. */
+  get fxRateResolver(): CpqFxRateResolver | undefined {
+    return this.deps.fxRateResolver
+  }
 
   /** Whether `cpq.cost_plus` is on for the tenant (R14). Missing / failing toggles count as off. */
   async enabled(tenantId: string): Promise<boolean> {

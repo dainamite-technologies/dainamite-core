@@ -29,7 +29,7 @@ export async function POST(req: Request) {
     const items = [...(body.primaryItem ? [body.primaryItem] : []), ...body.childItems]
     const costService = ctx.container.resolve('cpqCostService') as CpqCostService
     const contexts = await resolveCalculatePriceCostContexts({
-      em: ctx.em, isEnabled: (tenantId) => costService.enabled(tenantId), currencyCode, scope,
+      em: ctx.em, isEnabled: (tenantId) => costService.enabled(tenantId), fxResolver: costService.fxRateResolver, currencyCode, scope,
       items: items.map((item) => ({ offeringId: item.offeringId, productId: item.productId, configuration: item.configuration })),
     })
     const resolveItem = async (item: (typeof items)[number], index: number) => {

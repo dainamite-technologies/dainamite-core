@@ -26,12 +26,12 @@ Engine: om-auto-create-pr-loop (steps: 20, --loop: no)
 | C | 12 | Sourcing events | group:C1 | done | eb05ea6 |
 | C | 13 | Notifications | group:C1 | done | f0a5732 |
 | C | 14 | Confidentiality sweep extension | group:C1 | done | 889b5fb |
-| D | 15 | Cost requests page | group:D1 | done | |
-| D | 16 | Quote Costs panel additions | group:D1 | done | |
-| E | 17 | Demo seed | group:E1 | done | |
-| E | 18 | Workflow recipe seeded disabled | group:E1 | done | |
-| E | 19 | Manual, migration notes and E2E | group:E2 | done | |
-| E | 20 | Archive the Delta | group:E2 | done | |
+| D | 15 | Cost requests page | group:D1 | done | 8dde6c8 |
+| D | 16 | Quote Costs panel additions | group:D1 | done | 448ce6b |
+| E | 17 | Demo seed | group:E1 | done | 19751f9 |
+| E | 18 | Workflow recipe seeded disabled | group:E1 | done | 597e755 |
+| E | 19 | Manual, migration notes and E2E | group:E2 | done | 5312568 |
+| E | 20 | Archive the Delta | group:E2 | done | 1500026 |
 
 ## Goal
 

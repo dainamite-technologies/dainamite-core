@@ -26,7 +26,7 @@ type CostRow = {
   convertedInstanceAmount?: string | null
 }
 type QuoteCosts = { lines: Array<{ costs: CostRow[] }> }
-type QuoteView = { cpqStatus: string }
+type QuoteView = { cpqStatus: string; pricingSummary: { mrcTotal: number; nrcTotal: number } }
 
 const TOGGLE = 'cpq.cost_plus'
 
@@ -141,6 +141,8 @@ test.describe('TC-CPQ-COST-FX-001 — foreign-currency costs', () => {
       expect(Number(first.convertedInstanceAmount)).toBeCloseTo(276, 4)
       const priced = await getJson<QuoteView>(request, token, `/api/cpq/quotes/${quote.id}`)
       expect(priced.cpqStatus).toBe('ready')
+      // I-8 golden: 300 USD x 0.92 x 1.25 markup = 345.00 EUR list price (a dropped fx_rate would price 375.00).
+      expect(priced.pricingSummary.mrcTotal).toBeCloseTo(345, 2)
 
       // 2. The Costs panel shows the conversion.
       await login(page, 'admin')
@@ -159,11 +161,15 @@ test.describe('TC-CPQ-COST-FX-001 — foreign-currency costs', () => {
       expect(Number(refreshed.fxRate)).toBeCloseTo(0.95, 8)
       expect(refreshed.fxRateSource).toBe(`0e2efx-a-${id}`)
       expect(Number(refreshed.convertedInstanceAmount)).toBeCloseTo(285, 4)
+      const repriced = await getJson<QuoteView>(request, token, `/api/cpq/quotes/${quote.id}`)
+      expect(repriced.pricingSummary.mrcTotal).toBeCloseTo(356.25, 2) // 300 x 0.95 x 1.25
 
       // 4. Send it: with_customer applies the cost lock.
       const toCustomer = await apiRequest(request, 'POST', `/api/cpq/quotes/${quote.id}/status`, { token, data: { targetStatus: 'with_customer' } })
       expect(toCustomer.ok(), `transition to with_customer returned ${toCustomer.status()}: ${await toCustomer.text()}`).toBeTruthy()
       const locked = await tailCost(request, token, quote.id)
+      const lockedPrice = (await getJson<QuoteView>(request, token, `/api/cpq/quotes/${quote.id}`)).pricingSummary.mrcTotal
+      expect(lockedPrice).toBeCloseTo(356.25, 2)
 
       // 5. A rate that outranks both arrives; a saved recalculation of the locked quote leaves the snapshot untouched.
       await addRate(request, token, scope, `0e2efx-0-${id}`, '0.97000000', cleanup)
@@ -176,6 +182,8 @@ test.describe('TC-CPQ-COST-FX-001 — foreign-currency costs', () => {
       expect(frozen.convertedInstanceAmount).toBe(locked.convertedInstanceAmount)
       const after = await getJson<QuoteView>(request, token, `/api/cpq/quotes/${quote.id}`)
       expect(after.cpqStatus).toBe('with_customer')
+      // R11: the locked recalculation (with a better-ranking 0.97 rate available) leaves the list price unchanged.
+      expect(after.pricingSummary.mrcTotal).toBe(lockedPrice)
     } finally {
       await deleteCustomer(request, token, customerId).catch(() => undefined)
       for (const f of cleanup.reverse()) await f().catch(() => undefined)

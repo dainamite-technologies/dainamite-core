@@ -38,3 +38,4 @@
 - 2026-11-15 review1-b: missingFxPairs counts only unlocked (new/incomplete/ready) quotes via ADJUSTMENT_MUTABLE_STATUSES; manual updated
 - 2026-11-15 review1-c: CostsPanel per_unit rows show the converted unit amount then the instance total (pure formatConverted helper)
 - 2026-11-15 review1-d: snapshotNote shows the cost-currency line total (totalAmount / fxRate), falling back to the instance amount
+- 2026-11-15 review1-e: E2E asserts pricingSummary.mrcTotal 345.00, 356.25 after refresh, and unchanged after the locked recalculation

@@ -63,3 +63,4 @@
 ## 2026-11-15T08:00:00Z — step 19 (E2)
 - Decision: the "enabled recipe creates a task and answers" scenario is `test.fixme` in TC-CPQ-COST-SOURCING-001: the event trigger is delivered asynchronously by the queue worker (no awaitable hook) and the definition's execution principal exists only through the demo seed. Reversible once the workflows engine exposes a deterministic trigger in test runs.
 - Manual states what is true: reps (`employee`) hold `cpq.costs.view` only, so they read `GET /api/cpq/cost-requests` but neither see the Cost requests page nor answer; closing the workflow task on `cost_request_cancelled` is NOT automatic (documented as a project add-on trigger).
+- 2026-11-15 review1-a: E2E ref-conflict assertion moved before the re-request (a re-request clears lastAnswerHash by design).

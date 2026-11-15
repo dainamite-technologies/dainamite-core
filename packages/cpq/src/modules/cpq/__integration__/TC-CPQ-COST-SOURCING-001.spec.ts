@@ -18,8 +18,8 @@ import { deleteCustomer, seedCustomer, uniq } from './_helpers/cpqArcFixtures'
  * `cpq.costs.manage`); nothing relies on demo data. The tenant toggle `cpq.cost_plus` is switched on and restored.
  *
  * Flow: a saved recalculation opens a request -> the queue lists it -> the current request id is answered (line
- * ready, value confirmed) -> an identical repeat is a 200 noop -> a re-request supersedes the old id (409) -> a
- * changed payload under the same supplier reference is refused -> a rep without `cpq.costs.manage` reads the
+ * ready, value confirmed) -> an identical repeat is a 200 noop -> a changed payload under the same supplier reference
+ * is refused (409) -> a re-request supersedes the old id (409) -> a rep without `cpq.costs.manage` reads the
  * queue but cannot answer.
  *
  * The workflow-recipe scenario is `test.fixme` below: it cannot be made deterministic.
@@ -102,7 +102,7 @@ const answerBody = (costRequestId: string, over: Json = {}): Json => ({
 })
 
 test.describe('TC-CPQ-COST-SOURCING-001 — supplier cost sourcing', () => {
-  test('auto-open -> queue -> answer -> noop -> superseded -> ref conflict; a rep reads the queue but cannot answer', async ({ request }) => {
+  test('auto-open -> queue -> answer -> noop -> ref conflict -> superseded; a rep reads the queue but cannot answer', async ({ request }) => {
     test.setTimeout(180_000)
     const token = await getAuthToken(request, 'admin')
     const { organizationId } = getTokenContext(token)
@@ -152,23 +152,28 @@ test.describe('TC-CPQ-COST-SOURCING-001 — supplier cost sourcing', () => {
       expect(repeat.outcome).toBe('noop')
       expect(repeat.pricingRevision).toBe(applied.pricingRevision)
 
-      // 5. A re-request supersedes the old id: answering it is 409 COST_REQUEST_SUPERSEDED, nothing changes.
+      // 5. The stored supplier reference with a changed payload on the still-current request is refused (hash differs),
+      // nothing written. (Only checked while an answer hash is stored: a re-request clears it by design.)
+      const conflict = await apiRequest(request, 'POST', answerPath, {
+        token, data: answerBody(firstRequestId, { unitAmount: 295 }),
+      })
+      expect(conflict.status()).toBe(409)
+      expect(await conflict.text()).toContain('SUPPLIER_QUOTE_REF_CONFLICT')
+      const afterConflict = await tailCost(request, token, quote.id)
+      expect(Number(afterConflict.unitAmount)).toBe(280)
+      expect(afterConflict.costRequestId).toBe(firstRequestId)
+
+      // 6. A re-request supersedes the old id: answering it is 409 COST_REQUEST_SUPERSEDED, nothing changes.
       await post(request, token, `/api/cpq/quotes/${quote.id}/costs/${opened.id}/request`, {}, 're-request')
       const second = await tailCost(request, token, quote.id)
       expect(second.requestSeq).toBe(2)
+      expect(second.sourcingStatus).toBe('requested')
       expect(second.costRequestId).toBeTruthy()
       expect(second.costRequestId).not.toBe(firstRequestId)
       const stale = await apiRequest(request, 'POST', answerPath, { token, data: answerBody(firstRequestId, { unitAmount: 295, supplierQuoteRef: 'CARR-890' }) })
       expect(stale.status()).toBe(409)
       expect(await stale.text()).toContain('COST_REQUEST_SUPERSEDED')
       expect((await tailCost(request, token, quote.id)).costRequestId).toBe(second.costRequestId)
-
-      // 6. The same supplier reference with a changed payload is refused (hash differs), nothing written.
-      const conflict = await apiRequest(request, 'POST', answerPath, {
-        token, data: answerBody(second.costRequestId as string, { unitAmount: 295 }),
-      })
-      expect(conflict.status()).toBe(409)
-      expect(await conflict.text()).toContain('SUPPLIER_QUOTE_REF_CONFLICT')
 
       // 7. A rep with cpq.costs.view but not cpq.costs.manage reads the queue (no amounts) and cannot answer.
       roleId = await createRoleFixture(request, token, { name: `cpq-rep-${uniq()}` })

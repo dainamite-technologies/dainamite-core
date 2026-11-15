@@ -290,6 +290,23 @@ export function workingDaysBetween(from: Date, to: Date): number {
 /** Open longer than the threshold (strictly), in working days. */
 export const isRequestOverdue = (ageWorkingDays: number, thresholdWorkingDays: number): boolean => ageWorkingDays > thresholdWorkingDays
 
+/**
+ * The instant before which a request is overdue as of `now`: `requested_at < cutoff` <=> `isRequestOverdue(
+ * workingDaysBetween(requested_at, now), threshold)`. The age depends only on the request's UTC day and never grows
+ * for a later day, so the overdue days are a prefix; the queue filters on this timestamp in SQL (correct across
+ * pages, uses the queue index) instead of computing ages in the database.
+ */
+export function overdueCutoff(now: Date, thresholdWorkingDays: number): Date {
+  const threshold = Math.max(0, Math.floor(thresholdWorkingDays))
+  let day = utcDay(now)
+  // Walk back to the latest day that is overdue; the day after it opens the not-overdue range. Bounded: every
+  // 7 days hold 5 working days, so threshold + 1 working days lie within about 2 * threshold + 9 days.
+  for (let guard = 0; guard < 2 * threshold + 14; guard++, day--) {
+    if (isRequestOverdue(workingDaysBetween(new Date(day * DAY_MS), now), threshold)) return new Date((day + 1) * DAY_MS)
+  }
+  return new Date((day + 1) * DAY_MS)
+}
+
 // ─── State invariants ───────────────────────────────────────────
 
 /** Spec §Data Model state rules; returns the violated rules (empty = consistent). */

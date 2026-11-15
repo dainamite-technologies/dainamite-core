@@ -77,7 +77,7 @@ const isEnteredOrigin = (origin: string | null | undefined): boolean => origin =
 const NO_VALUE: ResolvedValue = { valueStatus: 'none', valueOrigin: null, unitAmount: null, instanceAmount: null, currencyCode: null, errorCode: null }
 
 /** Driver attributes of an element: its applicability attribute (table dimensions are added by the caller). */
-function driverAttributes(element: CpqChargeCostElement, table: CpqPricingTable | null): string[] {
+export function driverAttributes(element: CpqChargeCostElement, table: CpqPricingTable | null): string[] {
   const attributes = new Set<string>()
   const attribute = element.applicabilityCondition?.attribute
   if (typeof attribute === 'string' && attribute) attributes.add(attribute)

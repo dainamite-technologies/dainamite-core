@@ -1,7 +1,7 @@
 import {
   REQUEST_HISTORY_CAP, appendRequestHistory, buildHistoryEntry, classifyAnswer, costLineEligibility, declineEffect,
   formatAmount4, hashAnswer, isRequestOverdue, normalizeAnswer, shouldAutoOpenRequest, sourcingStateViolations,
-  workingDaysBetween, type AnswerClassificationInput, type AutoOpenInput, type SupplierAnswer,
+  overdueCutoff, workingDaysBetween, type AnswerClassificationInput, type AutoOpenInput, type SupplierAnswer,
 } from '../costSourcing'
 
 const frozenAmend = { _arcMirroredFromItemId: 'item-1', _arcPriceFrozen: true }
@@ -245,5 +245,41 @@ describe('sourcingStateViolations', () => {
     ['proposal on an answered line', { ...ok, sourcingStatus: 'answered', answeredAt: new Date(), proposedAmount: '1' }, []],
   ])('%s', (_name, cost, expected) => {
     expect(sourcingStateViolations(cost)).toEqual(expected)
+  })
+})
+
+describe('overdueCutoff (queue filter: requested_at < cutoff <=> overdue)', () => {
+  const at = (iso: string) => new Date(iso)
+  it('exactly N working days is not overdue, N + 1 is (Tuesday 2026-11-17, threshold 5)', () => {
+    const now = at('2026-11-17T10:00:00Z')
+    const cutoff = overdueCutoff(now, 5)
+    // Mon 11-09 = 6 working days (overdue); Tue 11-10 = 5 (not overdue, the boundary).
+    expect(cutoff.toISOString()).toBe('2026-11-10T00:00:00.000Z')
+    expect(at('2026-11-09T23:59:59Z') < cutoff).toBe(true)
+    expect(at('2026-11-10T00:00:00Z') < cutoff).toBe(false)
+  })
+  it('weekends do not age a request: Friday request is not overdue the following Tuesday', () => {
+    const cutoff = overdueCutoff(at('2026-11-17T08:00:00Z'), 5)
+    expect(at('2026-11-13T09:00:00Z') < cutoff).toBe(false)
+    // Saturday 11-14 -> Tuesday: Mon + Tue = 2 working days.
+    expect(overdueCutoff(at('2026-11-16T08:00:00Z'), 0).toISOString()).toBe('2026-11-16T00:00:00.000Z')
+  })
+  it('a Sunday "now" is the weekend: the previous week is aged by 5 working days at most', () => {
+    // Sun 2026-11-15, threshold 4: Mon 11-09 -> Sun = Tue..Fri = 4 (not overdue); Sun 11-08 = 5 (overdue).
+    expect(overdueCutoff(at('2026-11-15T12:00:00Z'), 4).toISOString()).toBe('2026-11-09T00:00:00.000Z')
+  })
+  it('agrees with workingDaysBetween / isRequestOverdue for every day and threshold over several weeks', () => {
+    for (const threshold of [0, 1, 2, 5, 10]) {
+      for (let nowOffset = 0; nowOffset < 14; nowOffset++) {
+        const now = new Date(Date.UTC(2026, 10, 2 + nowOffset, 13, 30))
+        const cutoff = overdueCutoff(now, threshold)
+        for (let back = 0; back < 40; back++) {
+          for (const hour of [0, 12, 23]) {
+            const requestedAt = new Date(Date.UTC(2026, 10, 2 + nowOffset - back, hour, 59))
+            expect(requestedAt < cutoff).toBe(isRequestOverdue(workingDaysBetween(requestedAt, now), threshold))
+          }
+        }
+      }
+    }
   })
 })

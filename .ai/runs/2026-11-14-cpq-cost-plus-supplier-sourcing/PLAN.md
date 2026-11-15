@@ -22,7 +22,7 @@ Engine: om-auto-create-pr-loop (steps: 20, --loop: no)
 | B | 8 | Apply answer route | group:B2 | done | |
 | B | 9 | Cancellation on close | group:B3 | done | |
 | B | 10 | Element deactivation fan-out and sales quote deleted subscriber | group:B3 | done | |
-| B | 11 | Queue read API and usage openRequests | group:B4 | todo | |
+| B | 11 | Queue read API and usage openRequests | group:B4 | done | |
 | C | 12 | Sourcing events | group:C1 | todo | |
 | C | 13 | Notifications | group:C1 | todo | |
 | C | 14 | Confidentiality sweep extension | group:C1 | todo | |

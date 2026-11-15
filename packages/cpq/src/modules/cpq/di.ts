@@ -14,6 +14,7 @@ import { DefaultCpqBundleService } from './services/cpqBundleService'
 import { CpqCostService } from './services/costs/costService'
 import { CpqQuoteCostService } from './services/costs/quoteCostService'
 import { CpqCostSourcingService } from './services/costs/costSourcingService'
+import { CpqCostRequestQueueService } from './services/costs/costRequestQueue'
 
 /**
  * Resolve dependencies from the container closure rather than via destructured
@@ -41,6 +42,10 @@ export function register(container: AppContainer) {
       em: container.resolve('em'),
       costService: container.resolve('cpqCostService'),
       quotingService: container.resolve('cpqQuotingService'),
+    })).scoped(),
+    cpqCostRequestQueueService: asFunction(() => new CpqCostRequestQueueService({
+      em: container.resolve('em'),
+      featureTogglesService: container.resolve('featureTogglesService'),
     })).scoped(),
     cpqCostSourcingService: asFunction(() => new CpqCostSourcingService({
       em: container.resolve('em'),

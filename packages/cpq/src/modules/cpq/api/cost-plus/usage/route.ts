@@ -20,7 +20,7 @@ export async function GET(req: Request) {
 
 export const openApi: OpenApiRouteDoc = { tag: 'CPQ Pricing', methods: { GET: {
   summary: 'Cost-plus usage: toggle state, active cost-plus charges, open quotes with costs',
-  responses: [{ status: 200, description: 'Usage counters (openRequests and liveSubscriptions are filled by later features)',
+  responses: [{ status: 200, description: 'Usage counters (openRequests: open supplier cost requests on live quotes)',
     schema: z.object({ enabled: z.boolean(), costPlusCharges: z.number(), openQuotes: z.number(), openRequests: z.number(), liveSubscriptions: z.number() }) }],
   errors: [cpqErrorDoc(403, 'Missing permission')],
 } } }

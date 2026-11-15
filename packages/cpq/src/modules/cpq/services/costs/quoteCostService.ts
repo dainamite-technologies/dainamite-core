@@ -30,6 +30,7 @@ import { computeCostPlusPrice, type MarkupRule } from './costPlusPrice'
 import type { QuoteMargin } from './quoteMargin'
 import { createMarginTracker } from './quoteMarginTracker'
 import { cancelRowRequests } from './costRequestCancel'
+import { liveQuoteConfigurationIds } from './costRequestQueue'
 import type { SourcingSignal, SourcingSignalPublisher } from './sourcingSignals'
 import {
   fullCostView, groupByLine, loadQuoteCosts, loadQuoteMargin, loadQuoteMarkupOverrides, markupOverrideView, redactedCostView,
@@ -195,7 +196,11 @@ export class CpqQuoteCostService {
     const liveSubscriptions = await em.count(CpqInventorySubscription, {
       ...scoped(scope), status: { $nin: [...ITEM_NOT_LIVE_STATUSES] }, id: { $in: costedSubscriptions },
     })
-    return { enabled, costPlusCharges, openQuotes, openRequests: 0, liveSubscriptions }
+    // Open requests on quotes alive on both sides (Q7): one COUNT over the queue index with a nested semi-join.
+    const openRequests = await em.count(CpqQuoteLineCost, {
+      ...scoped(scope), sourcingStatus: 'requested', quoteConfigurationId: { $in: liveQuoteConfigurationIds(em, scope) },
+    })
+    return { enabled, costPlusCharges, openQuotes, openRequests, liveSubscriptions }
   }
 
   // ─── Cost line writes ──────────────────────────────────────────

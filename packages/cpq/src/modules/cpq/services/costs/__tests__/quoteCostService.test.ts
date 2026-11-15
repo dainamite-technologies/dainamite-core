@@ -1,6 +1,7 @@
 import {
   CpqInventoryAsset, CpqInventoryCost, CpqInventorySubscription, CpqInventorySubscriptionItem, CpqOrderConfiguration, CpqProductCharge, CpqQuoteConfiguration, CpqQuoteLineConfiguration, CpqQuoteLineCost, CpqQuoteMarkupOverride,
 } from '../../../data/entities'
+import { SalesQuote } from '@open-mercato/core/modules/sales/data/entities'
 
 jest.mock('../../priceAdjustments/quotePricingWrite', () => ({
   withQuotePricingWrite: async (em: any, quoteId: string, _scope: unknown, execute: any, makeError: any, optionsOrRevision?: any) => {
@@ -109,10 +110,15 @@ describe('reads', () => {
   })
   it('usage counts with one aggregate query per figure: no cost row hydrated, no bound id list', async () => {
     const { service, em, subquery } = setup({ costs: [catalogRow()] })
-    em.count.mockImplementation(async (entity: unknown) => (entity === CpqProductCharge ? 3 : entity === CpqQuoteConfiguration ? 2 : entity === CpqInventorySubscription ? 4 : 0))
-    await expect(service.usage(SCOPE)).resolves.toEqual({ enabled: true, costPlusCharges: 3, openQuotes: 2, openRequests: 0, liveSubscriptions: 4 })
+    em.count.mockImplementation(async (entity: unknown) => (entity === CpqProductCharge ? 3 : entity === CpqQuoteConfiguration ? 2 : entity === CpqInventorySubscription ? 4 : entity === CpqQuoteLineCost ? 5 : 0))
+    await expect(service.usage(SCOPE)).resolves.toEqual({ enabled: true, costPlusCharges: 3, openQuotes: 2, openRequests: 5, liveSubscriptions: 4 })
     expect(em.find).not.toHaveBeenCalled()
-    expect(em.count).toHaveBeenCalledTimes(3)
+    expect(em.count).toHaveBeenCalledTimes(4)
+    // Open requests: one COUNT of status-requested rows, restricted to quotes alive on both sides by a semi-join.
+    const reqWhere = em.count.mock.calls.find(([entity]: unknown[]) => entity === CpqQuoteLineCost)[1]
+    expect(reqWhere).toMatchObject({ ...SCOPE, deletedAt: null, sourcingStatus: 'requested' })
+    expect(reqWhere.quoteConfigurationId.$in).toBe(subquery)
+    expect(em.createQueryBuilder).toHaveBeenCalledWith(SalesQuote, 'sq')
     // Live subscriptions with an open cost: a semi-join on active inventory costs, no bound id list.
     const subWhere = em.count.mock.calls.find(([entity]: unknown[]) => entity === CpqInventorySubscription)[1]
     expect(subWhere).toMatchObject({ ...SCOPE, deletedAt: null, status: { $nin: ['terminated', 'expired', 'superseded'] } })
@@ -136,7 +142,7 @@ describe('reads', () => {
     // Accepted-but-unconverted quotes are open; ordered quotes (NOT IN order sources) are not.
     expect(quoteWhere.cpqStatus.$nin).not.toContain('accepted')
     expect(quoteWhere.id.$nin).toBe(subquery)
-    expect(em.createQueryBuilder).toHaveBeenCalledTimes(5)
+    expect(em.createQueryBuilder).toHaveBeenCalledTimes(7) // + sales quotes and quote configurations of the open-request semi-join
     expect(em.createQueryBuilder).toHaveBeenCalledWith(CpqQuoteLineCost, 'qlc')
     expect(em.createQueryBuilder).toHaveBeenCalledWith(CpqOrderConfiguration, 'oc')
     expect(subquery.select).toHaveBeenCalledWith('oc.sourceQuoteId')

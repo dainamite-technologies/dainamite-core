@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+    # Default types plus `ready_for_review`: draft PRs are skipped (see the
+    # `changes` job), so the full suite runs when a draft is marked ready.
+    types: [opened, synchronize, reopened, ready_for_review]
   schedule:
     # Weekly health check — Monday 06:00 UTC. Catches flakes / dep-bump regressions
     # that don't get triggered by direct activity. Runs against the default branch (main).
@@ -35,6 +38,10 @@ jobs:
   # against, and we want manual / health-check runs to exercise everything).
   changes:
     name: Detect changes
+    # Draft PRs don't run CI: agents open drafts early and keep pushing.
+    # Skipping this job skips every job that needs it; marking the PR ready
+    # for review (`ready_for_review`) triggers the full run.
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 2
     outputs:

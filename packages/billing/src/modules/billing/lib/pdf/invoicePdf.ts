@@ -3,7 +3,7 @@ import { BillingAccount, BillingInvoice, BillingInvoiceLine } from '../../data/e
 import { billingEntityIds } from '../../data/entityIds'
 import { buildSellerSnapshot, getBillingSettings } from '../billingSettings'
 import { buildBuyerSnapshot } from '../documentParties'
-import { DEFAULT_INVOICE_LANGUAGE } from '../invoiceLanguages'
+import { resolveInvoiceLanguage } from '../invoiceLanguages'
 import { buildInvoiceDocumentModel, type DocumentTranslate, type PdfAddress } from './invoiceModel'
 import { renderInvoicePdf, type PdfLogo } from './invoiceTemplate'
 import { attachmentIdFromUrl, readAttachment, storeAttachment } from './attachmentStore'
@@ -25,11 +25,15 @@ import { attachmentIdFromUrl, readAttachment, storeAttachment } from './attachme
 
 export type TranslatorLoader = (language: string) => Promise<DocumentTranslate>
 
-/** Billing i18n for a document language (en / pl, falling back to en). */
+/**
+ * Billing i18n for a document language. Any supported invoice language loads
+ * its own dictionary (registry in `../invoiceLanguages`); anything else falls
+ * back to the default language.
+ */
 export const loadDocumentTranslator: TranslatorLoader = async (language) => {
   const { loadDictionary } = await import('@open-mercato/shared/lib/i18n/server')
   const { createFallbackTranslator } = await import('@open-mercato/shared/lib/i18n/translate')
-  const locale = language === 'pl' ? 'pl' : 'en'
+  const locale = resolveInvoiceLanguage(language)
   const translate = createFallbackTranslator(await loadDictionary(locale))
   return (key, fallback) => translate(key, fallback)
 }
@@ -93,7 +97,7 @@ export async function renderBillingDocument(
     { orderBy: { lineNumber: 'asc' } as never },
   )
   const { seller, buyer } = await resolveParties(em, invoice)
-  const language = str(buyer.invoice_language) ?? DEFAULT_INVOICE_LANGUAGE
+  const language = resolveInvoiceLanguage(str(buyer.invoice_language))
   const translate = await (deps.loadTranslator ?? loadDocumentTranslator)(language)
 
   let correctsNumber: string | null = null

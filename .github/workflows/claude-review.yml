@@ -26,7 +26,9 @@ name: Claude PR Review
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    # `ready_for_review` → the first automatic review happens when a draft
+    # is marked ready; pushes to a draft are not reviewed.
+    types: [opened, synchronize, reopened, ready_for_review]
     # Skip docs-only churn — saves a review pass when nothing actionable
     # changed.
     paths-ignore:
@@ -68,8 +70,10 @@ jobs:
     name: Claude review
     # Only run the on-comment branch when someone actually mentions the bot
     # — without this guard every comment on every issue/PR would invoke it.
+    # Draft PRs are skipped on push; an explicit "@claude" mention still
+    # reviews a draft on demand.
     if: |
-      (github.event_name == 'pull_request') ||
+      (github.event_name == 'pull_request' && github.event.pull_request.draft == false) ||
       (github.event_name == 'issue_comment' &&
         github.event.issue.pull_request != null &&
         contains(github.event.comment.body, '@claude'))

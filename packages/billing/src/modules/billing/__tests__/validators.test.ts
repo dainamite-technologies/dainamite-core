@@ -398,8 +398,12 @@ describe('billingAccountCreateSchema', () => {
 
   it('rejects an invoice language the template does not support', () => {
     expect(() =>
-      billingAccountCreateSchema.parse({ ...validAccountCreate, invoiceLanguage: 'de' }),
+      billingAccountCreateSchema.parse({ ...validAccountCreate, invoiceLanguage: 'fr' }),
     ).toThrow()
+  })
+
+  it.each(['en', 'es', 'de', 'pl'])('accepts the supported invoice language %s (case-insensitive)', (code) => {
+    expect(billingAccountCreateSchema.parse({ ...validAccountCreate, invoiceLanguage: ` ${code.toUpperCase()} ` }).invoiceLanguage).toBe(code)
   })
 
   it('defaults invoiceLanguage when omitted', () => {

@@ -12,7 +12,9 @@
  * "corrects" row is added to the header.
  */
 
-export type DocumentTranslate = (key: string, fallback: string) => string
+import { invoiceIntlLocale } from '../invoiceLanguages'
+
+export type DocumentTranslate =(key: string, fallback: string) => string
 
 export type PdfAddress = {
   line1?: string | null
@@ -91,10 +93,9 @@ export type InvoiceDocumentModel = {
   pageLabel: (page: number, pages: number) => string
 }
 
-const LOCALE_BY_LANGUAGE: Record<string, string> = { en: 'en-GB', pl: 'pl-PL' }
-
+/** `Intl` locale for a document language — derived from the language registry. */
 export function documentLocale(language: string): string {
-  return LOCALE_BY_LANGUAGE[language] ?? 'en-GB'
+  return invoiceIntlLocale(language)
 }
 
 function toDate(value: Date | string | null | undefined): Date | null {

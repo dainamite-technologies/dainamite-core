@@ -68,7 +68,7 @@
   "billing.accounts.form.customer_kind": "Typ klienta",
   "billing.accounts.form.cycle_anchor": "Zakotwiczenie cyklu",
   "billing.accounts.form.cycle_anchor.month_hint": "1 — 28",
-  "billing.accounts.form.cycle_anchor.weekly_hint": "pon | wt | … | nd",
+  "billing.accounts.form.cycle_anchor.weekly_hint": "mon | tue | … | sun",
   "billing.accounts.form.error.address_required": "Adres na fakturze (linia 1 + miasto) jest wymagany",
   "billing.accounts.form.error.country_invalid": "Kraj musi być 2- lub 3-literowym kodem ISO 3166",
   "billing.accounts.form.error.currency_invalid": "Waluta musi być 3-literowym kodem ISO",

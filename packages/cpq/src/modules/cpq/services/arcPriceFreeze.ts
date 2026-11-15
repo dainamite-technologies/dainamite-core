@@ -1,3 +1,5 @@
+import { canonicalJson as canonical } from '../lib/stateHash'
+
 /**
  * Frozen Amend mirror lines.
  *
@@ -35,6 +37,15 @@ export const ARC_COST_PLUS_FROZEN_KEY = '_arcCostPlusFrozen'
  * activation (Q5).
  */
 export const ARC_RECONFIGURED_KEY = '_arcReconfigured'
+
+/**
+ * Set on an ARC mirror line whose subscription item costs are carried onto the quote (ARC costs spec Q5): the
+ * line is cost-managed and always syncs by `replace` at activation. Written by the carry step (spec step 6).
+ */
+export const ARC_COSTS_CARRIED_KEY = '_arcCostsCarried'
+
+/** `itemCostSetHash` of the item's open costs at mirroring: the baseline of the `COST_SOURCE_CHANGED` guard (I-12). */
+export const ARC_CARRIED_COST_SET_HASH_KEY = '_arcCarriedCostSetHash'
 
 /** Markers that describe quote-time pricing state and never leave the quote. */
 const QUOTE_ONLY_ARC_KEYS = [ARC_PRICE_FROZEN_KEY, ARC_REPRICED_KEY, ARC_COST_PLUS_FROZEN_KEY, ARC_RECONFIGURED_KEY] as const
@@ -125,17 +136,6 @@ export function stripArcMarkers(configuration: Record<string, unknown> | null | 
     if (!key.startsWith(ARC_MARKER_PREFIX)) out[key] = value
   }
   return out
-}
-
-function canonical(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`
-  if (value && typeof value === 'object') {
-    const entries = Object.keys(value as Record<string, unknown>)
-      .sort()
-      .map((key) => `${JSON.stringify(key)}:${canonical((value as Record<string, unknown>)[key])}`)
-    return `{${entries.join(',')}}`
-  }
-  return JSON.stringify(value ?? null)
 }
 
 function isoDay(value: Date | string | null | undefined): string | null {

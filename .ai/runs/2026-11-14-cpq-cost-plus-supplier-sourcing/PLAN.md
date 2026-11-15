@@ -31,7 +31,7 @@ Engine: om-auto-create-pr-loop (steps: 20, --loop: no)
 | E | 17 | Demo seed | group:E1 | done | |
 | E | 18 | Workflow recipe seeded disabled | group:E1 | done | |
 | E | 19 | Manual, migration notes and E2E | group:E2 | done | |
-| E | 20 | Archive the Delta | group:E2 | todo | |
+| E | 20 | Archive the Delta | group:E2 | done | |
 
 ## Goal
 

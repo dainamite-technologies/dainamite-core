@@ -25,7 +25,7 @@ The system SHALL consult registered mutation guards before and after status tran
 Source: .ai/specs/2026-11-10-cpq-quote-pricing-integrity.md
 
 ## Requirement: Quote to order conversion
-The system SHALL refuse to convert a quote whose stored pricing contains an invalid manual adjustment, refuse it while any price-basis cost line on a live quote line is not `confirmed` or has `valid_until` before the conversion date, or a live line stores a cost-plus charge without a price (`422 COSTS_NOT_CONFIRMED` with `lines: [{ quoteLineId, costKeys, chargeCodes }]`, either list possibly empty; checked regardless of the toggle and without relying on cost lines existing, before the order number is allocated; ARC cancel lines — items removed on Amend / Renew and Cancel-quote lines — never block), keep today's `cancelled` / `rejected` refusal, and take the quote's pricing lock while converting. Once an order exists, cost lines SHALL NOT change the quote's prices. A successful conversion SHALL copy every non-deleted quote cost line to exactly one order line cost in the same transaction, and a refused or failed conversion SHALL write none.
+The system SHALL refuse to convert a quote whose stored pricing contains an invalid manual adjustment, refuse it while any price-basis cost line on a live quote line is not `confirmed` or has `valid_until` before the conversion date, or a live line stores a cost-plus charge without a price (`422 COSTS_NOT_CONFIRMED` with `lines: [{ quoteLineId, costKeys, chargeCodes }]`, either list possibly empty; checked regardless of the toggle and without relying on cost lines existing, before the order number is allocated; ARC cancel lines — items removed on Amend / Renew and Cancel-quote lines — never block), keep today's `cancelled` / `rejected` refusal, and take the quote's pricing lock while converting. Once an order exists, cost lines SHALL NOT change the quote's prices. The system SHALL also refuse it while any price-basis cost line has an unapplied supplier proposal (`422 COST_ANSWER_PENDING`, listing the lines; checked before `COSTS_NOT_CONFIRMED`). A successful conversion SHALL copy every non-deleted quote cost line to exactly one order line cost and cancel every open cost request of the quote (`quote_closed`), both in the same transaction, and a refused or failed conversion SHALL write none.
 
 ### Scenario: Invalid adjustment blocks conversion
 - WHEN an accepted quote's stored line carries `ADJUSTMENT_TARGET_MISSING`
@@ -55,15 +55,24 @@ The system SHALL refuse to convert a quote whose stored pricing contains an inva
 - WHEN an accepted quote whose tail line has a confirmed `price_basis` cost of 270 EUR and a `margin_only` installation cost of 1500 EUR is converted
 - THEN the order line has two order line costs with the same `cost_key`s and values, and the order line's `charges`, `nrcTotal` and `mrcTotal` equal those of a conversion of the same quote without costs
 
+### Scenario: Pending supplier answer blocks conversion
+- WHEN an accepted quote has a confirmed tail of 276 and an unapplied proposal of 310
+- THEN conversion returns `422 COST_ANSWER_PENDING` naming the line, and no order or order line cost is created
+
+### Scenario: Margin-only costs never block
+- WHEN only a `margin_only` cost is unconfirmed and its request is open
+- THEN conversion succeeds, that cost is copied with its `value_status`, and the request is `cancelled (quote_closed)`
+
 ### Scenario: Conversion fails mid-way
 - WHEN copying a cost line throws
 - THEN no order, order line or order line cost exists afterwards
 
-Frozen by: `packages/cpq/src/modules/cpq/services/__tests__/cpqOrderService.test.ts`, `packages/cpq/src/modules/cpq/services/costs/__tests__/orderCostCopy.test.ts`
+Frozen by: `packages/cpq/src/modules/cpq/services/__tests__/cpqOrderService.test.ts`, `packages/cpq/src/modules/cpq/services/costs/__tests__/orderCostCopy.test.ts`, `packages/cpq/src/modules/cpq/services/costs/__tests__/conversionGuard.test.ts`
 
 Source: .ai/specs/2026-11-10-cpq-manual-price-adjustments.md
 Source: .ai/specs/2026-11-12-cpq-cost-plus-quote-pricing-margin.md
 Source: .ai/specs/2026-11-12-cpq-cost-plus-order-subscription-costs.md
+Source: .ai/specs/2026-11-12-cpq-cost-plus-supplier-sourcing.md
 
 ## Requirement: Order activation
 The system SHALL activate an order (new sale or ARC) atomically: subscriptions, items, assets, inventory costs, change-log rows and the order status SHALL be committed together or not at all, and lifecycle events SHALL be emitted only after the commit. A failed activation SHALL leave no pending change in the caller's entity manager.
@@ -137,3 +146,18 @@ The system SHALL accept an optional `expectedRevision` on quote status transitio
 - THEN the API returns `409 STALE_REVISION`, and the status is unchanged
 
 Source: .ai/specs/2026-11-12-cpq-cost-plus-quote-pricing-margin.md
+
+## Requirement: Quote deletion
+The system SHALL refuse to delete a quote in `accepted`, `rejected` or `cancelled`, and otherwise SHALL soft-delete the quote, its lines and the linked sales quote and lines under the quote's pricing lock, after the quote mutation guards pass, cancelling every open cost request (`quote_closed`) in the same transaction.
+
+### Scenario: Delete a draft with an open request
+- WHEN a rep deletes a `ready` quote with one open tail request
+- THEN the quote and lines are soft-deleted, the request is `cancelled (quote_closed)` in the same commit, and a later answer returns `409 QUOTE_CLOSED`
+
+### Scenario: Guard blocks deletion
+- WHEN a project mutation guard rejects `cpq.quote` delete
+- THEN the route returns the guard's response and nothing is deleted
+
+Frozen by: `packages/cpq/src/modules/cpq/api/quotes/[quoteId]/__tests__/route.delete.test.ts`
+
+Source: .ai/specs/2026-11-12-cpq-cost-plus-supplier-sourcing.md

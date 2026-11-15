@@ -94,7 +94,7 @@ The system SHALL report `ruleDiscountTotal` and `manualDiscountTotal` (both incl
 Source: .ai/specs/2026-11-10-cpq-manual-price-adjustments.md
 
 ## Requirement: Quote cost lines from catalog cost elements
-The system SHALL keep exactly one non-deleted catalog cost line per applicable active cost element on every configured quote line that the engine prices — new lines, Cancel-quote lines and ARC mirror lines (Amend or Renew) that have been reconfigured; never unreconfigured mirror lines, including frozen cost-plus Renew mirrors (App Spec R1c) — matched by cost key. A line that becomes an ARC cancel line (an item removed on Amend / Renew) SHALL lose its cost lines (catalog and manual) and markup overrides at once, regardless of the toggle or the cost lock. On every saved recalculation it SHALL resolve `fixed` and `table` values (a `table` or `fixed` value is `confirmed`, an `on_request` catalog estimate is `estimated`, otherwise `none`) and soft-delete cost lines whose element no longer applies. A value a pricing manager entered or confirmed (`value_origin = manual`) SHALL survive recalculation until a driving attribute changes.
+The system SHALL keep exactly one non-deleted catalog cost line per applicable active cost element on every configured quote line that the engine prices — new lines, Cancel-quote lines and ARC mirror lines (Amend or Renew) that have been reconfigured; never unreconfigured mirror lines, including frozen cost-plus Renew mirrors (App Spec R1c) — matched by cost key. A line that becomes an ARC cancel line (an item removed on Amend / Renew) SHALL lose its cost lines (catalog and manual) and markup overrides at once, regardless of the toggle or the cost lock. On every saved recalculation it SHALL resolve `fixed` and `table` values (a `table` or `fixed` value is `confirmed`, an `on_request` catalog estimate is `estimated`, otherwise `none`) and soft-delete cost lines whose element no longer applies, cancelling any open cost request on them (`element_deactivated` when the element is inactive, otherwise `reconfigured`). A value a pricing manager entered or confirmed (`value_origin = manual`) or a supplier answered (`value_origin = supplier`) SHALL survive recalculation until a driving attribute changes. A reconfiguration that changes an attribute driving an `on_request` line SHALL reset its value to the catalog estimate (or `none`), keep the previous value in `note`, cancel any open request (`reconfigured`) and, for `requires_sourcing` elements, open a new one.
 
 ### Scenario: Add a costed product
 - WHEN a rep adds a product whose `tail_mrc` charge has a `table` element and an `on_request` element with estimate 300
@@ -102,11 +102,11 @@ The system SHALL keep exactly one non-deleted catalog cost line per applicable a
 
 ### Scenario: Reconfigure a driving attribute
 - WHEN the line's `bandwidth` (a dimension of the tail element) changes from 1G to 10G
-- THEN the `on_request` cost line goes back to its catalog estimate (or `none`), and its previous value is kept in `note`
+- THEN the `on_request` cost line goes back to its catalog estimate (or `none`), its previous value is kept in `note`, and an open request is `cancelled (reconfigured)` with exactly one `cost_request_cancelled` event (a new one opens when the element has `requires_sourcing`)
 
 ### Scenario: Unreconfigured Amend mirror
 - WHEN an Amend quote mirrors a subscription item and nothing on the line changes
-- THEN no catalog cost lines are created on the mirror line
+- THEN no catalog cost lines are created on the mirror line and no request opens
 
 ### Scenario: Frozen cost-plus Renew mirror
 - WHEN a Renew quote mirrors a cost-plus item and nothing on the line changes
@@ -128,6 +128,7 @@ Frozen by: `packages/cpq/src/modules/cpq/services/costs/__tests__/costResolution
 
 Source: .ai/specs/2026-11-12-cpq-cost-plus-quote-pricing-margin.md
 Source: .ai/specs/2026-11-12-cpq-cost-plus-order-subscription-costs.md
+Source: .ai/specs/2026-11-12-cpq-cost-plus-supplier-sourcing.md
 
 ## Requirement: Cost-plus list price
 The system SHALL price a cost-plus charge at list total = markup(Σ known price-basis costs per instance, converted to the quote currency), where `markup_percent` m gives C × (1 + m/100), `target_margin_percent` gives C ÷ (1 − m/100) and `markup_absolute` gives C + a, rounded once to the currency precision (per-unit: unit = total ÷ quantity at 4 dp). Price rules and manual adjustments SHALL then apply unchanged; percent price rules on a cost-plus charge SHALL scale the exact per-instance total, so no unit × quantity drift appears. An absolute markup is in the charge currency (a markup override's in the quote currency). A charge with an unknown price-basis cost (`COST_PENDING`), with no applicable one (`NO_PRICE_BASIS_COST`), with an invalid markup (`MARKUP_INVALID`) or with an absolute markup in a currency other than the quote's (`CURRENCY_NO_RATE`, never a 1:1 add) SHALL have no price, and its line SHALL NOT be ready. `estimated` costs price the charge and make the quote indicative.
@@ -166,11 +167,15 @@ The system SHALL let a user with `cpq.quotes.manage` and `cpq.costs.manage`:
 - enter or confirm the value of any cost line, including those of non-frozen ARC mirror lines (overwriting a catalog value needs a note, extending a validity or supplier term needs a new supplier quote reference or a note);
 - override or clear a cost-plus charge's markup on one quote line (note required; unknown charge `CHARGE_NOT_FOUND`);
 
-manual costs and markup overrides are refused on every ARC mirror line, and every cost write on ARC cancel lines and frozen Amend mirror lines (`422 LINE_NOT_ELIGIBLE`); all subject to the cost lock: price-basis cost lines and markup overrides can only change while the quote is `new`, `incomplete` or `ready` and no order exists (`409 COST_LOCKED` otherwise; terminal quotes refuse every cost write). With the toggle on, a cost-locked quote SHALL also refuse adding a line whose offering / product has an active cost-plus charge, and changing such a line's configuration or quantity (`409 COST_LOCKED`; term and dates stay editable). Margin-only changes, confirming an unchanged value and extending validity or supplier term are always allowed in non-terminal statuses. Cost writes accept `expectedRevision` (`409 STALE_REVISION`), bump `pricingRevision`, are commands that are not undoable, and write snapshots without amounts.
+manual costs and markup overrides are refused on every ARC mirror line, and every cost write on ARC cancel lines and frozen Amend mirror lines (`422 LINE_NOT_ELIGIBLE`); all subject to the cost lock: price-basis cost lines and markup overrides can only change while the quote is `new`, `incomplete` or `ready` and no order exists (`409 COST_LOCKED` otherwise; terminal quotes refuse every cost write). With the toggle on, a cost-locked quote SHALL also refuse adding a line whose offering / product has an active cost-plus charge, and changing such a line's configuration or quantity (`409 COST_LOCKED`; term and dates stay editable). Margin-only changes, confirming an unchanged value and extending validity or supplier term are always allowed in non-terminal statuses. Cost writes accept `expectedRevision` (`409 STALE_REVISION`), bump `pricingRevision`, are commands that are not undoable, and write snapshots without amounts. Entering a value (amount or value status) on a cost line with an open request SHALL cancel that request (`manual_value`) and clear any pending proposal in the same write; a note or supplier-data edit that changes neither SHALL NOT. After a decline the alternative supplier's value is entered on the same cost line.
 
 ### Scenario: Enter a tail cost by hand
 - WHEN a pricing manager sets the `on_request` tail cost line to 280 EUR, `confirmed`, with a supplier quote ref
 - THEN the line prices from 280, and the cost line has `value_origin = manual`
+
+### Scenario: Manual value while a request is open
+- WHEN a pricing manager enters 290 EUR on a tail whose request seq 2 is open
+- THEN seq 2 is `cancelled (manual_value)`, and a later answer to seq 2 returns `409 COST_REQUEST_SUPERSEDED`
 
 ### Scenario: Margin-only custom cost after submission
 - WHEN a pricing manager adds a `margin_only` NRC cost of 1500 to a line of a quote in `in_approval`
@@ -193,6 +198,7 @@ manual costs and markup overrides are refused on every ARC mirror line, and ever
 - THEN the cost line's per-instance amount is refreshed from the new quantity; value, status, origin and note stay
 
 Source: .ai/specs/2026-11-12-cpq-cost-plus-quote-pricing-margin.md
+Source: .ai/specs/2026-11-12-cpq-cost-plus-supplier-sourcing.md
 
 ## Requirement: Quote margin
 The system SHALL compute margin for holders of `cpq.costs.view`:
@@ -220,10 +226,15 @@ Frozen by: `packages/cpq/src/modules/cpq/services/__tests__/costConfidentiality.
 Source: .ai/specs/2026-11-12-cpq-cost-plus-quote-pricing-margin.md
 
 ## Requirement: Costs follow quote copies and line removal
-The system SHALL copy cost lines and markup overrides when a quote is cloned (new ids, remapped lines, an expired cost stays expired, catalog lines re-resolved on the clone's first recalculation). It SHALL soft-delete a line's cost lines and overrides when the line is removed, regardless of the toggle.
+The system SHALL copy cost lines and markup overrides when a quote is cloned (new ids, remapped lines, an expired cost stays expired, catalog lines re-resolved on the clone's first recalculation, supplier answers kept with their validity; open requests and proposals are **not** copied: `sourcing_status = not_requested`, empty request id and history, and the clone's first saved recalculation opens none). It SHALL soft-delete a line's cost lines and overrides when the line is removed, regardless of the toggle, cancelling their open requests (`line_removed`) in the same write.
 
 ### Scenario: Clone
-- WHEN a quote with a manual cost and a markup override is cloned
-- THEN the clone prices identically and has its own cost line and override rows
+- WHEN a quote with a manual cost, a markup override and an open tail request is cloned
+- THEN the clone prices identically, has its own cost line and override rows, and its tail cost line is `not_requested`
+
+### Scenario: Line removal
+- WHEN a line with an open tail request is removed
+- THEN the cost line is soft-deleted and the request is `cancelled (line_removed)` in the same commit
 
 Source: .ai/specs/2026-11-12-cpq-cost-plus-quote-pricing-margin.md
+Source: .ai/specs/2026-11-12-cpq-cost-plus-supplier-sourcing.md

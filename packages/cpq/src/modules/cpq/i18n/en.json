@@ -27,7 +27,7 @@
   "cpq.costRequests.answerPending": "Answer pending",
   "cpq.costRequests.applyConfirm.change": "New cost: {newCost} (was {previousCost}).",
   "cpq.costRequests.applyConfirm.confirm": "Reopen and apply supplier answer",
-  "cpq.costRequests.applyConfirm.converted": "Converted at the quote's rate on apply.",
+  "cpq.costRequests.applyConfirm.converted": "A foreign-currency answer stays unpriced until an exchange rate is available.",
   "cpq.costRequests.applyConfirm.text": "The quote returns to Ready and must be re-sent and re-accepted.",
   "cpq.costRequests.applyConfirm.title": "Reopen and apply supplier answer?",
   "cpq.costRequests.cancel": "Cancel",

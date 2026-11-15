@@ -96,7 +96,7 @@ export function useCostSourcingActions({ quoteId, cpqStatus, convertedOrderId, c
             text: [
               t('cpq.costRequests.applyConfirm.text', 'The quote returns to Ready and must be re-sent and re-accepted.'),
               t('cpq.costRequests.applyConfirm.change', 'New cost: {newCost} (was {previousCost}).', { newCost: change.newCost, previousCost: change.previousCost }),
-              change.differentCurrency ? t('cpq.costRequests.applyConfirm.converted', 'Converted at the quote\'s rate on apply.') : '',
+              change.differentCurrency ? t('cpq.costRequests.applyConfirm.converted', 'A foreign-currency answer stays unpriced until an exchange rate is available.') : '',
             ].filter(Boolean).join(' '),
             confirmText: t('cpq.costRequests.applyConfirm.confirm', 'Reopen and apply supplier answer'),
           })

@@ -23,9 +23,9 @@ Engine: om-auto-create-pr-loop (steps: 20, --loop: no)
 | B | 9 | Cancellation on close | group:B3 | done | df71e82 |
 | B | 10 | Element deactivation fan-out and sales quote deleted subscriber | group:B3 | done | ba14434 |
 | B | 11 | Queue read API and usage openRequests | group:B4 | done | 57fbf6e |
-| C | 12 | Sourcing events | group:C1 | done | |
-| C | 13 | Notifications | group:C1 | done | |
-| C | 14 | Confidentiality sweep extension | group:C1 | done | |
+| C | 12 | Sourcing events | group:C1 | done | eb05ea6 |
+| C | 13 | Notifications | group:C1 | done | f0a5732 |
+| C | 14 | Confidentiality sweep extension | group:C1 | done | 889b5fb |
 | D | 15 | Cost requests page | group:D1 | todo | |
 | D | 16 | Quote Costs panel additions | group:D1 | todo | |
 | E | 17 | Demo seed | group:E1 | todo | |

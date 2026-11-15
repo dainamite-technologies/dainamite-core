@@ -89,7 +89,9 @@ describe('reads', () => {
       overrides: [{ id: 'o', quoteLineId: ids.line, chargeCode: 'tail', markupRule: 'markup_percent', markupValue: '31.0000', note: 'why' }],
     })
     const body = await service.read(ids.quote, SCOPE, false)
-    expect(body).toEqual({ lines: [{ quoteLineId: ids.line, costs: [{ id: ids.cost, costKey: 'tail', name: 'Tail', role: 'price_basis', valueStatus: 'estimated', expired: true }] }], pricingRevision: 4 })
+    expect(body).toEqual({ lines: [{ quoteLineId: ids.line, costs: [{ id: ids.cost, costKey: 'tail', name: 'Tail', role: 'price_basis', valueStatus: 'estimated', expired: true,
+      // sourcing status projection (statuses only)
+      sourcingStatus: 'not_requested', requestSeq: null, requestedAt: null, hasAnswerPending: false, overdue: false, requestEligible: true }] }], pricingRevision: 4 })
     const json = JSON.stringify(body)
     for (const leak of ['7777', 'SecretSupplier', 'REF-9', 'secret note', 'markup', 'margin', 'amount', 'Amount', 'currency', 'supplier', '2020-01-01']) expect(json).not.toContain(leak)
   })

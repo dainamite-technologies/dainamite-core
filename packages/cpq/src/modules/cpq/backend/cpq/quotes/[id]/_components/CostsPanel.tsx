@@ -2,7 +2,8 @@
 
 import * as React from 'react'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
-import { Lock } from 'lucide-react'
+import { ChevronDown, ChevronRight, Lock } from 'lucide-react'
+import { IconButton } from '@open-mercato/ui/primitives/icon-button'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { SimpleTooltip } from '@open-mercato/ui/primitives/tooltip'
 import { InjectionSpot } from '@open-mercato/ui/backend/injection/InjectionSpot'
@@ -14,6 +15,8 @@ import {
   type FullQuoteCost,
   type RedactedQuoteCost,
 } from '../../../../../lib/quoteCostView'
+import { SOURCING_STATUS_FALLBACKS, SOURCING_STATUS_VARIANTS } from '../../../../../lib/costSourcingView'
+import { CostRequestDetailPanel } from '../../../cost-requests/_components/CostRequestDetailPanel'
 
 export const QUOTE_LINE_COSTS_SPOT_ID = 'data-table:cpq.quote_line_costs'
 
@@ -35,6 +38,14 @@ export function CostsPanel({ quoteId, lineId, lineName, costs, locked, status, c
 }) {
   const t = useT()
   const rows = costs.filter(isFullCost)
+  // Request detail (history, supplier answer, proposal) opens inline; read-only for every cost viewer.
+  const [openDetails, setOpenDetails] = React.useState<ReadonlySet<string>>(new Set())
+  const toggleDetail = (id: string) => setOpenDetails((current) => {
+    const next = new Set(current)
+    if (!next.delete(id)) next.add(id)
+    return next
+  })
+  const columnCount = 8 + (renderRowActions ? 1 : 0)
   const lockedText = t(
     'cpq.quoteCosts.locked',
     'Costs that change the price are locked in status {status} — margin-only costs and confirmations remain possible.',
@@ -84,29 +95,54 @@ export function CostsPanel({ quoteId, lineId, lineName, costs, locked, status, c
           <tbody>
             {rows.map((cost) => {
               const source = cost.origin === 'manual' ? 'manual' : cost.source
+              const sourcingStatus = cost.sourcingStatus ?? 'not_requested'
+              const hasRequest = sourcingStatus !== 'not_requested'
+              const detailOpen = hasRequest && openDetails.has(cost.id)
               return (
-                <tr key={cost.id} className="border-t border-dashed border-border/50" data-testid="cpq-cost-row">
-                  <td className="py-1 font-medium">
-                    {cost.name}
-                    {cost.chargeCode && <span className="ml-1 font-mono font-normal text-muted-foreground">{cost.chargeCode}</span>}
-                  </td>
-                  <td className="py-1">{t(`cpq.quoteCosts.roles.${cost.role}`, COST_ROLE_FALLBACKS[cost.role] ?? cost.role)}</td>
-                  <td className="py-1">{t(`cpq.quoteCosts.sources.${source}`, COST_SOURCE_FALLBACKS[source] ?? source)}</td>
-                  <td className="py-1">
-                    <Tag variant={STATUS_VARIANTS[cost.valueStatus] ?? 'neutral'} className="px-1.5 text-xs">
-                      {t(`cpq.quoteCosts.statuses.${cost.valueStatus}`, COST_STATUS_FALLBACKS[cost.valueStatus] ?? cost.valueStatus)}
-                    </Tag>
-                    {cost.expired && (
-                      <Tag variant="error" className="ml-1 px-1.5 text-xs">{t('cpq.quoteCosts.badges.expired', 'Expired cost')}</Tag>
-                    )}
-                    {cost.error && <span className="ml-1 text-destructive">{t(`cpq.quoteCosts.errors.${cost.error}`, cost.error)}</span>}
-                  </td>
-                  <td className="py-1 text-right font-mono">{cost.unitAmount ?? '—'}</td>
-                  <td className="py-1 pl-2">{cost.currencyCode ?? '—'}</td>
-                  <td className="py-1">{cost.supplierName ?? '—'}</td>
-                  <td className="py-1">{cost.validUntil ?? '—'}</td>
-                  {renderRowActions && <td className="py-1 text-right whitespace-nowrap">{renderRowActions(cost)}</td>}
-                </tr>
+                <React.Fragment key={cost.id}>
+                  <tr className="border-t border-dashed border-border/50" data-testid="cpq-cost-row">
+                    <td className="py-1 font-medium">
+                      {hasRequest && (
+                        <IconButton variant="ghost" size="xs" className="mr-1 align-middle" aria-expanded={detailOpen}
+                          aria-label={t('cpq.quoteCosts.requestDetails', 'Request details')} title={t('cpq.quoteCosts.requestDetails', 'Request details')}
+                          onClick={() => toggleDetail(cost.id)} data-testid="cpq-cost-request-toggle">
+                          {detailOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                        </IconButton>
+                      )}
+                      {cost.name}
+                      {cost.chargeCode && <span className="ml-1 font-mono font-normal text-muted-foreground">{cost.chargeCode}</span>}
+                    </td>
+                    <td className="py-1">{t(`cpq.quoteCosts.roles.${cost.role}`, COST_ROLE_FALLBACKS[cost.role] ?? cost.role)}</td>
+                    <td className="py-1">{t(`cpq.quoteCosts.sources.${source}`, COST_SOURCE_FALLBACKS[source] ?? source)}</td>
+                    <td className="py-1">
+                      <Tag variant={STATUS_VARIANTS[cost.valueStatus] ?? 'neutral'} className="px-1.5 text-xs">
+                        {t(`cpq.quoteCosts.statuses.${cost.valueStatus}`, COST_STATUS_FALLBACKS[cost.valueStatus] ?? cost.valueStatus)}
+                      </Tag>
+                      {cost.expired && (
+                        <Tag variant="error" className="ml-1 px-1.5 text-xs">{t('cpq.quoteCosts.badges.expired', 'Expired cost')}</Tag>
+                      )}
+                      {hasRequest && (
+                        <Tag variant={SOURCING_STATUS_VARIANTS[sourcingStatus] ?? 'neutral'} className="ml-1 px-1.5 text-xs" data-testid="cpq-cost-sourcing-status">
+                          {t(`cpq.costRequests.status.${sourcingStatus}`, SOURCING_STATUS_FALLBACKS[sourcingStatus] ?? sourcingStatus)}
+                          {cost.requestSeq ? ` #${cost.requestSeq}` : ''}
+                        </Tag>
+                      )}
+                      {cost.error && <span className="ml-1 text-destructive">{t(`cpq.quoteCosts.errors.${cost.error}`, cost.error)}</span>}
+                    </td>
+                    <td className="py-1 text-right font-mono">{cost.unitAmount ?? '—'}</td>
+                    <td className="py-1 pl-2">{cost.currencyCode ?? '—'}</td>
+                    <td className="py-1">{cost.supplierName ?? '—'}</td>
+                    <td className="py-1">{cost.validUntil ?? '—'}</td>
+                    {renderRowActions && <td className="py-1 text-right whitespace-nowrap">{renderRowActions(cost)}</td>}
+                  </tr>
+                  {detailOpen && (
+                    <tr data-testid="cpq-cost-request-detail-row">
+                      <td colSpan={columnCount} className="bg-muted/10 px-2">
+                        <CostRequestDetailPanel key={`${cost.id}:${sourcingStatus}:${cost.requestSeq ?? ''}:${cost.hasAnswerPending ?? false}`} costId={cost.id} />
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
               )
             })}
           </tbody>

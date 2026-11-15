@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { EntityManager } from '@mikro-orm/postgresql'
+import type { FeatureTogglesService } from '@open-mercato/core/modules/feature_toggles/lib/feature-flag-check'
 import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import { withAtomicFlush } from '@open-mercato/shared/lib/commands/flush'
 import {
@@ -30,7 +31,8 @@ import { computeCostPlusPrice, type MarkupRule } from './costPlusPrice'
 import type { QuoteMargin } from './quoteMargin'
 import { createMarginTracker } from './quoteMarginTracker'
 import { cancelRowRequests } from './costRequestCancel'
-import { liveQuoteConfigurationIds } from './costRequestQueue'
+import { liveQuoteConfigurationIds, resolveOverdueThreshold } from './costRequestQueue'
+import { costLineEligibility, overdueCutoff } from './costSourcing'
 import { lineReady, sourcingCostRef, type SourcingSignal, type SourcingSignalPublisher } from './sourcingSignals'
 import {
   fullCostView, groupByLine, loadQuoteCosts, loadQuoteMargin, loadQuoteMarkupOverrides, markupOverrideView, redactedCostView,
@@ -43,6 +45,8 @@ type Dependencies = {
   quotingService: Pick<DefaultCpqQuotingService, 'recalculateLockedQuote'>
   /** Publishes the sourcing signals (request cancelled by a manual value) of a committed write; wired in di.ts. */
   publisher?: SourcingSignalPublisher
+  /** Overdue threshold source for the read projection (Q10); without it `overdue` is never set. */
+  featureTogglesService?: Pick<FeatureTogglesService, 'getNumberConfig'>
 }
 
 const scoped = (scope: TenantScope) => ({ organizationId: scope.organizationId, tenantId: scope.tenantId, deletedAt: null })
@@ -103,9 +107,21 @@ export class CpqQuoteCostService {
     const quote = await this.findQuote(em, quoteId, scope)
     const costs = await loadQuoteCosts(em, quote.id, scope)
     const pricingRevision = quote.pricingRevision ?? 0
-    if (!includeCosts) return { lines: groupByLine(costs, redactedCostView), pricingRevision }
+    // Sourcing projection context: the overdue cutoff (Q10) and the Q14 eligibility per cost line (statuses only).
+    const lineConfigs = await em.find(CpqQuoteLineConfiguration, { quoteConfigurationId: quote.id, ...scoped(scope) })
+    const linesById = new Map(lineConfigs.map((line) => [line.quoteLineId, line]))
+    const threshold = this.deps.featureTogglesService ? await resolveOverdueThreshold(this.deps.featureTogglesService, scope.tenantId) : null
+    const cutoff = threshold === null ? null : overdueCutoff(new Date(), threshold)
+    const contextOf = (row: CpqQuoteLineCost) => {
+      const line = linesById.get(row.quoteLineId)
+      return {
+        overdueCutoff: cutoff,
+        ...(line ? { requestEligible: costLineEligibility({ action: line.action ?? null, configuration: line.configuration }, row, quote.quoteType).eligible } : {}),
+      }
+    }
+    if (!includeCosts) return { lines: groupByLine(costs, (row) => redactedCostView(row, contextOf(row))), pricingRevision }
     const [overrides, margin] = await Promise.all([loadQuoteMarkupOverrides(em, quote.id, scope), loadQuoteMargin(em, quote, scope)])
-    return { lines: groupByLine(costs, fullCostView), markupOverrides: overrides.map(markupOverrideView), margin, pricingRevision }
+    return { lines: groupByLine(costs, (row) => fullCostView(row, contextOf(row))), markupOverrides: overrides.map(markupOverrideView), margin, pricingRevision }
   }
 
   /** Quote-independent costs and list price of a configuration. Persists nothing. */

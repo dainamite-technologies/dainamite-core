@@ -17,6 +17,15 @@ export type RedactedQuoteCost = {
   valueStatus: 'none' | 'estimated' | 'confirmed' | string
   expired: boolean
   error?: string
+  /** Sourcing status projection (feature spec supplier sourcing): statuses only, present for every user. */
+  sourcingStatus?: 'not_requested' | 'requested' | 'answered' | 'declined' | 'cancelled' | string
+  requestSeq?: number | null
+  requestedAt?: string | null
+  hasAnswerPending?: boolean
+  /** Open longer than the tenant's overdue threshold (computed on the server). */
+  overdue?: boolean
+  /** `false` on a Cancel line or a frozen-unpriceable cost line: the server refuses requests there (Q14). */
+  requestEligible?: boolean
 }
 
 /** The full cost line, `cpq.costs.view` only. Decimals are strings. */
@@ -38,6 +47,14 @@ export type FullQuoteCost = RedactedQuoteCost & {
   supplierTermEnd: string | null
   supplierMinTermMonths: number | null
   note: string | null
+  /** Sourcing detail, `cpq.costs.view` only. */
+  costRequestId?: string | null
+  answeredAt?: string | null
+  declineReason?: string | null
+  proposedAnswer?: Record<string, unknown> | null
+  requestSupplierId?: string | null
+  requestSupplierName?: string | null
+  supplierId?: string | null
 }
 
 export type QuoteMarkupOverride = { id: string; quoteLineId: string; chargeCode: string; markupRule: string; markupValue: string; note: string | null }

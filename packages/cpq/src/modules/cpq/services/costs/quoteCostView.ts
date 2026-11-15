@@ -72,7 +72,15 @@ export async function loadQuoteMarginState(em: EntityManager, quote: CpqQuoteCon
  * What a user WITHOUT `cpq.costs.view` may see of a cost line: identity, status
  * and expiry. No amount, currency, supplier, validity date, note or markup.
  */
-export function redactedCostView(row: CpqQuoteLineCost) {
+export type CostViewContext = {
+  /** Open requests opened before this instant are overdue (`overdueCutoff`); absent = overdue is not computed. */
+  overdueCutoff?: Date | null
+  /** Q14 eligibility of the cost line's quote line; absent = not computed (the UI then assumes eligible). */
+  requestEligible?: boolean
+}
+
+export function redactedCostView(row: CpqQuoteLineCost, context: CostViewContext = {}) {
+  const requestedAt = row.requestedAt ? new Date(row.requestedAt) : null
   return {
     id: row.id,
     costKey: row.costKey,
@@ -81,13 +89,20 @@ export function redactedCostView(row: CpqQuoteLineCost) {
     valueStatus: row.valueStatus,
     expired: isCostExpired(row),
     ...(row.errorCode ? { error: row.errorCode } : {}),
+    // Sourcing status projection (feature spec §API Contracts): ids and statuses only, never an amount, supplier or note.
+    sourcingStatus: row.sourcingStatus ?? 'not_requested',
+    requestSeq: row.requestSeq ?? null,
+    requestedAt: requestedAt ? requestedAt.toISOString() : null,
+    hasAnswerPending: row.proposedAmount !== null && row.proposedAmount !== undefined,
+    overdue: row.sourcingStatus === 'requested' && requestedAt !== null && context.overdueCutoff != null && requestedAt < context.overdueCutoff,
+    ...(context.requestEligible !== undefined ? { requestEligible: context.requestEligible } : {}),
   }
 }
 
 /** The full cost line, for holders of `cpq.costs.view`. */
-export function fullCostView(row: CpqQuoteLineCost) {
+export function fullCostView(row: CpqQuoteLineCost, context: CostViewContext = {}) {
   return {
-    ...redactedCostView(row),
+    ...redactedCostView(row, context),
     quoteLineId: row.quoteLineId,
     chargeCode: row.chargeCode,
     origin: row.origin,
@@ -104,8 +119,9 @@ export function fullCostView(row: CpqQuoteLineCost) {
     requestSeq: row.requestSeq ?? null,
     answeredAt: row.answeredAt ? new Date(row.answeredAt).toISOString() : null,
     declineReason: row.declineReason ?? null,
-    hasAnswerPending: row.proposedAmount !== null && row.proposedAmount !== undefined,
     proposedAnswer: row.proposedAnswer ?? null,
+    requestSupplierId: row.requestSupplierId ?? null,
+    requestSupplierName: row.requestSupplierName ?? null,
     supplierId: row.supplierId,
     supplierName: row.supplierName,
     supplierQuoteRef: row.supplierQuoteRef,

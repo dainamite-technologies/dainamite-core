@@ -32,6 +32,7 @@ import { MarginCard } from './_components/MarginCard'
 import { StaleRevisionBanner } from './_components/StaleRevisionBanner'
 import { CostHeaderActions, CostRowActions } from './_components/CostActionButtons'
 import { useCostActions } from './_components/useCostActions'
+import { useCostSourcingActions } from './_components/useCostSourcingActions'
 import { hasAnyCosts, isCostLocked, isQuoteIndicative, statusFailure, type RedactedQuoteCost } from '../../../../lib/quoteCostView'
 import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import { COSTS_MANAGE_FEATURE, COSTS_VIEW_FEATURE } from '../../../../data/costs'
@@ -404,6 +405,16 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
     reloadCosts: quoteCosts.reload,
     reloadQuote,
   })
+  const sourcingActionsUi = useCostSourcingActions({
+    quoteId: isNew ? null : cpqQuote?.id ?? null,
+    cpqStatus: cpqQuote?.cpqStatus ?? 'new',
+    convertedOrderId: cpqQuote?.convertedOrderId,
+    currency: cpqQuote?.currencyCode ?? 'EUR',
+    data: quoteCosts.data,
+    granted: grantedFeatures,
+    reloadCosts: quoteCosts.reload,
+    reloadQuote,
+  })
   const costsUi: QuoteCostsUi | null = cpqQuote && quoteCosts.state === 'ready'
     ? {
       quoteId: cpqQuote.id,
@@ -416,6 +427,7 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
       reload: quoteCosts.reload,
       chargesFor,
       actions: costActions.actions,
+      sourcing: sourcingActionsUi.sourcing,
     }
     : null
   const indicative = costsUi?.data ? isQuoteIndicative(costsUi.data.lines) : false
@@ -705,6 +717,7 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
     <div className="space-y-6">
       {priceAdjustments.elements}
       {costActions.elements}
+      {sourcingActionsUi.elements}
       {lineRemoval.ConfirmDialogElement}
       {arcDrawerOpen && (
         <ArcQuoteConfigurator
@@ -1503,7 +1516,7 @@ function QuoteLineRow({ line, lineIdx, currency, isExpanded, pricingDetail, isBu
           status={costsUi.cpqStatus}
           canManage={costsUi.canManage}
           headerActions={<CostHeaderActions line={{ lineId: line.lineId, lineName: line.offeringName }} />}
-          renderRowActions={costsUi.actions ? (cost) => <CostRowActions cost={cost} line={{ lineId: line.lineId, lineName: line.offeringName }} /> : undefined}
+          renderRowActions={costsUi.actions || costsUi.sourcing ? (cost) => <CostRowActions cost={cost} line={{ lineId: line.lineId, lineName: line.offeringName }} /> : undefined}
         />
       )}
       {/* XD-250 ARC: before/after preview, below the charges, when line mirrors a sub item */}

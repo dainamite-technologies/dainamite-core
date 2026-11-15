@@ -48,6 +48,7 @@ export function register(container: AppContainer) {
       costService: container.resolve('cpqCostService'),
       quotingService: container.resolve('cpqQuotingService'),
       publisher: sourcingPublisher(),
+      featureTogglesService: container.resolve('featureTogglesService'),
     })).scoped(),
     cpqCostRequestQueueService: asFunction(() => new CpqCostRequestQueueService({
       em: container.resolve('em'),

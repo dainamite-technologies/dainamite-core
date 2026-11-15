@@ -671,7 +671,9 @@ responses for other users.
 ### Demo data
 
 `demo_gix` (with examples) seeds USD→EUR rates for the last three days (source
-`Manual`, UTC midnight: `0.92`, `0.915`, `0.91`) and the quote "Demo — IP Transit,
+`Manual`, UTC midnight: `0.92`, `0.915`, `0.91`) plus today's rate for each of the
+next 29 days (the resolver only looks back, so this keeps the demo quote priced
+for a month; re-run the seed to extend it) and the quote "Demo — IP Transit,
 USD partner tail converted to EUR" (fixed 300 USD tail, EUR quote, list price
 345.00 at today's rate). Re-running the seed adds the rate of the new day.
 

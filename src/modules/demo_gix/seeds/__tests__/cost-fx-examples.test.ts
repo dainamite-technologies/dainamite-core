@@ -2,7 +2,7 @@ import { CustomerEntity } from '@open-mercato/core/modules/customers/data/entiti
 import { ExchangeRate } from '@open-mercato/core/modules/currencies/data/entities'
 import { CpqProductOffering, CpqQuoteConfiguration } from '@dainamite/cpq/modules/cpq/data/entities'
 import { FX_DEMO } from '../data/cost-plus'
-import { seedGixCostFxExamples, seedGixDemoFxRates, utcMidnight } from '../cost-fx-examples'
+import { DEMO_RATE_HORIZON_DAYS, seedGixCostFxExamples, seedGixDemoFxRates, utcMidnight } from '../cost-fx-examples'
 
 jest.mock('@open-mercato/shared/lib/encryption/find', () => ({ findWithDecryption: jest.fn(async (em: { find: (...a: unknown[]) => unknown }, entity: unknown, where: unknown) => em.find(entity, where)) }))
 
@@ -50,14 +50,18 @@ describe('utcMidnight', () => {
 describe('seedGixDemoFxRates', () => {
   const now = new Date('2026-11-15T10:00:00Z')
 
-  it('writes one USD→EUR rate per day for the last three days, source Manual, at UTC midnight', async () => {
+  it('writes one USD→EUR rate per day: the last three days and the next 29 (today repeated), source Manual, at UTC midnight', async () => {
     const t = setup()
     await seedGixDemoFxRates(t.em as never, scope, now)
-    expect(t.rates.map((row) => [(row.date as Date).toISOString(), row.rate])).toEqual([
-      ['2026-11-15T00:00:00.000Z', '0.92000000'],
-      ['2026-11-14T00:00:00.000Z', '0.91500000'],
-      ['2026-11-13T00:00:00.000Z', '0.91000000'],
-    ])
+    expect(t.rates).toHaveLength(2 + DEMO_RATE_HORIZON_DAYS)
+    const byDay = new Map(t.rates.map((row) => [(row.date as Date).toISOString(), row.rate]))
+    expect(byDay.get('2026-11-13T00:00:00.000Z')).toBe('0.91000000')
+    expect(byDay.get('2026-11-14T00:00:00.000Z')).toBe('0.91500000')
+    expect(byDay.get('2026-11-15T00:00:00.000Z')).toBe('0.92000000')
+    // Review1-f: a recalculation weeks after seeding still finds the rate of its own day.
+    expect(byDay.get('2026-11-16T00:00:00.000Z')).toBe('0.92000000')
+    expect(byDay.get('2026-12-14T00:00:00.000Z')).toBe('0.92000000')
+    expect(byDay.has('2026-12-15T00:00:00.000Z')).toBe(false)
     expect(t.rates.every((row) => row.source === 'Manual' && row.fromCurrencyCode === 'USD' && row.toCurrencyCode === 'EUR' && row.tenantId === 't' && row.organizationId === 'o' && row.isActive === true)).toBe(true)
   })
 
@@ -66,7 +70,7 @@ describe('seedGixDemoFxRates', () => {
     await seedGixDemoFxRates(t.em as never, scope, now)
     t.rates[0].rate = '0.99000000'
     await seedGixDemoFxRates(t.em as never, scope, now)
-    expect(t.rates).toHaveLength(3)
+    expect(t.rates).toHaveLength(2 + DEMO_RATE_HORIZON_DAYS)
     expect(t.rates[0].rate).toBe('0.99000000')
   })
 
@@ -74,7 +78,7 @@ describe('seedGixDemoFxRates', () => {
     const t = setup()
     await seedGixDemoFxRates(t.em as never, scope, now)
     await seedGixDemoFxRates(t.em as never, scope, new Date('2026-11-16T09:00:00Z'))
-    expect(t.rates).toHaveLength(4)
+    expect(t.rates).toHaveLength(3 + DEMO_RATE_HORIZON_DAYS)
   })
 })
 
@@ -82,7 +86,7 @@ describe('seedGixCostFxExamples', () => {
   it('seeds the rates and one EUR quote with the USD tail, priced by a saved recalculation', async () => {
     const t = setup()
     await seedGixCostFxExamples(t.em as never, t.container as never, scope)
-    expect(t.rates).toHaveLength(3)
+    expect(t.rates).toHaveLength(2 + DEMO_RATE_HORIZON_DAYS)
     expect(t.quoting.createQuote).toHaveBeenCalledTimes(1)
     expect(t.quoting.createQuote.mock.calls[0][0]).toMatchObject({ customerId: 'acme', currencyCode: 'EUR', quoteContext: { scenario: FX_DEMO.scenario } })
     expect(t.quoting.recalculate).toHaveBeenCalledWith('q-1', { save: true }, scope)
@@ -92,14 +96,14 @@ describe('seedGixCostFxExamples', () => {
     const t = setup()
     await seedGixCostFxExamples(t.em as never, t.container as never, scope)
     await seedGixCostFxExamples(t.em as never, t.container as never, scope)
-    expect(t.rates).toHaveLength(3)
+    expect(t.rates).toHaveLength(2 + DEMO_RATE_HORIZON_DAYS)
     expect(t.quotes).toHaveLength(1)
   })
 
   it('still seeds the rates when the demo customer is missing, and creates no quote', async () => {
     const t = setup({ customer: false })
     await seedGixCostFxExamples(t.em as never, t.container as never, scope)
-    expect(t.rates).toHaveLength(3)
+    expect(t.rates).toHaveLength(2 + DEMO_RATE_HORIZON_DAYS)
     expect(t.quoting.createQuote).not.toHaveBeenCalled()
   })
 

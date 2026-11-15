@@ -520,8 +520,9 @@ export class CpqQuoteCostService {
 
   /**
    * FX snapshot of a written foreign-currency value (Q9): the dated rate at the write date, from the DI-scoped resolver.
-   * `attempted` is false for a quote-currency / empty value (no FX columns) and when no resolver is wired. A missing rate
-   * is `found: false` (the caller stores the value as `none` + CURRENCY_NO_RATE, never 1:1). The resolver never throws.
+   * `attempted` is false only for a quote-currency / empty value (no FX columns). A foreign value is always `attempted`:
+   * a missing rate, including no resolver wired, is `found: false` (the caller stores the value as `none` +
+   * CURRENCY_NO_RATE, never 1:1). The resolver never throws.
    */
   private async fxPatch(quote: CpqQuoteConfiguration, scope: TenantScope, currency: string | null): Promise<{ attempted: boolean; found: boolean; fields: FxColumns }> {
     if (!currency || currency === quote.currencyCode) return { attempted: false, found: false, fields: { ...NO_FX } }

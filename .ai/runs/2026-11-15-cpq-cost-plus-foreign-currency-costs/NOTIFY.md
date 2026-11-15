@@ -39,3 +39,4 @@
 - 2026-11-15 review1-c: CostsPanel per_unit rows show the converted unit amount then the instance total (pure formatConverted helper)
 - 2026-11-15 review1-d: snapshotNote shows the cost-currency line total (totalAmount / fxRate), falling back to the instance amount
 - 2026-11-15 review1-e: E2E asserts pricingSummary.mrcTotal 345.00, 356.25 after refresh, and unchanged after the locked recalculation
+- 2026-11-15 review1-f: fxPatch comment fixed; price route test renamed; demo rates seeded for 29 forward days; zero-quantity fallback fix landed in review1-a

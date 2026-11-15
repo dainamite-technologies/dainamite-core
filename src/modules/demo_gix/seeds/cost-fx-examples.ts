@@ -23,14 +23,22 @@ export function utcMidnight(offsetDays: number, now: Date = new Date()): Date {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + offsetDays))
 }
 
+/** Days of demo rates seeded ahead of the seed day (today included): the demo quote stays priced for that long. */
+export const DEMO_RATE_HORIZON_DAYS = 30
+
 /**
- * Demo USD→EUR rates for the last three days (source `Manual`, UTC midnight). Written straight to the framework
- * `ExchangeRate` entity (this is an L3 demo module; CPQ itself only reads through `exchangeRateService`). Idempotent per
- * (pair, day, source): an operator's own row for the same day and source is never overwritten.
+ * Demo USD→EUR rates (source `Manual`, UTC midnight): the last three days (distinct rates) and every day up to
+ * `DEMO_RATE_HORIZON_DAYS - 1` days ahead (today's rate repeated). The resolver only looks BACK from the day of a saved
+ * recalculation, so past-dated rows cannot keep an old demo quote priced; rows dated ahead can: a recalculation up to a
+ * month after seeding finds the rate of its own day instead of demoting the tail to CURRENCY_NO_RATE. Written straight to
+ * the framework `ExchangeRate` entity (this is an L3 demo module; CPQ itself only reads through `exchangeRateService`).
+ * Idempotent per (pair, day, source): an operator's own row for the same day and source is never overwritten, and a
+ * later run only adds the days that are new.
  */
 export async function seedGixDemoFxRates(em: EntityManager, scope: TenantScope, now: Date = new Date()): Promise<void> {
-  for (const [index, rate] of FX_DEMO.rates.entries()) {
-    const date = utcMidnight(-index, now)
+  for (let offset = -(FX_DEMO.rates.length - 1); offset < DEMO_RATE_HORIZON_DAYS; offset += 1) {
+    const rate = FX_DEMO.rates[Math.max(0, -offset)]
+    const date = utcMidnight(offset, now)
     const where = {
       ...scope, fromCurrencyCode: FX_DEMO.costCurrency, toCurrencyCode: FX_DEMO.quoteCurrency, date, source: FX_DEMO.rateSource,
     }

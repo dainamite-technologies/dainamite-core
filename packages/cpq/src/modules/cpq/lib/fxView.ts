@@ -15,6 +15,9 @@ export type FxFields = {
   fxRateSource?: string | null
   fxRateDerivation?: string | null
   convertedInstanceAmount?: string | null
+  /** Quote costs only: lets a `per_unit` row show the converted unit amount next to the unit amount. */
+  costModel?: string | null
+  unitAmount?: string | null
   quoteCurrencyCode?: string | null
   errorDetail?: FxErrorDetail | null
 }
@@ -57,12 +60,23 @@ export function fxRateParts(cost: FxFields, t: Translate): string {
 /**
  * The second line under a converted cost value: "≈ 276.00 EUR · 0.92 · ECB · 2026-11-11". `quoteCurrency` falls back to the
  * projection's own `quoteCurrencyCode`. Null when the cost carries no rate (a quote-currency cost, or no rate found).
+ *
+ * A `per_unit` cost shows the value cell's UNIT amount, so its converted line reconciles with it: the converted unit amount
+ * first, then the instance total: "≈ 276.00 EUR / unit · ≈ 2,760.00 EUR total · 0.92 · ...". When unit and instance
+ * amounts are equal (quantity 1) the plain single amount is kept.
  */
 export function formatConverted(cost: FxFields, quoteCurrency: string | null | undefined, t: Translate): ConvertedLine | null {
   if (!hasFxRate(cost)) return null
   const currency = quoteCurrency ?? cost.quoteCurrencyCode ?? null
-  const amount = formatAmount(cost.convertedInstanceAmount)
-  const converted = amount && currency ? `≈ ${amount} ${currency}` : null
+  const total = formatAmount(cost.convertedInstanceAmount)
+  const unitValue = cost.costModel === 'per_unit' && cost.unitAmount ? Number(cost.unitAmount) * Number(cost.fxRate) : null
+  const unit = unitValue !== null && Number.isFinite(unitValue) ? formatAmount(unitValue) : null
+  const perUnit = unit !== null && total !== null && unit !== total
+  const converted = !currency
+    ? null
+    : perUnit
+      ? `≈ ${unit} ${currency} ${t('cpq.fx.perUnit', '/ unit')} · ≈ ${total} ${currency} ${t('cpq.fx.total', 'total')}`
+      : total ? `≈ ${total} ${currency}` : null
   const rate = fxRateParts(cost, t)
   return { converted, rate, text: [converted, rate].filter(Boolean).join(' · ') }
 }

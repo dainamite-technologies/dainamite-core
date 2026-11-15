@@ -20,6 +20,17 @@ describe('formatters', () => {
   })
 })
 
+describe('formatConverted: per_unit reconciles with the unit amount (review1-c)', () => {
+  const perUnit = { ...converted, costModel: 'per_unit', unitAmount: '300', convertedInstanceAmount: '2760' }
+  it('shows the converted unit amount first, then the instance total', () => {
+    expect(formatConverted(perUnit, null, t)?.text).toBe('≈ 276.00 EUR / unit · ≈ 2,760.00 EUR total · 0.92 · ECB · 2026-11-11')
+  })
+  it('keeps the single amount when unit and instance converted amounts are equal (quantity 1) or the model is flat', () => {
+    expect(formatConverted({ ...perUnit, convertedInstanceAmount: '276' }, null, t)?.text).toBe('≈ 276.00 EUR · 0.92 · ECB · 2026-11-11')
+    expect(formatConverted({ ...perUnit, costModel: 'flat' }, null, t)?.text).toBe('≈ 2,760.00 EUR · 0.92 · ECB · 2026-11-11')
+  })
+})
+
 describe('formatConverted', () => {
   it('renders "≈ 276.00 EUR · 0.92 · ECB · 2026-11-11"', () => {
     expect(formatConverted(converted, null, t)?.text).toBe('≈ 276.00 EUR · 0.92 · ECB · 2026-11-11')

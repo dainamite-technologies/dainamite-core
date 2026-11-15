@@ -36,3 +36,4 @@
 - E2E (`TC-CPQ-COST-FX-001`) cannot run locally. Rate sources are named `0e2efx-*` so they sort before any real source under the resolver's tie-break (no priority list), making the newer-rate steps deterministic.
 - 2026-11-15 review1-a: no-rate entered values null instanceAmount; transient resolver error keeps snapshot; confirmed_unchanged never promotes a snapshot-less foreign row; zero-quantity fallback cost needs no rate
 - 2026-11-15 review1-b: missingFxPairs counts only unlocked (new/incomplete/ready) quotes via ADJUSTMENT_MUTABLE_STATUSES; manual updated
+- 2026-11-15 review1-c: CostsPanel per_unit rows show the converted unit amount then the instance total (pure formatConverted helper)

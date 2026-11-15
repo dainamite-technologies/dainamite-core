@@ -24,6 +24,7 @@ import { evaluateApplicability } from '../cpqPricingService'
 import { QuotingError, type DefaultCpqQuotingService } from '../cpqQuotingService'
 import { withQuotePricingWrite } from '../priceAdjustments/quotePricingWrite'
 import { getBaseCurrencyCode, type TenantScope } from '../types'
+import { ADJUSTMENT_MUTABLE_STATUSES } from '../../data/price-adjustments'
 import { affectsPrice, COST_CLOSED_STATUSES, extendsValidity, isWriteRefused, type CostLockState } from './costLock'
 import type { CpqCostService } from './costService'
 import { isQuoteCostLocked, previewCatalogCosts } from './costResolution'
@@ -249,23 +250,25 @@ export class CpqQuoteCostService {
   /**
    * Operator signal (FX spec §API Contracts, Q14): the currency pairs open quotes are missing a rate for, grouped, with
    * the number of distinct quotes. ONE grouped query (no row hydrated): cost lines stored as `none` + CURRENCY_NO_RATE,
-   * on live quotes that are not closed (rejected / cancelled) and not yet converted to an order. Raw SQL because the
+   * on live quotes that are unlocked (new / incomplete / ready, the `isQuoteCostLocked` status set: closed and locked quotes never pick up a rate) and not yet converted to an order. Raw SQL because the
    * pair spans two modules' tables without an ORM relation; every table is tenant-scoped and soft-delete filtered.
    */
   private async missingFxPairs(em: EntityManager, scope: TenantScope): Promise<MissingFxPair[]> {
-    const closed = [...COST_CLOSED_STATUSES]
+    // Only quotes that PICK UP a newly added rate: unlocked ones (the status set `isQuoteCostLocked` uses; a subset of the
+    // non-closed statuses). A locked quote never re-rates, so counting it would leave the figure stuck after the operator acts.
+    const editable = [...ADJUSTMENT_MUTABLE_STATUSES]
     const rows = await em.getConnection().execute(
       `select c.currency_code as "from", q.currency_code as "to", count(distinct c.quote_configuration_id)::int as "openQuotes"
        from cpq_quote_line_costs c
        join cpq_quote_configurations q on q.id = c.quote_configuration_id and q.organization_id = c.organization_id and q.tenant_id = c.tenant_id
        where c.organization_id = ? and c.tenant_id = ? and c.deleted_at is null
          and c.error_code = 'CURRENCY_NO_RATE' and c.value_status = 'none' and c.currency_code is not null
-         and q.deleted_at is null and q.cpq_status not in (${closed.map(() => '?').join(', ')})
+         and q.deleted_at is null and q.cpq_status in (${editable.map(() => '?').join(', ')})
          and not exists (select 1 from cpq_order_configurations o
            where o.source_quote_id = q.id and o.organization_id = q.organization_id and o.tenant_id = q.tenant_id and o.deleted_at is null)
        group by c.currency_code, q.currency_code
        order by count(distinct c.quote_configuration_id) desc, c.currency_code, q.currency_code`,
-      [scope.organizationId, scope.tenantId, ...closed],
+      [scope.organizationId, scope.tenantId, ...editable],
     ) as Array<{ from: string; to: string; openQuotes: number | string }>
     return rows.map((row) => ({ from: row.from, to: row.to, openQuotes: Number(row.openQuotes) }))
   }

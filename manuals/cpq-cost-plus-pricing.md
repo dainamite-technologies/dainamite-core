@@ -617,8 +617,9 @@ until it is reopened.
 
 **Finding missing rates.** `GET /api/cpq/cost-plus/usage` returns
 `missingFxPairs: [{ from, to, openQuotes }]` — every pair on which a cost line of
-an open, unconverted quote has no rate, with the number of affected quotes
-(most affected first). The cost dialog shows "No USD→EUR rate for 2026-11-12"
+an unlocked (New / Incomplete / Ready), unconverted quote has no rate, with the
+number of affected quotes (most affected first). Locked quotes are not counted:
+they keep their stored cost until reopened, so a new rate cannot fix them. The cost dialog shows "No USD→EUR rate for 2026-11-12"
 next to the amount while no rate is maintained.
 
 ### When the rate is taken, and when it freezes

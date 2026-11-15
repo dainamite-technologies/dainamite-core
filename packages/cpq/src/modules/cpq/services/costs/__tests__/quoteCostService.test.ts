@@ -18,6 +18,7 @@ jest.mock('../../priceAdjustments/quotePricingWrite', () => ({
 }))
 import { CpqQuoteCostService } from '../quoteCostService'
 import { COST_CLOSED_STATUSES } from '../costLock'
+import { ADJUSTMENT_MUTABLE_STATUSES } from '../../../data/price-adjustments'
 
 const SCOPE = { organizationId: 'org', tenantId: 'tenant' }
 const ids = { quote: '11111111-1111-4111-8111-111111111111', line: '22222222-2222-4222-8222-222222222222', cost: '33333333-3333-4333-8333-333333333333' }
@@ -187,14 +188,18 @@ describe('usage: missingFxPairs (FX step 8)', () => {
     expect(usage.missingFxPairs).toEqual([{ from: 'USD', to: 'EUR', openQuotes: 2 }, { from: 'GBP', to: 'EUR', openQuotes: 1 }])
     expect(fxPairs).toHaveBeenCalledTimes(1)
     const [sql, params] = fxPairs.mock.calls[0] as [string, unknown[]]
-    expect(params).toEqual([SCOPE.organizationId, SCOPE.tenantId, ...COST_CLOSED_STATUSES])
+    expect(params).toEqual([SCOPE.organizationId, SCOPE.tenantId, ...ADJUSTMENT_MUTABLE_STATUSES])
+    // review1-b: locked statuses (in_approval, with_customer, accepted, ...) never pick up a rate, so they are not counted
+    expect(params).not.toContain('with_customer')
+    expect(params).not.toContain('accepted')
+    for (const closed of COST_CLOSED_STATUSES) expect(params).not.toContain(closed)
     const flat = sql.replace(/\s+/g, ' ')
     expect(flat).toMatch(/group by c\.currency_code, q\.currency_code/)
     expect(flat).toMatch(/count\(distinct c\.quote_configuration_id\)/)
     expect(flat).toMatch(/c\.error_code = 'CURRENCY_NO_RATE'/)
     expect(flat).toMatch(/c\.deleted_at is null/)
     expect(flat).toMatch(/q\.deleted_at is null/)
-    expect(flat).toMatch(/q\.cpq_status not in \(\?, \?\)/)
+    expect(flat).toMatch(/q\.cpq_status in \(\?, \?, \?\)/)
     expect(flat).toMatch(/not exists \(select 1 from cpq_order_configurations o where o\.source_quote_id = q\.id/)
     expect(flat).toMatch(/o\.organization_id = q\.organization_id and o\.tenant_id = q\.tenant_id and o\.deleted_at is null/)
     expect(em.find).not.toHaveBeenCalled() // no cost row is hydrated

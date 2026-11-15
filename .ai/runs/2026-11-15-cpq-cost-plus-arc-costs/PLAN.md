@@ -12,7 +12,7 @@ Engine: om-auto-create-pr-loop (steps: 23, --loop: no)
 
 | Phase | Step | Title | Exec | Status | Commit |
 |-------|------|-------|------|--------|--------|
-| A | 1 | Characterize ARC pricing, conversion and activation | group:A1 | todo | |
+| A | 1 | Characterize ARC pricing, conversion and activation | group:A1 | done | |
 | B | 2 | State hash helper and item cost state | group:B1 | todo | |
 | B | 3 | Activation locks | group:B1 | todo | |
 | B | 4 | COST_SOURCE_CHANGED guard | group:B1 | todo | |

@@ -190,3 +190,31 @@ describe('Renew freeze of cost-plus items (Q4)', () => {
     expect(stripQuoteOnlyArcMarkers(cfg)).toEqual({ port_size: '1G', _arcMirroredFromItemId: 'item-1', _arcMirroredName: 'GIX Access Port' })
   })
 })
+
+// ARC costs step 1 (characterization, green on unchanged code): the canonical comparison `arcPricingInputsChanged`
+// runs on, pinned before the private `canonical()` moves to `lib/stateHash.ts` (step 2). Amend / Renew mirror line
+// pricing itself (frozen Amend keeps the stored price, legacy and non-cost-plus Renew re-price, a cost-plus Renew is
+// frozen) is already pinned above and in cpqQuotingService.arc.test.ts; not duplicated here.
+describe('arcPricingInputsChanged canonical comparison (pinned before the stateHash extraction)', () => {
+  const base = { configuration: { a: 1, nested: { x: 1, y: [1, 2] } }, quantity: 1 }
+  const same = (configuration: Record<string, unknown>) => !arcPricingInputsChanged(base, { configuration })
+
+  it('ignores object key order at every depth, but not array order', () => {
+    expect(same({ nested: { y: [1, 2], x: 1 }, a: 1 })).toBe(true)
+    expect(same({ a: 1, nested: { x: 1, y: [2, 1] } })).toBe(false)
+  })
+
+  it('treats an undefined value like null, and a missing key as a change', () => {
+    const before = { configuration: { a: null, b: 1 }, quantity: 1 }
+    expect(arcPricingInputsChanged(before, { configuration: { a: undefined, b: 1 } })).toBe(false)
+    expect(arcPricingInputsChanged(before, { configuration: { b: 1 } })).toBe(true)
+  })
+
+  it('does not normalise numeric strings: "1" and 1 are different inputs', () => {
+    expect(same({ a: '1', nested: { x: 1, y: [1, 2] } })).toBe(false)
+  })
+
+  it('ignores every _arc* marker on both sides', () => {
+    expect(same({ a: 1, nested: { x: 1, y: [1, 2] }, _arcPriceFrozen: true, _arcReconfigured: true, _arcAnything: 'x' })).toBe(true)
+  })
+})

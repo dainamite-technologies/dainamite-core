@@ -90,3 +90,17 @@ it('refuses an fx rate in the create / update body and keeps the rate out of the
   const log = await createQuoteLineCostCommand.buildLog!({ input: { quoteId, cost: { ...cost, currencyCode: 'USD' } }, result, ctx, snapshots: {} } as never)
   expect(JSON.stringify(log)).not.toMatch(/0\.7777|SentinelFX|fxRate|USD/)
 })
+
+// ARC costs step 1 (characterization): the cost-lock matrix itself is pinned in costLock.test.ts and
+// quoteCostService.test.ts ("cost lock matrix"). The commands add nothing to it and must let the service's refusal
+// through untouched, with no log entry produced for a refused write.
+it('lets a COST_LOCKED refusal from the service through unchanged on create, update and delete', async () => {
+  const { ctx, service } = setup()
+  const locked = Object.assign(new Error('COST_LOCKED'), { status: 409 })
+  service.createCost.mockRejectedValue(locked)
+  service.updateCost.mockRejectedValue(locked)
+  service.deleteCost.mockRejectedValue(locked)
+  await expect(createQuoteLineCostCommand.execute({ quoteId, cost: { ...cost, role: 'price_basis' } }, ctx)).rejects.toBe(locked)
+  await expect(updateQuoteLineCostCommand.execute({ quoteId, costId, patch: { unitAmount: 5 } }, ctx)).rejects.toBe(locked)
+  await expect(deleteQuoteLineCostCommand.execute({ quoteId, costId }, ctx)).rejects.toBe(locked)
+})

@@ -1444,3 +1444,49 @@ describe('conversion and supplier cost requests (step 9)', () => {
     expect(refused.em.create).not.toHaveBeenCalled()
   })
 })
+
+// ARC costs step 1 (characterization, green on unchanged code). Already pinned above and NOT duplicated:
+//  - the conversion refusals and the cost copy ('conversion cost guard', 'conversion copies quote costs to order line costs',
+//    'conversion and supplier cost requests'), with the guard order check;
+//  - the activation transaction boundary ('activateOrder transaction boundary'): one forked transaction, order row lock,
+//    rollback, events after commit;
+//  - the ARC write-back wiring ('ARC write-back wiring in activateOrder').
+// New here: the billing payload of an Amend whose lines are all `modify` (a cost-only Amend later, I-9).
+describe('amended / renewed payload for an Amend with only modify lines (I-9 characterization)', () => {
+  const subscription = { id: 'sub-1', customerId: 'cust-1', currentTermStart: new Date('2027-01-01T00:00:00.000Z'), currentTermEnd: new Date('2028-01-01T00:00:00.000Z') }
+  const modifyOnly = {
+    id: 'log-1', subscriptionId: 'sub-1', effectiveAt: new Date('2026-06-01T10:00:00.000Z'), afterSnapshot: { items: [{ id: 'item-1', name: 'Tail' }] },
+    lineChanges: [{ action: 'modify', itemId: 'item-1', quoteLineId: 'ql-1', mrcDelta: 0 }],
+  }
+  const quoteLines = [{ quoteLineId: 'ql-1', action: 'modify', configuration: { _arcMirroredFromItemId: 'item-1', _arcPriceFrozen: true }, targetSubscriptionId: 'sub-1',
+    sourceSubscriptionItemId: 'item-1', quantity: 1, charges: [], mrcTotal: '345', nrcTotal: '0', parentLineId: null }]
+  afterEach(() => jest.restoreAllMocks())
+
+  it('amended: empty addedItems and removedSubscriptionItemIds, nothing else', async () => {
+    const h = createActivationHarness({ quoteType: 'amend', targets: [{ subscriptionId: 'sub-1', mergeAction: 'standalone' }], quoteLines, inventory: { applyAmendment: { changeLog: modifyOnly, subscription } } })
+    const emitSpy = jest.spyOn(eventsModule, 'emitCpqEvent').mockResolvedValue(undefined as never)
+    await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+    expect(emitSpy).toHaveBeenCalledTimes(1)
+    const [event, payload] = emitSpy.mock.calls[0] as unknown as [string, Record<string, unknown>]
+    expect(event).toBe('cpq.subscription.amended')
+    expect(JSON.stringify({ ...payload, timestamp: '<timestamp>' })).toBe(JSON.stringify({
+      tenantId: ACTIVATION_SCOPE.tenantId, organizationId: ACTIVATION_SCOPE.organizationId, subscriptionId: 'sub-1', customerId: 'cust-1', effectiveDate: '2026-06-01',
+      addedItems: [], removedSubscriptionItemIds: [], sourceQuoteId: 'quote-1', sourceOrderId: 'oc-1', timestamp: '<timestamp>',
+    }))
+  })
+
+  it('renewed: empty addedItems', async () => {
+    const h = createActivationHarness({
+      quoteType: 'renew', targets: [{ subscriptionId: 'sub-1', mergeAction: 'standalone', newTermStart: '2027-01-01', newTermEnd: '2028-01-01', newTermMonths: 12 }],
+      quoteLines, inventory: { applyRenewal: { changeLog: modifyOnly, subscription } },
+    })
+    const emitSpy = jest.spyOn(eventsModule, 'emitCpqEvent').mockResolvedValue(undefined as never)
+    await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+    const [event, payload] = emitSpy.mock.calls[0] as unknown as [string, Record<string, unknown>]
+    expect(event).toBe('cpq.subscription.renewed')
+    expect(JSON.stringify({ ...payload, timestamp: '<timestamp>' })).toBe(JSON.stringify({
+      tenantId: ACTIVATION_SCOPE.tenantId, organizationId: ACTIVATION_SCOPE.organizationId, subscriptionId: 'sub-1', customerId: 'cust-1',
+      newTermStart: '2027-01-01', newTermEnd: '2028-01-01', addedItems: [], sourceQuoteId: 'quote-1', sourceOrderId: 'oc-1', timestamp: '<timestamp>',
+    }))
+  })
+})

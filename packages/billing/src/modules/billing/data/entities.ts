@@ -1277,6 +1277,9 @@ export class BillingDocumentSequence {
 }
 
 @Entity({ tableName: 'billing_settings' })
+// Mirrors the partial unique index `billing_settings_org_uq` (… WHERE deleted_at IS NULL)
+// created in Migration20261115000000_billing_invoice_ledger: one settings row per organization.
+@Unique({ name: 'billing_settings_org_uq', properties: ['tenantId', 'organizationId'] })
 export class BillingSettings {
   [OptionalProps]?:
     | 'lowBalanceThresholdDefault'
@@ -1485,9 +1488,11 @@ export class BillingPayment {
 // `source_type = 'payment' | 'credit_memo'`, `source_id` → billing_payments
 // or billing_invoices. Un-allocate = soft delete (history kept).
 @Entity({ tableName: 'billing_allocations' })
-@Index({ name: 'billing_allocations_source_idx', properties: ['sourceType', 'sourceId'] })
-@Index({ name: 'billing_allocations_invoice_idx', properties: ['invoiceId'] })
-@Index({ name: 'billing_allocations_account_idx', properties: ['billAccountId'] })
+// Scope-first like the package's other indexes; every allocation read filters by
+// tenant + organization plus the invoice or the source (Migration20261120000000).
+@Index({ name: 'billing_allocations_source_idx', properties: ['tenantId', 'organizationId', 'sourceType', 'sourceId'] })
+@Index({ name: 'billing_allocations_invoice_idx', properties: ['tenantId', 'organizationId', 'invoiceId'] })
+@Index({ name: 'billing_allocations_account_idx', properties: ['tenantId', 'organizationId', 'billAccountId'] })
 export class BillingAllocation {
   [OptionalProps]?: 'userId' | 'deallocatedByUserId' | 'createdAt' | 'updatedAt' | 'deletedAt'
 

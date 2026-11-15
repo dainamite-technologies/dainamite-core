@@ -152,19 +152,19 @@ test.describe('TC-BILL-004: B2C accounts + navigation', () => {
     // detail body also links to the account, so match the header link only.)
     const backLink = page.locator('a', { hasText: '←' }).first()
 
-    // Opened in account context → back goes to the account.
+    // Opened in account context → back goes to the account's Items tab (Spec F, F8).
     await page.goto(`/backend/billing/items/${itemId}`, { waitUntil: 'domcontentloaded' })
-    await expect(backLink).toHaveAttribute('href', `/backend/billing/accounts/${accountId}`)
+    await expect(backLink).toHaveAttribute('href', `/backend/billing/accounts/${accountId}?tab=items`)
 
     // Opened from the global Items list → back goes to the list.
     await page.goto(`/backend/billing/items/${itemId}?from=items`, { waitUntil: 'domcontentloaded' })
     await expect(backLink).toHaveAttribute('href', '/backend/billing/items')
 
-    // "Add item" from an account → Cancel returns to that account.
+    // "Add item" from an account → Cancel returns to that account's Items tab.
     await page.goto(`/backend/billing/items/create?billAccountId=${accountId}`, {
       waitUntil: 'domcontentloaded',
     })
     await page.getByRole('button', { name: /cancel/i }).first().click()
-    await expect(page).toHaveURL(new RegExp(`/backend/billing/accounts/${accountId}$`))
+    await expect(page).toHaveURL(new RegExp(`/backend/billing/accounts/${accountId}\\?tab=items$`))
   })
 })

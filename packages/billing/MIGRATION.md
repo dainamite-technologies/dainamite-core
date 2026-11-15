@@ -19,6 +19,10 @@ billing data.
 `'topup'`, `billing_statements.vat_summary`). Run `yarn mercato auth sync-role-acls` for the
 new `billing.run.delete` permission.
 
+**Migration:** `Migration20261120000000_billing_allocation_scope_indexes.ts` (index-only:
+the `billing_allocations` source / invoice / account indexes now lead with
+`tenant_id, organization_id`, like the package's other tables). No data change.
+
 - **Item price basis.** Prices are stored as typed with `priceBasis` (`net` | `gross`);
   lines are computed with `lib/lineAmounts.ts`, so a typed gross is the invoice gross.
   Tiered usage rates are always net (422 `billing.item.gross_tiered_unsupported`).

@@ -298,7 +298,7 @@ describe('answer: unlocked quote', () => {
     expect(JSON.stringify(result.signals)).not.toMatch(/280|7777/)
   })
 
-  it('an estimated answer applies as estimated; a non-quote currency is stored and resolves to none + CURRENCY_NO_RATE', async () => {
+  it('[FX step 1 characterization; steps 6-7 modify the foreign leg] an estimated answer applies as estimated; a non-quote currency is stored and resolves to none + CURRENCY_NO_RATE', async () => {
     const a = setup({ costs: [requested()] })
     await a.service.answer(ids.quote, ids.cost, answerInput({ valueStatus: 'estimated' }), ACTOR, SCOPE)
     expect(a.costs[0].valueStatus).toBe('estimated')

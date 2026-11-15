@@ -98,6 +98,10 @@ describe('marginHash', () => {
     expect(reversed.marginHash).toBe(base().marginHash)
   })
 
+  it('Q15 characterization: a quote whose costs are all in the quote currency keeps this exact hash (FX must not change it)', () => {
+    expect(base().marginHash).toBe('70c5f837aa59e65ce477241272505243e4d6331103c024fe35192d2955bce799')
+  })
+
   it('changes when a cost value changes', () => {
     expect(margin([line('l1')], [cost('l1', { instanceAmount: '61' }), cost('l1', { costKey: 'k2', instanceAmount: '5' })]).marginHash).not.toBe(base().marginHash)
   })

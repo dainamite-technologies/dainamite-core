@@ -666,3 +666,24 @@ describe('cost requests on saved recalculations (Q12, R1a, R1b)', () => {
     for (const key of ['costRequestId', 'requestSeq', 'requestedAt', 'answeredAt', 'declineReason', 'proposedAmount']) expect(s.costs[0][key] ?? null).toBeNull()
   })
 })
+
+// Characterization for the FX feature (step 1): outcomes of foreign-currency catalog costs BEFORE rate lookup. Step 6 modifies these.
+describe('foreign-currency catalog costs on a EUR quote (pre-FX behaviour)', () => {
+  const eurQuote = { currencyCode: 'EUR' }
+
+  it('a USD fixed cost is none + CURRENCY_NO_RATE with no amounts', async () => {
+    const s = store({ charges: [charge()], elements: [element({ currencyCode: 'USD', amount: '100' })] })
+    await run(s, { quoteOver: eurQuote })
+    expect(s.costs).toHaveLength(1)
+    expect(s.costs[0]).toMatchObject({ valueStatus: 'none', unitAmount: null, instanceAmount: null, errorCode: 'CURRENCY_NO_RATE' })
+  })
+
+  it('a USD-only cost table is none + CURRENCY_NO_RATE (the table row is priced, but in another currency)', async () => {
+    const tables = [{ id: 'tbl', ...SCOPE, deletedAt: null, purpose: 'cost', dimensions: [{ key: 'speed' }] }]
+    const entries = [{ ...SCOPE, deletedAt: null, isActive: true, pricingTableId: 'tbl', dimensionValues: { speed: '10G' }, prices: { cost: 40 }, currencyCode: 'USD' }]
+    const el = element({ source: 'table', amount: null, currencyCode: null, costTableId: 'tbl', costColumnKey: 'cost' })
+    const s = store({ charges: [charge()], elements: [el], tables, entries })
+    await run(s, { quoteOver: eurQuote, config: { speed: '10G' } })
+    expect(s.costs[0]).toMatchObject({ valueStatus: 'none', unitAmount: null, instanceAmount: null, errorCode: 'CURRENCY_NO_RATE' })
+  })
+})

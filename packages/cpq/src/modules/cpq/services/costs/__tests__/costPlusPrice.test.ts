@@ -288,3 +288,19 @@ describe('cost-plus pricing in recalculateInternal', () => {
     expect(result.pricingSummary.mrcTotal).toBe(375)
   })
 })
+
+// Characterization for the FX feature (step 1): a USD fixed cost on a EUR quote leaves the charge unpriced. Step 6 modifies this.
+describe('foreign-currency fixed cost on a EUR quote (pre-FX behaviour)', () => {
+  it('resolves to none + CURRENCY_NO_RATE and the cost-plus charge stays unpriced (incomplete quote)', async () => {
+    const element = { id: 'el', ...SCOPE, deletedAt: null, isActive: true, productChargeId: 'charge-1', code: 'tail', name: 'Tail', role: 'price_basis', costType: 'mrc',
+      source: 'fixed', costModel: 'flat', amount: '400', currencyCode: 'USD', costTableId: null, costColumnKey: null, estimateAmount: null, applicabilityCondition: null, sortOrder: 0 }
+    const h = harness({ costs: [], elements: [element], status: 'new' })
+    const config = h.cfg()
+    const result = await h.quoting.recalculateLockedQuote(h.em as never, config, SCOPE, true)
+    expect(h.em.persist).toHaveBeenCalledTimes(1)
+    expect(h.em.create).toHaveBeenCalledWith(CpqQuoteLineCost, expect.objectContaining({ valueStatus: 'none', unitAmount: null, instanceAmount: null, errorCode: 'CURRENCY_NO_RATE' }))
+    expect(h.lineConfig.charges).toEqual([expect.objectContaining({ pricingMethod: 'cost_plus', unitPrice: null, totalPrice: null })])
+    expect(result.pricingSummary.mrcTotal).toBe(0)
+    expect(config.cpqStatus).toBe('incomplete')
+  })
+})

@@ -183,7 +183,7 @@ describe('createCost', () => {
     expect(costs[0]).toMatchObject({ role: 'price_basis', chargeCode: 'tail', valueStatus: 'confirmed' })
     expect(recalculate).toHaveBeenCalled()
   })
-  it('refuses a foreign-currency amount (no silent FX)', async () => {
+  it('[FX step 1 characterization; step 7 replaces it] refuses a foreign-currency amount (no silent FX)', async () => {
     const { service } = setup()
     await expect(service.createCost(ids.quote, { ...create, currencyCode: 'USD' }, ACTOR, SCOPE)).rejects.toMatchObject({ status: 422, message: 'CURRENCY_NO_RATE' })
   })

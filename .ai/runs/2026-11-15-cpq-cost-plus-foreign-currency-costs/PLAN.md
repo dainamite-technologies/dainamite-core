@@ -12,7 +12,7 @@ Engine: om-auto-create-pr-loop (steps: 12, --loop: no)
 
 | Phase | Step | Title | Exec | Status | Commit |
 |-------|------|-------|------|--------|--------|
-| A | 1 | Characterization tests | group:A1 | todo | |
+| A | 1 | Characterization tests | group:A1 | done | |
 | A | 2 | FX settings | group:A2 | todo | |
 | A | 3 | FX rate resolver | group:A2 | todo | |
 | A | 4 | DI registration | group:A2 | todo | |

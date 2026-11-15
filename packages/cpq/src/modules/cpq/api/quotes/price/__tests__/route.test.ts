@@ -80,6 +80,13 @@ describe('cost-plus charges', () => {
     expect(result.primaryCharges[1]).not.toHaveProperty('priceOnRequest')
     expect(result.totals.mrcTotal).toBe(90)
   })
+  it('flags priceOnRequest for a USD price-basis cost on a EUR quote (CURRENCY_NO_RATE, pre-FX behaviour; step 6 modifies this)', async () => {
+    resolveProductCharges.mockResolvedValue([costPlusCharge({ currencyCode: 'EUR', unitPrice: null, totalPrice: null, fallbackPrice: 99 })])
+    previewCatalogCosts.mockResolvedValue([basis('none', { instanceAmount: null, unitAmount: null, currencyCode: null, errorCode: 'CURRENCY_NO_RATE' })])
+    const result = await (await POST(request({ primaryItem: body.primaryItem, childItems: [], currencyCode: 'EUR' }))).json()
+    expect(result.primaryCharges[0]).toMatchObject({ priceOnRequest: true, unitPrice: null, totalPrice: null })
+    expect(result.totals.mrcTotal).toBe(0)
+  })
   it('flags priceOnRequest when the toggle is off and resolves no costs', async () => {
     enabled.mockResolvedValue(false)
     resolveProductCharges.mockResolvedValue([unpriced])

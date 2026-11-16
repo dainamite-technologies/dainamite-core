@@ -227,6 +227,16 @@ export type CostResolutionParams = {
    * re-resolves its catalog costs but opens no request (spec "Clone": the cloned tail is `not_requested`, R16).
    */
   autoOpen?: boolean
+  /**
+   * Date of the recalculation (`YYYY-MM-DD`, UTC): the day index values are read at (index-costs spec Q6). Absent = today
+   * (UTC). Nothing reads it before the index branch ships.
+   */
+  asOfDate?: string
+  /**
+   * Whether this recalculation may store resolved values / snapshots: a SAVED recalculation of an unlocked quote
+   * (no order, status `new | incomplete | ready`). Computed by the caller from the same lock predicate as the resolver.
+   */
+  persist?: boolean
   /** Test seam / the index-costs feature: the second step of Renew reconciliation (default: the no-op `reevaluateCarriedIndexCosts`). */
   reevaluateCarriedIndexCosts?: ReevaluateCarriedIndexCosts
 }

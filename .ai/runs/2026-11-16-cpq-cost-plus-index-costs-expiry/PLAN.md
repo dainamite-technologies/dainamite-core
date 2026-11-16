@@ -15,7 +15,7 @@ Engine: om-auto-create-pr-loop (steps: 18, --loop: no)
 | A | 1 | Index entities and migration | group:A1 | done | |
 | A | 2 | costIndexService | group:A1 | done | |
 | A | 3 | Index commands and routes | group:A2 | done | |
-| A | 4 | Index pages | group:A3 | todo | |
+| A | 4 | Index pages | group:A3 | done | |
 | A | 5 | Phase A close-out | group:A3 | todo | |
 | B | 6 | Characterize index refusal and locked recalculation | group:B1 | todo | |
 | B | 7 | Element index fields | group:B1 | todo | |

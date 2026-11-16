@@ -107,6 +107,12 @@ describe('reconfirm: the Q-D13 write', () => {
     })
   })
 
+  it('no amount but a stored currency: re-confirming something else is not a value change (no NOTE_REQUIRED, value_origin and currency kept)', async () => {
+    const h = setup({ cost: costRow({ valueStatus: 'none', valueOrigin: 'catalog', unitAmount: null, instanceAmount: null, totalAmount: null, currencyCode: 'EUR' }) })
+    await h.service.reconfirm(ORDER, COST, { supplierName: 'Carrier Y' }, ACTOR, SCOPE)
+    expect(h.cost).toMatchObject({ supplierName: 'Carrier Y', currencyCode: 'EUR', valueOrigin: 'catalog', valueStatus: 'none', unitAmount: null, reconfirmedByUserId: ACTOR })
+  })
+
   it('an unchanged foreign value keeps its stored snapshot (no rate lookup); back to the order currency clears it', async () => {
     const foreign = costRow({ currencyCode: 'USD', unitAmount: '300.0000', instanceAmount: '300.0000', fxRate: '0.90000000', fxRateDate: '2026-11-01', fxRateSource: 'ECB', fxRateDerivation: 'direct', totalAmount: '540.0000' })
     const kept = setup({ cost: foreign })

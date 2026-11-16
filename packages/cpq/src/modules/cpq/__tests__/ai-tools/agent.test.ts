@@ -65,7 +65,7 @@ describe('cpq.quoting_assistant', () => {
 
   it('requires cpq.quotes.view, declared in acl.ts and granted to the default roles', () => {
     expect(cpqQuotingAssistant.requiredFeatures).toEqual(['cpq.quotes.view'])
-    const declared = new Set(features.map((feature) => feature.id))
+    const declared = new Set<string>(features.map((feature) => feature.id))
     expect(declared.has('cpq.quotes.view')).toBe(true)
     const grants = Object.values(setup.defaultRoleFeatures ?? {}).flat()
     expect(grants.some((grant) => grant === 'cpq.quotes.view' || grant === 'cpq.*' || grant === 'cpq.quotes.*')).toBe(true)

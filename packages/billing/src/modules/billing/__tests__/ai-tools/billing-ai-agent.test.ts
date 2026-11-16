@@ -39,7 +39,7 @@ describe('billing.operator_assistant', () => {
   })
 
   it('requires a declared billing view feature that the default roles grant', () => {
-    const declared = new Set(features.map((feature) => feature.id))
+    const declared = new Set<string>(features.map((feature) => feature.id))
     expect(agent!.requiredFeatures).toEqual(['billing.account.view'])
     expect(declared.has('billing.account.view')).toBe(true)
     const roleGrants = Object.values(setup.defaultRoleFeatures ?? {}).flat()

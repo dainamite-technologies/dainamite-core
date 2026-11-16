@@ -427,7 +427,7 @@ describe('CPQ AI tool registry', () => {
   })
 
   it('declares every required feature in acl.ts', () => {
-    const declared = new Set(features.map((feature) => feature.id))
+    const declared = new Set<string>(features.map((feature) => feature.id))
     for (const tool of aiTools) {
       expect(tool.requiredFeatures?.length).toBeGreaterThan(0)
       for (const feature of tool.requiredFeatures ?? []) expect(declared.has(feature)).toBe(true)

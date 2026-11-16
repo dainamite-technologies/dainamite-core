@@ -85,7 +85,7 @@ describe('billing AI tool registry', () => {
   })
 
   it('gives every tool a description and non-empty requiredFeatures declared in acl.ts', () => {
-    const declared = new Set(features.map((feature) => feature.id))
+    const declared = new Set<string>(features.map((feature) => feature.id))
     for (const entry of aiTools) {
       expect(entry.description.length).toBeGreaterThan(20)
       expect(entry.requiredFeatures?.length ?? 0).toBeGreaterThan(0)

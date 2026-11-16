@@ -120,5 +120,10 @@
   "license": "MIT",
   "engines": {
     "node": ">=24.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@open-mercato/ai-assistant": {
+      "optional": true
+    }
   }
 }

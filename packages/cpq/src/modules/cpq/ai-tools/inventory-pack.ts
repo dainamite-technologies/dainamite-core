@@ -6,6 +6,7 @@
  * by order activation, never by these tools.
  */
 import { z } from 'zod'
+import { INVENTORY_BILLING_CYCLES, INVENTORY_SUBSCRIPTION_STATUSES } from '../services/types'
 import {
   compactQuery,
   defineCpqApiTool,
@@ -19,8 +20,8 @@ import {
   type CpqPagedApiResponse,
 } from './_shared'
 
-const subscriptionStatus = z.enum(['pending', 'active', 'suspended', 'terminated', 'expired', 'superseded'])
-const billingCycle = z.enum(['monthly', 'quarterly', 'annually'])
+const subscriptionStatus = z.enum(INVENTORY_SUBSCRIPTION_STATUSES)
+const billingCycle = z.enum(INVENTORY_BILLING_CYCLES)
 
 /* -------------------------------------------------------------------------- */
 /*  cpq.list_subscriptions  ->  GET /api/cpq/inventory/subscriptions           */
@@ -28,7 +29,7 @@ const billingCycle = z.enum(['monthly', 'quarterly', 'annually'])
 
 export const listSubscriptionsInput = z.object({
   customerId: z.string().uuid().optional().describe('Customer entity id (UUID) from the customers module.'),
-  statuses: z.array(subscriptionStatus).max(6).optional().describe('Only subscriptions in one of these statuses.'),
+  statuses: z.array(subscriptionStatus).max(INVENTORY_SUBSCRIPTION_STATUSES.length).optional().describe('Only subscriptions in one of these statuses.'),
   billingCycle: billingCycle.optional().describe('Billing cycle filter.'),
   sourceOrderId: z.string().uuid().optional().describe('Only subscriptions created by this CPQ order.'),
   expiringWithinDays: z.number().int().min(1).max(365).optional().describe('Only subscriptions whose current term ends within this many days.'),

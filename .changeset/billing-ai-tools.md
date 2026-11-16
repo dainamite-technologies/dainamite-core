@@ -8,4 +8,4 @@ Billing is now usable by AI agents. The package ships an AI tool pack (`ai-tools
 - 2 write tools, `billing.trigger_bill_run` (dry and test mode only, never a real run) and `billing.record_payment`. They run only after the operator approves the preview card in the AI chat. A direct call without that approval, for example from an MCP client, is refused.
 - The agent uses `mutationPolicy: 'confirm-required'`: every write needs the operator's confirmation. A tenant can switch it to `read-only` in the AI assistant settings.
 
-No new permissions and no migration. The package now lists `@open-mercato/ai-assistant` `^0.9.0` as a peer dependency. After upgrading, run `yarn generate` so the agent and the tools are registered. See `manuals/billing-ai-agent.md`.
+No new permissions and no migration. **New required peer dependency (breaking):** `@open-mercato/ai-assistant` `^0.9.0`, and the `ai_assistant` module must be enabled. It ships in the 1.0.0 major. See `MIGRATION.md`. After upgrading, run `yarn generate` so the agent and the tools are registered. See `manuals/billing-ai-agent.md`.

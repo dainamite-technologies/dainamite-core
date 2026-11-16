@@ -22,6 +22,7 @@
  * every route the tool calls).
  */
 import { z } from 'zod'
+import { CPQ_STATUSES, SUBMIT_FOR_APPROVAL_FROM_STATUSES, type CpqStatus } from '../services/types'
 import type { McpToolContext } from '@open-mercato/ai-assistant/modules/ai_assistant/lib/types'
 import {
   compactQuery,
@@ -31,6 +32,7 @@ import {
   pageField,
   pageSizeField,
   quoteRecordVersion,
+  toUsageEstimateInputs,
   responseRecord,
   seg,
   sortDirField,
@@ -38,22 +40,6 @@ import {
   type CpqAiToolDefinition,
   type CpqPagedApiResponse,
 } from './_shared'
-
-const CPQ_QUOTE_STATUSES = [
-  'new',
-  'incomplete',
-  'ready',
-  'in_approval',
-  'pre_approved',
-  'approved',
-  'with_customer',
-  'accepted',
-  'rejected',
-  'cancelled',
-] as const
-
-/** Statuses from which an AI-initiated "submit for approval" makes sense. */
-export const SUBMITTABLE_QUOTE_STATUSES: readonly string[] = ['new', 'incomplete', 'ready']
 
 const QUOTE_ENTITY = 'cpq:cpq_quote_configuration'
 const QUOTE_LINE_ENTITY = 'cpq:cpq_quote_line_configuration'
@@ -66,7 +52,7 @@ const CUSTOMER_ENTITY = 'customers:customer_entity'
 
 export const listQuotesInput = z.object({
   customerId: z.string().uuid().optional().describe('Customer entity id (UUID) from the customers module.'),
-  cpqStatus: z.enum(CPQ_QUOTE_STATUSES).optional().describe('CPQ quote status filter.'),
+  cpqStatus: z.enum(CPQ_STATUSES).optional().describe('CPQ quote status filter.'),
   currencyCode: z.string().trim().min(3).max(3).optional().describe('ISO 4217 currency filter.'),
   search: z.string().trim().optional().describe('Free-text match on the quote id or customer id.'),
   sortField: z.enum(['createdAt', 'updatedAt', 'cpqStatus', 'version', 'currencyCode']).optional().describe('Sort column (default createdAt).'),
@@ -272,6 +258,8 @@ type LineSnapshot = {
   startDate: string | null
   termMonths: number | null
   endDate: string | null
+  /** Carried over unchanged: the item PUT clears estimates that are not sent. */
+  usageEstimates: Array<{ chargeCode: string; estimatedQuantity: number }> | null
 }
 
 /** Merges the requested patch over the current line, the way the PUT route expects a full configuration. */
@@ -282,6 +270,7 @@ export function mergeLinePatch(current: LineSnapshot, input: UpdateQuoteLineInpu
     startDate: input.startDate ?? current.startDate,
     termMonths: input.termMonths ?? current.termMonths,
     endDate: input.endDate ?? current.endDate,
+    usageEstimates: current.usageEstimates,
   }
 }
 
@@ -296,6 +285,7 @@ async function loadLine(tool: CpqAiToolDefinition, ctx: McpToolContext, quoteId:
     startDate: line.startDate ?? null,
     termMonths: line.termMonths ?? null,
     endDate: line.endDate ?? null,
+    usageEstimates: toUsageEstimateInputs(line.usageEstimates),
   }
   return { quote, line, snapshot }
 }
@@ -328,6 +318,7 @@ updateQuoteLineTool = defineCpqApiTool<UpdateQuoteLineInput, Record<string, unkn
           startDate: 'Start date',
           termMonths: 'Term (months)',
           endDate: 'End date',
+          usageEstimates: 'Usage estimates',
         },
       },
     }
@@ -343,6 +334,9 @@ updateQuoteLineTool = defineCpqApiTool<UpdateQuoteLineInput, Record<string, unkn
     if (merged.startDate) body.startDate = merged.startDate
     if (merged.termMonths !== null) body.termMonths = merged.termMonths
     if (merged.endDate) body.endDate = merged.endDate
+    // The service recomputes usage totals from the request and stores null when
+    // `usageEstimates` is absent, so the current estimates must be sent back.
+    if (merged.usageEstimates) body.usageEstimates = merged.usageEstimates
     return {
       method: 'PUT',
       path: `/cpq/quotes/${seg(input.quoteId)}/items/${seg(input.lineId)}`,
@@ -388,9 +382,9 @@ submitQuoteForApprovalTool = defineCpqApiTool<
   toOperation: async (input, ctx) => {
     const quote = await loadQuoteSnapshot(submitQuoteForApprovalTool, ctx, input.quoteId)
     if (!quote) throw new Error(`Quote "${input.quoteId}" was not found.`)
-    if (!quote.cpqStatus || !SUBMITTABLE_QUOTE_STATUSES.includes(quote.cpqStatus)) {
+    if (!quote.cpqStatus || !SUBMIT_FOR_APPROVAL_FROM_STATUSES.includes(quote.cpqStatus as CpqStatus)) {
       throw new Error(
-        `Quote "${input.quoteId}" is in status "${quote.cpqStatus ?? 'unknown'}"; only ${SUBMITTABLE_QUOTE_STATUSES.join(', ')} quotes can be submitted for approval.`,
+        `Quote "${input.quoteId}" is in status "${quote.cpqStatus ?? 'unknown'}"; only ${SUBMIT_FOR_APPROVAL_FROM_STATUSES.join(', ')} quotes can be submitted for approval.`,
       )
     }
     return {

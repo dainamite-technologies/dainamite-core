@@ -6,4 +6,4 @@ New read-only AI tool `cpq_billing_connector.get_order_setup`: shows how a CPQ o
 
 The connector adds this tool, a prompt hint and a starter suggestion to the billing package's `billing.operator_assistant` agent, so operators can ask the billing assistant about CPQ orders. Billing itself does not depend on the connector.
 
-The package now lists `@open-mercato/ai-assistant` `^0.9.0` as a peer dependency. After upgrading, run `yarn generate`.
+The package lists `@open-mercato/ai-assistant` `^0.9.0` as an **optional** peer dependency: the tool only imports its types at load time and loads the runner when it is called, so apps without the AI assistant keep working. After upgrading, run `yarn generate`.

@@ -8,10 +8,10 @@
  * The dependency points from the connector to billing, never the reverse.
  * The tool keeps its own feature gate (`cpq_billing_connector.order_setup.view`).
  */
-import {
-  defineAiAgentExtension,
-  type AiAgentDefinition,
-  type AiAgentExtension,
+// Type-only import: `@open-mercato/ai-assistant` is an optional peer.
+import type {
+  AiAgentDefinition,
+  AiAgentExtension,
 } from '@open-mercato/ai-assistant/modules/ai_assistant/lib/ai-agent-definition'
 
 export const BILLING_AGENT_ID = 'billing.operator_assistant'
@@ -20,7 +20,7 @@ export const ORDER_SETUP_TOOL = 'cpq_billing_connector.get_order_setup'
 export const aiAgents: AiAgentDefinition[] = []
 
 export const aiAgentExtensions: AiAgentExtension[] = [
-  defineAiAgentExtension({
+  {
     targetAgentId: BILLING_AGENT_ID,
     appendAllowedTools: [ORDER_SETUP_TOOL],
     appendSystemPrompt:
@@ -33,7 +33,7 @@ export const aiAgentExtensions: AiAgentExtension[] = [
         prompt: 'How will the CPQ order I name be billed: which account and which bill start dates?',
       },
     ],
-  }),
+  },
 ]
 
 export default aiAgents

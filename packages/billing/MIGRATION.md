@@ -12,6 +12,21 @@ billing data.
 
 ---
 
+## AI tools and agent (2026-11-16)
+
+**New required peer (breaking for consumers):** `@open-mercato/ai-assistant` `^0.9.0`.
+The package ships `ai-tools.ts` / `ai-agents.ts`, which the framework generator imports
+statically, and the tools build on `defineApiBackedAiTool` at load time. Install and enable
+the AI assistant module, then run `yarn generate`. Ships in the same major as the 1.0.0
+release. No migration and no new permission.
+
+- 14 read tools and 2 write tools (`billing.trigger_bill_run`, dry / test runs only;
+  `billing.record_payment`) over the existing routes, and the `billing.operator_assistant`
+  agent (`mutationPolicy: 'confirm-required'`). Writes run only after the operator confirms
+  the preview card; over MCP they are refused. See `manuals/billing-ai-agent.md`.
+
+---
+
 ## Spec F — Operator feedback round 1
 
 **Migration:** `Migration20261119000000_billing_operator_feedback.ts` (additive:

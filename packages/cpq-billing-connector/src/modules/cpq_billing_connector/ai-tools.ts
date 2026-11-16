@@ -8,10 +8,12 @@
  * are reused. The tool is offered to the billing agent through the
  * `aiAgentExtensions` export in `ai-agents.ts` (billing must not depend on
  * this package, so the dependency points from the connector to billing).
+ *
+ * `@open-mercato/ai-assistant` is an optional peer of the connector: this file
+ * imports only its types at load time and loads the operation runner inside
+ * the handler, so an app without the AI assistant still builds and boots.
  */
 import { z } from 'zod'
-import { defineAiTool } from '@open-mercato/ai-assistant/modules/ai_assistant/lib/ai-tool-definition'
-import { createAiApiOperationRunner } from '@open-mercato/ai-assistant/modules/ai_assistant/lib/ai-api-operation-runner'
 import type { AiToolDefinition } from '@open-mercato/ai-assistant/modules/ai_assistant/lib/types'
 
 export const ORDER_SETUP_VIEW_FEATURE = 'cpq_billing_connector.order_setup.view'
@@ -31,7 +33,7 @@ const GET_ORDER_SETUP = {
   requiredFeatures: [ORDER_SETUP_VIEW_FEATURE],
 }
 
-export const getOrderSetupTool = defineAiTool<GetOrderSetupInput, GetOrderSetupOutput>({
+export const getOrderSetupTool: AiToolDefinition<GetOrderSetupInput, GetOrderSetupOutput> = {
   name: GET_ORDER_SETUP.name,
   displayName: 'Get CPQ order billing setup',
   description:
@@ -46,6 +48,9 @@ export const getOrderSetupTool = defineAiTool<GetOrderSetupInput, GetOrderSetupO
   handler: async (rawInput, ctx) => {
     if (!ctx.tenantId) throw new Error('Tenant context is required for cpq_billing_connector.* tools')
     const input = getOrderSetupInput.parse(rawInput)
+    const { createAiApiOperationRunner } = await import(
+      '@open-mercato/ai-assistant/modules/ai_assistant/lib/ai-api-operation-runner'
+    )
     const runner = createAiApiOperationRunner({
       ...ctx,
       tool: ctx.tool ?? (GET_ORDER_SETUP as AiToolDefinition),
@@ -62,7 +67,7 @@ export const getOrderSetupTool = defineAiTool<GetOrderSetupInput, GetOrderSetupO
     }
     return { found: true, orderId: input.orderId, view: response.data ?? {} }
   },
-})
+}
 
 export const aiTools: AiToolDefinition[] = [getOrderSetupTool as unknown as AiToolDefinition]
 

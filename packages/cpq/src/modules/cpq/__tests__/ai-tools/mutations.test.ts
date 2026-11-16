@@ -216,11 +216,42 @@ describe('cpq.update_quote_line', () => {
   })
 
   it('mergeLinePatch keeps unspecified values', () => {
+    const usageEstimates = [{ chargeCode: 'egress', estimatedQuantity: 50 }]
     const merged = mergeLinePatch(
-      { configuration: { a: 1, b: 2 }, quantity: 4, startDate: '2026-01-01', termMonths: 12, endDate: null },
+      { configuration: { a: 1, b: 2 }, quantity: 4, startDate: '2026-01-01', termMonths: 12, endDate: null, usageEstimates },
       { quoteId: QUOTE_ID, lineId: LINE_ID, configuration: { b: 3 } },
     )
-    expect(merged).toEqual({ configuration: { a: 1, b: 3 }, quantity: 4, startDate: '2026-01-01', termMonths: 12, endDate: null })
+    expect(merged).toEqual({ configuration: { a: 1, b: 3 }, quantity: 4, startDate: '2026-01-01', termMonths: 12, endDate: null, usageEstimates })
+  })
+
+  it('sends the current usage estimates back so the PUT does not clear them', async () => {
+    const withUsage = quote({
+      lines: [
+        {
+          lineId: LINE_ID,
+          offeringId: OFFERING_ID,
+          quantity: 1,
+          configuration: { bandwidth: '100M', site: 'WAW1' },
+          termMonths: 12,
+          usageEstimates: [{ chargeCode: 'egress', estimatedQuantity: 50, estimatedTotal: 25 }],
+        },
+      ],
+    })
+    api.on('GET', `/cpq/quotes/${QUOTE_ID}`, withUsage)
+    api.on('PUT', `/cpq/quotes/${QUOTE_ID}/items/${LINE_ID}`, withUsage)
+    await getTool('cpq.update_quote_line').handler({ quoteId: QUOTE_ID, lineId: LINE_ID, quantity: 2 }, approvedCtx())
+    expect(api.writes()).toEqual([
+      expect.objectContaining({
+        method: 'PUT',
+        body: expect.objectContaining({ quantity: 2, usageEstimates: [{ chargeCode: 'egress', estimatedQuantity: 50 }] }),
+      }),
+    ])
+  })
+
+  it('changes the record version when usage estimates change', () => {
+    const base = quote()
+    const lines = base.lines!.map((line) => ({ ...line, usageEstimates: [{ chargeCode: 'egress', estimatedQuantity: 5 }] }))
+    expect(quoteRecordVersion({ ...base, lines })).not.toEqual(quoteRecordVersion(base))
   })
 })
 

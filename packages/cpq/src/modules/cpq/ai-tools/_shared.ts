@@ -212,6 +212,7 @@ export type CpqQuoteLineSnapshot = {
   endDate?: string | null
   nrcTotal?: number | null
   mrcTotal?: number | null
+  usageEstimates?: Array<{ chargeCode: string; estimatedQuantity: number; estimatedTotal?: number | null }> | null
 }
 
 export type CpqQuoteSnapshot = {
@@ -260,6 +261,17 @@ function stableStringify(value: unknown): string {
  * CPQ quote configurations have no single `updatedAt` that moves on every line
  * edit, so the fingerprint covers status, revision counters and every line.
  */
+/**
+ * Reduces stored line usage estimates to the `{ chargeCode, estimatedQuantity }`
+ * input shape the quote item routes accept. `null` when the line has none.
+ */
+export function toUsageEstimateInputs(
+  estimates: CpqQuoteLineSnapshot['usageEstimates'],
+): Array<{ chargeCode: string; estimatedQuantity: number }> | null {
+  if (!Array.isArray(estimates) || estimates.length === 0) return null
+  return estimates.map((entry) => ({ chargeCode: entry.chargeCode, estimatedQuantity: entry.estimatedQuantity }))
+}
+
 export function quoteRecordVersion(quote: CpqQuoteSnapshot): string {
   const lines = (quote.lines ?? [])
     .map((line) => ({
@@ -270,6 +282,7 @@ export function quoteRecordVersion(quote: CpqQuoteSnapshot): string {
       startDate: line.startDate ?? null,
       termMonths: line.termMonths ?? null,
       endDate: line.endDate ?? null,
+      usageEstimates: toUsageEstimateInputs(line.usageEstimates),
     }))
     .sort((a, b) => a.lineId.localeCompare(b.lineId))
   const payload = stableStringify({

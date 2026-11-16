@@ -27,7 +27,7 @@ Engine: om-auto-create-pr-loop (steps: 18, --loop: no)
 | B | 13 | Index demo seed and manual | group:B4 | done | |
 | B | 14 | Phase B close-out | group:B4 | done | |
 | C | 15 | Expiry ledger and lead-days toggle | group:C1 | done | |
-| C | 16 | costExpiryService, event and notification | group:C1 | todo | |
+| C | 16 | costExpiryService, event and notification | group:C1 | done | |
 | C | 17 | Worker, schedule and CLI | group:C2 | todo | |
 | C | 18 | Phase C close-out | group:C2 | todo | |
 

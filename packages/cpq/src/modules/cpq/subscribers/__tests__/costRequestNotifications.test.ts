@@ -100,15 +100,16 @@ describe('cost_requested manager notification', () => {
 })
 
 describe('notification types', () => {
-  it('declares the four frozen ids, in-app + email, with i18n keys that exist in en.json and no push', () => {
+  it('declares the four frozen cost request ids plus the expiry warning, in-app + email, with i18n keys that exist in en.json and no push', () => {
     const en = require('../../i18n/en.json') as Record<string, string>
-    expect(notificationTypes.map((type) => type.type)).toEqual(['cpq.cost_request.opened', 'cpq.cost_request.answered', 'cpq.cost_request.answer_pending', 'cpq.cost_request.declined'])
+    expect(notificationTypes.map((type) => type.type)).toEqual(['cpq.cost_request.opened', 'cpq.cost_request.answered', 'cpq.cost_request.answer_pending', 'cpq.cost_request.declined', 'cpq.cost.expiring'])
     for (const type of notificationTypes) {
       expect(type.channels).toEqual(['in_app', 'email'])
       expect(en[type.titleKey]).toBeTruthy()
       expect(en[type.bodyKey as string]).toBeTruthy()
     }
     for (const variant of ['confirmed', 'estimated', 'rateMissing', 'notReady']) expect(en[`cpq.notifications.costRequest.answered.body.${variant}`]).toBeTruthy()
+    expect(en['cpq.notifications.costExpiring.bodyExpired']).toBeTruthy()
     expect(en['notifications.categories.cpq']).toBeTruthy()
     expect(Object.values(en).join(' ')).not.toMatch(/\{(unitAmount|amount|price)\}/)
   })

@@ -21,7 +21,7 @@ Engine: om-auto-create-pr-loop (steps: 18, --loop: no)
 | B | 7 | Element index fields | group:B1 | done | |
 | B | 8 | Date plumbing | group:B1 | done | |
 | B | 9 | Index cost resolution | group:B2 | done | |
-| B | 10 | Cost preview and calculate-price | group:B2 | todo | |
+| B | 10 | Cost preview and calculate-price | group:B2 | done | |
 | B | 11 | Index UI | group:B3 | todo | |
 | B | 12 | Renew index re-evaluation | group:B3 | todo | |
 | B | 13 | Index demo seed and manual | group:B4 | todo | |

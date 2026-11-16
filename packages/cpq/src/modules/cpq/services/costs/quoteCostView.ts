@@ -135,6 +135,8 @@ export function fullCostView(row: CpqQuoteLineCost, context: CostViewContext = {
     fxRateSource: row.fxRateSource ?? null,
     fxRateDerivation: row.fxRateDerivation ?? null,
     convertedInstanceAmount: convertedInstanceAmount(row.instanceAmount, row.fxRate),
+    // Index snapshot (cost data: only here): the value, date and revision the unit amount was computed from (R4).
+    indexSnapshot: row.indexSnapshot ?? null,
     ...(row.errorCode === 'CURRENCY_NO_RATE' && row.currencyCode && context.quoteCurrencyCode
       ? { errorDetail: { code: row.errorCode, from: row.currencyCode, to: context.quoteCurrencyCode, date: today() } } : {}),
     sourcingStatus: row.sourcingStatus,

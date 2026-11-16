@@ -226,6 +226,8 @@ export class CpqQuoteCostService {
           // In-memory FX snapshot of this preview (nothing is stored); the route requires cpq.costs.view.
           fxRate: cost.fxRate ?? null, fxRateDate: cost.fxRateDate ?? null, fxRateSource: cost.fxRateSource ?? null,
           fxRateDerivation: cost.fxRateDerivation ?? null,
+          // Index costs: the in-memory snapshot at today's date (nothing stored); the route requires cpq.costs.view.
+          indexSnapshot: cost.indexSnapshot ?? null,
           convertedInstanceAmount: convertedInstanceAmount(cost.instanceAmount as string | null | undefined, cost.fxRate as string | null | undefined),
           ...(cost.errorCode ? { error: cost.errorCode } : {}),
           ...(cost.errorCode === 'CURRENCY_NO_RATE' && cost.currencyCode

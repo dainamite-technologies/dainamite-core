@@ -2243,3 +2243,101 @@ export class CpqInventoryCost {
   @Property({ name: 'deleted_at', type: Date, nullable: true })
   deletedAt: Date | null = null
 }
+
+// ─── CpqCostIndex ────────────────────────────────────────────────
+// Reference data for index-linked costs (index-costs spec §Data Model): a named market
+// series (e.g. "Brent, USD/bbl"). `code` is unique per tenant among non-deleted rows
+// (partial unique index in the migration) and immutable. Confidential cost data
+// (I-4), not registered in ce.ts. Values live in CpqCostIndexValue (same module, FK string).
+
+@Entity({ tableName: 'cpq_cost_indices' })
+@Index({ name: 'cpq_cost_indices_active_idx', properties: ['organizationId', 'tenantId', 'isActive'] })
+export class CpqCostIndex {
+  [OptionalProps]?: 'description' | 'isActive' | 'createdAt' | 'updatedAt' | 'deletedAt'
+
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @Property({ name: 'organization_id', type: 'uuid' })
+  organizationId!: string
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  @Property({ type: 'text' })
+  code!: string
+
+  @Property({ type: 'text' })
+  name!: string
+
+  /** Display only, e.g. "USD/bbl". */
+  @Property({ type: 'text' })
+  unit!: string
+
+  /** ISO 4217; immutable once values or references exist. */
+  @Property({ name: 'currency_code', type: 'text' })
+  currencyCode!: string
+
+  @Property({ type: 'text', nullable: true })
+  description: string | null = null
+
+  @Property({ name: 'is_active', type: 'boolean', default: true })
+  isActive: boolean = true
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+
+  @Property({ name: 'updated_at', type: Date, onUpdate: () => new Date() })
+  updatedAt: Date = new Date()
+
+  @Property({ name: 'deleted_at', type: Date, nullable: true })
+  deletedAt: Date | null = null
+}
+
+// ─── CpqCostIndexValue ───────────────────────────────────────────
+// Append-only dated value of an index: never updated, never deleted (no `updated_at` /
+// `deleted_at`). A correction is a new row for the same date with the next server-assigned
+// `revision`. Value in force at a date = latest `effective_date` <= date, highest revision.
+// DB CHECK `value > 0` is hand-added in the migration.
+
+@Entity({ tableName: 'cpq_cost_index_values' })
+@Unique({ name: 'cpq_cost_index_values_key_unique', properties: ['costIndexId', 'effectiveDate', 'revision'] })
+@Index({ name: 'cpq_cost_index_values_lookup_idx', properties: ['organizationId', 'tenantId', 'costIndexId', 'effectiveDate', 'revision'] })
+export class CpqCostIndexValue {
+  [OptionalProps]?: 'sourceNote' | 'importBatchId' | 'createdByUserId' | 'createdAt'
+
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @Property({ name: 'organization_id', type: 'uuid' })
+  organizationId!: string
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  @Property({ name: 'cost_index_id', type: 'uuid' })
+  costIndexId!: string
+
+  /** YYYY-MM-DD; future dates allowed. */
+  @Property({ name: 'effective_date', type: 'date' })
+  effectiveDate!: string
+
+  @Property({ type: 'numeric', columnType: 'numeric(18, 6)' })
+  value!: string
+
+  @Property({ type: 'integer' })
+  revision!: number
+
+  @Property({ name: 'source_note', type: 'text', nullable: true })
+  sourceNote: string | null = null
+
+  /** Groups the rows of one import call. */
+  @Property({ name: 'import_batch_id', type: 'uuid', nullable: true })
+  importBatchId: string | null = null
+
+  @Property({ name: 'created_by_user_id', type: 'uuid', nullable: true })
+  createdByUserId: string | null = null
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+}

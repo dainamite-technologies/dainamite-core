@@ -2,6 +2,7 @@ import { CpqQuoteConfiguration, CpqQuoteLineConfiguration } from '../../data/ent
 import {
   interceptors,
   readDeletedSalesQuoteId,
+  guardSalesDeleteOfTerminalCpqQuote,
   restoreCpqQuoteAfterSalesUndo,
   softDeleteCpqQuoteAfterSalesDelete,
 } from '../interceptors'
@@ -38,6 +39,7 @@ describe('cpq sales.quotes.delete undo interceptor', () => {
     expect(interceptors.map((entry) => entry.targetCommand)).toEqual(['sales.quotes.delete'])
     expect(typeof interceptors[0].afterUndo).toBe('function')
     expect(typeof interceptors[0].afterExecute).toBe('function')
+    expect(typeof interceptors[0].beforeExecute).toBe('function')
   })
 
   it('reads the quote id from the action log entry, then from the undo payload', () => {
@@ -109,10 +111,45 @@ describe('cpq sales.quotes.delete undo interceptor', () => {
       expect(em.flush).toHaveBeenCalledTimes(1)
     })
 
+    it.each(['accepted', 'rejected', 'cancelled'])('never soft-deletes a %s quote', async (cpqStatus) => {
+      const config: Record<string, unknown> = { id: 'cfg', organizationId: 'org', deletedAt: null, cpqStatus }
+      const { em, context } = deleteSetup(config)
+      expect(await softDeleteCpqQuoteAfterSalesDelete({ body: { id: QUOTE } }, context)).toBeNull()
+      expect(config.deletedAt).toBeNull()
+      expect(em.flush).not.toHaveBeenCalled()
+    })
+
     it('does nothing when CPQ already deleted the configuration or the quote is not a CPQ quote', async () => {
       const { em, context } = deleteSetup(null)
       expect(await softDeleteCpqQuoteAfterSalesDelete({ body: { id: QUOTE } }, context)).toBeNull()
       expect(em.flush).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('beforeExecute guard', () => {
+    function guardSetup(config: Record<string, unknown> | null) {
+      const em = { findOne: jest.fn(async () => config) }
+      return {
+        commandId: 'sales.quotes.delete',
+        auth: { tenantId: 'tenant' },
+        selectedOrganizationId: null,
+        container: { resolve: () => ({ fork: () => em }) },
+      } as never
+    }
+
+    it.each(['accepted', 'rejected', 'cancelled'])('blocks deleting a %s CPQ quote with 409', async (cpqStatus) => {
+      const result = await guardSalesDeleteOfTerminalCpqQuote({ body: { id: QUOTE } }, guardSetup({ id: 'cfg', cpqStatus }))
+      expect(result).toEqual({
+        ok: false,
+        status: 409,
+        message: `Cannot delete a quote in '${cpqStatus}' status`,
+        body: { error: `Cannot delete a quote in '${cpqStatus}' status` },
+      })
+    })
+
+    it('lets open CPQ quotes and plain sales quotes through', async () => {
+      expect(await guardSalesDeleteOfTerminalCpqQuote({ body: { id: QUOTE } }, guardSetup({ id: 'cfg', cpqStatus: 'ready' }))).toBeUndefined()
+      expect(await guardSalesDeleteOfTerminalCpqQuote({ body: { id: QUOTE } }, guardSetup(null))).toBeUndefined()
     })
   })
 })

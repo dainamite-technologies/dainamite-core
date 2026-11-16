@@ -199,7 +199,9 @@ No route contract change. Data retention changes for installers:
   the CPQ configuration and the lines deleted with it. Lines removed earlier
   on their own stay deleted. Its `afterExecute` soft-deletes the live CPQ
   configuration whenever `sales.quotes.delete` runs elsewhere (redo from the
-  audit log, a delete in the sales module). Run `yarn generate` after
+  audit log, a delete in the sales module), and its `beforeExecute` refuses
+  (409) to delete a sales quote whose CPQ quote is accepted, rejected or
+  cancelled, the same rule as the CPQ route. Run `yarn generate` after
   upgrading so the interceptor is registered.
 - `POST /api/cpq/product-specifications` creates the catalog product with
   `catalog.products.create`, so catalog validation limits apply (title 255,

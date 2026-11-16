@@ -1,10 +1,12 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
 import type {
   CommandInterceptor,
+  CommandInterceptorBeforeResult,
   CommandInterceptorContext,
   CommandInterceptorUndoContext,
 } from '@open-mercato/shared/lib/commands/command-interceptor'
 import { CpqQuoteConfiguration, CpqQuoteLineConfiguration } from '../data/entities'
+import { TERMINAL_STATUSES, type CpqStatus } from '../services/types'
 
 /**
  * Command interceptors for CPQ.
@@ -21,6 +23,11 @@ import { CpqQuoteConfiguration, CpqQuoteLineConfiguration } from '../data/entiti
  * redo from the audit log, or a delete started in the sales module. It
  * soft-deletes the live CPQ configuration of that quote and its live lines,
  * so no CPQ row is left pointing at a sales quote that no longer exists.
+ *
+ * `beforeExecute` applies the CPQ delete rule to every caller: a quote in a
+ * terminal CPQ status (accepted, rejected, cancelled) cannot be deleted. An
+ * accepted quote may already back an order; soft-deleting its configuration
+ * would make order activation treat an amend / cancel as a new sale.
  *
  * Auto-discovered from `commands/interceptors.ts`; no DI registration.
  */
@@ -86,6 +93,23 @@ export async function restoreCpqQuoteAfterSalesUndo(
   return { restoredConfigurationId: config.id, restoredLines: lines.length }
 }
 
+const isTerminal = (status: string | null | undefined) =>
+  !!status && (TERMINAL_STATUSES as readonly string[]).includes(status as CpqStatus)
+
+export async function guardSalesDeleteOfTerminalCpqQuote(
+  input: unknown,
+  context: CommandInterceptorContext,
+): Promise<CommandInterceptorBeforeResult | void> {
+  const salesQuoteId = readDeletedSalesQuoteId(input)
+  const tenantId = context.auth?.tenantId ?? null
+  if (!salesQuoteId || !tenantId) return
+  const em = (context.container.resolve('em') as EntityManager).fork()
+  const config = await em.findOne(CpqQuoteConfiguration, { quoteId: salesQuoteId, tenantId, deletedAt: null })
+  if (!config || !isTerminal(config.cpqStatus)) return
+  const message = `Cannot delete a quote in '${config.cpqStatus}' status`
+  return { ok: false, status: 409, message, body: { error: message } }
+}
+
 export async function softDeleteCpqQuoteAfterSalesDelete(
   input: unknown,
   context: CommandInterceptorContext,
@@ -97,7 +121,8 @@ export async function softDeleteCpqQuoteAfterSalesDelete(
   // Scoped by tenant only: a delete from the sales module may run with no
   // selected organization; the quote id itself is unique.
   const config = await em.findOne(CpqQuoteConfiguration, { quoteId: salesQuoteId, tenantId, deletedAt: null })
-  if (!config) return null
+  // Terminal quotes are blocked in beforeExecute; never soft-delete one here.
+  if (!config || isTerminal(config.cpqStatus)) return null
   const lines = await em.find(CpqQuoteLineConfiguration, {
     quoteConfigurationId: config.id,
     tenantId,
@@ -116,6 +141,9 @@ export const interceptors: CommandInterceptor[] = [
     id: 'cpq.restore-quote-configuration-after-sales-undo',
     targetCommand: 'sales.quotes.delete',
     priority: 50,
+    async beforeExecute(input, context) {
+      return guardSalesDeleteOfTerminalCpqQuote(input, context)
+    },
     async afterExecute(input, _result, context) {
       await softDeleteCpqQuoteAfterSalesDelete(input, context)
     },

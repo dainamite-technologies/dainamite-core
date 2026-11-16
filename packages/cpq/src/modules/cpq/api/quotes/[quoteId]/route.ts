@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { cpqContextError, resolveCpqRouteContext } from '../../context'
 import { cpqUpdateQuoteSchema } from '../../../data/validators'
 import { isQuotingError } from '../../../services/cpqQuotingService'
+import { TERMINAL_STATUSES } from '../../../services/types'
 import { resolveQuotingService } from '../../resolveQuotingService'
 import { CpqQuoteConfiguration, CpqQuoteLineConfiguration } from '../../../data/entities'
 import { SalesQuote } from '@open-mercato/core/modules/sales/data/entities'
@@ -87,7 +88,7 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ quote
     }
     if (!cpqConfig) return NextResponse.json({ error: 'Quote not found' }, { status: 404 })
 
-    const terminalStatuses = ['accepted', 'rejected', 'cancelled']
+    const terminalStatuses: readonly string[] = TERMINAL_STATUSES
     if (terminalStatuses.includes(cpqConfig.cpqStatus)) {
       return NextResponse.json({ error: `Cannot delete a quote in '${cpqConfig.cpqStatus}' status` }, { status: 409 })
     }

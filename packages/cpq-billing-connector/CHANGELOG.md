@@ -1,5 +1,29 @@
 # @dainamite/cpq-billing-connector
 
+## 5.2.0
+
+### Minor Changes
+
+- dc9a79d: ARC credit reasons, end-date clamp and an activation guard (spec `2026-11-16-billing-operator-polish-and-bill-cycle-day`, Part 2 / Phase 9).
+
+  - **End-date clamp.** The `amended` / `cancelled` / `superseded` subscribers end each billing item at `max(effectiveDate − 1, billStartDate − 1)` (`lib/arcEndDate.ts`). An item that has not started yet ends the day before its start ("cancelled before start"), so it never bills and never trips billing's `billing.item.end_before_start`. Items that already end on or before that date are left alone: a re-delivered event writes nothing, and an earlier end is never extended.
+  - **Credit reasons.** Every ARC end-date write sends `creditReasonCode` (`subscription_amended` / `subscription_cancelled` / `subscription_superseded`) plus `creditReasonParams { reference?, effectiveDate }`. `reference` is the CPQ order number, best-effort. Billing stores the reason only when the end date credits already-billed days, and renders it in the invoice language. This needs a `@dainamite/billing` release that accepts the fields; older billing versions drop them.
+  - **Earliest activation date.** `GET /api/cpq_billing_connector/order-setups/:orderId` adds `earliestActivationDate` (`YYYY-MM-DD` or null) and `earliestActivationReason { subscriptionId, itemDescription }` (or null). For an `amend` / `cancel` order this is the day billing of every target subscription has begun: per subscription, the earliest `billStartDate` among its active billing items that do not end before they start (a future-dated item does not block). Renewals and new business get null. The Billing tab shows an amber callout while that date is in the future (i18n en / es / de / pl).
+  - **Activation guard.** New `data/guards.ts` registers a mutation guard on `cpq.order` / `update`. For `{ action: 'activate' }` it rejects activation before the earliest date with 422 `{ error, code: 'cpq_billing_connector.activation_before_billing_start', earliestActivationDate }`. If billing cannot be read, the guard fails open and logs a warning. Requires `@dainamite/cpq` with mutation-guard wiring on the activate route. Run `yarn generate` after upgrading.
+
+- dc9a79d: Bill cycle day. Follows `@dainamite/billing` 1.1 (peer range now `^1.1.0`; `@dainamite/cpq` `^1.1.0` for the activation guard). Order-setup overrides take `billCycleInterval` + `billCycleDay`; `billCycleAnchor` and `quarterly` are rejected.
+
+  - **New accounts are created with `billCycle` + `billCycleInterval` + `billCycleDay`** instead of `billCycleAnchor`. Default: every 1 month on day 1. `quarterly` is gone; a legacy `quarterly` in an upstream payload is read as monthly × 3, and an invalid upstream combination falls back to the unit's defaults instead of failing onboarding.
+  - **`nextBillDate` is sent only when the operator or upstream set one.** Otherwise billing starts the account on the first bill cycle day on or after today. The connector no longer derives it from the earliest line bill start or the activation date; recurring items that start later produce empty cycles until their bill start.
+  - **Order setup.** The free-text "Bill cycle anchor" input is replaced by "Every [N] [unit] on [day]" controls (1–31 for months / years, a weekday for weeks, hidden for days). "First bill date" is optional. Saved `accountOverrides` take `billCycleInterval` / `billCycleDay` (validated against the unit); `billCycleAnchor` is rejected.
+
+### Patch Changes
+
+- dc9a79d: Order billing setup: follow-ups from the PR review.
+
+  - **Concurrent saves no longer fail with a 500.** When two requests create an order's billing setup at the same time, the loser hits the unique index and now retries once: it finds the winner's row and updates it (PUT replaces the whole setup, so the last writer wins). The activation lock (`markApplied`) retries the same way and keeps the first `appliedAt`.
+  - **A saved account that is no longer usable is flagged.** If the account saved for an order was deactivated, deleted, or no longer matches the customer and currency, the Billing tab shows a warning and re-derives the account choice (one candidate → preselected, none → create new, several → pick one) instead of re-submitting a selection the API rejects with 422. Saved bill start dates are kept. Activation already falls back safely when nobody re-saves.
+
 ## 5.1.0
 
 ### Minor Changes

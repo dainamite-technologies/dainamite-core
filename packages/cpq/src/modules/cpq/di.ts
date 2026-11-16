@@ -18,6 +18,8 @@ import { CpqCostSourcingService } from './services/costs/costSourcingService'
 import { CpqCostRequestQueueService } from './services/costs/costRequestQueue'
 import { createSourcingPublisher } from './services/costs/sourcingPublisher'
 import { CpqCostIndexService, findIndexReferences } from './services/costs/costIndexService'
+import { CpqCostExpiryService } from './services/costs/costExpiryService'
+import { tryResolveNotificationService } from './lib/costNotifications'
 import { CpqFxRateResolver, type FxExchangeRateService } from './services/costs/fxRateResolver'
 
 /**
@@ -47,6 +49,18 @@ export function register(container: AppContainer) {
       em: container.resolve('em'),
       findReferences: findIndexReferences,
     })).scoped(),
+    // Supplier cost expiry warnings (index-costs spec step 16 / 17): used by the `cpq-cost-expiry` worker and the
+    // `run-cost-expiry` CLI. Notifications are an optional peer: with no `notificationService` (or no `rbacService`) the
+    // warnings are events only.
+    cpqCostExpiryService: asFunction(() => {
+      const notificationService = tryResolveNotificationService(container)
+      const rbacService = container.hasRegistration('rbacService') ? container.resolve('rbacService') : null
+      return new CpqCostExpiryService({
+        em: container.resolve('em'),
+        featureTogglesService: container.resolve('featureTogglesService'),
+        notify: notificationService && rbacService ? { notificationService, rbacService } : null,
+      })
+    }).scoped(),
     cpqAdjustmentService: asFunction(() => new CpqAdjustmentService({
       em: container.resolve('em'),
       quotingService: container.resolve('cpqQuotingService'),

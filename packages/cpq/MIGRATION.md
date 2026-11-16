@@ -166,6 +166,69 @@ the `@dainamite/cpq` package, per
 
 ## Schema / API changelog (track breaking changes here)
 
+### 2026-11-15 — ARC costs (cost-plus pricing, feature 5)
+
+Spec: `.ai/specs/2026-11-12-cpq-cost-plus-arc-costs.md`. Minor release of
+`@dainamite/cpq`. Requires features 1 to 4. Operator documentation: "ARC costs:
+carry, renegotiation and recovery" in `manuals/cpq-cost-plus-pricing.md` and
+Scenario 12 of `manuals/xd-250-arc-flow.md`.
+
+**Schema (run `yarn mercato db migrate`).**
+- `Migration20261115151709` (CHECKs and the partial index hand-added; the
+  generator cannot express them): `cpq_quote_line_costs.renegotiation_due`
+  (boolean not null default false); `cpq_quote_line_costs_origin_check` widened to
+  `catalog` / `manual` / `carried` and `..._value_origin_check` to also allow
+  `carried`; partial index `cpq_quote_line_costs_carried_item_cost_idx` on
+  `(organization_id, tenant_id, carried_from_item_cost_id)` (open carried rows).
+  `down()` maps `carried` rows to `manual` before restoring the narrow checks.
+
+**Behaviour changes.**
+- Amend mirror lines (and standalone Renew mirrors, reconciled with the catalog)
+  carry the item's open costs as `carried` lines; activation writes them back in
+  place through `replaceItemCosts` (same cost ids, full image). Cost-only Amends
+  are margin-only: payloads (`amended` / `renewed`) are byte-identical (I-9).
+- **Standalone Renews are no longer frozen** for cost-plus items: they are
+  re-priced at today's standard. Merge-renew lines and Renews created before this
+  release (`_arcCostPlusFrozen` lines) keep the old rules.
+- **Activation lock order**: order row, then the source quote row
+  (`lockSourceQuote`), then the target subscription rows sorted by id. Anything
+  that locks several of them must follow this order.
+- `409 COST_SOURCE_CHANGED` (with `lines[]`, `costKeys`) at conversion and at
+  activation when carried costs no longer match the subscription; nothing is
+  written. The activate and status routes now return the OrderError `details`.
+- Frozen-line lock rule: a cost change on a frozen mirror line is margin-only
+  (never `COST_LOCKED`); overwriting a carried value needs a note.
+- Renew: carried MRC costs whose validity / supplier term ends before the new term
+  are `renegotiation_due` (status `estimated`, conversion blocked) until answered,
+  re-entered or kept (`keepCurrent`).
+- `QUOTE_CONVERTED` bodies of the sourcing writes gain `orderLineCostId`
+  (`{ orderId, orderLineCostId }`).
+- `GET /api/cpq/cost-plus/usage` gains `openArcQuotesWithCarriedCosts`.
+- Cost / quote reads gain `carried`, `renegotiationDue`, `frozen` (everyone) and,
+  for `cpq.costs.view` holders only, `previous`, `droppedItemCosts`, `exposure`
+  and `arcCosts` (before / after MRC and NRC cost per ARC line).
+- Re-price from cost is **not shipped**: it needs `modifiedItems` in the billing
+  payload, which does not exist yet (spec Q3). Until then a cost-only Amend moves
+  margin only.
+
+**New routes** (all `openApi`, `requireFeatures`):
+`POST /api/cpq/quotes/{quoteId}/items/{lineId}/refresh-from-subscription`
+(`cpq.quotes.manage` plus the quote-type ARC feature, enforced in the service);
+`PATCH /api/cpq/orders/{orderId}/costs/{orderLineCostId}` (`cpq.orders.manage` +
+`cpq.costs.manage`, re-confirmation, non-undoable command
+`cpq.order_line_cost.reconfirm`). `PATCH .../costs/{costId}` accepts
+`keepCurrent: true`. New error codes: `COST_SOURCE_CHANGED`,
+`RENEGOTIATION_DATES_SHORT`, `NOT_RENEGOTIATION_DUE`, `NOT_ARC_MIRROR`,
+`MERGE_LINE`, `ITEM_NOT_ACTIVE`, `ORDER_ACTIVATED`, `ORDER_CANCELLED`.
+
+**Demo.** `demo_gix` seeds one live Acme subscription whose 270 USD partner tail
+has a supplier term ending before the subscription renews.
+
+**Rollback.** Code first, then the down-migration (`carried` origins become
+`manual`; open ARC quotes lose their carry markers' meaning, so settle or cancel
+open Amend / Renew quotes first). Orders carrying a re-confirmation keep the
+values; `reconfirmed_*` columns pre-date this release.
+
 ### 2026-11-15 — Foreign-currency costs (cost-plus pricing, feature 4)
 
 Spec: `.ai/specs/2026-11-12-cpq-cost-plus-foreign-currency-costs.md`. Minor

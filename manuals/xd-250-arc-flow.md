@@ -414,6 +414,72 @@ To see a brand-new merged subscription created:
 
 ---
 
+# Scenario 12 — Costs on ARC quotes (cost-plus tenants)
+
+Applies when the `cpq.cost_plus` toggle is on and the subscription's items have
+costs (the `demo_gix` seed adds a live Acme subscription "IP Transit with partner
+tail" whose 270 USD tail has a supplier term ending 45 days out, before the
+subscription renews in 90 days). Full reference:
+[cpq-cost-plus-pricing.md](./cpq-cost-plus-pricing.md#arc-costs-carry-renegotiation-and-recovery).
+Needs `cpq.costs.view` to see amounts.
+
+## 12.1 — Cost-only Amend (renegotiate a cost)
+
+1. **Amend** the subscription. The mirror line says **price kept** and its
+   Costs panel (expand the line) lists the item cost with a **Carried** badge.
+2. Edit the carried cost (270 → 240). A note is required to overwrite a carried
+   value. The price does not change; only the margin does, and the line shows
+   *"Price locked — cost changes move margin only"*.
+3. The quote shows *"Internal change — no customer document needed; move to
+   Accepted when ready."* Walk it to **Accepted**, convert, activate.
+4. The item cost keeps its id and now holds 240; Change History shows an
+   `amend` entry with **Cost changes** `Partner tail · 270 USD -> 240 USD`.
+   The `cpq.subscription.amended` payload is unchanged (no `modifiedItems`, no
+   price delta).
+
+**Checkpoint:** after activation, `GET .../subscriptions/{id}/costs` returns the
+same cost id with 240.
+
+## 12.2 — Renew: renegotiation due
+
+1. **Renew** the subscription. Standalone Renews are no longer price-frozen:
+   the line is re-priced at today's standard and its costs are reconciled with the
+   catalog.
+2. A carried cost whose supplier term ends before the new term end shows
+   **Renegotiation due** and the quote cannot convert (`COSTS_NOT_CONFIRMED`).
+3. Settle it with **Request cost** (supplier answer), a manual value, or
+   **Keep current cost** (new supplier term / validity, or *Rolling*, and a new
+   supplier quote reference or a note). Costs that no longer apply are listed
+   as *Dropped at renewal*.
+
+## 12.3 — Cancel: supplier exposure
+
+A Cancel quote shows **Supplier exposure**: for each open cost whose supplier
+term outlives the cancellation, the term end and the months left ("exposure 4
+months"), or "supplier term unknown". Information only.
+
+## 12.4 — Re-confirm an order line cost
+
+On a `draft` / `pending_activation` ARC order, **Re-confirm** on a cost line
+changes its value (margin only; a note or a new supplier quote reference is
+required for a changed value). Activation then writes the re-confirmed value to
+the subscription. After activation the action is refused (`ORDER_ACTIVATED`).
+
+## 12.5 — Recovery from `COST_SOURCE_CHANGED`
+
+If the subscription's costs changed after the quote was created (another ARC
+order activated first), conversion answers `409 COST_SOURCE_CHANGED` and the
+quote page lists the stale lines: **Refresh from subscription** on each (it
+discards renegotiated costs and changes on that line), then convert again. If the
+order is already created, activation answers the same 409 and writes nothing:
+cancel the order and create a new Amend. Of two Amends carrying the same cost,
+exactly one can activate.
+
+Not shipped yet: **Re-price from cost** (re-pricing a frozen line from its
+renegotiated cost). It waits for `modifiedItems` in the billing payload.
+
+---
+
 # Reset / cleanup
 
 If the data gets messy and you want to start over:
@@ -437,8 +503,8 @@ This section is for developers extending or debugging ARC. Operators don't need 
 
 | Action | What the quote does | What changes on the sub at activation |
 |---|---|---|
-| Amend | Adds / removes items on existing subscription(s). Term untouched. | Items added/removed; subscription status unchanged. ChangeLog row written. |
-| Renew (standalone) | Extends term + optionally adds/removes items on a single subscription. | `currentTermStart` / `currentTermEnd` / `termMonths` updated; items mutated in place. |
+| Amend | Adds / removes items on existing subscription(s). Term untouched. | Items added/removed; subscription status unchanged. ChangeLog row written. Carried item costs are written back in place (cost-plus tenants). |
+| Renew (standalone) | Extends term + optionally adds/removes items on a single subscription. | `currentTermStart` / `currentTermEnd` / `termMonths` updated; items mutated in place. Item costs reconcile with the catalog (cost-plus tenants). |
 | Renew (merge) | Consolidates 2+ subscriptions into one new sub with a new term. | A **new** subscription row is created with the new term + combined items. All input subs go to `superseded` with `mergedIntoSubscriptionId` → new sub. |
 | Cancel | Terminates the subscription(s). | Subscription → `terminated`; items → `terminated`; assets → `cancelled`. |
 
@@ -521,3 +587,4 @@ ARC quote approval (status transitions through the lifecycle) uses the existing 
 - Scenario 8 — spec § UI Integration "Existing-quote redirect" + § Validation
 - Scenario 9 — spec § Process 4 (Expiring Subscriptions list view)
 - Scenario 10 — spec § Data Models (`CpqSubscriptionChangeLog`)
+- Scenario 12 — `.ai/specs/capabilities/cpq-arc.md` (carried costs, renegotiation, exposure) and `specs/` cost-plus ARC costs feature

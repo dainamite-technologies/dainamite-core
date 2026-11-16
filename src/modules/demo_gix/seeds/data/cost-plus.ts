@@ -76,3 +76,27 @@ export const FX_DEMO = {
   scenario: 'cost-fx-converted-tail',
   label: 'Demo — IP Transit, USD partner tail converted to EUR',
 } as const
+
+/**
+ * ARC costs demo: one LIVE subscription (activated through quote → order → activation, so its item cost is real) whose
+ * partner tail (a fixed 270 USD) has a supplier term that ends before the subscription renews. A Renew of it flags the
+ * tail "renegotiation due"; an Amend carries it. 270 x 1.25 = 337.50.
+ */
+export const ARC_COST_DEMO = {
+  sku: 'GIX-IP-TRANSIT-ARC',
+  title: 'GIX IP Transit with partner tail (supplier term ending)',
+  description: 'IP transit whose partner tail is contracted only until before the subscription renews',
+  specCode: 'SPEC-GIX-IP-TRANSIT-ARC',
+  offerCode: 'OFFER-GIX-IP-TRANSIT-ARC',
+  chargeCode: 'transit_fee_arc',
+  currency: 'USD',
+  markupPercent: 25,
+  tailElementCode: 'partner_tail_arc',
+  tailAmount: 270,
+  supplierName: PARTNER_SUPPLIER,
+  /** Days from today: the subscription renews 90 days out; the supplier term ends 45 days out, i.e. before the renewal. */
+  subscriptionTermEndDays: 90,
+  supplierTermEndDays: 45,
+  scenario: 'cost-arc-supplier-term-ending',
+  label: 'Demo — IP Transit, partner tail supplier term ends before renewal',
+} as const

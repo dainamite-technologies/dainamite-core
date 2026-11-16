@@ -32,7 +32,7 @@ Engine: om-auto-create-pr-loop (steps: 23, --loop: no)
 | E | 18 | Read projection additions | group:E2 | done | |
 | F | 19 | ArcLineDiff cost and margin rows | group:F1 | done | |
 | F | 20 | Quote and order pages | group:F1 | done | |
-| F | 21 | Docs, demo and E2E | group:F2 | todo | |
+| F | 21 | Docs, demo and E2E | group:F2 | done | |
 | G | 22 | Re-price from cost | group:G1 | blocked | |
 | G | 23 | Archive the Delta | group:G2 | todo | |
 

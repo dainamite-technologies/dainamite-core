@@ -1027,3 +1027,34 @@ describe('cost index surfaces (index costs, Phase A)', () => {
     expect(list.filter((spec) => /index/i.test(spec.id))).toEqual([])
   })
 })
+
+describe('supplier cost expiry warnings (index costs, Phase C)', () => {
+  it('the event and the notification carry no amount, supplier, note or index data; the cost line is never written (control: the line holds the sentinels)', async () => {
+    const { setup: expirySetup, run: expiryRun, lineRow: expiryLine } = await import('../costs/__tests__/_helpers/expiryHarness')
+    const line = expiryLine({ supplierName: SUPPLIER, supplierId: 'sup-1', unitAmount: COST, instanceAmount: COST, note: NOTE, indexSnapshot: { value: COST, factor: '3.3333' }, fxRate: FX_RATE })
+    const before = JSON.stringify(line)
+    const t = expirySetup({ lines: [line] })
+    expect(await expiryRun(t.service, '2026-11-06')).toEqual({ inserted: 1, reEmitted: 0 })
+    expect(leaked(line)).toEqual(expect.arrayContaining(['7777.77', SUPPLIER, NOTE, FX_RATE])) // positive control
+    expect(JSON.stringify(line)).toBe(before) // read-only on the cost line
+    expect(t.emit).toHaveBeenCalledTimes(1)
+    expect(t.createBatch).toHaveBeenCalledTimes(1)
+    const [eventId, payload] = t.emit.mock.calls[0] as unknown as [string, Record<string, unknown>]
+    expect(eventId).toBe('cpq.quote.cost_expiring')
+    expectClean(payload)
+    expect(JSON.stringify(payload)).not.toMatch(/"[A-Za-z]*(amount|Amount|supplier|Supplier|markup|margin|note|index|Index|fx)[A-Za-z]*"/)
+    expectClean(t.createBatch.mock.calls)
+    expect(JSON.stringify(t.createBatch.mock.calls)).not.toMatch(/amount|supplier|7777|3\.3333/i)
+    expect(t.ledger).toHaveLength(1)
+    expectClean(t.ledger)
+  })
+
+  it('the declared event is non-broadcast and the notification type has no amount-bearing variable', async () => {
+    const declared = (eventsConfig as unknown as { events: Array<{ id: string; clientBroadcast?: boolean }> }).events.find((e) => e.id === 'cpq.quote.cost_expiring')
+    expect(declared).toBeDefined()
+    expect(declared!.clientBroadcast).not.toBe(true)
+    const { notificationTypes } = await import('../../notifications')
+    const type = notificationTypes.find((n) => n.type === 'cpq.cost.expiring')!
+    expect(JSON.stringify(type)).not.toMatch(/amount|supplier|price/i)
+  })
+})

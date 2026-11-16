@@ -166,6 +166,40 @@ the `@dainamite/cpq` package, per
 
 ## Schema / API changelog (track breaking changes here)
 
+### 2026-11-16 — Index costs, Phase C: supplier cost expiry warnings (cost-plus pricing, feature 6)
+
+Spec: `.ai/specs/2026-11-12-cpq-cost-plus-index-costs-expiry.md`. Minor release of
+`@dainamite/cpq`, on top of Phases A and B.
+
+**Schema (run `yarn mercato db migrate`).**
+- `Migration20261116105841`: new table `cpq_cost_expiry_warnings` (the warning ledger: unique
+  `(quote_line_cost_id, valid_until)`, `emitted_at` null until delivered) and a hand-added
+  partial index `cpq_quote_line_costs_expiry_candidate_idx` on `cpq_quote_line_costs`
+  (confirmed price-basis lines with a `valid_until`). `down()` drops both.
+
+**Event.** New `cpq.quote.cost_expiring` (non-broadcast, persistent): ids, `costKey`,
+`chargeCode`, `validUntil`, `daysLeft`, `expired`, `leadDays`, `warningId` (consumers dedupe on
+it). No amount, no supplier. New notification type `cpq.cost.expiring` (in-app + email) to
+cost managers (`cpq.costs.view` + `cpq.costs.manage`).
+
+**Toggle.** `cpq.cost_expiry_lead_days` (number, default 14), registered with the other
+cost-plus toggles (`seed-cost-plus`, existing values kept).
+
+**Worker and schedule.** Worker `cpq:cost-expiry` on queue `cpq-cost-expiry` (concurrency 1,
+not scheduler-safe, tenant scope from the scheduler envelope only). One module-registered
+schedule per organization, cron `0 6 * * *` UTC, created by tenant setup and `seed-cost-plus`
+as an upsert without `isEnabled` (an admin's disable is kept). Skipped when the scheduler
+module is not installed. After upgrading an existing install run
+`yarn mercato cpq seed-cost-plus` and `yarn generate`. `cpqCostExpiryService` is registered in
+DI (notifications optional).
+
+**CLI.** `yarn mercato cpq run-cost-expiry [--org] [--tenant] [--dry-run] [--today YYYY-MM-DD]`;
+`--today` is refused in production unless `--dry-run`. `seed-cost-plus` also registers the
+schedules and accepts `--org` / `--tenant`.
+
+**Rollback.** Disable the schedule on the scheduler page (or delete the row), then roll the
+code back; the ledger table can stay or be dropped by `down()`.
+
 ### 2026-11-16 — Index costs, Phase B: index cost elements and pricing (cost-plus pricing, feature 6)
 
 Spec: `.ai/specs/2026-11-12-cpq-cost-plus-index-costs-expiry.md`. Minor release of

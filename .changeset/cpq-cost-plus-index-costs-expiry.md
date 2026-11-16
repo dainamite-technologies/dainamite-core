@@ -28,3 +28,17 @@ Index cost elements (Phase B: engine): a cost-plus charge can take its cost from
   `index_snapshot`; sent (locked) quotes never move. ARC Renew re-evaluates carried index
   costs. Calculate-price and cost preview resolve at today's value and expose no index data.
 - Index value, factor, offset and snapshot are `cpq.costs.view` data only.
+
+Supplier cost expiry warnings (Phase C): a daily job warns cost managers before confirmed
+supplier costs on open quotes expire.
+
+- Migration `Migration20261116105841` adds `cpq_cost_expiry_warnings` (the dedupe ledger) and a
+  partial candidate index on `cpq_quote_line_costs`; run `yarn mercato db migrate`.
+- New event `cpq.quote.cost_expiring` (non-broadcast; no amount or supplier) and notification
+  `cpq.cost.expiring` to users with `cpq.costs.view` + `cpq.costs.manage`.
+- New toggle `cpq.cost_expiry_lead_days` (default 14).
+- New worker `cpq:cost-expiry` (queue `cpq-cost-expiry`) and a per-organization daily schedule
+  (06:00 UTC) created by tenant setup and `cpq seed-cost-plus`; run
+  `yarn mercato cpq seed-cost-plus` once after upgrading and keep a queue worker running.
+- New CLI `cpq run-cost-expiry [--org] [--tenant] [--dry-run] [--today]`; `--today` is refused in
+  production without `--dry-run`.

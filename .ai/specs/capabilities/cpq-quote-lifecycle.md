@@ -208,3 +208,30 @@ The system SHALL copy `fx_rate`, `fx_rate_date`, `fx_rate_source` and `fx_rate_d
 Frozen by: `packages/cpq/src/modules/cpq/services/__tests__/cpqOrderService.test.ts`, `cpqInventoryService` activation / snapshot tests
 
 Source: .ai/specs/2026-11-12-cpq-cost-plus-foreign-currency-costs.md
+
+## Requirement: Supplier cost expiry warnings
+The system SHALL, once a day per organization with the `cpq.cost_plus` toggle on, emit the non-broadcast event `cpq.quote.cost_expiring` and notify users holding `cpq.costs.manage` and `cpq.costs.view` in the quote's organization (notification `cpq.cost.expiring`). This SHALL happen exactly once per `(cost line, valid_until)`, for every confirmed price-basis cost line with `valid_until <= today + N` (`cpq.cost_expiry_lead_days`, default 14) on a quote that is not rejected or cancelled and has no order. Missed days SHALL be caught up. Neither the event nor the notification SHALL carry an amount or supplier. The daily run SHALL be a module-registered schedule (`cpq-cost-expiry` queue, 06:00 UTC) whose enabled flag a re-seed never changes, and the `cpq run-cost-expiry` CLI SHALL refuse `--today` in production unless `--dry-run` is set.
+
+### Scenario: Warned once
+- WHEN a tail cost has `valid_until` 2026-11-20, N = 14, and the job runs on 2026-11-06 and 2026-11-07
+- THEN exactly one event and one notification exist for that line and date
+
+### Scenario: Validity extended
+- WHEN procurement extends the cost to 2026-12-31 after the warning
+- THEN no further warning is sent until 2026-12-17, when one is sent for 2026-12-31
+
+### Scenario: Missed days
+- WHEN the job did not run for three days
+- THEN the next run warns every in-scope line that became due in those days (including already expired ones, flagged `expired: true`), with no duplicates
+
+### Scenario: Excluded quotes
+- WHEN the quote is cancelled, or has been converted to an order
+- THEN no warning is emitted for its cost lines
+
+### Scenario: Schedule disabled by an admin
+- WHEN a tenant admin disables the schedule and `seed-cost-plus` or tenant setup runs again
+- THEN the schedule stays disabled
+
+Frozen by: `packages/cpq/src/modules/cpq/services/costs/__tests__/costExpiryService.test.ts`, `packages/cpq/src/modules/cpq/workers/__tests__/cost-expiry.worker.test.ts`, `packages/cpq/src/modules/cpq/lib/__tests__/costExpirySchedule.test.ts`, `packages/cpq/src/modules/cpq/__tests__/cli.test.ts`, `costConfidentiality.test.ts` (Phase C)
+
+Source: .ai/specs/2026-11-12-cpq-cost-plus-index-costs-expiry.md

@@ -931,6 +931,43 @@ it move) and **"Demo — IP Transit, index cost (with customer: frozen)"** (same
 price, never moves). In 45 days the future value takes effect (75.00 EUR) for the
 unlocked quote only.
 
+## Supplier cost expiry warnings
+
+A confirmed supplier price is only good until its `valid_until` date. Once a day CPQ
+looks for confirmed price-basis cost lines that expire within the next **N days**
+(toggle `cpq.cost_expiry_lead_days`, default 14, set per tenant) on quotes that are
+still open and have no order, and warns the cost managers: a notification
+"Supplier cost expiring on quote ..." (users holding both `cpq.costs.view` and
+`cpq.costs.manage` in the quote's organization) and the non-broadcast event
+`cpq.quote.cost_expiring` for workflows. Lines that have **already expired** and were
+never warned are included and say "expired on". A line is warned **once per
+`valid_until` date**: extend the validity to a new date and a new warning comes when
+that date gets within N days. Rejected and cancelled quotes, converted quotes and
+quotes while `cpq.cost_plus` is off are skipped. Warnings carry the quote number, cost
+name and date only: never an amount or a supplier.
+
+### The schedule
+
+Each organization gets one schedule, "CPQ supplier cost expiry warnings", daily at
+06:00 UTC, created by tenant setup and by `yarn mercato cpq seed-cost-plus` (run it
+once after upgrading an existing install). It needs the Scheduler module; without it
+nothing is registered and warnings are only produced by the CLI below. A tenant admin
+can disable it on the scheduler page; re-running `seed-cost-plus` keeps it disabled,
+and re-enabling it catches up every missed day without duplicates. The job runs on the
+`cpq-cost-expiry` queue, so a queue worker must be running (the same worker process that serves the other
+queues; with the local queue strategy in development it runs in the app).
+
+### Running it by hand
+
+```
+yarn mercato cpq run-cost-expiry [--org <id>] [--tenant <id>] [--dry-run] [--today YYYY-MM-DD]
+```
+
+`--dry-run` prints how many warnings would go out and writes nothing. `--today` runs the
+scan as of another date (for demos and tests); it is refused in production unless
+`--dry-run` is also given, so no back- or forward-dated warnings can be sent there.
+Running it twice warns nothing the second time.
+
 ## Margin
 
 Holders of `cpq.costs.view` see the **Margin card** on the quote page and
@@ -1103,4 +1140,5 @@ Full contracts: the `openApi` export on each route.
 Re-pricing a frozen Amend line from its cost waits for `modifiedItems`
 ([Re-price from cost](#re-price-from-cost-not-shipped)). Foreign-currency
 costs are described in [Foreign-currency costs](#foreign-currency-costs) and
-index-linked costs in [Index costs](#index-costs).
+index-linked costs in [Index costs](#index-costs). Expiring supplier prices are covered in
+[Supplier cost expiry warnings](#supplier-cost-expiry-warnings).

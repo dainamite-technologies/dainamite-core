@@ -6,13 +6,16 @@ import { toIsoDate } from './orderSetupResolution'
  * Pure.
  *
  * CPQ has no operator-chosen amendment date: an `amend` / `cancel` order takes
- * effect the moment it is activated. Activating it before billing of the
- * target subscription has started would end items that have not billed yet,
- * so the earliest activation date is the LATEST `billStartDate` among the
- * target subscriptions' billing items that are:
+ * effect the moment it is activated. It may be activated once billing of
+ * EVERY target subscription has begun: per subscription, the EARLIEST
+ * `billStartDate` among its billing items; across subscriptions, the latest
+ * of those. Items considered are:
  *   - active (`isActive`), and
  *   - not already ended before they start (`billEndDate < billStartDate`:
  *     "cancelled before start" — they never bill).
+ * A future-dated item (e.g. an upsell starting next term) does not block:
+ * the subscribers end not-yet-started items at `billStartDate − 1`, so it
+ * simply never bills.
  *
  * Renewals and new-business orders have no constraint (`null`).
  */
@@ -44,16 +47,27 @@ export function computeEarliestActivation(
   items: ActivationBillingItem[],
 ): EarliestActivation | null {
   if (!isActivationConstrained(quoteType)) return null
-  let latest: EarliestActivation | null = null
+  // Billing start of each subscription = its earliest item start.
+  const firstStartBySubscription = new Map<string, EarliestActivation>()
   for (const item of items) {
     if (!item.isActive || !item.subscriptionId) continue
     const start = toIsoDate(item.billStartDate)
     if (!start) continue
     const end = toIsoDate(item.billEndDate)
     if (end && end < start) continue
-    if (!latest || start > latest.date) {
-      latest = { date: start, subscriptionId: item.subscriptionId, itemDescription: item.description }
+    const current = firstStartBySubscription.get(item.subscriptionId)
+    if (!current || start < current.date) {
+      firstStartBySubscription.set(item.subscriptionId, {
+        date: start,
+        subscriptionId: item.subscriptionId,
+        itemDescription: item.description,
+      })
     }
+  }
+  // The order waits for the subscription whose billing starts last.
+  let latest: EarliestActivation | null = null
+  for (const candidate of firstStartBySubscription.values()) {
+    if (!latest || candidate.date > latest.date) latest = candidate
   }
   return latest
 }

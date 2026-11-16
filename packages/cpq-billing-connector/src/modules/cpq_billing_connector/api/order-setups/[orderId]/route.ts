@@ -193,8 +193,8 @@ export const openApi: OpenApiRouteDoc = {
         'order customer snapshot; absent fields fall back to placeholders at activation) and `defaults.lines` ' +
         '(billable lines with their CPQ service start). Account candidates come from ' +
         '`GET /api/billing/accounts?customerId&currencyCode&isActive=true`. For ARC amend / cancel orders, ' +
-        '`earliestActivationDate` (YYYY-MM-DD) is the first day the order may be activated — the latest bill start of the ' +
-        "target subscriptions' active billing items — with `earliestActivationReason { subscriptionId, itemDescription }`; " +
+        '`earliestActivationDate` (YYYY-MM-DD) is the first day the order may be activated — the day billing of every ' +
+        "target subscription has begun (per subscription its earliest active item's bill start) — with `earliestActivationReason { subscriptionId, itemDescription }`; " +
         'both are null for other orders. Activating earlier is rejected by the connector guard (422 ' +
         '`cpq_billing_connector.activation_before_billing_start`).',
       responses: [{ status: 200, description: 'The order billing setup view' }],

@@ -15,15 +15,25 @@ const item = (overrides: Record<string, unknown> = {}) => ({
 })
 
 describe('computeEarliestActivation', () => {
-  it('returns the latest bill start among active items for amend and cancel', () => {
+  it('waits for billing of every target subscription to begin (earliest start per subscription)', () => {
     const items = [
       item(),
       item({ subscriptionId: 'sub-2', description: 'Static IP', billStartDate: '2026-11-20' }),
       item({ description: 'Router', billStartDate: new Date('2026-11-05T00:00:00Z') }),
     ]
+    // sub-1 began 2026-10-01, sub-2 begins 2026-11-20 → the order waits for sub-2.
     const expected = { date: '2026-11-20', subscriptionId: 'sub-2', itemDescription: 'Static IP' }
     expect(computeEarliestActivation('amend', items)).toEqual(expected)
     expect(computeEarliestActivation('cancel', items)).toEqual(expected)
+  })
+
+  it('a future-dated item does not block once the subscription has started billing', () => {
+    const items = [item(), item({ description: 'Upsell next term', billStartDate: '2027-01-01' })]
+    expect(computeEarliestActivation('amend', items)).toEqual({
+      date: '2026-10-01',
+      subscriptionId: 'sub-1',
+      itemDescription: 'Fiber 300',
+    })
   })
 
   it('returns null for renewals and new business', () => {

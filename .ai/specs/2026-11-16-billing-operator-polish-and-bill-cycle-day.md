@@ -412,7 +412,7 @@ previewCredit(item: { type, prorate, billedToDate, billStartDate, billEndDate },
 
 **6c. Earliest activation date (connector).**
 - **Rule** (pure `lib/earliestActivation.ts`): for an order whose quote is ARC `amend` or `cancel`:
-  - the earliest activation date is the latest `billStartDate` among the **active, not-ended** billing items of its target subscriptions;
+  - the earliest activation date is the day billing of **every** target subscription has begun: per subscription, the **earliest** `billStartDate` among its active, not-ended billing items; across subscriptions, the latest of those (changed 2026-11-16 after review: a future-dated item must not block);
   - an item whose `billEndDate` is already before that date is ignored;
   - renewals and new-business orders get `null` (no constraint).
   - Items not yet started can't be amended mid-flight; once billing has started, any date works.

@@ -279,8 +279,9 @@ export class CpqBillingOrderSetupService {
   }
 
   /**
-   * Earliest activation date of an ARC `amend` / `cancel` order: the latest
-   * bill start among its target subscriptions' billing items (Part 2, 6c).
+   * Earliest activation date of an ARC `amend` / `cancel` order: the day
+   * billing of every target subscription has begun (per subscription the
+   * earliest item bill start; the latest across subscriptions — Part 2, 6c).
    * Two bounded reads — the quote's targets (CPQ), then their items
    * (billing) — and none for other quote types.
    */

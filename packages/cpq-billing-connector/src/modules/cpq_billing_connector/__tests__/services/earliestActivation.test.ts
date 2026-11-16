@@ -56,8 +56,8 @@ describe('order-setup read model — earliest activation date', () => {
     expect(cpqQuotingService.listTargetSubscriptions).toHaveBeenCalledWith('quote-cfg-1', scope)
     expect(em.find).toHaveBeenCalledTimes(1)
     expect(em.find.mock.calls[0][1]).toMatchObject({ subscriptionId: { $in: ['sub-1'] } })
-    expect(view.earliestActivationDate).toBe('2026-11-20')
-    expect(view.earliestActivationReason).toEqual({ subscriptionId: 'sub-1', itemDescription: 'Static IP' })
+    expect(view.earliestActivationDate).toBe('2026-10-01')
+    expect(view.earliestActivationReason).toEqual({ subscriptionId: 'sub-1', itemDescription: 'Fiber 300' })
   })
 
   it('returns nulls without reading targets for renewals and new business', async () => {

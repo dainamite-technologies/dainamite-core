@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { resolveCpqRouteContext } from '../../../../context'
+import { cpqContextError, resolveCpqRouteContext } from '../../../../context'
 import { cpqChangeLogQuerySchema } from '../../../../../data/validators'
 import type { DefaultCpqInventoryService } from '../../../../../services/cpqInventoryService'
 import { handleArcError } from '../../../../_helpers/handleArcError'
@@ -23,7 +23,8 @@ export async function GET(
 ) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
     const { subscriptionId } = await params
     const url = new URL(req.url)
     const query = cpqChangeLogQuerySchema.parse({

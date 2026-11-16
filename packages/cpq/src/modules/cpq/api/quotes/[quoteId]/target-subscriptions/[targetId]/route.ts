@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { resolveCpqRouteContext } from '../../../../context'
+import { cpqContextError, resolveCpqRouteContext } from '../../../../context'
 import { cpqUpdateTargetSubscriptionSchema } from '../../../../../data/validators'
 import { resolveQuotingService } from '../../../../resolveQuotingService'
 import { handleArcError } from '../../../../_helpers/handleArcError'
@@ -27,7 +27,8 @@ export async function PATCH(
 ) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
     const { quoteId, targetId } = await params
     const body = cpqUpdateTargetSubscriptionSchema.parse(await req.json())
     const scope = { organizationId: ctx.organizationId, tenantId: ctx.tenantId }
@@ -55,7 +56,8 @@ export async function DELETE(
 ) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
     const { quoteId, targetId } = await params
     const scope = { organizationId: ctx.organizationId, tenantId: ctx.tenantId }
     const service = resolveQuotingService(ctx)

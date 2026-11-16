@@ -1,7 +1,8 @@
 const execute = jest.fn(), list = jest.fn(), preview = jest.fn(), guards = jest.fn(), after = jest.fn()
 const ctx = { auth: { sub: 'user', tenantId: 'tenant' }, tenantId: 'tenant', organizationId: 'org', organizationScope: null,
   container: { resolve: (name: string) => name === 'commandBus' ? { execute } : { list, preview } } }
-jest.mock('../context', () => ({ resolveCpqRouteContext: jest.fn(async () => ctx) }))
+jest.mock('../context', () => ({
+  cpqContextError: jest.requireActual('../context').cpqContextError, resolveCpqRouteContext: jest.fn(async () => ctx) }))
 jest.mock('../_helpers/quoteMutationGuard', () => ({ runCpqMutationGuards: (...args: unknown[]) => guards(...args) }))
 import { GET, POST, metadata } from '../quotes/[quoteId]/price-adjustments/route'
 import { POST as PREVIEW } from '../quotes/[quoteId]/price-adjustments/preview/route'

@@ -31,6 +31,7 @@
   "cpq.common.save": "Guardar",
   "cpq.common.saving": "Guardando...",
   "cpq.common.yes": "Sí",
+  "cpq.errors.organizationRequired": "Se requiere un contexto de organización: selecciona una organización o usa una clave de API vinculada a una.",
   "cpq.inventory.actions.refresh": "Actualizar",
   "cpq.inventory.assets": "Activos",
   "cpq.inventory.assets.detail.breadcrumb": "Detalle del activo",

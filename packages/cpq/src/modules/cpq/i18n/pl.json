@@ -31,6 +31,7 @@
   "cpq.common.save": "Zapisz",
   "cpq.common.saving": "Zapisywanie...",
   "cpq.common.yes": "Tak",
+  "cpq.errors.organizationRequired": "Wymagany jest kontekst organizacji: wybierz organizację albo użyj klucza API przypisanego do organizacji.",
   "cpq.inventory.actions.refresh": "Odśwież",
   "cpq.inventory.assets": "Zasoby",
   "cpq.inventory.assets.detail.breadcrumb": "Szczegóły zasobu",

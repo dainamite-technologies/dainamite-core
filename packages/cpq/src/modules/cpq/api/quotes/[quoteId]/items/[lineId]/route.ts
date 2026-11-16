@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { resolveCpqRouteContext } from '../../../../context'
+import { cpqContextError, resolveCpqRouteContext } from '../../../../context'
 import { cpqUpdateQuoteItemSchema } from '../../../../../data/validators'
 import { isQuotingError } from '../../../../../services/cpqQuotingService'
 import { resolveQuotingService } from '../../../../resolveQuotingService'
@@ -16,7 +16,8 @@ export const metadata = {
 export async function PUT(req: Request, { params }: { params: Promise<{ quoteId: string; lineId: string }> }) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     const { quoteId, lineId } = await params
     const body = cpqUpdateQuoteItemSchema.parse(await req.json())
@@ -52,7 +53,8 @@ export async function PUT(req: Request, { params }: { params: Promise<{ quoteId:
 export async function DELETE(req: Request, { params }: { params: Promise<{ quoteId: string; lineId: string }> }) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     const { quoteId, lineId } = await params
     const scope = { organizationId: ctx.organizationId, tenantId: ctx.tenantId }

@@ -1,3 +1,4 @@
+import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import { dateColumnToIso, toDateColumn } from '../lib/dateColumns'
 import { cloneQuoteAdjustments, removeQuoteLineTree } from './priceAdjustments/quoteAdjustmentLifecycle'
 import type { PriceAdjustment } from '../data/price-adjustments'
@@ -88,10 +89,15 @@ export class DefaultCpqQuotingService {
 
     // Validate customer exists (lookup by id + tenantId; organizationId may differ
     // between CPQ scope resolution and how the core customers API resolves it)
-    const customer = await em.findOne(CustomerEntity, {
-      id: input.customerId,
-      tenantId: scope.tenantId,
-    }, { populate: ['personProfile', 'companyProfile'] })
+    // Customer columns are encrypted: read through the decryption helper so the
+    // snapshot and the quote context carry plaintext, not ciphertext.
+    const customer = await findOneWithDecryption(
+      em,
+      CustomerEntity,
+      { id: input.customerId, tenantId: scope.tenantId },
+      { populate: ['personProfile', 'companyProfile'] },
+      { tenantId: scope.tenantId, organizationId: scope.organizationId },
+    )
 
     if (!customer) {
       throw new QuotingError(404, 'Customer not found')
@@ -1426,7 +1432,7 @@ async function resolveQuoteSideData(
   }
 
   const [customer, existingOrder] = await Promise.all([
-    em.findOne(CustomerEntity, { id: cpqConfig.customerId, ...scope }),
+    findOneWithDecryption(em, CustomerEntity, { id: cpqConfig.customerId, ...scope }, undefined, scope),
     em.findOne(
       CpqOrderConfiguration,
       { sourceQuoteId: cpqConfig.id, ...scope, deletedAt: null },
@@ -1937,8 +1943,8 @@ DefaultCpqQuotingService.prototype.createQuoteFromSubscription = async function 
     subscriptionId: sub.id,
     quoteType: input.type,
     mergeAction: input.type === 'renew' ? 'standalone' : null,
-    newTermStart: renewDefaults?.start ?? null,
-    newTermEnd: renewDefaults?.end ?? null,
+    newTermStart: toDateColumn(renewDefaults?.start),
+    newTermEnd: toDateColumn(renewDefaults?.end),
     newTermMonths: renewDefaults?.months ?? null,
   })
   em.persist(target)
@@ -2094,8 +2100,8 @@ DefaultCpqQuotingService.prototype.attachTargetSubscription = async function (
       input.quoteType === 'renew'
         ? input.mergeAction ?? (otherTargets.length === 0 ? 'standalone' : 'absorb')
         : null,
-    newTermStart: toDateOrNull(input.newTermStart),
-    newTermEnd: toDateOrNull(input.newTermEnd),
+    newTermStart: toDateColumn(input.newTermStart),
+    newTermEnd: toDateColumn(input.newTermEnd),
     newTermMonths: input.newTermMonths ?? null,
   })
   em.persist(target)
@@ -2249,8 +2255,8 @@ DefaultCpqQuotingService.prototype.updateTargetSubscription = async function (
   }
 
   if (patch.mergeAction !== undefined) target.mergeAction = patch.mergeAction
-  if (patch.newTermStart !== undefined) target.newTermStart = toDateOrNull(patch.newTermStart)
-  if (patch.newTermEnd !== undefined) target.newTermEnd = toDateOrNull(patch.newTermEnd)
+  if (patch.newTermStart !== undefined) target.newTermStart = toDateColumn(patch.newTermStart)
+  if (patch.newTermEnd !== undefined) target.newTermEnd = toDateColumn(patch.newTermEnd)
   if (patch.newTermMonths !== undefined) target.newTermMonths = patch.newTermMonths ?? null
 
   await em.flush()
@@ -2298,8 +2304,8 @@ DefaultCpqQuotingService.prototype.setMergeMeta = async function (
       `Merge meta can only be set on a renew quote (current: '${cpqConfig.quoteType}')`,
     )
   }
-  cpqConfig.arcMergeNewTermStart = toDateOrNull(meta.newTermStart)
-  cpqConfig.arcMergeNewTermEnd = toDateOrNull(meta.newTermEnd)
+  cpqConfig.arcMergeNewTermStart = toDateColumn(meta.newTermStart)
+  cpqConfig.arcMergeNewTermEnd = toDateColumn(meta.newTermEnd)
   cpqConfig.arcMergeNewTermMonths = meta.newTermMonths ?? null
   cpqConfig.arcMergeNewSubCode = meta.newSubCode ?? null
   cpqConfig.arcMergeNewSubName = meta.newSubName ?? null

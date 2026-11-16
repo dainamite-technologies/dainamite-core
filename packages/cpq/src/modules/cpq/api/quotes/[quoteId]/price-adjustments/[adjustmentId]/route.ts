@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
-import { resolveCpqRouteContext } from '../../../../context'
+import { cpqContextError, resolveCpqRouteContext } from '../../../../context'
 import { cpqPriceAdjustmentPatchSchema } from '../../../../../data/price-adjustments'
 import { adjustmentCommandRoute } from '../../../../_helpers/adjustmentCommandRoute'
 import { handleArcError } from '../../../../_helpers/handleArcError'
@@ -17,7 +17,8 @@ type Params = { params: Promise<{ quoteId: string; adjustmentId: string }> }
 export async function PATCH(req: Request, { params }: Params) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
     const { quoteId, adjustmentId } = pathParams.parse(await params)
     const body = cpqPriceAdjustmentPatchSchema.parse(await req.json())
     return await adjustmentCommandRoute(req, ctx, quoteId, body, cpqPriceAdjustmentPatchSchema, 'update', adjustmentId)
@@ -26,7 +27,8 @@ export async function PATCH(req: Request, { params }: Params) {
 export async function DELETE(req: Request, { params }: Params) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
     const { quoteId, adjustmentId } = pathParams.parse(await params)
     const body = deletionSchema.parse(Object.fromEntries(new URL(req.url).searchParams))
     return await adjustmentCommandRoute(req, ctx, quoteId, body, deletionSchema, 'delete', adjustmentId)

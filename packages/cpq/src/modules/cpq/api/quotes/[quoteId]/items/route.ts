@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { resolveCpqRouteContext } from '../../../context'
+import { cpqContextError, resolveCpqRouteContext } from '../../../context'
 import { cpqAddQuoteItemSchema } from '../../../../data/validators'
 import { resolveQuotingService } from '../../../resolveQuotingService'
 import { handleArcError } from '../../../_helpers/handleArcError'
@@ -14,7 +14,8 @@ export const metadata = {
 export async function POST(req: Request, { params }: { params: Promise<{ quoteId: string }> }) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     const { quoteId } = await params
     const body = cpqAddQuoteItemSchema.parse(await req.json())

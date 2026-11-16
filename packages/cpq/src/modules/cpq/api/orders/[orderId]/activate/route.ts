@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { OptimisticLockError } from '@mikro-orm/core'
-import { resolveCpqRouteContext } from '../../../context'
+import { cpqContextError, resolveCpqRouteContext } from '../../../context'
 import { isOrderError } from '../../../../services/cpqOrderService'
 import type { DefaultCpqOrderService } from '../../../../services/cpqOrderService'
 import { z } from 'zod'
@@ -14,7 +14,8 @@ export const metadata = {
 export async function POST(req: Request, { params }: { params: Promise<{ orderId: string }> }) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     const { orderId } = await params
     const scope = { organizationId: ctx.organizationId, tenantId: ctx.tenantId }

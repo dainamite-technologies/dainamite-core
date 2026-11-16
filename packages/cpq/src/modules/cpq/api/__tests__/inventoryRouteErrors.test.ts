@@ -10,7 +10,8 @@ const ctx = {
   organizationId: 'org',
   container: { resolve: () => service },
 }
-jest.mock('../context', () => ({ resolveCpqRouteContext: jest.fn(async () => ctx) }))
+jest.mock('../context', () => ({
+  cpqContextError: jest.requireActual('../context').cpqContextError, resolveCpqRouteContext: jest.fn(async () => ctx) }))
 
 import { GET as getSubscriptions, DELETE as deleteSubscription } from '../inventory/subscriptions/route'
 import { GET as getAssets } from '../inventory/assets/route'

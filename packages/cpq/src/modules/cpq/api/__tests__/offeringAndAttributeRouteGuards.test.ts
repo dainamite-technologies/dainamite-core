@@ -15,7 +15,8 @@ const ctx = {
   em,
   container: { resolve: () => ({}) },
 }
-jest.mock('../context', () => ({ resolveCpqRouteContext: jest.fn(async () => ctx) }))
+jest.mock('../context', () => ({
+  cpqContextError: jest.requireActual('../context').cpqContextError, resolveCpqRouteContext: jest.fn(async () => ctx) }))
 
 import { PUT } from '../product-offerings/route'
 import { GET as getAttributes } from '../quotes/attributes/route'

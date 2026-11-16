@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { resolveCpqRouteContext } from '../../../context'
+import { cpqContextError, resolveCpqRouteContext } from '../../../context'
 import { cpqExpiringSubscriptionsQuerySchema } from '../../../../data/validators'
 import type { DefaultCpqInventoryService } from '../../../../services/cpqInventoryService'
 import { handleArcError } from '../../../_helpers/handleArcError'
@@ -19,7 +19,8 @@ export const metadata = {
 export async function GET(req: Request) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
     const url = new URL(req.url)
     const query = cpqExpiringSubscriptionsQuerySchema.parse({
       withinDays: url.searchParams.get('withinDays') ?? undefined,

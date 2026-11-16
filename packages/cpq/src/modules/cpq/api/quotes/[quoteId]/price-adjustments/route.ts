@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
-import { resolveCpqRouteContext } from '../../../context'
+import { cpqContextError, resolveCpqRouteContext } from '../../../context'
 import { cpqPriceAdjustmentInputSchema } from '../../../../data/price-adjustments'
 import type { CpqAdjustmentService } from '../../../../services/priceAdjustments/adjustmentService'
 import { adjustmentCommandRoute } from '../../../_helpers/adjustmentCommandRoute'
@@ -17,7 +17,8 @@ type Params = { params: Promise<{ quoteId: string }> }
 export async function GET(req: Request, { params }: Params) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
     const { quoteId } = cpqQuoteIdPathParams.parse(await params)
     const { page, pageSize } = listQuery.parse(Object.fromEntries(new URL(req.url).searchParams))
     const service = ctx.container.resolve<CpqAdjustmentService>('cpqAdjustmentService')
@@ -27,7 +28,8 @@ export async function GET(req: Request, { params }: Params) {
 export async function POST(req: Request, { params }: Params) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
     const { quoteId } = cpqQuoteIdPathParams.parse(await params)
     const body = cpqPriceAdjustmentInputSchema.parse(await req.json())
     return await adjustmentCommandRoute(req, ctx, quoteId, body, cpqPriceAdjustmentInputSchema, 'create')

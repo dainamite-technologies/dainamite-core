@@ -819,14 +819,16 @@ export class CpqQuoteLineConfiguration {
   @Property({ name: 'parent_line_id', type: 'uuid', nullable: true })
   parentLineId?: string | null
 
+  // MikroORM hydrates `type: 'date'` as a `YYYY-MM-DD` string and rejects a
+  // `Date` on assign, so the property is typed as the string it really holds.
   @Property({ name: 'start_date', type: 'date', nullable: true })
-  startDate?: Date | null
+  startDate?: string | null
 
   @Property({ name: 'term_months', type: 'integer', nullable: true })
   termMonths?: number | null
 
   @Property({ name: 'end_date', type: 'date', nullable: true })
-  endDate?: Date | null
+  endDate?: string | null
 
   @Property({ type: 'jsonb', default: '{}' })
   configuration: Record<string, unknown> = {}

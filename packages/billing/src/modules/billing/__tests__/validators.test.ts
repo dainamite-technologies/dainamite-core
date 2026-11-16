@@ -786,3 +786,15 @@ describe('Spec B validators', () => {
   })
 })
 
+
+describe('list query booleans', () => {
+  it.each([
+    ['accounts isActive', billingAccountListQuerySchema, 'isActive'],
+    ['items isActive', billingItemListQuerySchema, 'isActive'],
+    ['usage rated', billingUsageListQuerySchema, 'rated'],
+  ] as const)('%s reads the query string literally', (_label, schema, key) => {
+    expect((schema.parse({ [key]: 'true' }) as Record<string, unknown>)[key]).toBe(true)
+    expect((schema.parse({ [key]: 'false' }) as Record<string, unknown>)[key]).toBe(false)
+    expect((schema.parse({}) as Record<string, unknown>)[key]).toBeUndefined()
+  })
+})

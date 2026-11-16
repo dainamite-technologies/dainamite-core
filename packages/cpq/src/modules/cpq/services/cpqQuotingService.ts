@@ -1,3 +1,4 @@
+import { dateColumnToIso, toDateColumn } from '../lib/dateColumns'
 import { cloneQuoteAdjustments, removeQuoteLineTree } from './priceAdjustments/quoteAdjustmentLifecycle'
 import type { PriceAdjustment } from '../data/price-adjustments'
 import { withAtomicFlush } from '@open-mercato/shared/lib/commands/flush'
@@ -335,9 +336,9 @@ export class DefaultCpqQuotingService {
       specId: spec?.id ?? null,
       action: item.action ?? 'add',
       parentLineId: item.parentLineId ?? null,
-      startDate: item.startDate ? new Date(item.startDate) : null,
+      startDate: toDateColumn(item.startDate),
       termMonths: item.termMonths ?? null,
-      endDate: endDate ? new Date(endDate) : null,
+      endDate: toDateColumn(endDate),
       configuration: item.configuration,
       quantity,
       charges: charges as unknown as Array<Record<string, unknown>>,
@@ -496,7 +497,7 @@ export class DefaultCpqQuotingService {
     const isConfigured =
       validationErrors.length === 0 && (charges.length > 0 || isBundleOffering || isArcMirrored)
 
-    const endDate = computeEndDate(update.startDate ?? lineConfig.startDate?.toISOString(), update.termMonths ?? lineConfig.termMonths ?? undefined, update.endDate)
+    const endDate = computeEndDate(update.startDate ?? (dateColumnToIso(lineConfig.startDate) ?? undefined), update.termMonths ?? lineConfig.termMonths ?? undefined, update.endDate)
 
     // Update line config
     em.assign(lineConfig, {
@@ -509,9 +510,9 @@ export class DefaultCpqQuotingService {
       usageTotalEstimated: usageTotalEstimated != null ? String(usageTotalEstimated) : null,
       validationErrors: validationErrors.length > 0 ? validationErrors as unknown as Array<Record<string, unknown>> : null,
       isConfigured,
-      startDate: update.startDate ? new Date(update.startDate) : lineConfig.startDate,
+      startDate: update.startDate ? toDateColumn(update.startDate) : lineConfig.startDate,
       termMonths: update.termMonths ?? lineConfig.termMonths,
-      endDate: endDate ? new Date(endDate) : lineConfig.endDate,
+      endDate: endDate ? toDateColumn(endDate) : lineConfig.endDate,
     })
 
     // Update SalesQuoteLine totals
@@ -1267,9 +1268,9 @@ export class DefaultCpqQuotingService {
         parentLineId: lc.parentLineId ?? null,
         quantity: lc.quantity,
         configuration: lc.configuration ?? {},
-        startDate: lc.startDate?.toISOString() ?? null,
+        startDate: dateColumnToIso(lc.startDate) ?? null,
         termMonths: lc.termMonths ?? null,
-        endDate: lc.endDate?.toISOString() ?? null,
+        endDate: dateColumnToIso(lc.endDate) ?? null,
         nrcTotal: Number(lc.nrcTotal),
         mrcTotal: Number(lc.mrcTotal),
         usageEstimates: lc.usageEstimates ?? null,
@@ -1372,9 +1373,9 @@ export class DefaultCpqQuotingService {
         parentLineId: lc.parentLineId ?? null,
         quantity: lc.quantity,
         configuration: lc.configuration ?? {},
-        startDate: lc.startDate?.toISOString() ?? null,
+        startDate: dateColumnToIso(lc.startDate) ?? null,
         termMonths: lc.termMonths ?? null,
-        endDate: lc.endDate?.toISOString() ?? null,
+        endDate: dateColumnToIso(lc.endDate) ?? null,
         nrcTotal,
         mrcTotal,
         usageEstimates,

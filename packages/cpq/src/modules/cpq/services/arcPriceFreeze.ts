@@ -134,6 +134,18 @@ export function buildArcMirrorConfiguration(
 }
 
 /**
+ * Line configuration as an API response carries it: the I-12 baseline hash is internal (an unsalted hash over cost values
+ * is a guess-confirmation oracle for confidential costs) and never leaves the server. Nothing client-side reads it.
+ */
+export function stripCostHashMarkers(
+  configuration: Record<string, unknown> | null | undefined,
+): Record<string, unknown> | null | undefined {
+  if (!configuration || !(ARC_CARRIED_COST_SET_HASH_KEY in configuration || ARC_CONVERTED_COST_SET_HASH_KEY in configuration)) return configuration
+  const { [ARC_CARRIED_COST_SET_HASH_KEY]: _carried, [ARC_CONVERTED_COST_SET_HASH_KEY]: _converted, ...rest } = configuration
+  return rest
+}
+
+/**
  * Line configuration as it may leave the quote (order lines, subscription
  * items, clones): quote-only pricing markers are dropped; the descriptive
  * `_arcMirrored*` markers stay.

@@ -64,6 +64,7 @@ import {
   isFrozenMirrorLine,
   isArcMirrorLine,
   stripArcMarkers,
+  stripCostHashMarkers,
   stripQuoteOnlyArcMarkers,
 } from './arcPriceFreeze'
 import type { CpqCostService } from './costs/costService'
@@ -1528,7 +1529,7 @@ export class DefaultCpqQuotingService {
         action: lc.action,
         parentLineId: lc.parentLineId ?? null,
         quantity: lc.quantity,
-        configuration: lc.configuration ?? {},
+        configuration: stripCostHashMarkers(lc.configuration) ?? {},
         startDate: lc.startDate?.toISOString() ?? null,
         termMonths: lc.termMonths ?? null,
         endDate: lc.endDate?.toISOString() ?? null,
@@ -1633,7 +1634,7 @@ export class DefaultCpqQuotingService {
         action: lc.action,
         parentLineId: lc.parentLineId ?? null,
         quantity: lc.quantity,
-        configuration: lc.configuration ?? {},
+        configuration: stripCostHashMarkers(lc.configuration) ?? {},
         startDate: lc.startDate?.toISOString() ?? null,
         termMonths: lc.termMonths ?? null,
         endDate: lc.endDate?.toISOString() ?? null,

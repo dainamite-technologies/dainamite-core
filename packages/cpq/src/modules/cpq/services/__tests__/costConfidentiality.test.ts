@@ -125,6 +125,34 @@ describe('pricing output (quote lines, orders, calculate-price)', () => {
     expectClean(result)
   })
 
+  it('review: the I-12 baseline hash (an unsalted hash over cost values) never leaves in a quote result, for any caller; the harmless carried flag does', async () => {
+    const HASH = 'ZXQ-set-hash-oracle'
+    const line = {
+      id: 'lc', ...SCOPE, quoteConfigurationId: ids.quote, quoteLineId: ids.line, offeringId: 'off', productId: null, quantity: 1, usageEstimates: null, charges: [], termMonths: 12, deletedAt: null,
+      configuration: { port: '1G', _arcCostsCarried: true, _arcCarriedCostSetHash: HASH, _arcConvertedCostSetHash: HASH },
+    }
+    const em: Row = {
+      find: jest.fn(async (entity: unknown) => (entity === CpqQuoteLineConfiguration ? [line] : [])),
+      findOne: jest.fn(async () => ({})), count: jest.fn().mockResolvedValue(0),
+      assign: jest.fn((entity: Row, updates: Row) => Object.assign(entity, updates)), persist: jest.fn(), create: jest.fn((_e: unknown, d: Row) => d), flush: jest.fn(),
+    }
+    const quoting = new DefaultCpqQuotingService({
+      em: em as never,
+      cpqPricingService: { resolveProductCharges: async () => [] } as never,
+      cpqValidationService: { validateOfferingConfiguration: async () => ({ valid: true, errors: [] }), validateRelationships: async () => [] } as never,
+      cpqProductService: {} as never, salesDocumentNumberGenerator: {} as never, cpqCostService: { enabled: async () => true },
+    })
+    const quote = { id: ids.quote, quoteId: 'sales', cpqStatus: 'with_customer', quoteType: 'amend', currencyCode: 'USD', quoteContext: {} } as unknown as CpqQuoteConfiguration
+    const result = await quoting.recalculateLockedQuote(em as never, quote, SCOPE, false)
+    const json = JSON.stringify(result)
+    expect(json).toContain('"port":"1G"') // positive control: the line configuration is returned
+    expect(json).not.toContain(HASH)
+    expect(json).not.toContain('SetHash')
+    expect(json).toContain('_arcCostsCarried')
+    // the stored configuration (what the server-side guard reads) is untouched by the projection
+    expect(line.configuration._arcCarriedCostSetHash).toBe(HASH)
+  })
+
   it('conversion output (returned order and every created record) stays clean with sentinel cost lines', async () => {
     const em: Row = {
       findOne: jest.fn().mockResolvedValue(null),

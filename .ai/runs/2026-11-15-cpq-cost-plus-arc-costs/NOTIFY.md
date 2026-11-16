@@ -60,3 +60,4 @@
 - 2026-11-16 review1-c: Q10 demotion to merge cancels open cost requests on the soft-deleted carried rows (reason reconfigured), request_cancelled signals published after the flush.
 - 2026-11-16 review1-d: demotion to merge re-freezes cost-plus lines at the subscription item's contracted charges, quantity and totals (re-mirror from the item), not the last standalone re-price.
 - 2026-11-16 review1-e: cost PATCH on a carried cost of a frozen mirror line, and Keep current, are refused with 409 QUOTE_CONVERTED (orderId, orderLineCostId) once the quote has an order; Re-confirm on the order is the path.
+- 2026-11-16 review1-f: the carried-cost set hashes (_arcCarriedCostSetHash, _arcConvertedCostSetHash) are stripped from quote line configuration in every quote result for all callers; nothing client-side reads them.

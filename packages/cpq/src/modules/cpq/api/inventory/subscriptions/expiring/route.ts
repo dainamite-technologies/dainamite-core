@@ -11,7 +11,7 @@ import { handleArcError } from '../../../_helpers/handleArcError'
  * `withinDays` days. Drives the operator's renewal triage view.
  */
 export const metadata = {
-  GET: { requireAuth: true, requireFeatures: ['cpq.inventory.expiring.view'] },
+  GET: { requireAuth: true, requireFeatures: ['cpq.inventory.view'] },
 }
 
 export async function GET(req: Request) {

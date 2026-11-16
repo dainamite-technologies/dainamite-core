@@ -259,7 +259,7 @@ cpq.wizards.{view,manage}
 cpq.orders.{view,manage}
 cpq.arc.{amend,renew,cancel}.manage
 cpq.arc.changelog.view
-cpq.inventory.expiring.view
+cpq.inventory.{view,manage}
 ```
 
 When evaluating raw granted features in runtime code, use `hasFeature` /

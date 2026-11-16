@@ -262,14 +262,20 @@ type LineSnapshot = {
   usageEstimates: Array<{ chargeCode: string; estimatedQuantity: number }> | null
 }
 
-/** Merges the requested patch over the current line, the way the PUT route expects a full configuration. */
+/**
+ * Merges the requested patch over the current line, the way the PUT route
+ * expects a full configuration. The server prefers an explicit `endDate` over
+ * `startDate + termMonths`, so when the term or the start changes without a
+ * new `endDate`, the stored end date is dropped and the server recomputes it.
+ */
 export function mergeLinePatch(current: LineSnapshot, input: UpdateQuoteLineInput): LineSnapshot {
+  const termOrStartChanged = input.termMonths !== undefined || input.startDate !== undefined
   return {
     configuration: input.configuration ? { ...current.configuration, ...input.configuration } : current.configuration,
     quantity: input.quantity ?? current.quantity,
     startDate: input.startDate ?? current.startDate,
     termMonths: input.termMonths ?? current.termMonths,
-    endDate: input.endDate ?? current.endDate,
+    endDate: input.endDate ?? (termOrStartChanged ? null : current.endDate),
     usageEstimates: current.usageEstimates,
   }
 }

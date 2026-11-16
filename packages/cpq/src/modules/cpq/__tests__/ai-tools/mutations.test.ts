@@ -224,6 +224,36 @@ describe('cpq.update_quote_line', () => {
     expect(merged).toEqual({ configuration: { a: 1, b: 3 }, quantity: 4, startDate: '2026-01-01', termMonths: 12, endDate: null, usageEstimates })
   })
 
+  it('drops the stored end date when the term or start changes, so the server recomputes it', () => {
+    const current = {
+      configuration: {},
+      quantity: 1,
+      startDate: '2026-01-01',
+      termMonths: 12,
+      endDate: '2027-01-01',
+      usageEstimates: null,
+    }
+    const base = { quoteId: QUOTE_ID, lineId: LINE_ID }
+    expect(mergeLinePatch(current, { ...base, termMonths: 24 }).endDate).toBeNull()
+    expect(mergeLinePatch(current, { ...base, startDate: '2026-03-01' }).endDate).toBeNull()
+    expect(mergeLinePatch(current, { ...base, termMonths: 24, endDate: '2028-06-30' }).endDate).toBe('2028-06-30')
+    expect(mergeLinePatch(current, { ...base, quantity: 3 }).endDate).toBe('2027-01-01')
+  })
+
+  it('does not send a stale end date on a term change', async () => {
+    const dated = quote({
+      lines: [
+        { lineId: LINE_ID, offeringId: OFFERING_ID, quantity: 1, configuration: {}, startDate: '2026-01-01', termMonths: 12, endDate: '2027-01-01' },
+      ],
+    })
+    api.on('GET', `/cpq/quotes/${QUOTE_ID}`, dated)
+    api.on('PUT', `/cpq/quotes/${QUOTE_ID}/items/${LINE_ID}`, dated)
+    await getTool('cpq.update_quote_line').handler({ quoteId: QUOTE_ID, lineId: LINE_ID, termMonths: 24 }, approvedCtx())
+    const body = api.writes()[0].body as Record<string, unknown>
+    expect(body).toMatchObject({ startDate: '2026-01-01', termMonths: 24 })
+    expect(body).not.toHaveProperty('endDate')
+  })
+
   it('sends the current usage estimates back so the PUT does not clear them', async () => {
     const withUsage = quote({
       lines: [

@@ -923,6 +923,28 @@ describe('Amend mirror carries the subscription item costs (ARC costs spec step 
     expect(carriedRow).toMatchObject({ deletedAt: expect.any(Date) })
   })
 
+  it('refuses restoring a removed line once the quote has an order: 409 QUOTE_CONVERTED, the line stays removed', async () => {
+    const em = Object.assign(createMockEm(), { assign: jest.fn((e: Record<string, unknown>, u: Record<string, unknown>) => Object.assign(e, u)), fork: jest.fn() })
+    em.fork.mockReturnValue(em)
+    const service = new DefaultCpqQuotingService({
+      em: em as never, cpqPricingService: {} as never, cpqValidationService: {} as never, cpqProductService: {} as never, salesDocumentNumberGenerator: {} as never,
+    })
+    const { cpqConfig, lineConfig } = amendFixture({ port_size: '1G', _arcMirroredFromItemId: 'item-1', _arcMirroredName: 'GIX Access Port', _arcCostsCarried: true, _arcCarriedCostSetHash: 'old' })
+    Object.assign(cpqConfig, { cpqStatus: 'new' })
+    lineConfig.action = 'cancel'
+    routeEm(em, cpqConfig, lineConfig)
+    const base = em.findOne.getMockImplementation()!
+    em.findOne.mockImplementation(async (entity: unknown, ...rest: unknown[]) => (entity === CpqOrderConfiguration ? { id: 'order-1' } : (base as (...args: unknown[]) => unknown)(entity, ...rest)))
+    em.find.mockImplementation(async (entity: unknown) => {
+      if (entity === CpqQuoteLineConfiguration) return [lineConfig]
+      if (entity === CpqInventorySubscriptionItem) return [subscriptionItem()]
+      return []
+    })
+    await expect(service.restoreQuoteItem('cpq-1', 'ql-1', SCOPE)).rejects.toMatchObject({ status: 409, message: 'QUOTE_CONVERTED', details: { orderId: 'order-1' } })
+    expect(lineConfig.action).toBe('cancel')
+    expect((lineConfig.configuration as Record<string, unknown>)._arcCarriedCostSetHash).toBe('old')
+  })
+
   it('restore re-carries the item costs of a removed Amend line (fresh markers, previous cost rows replaced)', async () => {
     const em = Object.assign(createMockEm(), { assign: jest.fn((e: Record<string, unknown>, u: Record<string, unknown>) => Object.assign(e, u)), fork: jest.fn() })
     em.fork.mockReturnValue(em)
@@ -1018,6 +1040,18 @@ describe('Amend mirror carries the subscription item costs (ARC costs spec step 
       await expect(service.refreshMirrorFromSubscription('cpq-1', 'ql-1', SCOPE, null, undefined, allowed)).rejects.toMatchObject(expected)
       expect(JSON.stringify(lineConfig.configuration)).toBe(before)
       expect(previous.every((row) => row.deletedAt === null)).toBe(true)
+    })
+
+    it('refuses a refresh once the quote has an order: 409 QUOTE_CONVERTED with the orderId, nothing written (the I-12 baseline must not reset)', async () => {
+      const { em, service, lineConfig, previous } = refreshFixture()
+      const base = em.findOne.getMockImplementation()!
+      em.findOne.mockImplementation(async (entity: unknown, ...rest: unknown[]) => (entity === CpqOrderConfiguration ? { id: 'order-1' } : (base as (...args: unknown[]) => unknown)(entity, ...rest)))
+      const before = JSON.stringify(lineConfig.configuration)
+      await expect(service.refreshMirrorFromSubscription('cpq-1', 'ql-1', SCOPE, null, undefined, ['amend']))
+        .rejects.toMatchObject({ status: 409, message: 'QUOTE_CONVERTED', details: { orderId: 'order-1' } })
+      expect(JSON.stringify(lineConfig.configuration)).toBe(before)
+      expect(previous.every((row) => row.deletedAt === null)).toBe(true)
+      expect(em.create).not.toHaveBeenCalledWith(CpqQuoteLineCost, expect.anything())
     })
 
     it('refuses a removed line and a cost-locked quote priced from costs', async () => {

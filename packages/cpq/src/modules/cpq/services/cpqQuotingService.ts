@@ -1,5 +1,6 @@
 import { cloneQuoteAdjustments, loadLineCostRows, removeQuoteLineTree } from './priceAdjustments/quoteAdjustmentLifecycle'
 import { cancelOpenRequests, cancelRowRequests } from './costs/costRequestCancel'
+import { findQuoteOrder } from './costs/quoteOrderLookup'
 import { isTerminalQuoteStatus } from './costs/costLock'
 import type { PriceAdjustment } from '../data/price-adjustments'
 import { withAtomicFlush } from '@open-mercato/shared/lib/commands/flush'
@@ -597,6 +598,15 @@ export class DefaultCpqQuotingService {
    * never gets cost lines. `409 COST_LOCKED` (costs that change the price are locked — move the quote back to
    * Ready). Toggle off: cost-plus charges are not priced at all (R7 refuses them), nothing to protect here.
    */
+  /**
+   * `409 QUOTE_CONVERTED { orderId }` once the quote has an order (the check the sourcing writes use). Re-mirroring a line
+   * from its subscription after conversion would reset the quote's I-12 baseline and discard the costs the order copied.
+   */
+  private async assertNoOrder(em: EntityManager, cpqConfig: CpqQuoteConfiguration, scope: TenantScope): Promise<void> {
+    const order = await findQuoteOrder(em, cpqConfig, scope)
+    if (order) throw new QuotingError(409, 'QUOTE_CONVERTED', undefined, order)
+  }
+
   private async assertCostPlusLineWritable(
     em: EntityManager,
     cpqConfig: CpqQuoteConfiguration,
@@ -691,6 +701,7 @@ export class DefaultCpqQuotingService {
       throw new QuotingError(409, 'Only subscription items marked for removal can be restored')
     }
 
+    await this.assertNoOrder(em, cpqConfig, scope)
     const plan = planArcLineRestore(lineConfig, lines, cpqConfig.quoteType)
     if (!plan.ok) throw new QuotingError(409, 'Restore the parent item first')
 
@@ -787,6 +798,7 @@ export class DefaultCpqQuotingService {
       ? await em.findOne(CpqInventorySubscriptionItem, { id: itemId, organizationId: scope.organizationId, tenantId: scope.tenantId, deletedAt: null })
       : null
     if (!item || ['terminated', 'expired', 'superseded'].includes(item.status)) throw new QuotingError(409, 'ITEM_NOT_ACTIVE')
+    await this.assertNoOrder(em, cpqConfig, scope)
 
     // The rows below are discarded and re-created, and the line's price may move: same cost lock as a restore.
     await this.assertCostPlusLineWritable(em, cpqConfig, lineConfig, scope)

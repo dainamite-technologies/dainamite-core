@@ -35,7 +35,9 @@ import {
   type TenantScope,
 } from './types'
 import { emitCpqEvent } from '../events'
-import { ARC_COSTS_CARRIED_KEY, isArcReconfigured, stripQuoteOnlyArcMarkers } from './arcPriceFreeze'
+import {
+  ARC_CARRIED_COST_SET_HASH_KEY, ARC_CONVERTED_COST_SET_HASH_KEY, ARC_COSTS_CARRIED_KEY, isArcReconfigured, stripQuoteOnlyArcMarkers,
+} from './arcPriceFreeze'
 import { isArcTerminationLine } from './arcLineRemoval'
 import type { CpqCostService } from './costs/costService'
 import { cancelOpenRequests } from './costs/costRequestCancel'
@@ -342,8 +344,15 @@ export class DefaultCpqOrderService {
         startDate: ql.startDate,
         termMonths: ql.termMonths ?? null,
         endDate: ql.endDate,
-        // Quote-only ARC pricing markers stay on the quote.
-        configuration: { ...stripQuoteOnlyArcMarkers(ql.configuration), offeringName },
+        // Quote-only ARC pricing markers stay on the quote. The carried-cost set hash is frozen onto the order line (under its
+        // own key, stripped from every response) so activation compares against it, never against the mutable quote line.
+        configuration: {
+          ...stripQuoteOnlyArcMarkers(ql.configuration),
+          offeringName,
+          ...(typeof (ql.configuration as Record<string, unknown> | null)?.[ARC_CARRIED_COST_SET_HASH_KEY] === 'string'
+            ? { [ARC_CONVERTED_COST_SET_HASH_KEY]: (ql.configuration as Record<string, unknown>)[ARC_CARRIED_COST_SET_HASH_KEY] }
+            : {}),
+        },
         quantity: ql.quantity,
         charges: ql.charges ? [...ql.charges] : null,
         nrcTotal: ql.nrcTotal,
@@ -518,7 +527,9 @@ export class DefaultCpqOrderService {
     })
     // I-12, under the locks and before the first write: refuse when another ARC changed a carried item cost since
     // this quote mirrored it. A no-op, with no read, for lines without carried-cost markers.
-    await assertCarriedCostsFresh(em, carriedCostLines(sourceQuoteLines, quoteType), scope, costSourceChanged)
+    // The baseline is the hash frozen onto the order line at conversion, not the live quote line (nothing done to the quote
+    // after conversion may reset it); an order converted before the freeze falls back to the quote line's own hash.
+    await assertCarriedCostsFresh(em, carriedCostLines(withConversionHashes(sourceQuoteLines, orderLines), quoteType), scope, costSourceChanged)
 
     const linesByTarget = new Map<string | null, CpqQuoteLineConfiguration[]>()
     for (const line of sourceQuoteLines) {
@@ -1541,4 +1552,27 @@ async function emitSupersededEvent(
     sourceOrderId: envelope.sourceOrderId,
     timestamp: new Date().toISOString(),
   } as never)
+}
+
+/**
+ * The quote lines with their carried-cost baseline replaced by the one frozen on the matching order line at conversion
+ * (`_arcConvertedCostSetHash`). A line whose order line has no frozen hash (converted before the freeze) is unchanged.
+ */
+function withConversionHashes(
+  quoteLines: CpqQuoteLineConfiguration[], orderLines: CpqOrderLineConfiguration[],
+): CpqQuoteLineConfiguration[] {
+  const frozen = new Map<string, string>()
+  for (const orderLine of orderLines) {
+    const hash = (orderLine.configuration as Record<string, unknown> | null)?.[ARC_CONVERTED_COST_SET_HASH_KEY]
+    if (orderLine.sourceQuoteLineId && typeof hash === 'string') frozen.set(orderLine.sourceQuoteLineId, hash)
+  }
+  if (frozen.size === 0) return quoteLines
+  return quoteLines.map((line) => {
+    const hash = frozen.get(line.quoteLineId)
+    if (!hash) return line
+    return {
+      quoteLineId: line.quoteLineId, action: line.action, sourceSubscriptionItemId: line.sourceSubscriptionItemId,
+      configuration: { ...(line.configuration ?? {}), [ARC_COSTS_CARRIED_KEY]: true, [ARC_CARRIED_COST_SET_HASH_KEY]: hash },
+    } as CpqQuoteLineConfiguration
+  })
 }

@@ -1685,6 +1685,31 @@ describe('COST_SOURCE_CHANGED (ARC costs step 4)', () => {
       expect(emitSpy).not.toHaveBeenCalled()
     })
 
+    it('review: the baseline is the hash frozen on the order line at conversion; resetting the live quote line marker cannot let a stale order activate', async () => {
+      const live = [tailCost({ unitAmount: '240', instanceAmount: '240', totalAmount: '240' }), tailCost({ id: 'ic-2', costKey: 'install' })] as unknown as Array<Record<string, unknown>>
+      // Another ARC changed the tail and added a key; afterwards the quote line's marker was reset to the CURRENT set.
+      const reset = { ...markers, _arcCarriedCostSetHash: itemCostSetHash(live as never) }
+      const stale = createActivationHarness(amend({
+        quoteLines: [quoteLine(reset)], inventoryCosts: live,
+        orderLines: [{ orderLineId: 'ol-1', sourceQuoteLineId: 'ql-1', action: 'modify', configuration: { _arcConvertedCostSetHash: markers._arcCarriedCostSetHash } }],
+      }))
+      await expect(stale.service.activateOrder('oc-1', ACTIVATION_SCOPE)).rejects.toMatchObject({ status: 409, message: 'COST_SOURCE_CHANGED', details: body(['install', 'tail']) })
+      expect(stale.inventory.applyAmendment).not.toHaveBeenCalled()
+      expect(stale.store.committed).toEqual([])
+      // Control: an order converted before the freeze has no frozen hash and falls back to the (reset) quote marker.
+      const legacy = createActivationHarness(amend({ quoteLines: [quoteLine(reset)], inventoryCosts: live, carriedQuoteCosts: [] }))
+      await legacy.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+      expect(legacy.inventory.applyAmendment).toHaveBeenCalled()
+    })
+
+    it('review: a frozen hash that still matches the live costs activates normally', async () => {
+      const h = createActivationHarness(amend({
+        orderLines: [{ orderLineId: 'ol-1', sourceQuoteLineId: 'ql-1', action: 'modify', configuration: { _arcConvertedCostSetHash: markers._arcCarriedCostSetHash } }],
+      }))
+      await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+      expect(h.inventory.applyAmendment).toHaveBeenCalled()
+    })
+
     it('stale after merge (ARC costs Q10): an Amend on A that carried A\'s tail is refused once a merge re-pointed the cost to the clone', async () => {
       // `repointItemCosts` moved ic-1 onto the merged subscription's clone: same id and key, new item / subscription.
       const repointed = tailCost({ subscriptionItemId: 'item-clone' }) as unknown as Record<string, unknown>
@@ -1860,6 +1885,22 @@ describe('COST_SOURCE_CHANGED (ARC costs step 4)', () => {
       expect(entities).not.toContain(CpqInventoryCost)
       expect(entities).not.toContain(CpqInventorySubscriptionItem)
       expect(em.create).toHaveBeenCalledWith(CpqOrderLineConfiguration, expect.anything())
+    })
+
+    it('review: freezes the carried-cost set hash onto the order line (own key); the quote-only marker itself stays on the quote', async () => {
+      const { em, run } = await convertQuote([line(markers)], mirroredAt)
+      await run()
+      const created = em.create.mock.calls.find(([entity]) => entity === CpqOrderLineConfiguration)![1] as { configuration: Record<string, unknown> }
+      expect(created.configuration).toMatchObject({ _arcConvertedCostSetHash: markers._arcCarriedCostSetHash })
+      expect(created.configuration).not.toHaveProperty('_arcCarriedCostSetHash')
+      expect(created.configuration).not.toHaveProperty('_arcCostsCarried')
+    })
+
+    it('review: a line without the carried marker freezes nothing', async () => {
+      const { em, run } = await convertQuote([line({ _arcMirroredFromItemId: 'item-1', _arcPriceFrozen: true })], [])
+      await run()
+      const created = em.create.mock.calls.find(([entity]) => entity === CpqOrderLineConfiguration)![1] as { configuration: Record<string, unknown> }
+      expect(created.configuration).not.toHaveProperty('_arcConvertedCostSetHash')
     })
 
     it('a new-sale quote never reads item costs', async () => {

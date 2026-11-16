@@ -47,9 +47,16 @@ export const ARC_COSTS_CARRIED_KEY = '_arcCostsCarried'
 /** `itemCostSetHash` of the item's open costs at mirroring: the baseline of the `COST_SOURCE_CHANGED` guard (I-12). */
 export const ARC_CARRIED_COST_SET_HASH_KEY = '_arcCarriedCostSetHash'
 
+/**
+ * Set on an ORDER line at conversion: `_arcCarriedCostSetHash` as it was then. Activation compares the subscription's open
+ * item costs with this frozen value, so nothing that happens to the quote afterwards can reset the I-12 baseline.
+ */
+export const ARC_CONVERTED_COST_SET_HASH_KEY = '_arcConvertedCostSetHash'
+
 /** Markers that describe quote-time pricing state and never leave the quote. */
 const QUOTE_ONLY_ARC_KEYS = [
   ARC_PRICE_FROZEN_KEY, ARC_REPRICED_KEY, ARC_COST_PLUS_FROZEN_KEY, ARC_RECONFIGURED_KEY, ARC_COSTS_CARRIED_KEY, ARC_CARRIED_COST_SET_HASH_KEY,
+  ARC_CONVERTED_COST_SET_HASH_KEY,
 ] as const
 
 const ARC_MARKER_PREFIX = '_arc'

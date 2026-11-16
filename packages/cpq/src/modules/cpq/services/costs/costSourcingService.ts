@@ -4,8 +4,6 @@ import { withAtomicFlush } from '@open-mercato/shared/lib/commands/flush'
 import { SalesQuote } from '@open-mercato/core/modules/sales/data/entities'
 import {
   CpqChargeCostElement,
-  CpqOrderConfiguration,
-  CpqOrderLineCost,
   CpqProductCharge,
   CpqQuoteConfiguration,
   CpqQuoteLineConfiguration,
@@ -32,6 +30,7 @@ import type { TenantScope } from '../types'
 import { COST_CLOSED_STATUSES } from './costLock'
 import type { CpqCostService } from './costService'
 import { isQuoteCostLocked } from './costResolution'
+import { findQuoteOrder } from './quoteOrderLookup'
 import { isFrozenMirrorLine } from '../arcPriceFreeze'
 import { cancelRequestPatch, isRequestOpen, openRequestPatch } from './costRequestState'
 import { cancelOpenRequests as cancelOpenCostRequests } from './costRequestCancel'
@@ -111,13 +110,10 @@ const audit = (row: CpqQuoteLineCost, reason?: string): SourcingAudit => ({
 export async function assertQuoteOpenForSourcing(em: EntityManager, quote: CpqQuoteConfiguration, scope: TenantScope, costId?: string): Promise<void> {
   const sales = await findOneWithDecryption(em, SalesQuote, { id: quote.quoteId, ...scoped(scope) }, undefined, scope)
   if (!sales || COST_CLOSED_STATUSES.includes(quote.cpqStatus as never)) throw new QuotingError(409, 'QUOTE_CLOSED')
-  const order = await em.findOne(CpqOrderConfiguration, { sourceQuoteId: quote.id, ...scoped(scope) })
-  if (order) {
-    // ARC costs Q7 (additive): the order line cost copied from this quote cost line, so the Cost requests page can link
-    // to Re-confirm on the order. Null when the cost line has no copy (or no cost line was named).
-    const copy = costId ? await em.findOne(CpqOrderLineCost, { sourceQuoteLineCostId: costId, orderConfigurationId: order.id, ...scoped(scope) }) : null
-    throw new QuotingError(409, 'QUOTE_CONVERTED', undefined, { orderId: order.id, orderLineCostId: copy?.id ?? null })
-  }
+  // ARC costs Q7 (additive): `orderLineCostId` is the order line cost copied from this quote cost line, so the Cost requests
+  // page can link to Re-confirm on the order. Null when the cost line has no copy (or no cost line was named).
+  const order = await findQuoteOrder(em, quote, scope, costId)
+  if (order) throw new QuotingError(409, 'QUOTE_CONVERTED', undefined, order)
 }
 
 /**

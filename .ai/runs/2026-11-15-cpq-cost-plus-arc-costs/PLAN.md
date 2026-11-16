@@ -12,29 +12,29 @@ Engine: om-auto-create-pr-loop (steps: 23, --loop: no)
 
 | Phase | Step | Title | Exec | Status | Commit |
 |-------|------|-------|------|--------|--------|
-| A | 1 | Characterize ARC pricing, conversion and activation | group:A1 | done | |
-| B | 2 | State hash helper and item cost state | group:B1 | done | |
-| B | 3 | Activation locks | group:B1 | done | |
-| B | 4 | COST_SOURCE_CHANGED guard | group:B1 | done | |
-| C | 5 | Entity: carried origin and renegotiation_due | group:C1 | done | |
-| C | 6 | Carry on Amend mirror | group:C1 | done | |
-| C | 7 | Frozen-line lock rule | group:C1 | done | |
-| C | 8 | Conversion link and write-back | group:C2 | done | |
-| C | 9 | Cost-only Amend and I-9 | group:C2 | done | |
-| C | 10 | Merge rule | group:C2 | done | |
-| C | 11 | Forward compatibility | group:C2 | done | |
-| D | 12 | Usage openArcQuotesWithCarriedCosts | group:D1 | done | |
-| D | 13 | Order line cost re-confirmation | group:D1 | done | |
-| E | 14 | Renew reconciliation, index re-evaluation, renegotiation due | group:E1 | done | |
-| E | 15 | Keep current cost | group:E1 | done | |
-| E | 16 | Refresh from subscription | group:E2 | done | |
-| E | 17 | Cancel exposure | group:E2 | done | |
-| E | 18 | Read projection additions | group:E2 | done | |
-| F | 19 | ArcLineDiff cost and margin rows | group:F1 | done | |
-| F | 20 | Quote and order pages | group:F1 | done | |
-| F | 21 | Docs, demo and E2E | group:F2 | done | |
+| A | 1 | Characterize ARC pricing, conversion and activation | group:A1 | done | 25504d3 |
+| B | 2 | State hash helper and item cost state | group:B1 | done | 6ac785c |
+| B | 3 | Activation locks | group:B1 | done | 88e658d |
+| B | 4 | COST_SOURCE_CHANGED guard | group:B1 | done | 93ead2b |
+| C | 5 | Entity: carried origin and renegotiation_due | group:C1 | done | d50980d |
+| C | 6 | Carry on Amend mirror | group:C1 | done | 495e68e |
+| C | 7 | Frozen-line lock rule | group:C1 | done | cef5ad1 |
+| C | 8 | Conversion link and write-back | group:C2 | done | 29232a7 |
+| C | 9 | Cost-only Amend and I-9 | group:C2 | done | 496467f |
+| C | 10 | Merge rule | group:C2 | done | 747aa57 |
+| C | 11 | Forward compatibility | group:C2 | done | 75ccc8f |
+| D | 12 | Usage openArcQuotesWithCarriedCosts | group:D1 | done | 5f88123 |
+| D | 13 | Order line cost re-confirmation | group:D1 | done | 10e26bc |
+| E | 14 | Renew reconciliation, index re-evaluation, renegotiation due | group:E1 | done | 9462841 |
+| E | 15 | Keep current cost | group:E1 | done | 6ef0c40 |
+| E | 16 | Refresh from subscription | group:E2 | done | d3cb344 |
+| E | 17 | Cancel exposure | group:E2 | done | 2e1f2dc |
+| E | 18 | Read projection additions | group:E2 | done | aa74204 |
+| F | 19 | ArcLineDiff cost and margin rows | group:F1 | done | 82f535e |
+| F | 20 | Quote and order pages | group:F1 | done | 6c06a55 |
+| F | 21 | Docs, demo and E2E | group:F2 | done | ceb0aa5 |
 | G | 22 | Re-price from cost | group:G1 | blocked | |
-| G | 23 | Archive the Delta | group:G2 | done | |
+| G | 23 | Archive the Delta | group:G2 | done | d48dab3 |
 
 ## Goal
 

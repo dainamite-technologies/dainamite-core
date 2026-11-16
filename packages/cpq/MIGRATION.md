@@ -197,8 +197,10 @@ No route contract change. Data retention changes for installers:
   CPQ interceptor `cpq.restore-quote-configuration-after-sales-undo`
   (`commands/interceptors.ts`, `afterUndo` on `sales.quotes.delete`) restores
   the CPQ configuration and the lines deleted with it. Lines removed earlier
-  on their own stay deleted. Run `yarn generate` after upgrading so the
-  interceptor is registered.
+  on their own stay deleted. Its `afterExecute` soft-deletes the live CPQ
+  configuration whenever `sales.quotes.delete` runs elsewhere (redo from the
+  audit log, a delete in the sales module). Run `yarn generate` after
+  upgrading so the interceptor is registered.
 - `POST /api/cpq/product-specifications` creates the catalog product with
   `catalog.products.create`, so catalog validation limits apply (title 255,
   description 4000, handle 150 characters) and return 400.

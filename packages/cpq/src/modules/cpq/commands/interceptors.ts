@@ -17,6 +17,11 @@ import { CpqQuoteConfiguration, CpqQuoteLineConfiguration } from '../data/entiti
  * restored quote and the lines that were deleted in the same operation (same
  * `deletedAt`). Lines removed earlier on their own stay deleted.
  *
+ * `afterExecute` covers every other path that runs `sales.quotes.delete`: a
+ * redo from the audit log, or a delete started in the sales module. It
+ * soft-deletes the live CPQ configuration of that quote and its live lines,
+ * so no CPQ row is left pointing at a sales quote that no longer exists.
+ *
  * Auto-discovered from `commands/interceptors.ts`; no DI registration.
  */
 
@@ -81,11 +86,39 @@ export async function restoreCpqQuoteAfterSalesUndo(
   return { restoredConfigurationId: config.id, restoredLines: lines.length }
 }
 
+export async function softDeleteCpqQuoteAfterSalesDelete(
+  input: unknown,
+  context: CommandInterceptorContext,
+): Promise<{ deletedConfigurationId: string; deletedLines: number } | null> {
+  const salesQuoteId = readDeletedSalesQuoteId(input)
+  const tenantId = context.auth?.tenantId ?? null
+  if (!salesQuoteId || !tenantId) return null
+  const em = (context.container.resolve('em') as EntityManager).fork()
+  // Scoped by tenant only: a delete from the sales module may run with no
+  // selected organization; the quote id itself is unique.
+  const config = await em.findOne(CpqQuoteConfiguration, { quoteId: salesQuoteId, tenantId, deletedAt: null })
+  if (!config) return null
+  const lines = await em.find(CpqQuoteLineConfiguration, {
+    quoteConfigurationId: config.id,
+    tenantId,
+    organizationId: config.organizationId,
+    deletedAt: null,
+  })
+  const now = new Date()
+  config.deletedAt = now
+  for (const line of lines) line.deletedAt = now
+  await em.flush()
+  return { deletedConfigurationId: config.id, deletedLines: lines.length }
+}
+
 export const interceptors: CommandInterceptor[] = [
   {
     id: 'cpq.restore-quote-configuration-after-sales-undo',
     targetCommand: 'sales.quotes.delete',
     priority: 50,
+    async afterExecute(input, _result, context) {
+      await softDeleteCpqQuoteAfterSalesDelete(input, context)
+    },
     async afterUndo(undoContext, context) {
       await restoreCpqQuoteAfterSalesUndo(undoContext, context)
     },

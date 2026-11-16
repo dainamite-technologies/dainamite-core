@@ -1,5 +1,10 @@
 import { CpqQuoteConfiguration, CpqQuoteLineConfiguration } from '../../data/entities'
-import { interceptors, readDeletedSalesQuoteId, restoreCpqQuoteAfterSalesUndo } from '../interceptors'
+import {
+  interceptors,
+  readDeletedSalesQuoteId,
+  restoreCpqQuoteAfterSalesUndo,
+  softDeleteCpqQuoteAfterSalesDelete,
+} from '../interceptors'
 
 const QUOTE = '11111111-1111-4111-8111-111111111111'
 const scope = { tenantId: 'tenant', organizationId: 'org' }
@@ -32,6 +37,7 @@ describe('cpq sales.quotes.delete undo interceptor', () => {
   it('is registered for the sales delete command', () => {
     expect(interceptors.map((entry) => entry.targetCommand)).toEqual(['sales.quotes.delete'])
     expect(typeof interceptors[0].afterUndo).toBe('function')
+    expect(typeof interceptors[0].afterExecute).toBe('function')
   })
 
   it('reads the quote id from the action log entry, then from the undo payload', () => {
@@ -73,5 +79,40 @@ describe('cpq sales.quotes.delete undo interceptor', () => {
     const { context, undo, em } = setup({ deleted: { id: 'cfg', deletedAt } })
     expect(await restoreCpqQuoteAfterSalesUndo({ ...undo, logEntry: { resourceKind: 'sales.quote', resourceId: QUOTE } }, context)).toBeNull()
     expect(em.flush).not.toHaveBeenCalled()
+  })
+
+  describe('afterExecute (redo, delete from the sales module)', () => {
+    function deleteSetup(config: Record<string, unknown> | null, lines: Array<Record<string, unknown>> = []) {
+      const em = {
+        findOne: jest.fn(async () => config),
+        find: jest.fn(async () => lines),
+        flush: jest.fn(),
+      }
+      const context = {
+        commandId: 'sales.quotes.delete',
+        auth: { tenantId: 'tenant' },
+        selectedOrganizationId: null,
+        container: { resolve: () => ({ fork: () => em }) },
+      } as never
+      return { em, context }
+    }
+
+    it('soft-deletes the live CPQ configuration and its live lines with one timestamp', async () => {
+      const config: Record<string, unknown> = { id: 'cfg', organizationId: 'org', deletedAt: null }
+      const line: Record<string, unknown> = { id: 'line', deletedAt: null }
+      const { em, context } = deleteSetup(config, [line])
+      const result = await softDeleteCpqQuoteAfterSalesDelete({ body: { id: QUOTE } }, context)
+      expect(result).toEqual({ deletedConfigurationId: 'cfg', deletedLines: 1 })
+      expect(config.deletedAt).toBeInstanceOf(Date)
+      expect(line.deletedAt).toBe(config.deletedAt)
+      expect(em.findOne).toHaveBeenCalledWith(CpqQuoteConfiguration, { quoteId: QUOTE, tenantId: 'tenant', deletedAt: null })
+      expect(em.flush).toHaveBeenCalledTimes(1)
+    })
+
+    it('does nothing when CPQ already deleted the configuration or the quote is not a CPQ quote', async () => {
+      const { em, context } = deleteSetup(null)
+      expect(await softDeleteCpqQuoteAfterSalesDelete({ body: { id: QUOTE } }, context)).toBeNull()
+      expect(em.flush).not.toHaveBeenCalled()
+    })
   })
 })

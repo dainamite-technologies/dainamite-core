@@ -1,5 +1,42 @@
 # @dainamite/cpq
 
+## 1.0.0
+
+### Major Changes
+
+- 478c144: First stable release: `1.0.0`. No code or API changes against `@dainamite/billing@0.22.0` and `@dainamite/cpq@0.8.0`.
+
+  From now on the packages follow semver in the 1.x line: new features bump the minor version, fixes bump the patch version, and only breaking changes bump the major version. Upgrade by changing your range to `^1.0.0`.
+
+### Minor Changes
+
+- 9370e52: CPQ now works with the Open Mercato AI assistant, in the in-app AI chat and for MCP clients.
+
+  - **24 AI tools** (`ai-tools.ts`), each a thin wrapper over an existing CPQ REST route, so they use the same permissions, tenant scoping and validation as the API. Read tools: offerings, specifications and their attributes, bundle trees, configurable attributes for an offering, price calculation (`cpq.calculate_price`), offering combination validation, price rules, quotes with lines and totals, subscriptions, assets, a customer's installed base, expiring subscriptions, subscription change log, and orders.
+  - **4 write tools**: create a draft quote, add a configured line, update a line, submit a quote for approval. They run only after the operator confirms the preview card in the AI chat. A direct call, for example from an MCP client, is refused and nothing is written.
+  - **CPQ Quoting Assistant** agent (`cpq.quoting_assistant`, needs `cpq.quotes.view`). It knows the CPQ concepts, always prices through the calculate-price API instead of guessing, and asks before any write. A tenant can lock it to read-only in `/backend/config/ai-assistant/agents`.
+  - **New required peer dependency (breaking)**: `@open-mercato/ai-assistant` `^0.9.0`, and the `ai_assistant` module must be enabled. It ships in the 1.0.0 major. See `MIGRATION.md`.
+
+  No new permissions and no migrations. After upgrading, run `yarn generate` and restart the app. Try it at `/backend/config/ai-assistant/playground`. Details: `manuals/cpq-ai-agent.md`.
+
+### Patch Changes
+
+- d31e4fa: Declare the customer inventory features in `acl.ts`: `cpq.inventory.view` and `cpq.inventory.manage`. Routes and the admin and employee roles already used them, but they were never declared, so they could not be assigned to other roles in the RBAC UI.
+
+  `GET /api/cpq/inventory/subscriptions/expiring` now requires `cpq.inventory.view`. It used to require `cpq.inventory.expiring.view`, a feature that was retired, so no role could call the endpoint.
+
+  For existing tenants, run `yarn mercato auth sync-role-acls --tenant <id>` after the upgrade.
+
+- c49d3f6: API fixes:
+
+  - **Quote lines with a start date no longer fail.** `CpqQuoteLineConfiguration.startDate` / `endDate` are `type: 'date'` columns, which MikroORM reads back as `YYYY-MM-DD` strings. Code called `.toISOString()` on them and assigned `Date` objects, so recalculating or reading a quote with a dated line returned 500, and editing a dated line (term, start or end) failed. Order activation also created the subscription without the quote line's start date. The properties are now typed as strings and all reads go through one helper. No migration.
+
+  - **Updates no longer reset fields you did not send.** The update schemas for specifications, offerings, relationships, attributes, charges, price rules, pricing tables, pricing table entries and wizards filled in create-time defaults. A `PUT` with only `{ id, isActive }`, such as the price rule active toggle in the admin UI, reset `sortOrder` to 0. Other partial updates could reset `offeringType`, `lifecycleStatus`, `designTimeValues` and similar fields. Updates now change only the fields in the request.
+  - **Inventory routes return 404** instead of 500 when a subscription, subscription item or asset does not exist. Subscription and asset status transitions keep their 409 for invalid transitions.
+  - **`PUT /api/cpq/product-offerings` checks V-OFF-7** when `specId` or `offeringType` changes: the offering type must match the specification type, as on create.
+  - **`GET /api/cpq/quotes/attributes`** answers 400 for malformed `configuration` JSON instead of 500.
+  - `POST /api/cpq/offering-components` and `/api/cpq/bundle-slots` no longer return raw internal error messages in 500 responses.
+
 ## 0.8.0
 
 ### Minor Changes

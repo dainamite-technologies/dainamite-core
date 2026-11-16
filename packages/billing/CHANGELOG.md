@@ -1,5 +1,27 @@
 # @dainamite/billing
 
+## 1.0.0
+
+### Major Changes
+
+- 478c144: First stable release: `1.0.0`. No code or API changes against `@dainamite/billing@0.22.0` and `@dainamite/cpq@0.8.0`.
+
+  From now on the packages follow semver in the 1.x line: new features bump the minor version, fixes bump the patch version, and only breaking changes bump the major version. Upgrade by changing your range to `^1.0.0`.
+
+### Minor Changes
+
+- 9370e52: Billing is now usable by AI agents. The package ships an AI tool pack (`ai-tools.ts`) and a `billing.operator_assistant` agent (`ai-agents.ts`) for the Open Mercato AI assistant: the in-app chat and MCP clients see the same tools.
+
+  - 14 read tools (`billing.list_accounts`, `billing.get_account`, `billing.list_items`, `billing.list_usage`, `billing.list_invoices`, `billing.get_invoice`, `billing.list_payments`, `billing.get_payment`, `billing.list_transactions`, `billing.list_statements`, `billing.get_statement`, `billing.list_bill_runs`, `billing.get_bill_run`, `billing.list_run_outcomes`). Each one calls the existing `/api/billing/*` route, so it needs the same permission as the matching back-office page and sees only the caller's organization.
+  - 2 write tools, `billing.trigger_bill_run` (dry and test mode only, never a real run) and `billing.record_payment`. They run only after the operator approves the preview card in the AI chat. A direct call without that approval, for example from an MCP client, is refused.
+  - The agent uses `mutationPolicy: 'confirm-required'`: every write needs the operator's confirmation. A tenant can switch it to `read-only` in the AI assistant settings.
+
+  No new permissions and no migration. **New required peer dependency (breaking):** `@open-mercato/ai-assistant` `^0.9.0`, and the `ai_assistant` module must be enabled. It ships in the 1.0.0 major. See `MIGRATION.md`. After upgrading, run `yarn generate` so the agent and the tools are registered. See `manuals/billing-ai-agent.md`.
+
+### Patch Changes
+
+- c49d3f6: List filters `isActive` (accounts, items) and `rated` (usage) read the query string literally. `?isActive=false` used to be parsed as `true`, so the accounts page filter "Inactive" showed active accounts. Now `false` returns inactive accounts and unrated usage.
+
 ## 0.22.0
 
 ### Minor Changes

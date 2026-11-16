@@ -615,7 +615,7 @@ export class CpqChargeCostElement {
   @Property({ name: 'cost_type', type: 'text' })
   costType!: string
 
-  /** fixed | table | on_request (index arrives with the index-costs feature) */
+  /** fixed | table | index | on_request */
   @Property({ type: 'text' })
   source!: string
 
@@ -637,6 +637,18 @@ export class CpqChargeCostElement {
 
   @Property({ name: 'estimate_amount', type: 'numeric', columnType: 'numeric(18, 4)', nullable: true })
   estimateAmount: string | null = null
+
+  /** FK string to `cpq_cost_indices`; set iff `source = index` (partial index and CHECKs are hand-added in the migration). */
+  @Property({ name: 'cost_index_id', type: 'uuid', nullable: true })
+  costIndexId: string | null = null
+
+  /** Unit cost = `index_factor` x value in force + `index_offset`. `> 0`, defaults to 1 on an index element. */
+  @Property({ name: 'index_factor', type: 'numeric', columnType: 'numeric(18, 6)', nullable: true })
+  indexFactor: string | null = null
+
+  /** In the index currency, `>= 0`, defaults to 0 on an index element. */
+  @Property({ name: 'index_offset', type: 'numeric', columnType: 'numeric(18, 4)', nullable: true })
+  indexOffset: string | null = null
 
   /** FK string to a customers company used as supplier. */
   @Property({ name: 'default_supplier_id', type: 'uuid', nullable: true })

@@ -11,7 +11,7 @@ import {
   type CostIndexUpdateInput,
   type CostIndexValueInput,
 } from '../../data/cost-indices'
-import { CpqCostIndex, CpqCostIndexValue } from '../../data/entities'
+import { CpqChargeCostElement, CpqCostIndex, CpqCostIndexValue, CpqProductCharge } from '../../data/entities'
 import { QuotingError } from '../cpqQuotingService'
 import type { TenantScope } from '../types'
 
@@ -38,12 +38,31 @@ export type IndexReference = {
 }
 
 /**
- * Non-deleted cost elements referencing the given indices. Injectable because the element columns
- * (`cost_index_id`, ...) arrive with the "Element index fields" step: until that step wires the real query in
- * `di.ts`, the default returns nothing, so no index counts as in use.
+ * Non-deleted cost elements referencing the given indices (inactive ones included: a delete or a currency change is
+ * refused for any of them, a deactivation only for active ones). Injectable so tests can stub it; the default (and
+ * `di.ts`) is `findIndexReferences`.
  */
 export type FindIndexReferences = (em: EntityManager, indexIds: string[], scope: TenantScope) => Promise<IndexReference[]>
-export const noIndexReferences: FindIndexReferences = async () => []
+
+/** The real in-use query: tenant / organization scoped, `deleted_at IS NULL` on elements and on their charges. */
+export const findIndexReferences: FindIndexReferences = async (em, indexIds, scope) => {
+  if (indexIds.length === 0) return []
+  const where = { organizationId: scope.organizationId, tenantId: scope.tenantId, deletedAt: null }
+  const elements = await em.find(CpqChargeCostElement, { ...where, costIndexId: { $in: indexIds } }, { orderBy: { code: 'asc' } })
+  if (elements.length === 0) return []
+  const charges = await em.find(CpqProductCharge, { ...where, id: { $in: [...new Set(elements.map((element) => element.productChargeId))] } })
+  const chargeCodes = new Map(charges.map((charge) => [charge.id, charge.code]))
+  return elements.map((element) => ({
+    costIndexId: element.costIndexId as string,
+    id: element.id,
+    code: element.code,
+    name: element.name,
+    role: element.role,
+    productChargeId: element.productChargeId,
+    chargeCode: chargeCodes.get(element.productChargeId) ?? null,
+    isActive: element.isActive,
+  }))
+}
 
 export type IndexValueInForce = { indexId: string; effectiveDate: string; revision: number; value: string }
 
@@ -135,7 +154,7 @@ export class CpqCostIndexService {
   }
 
   private get references(): FindIndexReferences {
-    return this.deps.findReferences ?? noIndexReferences
+    return this.deps.findReferences ?? findIndexReferences
   }
 
   private readEm(): EntityManager {
@@ -237,7 +256,7 @@ export class CpqCostIndexService {
     return result
   }
 
-  /** Non-deleted elements that use the index (empty until the element index fields ship). */
+  /** Non-deleted elements that use the index. */
   async referencingElements(indexId: string, scope: TenantScope, em: EntityManager = this.readEm()): Promise<IndexReference[]> {
     return (await this.references(em, [indexId], scope)).filter((ref) => ref.costIndexId === indexId)
   }

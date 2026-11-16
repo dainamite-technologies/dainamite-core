@@ -18,7 +18,7 @@ Engine: om-auto-create-pr-loop (steps: 18, --loop: no)
 | A | 4 | Index pages | group:A3 | done | |
 | A | 5 | Phase A close-out | group:A3 | done | |
 | B | 6 | Characterize index refusal and locked recalculation | group:B1 | done | |
-| B | 7 | Element index fields | group:B1 | todo | |
+| B | 7 | Element index fields | group:B1 | done | |
 | B | 8 | Date plumbing | group:B1 | todo | |
 | B | 9 | Index cost resolution | group:B2 | todo | |
 | B | 10 | Cost preview and calculate-price | group:B2 | todo | |

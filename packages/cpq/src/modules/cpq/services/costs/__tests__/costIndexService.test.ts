@@ -1,5 +1,5 @@
 import { LockMode, UniqueConstraintViolationException } from '@mikro-orm/core'
-import { CpqCostIndex, CpqCostIndexValue } from '../../../data/entities'
+import { CpqChargeCostElement, CpqCostIndex, CpqCostIndexValue, CpqProductCharge } from '../../../data/entities'
 import { CpqCostIndexService, type IndexReference } from '../costIndexService'
 
 const scope = { organizationId: '55555555-5555-4555-8555-555555555555', tenantId: '44444444-4444-4444-8444-444444444444' }
@@ -11,7 +11,7 @@ type Row = Record<string, unknown>
 
 /** In-memory EntityManager covering the query shapes of the service (equality, $in, $ne, $lte, $gt, $gte, $or / $ilike). */
 function fakeEm() {
-  const store = new Map<unknown, Row[]>([[CpqCostIndex, []], [CpqCostIndexValue, []]])
+  const store = new Map<unknown, Row[]>([[CpqCostIndex, []], [CpqCostIndexValue, []], [CpqChargeCostElement, []], [CpqProductCharge, []]])
   const events: string[] = []
   const pending: Array<{ cls: unknown; row: Row }> = []
   const hooks = { failFlush: null as Error | null }
@@ -390,11 +390,63 @@ describe('update / setActive / softDelete', () => {
     await expect(service.softDelete(free.id, scope)).rejects.toMatchObject({ status: 404 })
   })
 
-  it('the default in-use query reports nothing until the element fields are wired', async () => {
-    const { service, addIndex } = setup()
-    const index = addIndex()
-    const plain = new CpqCostIndexService({ em: (service as unknown as { deps: { em: never } }).deps.em, now: () => NOW })
-    expect(await plain.referencingElements(index.id, scope)).toEqual([])
-    await expect(plain.softDelete(index.id, scope)).resolves.toBeUndefined()
+})
+
+describe('findIndexReferences wired as the real in-use query (default and di.ts)', () => {
+  function withElements() {
+    const fake = setup()
+    const index = fake.addIndex()
+    const charge = { id: uuid(), ...scope, deletedAt: null, code: 'transit' }
+    fake.store.get(CpqProductCharge)!.push(charge)
+    const addElement = (over: Row = {}) => {
+      const row = { id: uuid(), ...scope, deletedAt: null, productChargeId: charge.id, code: 'power', name: 'Power', role: 'price_basis', isActive: true, costIndexId: index.id, ...over }
+      fake.store.get(CpqChargeCostElement)!.push(row)
+      return row as Row & { id: string }
+    }
+    // The default `findReferences` is the real query.
+    const service = new CpqCostIndexService({ em: fake.em as never, now: () => NOW })
+    return { ...fake, index, charge, addElement, service }
+  }
+
+  it('lists non-deleted elements of the index (inactive included) with their charge code, tenant scoped', async () => {
+    const { service, index, charge, addElement } = withElements()
+    const active = addElement()
+    const inactive = addElement({ id: uuid(), code: 'power_old', isActive: false })
+    addElement({ id: uuid(), code: 'deleted', deletedAt: new Date() })
+    addElement({ id: uuid(), code: 'other_org', organizationId: 'other-org' })
+    addElement({ id: uuid(), code: 'other_index', costIndexId: uuid() })
+    const refs = await service.referencingElements(index.id, scope)
+    expect(refs.map((r) => r.code)).toEqual(['power', 'power_old'])
+    expect(refs[0]).toEqual({ costIndexId: index.id, id: active.id, code: 'power', name: 'Power', role: 'price_basis', productChargeId: charge.id, chargeCode: 'transit', isActive: true })
+    expect(refs[1].isActive).toBe(false)
+    expect(inactive.id).toBe(refs[1].id)
+  })
+
+  it('INDEX_IN_USE triggers on delete (any element) and on deactivation (active elements only)', async () => {
+    const { service, index, addElement } = withElements()
+    const element = addElement({ isActive: false })
+    await expect(service.setActive(index.id, false, scope)).resolves.toMatchObject({ isActive: false })
+    await service.setActive(index.id, true, scope)
+    await expect(service.softDelete(index.id, scope)).rejects.toMatchObject({ status: 422, message: 'INDEX_IN_USE', details: { elements: [expect.objectContaining({ id: element.id, chargeCode: 'transit' })] } })
+    element.isActive = true
+    await expect(service.setActive(index.id, false, scope)).rejects.toMatchObject({ status: 422, message: 'INDEX_IN_USE', details: { elements: [expect.objectContaining({ id: element.id })] } })
+    element.deletedAt = new Date()
+    await expect(service.softDelete(index.id, scope)).resolves.toBeUndefined()
+  })
+
+  it('INDEX_CURRENCY_LOCKED triggers on a referencing element even without values', async () => {
+    const { service, index, addElement } = withElements()
+    await expect(service.update(index.id, { currencyCode: 'EUR' }, scope)).resolves.toMatchObject({ currencyCode: 'EUR' })
+    addElement()
+    await expect(service.update(index.id, { currencyCode: 'GBP' }, scope)).rejects.toMatchObject({ status: 422, message: 'INDEX_CURRENCY_LOCKED' })
+  })
+
+  it('list and get report the element count / elements', async () => {
+    const { service, index, addElement } = withElements()
+    addElement()
+    addElement({ id: uuid(), code: 'b' })
+    const list = await service.list(scope, { page: 1, pageSize: 20 })
+    expect(list.items[0].elementCount).toBe(2)
+    expect((await service.get(index.id, scope)).elements).toHaveLength(2)
   })
 })

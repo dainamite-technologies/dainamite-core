@@ -17,7 +17,7 @@ import { CpqOrderCostReconfirmService } from './services/costs/orderCostReconfir
 import { CpqCostSourcingService } from './services/costs/costSourcingService'
 import { CpqCostRequestQueueService } from './services/costs/costRequestQueue'
 import { createSourcingPublisher } from './services/costs/sourcingPublisher'
-import { CpqCostIndexService } from './services/costs/costIndexService'
+import { CpqCostIndexService, findIndexReferences } from './services/costs/costIndexService'
 import { CpqFxRateResolver, type FxExchangeRateService } from './services/costs/fxRateResolver'
 
 /**
@@ -41,10 +41,11 @@ export function register(container: AppContainer) {
         : null,
       featureTogglesService: container.resolve('featureTogglesService'),
     })).scoped(),
-    // Cost indices and their append-only values (index-costs spec). The in-use query (`findReferences`) is wired by the
-    // "Element index fields" step; until then no index counts as referenced.
+    // Cost indices and their append-only values (index-costs spec). `findReferences` is the in-use query over the
+    // elements' `cost_index_id` (INDEX_IN_USE / INDEX_CURRENCY_LOCKED, element counts).
     cpqCostIndexService: asFunction(() => new CpqCostIndexService({
       em: container.resolve('em'),
+      findReferences: findIndexReferences,
     })).scoped(),
     cpqAdjustmentService: asFunction(() => new CpqAdjustmentService({
       em: container.resolve('em'),

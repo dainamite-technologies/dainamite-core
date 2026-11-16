@@ -1,6 +1,6 @@
 {
   "name": "@dainamite/cpq-billing-connector",
-  "version": "5.1.0",
+  "version": "5.2.0",
   "description": "Wires @dainamite/cpq subscription lifecycle events to @dainamite/billing API calls (activated / amended / renewed / cancelled / merged / superseded).",
   "type": "module",
   "main": "./dist/modules/cpq_billing_connector/index.js",

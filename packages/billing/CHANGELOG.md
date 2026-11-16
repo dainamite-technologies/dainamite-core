@@ -1,5 +1,25 @@
 # @dainamite/billing
 
+## 1.1.0
+
+### Minor Changes
+
+- dc9a79d: Credit reasons and item date guards (spec `2026-11-16-billing-operator-polish-and-bill-cycle-day`, Part 2).
+
+  - **Credit reason.** An item ended inside its billed window (price change, earlier end date) with proration on credits the billed days. `PUT /api/billing/items` and `POST /api/billing/items/change-price` then require a reason: `creditReason` (operator text, at most 500 characters) or `creditReasonCode` + `creditReasonParams` (generated). Without one they return 422 `billing.item.credit_reason_required`. The reason is stored on the item (`credit_reason` jsonb, migration `Migration20261122000000_billing_item_credit_reason`), frozen into the credit line's `metadata.credit_reason`, and printed under the line on the PDF (in the invoice language) and on the invoice page.
+  - **The price-change dialog and item form** show how far the item is billed and warn before a credit. They ask for the reason only when one is needed.
+  - **Breaking: an item can no longer end before it starts.** An end date more than one day before the start returns 422 `billing.item.end_before_start` on create, bulk create and update. `end = start − 1` is allowed: the item was cancelled before it started and never bills.
+  - **A new item state, "Cancelled before start"**, appears on the account Items tab.
+
+- dc9a79d: Bill cycle day, every-N cycles and operator polish.
+
+  - **Breaking — bill cycle.** `billCycleAnchor` / `bill_cycle_anchor` is replaced by `billCycleDay` / `bill_cycle_day` (`1`–`31` for monthly / annually, `mon`–`sun` for weekly, `null` for daily) plus `billCycleInterval` / `bill_cycle_interval` (every N units, default 1). Units are now `daily | weekly | monthly | annually`; `quarterly` is gone (use `monthly` × 3). No alias is kept. Migration `Migration20261121000000_billing_cycle_day` renames the column and converts quarterly rows.
+  - **Billing uses the bill cycle day.** `nextBillDate` is optional on create (defaults to the first cycle day on or after today). Bill Runs and prepaid period close re-pin every advance to the day, so a 31st no longer drifts to the 28th. Changing the cycle on a live account moves the next bill date to the next occurrence of the new day; that run bills one short alignment period and prorates in-advance charges. The arrears period now starts the day after `last_bill_date`.
+  - **Every N days.** For example, `billCycle: 'daily', billCycleInterval: 30`.
+  - **Invoice lines** show their service period under the description on the admin invoice page (it was shown only on prorated and credit lines).
+  - **Payment back navigation.** A payment opened from an account returns to that account's Payments tab.
+  - **Billing Accounts list.** A Billing pill ("Billed through …", "Due since …", "Not billed yet") replaces the Last bill column. The Cycle column reads "Monthly on day 15" or "Every 30 days".
+
 ## 1.0.1
 
 ### Patch Changes

@@ -2397,6 +2397,8 @@ DefaultCpqQuotingService.prototype.attachTargetSubscription = async function (
     organizationId: scope.organizationId,
     tenantId: scope.tenantId,
   })
+  const signals: SourcingSignal[] = []
+  const publisher = (this as unknown as { sourcingPublisher?: SourcingSignalPublisher }).sourcingPublisher
   if (salesQuote) {
     const isRenewMerge = input.quoteType === 'renew' && otherTargets.length > 0
     await mirrorTargetSubscriptionItems(
@@ -2431,6 +2433,9 @@ DefaultCpqQuotingService.prototype.attachTargetSubscription = async function (
         const carriedRows = await em.find(CpqQuoteLineCost, {
           quoteLineId: { $in: demoted.map((lc) => lc.quoteLineId) }, organizationId: scope.organizationId, tenantId: scope.tenantId, deletedAt: null,
         })
+        // The discarded rows may hold open requests (a due tail cost, an auto-opened catalog row): close them first, the same
+        // way refresh / removal do (`reconfigured`: history + request_cancelled signal, published after the flush below).
+        cancelRowRequests(carriedRows as never, 'reconfigured', { signals })
         for (const row of carriedRows) row.deletedAt = now
       }
       for (const lc of existingLines) {
@@ -2443,6 +2448,7 @@ DefaultCpqQuotingService.prototype.attachTargetSubscription = async function (
     }
 
     await em.flush()
+    if (signals.length > 0 && publisher) await publisher(signals, cpqConfig)
   }
 
   return mapTargetView(em, target, scope)

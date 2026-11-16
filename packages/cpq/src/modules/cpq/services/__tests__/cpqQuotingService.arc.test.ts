@@ -923,6 +923,51 @@ describe('Amend mirror carries the subscription item costs (ARC costs spec step 
     expect(carriedRow).toMatchObject({ deletedAt: expect.any(Date) })
   })
 
+  describe('Q10 demotion to merge (review fixes)', () => {
+    const demotion = (first: Record<string, any>, rows: Array<Record<string, any>>) => {
+      const { em } = mirrorFixture('renew', [itemCost()])
+      const costPlusItem = { ...subscriptionItem(), mrcAmount: '300', quantity: 1, charges: [{ chargeCode: 'mrc', pricingMethod: 'cost_plus', chargeType: 'mrc', unitPrice: 300, totalPrice: 300 }] }
+      const salesLine = { id: first.quoteLineId, quantity: '2' }
+      em.findOne.mockImplementation(async (entity: unknown) => {
+        if (entity === CpqQuoteConfiguration) return { id: 'cpq-1', quoteId: 'sq-1', cpqStatus: 'new', quoteType: 'renew', customerId: 'cust-1', currencyCode: 'EUR', organizationId: SCOPE.organizationId, tenantId: SCOPE.tenantId }
+        if (entity === CpqInventorySubscription) return { id: 'sub-2', customerId: 'cust-1', currencyCode: 'EUR', billingCycle: 'monthly', status: 'active' }
+        if (entity === SalesQuote) return { id: 'sq-1', currencyCode: 'EUR' }
+        return null
+      })
+      em.find.mockImplementation(async (entity: unknown) => {
+        if (entity === CpqQuoteTargetSubscription) return [{ id: 't-1', subscriptionId: 'sub-1', mergeAction: 'standalone', quoteId: 'cpq-1' }, { id: 't-2', subscriptionId: 'sub-2', mergeAction: 'absorb', quoteId: 'cpq-1' }]
+        if (entity === CpqInventorySubscription) return [{ id: 'sub-1', billingCycle: 'monthly' }]
+        if (entity === CpqInventorySubscriptionItem) return [costPlusItem]
+        if (entity === CpqQuoteLineConfiguration) return [first]
+        if (entity === SalesQuoteLine) return [salesLine]
+        if (entity === CpqQuoteLineCost) return rows
+        return []
+      })
+      const published: Array<Array<Record<string, unknown>>> = []
+      const service = new DefaultCpqQuotingService({
+        em: em as never, cpqPricingService: {} as never, cpqValidationService: {} as never, cpqProductService: {} as never, salesDocumentNumberGenerator: {} as never,
+        sourcingPublisher: (async (signals: Array<Record<string, unknown>>) => { published.push([...signals]) }) as never,
+      })
+      return { service, published, salesLine }
+    }
+    const standalone = () => ({
+      quoteLineId: 'ql-first', targetSubscriptionId: 'sub-1', sourceSubscriptionItemId: 'item-1', action: 'modify', quantity: 2,
+      charges: [{ chargeCode: 'mrc', pricingMethod: 'cost_plus', chargeType: 'mrc', unitPrice: 340, totalPrice: 340 }], mrcTotal: '680', nrcTotal: '0',
+      configuration: { _arcMirroredFromItemId: 'item-1', _arcCostsCarried: true, _arcCarriedCostSetHash: 'h' },
+    })
+
+    it('cancels the open cost requests of the soft-deleted rows (reconfigured: history + request_cancelled after the flush)', async () => {
+      const open = { id: 'qc-open', quoteId: 'cpq-1', quoteLineId: 'ql-first', costKey: 'tail', origin: 'carried', sourcingStatus: 'requested', costRequestId: 'req-9', requestSeq: 1, requestHistory: [], supplierId: null, deletedAt: null }
+      const idle = { id: 'qc-idle', quoteId: 'cpq-1', quoteLineId: 'ql-first', costKey: 'x', origin: 'carried', sourcingStatus: 'not_requested', costRequestId: null, deletedAt: null }
+      const { service, published } = demotion(standalone(), [open, idle])
+      await service.attachTargetSubscription('cpq-1', { quoteType: 'renew', subscriptionId: 'sub-2' } as never, SCOPE)
+      expect(open).toMatchObject({ deletedAt: expect.any(Date), sourcingStatus: 'cancelled', cancelReason: 'reconfigured' })
+      expect(open.requestHistory).toHaveLength(1)
+      expect(idle.deletedAt).toBeInstanceOf(Date)
+      expect(published.flat()).toEqual([expect.objectContaining({ kind: 'request_cancelled', costRequestId: 'req-9', reason: 'reconfigured' })])
+    })
+  })
+
   it('refuses restoring a removed line once the quote has an order: 409 QUOTE_CONVERTED, the line stays removed', async () => {
     const em = Object.assign(createMockEm(), { assign: jest.fn((e: Record<string, unknown>, u: Record<string, unknown>) => Object.assign(e, u)), fork: jest.fn() })
     em.fork.mockReturnValue(em)

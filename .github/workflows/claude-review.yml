@@ -70,8 +70,10 @@ jobs:
     name: Claude review
     # Only run the on-comment branch when someone actually mentions the bot
     # — without this guard every comment on every issue/PR would invoke it.
-    # Draft PRs are skipped on push; an explicit "@claude" mention still
-    # reviews a draft on demand.
+    # Draft PRs are never reviewed: not on open/push, and not on an
+    # "@claude" mention either (the "Skip draft PRs" step below covers the
+    # comment path, whose payload has no reliable draft flag). The first
+    # review runs when the PR is marked ready (`ready_for_review`).
     if: |
       (github.event_name == 'pull_request' && github.event.pull_request.draft == false) ||
       (github.event_name == 'issue_comment' &&
@@ -80,7 +82,20 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      - name: Skip draft PRs
+        id: gate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+        run: |
+          is_draft=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')
+          echo "draft=$is_draft" >> "$GITHUB_OUTPUT"
+          if [ "$is_draft" = "true" ]; then
+            echo "::notice::PR #$PR_NUMBER is a draft - review skipped. Mark it ready for review to run it."
+          fi
+
       - name: Checkout
+        if: steps.gate.outputs.draft != 'true'
         uses: actions/checkout@v4
         with:
           # The action needs the full PR diff vs base; depth 0 is the safe
@@ -88,10 +103,12 @@ jobs:
           fetch-depth: 0
 
       - name: Run Claude review
+        if: steps.gate.outputs.draft != 'true'
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          # Sonnet 4.6 pinned for reproducibility. max-turns sized for
+          # Opus 5.5 pinned for reproducibility (was Sonnet 4.6 until 2026-11-16:
+          # too many wrong suggested fixes). max-turns sized for
           # read-CLAUDE.md → AGENTS.md → SKILL.md → sub-skill → diff →
           # inline-comments → write-summary → post-via-gh. The flag is
           # `--allowedTools` (camelCase) — kebab-case is silently ignored.
@@ -119,7 +136,7 @@ jobs:
           # Both paths publish the same content.
           claude_args: |
             --max-turns 60
-            --model claude-sonnet-4-6
+            --model claude-opus-5-5
             --allowedTools "Read,Glob,Grep,Write,Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr comment:*),Bash(cat:*),mcp__github_inline_comment__create_inline_comment"
           prompt: |
             You are reviewing a pull request on the dainamite-core repository
@@ -180,15 +197,74 @@ jobs:
             `src/modules/` follow framework's `api/<method>/<path>.ts`).
             Surface the divergence rather than picking sides silently.
 
-            Your output is a single PR review comment with these sections:
+            ## Focus: High and Medium findings only
+
+            Your job is to catch things worth a human's time. Classify every
+            candidate finding before you report it:
+
+              - **High** - will break or is unsafe: a bug on a normal path,
+                data loss / corruption, missing tenant scoping or
+                authorization (`requireFeatures`, ACL), security issue,
+                cross-module ORM relation, entity change without a generated
+                migration, breaking public contract without a
+                `packages/cpq/MIGRATION.md` entry, missing `openApi` on a
+                new route.
+              - **Medium** - real problem, narrower blast radius: bug on an
+                edge case that will actually occur, unbounded query / per-row
+                fetch on a list that can grow, missing unit tests for a
+                changed service / validator / state machine, missing
+                `withAtomicFlush` on mutate-then-query, wildcard-unsafe
+                feature check, a cluster of hardcoded user-facing strings.
+              - **Minor** - everything else: naming, style, formatting,
+                comment wording, optional refactors, "could be cleaner",
+                defensive checks for cases that cannot happen, personal
+                preference. Minors are NOT problems. They never go into
+                the review comment and never get an inline comment (see
+                channel C below). When unsure between Medium and Minor,
+                it is Minor.
+
+            ## Accuracy rules - a wrong finding is worse than none
+
+            1. **Verify before reporting.** The diff hunk is not enough.
+               `Read` the whole changed function / file at the PR head, and
+               `Grep` for callers, types and the code the finding depends
+               on. If the code already handles the case (guard upstream,
+               validator, DB constraint, framework default), drop it.
+            2. **No guessing about the framework.** If a finding depends on
+               Open Mercato behaviour, confirm it in the relevant
+               `node_modules/@open-mercato/*/AGENTS.md` or source. Cannot
+               confirm? Drop it, or ask it as a question ("Is X handled
+               elsewhere?") instead of asserting a defect.
+            3. **Suggested fixes must be checked.** Only propose code when
+               every identifier, import path and signature in it exists in
+               the repo (grep it) and the fix matches the surrounding
+               patterns. Otherwise describe the problem and the expected
+               behaviour, and leave the fix to the author. Never post
+               speculative code. Never use GitHub ```suggestion``` blocks
+               unless the replacement is exact and verified.
+            4. **Every finding states the concrete failure**: which input or
+               state produces which wrong result. No concrete failure =
+               not High/Medium.
+            5. **Stay on the diff.** Do not report pre-existing problems in
+               untouched code, unless High and directly made reachable by
+               this PR.
+            6. **Do not re-report** issues already raised in earlier review
+               comments on this PR (`gh pr view <N> --comments`) unless the
+               new commits did not fix them; then say "still open".
+
+            Your output is ONE review comment (High/Medium only) plus, when
+            there are any, ONE separate minor-notes comment. Review comment
+            sections:
 
             ### What this PR does (1–3 sentences)
             Plain-English summary of intent + scope. Mention the JIRA ticket
             (XD-NNN) if obvious from branch name / commit messages.
 
             ### Conventions check
-            Tick off, per item, whether the PR honours each non-negotiable.
-            Be direct — say "MISSING" / "VIOLATED" with file:line evidence.
+            Use the list below as your checklist, but REPORT ONLY items the
+            PR violates or misses, with file:line evidence ("VIOLATED" /
+            "MISSING"). Do not list items that pass or that the PR does not
+            touch. Nothing violated? Write "No violations found."
 
             **Open Mercato framework invariants** (apply everywhere):
               - **Auto-discovery layout**: filenames + locations *are* the
@@ -285,20 +361,24 @@ jobs:
                 `jest --config jest.config.cjs` (already wired via
                 `yarn test`) — see `.ai/skills/unit-tests/SKILL.md`.
 
-            ### Inconsistencies & suggestions
-            Specific, actionable items with file:line refs. Order by impact.
-            Skip nits — flag them only if they cluster (e.g. multiple
-            hardcoded strings).
+            ### Findings
+            High first, then Medium. One bullet each:
+            `**[High]** <file>:<line> - <what breaks, for which input/state>. <fix or expected behaviour>`.
+            No Minor items here. No findings? Write "No High or Medium
+            findings." and keep the section.
 
             ### Test coverage gaps
             Mark scenarios from the relevant manual or spec that the PR
             should have covered but didn't (matches the project's "scenarios
-            in tests" rule for ARC and similar feature areas).
+            in tests" rule for ARC and similar feature areas). Only gaps
+            that matter (changed logic without a test); not "could also
+            test X". Omit the section if there are none.
 
             ### Risk callouts
             Anything that could regress neighbouring areas — e.g. shared
             helpers used elsewhere, generated `.mercato/` consequences,
-            seed/migration ordering. Brief.
+            seed/migration ordering. Brief. Omit the section if there are
+            none.
 
             Tone: senior reviewer, terse, no fluff. Don't repeat the diff
             back at the user. Don't compliment things that are merely
@@ -308,10 +388,10 @@ jobs:
 
             ## Output format — IMPORTANT
 
-            Use TWO complementary channels for findings:
+            Use THREE channels:
 
-            **A. Inline comments — for specific file:line issues.**
-            For each concrete problem anchored to a precise location
+            **A. Inline comments: High / Medium findings only.**
+            For each High or Medium finding anchored to a precise location
             (a violated invariant, a buggy line, a missing piece in a
             specific function), call:
 
@@ -319,14 +399,14 @@ jobs:
             mcp__github_inline_comment__create_inline_comment
               path: "<repo-relative path>"
               line: <number, end-of-range for multi-line>
-              body: "<short, actionable message — 1-3 sentences max>"
+              body: "**[High]** <short, actionable message, 1-3 sentences max>"
             ```
 
-            Use these when the finding pins to ONE place. Don't use
-            inline for general observations or things spanning many
-            files. Don't repeat the diff — say what's wrong and how to
-            fix it. Aim for 0–8 inline comments on a typical PR; if you
-            find more, you're probably nitpicking.
+            Start every body with `**[High]**` or `**[Medium]**`. Never
+            post an inline comment for a Minor item. Use inline only when
+            the finding pins to ONE place. Don't repeat the diff: say
+            what's wrong and how to fix it. Aim for 0-6 inline comments;
+            if you find more, you're probably including Minors.
 
             **B. Top-level summary comment — for the synthesis.**
             Use the `Write` tool to save the markdown review to
@@ -337,23 +417,42 @@ jobs:
             ```
 
             (PR number from `$GITHUB_REF` or `gh pr view`.) The
-            top-level summary covers the 5 sections (What this PR does
-            / Conventions check / Inconsistencies & suggestions / Test
-            coverage gaps / Risk callouts). Inside "Inconsistencies",
-            cross-reference inline comments by saying "(see inline)"
-            instead of repeating the file:line detail.
+            top-level summary covers the sections above (What this PR does
+            / Conventions check / Findings / Test coverage gaps / Risk
+            callouts). Inside "Findings", cross-reference inline comments
+            by adding "(see inline)" instead of repeating the detail.
+
+            **C. Minor notes: separate comment, FYI only.**
+            If you have Minor items, write them to
+            **`/tmp/claude-review-minors.md`** and post as a SECOND
+            comment:
+
+            ```bash
+            gh pr comment <PR_NUMBER> --body-file /tmp/claude-review-minors.md
+            ```
+
+            Format exactly:
+
+            ```
+            #### Minor notes (FYI, no action required)
+            - `<file>:<line>` <one line, max ~15 words>
+            ```
+
+            One line per item, no code, no suggested patches, at most 10
+            items (keep the most useful). These are optional, not review
+            blockers: never phrase them as defects or requests. No Minor
+            items? Do not create the file and do not post this comment.
 
             Posting via `gh pr comment` from inside the action uses the
             Claude GitHub App installation token, so the comment is
             authored by `claude[bot]` with branded avatar.
 
-            If the PR is trivial / docs-only, skip inline entirely and
-            write a 1-line file ("_Trivial change — no review needed._")
-            posted as a top-level comment. Do NOT spam inline comments
-            on a trivial PR.
+            If the PR is trivial / docs-only, skip inline and minor notes
+            entirely and write a 1-line file ("_Trivial change, no review
+            needed._") posted as a top-level comment.
 
       - name: Fallback — post review comment if claude[bot] didn't
-        if: success()
+        if: success() && steps.gate.outputs.draft != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
@@ -384,3 +483,6 @@ jobs:
 
           echo "claude[bot] did not post — falling back to github-actions[bot]."
           gh pr comment "$PR_NUMBER" --body-file /tmp/claude-review.md
+          if [ -s /tmp/claude-review-minors.md ]; then
+            gh pr comment "$PR_NUMBER" --body-file /tmp/claude-review-minors.md
+          fi

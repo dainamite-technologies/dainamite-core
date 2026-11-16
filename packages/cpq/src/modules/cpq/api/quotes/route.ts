@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { resolveCpqRouteContext } from '../context'
+import { cpqContextError, resolveCpqRouteContext } from '../context'
 import { cpqCreateQuoteSchema } from '../../data/validators'
 import { isQuotingError } from '../../services/cpqQuotingService'
 import { resolveQuotingService } from '../resolveQuotingService'
@@ -17,7 +17,8 @@ export const metadata = {
 export async function POST(req: Request) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     const body = cpqCreateQuoteSchema.parse(await req.json())
     const scope = { organizationId: ctx.organizationId, tenantId: ctx.tenantId }
@@ -33,7 +34,8 @@ export async function POST(req: Request) {
 export async function GET(req: Request) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     const url = new URL(req.url)
     const scope = { organizationId: ctx.organizationId, tenantId: ctx.tenantId, deletedAt: null }

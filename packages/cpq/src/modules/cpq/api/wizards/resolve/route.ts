@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { resolveCpqRouteContext } from '../../context'
+import { cpqContextError, resolveCpqRouteContext } from '../../context'
 import { DefaultCpqWizardService } from '../../../services/cpqWizardService'
 import { z } from 'zod'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
@@ -12,7 +12,8 @@ export const metadata = {
 export async function GET(req: Request) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     const url = new URL(req.url)
     const surface = url.searchParams.get('surface')

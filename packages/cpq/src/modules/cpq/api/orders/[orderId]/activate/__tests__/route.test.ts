@@ -3,6 +3,8 @@ const runCpqMutationGuards = jest.fn()
 const runAfterSuccess = jest.fn()
 
 jest.mock('../../../../context', () => ({
+  // Auth / organization present in every case here → no context error.
+  cpqContextError: jest.fn(() => null),
   resolveCpqRouteContext: jest.fn().mockResolvedValue({
     auth: { sub: '77777777-7777-4777-8777-777777777777', tenantId: 't-1' },
     organizationId: 'org-1',

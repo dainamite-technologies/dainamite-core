@@ -1,3 +1,4 @@
+import { NextResponse } from 'next/server'
 import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
 import { resolveTranslations } from '@open-mercato/shared/lib/i18n/server'
@@ -36,4 +37,28 @@ export async function resolveCpqRouteContext(req: Request): Promise<CpqRouteCont
     organizationScope: scope ?? null,
     translate,
   }
+}
+
+/**
+ * Early response for a CPQ route context that cannot be served: 401 without
+ * auth, 400 without an organization. Every CPQ table is organization-scoped,
+ * so a caller with no selected organization (an API key created without one,
+ * a superadmin viewing all organizations) used to reach the database with an
+ * empty organization id and get a 500.
+ */
+export function cpqContextError(ctx: CpqRouteContext): NextResponse | null {
+  if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  if (!ctx.organizationId) {
+    const { translate } = ctx
+    return NextResponse.json(
+      {
+        error: translate(
+          'cpq.errors.organizationRequired',
+          'Organization context is required: select an organization or use an API key bound to one.',
+        ),
+      },
+      { status: 400 },
+    )
+  }
+  return null
 }

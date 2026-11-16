@@ -10,7 +10,7 @@ function changeLog(lineChanges: Array<Record<string, unknown>>): ApplyArcResult[
 
 describe('ARC added items → order lines', () => {
   const refs = buildArcLineRefs([
-    { orderLineId: 'ol-1', sourceQuoteLineId: 'ql-1', startDate: new Date('2026-12-01T00:00:00Z') },
+    { orderLineId: 'ol-1', sourceQuoteLineId: 'ql-1', startDate: '2026-12-01' },
     { orderLineId: 'ol-2', sourceQuoteLineId: null, startDate: null },
   ])
 

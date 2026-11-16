@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { OptimisticLockError } from '@mikro-orm/core'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
-import { resolveCpqRouteContext } from '../../../context'
+import { cpqContextError, resolveCpqRouteContext } from '../../../context'
 import { CPQ_ORDER_RESOURCE_KIND, runCpqMutationGuards } from '../../../_helpers/quoteMutationGuard'
 import { cpqErrorDoc } from '../../../_helpers/quoteRouteOpenApi'
 import { isOrderError } from '../../../../services/cpqOrderService'
@@ -15,7 +15,8 @@ export const metadata = {
 export async function POST(req: Request, { params }: { params: Promise<{ orderId: string }> }) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     const { orderId } = await params
     const scope = { organizationId: ctx.organizationId, tenantId: ctx.tenantId }
@@ -84,6 +85,7 @@ export const openApi: OpenApiRouteDoc = {
         'subscription returns 409 and the order stays retryable.',
       responses: [{ status: 200, description: 'Activated order' }],
       errors: [
+        cpqErrorDoc(400, 'No organization selected'),
         cpqErrorDoc(401, 'Unauthorized'),
         cpqErrorDoc(404, 'Order not found'),
         cpqErrorDoc(409, 'Order cannot be activated in its status, or concurrent modification detected'),

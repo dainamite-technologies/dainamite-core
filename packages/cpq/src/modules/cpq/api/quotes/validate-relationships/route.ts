@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { resolveCpqRouteContext } from '../../context'
+import { cpqContextError, resolveCpqRouteContext } from '../../context'
 import { cpqValidateRelationshipsSchema } from '../../../data/validators'
 import { DefaultCpqValidationService } from '../../../services/cpqValidationService'
 import {
@@ -18,7 +18,8 @@ export const metadata = {
 export async function POST(req: Request) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     const body = cpqValidateRelationshipsSchema.parse(await req.json())
     const scope = { organizationId: ctx.organizationId, tenantId: ctx.tenantId }

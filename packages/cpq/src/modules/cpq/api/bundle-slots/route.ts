@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { resolveCpqRouteContext } from '../context'
+import { cpqContextError, resolveCpqRouteContext } from '../context'
 import { cpqBundleSlotCreateSchema, cpqBundleSlotUpdateSchema } from '../../data/validators'
 import type { DefaultCpqBundleService } from '../../services/cpqBundleService'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
@@ -16,7 +16,8 @@ export const metadata = {
 export async function GET(req: Request) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     const url = new URL(req.url)
     const scope = { organizationId: ctx.organizationId, tenantId: ctx.tenantId }
@@ -43,7 +44,8 @@ export async function GET(req: Request) {
 export async function POST(req: Request) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     const body = cpqBundleSlotCreateSchema.parse(await req.json())
     const scope = { organizationId: ctx.organizationId, tenantId: ctx.tenantId }
@@ -66,7 +68,8 @@ export async function POST(req: Request) {
 export async function PUT(req: Request) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     const body = cpqBundleSlotUpdateSchema.parse(await req.json())
     const { id, ...updates } = body
@@ -92,7 +95,8 @@ export async function PUT(req: Request) {
 export async function DELETE(req: Request) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     const { id } = (await req.json()) as { id?: string }
     if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })

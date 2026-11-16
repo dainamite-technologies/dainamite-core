@@ -166,6 +166,23 @@ the `@dainamite/cpq` package, per
 
 ## Schema / API changelog (track breaking changes here)
 
+### 2026-11-16 - Date column props are strings; 400 without organization
+
+**Entity typings (consumers reading these props).** Every `type: 'date'`
+property is now typed `string | null` (`YYYY-MM-DD`), matching what MikroORM 7
+already returned at runtime: `CpqQuoteLineConfiguration.startDate` / `endDate`,
+`CpqOrderLineConfiguration.startDate` / `endDate`,
+`CpqInventorySubscription.startDate` / `currentTermStart` / `currentTermEnd`,
+`CpqInventoryAsset.purchaseDate` / `deliveryDate`,
+`CpqQuoteTargetSubscription.newTermStart` / `newTermEnd`,
+`CpqQuoteConfiguration.arcMergeNewTermStart` / `arcMergeNewTermEnd`. Code that
+called `Date` methods on them was already failing at runtime; wrap reads in
+`new Date(value)` and write `YYYY-MM-DD` strings. No migration.
+
+**Routes without an organization** answer `400`
+(`cpq.errors.organizationRequired`) instead of `500`. Use `cpqContextError(ctx)`
+from `api/context.ts` after `resolveCpqRouteContext` in custom CPQ routes.
+
 ### 2026-11-16 - AI tools and agent; `@open-mercato/ai-assistant` peer; update schemas
 
 **New required peer (breaking for consumers).** `@open-mercato/ai-assistant`

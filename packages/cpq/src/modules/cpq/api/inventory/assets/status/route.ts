@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { handleArcError } from '../../../_helpers/handleArcError'
-import { resolveCpqRouteContext } from '../../../context'
+import { cpqContextError, resolveCpqRouteContext } from '../../../context'
 import { cpqInventoryStatusTransitionSchema } from '../../../../data/validators'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { cpqErrorDoc } from '../../../_helpers/quoteRouteOpenApi'
@@ -12,7 +12,8 @@ export const metadata = {
 export async function POST(req: Request) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     const body = cpqInventoryStatusTransitionSchema.parse(await req.json())
     const scope = { organizationId: ctx.organizationId, tenantId: ctx.tenantId }

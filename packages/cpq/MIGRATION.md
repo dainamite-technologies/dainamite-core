@@ -183,6 +183,24 @@ called `Date` methods on them was already failing at runtime; wrap reads in
 (`cpq.errors.organizationRequired`) instead of `500`. Use `cpqContextError(ctx)`
 from `api/context.ts` after `resolveCpqRouteContext` in custom CPQ routes.
 
+### 2026-11-16 - Cross-module writes through sales / catalog commands
+
+No route contract change. Data retention changes for installers:
+
+- `DELETE /api/cpq/quotes/{quoteId}` removes the sales quote with
+  `sales.quotes.delete`. In Open Mercato 0.9 that command deletes the quote
+  graph (lines, adjustments, addresses, notes, tags) instead of setting
+  `deleted_at`. Reports or joins that relied on soft-deleted `sales_quotes`
+  rows no longer find them. CPQ rows (`CpqQuoteConfiguration`,
+  `CpqQuoteLineConfiguration`) are still soft-deleted.
+- Undoing that delete from the audit log restores the sales quote only; the
+  CPQ configuration stays soft-deleted, so the quote comes back as a plain
+  sales quote.
+- `POST /api/cpq/product-specifications` creates the catalog product with
+  `catalog.products.create`, so catalog validation limits apply (title 255,
+  description 4000, handle 150 characters) and return 400.
+- Errors from those commands (403, 404, 409) keep their status instead of 500.
+
 ### 2026-11-16 - AI tools and agent; `@open-mercato/ai-assistant` peer; update schemas
 
 **New required peer (breaking for consumers).** `@open-mercato/ai-assistant`

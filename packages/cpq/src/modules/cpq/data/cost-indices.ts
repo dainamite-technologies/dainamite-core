@@ -83,3 +83,5 @@ export type CostIndexCreateInput = z.infer<typeof cpqCostIndexCreateSchema>
 export type CostIndexUpdateInput = z.infer<typeof cpqCostIndexUpdateSchema>
 export type CostIndexValueInput = z.infer<typeof cpqCostIndexValueCreateSchema>
 export type CostIndexImportRow = z.infer<typeof cpqCostIndexImportRowSchema>
+
+export const cpqCostIndexIdPathParams = z.object({ indexId: z.string().uuid() })

@@ -13,6 +13,7 @@ import {
 } from '../../data/cost-indices'
 import { CpqChargeCostElement, CpqCostIndex, CpqCostIndexValue, CpqProductCharge } from '../../data/entities'
 import { QuotingError } from '../cpqQuotingService'
+import { loadValuesInForce, type IndexValueInForce } from './indexCostResolution'
 import type { TenantScope } from '../types'
 
 /**
@@ -64,7 +65,7 @@ export const findIndexReferences: FindIndexReferences = async (em, indexIds, sco
   }))
 }
 
-export type IndexValueInForce = { indexId: string; effectiveDate: string; revision: number; value: string }
+export type { IndexValueInForce }
 
 export type CostIndexView = ReturnType<typeof serializeCostIndex>
 export type CostIndexValueView = ReturnType<typeof serializeCostIndexValue>
@@ -240,20 +241,7 @@ export class CpqCostIndexService {
 
   /** One query for many indices (one per recalculation, not per line). Indices without a value in force are absent. */
   async valuesInForce(indexIds: string[], asOfDate: string, scope: TenantScope, em: EntityManager = this.readEm()): Promise<Map<string, IndexValueInForce>> {
-    const result = new Map<string, IndexValueInForce>()
-    const ids = [...new Set(indexIds)]
-    if (ids.length === 0) return result
-    const rows = await em.find(CpqCostIndexValue, {
-      ...scoped(scope), costIndexId: { $in: ids }, effectiveDate: { $lte: asOfDate },
-    }, { orderBy: { effectiveDate: 'desc', revision: 'desc' } })
-    for (const row of rows) {
-      const known = result.get(row.costIndexId)
-      // The order is not trusted: pick deterministically (latest date, then highest revision).
-      if (!known || row.effectiveDate > known.effectiveDate || (row.effectiveDate === known.effectiveDate && row.revision > known.revision)) {
-        result.set(row.costIndexId, { indexId: row.costIndexId, effectiveDate: row.effectiveDate, revision: row.revision, value: row.value })
-      }
-    }
-    return result
+    return loadValuesInForce(em, indexIds, asOfDate, scope)
   }
 
   /** Non-deleted elements that use the index. */

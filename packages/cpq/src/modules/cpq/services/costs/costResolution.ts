@@ -4,6 +4,7 @@ import { withAtomicFlush } from '@open-mercato/shared/lib/commands/flush'
 import type { CostLineErrorCode } from '../../data/costs'
 import {
   CpqChargeCostElement,
+  CpqCostIndex,
   CpqOrderConfiguration,
   CpqPricingTable,
   CpqPricingTableEntry,
@@ -25,6 +26,7 @@ import { shouldAutoOpenRequest, type CancelReason } from './costSourcing'
 import { cancelRequestPatch, isRequestOpen, openRequestPatch, type RequestRowState } from './costRequestState'
 import { sourcingCostRef, type SourcingSignal } from './sourcingSignals'
 import type { CpqFxRateResolver } from './fxRateResolver'
+import { loadValuesInForce, resolveIndexCost, type IndexCostResult, type IndexSnapshot } from './indexCostResolution'
 
 /**
  * Catalog cost resolution on SAVED recalculations (App Spec §1.4.7 R1, R3, R4,
@@ -80,6 +82,8 @@ type ResolvedValue = FxFields & {
   instanceAmount: string | null
   currencyCode: string | null
   errorCode: CostLineErrorCode | null
+  /** Set by `index` elements only (`null` = no value in force); `undefined` for every other source. */
+  indexSnapshot?: IndexSnapshot | null
 }
 
 /** A value that is not the catalog's: entered by a user, answered by a supplier, or carried from the subscription item (it survives a recalculation until a driving attribute changes). */
@@ -113,6 +117,7 @@ async function resolveValue(
   configuration: Record<string, unknown>,
   quoteCurrency: string,
   lookup: FxLookup,
+  indexCost: IndexCostResult | null,
 ): Promise<ResolvedValue> {
   const quantity = element.costModel === 'flat' ? 1 : quantityOf(charge, configuration)
   const instanceOf = (unit: number) => (element.costModel === 'per_unit' ? unit * quantity : unit)
@@ -127,6 +132,18 @@ async function resolveValue(
       return { valueStatus: 'none', valueOrigin: 'catalog', unitAmount: money(unit), instanceAmount: null, currencyCode: currency, errorCode: 'CURRENCY_NO_RATE', ...NO_FX }
     }
     return { valueStatus: status, valueOrigin: 'catalog', unitAmount: money(unit), instanceAmount: money(instance), currencyCode: currency, errorCode: null, ...fx }
+  }
+
+  if (element.source === 'index') {
+    // No value in force (or no index): none + INDEX_NO_VALUE, no snapshot; the line is not ready (R4).
+    if (!indexCost || !indexCost.ok) return { ...NO_VALUE, errorCode: 'INDEX_NO_VALUE', indexSnapshot: null }
+    const unit = Number(indexCost.unitAmount)
+    const instance = instanceOf(unit)
+    // R3: the index currency is the cost currency; another currency than the quote's goes through the FX resolver (never 1:1).
+    const resolved = indexCost.currencyCode === quoteCurrency
+      ? inQuote('confirmed', unit, instance)
+      : await foreign('confirmed', indexCost.currencyCode, unit, instance)
+    return { ...resolved, indexSnapshot: indexCost.snapshot }
   }
 
   if (element.source === 'fixed') {
@@ -229,12 +246,13 @@ export type CostResolutionParams = {
   autoOpen?: boolean
   /**
    * Date of the recalculation (`YYYY-MM-DD`, UTC): the day index values are read at (index-costs spec Q6). Absent = today
-   * (UTC). Nothing reads it before the index branch ships.
+   * (UTC).
    */
   asOfDate?: string
   /**
    * Whether this recalculation may store resolved values / snapshots: a SAVED recalculation of an unlocked quote
    * (no order, status `new | incomplete | ready`). Computed by the caller from the same lock predicate as the resolver.
+   * Only `false` is acted on: it forbids writing even a computed plan (absent = the `save` flag decides, as before).
    */
   persist?: boolean
   /** Test seam / the index-costs feature: the second step of Renew reconciliation (default: the no-op `reevaluateCarriedIndexCosts`). */
@@ -320,7 +338,7 @@ export async function resolveCostPlusInputs(params: CostResolutionParams & { sav
     for (const row of stored) add(toCostLineValue(row as unknown as Record<string, unknown>))
   } else {
     const plan = await planQuoteCosts(params)
-    if (params.save) await applyCostPlan(em, plan, params.signals)
+    if (params.save && params.persist !== false) await applyCostPlan(em, plan, params.signals)
     const patchByRow = new Map(plan.updates.map(({ row, patch }) => [row, patch]))
     const dropped = new Set(plan.drops)
     for (const row of plan.existing) {
@@ -460,6 +478,18 @@ async function planQuoteCosts(params: CostResolutionParams & { save?: boolean })
     table, dimensions: table.dimensions, entries: entries.filter((entry) => entry.pricingTableId === table.id),
   }]))
 
+  // Index costs (R4): ONE value-in-force query for every index the applicable elements use, at the recalculation date.
+  // Reads only: a preview computes the same values in memory, a locked quote never reaches this plan.
+  const asOfDate = params.asOfDate ?? new Date().toISOString().slice(0, 10)
+  const indexIds = [...new Set(elements.filter((element) => element.source === 'index' && element.costIndexId).map((element) => element.costIndexId as string))]
+  const indexById = new Map<string, { id: string; currencyCode: string }>()
+  let valuesInForce: Awaited<ReturnType<typeof loadValuesInForce>> = new Map()
+  if (indexIds.length > 0) {
+    const indices = await em.find(CpqCostIndex, { ...scoped(scope), id: { $in: indexIds } })
+    for (const index of indices) indexById.set(index.id, { id: index.id, currencyCode: index.currencyCode })
+    valuesInForce = await loadValuesInForce(em, [...indexById.keys()], asOfDate, scope)
+  }
+
   // R1c / R13: the new term end of each cost-managed standalone Renew line's target (due flags are computed against it).
   const managedRenew = lines.filter(({ lineConfig }) => isCostManagedRenewLine(lineConfig.configuration, quote.quoteType))
   const newTermEndByTarget = new Map<string, Date | null>()
@@ -502,7 +532,10 @@ async function planQuoteCosts(params: CostResolutionParams & { save?: boolean })
         const attributes = driverAttributes(element, tableEntry?.table ?? null)
         const hash = driverHash(attributes, mergedConfig)
         const lookup = lookupFor(row, lineConfig)
-        const resolved = await resolveValue(element, charge, tableEntry, mergedConfig, quote.currencyCode, lookup)
+        const indexCost = element.source === 'index'
+          ? resolveIndexCost({ element, index: element.costIndexId ? indexById.get(element.costIndexId) ?? null : null, valuesInForce, asOfDate })
+          : null
+        const resolved = await resolveValue(element, charge, tableEntry, mergedConfig, quote.currencyCode, lookup, indexCost)
         const structure = {
           chargeCode: charge.code, costElementId: element.id, name: element.name, role: element.role,
           costType: element.costType, source: element.source, costModel: element.costModel,
@@ -544,8 +577,11 @@ async function planQuoteCosts(params: CostResolutionParams & { save?: boolean })
           patch.note = resetNote(row, attributes)
         }
         if (driversChanged || !isEnteredOrigin(row.valueOrigin)) {
-          // Catalog values follow the catalog on every saved recalculation while unlocked (R4).
+          // Catalog values follow the catalog on every saved recalculation while unlocked (R4). An index line follows the
+          // value in force (Q11: only `value_origin = catalog` lines get here; a manual overwrite is kept, below).
           Object.assign(patch, toFields(resolved))
+          // The element no longer uses an index: the old snapshot goes with the value.
+          if (resolved.indexSnapshot === undefined && row.indexSnapshot) patch.indexSnapshot = null
         } else if (row.unitAmount !== null && row.unitAmount !== undefined) {
           // An entered / confirmed value survives, but its per-instance amount follows the quantity.
           const unit = Number(row.unitAmount)
@@ -645,5 +681,6 @@ function toFields(value: ResolvedValue) {
     valueStatus: value.valueStatus, valueOrigin: value.valueOrigin, unitAmount: value.unitAmount,
     instanceAmount: value.instanceAmount, currencyCode: value.currencyCode, errorCode: value.errorCode,
     fxRate: value.fxRate, fxRateDate: value.fxRateDate, fxRateSource: value.fxRateSource, fxRateDerivation: value.fxRateDerivation,
+    ...(value.indexSnapshot === undefined ? {} : { indexSnapshot: value.indexSnapshot }),
   }
 }

@@ -65,6 +65,6 @@ export const openApi: OpenApiRouteDoc = { tag: 'CPQ Costs', pathParams, methods:
     errors: [cpqErrorDoc(400, 'Validation error'), cpqErrorDoc(403, 'Missing permission'),
       cpqErrorDoc(404, 'Order or order line cost not found, also returned while the tenant toggle cpq.cost_plus is off'),
       cpqErrorDoc(409, 'ORDER_ACTIVATED (the order is active or fulfilled, nothing written) or ORDER_CANCELLED'),
-      cpqErrorDoc(422, 'CURRENCY_NO_RATE (no rate for a foreign currency; carries from / to), NOTE_REQUIRED (changed value without a new supplierQuoteRef or note), VALIDITY_EVIDENCE_REQUIRED, LINE_NOT_ELIGIBLE or a mutation-guard rejection')],
+      cpqErrorDoc(422, 'CURRENCY_REQUIRED (an amount without a currency on a cost that has none), CURRENCY_NO_RATE (no rate for a foreign currency; carries from / to), NOTE_REQUIRED (changed value without a new supplierQuoteRef or note), VALIDITY_EVIDENCE_REQUIRED, LINE_NOT_ELIGIBLE or a mutation-guard rejection')],
   },
 } }

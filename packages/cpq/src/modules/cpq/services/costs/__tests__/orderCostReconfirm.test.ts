@@ -75,6 +75,38 @@ describe('reconfirm: the Q-D13 write', () => {
     expect(h.cost).toMatchObject({ unitAmount: '276.0000', reconfirmedAt: null })
   })
 
+  describe('a cost with no value yet (review: currency of a first amount)', () => {
+    const unknown = () => costRow({ valueStatus: 'none', valueOrigin: null, unitAmount: null, instanceAmount: null, totalAmount: null, currencyCode: null })
+
+    it('an amount without a currency is refused with CURRENCY_REQUIRED (never silently the order currency); nothing is written', async () => {
+      const h = setup({ cost: unknown() })
+      await expect(h.service.reconfirm(ORDER, COST, { unitAmount: 250, note: 'carrier mail' }, ACTOR, SCOPE))
+        .rejects.toMatchObject({ status: 422, message: 'CURRENCY_REQUIRED' })
+      expect(h.tx.flush).not.toHaveBeenCalled()
+      expect(h.cost).toMatchObject({ unitAmount: null, currencyCode: null, reconfirmedAt: null })
+    })
+
+    it('the amount with its foreign currency resolves the rate and is stored in that currency', async () => {
+      const h = setup({ cost: unknown() })
+      await h.service.reconfirm(ORDER, COST, { unitAmount: 250, currencyCode: 'USD', note: 'carrier mail' }, ACTOR, SCOPE)
+      expect(h.fx).toHaveBeenCalledWith({ from: 'USD', to: 'EUR', scope: SCOPE })
+      expect(h.cost).toMatchObject({ unitAmount: '250', currencyCode: 'USD', fxRate: '0.92000000', valueStatus: 'confirmed', valueOrigin: 'manual', totalAmount: '460' })
+    })
+
+    it('a foreign currency with no rate is refused with CURRENCY_NO_RATE', async () => {
+      const h = setup({ cost: unknown(), fx: jest.fn(async () => ({ ok: false, code: 'CURRENCY_NO_RATE' })) })
+      await expect(h.service.reconfirm(ORDER, COST, { unitAmount: 250, currencyCode: 'USD', note: 'x' }, ACTOR, SCOPE)).rejects.toMatchObject({ status: 422, message: 'CURRENCY_NO_RATE' })
+      expect(h.tx.flush).not.toHaveBeenCalled()
+    })
+
+    it('the amount in the order currency is stored as is (no snapshot)', async () => {
+      const h = setup({ cost: unknown() })
+      await h.service.reconfirm(ORDER, COST, { unitAmount: 250, currencyCode: 'EUR', note: 'carrier mail' }, ACTOR, SCOPE)
+      expect(h.fx).not.toHaveBeenCalled()
+      expect(h.cost).toMatchObject({ unitAmount: '250', currencyCode: 'EUR', fxRate: null, totalAmount: '500' })
+    })
+  })
+
   it('an unchanged foreign value keeps its stored snapshot (no rate lookup); back to the order currency clears it', async () => {
     const foreign = costRow({ currencyCode: 'USD', unitAmount: '300.0000', instanceAmount: '300.0000', fxRate: '0.90000000', fxRateDate: '2026-11-01', fxRateSource: 'ECB', fxRateDerivation: 'direct', totalAmount: '540.0000' })
     const kept = setup({ cost: foreign })

@@ -37,9 +37,19 @@ describe('reconfirmIssues', () => {
 
 describe('buildReconfirmPatch', () => {
   it('sends only what changed, plus the note', () => {
-    expect(buildReconfirmPatch(form({ unitAmount: '240', note: ' why ' }), cost)).toEqual({ unitAmount: 240, note: 'why' })
+    expect(buildReconfirmPatch(form({ unitAmount: '240', note: ' why ' }), cost)).toEqual({ unitAmount: 240, currencyCode: 'EUR', note: 'why' })
     expect(buildReconfirmPatch(form({ supplierName: '' }), cost)).toEqual({ supplierName: null })
     expect(buildReconfirmPatch(form({ note: 'only a note' }), cost)).toEqual({})
+  })
+  it('a cost with no stored currency: the amount travels with the currency the form holds (default or typed), never dropped', () => {
+    const unknown = { ...cost, unitAmount: null, currencyCode: null }
+    const blank = (over = {}) => ({ ...reconfirmFormFromCost(unknown, 'EUR'), ...over })
+    expect(buildReconfirmPatch(blank({ unitAmount: '250', note: 'n' }), unknown)).toEqual({ unitAmount: 250, currencyCode: 'EUR', note: 'n' })
+    expect(buildReconfirmPatch(blank({ unitAmount: '250', currencyCode: 'USD', note: 'n' }), unknown)).toEqual({ unitAmount: 250, currencyCode: 'USD', note: 'n' })
+  })
+  it('a currency-only change on a stored currency is sent; an untouched currency is not', () => {
+    expect(buildReconfirmPatch(form({ currencyCode: 'USD' }), cost)).toEqual({ currencyCode: 'USD' })
+    expect(buildReconfirmPatch(form({ supplierName: '' }), cost)).not.toHaveProperty('currencyCode')
   })
 })
 

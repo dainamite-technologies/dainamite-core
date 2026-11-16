@@ -95,7 +95,9 @@ export class CpqOrderCostReconfirmService {
       const auditBefore = orderCostAudit(row)
       const amountGiven = patch.unitAmount !== undefined
       const amount = amountGiven ? patch.unitAmount as number : row.unitAmount === null ? null : Number(row.unitAmount)
-      const currency = amount === null ? null : patch.currencyCode ?? row.currencyCode ?? order.currencyCode
+      // An amount needs a currency: the body's, else the stored one. Never a silent fall back to the order currency.
+      if (amount !== null && amountGiven && !patch.currencyCode && !row.currencyCode) throw new QuotingError(422, 'CURRENCY_REQUIRED')
+      const currency = amount === null ? null : patch.currencyCode ?? row.currencyCode ?? null
       const valueChanged = (before.unitAmount === null ? null : Number(before.unitAmount)) !== amount || before.currencyCode !== currency
       const next: CostLockState = {
         ...before, unitAmount: amount, currencyCode: currency,

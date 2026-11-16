@@ -81,7 +81,8 @@ export function buildReconfirmPatch(form: ReconfirmForm, cost: ReconfirmSource):
   const next = amount === null || Number.isNaN(amount) ? null : amount
   if (next !== null && !sameAmount(cost.unitAmount, next)) patch.unitAmount = next
   const currency = text(form.currencyCode)
-  if (currency && cost.currencyCode !== null && currency !== cost.currencyCode) patch.currencyCode = currency
+  // An amount always travels with its currency: a cost with no stored currency has none for the server to assume.
+  if (currency && (patch.unitAmount !== undefined || (cost.currencyCode !== null && currency !== cost.currencyCode))) patch.currencyCode = currency
   if (text(form.supplierName) !== cost.supplierName) patch.supplierName = text(form.supplierName)
   if (text(form.supplierQuoteRef) !== cost.supplierQuoteRef) patch.supplierQuoteRef = text(form.supplierQuoteRef)
   if (text(form.validUntil) !== cost.validUntil) patch.validUntil = text(form.validUntil)
@@ -107,6 +108,7 @@ export const RECONFIRM_ERROR_FALLBACKS: Record<string, string> = {
   ORDER_ACTIVATED: 'The order was activated — its costs can no longer be re-confirmed',
   ORDER_CANCELLED: 'The order was cancelled',
   CURRENCY_NO_RATE: 'No exchange rate is available for this currency',
+  CURRENCY_REQUIRED: 'Enter the currency of the amount',
   NOTE_REQUIRED: RECONFIRM_ISSUE_FALLBACKS.NOTE_REQUIRED,
   VALIDITY_EVIDENCE_REQUIRED: RECONFIRM_ISSUE_FALLBACKS.VALIDITY_EVIDENCE_REQUIRED,
   LINE_NOT_ELIGIBLE: 'This cost cannot be re-confirmed',

@@ -8,6 +8,8 @@ import {
   CpqProductSpecification,
   CpqProductRelationship,
 } from '../../../data/entities'
+import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
+import { cpqErrorDoc } from '../../_helpers/quoteRouteOpenApi'
 
 export const metadata = {
   POST: { requireAuth: true, requireFeatures: ['cpq.quotes.view'] },
@@ -97,4 +99,19 @@ export async function POST(req: Request) {
     console.error('[cpq/quotes/validate-relationships.POST]', err)
     return NextResponse.json({ error: 'Internal error' }, { status: 500 })
   }
+}
+
+export const openApi: OpenApiRouteDoc = {
+  tag: 'CPQ Quotes',
+  summary: 'CPQ relationship validation',
+  methods: {
+    POST: {
+      summary: 'Validate product relationships for a set of offerings without saving',
+      description:
+        'Checks the specification relationships (requires, excludes, parent/child cardinality) between the given offerings, and returns the child specifications each parent allows with their current counts.',
+      requestBody: { schema: cpqValidateRelationshipsSchema },
+      responses: [{ status: 200, description: '`{ valid, errors, allowedChildSpecs }`' }],
+      errors: [cpqErrorDoc(400, 'Validation error'), cpqErrorDoc(500, 'Internal error')],
+    },
+  },
 }

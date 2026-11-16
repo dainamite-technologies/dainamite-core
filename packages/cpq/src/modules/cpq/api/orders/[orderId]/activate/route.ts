@@ -3,6 +3,9 @@ import { OptimisticLockError } from '@mikro-orm/core'
 import { resolveCpqRouteContext } from '../../../context'
 import { isOrderError } from '../../../../services/cpqOrderService'
 import type { DefaultCpqOrderService } from '../../../../services/cpqOrderService'
+import { z } from 'zod'
+import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
+import { cpqErrorDoc } from '../../../_helpers/quoteRouteOpenApi'
 
 export const metadata = {
   POST: { requireAuth: true, requireFeatures: ['cpq.orders.manage'] },
@@ -45,4 +48,23 @@ export async function POST(req: Request, { params }: { params: Promise<{ orderId
     console.error('[cpq/orders/[orderId]/activate.POST]', err)
     return NextResponse.json({ error: 'Internal error' }, { status: 500 })
   }
+}
+
+export const openApi: OpenApiRouteDoc = {
+  tag: 'CPQ Orders',
+  summary: 'Activate a CPQ order',
+  pathParams: z.object({ orderId: z.string().uuid() }),
+  methods: {
+    POST: {
+      summary: 'Activate a CPQ order and provision customer inventory',
+      description:
+        'Moves the order to active and creates or updates the customer subscriptions and assets. For ARC quotes (amend, renew, cancel) the change is applied to the target subscriptions. A concurrent activation touching the same subscription returns 409 and the order stays retryable.',
+      responses: [{ status: 200, description: 'Activated order' }],
+      errors: [
+        cpqErrorDoc(404, 'Order not found'),
+        cpqErrorDoc(409, 'Order cannot be activated in its status, or concurrent modification detected'),
+        cpqErrorDoc(500, 'Internal error'),
+      ],
+    },
+  },
 }

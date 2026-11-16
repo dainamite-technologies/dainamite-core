@@ -3,6 +3,9 @@ import { resolveCpqRouteContext } from '../../context'
 import { cpqCreateQuoteFromSubscriptionSchema } from '../../../data/validators'
 import { resolveQuotingService } from '../../resolveQuotingService'
 import { handleArcError } from '../../_helpers/handleArcError'
+import { z } from 'zod'
+import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
+import { cpqErrorDoc } from '../../_helpers/quoteRouteOpenApi'
 
 /**
  * POST /api/cpq/quotes/from-subscription
@@ -45,41 +48,28 @@ export async function POST(req: Request) {
   }
 }
 
-export const openApi = {
-  '/api/cpq/quotes/from-subscription': {
-    post: {
-      tags: ['CPQ ARC'],
-      summary: 'Create an ARC quote pre-filled from a subscription',
-      requestBody: {
-        required: true,
-        content: {
-          'application/json': {
-            schema: {
-              type: 'object',
-              required: ['subscriptionId', 'type'],
-              properties: {
-                subscriptionId: { type: 'string', format: 'uuid' },
-                type: { type: 'string', enum: ['amend', 'renew', 'cancel'] },
-                renewTerm: {
-                  type: 'object',
-                  properties: {
-                    newTermStart: { type: 'string' },
-                    newTermEnd: { type: 'string' },
-                    newTermMonths: { type: 'integer', minimum: 1 },
-                  },
-                },
-              },
-            },
-          },
+export const openApi: OpenApiRouteDoc = {
+  tag: 'CPQ ARC',
+  summary: 'CPQ ARC quote from subscription',
+  methods: {
+    POST: {
+      summary: 'Create an ARC (amend, renew or cancel) quote pre-filled from a subscription',
+      description:
+        "Creates a new quote of the given ARC type with the subscription's current items as lines. `renewTerm` sets the new contract term for renewals. The subscription must be active or suspended.",
+      requestBody: { schema: cpqCreateQuoteFromSubscriptionSchema },
+      responses: [
+        {
+          status: 201,
+          description: 'Quote created',
+          schema: z.object({ quoteId: z.string(), cpqConfigId: z.string() }).passthrough(),
         },
-      },
-      responses: {
-        '201': { description: 'Quote created', content: { 'application/json': {} } },
-        '400': { description: 'Validation error' },
-        '401': { description: 'Unauthorized' },
-        '404': { description: 'Subscription not found' },
-        '409': { description: 'Subscription not in eligible status / concurrent ARC quote' },
-      },
+      ],
+      errors: [
+        cpqErrorDoc(400, 'Validation error'),
+        cpqErrorDoc(404, 'Subscription not found'),
+        cpqErrorDoc(409, 'Subscription not active or suspended, or concurrent modification detected'),
+        cpqErrorDoc(500, 'Internal error'),
+      ],
     },
   },
 }

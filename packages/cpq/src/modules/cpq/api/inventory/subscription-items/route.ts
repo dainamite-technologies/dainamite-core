@@ -5,6 +5,8 @@ import {
   cpqInventorySubscriptionItemCreateSchema,
   cpqInventorySubscriptionItemUpdateSchema,
 } from '../../../data/validators'
+import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
+import { cpqErrorDoc, cpqDeleteByIdBody, cpqSuccessResponseSchema } from '../../_helpers/quoteRouteOpenApi'
 
 export const metadata = {
   GET: { requireAuth: true, requireFeatures: ['cpq.inventory.view'] },
@@ -104,4 +106,52 @@ export async function DELETE(req: Request) {
     console.error('[cpq/inventory/subscription-items.DELETE]', err)
     return NextResponse.json({ error: 'Internal error' }, { status: 500 })
   }
+}
+
+export const openApi: OpenApiRouteDoc = {
+  tag: 'CPQ Inventory',
+  summary: 'CPQ inventory subscription items',
+  methods: {
+    GET: {
+      summary: 'List the items of a subscription, or the children of a parent item',
+      description: 'At least one of `subscriptionId` or `parentItemId` is required.',
+      query: z.object({
+        subscriptionId: z.string().uuid().optional(),
+        parentItemId: z.string().uuid().optional(),
+        status: z.string().optional(),
+      }),
+      responses: [{ status: 200, description: 'Subscription items' }],
+      errors: [
+        cpqErrorDoc(400, 'At least one of subscriptionId or parentItemId is required'),
+        cpqErrorDoc(500, 'Internal error'),
+      ],
+    },
+    POST: {
+      summary: 'Add an item to a subscription in CPQ inventory',
+      requestBody: { schema: cpqInventorySubscriptionItemCreateSchema },
+      responses: [{ status: 201, description: 'Created subscription item' }],
+      errors: [
+        cpqErrorDoc(400, 'Validation error'),
+        cpqErrorDoc(500, 'Internal error (also returned when the subscription or parent item does not exist)'),
+      ],
+    },
+    PUT: {
+      summary: 'Update a subscription item in CPQ inventory',
+      requestBody: { schema: cpqInventorySubscriptionItemUpdateSchema },
+      responses: [{ status: 200, description: 'Updated subscription item' }],
+      errors: [
+        cpqErrorDoc(400, 'Validation error'),
+        cpqErrorDoc(500, 'Internal error (also returned when the item does not exist)'),
+      ],
+    },
+    DELETE: {
+      summary: 'Delete a subscription item from CPQ inventory',
+      requestBody: { schema: cpqDeleteByIdBody },
+      responses: [{ status: 200, description: 'Deleted', schema: cpqSuccessResponseSchema }],
+      errors: [
+        cpqErrorDoc(400, 'Missing id'),
+        cpqErrorDoc(500, 'Internal error (also returned when the item does not exist)'),
+      ],
+    },
+  },
 }

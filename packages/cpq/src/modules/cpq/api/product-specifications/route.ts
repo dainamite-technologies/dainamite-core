@@ -3,6 +3,8 @@ import { z } from 'zod'
 import { resolveCpqRouteContext } from '../context'
 import { CpqProductSpecification, CpqProductAttribute, CpqProductOffering, CpqProductRelationship, CpqBundleSlot } from '../../data/entities'
 import { cpqProductSpecificationCreateSchema, cpqProductSpecificationUpdateSchema } from '../../data/validators'
+import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
+import { cpqErrorDoc, cpqPaginationQuery, cpqSortDirQuery, cpqDeleteByIdBody, cpqSuccessResponseSchema, CPQ_CRUD_WRITE_ERRORS, CPQ_CRUD_BY_ID_ERRORS } from '../_helpers/quoteRouteOpenApi'
 
 export const metadata = {
   GET: { requireAuth: true, requireFeatures: ['cpq.specifications.view'] },
@@ -322,4 +324,50 @@ export async function DELETE(req: Request) {
     console.error('[cpq/product-specifications.DELETE]', err)
     return NextResponse.json({ error: 'Internal error' }, { status: 500 })
   }
+}
+
+export const openApi: OpenApiRouteDoc = {
+  tag: 'CPQ Products',
+  summary: 'CPQ product specifications',
+  methods: {
+    GET: {
+      summary: 'List CPQ product specifications, or get one by id with its related records',
+      description:
+        'With `id` returns the specification plus its attributes, offerings, relationships and (for bundles) slots with their target specifications. Otherwise a paged list; `search` matches code, name or description.',
+      query: cpqPaginationQuery.extend({
+        id: z.string().uuid().optional(),
+        productId: z.string().uuid().optional(),
+        lifecycleStatus: z.enum(['draft', 'active', 'deprecated']).optional(),
+        code: z.string().optional(),
+        specType: z.enum(['simple', 'bundle']).optional(),
+        isActive: z.enum(['true', 'false']).optional(),
+        isAssetizable: z.enum(['true', 'false']).optional(),
+        search: z.string().optional(),
+        sortField: z.enum(['createdAt', 'updatedAt', 'code', 'name', 'lifecycleStatus', 'specType', 'version']).optional(),
+        sortDir: cpqSortDirQuery,
+      }),
+      responses: [{ status: 200, description: 'Specification detail, or paged list of specifications' }],
+      errors: [cpqErrorDoc(404, 'Specification not found'), cpqErrorDoc(500, 'Internal error')],
+    },
+    POST: {
+      summary: 'Create a CPQ product specification',
+      description:
+        'When `productId` is omitted, a configurable catalog product is reused (matched by handle or SKU derived from `code`) or created.',
+      requestBody: { schema: cpqProductSpecificationCreateSchema },
+      responses: [{ status: 201, description: 'Created specification' }],
+      errors: CPQ_CRUD_WRITE_ERRORS,
+    },
+    PUT: {
+      summary: 'Update a CPQ product specification',
+      requestBody: { schema: cpqProductSpecificationUpdateSchema },
+      responses: [{ status: 200, description: 'Updated specification' }],
+      errors: CPQ_CRUD_BY_ID_ERRORS,
+    },
+    DELETE: {
+      summary: 'Soft-delete a CPQ product specification',
+      requestBody: { schema: cpqDeleteByIdBody },
+      responses: [{ status: 200, description: 'Deleted', schema: cpqSuccessResponseSchema }],
+      errors: CPQ_CRUD_BY_ID_ERRORS,
+    },
+  },
 }

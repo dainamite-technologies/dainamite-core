@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { resolveCpqRouteContext } from '../../../context'
 import { cpqInventoryStatusTransitionSchema } from '../../../../data/validators'
+import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
+import { cpqErrorDoc } from '../../../_helpers/quoteRouteOpenApi'
 
 export const metadata = {
   POST: { requireAuth: true, requireFeatures: ['cpq.inventory.manage'] },
@@ -31,4 +33,22 @@ export async function POST(req: Request) {
     console.error('[cpq/inventory/assets/status.POST]', err)
     return NextResponse.json({ error: 'Internal error' }, { status: 500 })
   }
+}
+
+export const openApi: OpenApiRouteDoc = {
+  tag: 'CPQ Inventory',
+  summary: 'CPQ asset status',
+  methods: {
+    POST: {
+      summary: 'Transition an inventory asset to another status',
+      description: 'Validates the transition against the asset state machine.',
+      requestBody: { schema: cpqInventoryStatusTransitionSchema },
+      responses: [{ status: 200, description: 'Asset with its new status' }],
+      errors: [
+        cpqErrorDoc(400, 'Validation error'),
+        cpqErrorDoc(409, 'Transition not allowed'),
+        cpqErrorDoc(500, 'Internal error (also returned when the asset does not exist)'),
+      ],
+    },
+  },
 }

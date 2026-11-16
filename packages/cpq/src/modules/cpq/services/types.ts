@@ -54,6 +54,9 @@ export type CpqStatus = (typeof CPQ_STATUSES)[number]
 
 export const TERMINAL_STATUSES: CpqStatus[] = ['accepted', 'rejected', 'cancelled']
 
+/** Statuses from which an AI-initiated "submit for approval" is offered. */
+export const SUBMIT_FOR_APPROVAL_FROM_STATUSES: readonly CpqStatus[] = ['new', 'incomplete', 'ready']
+
 // Per product decision: the CPQ status path is operator-driven and can
 // jump between any pair of statuses. Self-transitions are excluded
 // because they're no-ops. ARC-specific guards (`validateArcQuote`,
@@ -259,6 +262,8 @@ export const INVENTORY_SUBSCRIPTION_STATUSES = [
   'superseded',
 ] as const
 export type InventorySubscriptionStatus = (typeof INVENTORY_SUBSCRIPTION_STATUSES)[number]
+
+export const INVENTORY_BILLING_CYCLES = ['monthly', 'quarterly', 'annually'] as const
 
 export const INVENTORY_SUBSCRIPTION_TRANSITIONS: Record<InventorySubscriptionStatus, InventorySubscriptionStatus[]> = {
   pending: ['active', 'terminated'],

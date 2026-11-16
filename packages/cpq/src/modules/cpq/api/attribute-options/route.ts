@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server'
 import { resolveCpqRouteContext } from '../context'
 import { DefaultCpqValidationService } from '../../services/cpqValidationService'
+import { z } from 'zod'
+import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
+import { cpqErrorDoc } from '../_helpers/quoteRouteOpenApi'
 
 export const metadata = {
   GET: { requireAuth: true, requireFeatures: ['cpq.quotes.view'] },
@@ -52,4 +55,29 @@ export async function GET(req: Request) {
     console.error('[cpq/attribute-options.GET]', err)
     return NextResponse.json({ error: 'Internal error' }, { status: 500 })
   }
+}
+
+export const openApi: OpenApiRouteDoc = {
+  tag: 'CPQ Quotes',
+  summary: 'CPQ attribute options',
+  methods: {
+    GET: {
+      summary: 'Resolve picklist options for a product attribute',
+      description:
+        'Used by the quoting wizard. Returns the options of one attribute, including dynamic options sourced from pricing tables and options narrowed by `dependsOn` constraints against the current configuration.',
+      query: z.object({
+        productId: z.string(),
+        attributeCode: z.string(),
+        configuration: z
+          .string()
+          .optional()
+          .describe('JSON-encoded object of the attribute values selected so far'),
+      }),
+      responses: [{ status: 200, description: '`{ items }` resolved options' }],
+      errors: [
+        cpqErrorDoc(400, 'productId and attributeCode are required, or configuration is not valid JSON'),
+        cpqErrorDoc(500, 'Internal error'),
+      ],
+    },
+  },
 }

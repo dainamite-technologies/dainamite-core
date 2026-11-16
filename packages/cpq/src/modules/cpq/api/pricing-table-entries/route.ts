@@ -3,6 +3,8 @@ import { z } from 'zod'
 import { resolveCpqRouteContext } from '../context'
 import { CpqPricingTableEntry } from '../../data/entities'
 import { cpqPricingTableEntryCreateSchema, cpqPricingTableEntryUpdateSchema } from '../../data/validators'
+import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
+import { cpqErrorDoc, cpqPaginationQuery, cpqDeleteByIdBody, cpqSuccessResponseSchema, CPQ_CRUD_WRITE_ERRORS, CPQ_CRUD_BY_ID_ERRORS } from '../_helpers/quoteRouteOpenApi'
 
 export const metadata = {
   GET: { requireAuth: true, requireFeatures: ['cpq.pricing.view'] },
@@ -156,4 +158,41 @@ export async function DELETE(req: Request) {
     console.error('[cpq/pricing-table-entries.DELETE]', err)
     return NextResponse.json({ error: 'Internal error' }, { status: 500 })
   }
+}
+
+export const openApi: OpenApiRouteDoc = {
+  tag: 'CPQ Pricing',
+  summary: 'CPQ pricing table entries',
+  methods: {
+    GET: {
+      summary: 'List the price rows of a pricing table',
+      query: cpqPaginationQuery.extend({ pricingTableId: z.string().uuid() }),
+      responses: [{ status: 200, description: '`{ items, total, page, pageSize, totalPages }`' }],
+      errors: [
+        cpqErrorDoc(400, 'pricingTableId is required and must be a valid UUID'),
+        cpqErrorDoc(500, 'Internal error'),
+      ],
+    },
+    POST: {
+      summary: 'Create one pricing table entry, or several in bulk',
+      description: 'Accepts a single entry object (returns the entry) or an array of entries (returns `{ items }`).',
+      requestBody: {
+        schema: z.union([cpqPricingTableEntryCreateSchema, z.array(cpqPricingTableEntryCreateSchema)]),
+      },
+      responses: [{ status: 201, description: 'Created entry, or `{ items }` for a bulk create' }],
+      errors: CPQ_CRUD_WRITE_ERRORS,
+    },
+    PUT: {
+      summary: 'Update a pricing table entry',
+      requestBody: { schema: cpqPricingTableEntryUpdateSchema },
+      responses: [{ status: 200, description: 'Updated entry' }],
+      errors: CPQ_CRUD_BY_ID_ERRORS,
+    },
+    DELETE: {
+      summary: 'Soft-delete a pricing table entry',
+      requestBody: { schema: cpqDeleteByIdBody },
+      responses: [{ status: 200, description: 'Deleted', schema: cpqSuccessResponseSchema }],
+      errors: CPQ_CRUD_BY_ID_ERRORS,
+    },
+  },
 }

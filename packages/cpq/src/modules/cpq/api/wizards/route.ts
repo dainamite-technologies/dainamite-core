@@ -3,6 +3,8 @@ import { z } from 'zod'
 import { resolveCpqRouteContext } from '../context'
 import { cpqWizardDefinitionCreateSchema, cpqWizardDefinitionUpdateSchema } from '../../data/validators'
 import { DefaultCpqWizardService } from '../../services/cpqWizardService'
+import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
+import { cpqErrorDoc, cpqPaginationQuery, cpqSortDirQuery, cpqDeleteByIdBody, cpqSuccessResponseSchema, CPQ_CRUD_WRITE_ERRORS, CPQ_CRUD_BY_ID_ERRORS } from '../_helpers/quoteRouteOpenApi'
 
 export const metadata = {
   GET: { requireAuth: true, requireFeatures: ['cpq.wizards.view'] },
@@ -124,4 +126,44 @@ export async function DELETE(req: Request) {
     console.error('[cpq/wizards.DELETE]', err)
     return NextResponse.json({ error: 'Internal error' }, { status: 500 })
   }
+}
+
+export const openApi: OpenApiRouteDoc = {
+  tag: 'CPQ Wizards',
+  summary: 'CPQ wizard definitions',
+  methods: {
+    GET: {
+      summary: 'List CPQ quoting wizard definitions, or get one by id or code',
+      description: 'With `id` or `code` returns a single definition; otherwise a paged list.',
+      query: cpqPaginationQuery.extend({
+        id: z.string().optional(),
+        code: z.string().optional(),
+        surface: z.string().optional(),
+        isActive: z.enum(['true', 'false']).optional(),
+        search: z.string().optional(),
+        sortField: z.enum(['createdAt', 'updatedAt', 'name', 'code', 'surface']).optional(),
+        sortDir: cpqSortDirQuery,
+      }),
+      responses: [{ status: 200, description: 'Wizard definition, or paged list of definitions' }],
+      errors: [cpqErrorDoc(404, 'Wizard definition not found'), cpqErrorDoc(500, 'Internal error')],
+    },
+    POST: {
+      summary: 'Create a CPQ wizard definition',
+      requestBody: { schema: cpqWizardDefinitionCreateSchema },
+      responses: [{ status: 201, description: 'Created wizard definition' }],
+      errors: CPQ_CRUD_WRITE_ERRORS,
+    },
+    PUT: {
+      summary: 'Update a CPQ wizard definition',
+      requestBody: { schema: cpqWizardDefinitionUpdateSchema },
+      responses: [{ status: 200, description: 'Updated wizard definition' }],
+      errors: CPQ_CRUD_BY_ID_ERRORS,
+    },
+    DELETE: {
+      summary: 'Delete a CPQ wizard definition',
+      requestBody: { schema: cpqDeleteByIdBody },
+      responses: [{ status: 200, description: 'Deleted', schema: cpqSuccessResponseSchema }],
+      errors: CPQ_CRUD_BY_ID_ERRORS,
+    },
+  },
 }

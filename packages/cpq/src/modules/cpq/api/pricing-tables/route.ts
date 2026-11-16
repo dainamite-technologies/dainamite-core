@@ -3,6 +3,8 @@ import { z } from 'zod'
 import { resolveCpqRouteContext } from '../context'
 import { CpqPricingTable, CpqPricingTableEntry } from '../../data/entities'
 import { cpqPricingTableCreateSchema, cpqPricingTableUpdateSchema } from '../../data/validators'
+import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
+import { cpqErrorDoc, cpqPaginationQuery, cpqSortDirQuery, cpqDeleteByIdBody, cpqSuccessResponseSchema, CPQ_CRUD_WRITE_ERRORS, CPQ_CRUD_BY_ID_ERRORS } from '../_helpers/quoteRouteOpenApi'
 
 export const metadata = {
   GET: { requireAuth: true, requireFeatures: ['cpq.pricing.view'] },
@@ -199,4 +201,44 @@ export async function DELETE(req: Request) {
     console.error('[cpq/pricing-tables.DELETE]', err)
     return NextResponse.json({ error: 'Internal error' }, { status: 500 })
   }
+}
+
+export const openApi: OpenApiRouteDoc = {
+  tag: 'CPQ Pricing',
+  summary: 'CPQ pricing tables',
+  methods: {
+    GET: {
+      summary: 'List CPQ pricing tables, or get one by id with all its entries',
+      description:
+        'A pricing table is a price matrix keyed by dimensions (attribute values) with one or more price columns. With `id` returns the table plus its entries; otherwise a paged list without entries. `search` matches code or name.',
+      query: cpqPaginationQuery.extend({
+        id: z.string().uuid().optional(),
+        code: z.string().optional(),
+        isActive: z.enum(['true', 'false']).optional(),
+        search: z.string().optional(),
+        sortField: z.enum(['createdAt', 'updatedAt', 'code', 'name']).optional(),
+        sortDir: cpqSortDirQuery,
+      }),
+      responses: [{ status: 200, description: 'Pricing table with entries, or paged list of pricing tables' }],
+      errors: [cpqErrorDoc(404, 'Pricing table not found'), cpqErrorDoc(500, 'Internal error')],
+    },
+    POST: {
+      summary: 'Create a CPQ pricing table',
+      requestBody: { schema: cpqPricingTableCreateSchema },
+      responses: [{ status: 201, description: 'Created pricing table' }],
+      errors: CPQ_CRUD_WRITE_ERRORS,
+    },
+    PUT: {
+      summary: 'Update a CPQ pricing table definition',
+      requestBody: { schema: cpqPricingTableUpdateSchema },
+      responses: [{ status: 200, description: 'Updated pricing table' }],
+      errors: CPQ_CRUD_BY_ID_ERRORS,
+    },
+    DELETE: {
+      summary: 'Soft-delete a CPQ pricing table',
+      requestBody: { schema: cpqDeleteByIdBody },
+      responses: [{ status: 200, description: 'Deleted', schema: cpqSuccessResponseSchema }],
+      errors: CPQ_CRUD_BY_ID_ERRORS,
+    },
+  },
 }

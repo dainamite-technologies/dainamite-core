@@ -6,6 +6,8 @@ import { isQuotingError } from '../../services/cpqQuotingService'
 import { resolveQuotingService } from '../resolveQuotingService'
 import { CpqQuoteConfiguration } from '../../data/entities'
 import { SalesQuote } from '@open-mercato/core/modules/sales/data/entities'
+import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
+import { cpqErrorDoc, cpqPaginationQuery, cpqSortDirQuery } from '../_helpers/quoteRouteOpenApi'
 
 export const metadata = {
   POST: { requireAuth: true, requireFeatures: ['cpq.quotes.manage'] },
@@ -111,4 +113,37 @@ function handleError(err: unknown, context: string) {
   }
   console.error(`[${context}]`, err)
   return NextResponse.json({ error: 'Internal error' }, { status: 500 })
+}
+
+export const openApi: OpenApiRouteDoc = {
+  tag: 'CPQ Quotes',
+  summary: 'CPQ quotes',
+  methods: {
+    POST: {
+      summary: 'Create a CPQ quote for a customer',
+      description:
+        'Creates the CPQ quote configuration and its sales quote header (or links an existing sales quote via `quoteId`). Lines are added afterwards via `POST /api/cpq/quotes/{quoteId}/items`.',
+      requestBody: { schema: cpqCreateQuoteSchema },
+      responses: [{ status: 201, description: 'Created quote' }],
+      errors: [
+        cpqErrorDoc(400, 'Validation error'),
+        cpqErrorDoc(404, 'Customer or sales quote not found'),
+        cpqErrorDoc(500, 'Internal error'),
+      ],
+    },
+    GET: {
+      summary: 'List CPQ quotes',
+      description: 'Paged list of CPQ quote configurations, each enriched with the sales `quoteNumber`. `search` matches quoteId or customerId.',
+      query: cpqPaginationQuery.extend({
+        cpqStatus: z.string().optional(),
+        currencyCode: z.string().optional(),
+        customerId: z.string().uuid().optional(),
+        search: z.string().optional(),
+        sortField: z.enum(['createdAt', 'updatedAt', 'cpqStatus', 'version', 'currencyCode']).optional(),
+        sortDir: cpqSortDirQuery,
+      }),
+      responses: [{ status: 200, description: '`{ items, total, page, pageSize, totalPages }`' }],
+      errors: [cpqErrorDoc(500, 'Internal error')],
+    },
+  },
 }

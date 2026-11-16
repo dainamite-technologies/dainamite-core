@@ -4,6 +4,8 @@ import { resolveCpqRouteContext } from '../context'
 import { CpqProductCharge, CpqProductOffering, CpqProductSpecification } from '../../data/entities'
 import { cpqProductChargeCreateSchema, cpqProductChargeUpdateSchema } from '../../data/validators'
 import { normalizeChargePricing } from '../../data/charge-pricing'
+import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
+import { cpqErrorDoc, cpqPaginationQuery, cpqDeleteByIdBody, cpqSuccessResponseSchema, CPQ_CRUD_BY_ID_ERRORS } from '../_helpers/quoteRouteOpenApi'
 
 export const metadata = {
   GET: { requireAuth: true, requireFeatures: ['cpq.products.view'] },
@@ -199,4 +201,45 @@ export async function DELETE(req: Request) {
     console.error('[cpq/product-charges.DELETE]', err)
     return NextResponse.json({ error: 'Internal error' }, { status: 500 })
   }
+}
+
+export const openApi: OpenApiRouteDoc = {
+  tag: 'CPQ Products',
+  summary: 'CPQ product charges',
+  methods: {
+    GET: {
+      summary: 'List the charges (price components) of a product or offering',
+      description: 'Ordered by sortOrder. A charge is priced either from a fixed price or from a pricing table column.',
+      query: cpqPaginationQuery.extend({
+        productId: z.string().uuid().optional(),
+        offeringId: z.string().uuid().optional(),
+      }),
+      responses: [{ status: 200, description: '`{ items, total, page, pageSize, totalPages }`' }],
+      errors: [cpqErrorDoc(500, 'Internal error')],
+    },
+    POST: {
+      summary: 'Create a product charge',
+      description:
+        "`productId` is derived from `offeringId` (via the offering's specification) when omitted. A legacy combined `pricingMethod` is normalized into `chargeModel` plus `pricingMethod` (fixed or table).",
+      requestBody: { schema: cpqProductChargeCreateSchema },
+      responses: [{ status: 201, description: 'Created charge' }],
+      errors: [
+        cpqErrorDoc(400, 'Validation error, or neither productId nor a valid offeringId given'),
+        cpqErrorDoc(500, 'Internal error'),
+      ],
+    },
+    PUT: {
+      summary: 'Update a product charge',
+      description: 'Changing `pricingMethod` or `chargeModel` re-normalizes the charge and clears the fields of the other pricing source (fixedPrice vs pricingTableId and priceColumnKey).',
+      requestBody: { schema: cpqProductChargeUpdateSchema },
+      responses: [{ status: 200, description: 'Updated charge' }],
+      errors: CPQ_CRUD_BY_ID_ERRORS,
+    },
+    DELETE: {
+      summary: 'Soft-delete a product charge',
+      requestBody: { schema: cpqDeleteByIdBody },
+      responses: [{ status: 200, description: 'Deleted', schema: cpqSuccessResponseSchema }],
+      errors: CPQ_CRUD_BY_ID_ERRORS,
+    },
+  },
 }

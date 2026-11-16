@@ -3,6 +3,8 @@ import { z } from 'zod'
 import { resolveCpqRouteContext } from '../context'
 import { CpqProductRelationship } from '../../data/entities'
 import { cpqProductRelationshipCreateSchema, cpqProductRelationshipUpdateSchema } from '../../data/validators'
+import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
+import { cpqErrorDoc, cpqPaginationQuery, cpqDeleteByIdBody, cpqSuccessResponseSchema, CPQ_CRUD_WRITE_ERRORS, CPQ_CRUD_BY_ID_ERRORS } from '../_helpers/quoteRouteOpenApi'
 
 export const metadata = {
   GET: { requireAuth: true, requireFeatures: ['cpq.specifications.view'] },
@@ -153,4 +155,40 @@ export async function DELETE(req: Request) {
     console.error('[cpq/product-relationships.DELETE]', err)
     return NextResponse.json({ error: 'Internal error' }, { status: 500 })
   }
+}
+
+export const openApi: OpenApiRouteDoc = {
+  tag: 'CPQ Products',
+  summary: 'CPQ product relationships',
+  methods: {
+    GET: {
+      summary: 'List relationships between product specifications',
+      description: 'Relationships (requires, excludes, parent_child) drive quote line validation and allowed child products.',
+      query: cpqPaginationQuery.extend({
+        sourceSpecId: z.string().uuid().optional(),
+        targetSpecId: z.string().uuid().optional(),
+        relationshipType: z.string().optional(),
+      }),
+      responses: [{ status: 200, description: '`{ items, total, page, pageSize, totalPages }`' }],
+      errors: [cpqErrorDoc(500, 'Internal error')],
+    },
+    POST: {
+      summary: 'Create a relationship between two product specifications',
+      requestBody: { schema: cpqProductRelationshipCreateSchema },
+      responses: [{ status: 201, description: 'Created relationship' }],
+      errors: CPQ_CRUD_WRITE_ERRORS,
+    },
+    PUT: {
+      summary: 'Update a product specification relationship',
+      requestBody: { schema: cpqProductRelationshipUpdateSchema },
+      responses: [{ status: 200, description: 'Updated relationship' }],
+      errors: CPQ_CRUD_BY_ID_ERRORS,
+    },
+    DELETE: {
+      summary: 'Soft-delete a product specification relationship',
+      requestBody: { schema: cpqDeleteByIdBody },
+      responses: [{ status: 200, description: 'Deleted', schema: cpqSuccessResponseSchema }],
+      errors: CPQ_CRUD_BY_ID_ERRORS,
+    },
+  },
 }

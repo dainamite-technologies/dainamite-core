@@ -166,6 +166,28 @@ the `@dainamite/cpq` package, per
 
 ## Schema / API changelog (track breaking changes here)
 
+### 2026-11-16 - AI tools and agent; `@open-mercato/ai-assistant` peer; update schemas
+
+**New required peer (breaking for consumers).** `@open-mercato/ai-assistant`
+`^0.9.0`. The package now ships `ai-tools.ts` and `ai-agents.ts`; the
+framework generator imports every enabled module's `ai-tools.ts` statically,
+and the CPQ tools build on `defineApiBackedAiTool` at load time. An app that
+enables `@dainamite/cpq` must also install and enable the AI assistant
+(`{ id: 'ai_assistant', from: '@open-mercato/ai-assistant' }` in
+`src/modules.ts`). Ships in the same major as the 1.0.0 release. After
+upgrading, run `yarn generate`.
+
+**AI surface.** 20 read tools and 4 write tools (`cpq.create_quote`,
+`cpq.add_quote_line`, `cpq.update_quote_line`,
+`cpq.submit_quote_for_approval`) over the existing routes, plus the
+`cpq.quoting_assistant` agent (`mutationPolicy: 'confirm-required'`). Writes
+run only after the operator confirms the preview card; over MCP they are
+refused. See `manuals/cpq-ai-agent.md`.
+
+**OpenAPI.** Every route exports a typed `OpenApiRouteDoc`. Seven routes
+moved from the path-keyed object form (which the generator ignored) to
+`methods`, so the generated spec now carries their params and bodies.
+
 ### 2026-11-10 — Manual price adjustments and price waterfall (price adjustments, Phase 1)
 
 Spec: `.ai/specs/2026-11-10-cpq-manual-price-adjustments.md`. Manual:

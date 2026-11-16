@@ -12,24 +12,24 @@ Engine: om-auto-create-pr-loop (steps: 18, --loop: no)
 
 | Phase | Step | Title | Exec | Status | Commit |
 |-------|------|-------|------|--------|--------|
-| A | 1 | Index entities and migration | group:A1 | done | |
-| A | 2 | costIndexService | group:A1 | done | |
-| A | 3 | Index commands and routes | group:A2 | done | |
-| A | 4 | Index pages | group:A3 | done | |
-| A | 5 | Phase A close-out | group:A3 | done | |
-| B | 6 | Characterize index refusal and locked recalculation | group:B1 | done | |
-| B | 7 | Element index fields | group:B1 | done | |
-| B | 8 | Date plumbing | group:B1 | done | |
-| B | 9 | Index cost resolution | group:B2 | done | |
-| B | 10 | Cost preview and calculate-price | group:B2 | done | |
-| B | 11 | Index UI | group:B3 | done | |
-| B | 12 | Renew index re-evaluation | group:B3 | done | |
-| B | 13 | Index demo seed and manual | group:B4 | done | |
-| B | 14 | Phase B close-out | group:B4 | done | |
-| C | 15 | Expiry ledger and lead-days toggle | group:C1 | done | |
-| C | 16 | costExpiryService, event and notification | group:C1 | done | |
-| C | 17 | Worker, schedule and CLI | group:C2 | done | |
-| C | 18 | Phase C close-out | group:C2 | done | |
+| A | 1 | Index entities and migration | group:A1 | done | 92cdc88 |
+| A | 2 | costIndexService | group:A1 | done | 96317dc |
+| A | 3 | Index commands and routes | group:A2 | done | f552941 |
+| A | 4 | Index pages | group:A3 | done | 39d81c2 |
+| A | 5 | Phase A close-out | group:A3 | done | 7215809 |
+| B | 6 | Characterize index refusal and locked recalculation | group:B1 | done | efe08ed |
+| B | 7 | Element index fields | group:B1 | done | 6765e40 |
+| B | 8 | Date plumbing | group:B1 | done | 36954d4 |
+| B | 9 | Index cost resolution | group:B2 | done | 6177432 |
+| B | 10 | Cost preview and calculate-price | group:B2 | done | 2bd1d26 |
+| B | 11 | Index UI | group:B3 | done | 576607e |
+| B | 12 | Renew index re-evaluation | group:B3 | done | 9d3f5ed |
+| B | 13 | Index demo seed and manual | group:B4 | done | 56463d4 |
+| B | 14 | Phase B close-out | group:B4 | done | 6ce63b7 |
+| C | 15 | Expiry ledger and lead-days toggle | group:C1 | done | d39cb51 |
+| C | 16 | costExpiryService, event and notification | group:C1 | done | 252d734 |
+| C | 17 | Worker, schedule and CLI | group:C2 | done | 9d7f788 |
+| C | 18 | Phase C close-out | group:C2 | done | 0014fbd |
 
 ## Goal
 

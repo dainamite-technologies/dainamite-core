@@ -42,7 +42,8 @@ step, you WILL produce incorrect imports and miss required patterns.
 | Task | Load |
 |---|---|
 | Add/modify an entity, create migration | `.ai/guides/core.md` → Module Files, then `yarn mercato db generate` |
-| Add a REST API endpoint | `.ai/guides/core.md` → API Routes |
+| Add a REST API endpoint | `.ai/guides/core.md` → API Routes, **and** `.ai/skills/mcp-tools/SKILL.md` (the route ships with its MCP / AI tool) |
+| Add or change an AI / MCP tool or agent | `.ai/skills/mcp-tools/SKILL.md` |
 | Add a backend page | `.ai/guides/ui.md` → CrudForm / DataTable |
 | Configure sidebar navigation, page groups, settings pages | `.ai/skills/module-scaffold/references/navigation-patterns.md` |
 | Add event subscribers or emit events | `.ai/guides/events.md` |

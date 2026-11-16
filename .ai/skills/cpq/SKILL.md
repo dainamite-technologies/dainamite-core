@@ -170,6 +170,9 @@ descriptions. On top of that, every CPQ change ships with:
 - [ ] Status enums extended in `services/types.ts`, never inline
 - [ ] Manuals (`manuals/xd-*.md`) updated if behavior changed
 - [ ] `packages/cpq/MIGRATION.md` updated if a public contract changed
+- [ ] New or changed routes ship with their MCP / AI tool (typed `openApi`,
+      tool in `ai-tools/`, `cpq.quoting_assistant` allowlist, tests); see
+      [`../mcp-tools/SKILL.md`](../mcp-tools/SKILL.md)
 
 ## When to load which sub-skill
 

@@ -71,7 +71,10 @@ The four non-negotiables (full version with rationale lives in
    documented invariant. No half-finished work.
 2. **API-first** — every new feature starts with the REST contract
    (`openApi` export). UI is a consumer of the API. Breaking changes are
-   versioned and changelogged.
+   versioned and changelogged. **Every new or changed route ships with its
+   MCP / AI tool in the same PR** (typed `openApi`, API-backed tool in
+   `<module>/ai-tools/`, agent allowlist, tests): see
+   [`.ai/skills/mcp-tools/SKILL.md`](.ai/skills/mcp-tools/SKILL.md).
 3. **Every entity has a detail page** — if it's listed in admin UI,
    `backend/<module>/<entity>/page.tsx` (list) AND
    `backend/<module>/<entity>/[id]/page.tsx` (detail) ship together.

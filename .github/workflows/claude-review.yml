@@ -354,6 +354,16 @@ jobs:
               - **CPQ never imports from `src/modules/<other>/`** —
                 customer-specific code goes to `src/modules/@app/<feature>/`,
                 NOT inside `src/modules/cpq/`.
+              - **API ships with its MCP / AI tool**
+                (`.ai/skills/mcp-tools/SKILL.md`): a new or changed
+                route has a typed `openApi` (`OpenApiRouteDoc` with
+                `methods`), an API-backed tool in `<module>/ai-tools/`
+                whose `requiredFeatures` match the route, write tools
+                refuse without `approvedPendingActionId`, and the tool
+                is in the module agent's `allowedTools`. A missing tool
+                for an agent-relevant route is Medium; a write tool
+                without the approval guard is High. Routes deliberately
+                not for agents are fine when the PR says so.
               - **Tests obligatory**: services / validators / state
                 machines / seeds touched have unit tests; UI flows
                 touched have a Playwright integration spec under

@@ -31,6 +31,7 @@
   "cpq.common.save": "Speichern",
   "cpq.common.saving": "Wird gespeichert...",
   "cpq.common.yes": "Ja",
+  "cpq.errors.organizationRequired": "Ein Organisationskontext ist erforderlich: Wählen Sie eine Organisation aus oder verwenden Sie einen API-Schlüssel, der an eine Organisation gebunden ist.",
   "cpq.inventory.actions.refresh": "Aktualisieren",
   "cpq.inventory.assets": "Assets",
   "cpq.inventory.assets.detail.breadcrumb": "Asset-Details",

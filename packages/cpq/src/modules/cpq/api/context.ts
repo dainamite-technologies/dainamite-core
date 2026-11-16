@@ -49,8 +49,14 @@ export async function resolveCpqRouteContext(req: Request): Promise<CpqRouteCont
 export function cpqContextError(ctx: CpqRouteContext): NextResponse | null {
   if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   if (!ctx.organizationId) {
+    const { translate } = ctx
     return NextResponse.json(
-      { error: 'Organization context is required: select an organization or use an API key bound to one.' },
+      {
+        error: translate(
+          'cpq.errors.organizationRequired',
+          'Organization context is required: select an organization or use an API key bound to one.',
+        ),
+      },
       { status: 400 },
     )
   }

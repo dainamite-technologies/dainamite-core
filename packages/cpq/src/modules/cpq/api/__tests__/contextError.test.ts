@@ -1,6 +1,11 @@
 import { cpqContextError, type CpqRouteContext } from '../context'
 
-const base = { tenantId: 'tenant', organizationId: 'org', auth: { sub: 'user' } } as unknown as CpqRouteContext
+const base = {
+  tenantId: 'tenant',
+  organizationId: 'org',
+  auth: { sub: 'user' },
+  translate: (_key: string, fallback?: string) => fallback ?? _key,
+} as unknown as CpqRouteContext
 
 describe('cpqContextError', () => {
   it('lets a scoped, authenticated context through', () => {

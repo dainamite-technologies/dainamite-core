@@ -5,6 +5,8 @@ import {
   cpqInventorySubscriptionCreateSchema,
   cpqInventorySubscriptionUpdateSchema,
 } from '../../../data/validators'
+import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
+import { cpqErrorDoc, cpqPaginationQuery, cpqSortDirQuery, cpqDeleteByIdBody, cpqSuccessResponseSchema, CPQ_CRUD_WRITE_ERRORS } from '../../_helpers/quoteRouteOpenApi'
 
 export const metadata = {
   GET: { requireAuth: true, requireFeatures: ['cpq.inventory.view'] },
@@ -123,4 +125,56 @@ export async function DELETE(req: Request) {
     console.error('[cpq/inventory/subscriptions.DELETE]', err)
     return NextResponse.json({ error: 'Internal error' }, { status: 500 })
   }
+}
+
+export const openApi: OpenApiRouteDoc = {
+  tag: 'CPQ Inventory',
+  summary: 'CPQ inventory subscriptions',
+  methods: {
+    GET: {
+      summary: 'List customer subscriptions in CPQ inventory, or get one by id',
+      description:
+        'With `id` returns a single subscription; otherwise a paged list. `status` accepts a comma-separated list. `expiringWithinDays` (1 to 365) keeps subscriptions whose current term ends within that window.',
+      query: cpqPaginationQuery.extend({
+        id: z.string().uuid().optional(),
+        customerId: z.string().uuid().optional(),
+        status: z.string().optional(),
+        productId: z.string().uuid().optional(),
+        sourceOrderId: z.string().uuid().optional(),
+        billingCycle: z.string().optional(),
+        search: z.string().optional(),
+        expiringWithinDays: z.coerce.number().int().min(1).max(365).optional(),
+        sortField: z.enum(['createdAt', 'updatedAt', 'code', 'name', 'status', 'startDate', 'currentTermEnd']).optional(),
+        sortDir: cpqSortDirQuery,
+      }),
+      responses: [{ status: 200, description: 'Subscription, or paged list of subscriptions' }],
+      errors: [cpqErrorDoc(500, 'Internal error (also returned when `id` does not exist)')],
+    },
+    POST: {
+      summary: 'Create a subscription in CPQ inventory',
+      description: 'Manual creation. Subscriptions are normally provisioned by order activation.',
+      requestBody: { schema: cpqInventorySubscriptionCreateSchema },
+      responses: [{ status: 201, description: 'Created subscription' }],
+      errors: CPQ_CRUD_WRITE_ERRORS,
+    },
+    PUT: {
+      summary: 'Update a subscription in CPQ inventory',
+      description: 'Status changes go through `POST /api/cpq/inventory/subscriptions/status`.',
+      requestBody: { schema: cpqInventorySubscriptionUpdateSchema },
+      responses: [{ status: 200, description: 'Updated subscription' }],
+      errors: [
+        cpqErrorDoc(400, 'Validation error'),
+        cpqErrorDoc(500, 'Internal error (also returned when the subscription does not exist)'),
+      ],
+    },
+    DELETE: {
+      summary: 'Delete a subscription from CPQ inventory',
+      requestBody: { schema: cpqDeleteByIdBody },
+      responses: [{ status: 200, description: 'Deleted', schema: cpqSuccessResponseSchema }],
+      errors: [
+        cpqErrorDoc(400, 'Missing id'),
+        cpqErrorDoc(500, 'Internal error (also returned when the subscription does not exist)'),
+      ],
+    },
+  },
 }

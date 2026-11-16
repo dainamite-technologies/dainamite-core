@@ -3,6 +3,8 @@ import { z } from 'zod'
 import { resolveCpqRouteContext } from '../context'
 import { CpqProductOffering, CpqProductCharge, CpqProductSpecification, CpqOfferingComponent, CpqBundleSlot } from '../../data/entities'
 import { cpqProductOfferingCreateSchema, cpqProductOfferingUpdateSchema } from '../../data/validators'
+import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
+import { cpqErrorDoc, cpqPaginationQuery, cpqSortDirQuery, cpqDeleteByIdBody, cpqSuccessResponseSchema, CPQ_CRUD_BY_ID_ERRORS } from '../_helpers/quoteRouteOpenApi'
 
 export const metadata = {
   GET: { requireAuth: true, requireFeatures: ['cpq.offerings.view'] },
@@ -328,4 +330,51 @@ export async function DELETE(req: Request) {
     console.error('[cpq/product-offerings.DELETE]', err)
     return NextResponse.json({ error: 'Internal error' }, { status: 500 })
   }
+}
+
+export const openApi: OpenApiRouteDoc = {
+  tag: 'CPQ Products',
+  summary: 'CPQ product offerings',
+  methods: {
+    GET: {
+      summary: 'List sellable CPQ product offerings, or get one by id with its specification and charges',
+      description:
+        'With `id` returns the offering plus its specification, charges and (for bundles) components with slots and child offerings. Otherwise a paged list with charges per offering; `search` matches code, name or description.',
+      query: cpqPaginationQuery.extend({
+        id: z.string().uuid().optional(),
+        specId: z.string().uuid().optional(),
+        lifecycleStatus: z.enum(['draft', 'active', 'deprecated']).optional(),
+        code: z.string().optional(),
+        offeringType: z.enum(['simple', 'bundle']).optional(),
+        isActive: z.enum(['true', 'false']).optional(),
+        search: z.string().optional(),
+        sortField: z.enum(['createdAt', 'updatedAt', 'code', 'name', 'lifecycleStatus', 'offeringType']).optional(),
+        sortDir: cpqSortDirQuery,
+      }),
+      responses: [{ status: 200, description: 'Offering detail, or paged list of offerings' }],
+      errors: [cpqErrorDoc(404, 'Offering not found'), cpqErrorDoc(500, 'Internal error')],
+    },
+    POST: {
+      summary: 'Create a CPQ product offering for a specification',
+      description: "`offeringType` must match the specification's `specType` (V-OFF-7).",
+      requestBody: { schema: cpqProductOfferingCreateSchema },
+      responses: [{ status: 201, description: 'Created offering' }],
+      errors: [
+        cpqErrorDoc(400, 'Validation error, specification not found, or offeringType does not match specType'),
+        cpqErrorDoc(500, 'Internal error'),
+      ],
+    },
+    PUT: {
+      summary: 'Update a CPQ product offering',
+      requestBody: { schema: cpqProductOfferingUpdateSchema },
+      responses: [{ status: 200, description: 'Updated offering' }],
+      errors: CPQ_CRUD_BY_ID_ERRORS,
+    },
+    DELETE: {
+      summary: 'Soft-delete a CPQ product offering',
+      requestBody: { schema: cpqDeleteByIdBody },
+      responses: [{ status: 200, description: 'Deleted', schema: cpqSuccessResponseSchema }],
+      errors: CPQ_CRUD_BY_ID_ERRORS,
+    },
+  },
 }

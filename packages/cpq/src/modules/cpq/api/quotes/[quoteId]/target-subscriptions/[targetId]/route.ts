@@ -3,6 +3,9 @@ import { resolveCpqRouteContext } from '../../../../context'
 import { cpqUpdateTargetSubscriptionSchema } from '../../../../../data/validators'
 import { resolveQuotingService } from '../../../../resolveQuotingService'
 import { handleArcError } from '../../../../_helpers/handleArcError'
+import { z } from 'zod'
+import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
+import { cpqErrorDoc } from '../../../../_helpers/quoteRouteOpenApi'
 
 /**
  * Manage a single attached ARC target.
@@ -63,29 +66,31 @@ export async function DELETE(
   }
 }
 
-export const openApi = {
-  '/api/cpq/quotes/{quoteId}/target-subscriptions/{targetId}': {
-    parameters: [
-      { name: 'quoteId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
-      { name: 'targetId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
-    ],
-    patch: {
-      tags: ['CPQ ARC'],
-      summary: 'Update an ARC target (mergeAction / term fields)',
-      responses: {
-        '200': { description: 'Updated' },
-        '404': { description: 'Target not found' },
-        '409': { description: 'Quote no longer editable' },
-      },
+export const openApi: OpenApiRouteDoc = {
+  tag: 'CPQ ARC',
+  summary: 'CPQ ARC quote target subscription',
+  pathParams: z.object({ quoteId: z.string().uuid(), targetId: z.string().uuid() }),
+  methods: {
+    PATCH: {
+      summary: 'Update an ARC quote target (mergeAction or renewal term)',
+      requestBody: { schema: cpqUpdateTargetSubscriptionSchema },
+      responses: [{ status: 200, description: 'Updated target' }],
+      errors: [
+        cpqErrorDoc(400, 'Validation error'),
+        cpqErrorDoc(404, 'Quote or target not found'),
+        cpqErrorDoc(409, 'Quote no longer editable'),
+        cpqErrorDoc(500, 'Internal error'),
+      ],
     },
-    delete: {
-      tags: ['CPQ ARC'],
-      summary: 'Detach an ARC target',
-      responses: {
-        '200': { description: 'Detached' },
-        '404': { description: 'Target not found' },
-        '409': { description: 'Quote no longer editable' },
-      },
+    DELETE: {
+      summary: 'Detach a target subscription from an ARC quote',
+      description: 'Also drops the quote lines that belong to that target.',
+      responses: [{ status: 200, description: 'Target detached' }],
+      errors: [
+        cpqErrorDoc(404, 'Quote or target not found'),
+        cpqErrorDoc(409, 'Quote no longer editable'),
+        cpqErrorDoc(500, 'Internal error'),
+      ],
     },
   },
 }

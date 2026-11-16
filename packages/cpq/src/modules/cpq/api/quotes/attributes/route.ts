@@ -2,6 +2,9 @@ import { NextResponse } from 'next/server'
 import { resolveCpqRouteContext } from '../../context'
 import { DefaultCpqProductService } from '../../../services/cpqProductService'
 import { CpqProductOffering } from '../../../data/entities'
+import { z } from 'zod'
+import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
+import { cpqErrorDoc } from '../../_helpers/quoteRouteOpenApi'
 
 export const metadata = {
   GET: { requireAuth: true, requireFeatures: ['cpq.quotes.view'] },
@@ -58,4 +61,30 @@ export async function GET(req: Request) {
     console.error('[cpq/quotes/attributes.GET]', err)
     return NextResponse.json({ error: 'Internal error' }, { status: 500 })
   }
+}
+
+export const openApi: OpenApiRouteDoc = {
+  tag: 'CPQ Quotes',
+  summary: 'CPQ quote attributes',
+  methods: {
+    GET: {
+      summary: 'List run-time attributes to configure for an offering',
+      description:
+        "Returns the offering specification's run-time attributes with constraints applied against the current configuration. Requests with only `productId` (legacy) return an empty list.",
+      query: z.object({
+        offeringId: z.string().uuid().optional(),
+        productId: z.string().uuid().optional(),
+        configuration: z
+          .string()
+          .optional()
+          .describe('JSON-encoded object of the attribute values selected so far'),
+      }),
+      responses: [{ status: 200, description: '`{ attributes }`' }],
+      errors: [
+        cpqErrorDoc(400, 'Either offeringId or productId is required'),
+        cpqErrorDoc(404, 'Offering not found'),
+        cpqErrorDoc(500, 'Internal error'),
+      ],
+    },
+  },
 }

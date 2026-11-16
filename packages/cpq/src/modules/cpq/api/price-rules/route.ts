@@ -3,6 +3,8 @@ import { z } from 'zod'
 import { resolveCpqRouteContext } from '../context'
 import { CpqPriceRule, CpqProductOffering } from '../../data/entities'
 import { cpqPriceRuleCreateSchema, cpqPriceRuleUpdateSchema } from '../../data/validators'
+import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
+import { cpqErrorDoc, cpqPaginationQuery, cpqSortDirQuery, cpqDeleteByIdBody, cpqSuccessResponseSchema, CPQ_CRUD_WRITE_ERRORS, CPQ_CRUD_BY_ID_ERRORS } from '../_helpers/quoteRouteOpenApi'
 
 export const metadata = {
   GET: { requireAuth: true, requireFeatures: ['cpq.pricing.view'] },
@@ -207,4 +209,47 @@ export async function DELETE(req: Request) {
     console.error('[cpq/price-rules.DELETE]', err)
     return NextResponse.json({ error: 'Internal error' }, { status: 500 })
   }
+}
+
+export const openApi: OpenApiRouteDoc = {
+  tag: 'CPQ Pricing',
+  summary: 'CPQ price rules',
+  methods: {
+    GET: {
+      summary: 'List CPQ price rules (discounts, surcharges, price overrides), or get one by id',
+      description:
+        'With `id` returns a single rule. Otherwise a paged list (default sort sortOrder asc), each row with `productOfferingName`. `globalOnly=true` keeps rules not bound to an offering; `search` matches code, name or description.',
+      query: cpqPaginationQuery.extend({
+        id: z.string().uuid().optional(),
+        productOfferingId: z.string().uuid().optional(),
+        globalOnly: z.enum(['true', 'false']).optional(),
+        ruleType: z.string().optional(),
+        chargeTypeFilter: z.string().optional(),
+        isActive: z.enum(['true', 'false']).optional(),
+        search: z.string().optional(),
+        sortField: z.enum(['sortOrder', 'createdAt', 'updatedAt', 'code', 'name', 'ruleType']).optional(),
+        sortDir: cpqSortDirQuery,
+      }),
+      responses: [{ status: 200, description: 'Price rule, or paged list of price rules' }],
+      errors: [cpqErrorDoc(404, 'Price rule not found'), cpqErrorDoc(500, 'Internal error')],
+    },
+    POST: {
+      summary: 'Create a CPQ price rule',
+      requestBody: { schema: cpqPriceRuleCreateSchema },
+      responses: [{ status: 201, description: 'Created price rule' }],
+      errors: CPQ_CRUD_WRITE_ERRORS,
+    },
+    PUT: {
+      summary: 'Update a CPQ price rule',
+      requestBody: { schema: cpqPriceRuleUpdateSchema },
+      responses: [{ status: 200, description: 'Updated price rule' }],
+      errors: CPQ_CRUD_BY_ID_ERRORS,
+    },
+    DELETE: {
+      summary: 'Soft-delete a CPQ price rule',
+      requestBody: { schema: cpqDeleteByIdBody },
+      responses: [{ status: 200, description: 'Deleted', schema: cpqSuccessResponseSchema }],
+      errors: CPQ_CRUD_BY_ID_ERRORS,
+    },
+  },
 }

@@ -3,6 +3,8 @@ import { z } from 'zod'
 import { resolveCpqRouteContext } from '../context'
 import { cpqOfferingComponentCreateSchema, cpqOfferingComponentUpdateSchema } from '../../data/validators'
 import type { DefaultCpqBundleService } from '../../services/cpqBundleService'
+import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
+import { cpqErrorDoc, cpqDeleteByIdBody, cpqSuccessResponseSchema, CPQ_CRUD_BY_ID_ERRORS } from '../_helpers/quoteRouteOpenApi'
 
 export const metadata = {
   GET: { requireAuth: true, requireFeatures: ['cpq.offerings.view'] },
@@ -100,4 +102,38 @@ export async function DELETE(req: Request) {
     console.error('[cpq/offering-components.DELETE]', err)
     return NextResponse.json({ error: 'Internal error' }, { status: 500 })
   }
+}
+
+export const openApi: OpenApiRouteDoc = {
+  tag: 'CPQ Bundles',
+  summary: 'CPQ offering components',
+  methods: {
+    GET: {
+      summary: 'List the components (child offerings per slot) of a bundle offering',
+      query: z.object({ offeringId: z.string().uuid(), slotId: z.string().uuid().optional() }),
+      responses: [{ status: 200, description: '`{ items }` components of the offering' }],
+      errors: [cpqErrorDoc(400, 'offeringId is required'), cpqErrorDoc(500, 'Internal error')],
+    },
+    POST: {
+      summary: 'Add a child offering to a slot of a bundle offering',
+      requestBody: { schema: cpqOfferingComponentCreateSchema },
+      responses: [{ status: 201, description: 'Created component' }],
+      errors: [
+        cpqErrorDoc(400, 'Validation error or bundle rule violation (`V-*` code)'),
+        cpqErrorDoc(500, 'Internal error'),
+      ],
+    },
+    PUT: {
+      summary: 'Update a bundle offering component',
+      requestBody: { schema: cpqOfferingComponentUpdateSchema },
+      responses: [{ status: 200, description: 'Updated component' }],
+      errors: CPQ_CRUD_BY_ID_ERRORS,
+    },
+    DELETE: {
+      summary: 'Remove a component from a bundle offering',
+      requestBody: { schema: cpqDeleteByIdBody },
+      responses: [{ status: 200, description: 'Removed', schema: cpqSuccessResponseSchema }],
+      errors: CPQ_CRUD_BY_ID_ERRORS,
+    },
+  },
 }

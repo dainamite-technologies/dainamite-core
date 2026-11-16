@@ -1,5 +1,8 @@
 import { NextResponse } from 'next/server'
 import { resolveCpqRouteContext } from '../../../context'
+import { z } from 'zod'
+import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
+import { cpqErrorDoc } from '../../../_helpers/quoteRouteOpenApi'
 
 export const metadata = {
   GET: { requireAuth: true, requireFeatures: ['cpq.inventory.view'] },
@@ -28,4 +31,23 @@ export async function GET(req: Request, { params }: { params: Promise<{ customer
     console.error('[cpq/inventory/customer.GET]', err)
     return NextResponse.json({ error: 'Internal error' }, { status: 500 })
   }
+}
+
+export const openApi: OpenApiRouteDoc = {
+  tag: 'CPQ Inventory',
+  summary: 'CPQ customer inventory',
+  pathParams: z.object({ customerId: z.string().uuid() }),
+  methods: {
+    GET: {
+      summary: 'Get the installed base (subscriptions and assets) of a customer',
+      description: 'Terminated records are excluded unless `includeTerminated=true`.',
+      query: z.object({
+        status: z.string().optional(),
+        productId: z.string().uuid().optional(),
+        includeTerminated: z.enum(['true', 'false']).optional(),
+      }),
+      responses: [{ status: 200, description: 'Customer inventory' }],
+      errors: [cpqErrorDoc(500, 'Internal error')],
+    },
+  },
 }

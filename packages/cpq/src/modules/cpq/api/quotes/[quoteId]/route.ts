@@ -6,6 +6,9 @@ import { resolveQuotingService } from '../../resolveQuotingService'
 import { CpqQuoteConfiguration, CpqQuoteLineConfiguration } from '../../../data/entities'
 import { SalesQuote, SalesQuoteLine } from '@open-mercato/core/modules/sales/data/entities'
 import { handleArcError } from '../../_helpers/handleArcError'
+import { z } from 'zod'
+import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
+import { cpqErrorDoc, cpqQuoteIdPathParams } from '../../_helpers/quoteRouteOpenApi'
 
 export const metadata = {
   GET: { requireAuth: true, requireFeatures: ['cpq.quotes.view'] },
@@ -106,4 +109,41 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ quote
     console.error('[cpq/quotes/[quoteId].DELETE]', err)
     return NextResponse.json({ error: 'Internal error' }, { status: 500 })
   }
+}
+
+export const openApi: OpenApiRouteDoc = {
+  tag: 'CPQ Quotes',
+  summary: 'CPQ quote',
+  pathParams: cpqQuoteIdPathParams,
+  methods: {
+    GET: {
+      summary: 'Get a CPQ quote with its lines and totals',
+      responses: [{ status: 200, description: 'Quote with lines, charges and totals' }],
+      errors: [cpqErrorDoc(404, 'Quote not found'), cpqErrorDoc(500, 'Internal error')],
+    },
+    PATCH: {
+      summary: 'Change the quote type of a CPQ quote (ARC)',
+      description:
+        'Only `quoteType` is updatable. The transition is one-way: `new` to `amend`, `renew` or `cancel`; any later change returns 409.',
+      requestBody: { schema: cpqUpdateQuoteSchema },
+      responses: [{ status: 200, description: 'Quote with its new type' }],
+      errors: [
+        cpqErrorDoc(400, 'Validation error, nothing to update, or transition back to `new`'),
+        cpqErrorDoc(404, 'Quote not found'),
+        cpqErrorDoc(409, 'Quote type is immutable'),
+        cpqErrorDoc(500, 'Internal error'),
+      ],
+    },
+    DELETE: {
+      summary: 'Soft-delete a CPQ quote',
+      description:
+        'Soft-deletes the CPQ quote, its line configurations and the underlying sales quote and lines. `quoteId` may be the CPQ configuration id or the sales quote id. Quotes in a terminal status (accepted, rejected, cancelled) cannot be deleted.',
+      responses: [{ status: 200, description: '`{ ok: true }`', schema: z.object({ ok: z.literal(true) }) }],
+      errors: [
+        cpqErrorDoc(404, 'Quote not found'),
+        cpqErrorDoc(409, 'Quote is in a terminal status'),
+        cpqErrorDoc(500, 'Internal error'),
+      ],
+    },
+  },
 }

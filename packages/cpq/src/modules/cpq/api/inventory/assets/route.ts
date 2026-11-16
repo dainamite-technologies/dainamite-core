@@ -5,6 +5,8 @@ import {
   cpqInventoryAssetCreateSchema,
   cpqInventoryAssetUpdateSchema,
 } from '../../../data/validators'
+import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
+import { cpqErrorDoc, cpqPaginationQuery, cpqSortDirQuery, cpqDeleteByIdBody, cpqSuccessResponseSchema } from '../../_helpers/quoteRouteOpenApi'
 
 export const metadata = {
   GET: { requireAuth: true, requireFeatures: ['cpq.inventory.view'] },
@@ -120,4 +122,57 @@ export async function DELETE(req: Request) {
     console.error('[cpq/inventory/assets.DELETE]', err)
     return NextResponse.json({ error: 'Internal error' }, { status: 500 })
   }
+}
+
+export const openApi: OpenApiRouteDoc = {
+  tag: 'CPQ Inventory',
+  summary: 'CPQ inventory assets',
+  methods: {
+    GET: {
+      summary: 'List customer assets in CPQ inventory, or get one by id',
+      description: 'With `id` returns a single asset; otherwise a paged list.',
+      query: cpqPaginationQuery.extend({
+        id: z.string().uuid().optional(),
+        customerId: z.string().uuid().optional(),
+        status: z.string().optional(),
+        assetType: z.string().optional(),
+        productId: z.string().uuid().optional(),
+        subscriptionId: z.string().uuid().optional(),
+        subscriptionItemId: z.string().uuid().optional(),
+        search: z.string().optional(),
+        sortField: z.enum(['createdAt', 'updatedAt', 'code', 'name', 'status', 'assetType', 'purchasePrice']).optional(),
+        sortDir: cpqSortDirQuery,
+      }),
+      responses: [{ status: 200, description: 'Asset, or paged list of assets' }],
+      errors: [cpqErrorDoc(500, 'Internal error (also returned when `id` does not exist)')],
+    },
+    POST: {
+      summary: 'Create an asset in CPQ inventory',
+      requestBody: { schema: cpqInventoryAssetCreateSchema },
+      responses: [{ status: 201, description: 'Created asset' }],
+      errors: [
+        cpqErrorDoc(400, 'Validation error'),
+        cpqErrorDoc(500, 'Internal error (also returned when the linked subscription or item does not exist)'),
+      ],
+    },
+    PUT: {
+      summary: 'Update an asset in CPQ inventory',
+      description: 'Status changes go through `POST /api/cpq/inventory/assets/status`.',
+      requestBody: { schema: cpqInventoryAssetUpdateSchema },
+      responses: [{ status: 200, description: 'Updated asset' }],
+      errors: [
+        cpqErrorDoc(400, 'Validation error'),
+        cpqErrorDoc(500, 'Internal error (also returned when the asset does not exist)'),
+      ],
+    },
+    DELETE: {
+      summary: 'Delete an asset from CPQ inventory',
+      requestBody: { schema: cpqDeleteByIdBody },
+      responses: [{ status: 200, description: 'Deleted', schema: cpqSuccessResponseSchema }],
+      errors: [
+        cpqErrorDoc(400, 'Missing id'),
+        cpqErrorDoc(500, 'Internal error (also returned when the asset does not exist)'),
+      ],
+    },
+  },
 }

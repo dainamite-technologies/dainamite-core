@@ -26,7 +26,8 @@ import { shouldAutoOpenRequest, type CancelReason } from './costSourcing'
 import { cancelRequestPatch, isRequestOpen, openRequestPatch, type RequestRowState } from './costRequestState'
 import { sourcingCostRef, type SourcingSignal } from './sourcingSignals'
 import type { CpqFxRateResolver } from './fxRateResolver'
-import { loadValuesInForce, resolveIndexCost, type IndexCostResult, type IndexSnapshot } from './indexCostResolution'
+import { loadValuesInForce, reevaluateCarriedIndexCosts, resolveIndexCost, type IndexCostResult, type IndexSnapshot, type IndexValueInForce } from './indexCostResolution'
+import { readIndexSnapshot } from '../../lib/indexView'
 
 /**
  * Catalog cost resolution on SAVED recalculations (App Spec §1.4.7 R1, R3, R4,
@@ -498,6 +499,16 @@ async function planQuoteCosts(params: CostResolutionParams & { save?: boolean })
     for (const target of targets ?? []) newTermEndByTarget.set(target.subscriptionId, target.newTermEnd ?? null)
   }
 
+  // Renew (Q12): the carried index lines re-read the value in force at the recalculation date, on the index of their OWN snapshot
+  // (the contracted formula), not on today's catalog element. One query for all of them; a quote that is not a Renew loads nothing.
+  const carriedValues = new Map<string, IndexValueInForce>()
+  if (managedRenew.length > 0) {
+    const carriedIndexIds = managedRenew.flatMap(({ lineConfig }) => existingByLine.get(lineConfig.quoteLineId) ?? [])
+      .flatMap((row) => (row.origin === 'carried' && row.source === 'index' ? [readIndexSnapshot(row.indexSnapshot)?.indexId ?? ''] : []))
+      .filter(Boolean)
+    for (const [id, value] of await loadValuesInForce(em, carriedIndexIds, asOfDate, scope)) carriedValues.set(id, value)
+  }
+
   // ── Compute ──
   const creates: CostPlan['creates'] = []
   const updates: CostPlan['updates'] = []
@@ -643,9 +654,17 @@ async function planQuoteCosts(params: CostResolutionParams & { save?: boolean })
         applicableKeys: desiredKeys,
         chargeCodes: new Set(ownerCharges.map((charge) => charge.code)),
         newTermEnd: (lineConfig.targetSubscriptionId ? newTermEndByTarget.get(lineConfig.targetSubscriptionId) : null) ?? null,
-        asOf: now.toISOString().slice(0, 10),
+        asOf: asOfDate,
         effective,
-      }, { reevaluateCarriedIndexCosts: params.reevaluateCarriedIndexCosts })
+      }, {
+        reevaluateCarriedIndexCosts: params.reevaluateCarriedIndexCosts ?? (async ({ lines: carried, asOf }) => reevaluateCarriedIndexCosts(carried, {
+          asOfDate: asOf, quoteType: quote.quoteType, valuesInForce: carriedValues,
+          quantityFor: (line) => {
+            const charge = ownerCharges.find((candidate) => candidate.code === line.chargeCode)
+            return charge ? quantityOf(charge, mergedConfig) : null
+          },
+        })),
+      })
       for (const row of outcome.dropped as unknown as CpqQuoteLineCost[]) {
         drops.push(row)
         droppedAtRenewal.add(row)

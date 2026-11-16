@@ -97,5 +97,5 @@ export function indexTodayHelp(
     value: formatIndexNumber(input.current.value), rate: indexRateLabel(input.currencyCode, input.unit), date: input.current.effectiveDate, revision: input.current.revision,
   })
   if (unitCost === null) return today
-  return `${today} → ${t('cpq.indexCosts.help.unitCost', 'unit cost {amount} {currency}', { amount: formatIndexNumber(unitCost), currency: input.currencyCode })}`
+  return `${today} → ${t('cpq.indexCosts.help.unitCost', 'unit cost {cost} {currency}', { cost: formatIndexNumber(unitCost), currency: input.currencyCode })}`
 }

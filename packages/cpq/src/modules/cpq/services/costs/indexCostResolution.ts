@@ -1,6 +1,8 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { CpqCostIndexValue } from '../../data/entities'
 import type { TenantScope } from '../types'
+import { isIndexReevaluable, type IndexReevaluation, type RenewCostRow } from './arcCostCarry'
+import { readIndexSnapshot } from '../../lib/indexView'
 import { computeIndexUnitAmount, normalizeDecimal } from '../../lib/indexMath'
 
 /**
@@ -81,4 +83,58 @@ export function resolveIndexCost({ element, index, valuesInForce, asOfDate }: Re
       value: normalizeDecimal(inForce.value, '0'), factor: normalizeDecimal(element.indexFactor, '1'), offset: normalizeDecimal(element.indexOffset, '0'), asOfDate,
     },
   }
+}
+
+export type ReevaluateCarriedIndexCostsOptions = {
+  /** The recalculation date (`YYYY-MM-DD`): the day the values are read as of. */
+  asOfDate: string
+  /** Only a Renew re-evaluates; anything else (Amend mirrors keep the contracted value, R13) returns nothing. */
+  quoteType: string | null | undefined
+  /** Value in force per index at `asOfDate`, loaded once by the caller (`loadValuesInForce`). */
+  valuesInForce: ReadonlyMap<string, IndexValueInForce>
+  /** Charge quantity of a line's `per_unit` cost (its instance amount is unit amount x quantity); null/absent = unknown. */
+  quantityFor?: (line: RenewCostRow) => number | null
+}
+
+const round4 = (value: number) => String(Math.round((value + Number.EPSILON) * 10_000) / 10_000)
+
+/**
+ * Renew re-evaluation of carried index costs (index-costs spec Q12, ARC costs spec "R1c reconciliation, then index
+ * re-evaluation"). Pure over loaded rows; the ARC Renew path calls it right after `reconcileRenewCosts`.
+ *
+ * Eligible: a `carried` line with `source = index`, `value_origin = carried` and no renegotiation-due flag (a supplier
+ * answer or manual entry, a due line and any non-index line are never touched). The formula is the line's OWN snapshot
+ * (`indexId`, `factor`, `offset`: the contracted one), only the value moves to the one in force at `asOfDate`. The patch
+ * carries the value (`unitAmount`, with the per-instance amount derived from it) and `indexSnapshot`; `valueStatus`,
+ * `renegotiationDue` and every other field are never part of it. Nothing in force at the date (or a line without a usable
+ * snapshot, or in another currency than the snapshot's): the line is left as it is.
+ */
+export function reevaluateCarriedIndexCosts(
+  lines: readonly RenewCostRow[],
+  { asOfDate, quoteType, valuesInForce, quantityFor }: ReevaluateCarriedIndexCostsOptions,
+): IndexReevaluation[] {
+  if (quoteType !== 'renew') return []
+  const out: IndexReevaluation[] = []
+  for (const line of lines) {
+    if (!isIndexReevaluable(line)) continue
+    const snapshot = readIndexSnapshot(line.indexSnapshot)
+    if (!snapshot) continue
+    if (line.currencyCode && line.currencyCode !== snapshot.currencyCode) continue
+    const result = resolveIndexCost({
+      element: { costIndexId: snapshot.indexId, indexFactor: snapshot.factor, indexOffset: snapshot.offset },
+      index: { id: snapshot.indexId, currencyCode: snapshot.currencyCode }, valuesInForce, asOfDate,
+    })
+    if (!result.ok) continue
+    const unit = Number(result.unitAmount)
+    const quantity = line.costModel === 'per_unit' ? quantityFor?.(line) ?? null : 1
+    out.push({
+      row: line,
+      patch: {
+        unitAmount: round4(unit),
+        ...(quantity === null ? {} : { instanceAmount: round4(line.costModel === 'per_unit' ? unit * quantity : unit) }),
+        indexSnapshot: result.snapshot,
+      },
+    })
+  }
+  return out
 }

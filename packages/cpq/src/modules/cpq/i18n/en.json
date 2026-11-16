@@ -340,7 +340,7 @@
   "cpq.indexCosts.frozen": "Frozen while the quote is locked",
   "cpq.indexCosts.help.noValue": "No value in force today — the cost stays not ready until a value is added to the index.",
   "cpq.indexCosts.help.today": "Today: {value} {rate} ({date}, r{revision})",
-  "cpq.indexCosts.help.unitCost": "unit cost {amount} {currency}",
+  "cpq.indexCosts.help.unitCost": "unit cost {cost} {currency}",
   "cpq.quoteCosts.badges.indexNoValue": "No index value",
   "cpq.quoteCosts.sources.index": "Market index",
   "cpq.quoteCosts.errors.INDEX_NO_VALUE": "The index has no value in force yet"

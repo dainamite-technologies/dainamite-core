@@ -2,10 +2,12 @@ import { NextResponse } from 'next/server'
 import { cpqContextError, resolveCpqRouteContext } from '../../context'
 import { cpqUpdateQuoteSchema } from '../../../data/validators'
 import { isQuotingError } from '../../../services/cpqQuotingService'
+import { TERMINAL_STATUSES } from '../../../services/types'
 import { resolveQuotingService } from '../../resolveQuotingService'
 import { CpqQuoteConfiguration, CpqQuoteLineConfiguration } from '../../../data/entities'
-import { SalesQuote, SalesQuoteLine } from '@open-mercato/core/modules/sales/data/entities'
+import { SalesQuote } from '@open-mercato/core/modules/sales/data/entities'
 import { handleArcError } from '../../_helpers/handleArcError'
+import { buildCpqCommandContext, commandErrorResponse, resolveCommandBus } from '../../_helpers/commandContext'
 import { z } from 'zod'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { cpqErrorDoc, cpqQuoteIdPathParams } from '../../_helpers/quoteRouteOpenApi'
@@ -86,7 +88,7 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ quote
     }
     if (!cpqConfig) return NextResponse.json({ error: 'Quote not found' }, { status: 404 })
 
-    const terminalStatuses = ['accepted', 'rejected', 'cancelled']
+    const terminalStatuses: readonly string[] = TERMINAL_STATUSES
     if (terminalStatuses.includes(cpqConfig.cpqStatus)) {
       return NextResponse.json({ error: `Cannot delete a quote in '${cpqConfig.cpqStatus}' status` }, { status: 409 })
     }
@@ -94,21 +96,33 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ quote
     const lineConfigs = await em.find(CpqQuoteLineConfiguration, {
       quoteConfigurationId: cpqConfig.id, organizationId: scope.organizationId, tenantId: scope.tenantId, deletedAt: null,
     })
-    for (const lc of lineConfigs) {
-      lc.deletedAt = now
-      const salesLine = await em.findOne(SalesQuoteLine, { id: lc.quoteLineId })
-      if (salesLine) salesLine.deletedAt = now
+    const salesQuote = await em.findOne(SalesQuote, {
+      id: cpqConfig.quoteId, organizationId: scope.organizationId, tenantId: scope.tenantId,
+    })
+
+    // The sales quote and its lines belong to the sales module, so they are
+    // removed through its `sales.quotes.delete` command (sales events, audit
+    // log, undo, search/index side effects). That command runs on its own
+    // forked EM and transaction, so it cannot share one with the CPQ rows.
+    // Order: sales command first, CPQ soft-delete second. If the command
+    // fails, nothing has changed. If the CPQ flush fails afterwards, the
+    // configuration still points at a missing sales quote; a retried DELETE
+    // skips the command (quote already gone) and finishes the cleanup.
+    if (salesQuote) {
+      await resolveCommandBus(ctx).execute('sales.quotes.delete', {
+        input: { body: { id: salesQuote.id } },
+        ctx: buildCpqCommandContext(ctx, req),
+      })
     }
 
+    for (const lc of lineConfigs) lc.deletedAt = now
     cpqConfig.deletedAt = now
-
-    const salesQuote = await em.findOne(SalesQuote, { id: cpqConfig.quoteId })
-    if (salesQuote) salesQuote.deletedAt = now
-
     await em.flush()
 
     return NextResponse.json({ ok: true })
   } catch (err) {
+    const commandError = commandErrorResponse(err)
+    if (commandError) return commandError
     console.error('[cpq/quotes/[quoteId].DELETE]', err)
     return NextResponse.json({ error: 'Internal error' }, { status: 500 })
   }
@@ -140,7 +154,7 @@ export const openApi: OpenApiRouteDoc = {
     DELETE: {
       summary: 'Soft-delete a CPQ quote',
       description:
-        'Soft-deletes the CPQ quote, its line configurations and the underlying sales quote and lines. `quoteId` may be the CPQ configuration id or the sales quote id. Quotes in a terminal status (accepted, rejected, cancelled) cannot be deleted.',
+        'Soft-deletes the CPQ quote and its line configurations, and deletes the underlying sales quote and its lines through the sales module command `sales.quotes.delete` (sales events, audit log and undo apply). `quoteId` may be the CPQ configuration id or the sales quote id. Quotes in a terminal status (accepted, rejected, cancelled) cannot be deleted.',
       responses: [{ status: 200, description: '`{ ok: true }`', schema: z.object({ ok: z.literal(true) }) }],
       errors: [
         cpqErrorDoc(404, 'Quote not found'),

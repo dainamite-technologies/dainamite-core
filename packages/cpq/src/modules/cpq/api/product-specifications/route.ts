@@ -4,6 +4,7 @@ import { cpqContextError, resolveCpqRouteContext } from '../context'
 import { CpqProductSpecification, CpqProductAttribute, CpqProductOffering, CpqProductRelationship, CpqBundleSlot } from '../../data/entities'
 import { cpqProductSpecificationCreateSchema, cpqProductSpecificationUpdateSchema } from '../../data/validators'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
+import { buildCpqCommandContext, commandErrorResponse, resolveCommandBus } from '../_helpers/commandContext'
 import { cpqErrorDoc, cpqPaginationQuery, cpqSortDirQuery, cpqDeleteByIdBody, cpqSuccessResponseSchema, CPQ_CRUD_WRITE_ERRORS, CPQ_CRUD_BY_ID_ERRORS } from '../_helpers/quoteRouteOpenApi'
 
 export const metadata = {
@@ -217,19 +218,30 @@ export async function POST(req: Request) {
       if (existing) {
         productId = existing.id
       } else {
-        const product = ctx.em.create(CatalogProduct, {
-          ...scope,
-          title: body.name,
-          sku,
-          handle,
-          description: body.description ?? null,
-          productType: 'configurable',
-          isConfigurable: true,
-          isActive: true,
-        })
-        ctx.em.persist(product)
-        await ctx.em.flush()
-        productId = product.id
+        // The catalog product belongs to the catalog module, so it is created
+        // through its `catalog.products.create` command (catalog events, audit
+        // log, undo, search/index side effects). That command commits in its
+        // own transaction, before the specification below is flushed. If the
+        // specification flush then fails, the product stays; a retried POST
+        // finds it by handle or SKU above and reuses it, so no duplicate.
+        const { result } = await resolveCommandBus(ctx).execute<Record<string, unknown>, { productId: string }>(
+          'catalog.products.create',
+          {
+            input: {
+              ...scope,
+              title: body.name,
+              sku,
+              handle,
+              ...(body.description ? { description: body.description } : {}),
+              productType: 'configurable',
+              isConfigurable: true,
+              isActive: true,
+            },
+            ctx: buildCpqCommandContext(ctx, req),
+          },
+        )
+        if (!result?.productId) throw new Error('catalog.products.create did not return a product id')
+        productId = result.productId
       }
     }
 
@@ -260,6 +272,8 @@ export async function POST(req: Request) {
     if (err instanceof z.ZodError) {
       return NextResponse.json({ error: 'Validation error', details: err.issues }, { status: 400 })
     }
+    const commandError = commandErrorResponse(err)
+    if (commandError) return commandError
     console.error('[cpq/product-specifications.POST]', err)
     return NextResponse.json({ error: 'Internal error' }, { status: 500 })
   }

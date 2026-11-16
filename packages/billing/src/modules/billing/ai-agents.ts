@@ -95,7 +95,7 @@ const agent: AiAgentDefinition = {
   label: 'Billing Operator Assistant',
   description:
     'Explains billing accounts, items, Bill Runs, invoices, payments and prepaid balances from live billing data. ' +
-    'Read-only by default.',
+    'Can start dry or test Bill Runs and record manual payments; every write goes through the approval card.',
   systemPrompt: SYSTEM_PROMPT,
   allowedTools: [
     ...BILLING_AGENT_READ_TOOLS,

@@ -166,6 +166,49 @@ the `@dainamite/cpq` package, per
 
 ## Schema / API changelog (track breaking changes here)
 
+### 2026-11-16 — Index costs, Phase A: cost index catalogue (cost-plus pricing, feature 6)
+
+Spec: `.ai/specs/2026-11-12-cpq-cost-plus-index-costs-expiry.md`. Minor release of
+`@dainamite/cpq`. Requires features 1 to 5. Phase A is the reference-data catalogue
+only: nothing prices from an index yet (the `index` cost source stays refused until
+the engine phase), so no pricing output changes.
+
+**Schema (run `yarn mercato db migrate`).**
+- `Migration20261116054402` (partial unique index and CHECKs hand-added; the
+  generator cannot express them): `cpq_cost_indices` (code unique per tenant among
+  non-deleted rows) and `cpq_cost_index_values` (append-only; unique
+  `(cost_index_id, effective_date, revision)`, `value > 0`, `revision >= 1`).
+  `down()` drops both tables. Neither entity is registered in `ce.ts`.
+
+**New routes** (all `openApi`, `requireFeatures`, 404 while the `cpq.cost_plus`
+toggle is off, `runCpqMutationGuards` on writes). Read = `cpq.pricing.view` +
+`cpq.costs.view`; write = `cpq.pricing.manage` + `cpq.costs.view`.
+- `GET|POST /api/cpq/cost-indices`
+- `GET|PATCH|DELETE /api/cpq/cost-indices/{indexId}` (`code` immutable; soft delete)
+- `GET|POST /api/cpq/cost-indices/{indexId}/values` (server-assigned revision;
+  `includeSuperseded`, `from`, `to`)
+- `POST /api/cpq/cost-indices/import` (1 to 1000 rows by index code, all-or-nothing,
+  `dryRun`; `batchId` is null on a dry run)
+
+New error codes: `INDEX_IN_USE` (with `elements`), `INDEX_CURRENCY_LOCKED`,
+`CODE_IMMUTABLE`, `DUPLICATE_CODE`, `UNKNOWN_CURRENCY`, `INDEX_INACTIVE`,
+`CONCURRENT_INDEX_WRITE` (409), `IMPORT_VALIDATION_FAILED` (422, `errors[]` with
+`UNKNOWN_INDEX` / `INDEX_INACTIVE` / `INVALID_VALUE` / `DUPLICATE_ROW`).
+
+**Commands.** `cpq.cost_index.create` / `update` / `delete` and
+`cpq.cost_index_value.append` (one command per import call). Not undoable, not
+replayable; logs carry ids, codes, dates and revisions, never a value or note.
+
+**UI.** `Cost indices` list (`/backend/cpq/cost-indices`) and detail
+(`/backend/cpq/cost-indices/[id]`) under the CPQ sidebar group (`pageOrder` 22);
+Create, Add value and Import (CSV preview then confirm) dialogs; read-only for users
+without `cpq.pricing.manage`. i18n keys under `cpq.costIndices.*`. Injection spots
+`detail:cpq.cost_index`, `data-table:cpq.cost_indices`,
+`data-table:cpq.cost_index_values`.
+
+**Rollback.** Code first, then the down-migration. Nothing references the tables
+yet, so no data migration is needed.
+
 ### 2026-11-15 — ARC costs (cost-plus pricing, feature 5)
 
 Spec: `.ai/specs/2026-11-12-cpq-cost-plus-arc-costs.md`. Minor release of

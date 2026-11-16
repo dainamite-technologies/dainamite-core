@@ -858,3 +858,72 @@ describe('ARC cost projections (feature 5, step 18)', () => {
     expect(reconfirmOrderLineCostCommand.isUndoable).toBe(false)
   })
 })
+
+/**
+ * Index costs, Phase A (index-costs spec §Risks): index values are cost data. Only holders of `cpq.costs.view` reach the
+ * catalogue routes, the index writes log ids / codes / dates / revisions and never a value or a note, nothing is
+ * broadcast, and no index entity is registered for custom-entity or search surfaces.
+ */
+describe('cost index surfaces (index costs, Phase A)', () => {
+  const indexId = '11111111-1111-4111-8111-111111111111'
+  const actor = '33333333-3333-4333-8333-333333333333'
+  const INDEX_NAME = 'ZXQ-sentinel-index-name'
+
+  it('every method of every index route requires cpq.costs.view (read: pricing.view, write: pricing.manage) and never requireRoles', async () => {
+    const routes = [
+      await import('../../api/cost-indices/route'),
+      await import('../../api/cost-indices/[indexId]/route'),
+      await import('../../api/cost-indices/[indexId]/values/route'),
+      await import('../../api/cost-indices/import/route'),
+    ]
+    let methods = 0
+    for (const route of routes) {
+      for (const [method, config] of Object.entries(route.metadata as Record<string, { requireFeatures?: string[]; requireRoles?: unknown }>)) {
+        methods++
+        expect(config.requireFeatures).toContain('cpq.costs.view')
+        expect(config.requireFeatures).toContain(method === 'GET' ? 'cpq.pricing.view' : 'cpq.pricing.manage')
+        expect(config.requireRoles).toBeUndefined()
+      }
+    }
+    expect(methods).toBe(8) // GET/POST, GET/PATCH/DELETE, GET/POST, POST: a new method must be added to this sweep
+  })
+
+  it('command logs carry no value, note or name, whatever the input held (control: the results do)', async () => {
+    const cmds = await import('../../commands/cost-indices')
+    const view = { id: indexId, code: 'BRENT', name: INDEX_NAME, unit: 'USD/bbl', currencyCode: 'USD', isActive: true, description: NOTE }
+    const value = { id: 'v1', costIndexId: indexId, effectiveDate: '2026-11-10', value: '7777.770000', revision: 2, sourceNote: NOTE }
+    const service = {
+      create: jest.fn(async () => view), update: jest.fn(async () => view), softDelete: jest.fn(async () => undefined), get: jest.fn(async () => ({ item: view })),
+      appendValue: jest.fn(async () => value),
+      importValues: jest.fn(async () => ({ batchId: 'batch-1', dryRun: false, results: [{ row: 1, indexCode: 'BRENT', effectiveDate: '2026-11-10', status: 'created', revision: 1 }] })),
+    }
+    const ctx = {
+      auth: { sub: actor, tenantId: 'tenant' }, selectedOrganizationId: 'org',
+      container: { resolve: (name: string) => (name === 'rbacService' ? { userHasAllFeatures: async () => true } : service) },
+    } as never
+    const inputs: Array<[{ execute: (i: never, c: never) => Promise<unknown>; buildLog?: (a: never) => Promise<unknown>; isUndoable: boolean }, unknown]> = [
+      [cmds.createCostIndexCommand as never, { index: { code: 'BRENT', name: INDEX_NAME, unit: 'USD/bbl', currencyCode: 'USD', description: NOTE } }],
+      [cmds.updateCostIndexCommand as never, { indexId, patch: { name: INDEX_NAME, description: NOTE } }],
+      [cmds.deleteCostIndexCommand as never, { indexId }],
+      [cmds.appendCostIndexValueCommand as never, { indexId, value: { effectiveDate: '2026-11-10', value: 7777.77, sourceNote: NOTE } }],
+      [cmds.appendCostIndexValueCommand as never, { import: { items: [{ indexCode: 'BRENT', effectiveDate: '2026-11-10', value: 7777.77, sourceNote: NOTE }] } }],
+    ]
+    for (const [command, input] of inputs) {
+      const result = await command.execute(input as never, ctx)
+      const log = await command.buildLog!({ input, result, ctx, snapshots: {} } as never)
+      expectClean(log)
+      expect(JSON.stringify(log)).not.toContain(INDEX_NAME)
+      expect((log as { replayable: boolean }).replayable).toBe(false)
+      expect(command.isUndoable).toBe(false)
+    }
+    expect(leaked(value)).toEqual(expect.arrayContaining(['7777.77', NOTE])) // control: the append result held the sentinels
+  })
+
+  it('index writes emit no event and no index entity is registered for custom entities', () => {
+    const declared = (eventsConfig as unknown as { events: Array<{ id: string }> }).events
+    expect(declared.filter((e) => /index/i.test(e.id))).toEqual([])
+    const specs = ceEntities as unknown as { entities?: Array<{ id: string }> } | Array<{ id: string }>
+    const list = Array.isArray(specs) ? specs : (specs.entities ?? [])
+    expect(list.filter((spec) => /index/i.test(spec.id))).toEqual([])
+  })
+})

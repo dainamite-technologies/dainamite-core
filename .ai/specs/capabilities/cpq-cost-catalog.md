@@ -80,3 +80,63 @@ The system SHALL return, for each previewed foreign-currency cost, the original 
 Frozen by: `packages/cpq/src/modules/cpq/api/__tests__/quoteCostReadRoutes.test.ts`
 
 Source: .ai/specs/2026-11-12-cpq-cost-plus-foreign-currency-costs.md
+
+## Requirement: Cost indices with append-only values
+The system SHALL let a user with `cpq.pricing.manage` and `cpq.costs.view` maintain cost indices (code unique per tenant and immutable, name, unit, currency, active flag) and append dated values (> 0). The server SHALL assign each value a revision equal to one more than the highest revision for the same index and effective date. Values SHALL never be updated or deleted. Reading indices and values SHALL need `cpq.pricing.view` and `cpq.costs.view`: index values are cost data.
+
+### Scenario: Correction for an existing date
+- WHEN Brent has value 80.00 for 2026-11-10 (revision 1) and the admin adds 82.40 for 2026-11-10
+- THEN a second row with revision 2 is stored, and the value in force on 2026-11-10 is 82.40
+
+### Scenario: Concurrent appends
+- WHEN two requests append a value for the same index and date at the same time
+- THEN both succeed with revisions n+1 and n+2, or one returns `409 CONCURRENT_INDEX_WRITE` and stores nothing; no two rows share a revision
+
+### Scenario: Non-positive value
+- WHEN a value of 0 or -5 is submitted
+- THEN the API returns `422` and nothing is stored
+
+### Scenario: Rep without write access
+- WHEN a user holding `cpq.pricing.view` and `cpq.costs.view` but not `cpq.pricing.manage` opens the index pages
+- THEN the list and detail render read-only (no create, add value, import or edit actions), and every write route returns `403`
+
+Frozen by: `packages/cpq/src/modules/cpq/services/costs/__tests__/costIndexService.test.ts`, `packages/cpq/src/modules/cpq/api/cost-indices/__tests__/route.test.ts`, `packages/cpq/src/modules/cpq/commands/__tests__/cost-indices.test.ts`, `packages/cpq/src/modules/cpq/services/__tests__/costConfidentiality.test.ts`, `packages/cpq/src/modules/cpq/__integration__/TC-CPQ-COST-INDEX-001.spec.ts`
+
+Source: .ai/specs/2026-11-12-cpq-cost-plus-index-costs-expiry.md
+
+## Requirement: Value in force
+The system SHALL resolve an index's value for an as-of date as the highest-revision value at the latest effective date on or before that date. Values dated after the as-of date SHALL be ignored.
+
+### Scenario: Future-dated value
+- WHEN Brent has 82.40 on 2026-11-10 and 90.00 on 2026-12-01, and a quote is recalculated on 2026-11-12
+- THEN the value in force is 82.40
+
+Frozen by: `packages/cpq/src/modules/cpq/services/costs/__tests__/costIndexService.test.ts`
+
+Source: .ai/specs/2026-11-12-cpq-cost-plus-index-costs-expiry.md
+
+## Requirement: Bulk import of index values
+The system SHALL accept up to 1000 index values per request, addressed by index code, and apply them atomically. Rows equal to the current highest revision for their date SHALL be reported `unchanged` and not appended. `dryRun` SHALL validate and report without writing.
+
+### Scenario: Re-run of the same feed
+- WHEN the same 30-row import is posted twice
+- THEN the first call reports 30 `created` and the second 30 `unchanged`, and no revision is added
+
+### Scenario: One invalid row
+- WHEN one of 30 rows names an unknown index code
+- THEN the API returns `422` with that row's error, and no row is stored
+
+Frozen by: `packages/cpq/src/modules/cpq/services/costs/__tests__/costIndexService.test.ts`, `packages/cpq/src/modules/cpq/api/cost-indices/__tests__/route.test.ts`, `packages/cpq/src/modules/cpq/lib/__tests__/costIndexView.test.ts`
+
+Source: .ai/specs/2026-11-12-cpq-cost-plus-index-costs-expiry.md
+
+## Requirement: Referenced indices cannot be removed
+The system SHALL refuse to delete an index referenced by any non-deleted cost element, and to deactivate an index referenced by any active cost element (`422 INDEX_IN_USE`, listing the elements). It SHALL refuse to change an index's currency once it has values or references (`422 INDEX_CURRENCY_LOCKED`).
+
+### Scenario: Deactivate an index in use
+- WHEN the admin deactivates Brent while the active element `fuel_surcharge` uses it
+- THEN the API returns `422 INDEX_IN_USE` naming `fuel_surcharge`, and Brent stays active
+
+Frozen by: `packages/cpq/src/modules/cpq/services/costs/__tests__/costIndexService.test.ts`, `packages/cpq/src/modules/cpq/api/cost-indices/__tests__/route.test.ts`
+
+Source: .ai/specs/2026-11-12-cpq-cost-plus-index-costs-expiry.md

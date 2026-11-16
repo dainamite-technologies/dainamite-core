@@ -506,7 +506,7 @@ V1 stores ETF as an operator-entered amount (`arcEtfAmount` + `arcEtfCurrency`) 
 | `cpq.arc.renew.manage` | Create / edit a quote with `type='renew'` (incl. merge) |
 | `cpq.arc.cancel.manage` | Create / edit a quote with `type='cancel'` |
 | `cpq.arc.changelog.view` | Read `CpqSubscriptionChangeLog` per subscription |
-| `cpq.inventory.expiring.view` | View the Expiring Subscriptions list |
+| `cpq.inventory.view` | View the Expiring Subscriptions list (the "Expiring within (days)" filter and `GET /api/cpq/inventory/subscriptions/expiring`) |
 
 ARC quote approval (status transitions through the lifecycle) uses the existing `cpq.quotes.manage` feature — no new approval feature.
 

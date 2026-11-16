@@ -345,7 +345,8 @@ All five include a `proration` payload + ChangeLog id, persistent +
 - `cpq.arc.renew.manage`
 - `cpq.arc.cancel.manage`
 - `cpq.arc.changelog.view`
-- `cpq.inventory.expiring.view`
+- `cpq.inventory.expiring.view` (retired since: the expiring filter and
+  `GET /api/cpq/inventory/subscriptions/expiring` use `cpq.inventory.view`)
 
 **Service surface additions** (no new top-level services — methods on existing):
 - `cpqInventoryService.applyAmendment / applyRenewal / applyMergeRenewal /

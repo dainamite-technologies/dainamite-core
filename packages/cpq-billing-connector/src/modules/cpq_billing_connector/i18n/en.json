@@ -1,5 +1,6 @@
 {
   "cpq_billing_connector.audit.orderSetupSave": "Save order billing setup",
+  "cpq_billing_connector.errors.activationBeforeBillingStart": "This order can be activated from {date}, when billing for {item} starts. Activating earlier is blocked.",
   "cpq_billing_connector.orderSetup.account.billCycle": "Bill cycle",
   "cpq_billing_connector.orderSetup.account.billCycleDay": "Bill cycle day",
   "cpq_billing_connector.orderSetup.account.billCycleEvery": "Every",

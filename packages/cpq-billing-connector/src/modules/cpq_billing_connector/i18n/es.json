@@ -1,5 +1,6 @@
 {
   "cpq_billing_connector.audit.orderSetupSave": "Guardar configuración de facturación del pedido",
+  "cpq_billing_connector.errors.activationBeforeBillingStart": "Este pedido se puede activar a partir del {date}, cuando empieza la facturación de {item}. No se permite activarlo antes.",
   "cpq_billing_connector.orderSetup.account.billCycle": "Ciclo de facturación",
   "cpq_billing_connector.orderSetup.account.billCycleDay": "Día de facturación",
   "cpq_billing_connector.orderSetup.account.billCycleEvery": "Cada",

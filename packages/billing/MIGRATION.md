@@ -38,9 +38,10 @@ to `monthly` × 3. It is hand-written like the earlier billing migrations.
 - **Breaking API change:** `billCycleAnchor` is removed (no alias). Send
   `billCycleDay` + `billCycleInterval` instead. `billCycle: 'quarterly'` is
   rejected; use `monthly` with `billCycleInterval: 3`.
-- Existing rows keep their stored day. The day was never read before, so check
-  that it matches `next_bill_date`: the first Bill Run aligns a mismatched
-  account to the day with one short period.
+- Existing rows get `bill_cycle_day` from their `next_bill_date` (day of month,
+  or weekday for weekly cycles), not from the old anchor. The anchor was never
+  read, so no account's bill dates move, and legacy values such as `Mon` or a
+  day number on a weekly cycle cannot fail the new validation.
 
 ---
 

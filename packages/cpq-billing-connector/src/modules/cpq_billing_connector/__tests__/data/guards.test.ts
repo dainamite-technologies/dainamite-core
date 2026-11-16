@@ -20,7 +20,13 @@ function input(overrides: Partial<MutationGuardInput> = {}): MutationGuardInput 
 
 function guardWith(resolve: jest.Mock, today = '2026-11-16') {
   const container = { resolve: jest.fn(() => ({ resolveEarliestActivationForOrder: resolve })) }
-  return { guard: createActivationGuard({ container: async () => container, today: () => today }), container }
+  return { guard: createActivationGuard({
+      container: async () => container,
+      today: () => today,
+      // Fallback text with filled params — the shape a real translator returns.
+      translate: async () => (_key: string, fallback: string, params?: Record<string, string>) =>
+        fallback.replace(/\{(\w+)\}/g, (m, k: string) => params?.[k] ?? m),
+    }), container }
 }
 
 const earliest = { date: '2026-11-20', subscriptionId: 'sub-1', itemDescription: 'Fiber 300' }

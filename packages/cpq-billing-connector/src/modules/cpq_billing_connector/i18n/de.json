@@ -1,5 +1,6 @@
 {
   "cpq_billing_connector.audit.orderSetupSave": "Abrechnungseinrichtung der Bestellung speichern",
+  "cpq_billing_connector.errors.activationBeforeBillingStart": "Dieser Auftrag kann ab {date} aktiviert werden, wenn die Abrechnung für {item} beginnt. Eine frühere Aktivierung ist gesperrt.",
   "cpq_billing_connector.orderSetup.account.billCycle": "Abrechnungszyklus",
   "cpq_billing_connector.orderSetup.account.billCycleDay": "Abrechnungstag",
   "cpq_billing_connector.orderSetup.account.billCycleEvery": "Alle",

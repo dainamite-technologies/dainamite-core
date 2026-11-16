@@ -218,8 +218,9 @@ const updateItemCommand: CommandHandler<BillingItemUpdateInput, { id: string }> 
     if (nextEnd !== previousEnd) {
       // Part 2 (D9): moving the end date into the billed window credits days —
       // the customer-facing reason is then required.
-      const reason = requireCreditReason(record, record.billEndDate ?? null, parsed)
-      if (reason) record.creditReason = reason
+      // Always overwrite: a later change that credits nothing must not leave a
+      // stale reason behind for a future credit line.
+      record.creditReason = requireCreditReason(record, record.billEndDate ?? null, parsed)
     }
     if (parsed.description !== undefined) record.description = parsed.description
     if (parsed.rateJson !== undefined) {
@@ -552,8 +553,7 @@ const changeItemPriceCommand: CommandHandler<
       }
       const { plan } = planned
       const now = new Date()
-      const reason = requireCreditReason(record, plan.oldItemEndDate, parsed)
-      if (reason) record.creditReason = reason
+      record.creditReason = requireCreditReason(record, plan.oldItemEndDate, parsed)
       record.billEndDate = plan.oldItemEndDate
       record.updatedAt = now
       const copy = tem.create(BillingItem, {

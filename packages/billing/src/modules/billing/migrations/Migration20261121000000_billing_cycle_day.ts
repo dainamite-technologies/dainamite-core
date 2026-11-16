@@ -10,6 +10,9 @@ import { Migration } from '@mikro-orm/migrations'
  *   units, so `quarterly` becomes `monthly` × 3 and "every 30 days" is
  *   `daily` × 30.
  *
+ * Existing rows are re-pinned to the day their `next_bill_date` falls on, so
+ * no account's schedule changes and legacy anchors cannot fail validation.
+ *
  * Hand-written like the package's earlier migrations: `yarn mercato db
  * generate` only diffs `@app` modules. Columns mirror `data/entities.ts` 1:1.
  */
@@ -23,6 +26,17 @@ export class Migration20261121000000_billing_cycle_day extends Migration {
     // `quarterly` is no longer a unit — keep any such row billable as monthly × 3.
     this.addSql(
       `update "billing_accounts" set "bill_cycle" = 'monthly', "bill_cycle_interval" = 3 where "bill_cycle" = 'quarterly';`,
+    )
+    // The old anchor was never read, so it can disagree with the schedule that
+    // actually runs (e.g. connector accounts: anchor '1', next bill on the 14th)
+    // or have a shape that is invalid for its cycle ('Mon', '15' on weekly).
+    // Pin every row to the day its `next_bill_date` falls on: no account's bill
+    // dates move, and every row passes the new cross-field validation.
+    this.addSql(
+      `update "billing_accounts" set "bill_cycle_day" = (array['sun','mon','tue','wed','thu','fri','sat'])[extract(dow from "next_bill_date")::int + 1] where "bill_cycle" = 'weekly';`,
+    )
+    this.addSql(
+      `update "billing_accounts" set "bill_cycle_day" = extract(day from "next_bill_date")::int::text where "bill_cycle" in ('monthly', 'annually');`,
     )
   }
 

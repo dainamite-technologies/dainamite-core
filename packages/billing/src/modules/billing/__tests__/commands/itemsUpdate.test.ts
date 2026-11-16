@@ -86,6 +86,13 @@ describe('updateItemCommand — Part 2 guards', () => {
     expect(record.description).toBe('Renamed')
     expect(record.creditReason).toBeUndefined()
   })
+
+  it('clears a stale reason when a later end-date change credits nothing', async () => {
+    const record = { ...billedItem(), billEndDate: '2026-12-15', creditReason: { kind: 'text', text: 'Old' } }
+    const { ctx } = env(record)
+    await updateItemCommand.execute({ ...scope, billEndDate: null }, ctx as never)
+    expect(record.creditReason).toBeNull()
+  })
 })
 
 describe('createItemCommand — end before start', () => {

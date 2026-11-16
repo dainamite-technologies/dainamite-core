@@ -216,7 +216,7 @@ describe('changeItemPriceCommand', () => {
           { tenantId: TENANT, organizationId: ORG, id: ITEM, effectiveDate: d('2026-12-15'), unitPrice: 59 },
           ctx as never,
         )
-        expect(record.creditReason).toBeUndefined()
+        expect(record.creditReason).toBeNull()
       }
     })
   })

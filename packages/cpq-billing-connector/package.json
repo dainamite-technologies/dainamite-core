@@ -94,7 +94,7 @@
   },
   "peerDependencies": {
     "@dainamite/billing": "^1.1.0",
-    "@dainamite/cpq": "^1.0.1",
+    "@dainamite/cpq": "^1.1.0",
     "@mikro-orm/core": "^7.1.14",
     "@mikro-orm/decorators": "^7.1.14",
     "@mikro-orm/postgresql": "^7.1.14",

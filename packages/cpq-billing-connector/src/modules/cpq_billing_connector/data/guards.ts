@@ -1,6 +1,7 @@
 import type { AwilixContainer } from 'awilix'
 import type { MutationGuard, MutationGuardInput, MutationGuardResult } from '@open-mercato/shared/lib/crud/mutation-guard-registry'
 import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
+import { resolveTranslations } from '@open-mercato/shared/lib/i18n/server'
 import { isActivationBlocked, type EarliestActivation } from '../lib/earliestActivation'
 import { todayIsoDate } from '../lib/orderSetupResolution'
 import type { CpqBillingOrderSetupService } from '../services/orderSetupService'
@@ -26,23 +27,31 @@ export type ActivationGuardDeps = {
   container: () => Promise<Pick<AwilixContainer, 'resolve'>>
   /** Today as YYYY-MM-DD (UTC — the same calendar CPQ derives the effective date from). */
   today: () => string
+  /** Request-locale translator for the error message. */
+  translate: () => Promise<GuardTranslate>
 }
+
+type GuardTranslate = (key: string, fallback: string, params?: Record<string, string>) => string
 
 const defaultDeps: ActivationGuardDeps = {
   container: () => createRequestContainer(),
   today: todayIsoDate,
+  translate: async () => (await resolveTranslations()).translate,
 }
 
-function blockedResult(earliest: EarliestActivation): MutationGuardResult {
+function blockedResult(earliest: EarliestActivation, translate: GuardTranslate): MutationGuardResult {
   return {
     ok: false,
     status: 422,
     body: {
-      error:
-        `This order can be activated from ${earliest.date}, when billing for subscription ` +
-        `${earliest.subscriptionId} (${earliest.itemDescription}) starts. Activating earlier is blocked.`,
+      error: translate(
+        'cpq_billing_connector.errors.activationBeforeBillingStart',
+        'This order can be activated from {date}, when billing for {item} starts. Activating earlier is blocked.',
+        { date: earliest.date, item: earliest.itemDescription },
+      ),
       code: ACTIVATION_BEFORE_BILLING_START_CODE,
       earliestActivationDate: earliest.date,
+      subscriptionId: earliest.subscriptionId,
     },
   }
 }
@@ -74,7 +83,8 @@ export function createActivationGuard(deps: ActivationGuardDeps = defaultDeps): 
         }
         return { ok: true }
       }
-      return isActivationBlocked(earliest, deps.today()) && earliest ? blockedResult(earliest) : { ok: true }
+      if (!earliest || !isActivationBlocked(earliest, deps.today())) return { ok: true }
+      return blockedResult(earliest, await deps.translate())
     },
   }
 }

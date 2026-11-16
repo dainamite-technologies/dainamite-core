@@ -6,6 +6,7 @@ import { isOrderError } from '../../../../services/cpqOrderService'
 import type { DefaultCpqOrderService } from '../../../../services/cpqOrderService'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { cpqErrorDoc } from '../../../_helpers/quoteRouteOpenApi'
+import { CPQ_ORDER_RESOURCE_KIND, runCpqMutationGuards } from '../../../_helpers/quoteMutationGuard'
 
 export const metadata = {
   POST: { requireAuth: true, requireFeatures: ['cpq.orders.manage'] },
@@ -21,8 +22,26 @@ export async function POST(req: Request, { params }: { params: Promise<{ orderId
     const body = cpqOrderStatusTransitionSchema.parse(await req.json())
     const scope = { organizationId: ctx.organizationId, tenantId: ctx.tenantId }
 
+    // Same guard contract as the activate route — a transition to `active`
+    // IS an activation (`transitionOrderStatus` delegates to `activateOrder`),
+    // so it carries `action: 'activate'` and add-on guards (e.g. the billing
+    // connector's activation-date rule) cannot be bypassed through this route.
+    // Other transitions run the guards with `action: 'transition'`.
+    const guard = await runCpqMutationGuards(ctx, req, {
+      resourceKind: CPQ_ORDER_RESOURCE_KIND,
+      resourceId: orderId,
+      operation: 'update',
+      mutationPayload: {
+        action: body.targetStatus === 'active' ? 'activate' : 'transition',
+        orderId,
+        targetStatus: body.targetStatus,
+      },
+    })
+    if (!guard.ok) return guard.response
+
     const service = ctx.container.resolve('cpqOrderService') as DefaultCpqOrderService
     const result = await service.transitionOrderStatus(orderId, body.targetStatus, scope)
+    await guard.runAfterSuccess()
     return NextResponse.json(result)
   } catch (err) {
     if (err instanceof z.ZodError) {
@@ -47,13 +66,18 @@ export const openApi: OpenApiRouteDoc = {
   methods: {
     POST: {
       summary: 'Transition a CPQ order to another status',
-      description: 'Operator-driven order lifecycle change, validated against the order state machine. Transitioning to `active` runs the same activation as the activate endpoint.',
+      description:
+        'Operator-driven order lifecycle change, validated against the order state machine. Transitioning to `active` ' +
+        'runs the same activation as the activate endpoint, including its mutation guards (resource kind `cpq.order`, ' +
+        'operation `update`, payload `{ action: "activate", orderId, targetStatus }`); other transitions run the guards ' +
+        'with `action: "transition"`. A blocking guard returns its own status and body.',
       requestBody: { schema: cpqOrderStatusTransitionSchema },
       responses: [{ status: 200, description: 'Order with its new status' }],
       errors: [
         cpqErrorDoc(400, 'Validation error'),
         cpqErrorDoc(404, 'Order not found'),
         cpqErrorDoc(409, 'Transition not allowed'),
+        cpqErrorDoc(422, 'Blocked by a mutation guard (body passed through from the guard)'),
         cpqErrorDoc(500, 'Internal error'),
       ],
     },

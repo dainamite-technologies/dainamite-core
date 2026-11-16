@@ -1,5 +1,6 @@
 {
   "cpq_billing_connector.audit.orderSetupSave": "Zapisz ustawienia rozliczeń zamówienia",
+  "cpq_billing_connector.errors.activationBeforeBillingStart": "To zamówienie można aktywować od {date}, gdy rozpocznie się rozliczanie {item}. Wcześniejsza aktywacja jest zablokowana.",
   "cpq_billing_connector.orderSetup.account.billCycle": "Cykl rozliczeniowy",
   "cpq_billing_connector.orderSetup.account.billCycleDay": "Dzień rozliczenia",
   "cpq_billing_connector.orderSetup.account.billCycleEvery": "Co",

@@ -91,6 +91,36 @@ describe('resolveQuoteCosts', () => {
     expect(s.em.persist).not.toHaveBeenCalled()
   })
 
+  // Index costs step 6 characterization: a SAVED recalculation never rewrites the cost lines of a locked quote.
+  describe('a saved recalculation leaves a locked quote cost lines byte-identical', () => {
+    const lockedCases: Array<[string, Row, Row[]]> = [
+      ['with_customer', { cpqStatus: 'with_customer' }, []],
+      ['accepted', { cpqStatus: 'accepted' }, []],
+      ['ready with an order', { cpqStatus: 'ready' }, [{ ...SCOPE, sourceQuoteId: QUOTE_ID, deletedAt: null }]],
+    ]
+    it.each(lockedCases)('%s', async (_label, quoteOver, orders) => {
+      const stored = [
+        catalogCost({ unitAmount: '77', instanceAmount: '77' }),
+        catalogCost({ id: 'c-2', costKey: 'power', source: 'index', valueStatus: 'confirmed', unitAmount: '43.2', instanceAmount: '43.2',
+          indexSnapshot: { indexId: 'idx-1', value: '82.4', factor: '0.5', offset: '2' } }),
+        catalogCost({ id: 'c-3', costKey: 'manual', origin: 'manual', valueOrigin: 'manual', unitAmount: '5', instanceAmount: '5' }),
+      ]
+      const s = store({ charges: [charge()], elements: [element({ amount: '150' }), element({ id: 'el-2', code: 'gone', isActive: false })], costs: stored, orders })
+      const before = JSON.stringify(s.costs)
+      const count = s.costs.length
+      await run(s, { quoteOver })
+      await resolveCostPlusInputs({
+        em: s.em as never, quote: quote(quoteOver), scope: SCOPE, save: true, isEnabled: async () => true,
+        lines: [{ lineConfig: lineConfig(), mergedConfig: {} }],
+      })
+      expect(JSON.stringify(s.costs)).toBe(before)
+      expect(s.costs).toHaveLength(count)
+      expect(s.em.persist).not.toHaveBeenCalled()
+      expect(s.em.create).not.toHaveBeenCalled()
+      expect(s.em.flush).not.toHaveBeenCalled()
+    })
+  })
+
   it('treats a quote with an order as locked even in a mutable status', async () => {
     const s = store({ orders: [{ ...SCOPE, sourceQuoteId: QUOTE_ID, deletedAt: null }] })
     expect(await isQuoteCostLocked(s.em as never, { id: QUOTE_ID, cpqStatus: 'ready' }, SCOPE)).toBe(true)

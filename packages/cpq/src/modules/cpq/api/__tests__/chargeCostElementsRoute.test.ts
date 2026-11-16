@@ -169,6 +169,20 @@ describe('POST', () => {
     expect(await response.json()).toMatchObject({ error: 'MODEL_REQUIRES_TABLE' })
   })
 
+  // Index costs step 6 characterization (today's behavior, replaced in step 7 by the index-element scenarios).
+  it('422 SOURCE_NOT_AVAILABLE for source index (declared, not yet accepted)', async () => {
+    const response = await POST(request('POST', { ...fixedBody, source: 'index', amount: undefined, currencyCode: undefined }))
+    expect(response.status).toBe(422)
+    expect(await response.json()).toMatchObject({ error: 'SOURCE_NOT_AVAILABLE' })
+    expect(em.create).not.toHaveBeenCalled()
+  })
+
+  it('PUT source index is refused with 422 SOURCE_NOT_AVAILABLE too', async () => {
+    const response = await PUT(request('PUT', { id: elementId, source: 'index', amount: null, currencyCode: null }))
+    expect(response.status).toBe(422)
+    expect(await response.json()).toMatchObject({ error: 'SOURCE_NOT_AVAILABLE' })
+  })
+
   it('400 on an unknown field', async () => {
     expect((await POST(request('POST', { ...fixedBody, bogus: 1 }))).status).toBe(400)
   })

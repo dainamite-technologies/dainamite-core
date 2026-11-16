@@ -8,3 +8,6 @@
 
 ## 2026-11-16T07:30:00Z — step 12 scope decision
 - Re-evaluation also patches `instance_amount` (derived from the new unit amount, x quantity for per_unit): the PR #100 seam allows it, and leaving it stale would break margin. `value_status`, flags and every other field are untouched.
+
+## 2026-11-16T09:00:00Z — step 13 scope decision
+- The index element lives on a dedicated demo offering ("GIX IP Transit with indexed power (EUR)", `OFFER-GIX-IP-TRANSIT-INDEX`), not on the "IP Transit with partner tail" charge: that charge is the USD 500.00 worked example that the cost-state demos and tests rely on, and a second EUR-index price-basis element would change it and force the FX path. Same pattern as the FX / ARC demos.

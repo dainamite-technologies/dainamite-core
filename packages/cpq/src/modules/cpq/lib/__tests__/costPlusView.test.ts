@@ -88,3 +88,42 @@ describe('small helpers', () => {
     expect(costErrorMessage(null, 'x')).toBe('x')
   })
 })
+
+describe('index source (index-costs spec)', () => {
+  const base = { ...emptyCostElementForm('mrc'), code: 'a', name: 'A', source: 'index' as const }
+
+  it('defaults the factor to 1 and the offset to 0 and needs an index', () => {
+    expect(base).toMatchObject({ indexFactor: '1', indexOffset: '0', costIndexId: '' })
+    expect(costElementFormError(base)).toBe('INDEX_REQUIRED')
+    expect(costElementFormError({ ...base, costIndexId: 'i1' })).toBeNull()
+  })
+
+  it('rejects a non-positive factor, a negative offset and non-numbers', () => {
+    const form = { ...base, costIndexId: 'i1' }
+    expect(costElementFormError({ ...form, indexFactor: '0' })).toBe('AMOUNT_INVALID')
+    expect(costElementFormError({ ...form, indexFactor: 'x' })).toBe('AMOUNT_INVALID')
+    expect(costElementFormError({ ...form, indexOffset: '-1' })).toBe('AMOUNT_INVALID')
+    expect(costElementFormError({ ...form, indexFactor: '0.5', indexOffset: '2' })).toBeNull()
+  })
+
+  it('keeps the model rule: tiered / volume need a table', () => {
+    expect(costElementFormError({ ...base, costIndexId: 'i1', costModel: 'tiered' })).toBe('MODEL_REQUIRES_TABLE')
+  })
+
+  it('sends the index fields and no amount or currency; other sources null the index fields', () => {
+    const form = { ...base, costIndexId: 'i1', indexFactor: '0.5', indexOffset: '2', amount: '9', currencyCode: 'USD' }
+    expect(buildCostElementPayload(form, 'edit', { id: 'e' })).toMatchObject({
+      source: 'index', costIndexId: 'i1', indexFactor: 0.5, indexOffset: 2, amount: null, currencyCode: null, costTableId: null, estimateAmount: null,
+    })
+    expect(buildCostElementPayload({ ...form, source: 'fixed' }, 'edit', { id: 'e' })).toMatchObject({ costIndexId: null, indexFactor: null, indexOffset: null, amount: 9 })
+  })
+
+  it('round-trips an index element into the form', () => {
+    const form = costElementToForm({ ...row, source: 'index', costTableId: null, costColumnKey: null, costIndexId: 'i1', indexFactor: '0.5', indexOffset: '0' })
+    expect(form).toMatchObject({ source: 'index', costIndexId: 'i1', indexFactor: '0.5', indexOffset: '0' })
+  })
+
+  it('maps the index error codes to text', () => {
+    for (const code of ['INDEX_REQUIRED', 'INDEX_INACTIVE', 'INDEX_FIELDS_NOT_ALLOWED', 'MODEL_REQUIRES_TABLE']) expect(costErrorMessage(code)).not.toBe(code)
+  })
+})

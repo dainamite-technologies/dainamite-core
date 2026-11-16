@@ -54,7 +54,7 @@ export function costErrorMessage(code: string | null | undefined, fallback = 'So
   return COST_ERROR_FALLBACKS[code] ?? code
 }
 
-export type CostElementSource = 'fixed' | 'table' | 'on_request'
+export type CostElementSource = 'fixed' | 'table' | 'index' | 'on_request'
 export type CostElementModel = 'flat' | 'per_unit' | 'tiered' | 'volume'
 
 /** A cost element as returned by `GET /api/cpq/charge-cost-elements` (decimals are strings). */
@@ -72,6 +72,10 @@ export type CostElementRow = {
   costTableId: string | null
   costColumnKey: string | null
   estimateAmount: string | null
+  /** Index source only. */
+  costIndexId?: string | null
+  indexFactor?: string | null
+  indexOffset?: string | null
   defaultSupplierName: string | null
   defaultValidityDays: number | null
   requiresSourcing: boolean
@@ -91,6 +95,9 @@ export type CostElementForm = {
   costTableId: string
   costColumnKey: string
   estimateAmount: string
+  costIndexId: string
+  indexFactor: string
+  indexOffset: string
   defaultSupplierName: string
   defaultValidityDays: string
   requiresSourcing: boolean
@@ -102,6 +109,7 @@ export function emptyCostElementForm(chargeType: string | null | undefined, curr
   return {
     code: '', name: '', role: isCostPlus ? 'price_basis' : 'margin_only', costType: chargeType === 'nrc' ? 'nrc' : 'mrc', source: 'fixed', costModel: 'flat',
     amount: '', currencyCode: currencyCode ?? 'USD', costTableId: '', costColumnKey: '', estimateAmount: '',
+    costIndexId: '', indexFactor: '1', indexOffset: '0',
     defaultSupplierName: '', defaultValidityDays: '', requiresSourcing: false, isActive: true,
   }
 }
@@ -110,7 +118,8 @@ export function costElementToForm(row: CostElementRow): CostElementForm {
   return {
     code: row.code, name: row.name, role: row.role, costType: row.costType, source: row.source, costModel: row.costModel,
     amount: row.amount ?? '', currencyCode: row.currencyCode ?? '', costTableId: row.costTableId ?? '', costColumnKey: row.costColumnKey ?? '',
-    estimateAmount: row.estimateAmount ?? '', defaultSupplierName: row.defaultSupplierName ?? '',
+    estimateAmount: row.estimateAmount ?? '', costIndexId: row.costIndexId ?? '', indexFactor: row.indexFactor ?? '1', indexOffset: row.indexOffset ?? '0',
+    defaultSupplierName: row.defaultSupplierName ?? '',
     defaultValidityDays: row.defaultValidityDays != null ? String(row.defaultValidityDays) : '', requiresSourcing: row.requiresSourcing, isActive: row.isActive,
   }
 }
@@ -128,11 +137,18 @@ export function costElementFormError(form: CostElementForm, mode: 'create' | 'ed
   if (!form.name.trim()) return 'NAME_REQUIRED'
   if (form.amount.trim() && num(form.amount) === null) return 'AMOUNT_INVALID'
   if (form.estimateAmount.trim() && num(form.estimateAmount) === null) return 'AMOUNT_INVALID'
+  if (form.source === 'index') {
+    // Factor: strictly positive; offset: never negative (index spec Q9).
+    const factor = num(form.indexFactor); const offset = num(form.indexOffset)
+    if (form.indexFactor.trim() && (factor === null || factor <= 0)) return 'AMOUNT_INVALID'
+    if (form.indexOffset.trim() && (offset === null || offset < 0)) return 'AMOUNT_INVALID'
+  }
   return costElementShapeError({
     role: form.role, costType: form.costType, source: form.source, costModel: form.costModel,
     amount: sourceFields(form).amount, currencyCode: sourceFields(form).currencyCode,
     costTableId: sourceFields(form).costTableId, costColumnKey: sourceFields(form).costColumnKey,
     estimateAmount: sourceFields(form).estimateAmount,
+    costIndexId: sourceFields(form).costIndexId, indexFactor: sourceFields(form).indexFactor, indexOffset: sourceFields(form).indexOffset,
   })
 }
 
@@ -140,14 +156,22 @@ export function costElementFormError(form: CostElementForm, mode: 'create' | 'ed
 function sourceFields(form: CostElementForm) {
   const amount = num(form.amount)
   const estimate = num(form.estimateAmount)
+  const noIndex = { costIndexId: null, indexFactor: null, indexOffset: null }
   if (form.source === 'fixed') {
-    return { amount, currencyCode: form.currencyCode || null, costTableId: null, costColumnKey: null, estimateAmount: null }
+    return { amount, currencyCode: form.currencyCode || null, costTableId: null, costColumnKey: null, estimateAmount: null, ...noIndex }
   }
   if (form.source === 'table') {
     // The currency of a table element is its fallback table currency (FX spec Q10): optional, converted when no quote-currency entry exists.
-    return { amount: null, currencyCode: form.currencyCode || null, costTableId: form.costTableId || null, costColumnKey: form.costColumnKey || null, estimateAmount: null }
+    return { amount: null, currencyCode: form.currencyCode || null, costTableId: form.costTableId || null, costColumnKey: form.costColumnKey || null, estimateAmount: null, ...noIndex }
   }
-  return { amount: null, currencyCode: estimate !== null ? form.currencyCode || null : null, costTableId: null, costColumnKey: null, estimateAmount: estimate }
+  if (form.source === 'index') {
+    // No own amount or currency: the unit cost is factor x index value + offset, in the index currency (a blank factor / offset means 1 / 0).
+    return {
+      amount: null, currencyCode: null, costTableId: null, costColumnKey: null, estimateAmount: null,
+      costIndexId: form.costIndexId || null, indexFactor: num(form.indexFactor) ?? 1, indexOffset: num(form.indexOffset) ?? 0,
+    }
+  }
+  return { amount: null, currencyCode: estimate !== null ? form.currencyCode || null : null, costTableId: null, costColumnKey: null, estimateAmount: estimate, ...noIndex }
 }
 
 export function buildCostElementPayload(form: CostElementForm, mode: 'create' | 'edit', ids: { productChargeId?: string; id?: string }) {

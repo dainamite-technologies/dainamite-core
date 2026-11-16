@@ -97,7 +97,7 @@ export type CarriedCostLine = { quoteLineId: string; subscriptionItemId: string;
 /** The `COST_SOURCE_CHANGED` body entry: a line whose item costs changed since mirroring, and the keys that differ. */
 export type StaleCarriedCostLine = { quoteLineId: string; subscriptionItemId: string; costKeys: string[] }
 
-type CarriedSourceLine = Pick<CpqQuoteLineConfiguration, 'quoteLineId' | 'action' | 'configuration' | 'sourceSubscriptionItemId'>
+export type CarriedSourceLine = Pick<CpqQuoteLineConfiguration, 'quoteLineId' | 'action' | 'configuration' | 'sourceSubscriptionItemId'>
 
 /**
  * The lines the guard covers: cost-managed mirror lines (`_arcCostsCarried` with a recorded set hash). Lines

@@ -2,7 +2,7 @@ import { storedAdjustmentFailure } from './priceAdjustments/storedAdjustmentFail
 import { loadConversionBlockers } from './costs/conversionGuard'
 import { copyQuoteCostsToOrder } from './costs/orderCostCopy'
 import { costSeedFromOrderLineCost, type CostSeed, type InventoryCostChange } from './costs/inventoryCostSync'
-import { assertCarriedCostsFresh, carriedCostLines, type StaleCarriedCostLine } from './costs/itemCostState'
+import { assertCarriedCostsFresh, carriedCostLines, type CarriedSourceLine, type StaleCarriedCostLine } from './costs/itemCostState'
 import { lockSourceQuote, lockSubscriptions } from './costs/sourceQuoteLock'
 import { withQuotePricingWrite } from './priceAdjustments/quotePricingWrite'
 import { LockMode } from '@mikro-orm/core'
@@ -1560,7 +1560,7 @@ async function emitSupersededEvent(
  */
 function withConversionHashes(
   quoteLines: CpqQuoteLineConfiguration[], orderLines: CpqOrderLineConfiguration[],
-): CpqQuoteLineConfiguration[] {
+): CarriedSourceLine[] {
   const frozen = new Map<string, string>()
   for (const orderLine of orderLines) {
     const hash = (orderLine.configuration as Record<string, unknown> | null)?.[ARC_CONVERTED_COST_SET_HASH_KEY]
@@ -1573,6 +1573,6 @@ function withConversionHashes(
     return {
       quoteLineId: line.quoteLineId, action: line.action, sourceSubscriptionItemId: line.sourceSubscriptionItemId,
       configuration: { ...(line.configuration ?? {}), [ARC_COSTS_CARRIED_KEY]: true, [ARC_CARRIED_COST_SET_HASH_KEY]: hash },
-    } as CpqQuoteLineConfiguration
+    }
   })
 }

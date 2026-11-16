@@ -1,3 +1,4 @@
+import { dateColumnToIso } from '../lib/dateColumns'
 import { storedAdjustmentFailure } from './priceAdjustments/storedAdjustmentFailure'
 import { withQuotePricingWrite } from './priceAdjustments/quotePricingWrite'
 import type { EntityManager } from '@mikro-orm/postgresql'
@@ -664,7 +665,7 @@ export class DefaultCpqOrderService {
         name: subscriptionName,
         billingCycle: 'monthly',
         currencyCode: orderConfig.currencyCode,
-        startDate: lineWithDates?.startDate?.toISOString?.() ?? undefined,
+        startDate: dateColumnToIso(lineWithDates?.startDate) ?? undefined,
         termMonths: lineWithTerm?.termMonths ?? undefined,
         sourceQuoteId: orderConfig.sourceQuoteId ?? undefined,
         sourceOrderId: orderConfig.id,
@@ -1013,9 +1014,9 @@ export class DefaultCpqOrderService {
         parentLineId: lc.parentLineId ?? null,
         quantity: lc.quantity,
         configuration: stripQuoteOnlyArcMarkers(lc.configuration) ?? {},
-        startDate: lc.startDate?.toISOString() ?? null,
+        startDate: dateColumnToIso(lc.startDate) ?? null,
         termMonths: lc.termMonths ?? null,
-        endDate: lc.endDate?.toISOString() ?? null,
+        endDate: dateColumnToIso(lc.endDate) ?? null,
         nrcTotal: Number(lc.nrcTotal),
         mrcTotal: Number(lc.mrcTotal),
         charges: (lc.charges ?? []) as Array<Record<string, unknown>>,

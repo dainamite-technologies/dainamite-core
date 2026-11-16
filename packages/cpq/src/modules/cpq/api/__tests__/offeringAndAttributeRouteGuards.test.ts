@@ -22,6 +22,7 @@ import { GET as getAttributes } from '../quotes/attributes/route'
 
 const OFFERING_ID = '11111111-1111-4111-8111-111111111111'
 const SPEC_ID = '22222222-2222-4222-8222-222222222222'
+const OTHER_SPEC_ID = '33333333-3333-4333-8333-333333333333'
 const put = (body: unknown) =>
   new Request('http://localhost/api/cpq/product-offerings', {
     method: 'PUT',
@@ -53,15 +54,15 @@ describe('PUT /api/cpq/product-offerings V-OFF-7', () => {
   })
 
   it('rejects a spec change to a spec of another type', async () => {
-    mockLookups({ id: OFFERING_ID, specId: SPEC_ID, offeringType: 'simple' }, { id: SPEC_ID, specType: 'bundle' })
-    const response = await PUT(put({ id: OFFERING_ID, specId: SPEC_ID }))
+    mockLookups({ id: OFFERING_ID, specId: SPEC_ID, offeringType: 'simple' }, { id: OTHER_SPEC_ID, specType: 'bundle' })
+    const response = await PUT(put({ id: OFFERING_ID, specId: OTHER_SPEC_ID }))
     expect(response.status).toBe(400)
     expect(em.flush).not.toHaveBeenCalled()
   })
 
   it('rejects a spec change to a missing specification', async () => {
     mockLookups({ id: OFFERING_ID, specId: SPEC_ID, offeringType: 'simple' }, null)
-    expect((await PUT(put({ id: OFFERING_ID, specId: SPEC_ID }))).status).toBe(400)
+    expect((await PUT(put({ id: OFFERING_ID, specId: OTHER_SPEC_ID }))).status).toBe(400)
   })
 
   it('skips the check when neither specId nor offeringType changes', async () => {
@@ -70,6 +71,13 @@ describe('PUT /api/cpq/product-offerings V-OFF-7', () => {
     expect(response.status).toBe(200)
     expect(em.findOne).not.toHaveBeenCalledWith(CpqProductSpecification, expect.anything())
     expect(em.flush).toHaveBeenCalled()
+  })
+
+  it('skips the check when the UI resends the stored spec and type unchanged', async () => {
+    mockLookups({ id: OFFERING_ID, specId: SPEC_ID, offeringType: 'bundle' }, { id: SPEC_ID, specType: 'simple' })
+    const response = await PUT(put({ id: OFFERING_ID, specId: SPEC_ID, offeringType: 'bundle', name: 'Renamed' }))
+    expect(response.status).toBe(200)
+    expect(em.findOne).not.toHaveBeenCalledWith(CpqProductSpecification, expect.anything())
   })
 
   it('accepts a matching type change', async () => {

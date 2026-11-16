@@ -283,8 +283,11 @@ export async function PUT(req: Request) {
 
     // V-OFF-7 on update: when the spec or the offering type changes, the
     // resulting offeringType must still match the specification's specType.
-    // Edits that touch neither field skip the check, so legacy rows stay editable.
-    if (updates.specId !== undefined || updates.offeringType !== undefined) {
+    // The detail page always resends both fields, so only a value that differs
+    // from the stored one counts as a change; legacy rows stay editable.
+    const specChanged = updates.specId !== undefined && updates.specId !== entity.specId
+    const typeChanged = updates.offeringType !== undefined && updates.offeringType !== entity.offeringType
+    if (specChanged || typeChanged) {
       const spec = await ctx.em.findOne(CpqProductSpecification, {
         id: updates.specId ?? entity.specId,
         organizationId: ctx.organizationId,

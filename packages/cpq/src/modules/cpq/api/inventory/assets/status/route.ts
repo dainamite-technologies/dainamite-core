@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server'
 import { handleArcError } from '../../../_helpers/handleArcError'
-import { z } from 'zod'
 import { resolveCpqRouteContext } from '../../../context'
 import { cpqInventoryStatusTransitionSchema } from '../../../../data/validators'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'

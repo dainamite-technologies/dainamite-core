@@ -1,3 +1,4 @@
+import { getCommandInterceptorHttpRejection } from '@open-mercato/shared/lib/commands/errors'
 import { NextResponse } from 'next/server'
 import type { CommandBus, CommandRuntimeContext } from '@open-mercato/shared/lib/commands'
 import { isCrudHttpError } from '@open-mercato/shared/lib/crud/errors'
@@ -29,6 +30,10 @@ export function resolveCommandBus(ctx: CpqRouteContext): CommandBus {
  * else so the route keeps its own fallback.
  */
 export function commandErrorResponse(err: unknown): NextResponse | null {
+  // A command interceptor rejection (e.g. CPQ's 409 for terminal quotes on
+  // `sales.quotes.delete`) carries its own status and body.
+  const rejection = getCommandInterceptorHttpRejection(err)
+  if (rejection) return NextResponse.json(rejection.body, { status: rejection.status })
   if (!isCrudHttpError(err)) return null
   const body = err.body && typeof err.body === 'object' ? err.body : { error: err.message }
   return NextResponse.json(body, { status: err.status })

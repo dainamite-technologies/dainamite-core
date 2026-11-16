@@ -30,10 +30,10 @@ import {
 import { computeRecurringLines, type RecurringSkip } from './servicePeriods'
 import { withTenantLock } from './tenantLock'
 import { processUsageForAccount } from './usageRunner'
+import { accountCycleSpec } from './accountCycle'
 import { processPrepaidAccount } from './prepaidPeriodClose'
 import type { DomainEvent } from './balanceEvents'
 import { emitBillingEvent, type BillingEventId } from '../events'
-import type { BillCycle } from '../data/validators'
 
 /**
  * Bill Run engine — orchestrates one execution of the billing cycle for
@@ -340,7 +340,7 @@ async function processPostpaidAccount(
   account: BillingAccount,
   params: RunBillRunParams,
 ): Promise<AccountProcessResult> {
-  const cycle = account.billCycle as BillCycle
+  const cycle = accountCycleSpec(account)
   const testRun = params.mode === 'test'
   const items = (await em.find(BillingItem, {
     tenantId: account.tenantId,
@@ -358,6 +358,9 @@ async function processPostpaidAccount(
   )
   const billedOneTimes = new Set<string>(oneTimeItems.filter((it) => it.billedToDate).map((it) => it.id))
   let billDate = cloneAtMidnight(account.nextBillDate)
+  // End of the last billed period — starts the next arrears period, so a
+  // short alignment period (bill cycle day change) bills exactly its days.
+  let lastBilled: Date | null = account.lastBillDate ? cloneAtMidnight(account.lastBillDate) : null
   // Usage already counted by an earlier cycle of THIS run (test / dry never
   // mark records, so later simulated cycles must not re-count them).
   let usageCountedThrough: Date | null = null
@@ -385,7 +388,7 @@ async function processPostpaidAccount(
       break
     }
     const nextBillDate = advanceNextBillDate(billDate, cycle)
-    const arrearsPeriod: BillPeriod = deriveBillPeriod(billDate, cycle)
+    const arrearsPeriod: BillPeriod = deriveBillPeriod(billDate, cycle, lastBilled)
 
     // ── Recurring: service periods against the in-memory watermarks ──
     const lines: InvoiceLineDescriptor[] = []
@@ -500,6 +503,7 @@ async function processPostpaidAccount(
           }
         }
         billDate = nextBillDate
+        lastBilled = arrearsPeriod.periodEnd
         for (const [itemId, date] of watermarkUpdates) watermarks.set(itemId, date)
         for (const it of oneTimesThisCycle) billedOneTimes.add(it.id)
         usageCountedThrough = arrearsPeriod.periodEnd
@@ -559,6 +563,7 @@ async function processPostpaidAccount(
     }
 
     billDate = nextBillDate
+    lastBilled = arrearsPeriod.periodEnd
   }
 
   const finalWarnings = finalizeWarnings(warnings, skippedItems)

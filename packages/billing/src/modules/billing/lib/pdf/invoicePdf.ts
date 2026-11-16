@@ -7,6 +7,7 @@ import { resolveInvoiceLanguage } from '../invoiceLanguages'
 import { buildInvoiceDocumentModel, type DocumentTranslate, type PdfAddress } from './invoiceModel'
 import { renderInvoicePdf, type PdfLogo } from './invoiceTemplate'
 import { attachmentIdFromUrl, readAttachment, storeAttachment } from './attachmentStore'
+import { parseCreditReason } from '../creditReason'
 
 /**
  * Billing document PDFs (Spec B, P-D1 / B-D5):
@@ -135,6 +136,7 @@ export async function renderBillingDocument(
       grossAmount: line.grossAmount,
       servicePeriodStart: line.servicePeriodStart ?? null,
       servicePeriodEnd: line.servicePeriodEnd ?? null,
+      creditReason: parseCreditReason((line.metadata as Record<string, unknown> | null | undefined)?.credit_reason),
     })),
     seller: {
       legalName: str(seller.legal_name),

@@ -38,7 +38,8 @@ export const openApi = {
       description:
         'Ends the item the day before `effectiveDate` and creates a copy with the new `unitPrice` (on the item price basis) ' +
         'starting on `effectiveDate`. Already-billed days after the change are credited / re-charged by the Bill Run per the ' +
-        "item's proration setting, so nothing is billed twice.",
+        "item's proration setting, so nothing is billed twice. When the change credits billed days (prorate on, item billed " +
+        'past the effective date) a customer-facing reason is required: `creditReason` or `creditReasonCode` + `creditReasonParams`.',
       requestBody: { schema: bodySchema },
       responses: [{ status: 200, description: 'Both item ids', schema: responseSchema }],
       errors: [
@@ -46,7 +47,8 @@ export const openApi = {
         {
           status: 422,
           description:
-            '`billing.item.price_change_recurring_only` / `_inactive` / `_before_start` (must be after the start date) / `_after_end`',
+            '`billing.item.price_change_recurring_only` / `_inactive` / `_before_start` (must be after the start date) / `_after_end`; ' +
+            '`billing.item.credit_reason_required` when the change credits billed days and no reason is given',
         },
       ],
     },

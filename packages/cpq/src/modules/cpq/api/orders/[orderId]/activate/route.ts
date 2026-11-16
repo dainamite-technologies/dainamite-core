@@ -1,11 +1,12 @@
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { OptimisticLockError } from '@mikro-orm/core'
+import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { resolveCpqRouteContext } from '../../../context'
+import { CPQ_ORDER_RESOURCE_KIND, runCpqMutationGuards } from '../../../_helpers/quoteMutationGuard'
+import { cpqErrorDoc } from '../../../_helpers/quoteRouteOpenApi'
 import { isOrderError } from '../../../../services/cpqOrderService'
 import type { DefaultCpqOrderService } from '../../../../services/cpqOrderService'
-import { z } from 'zod'
-import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
-import { cpqErrorDoc } from '../../../_helpers/quoteRouteOpenApi'
 
 export const metadata = {
   POST: { requireAuth: true, requireFeatures: ['cpq.orders.manage'] },
@@ -19,8 +20,24 @@ export async function POST(req: Request, { params }: { params: Promise<{ orderId
     const { orderId } = await params
     const scope = { organizationId: ctx.organizationId, tenantId: ctx.tenantId }
 
+    // Registered mutation guards run first (resource kind `cpq.order`,
+    // action `activate`). CPQ owns no rule here: add-on packages use the hook
+    // — e.g. the billing connector blocks activating an amendment before
+    // billing of the subscription has started. A blocked guard's body and
+    // status are returned as-is.
+    const guard = await runCpqMutationGuards(ctx, req, {
+      resourceKind: CPQ_ORDER_RESOURCE_KIND,
+      resourceId: orderId,
+      operation: 'update',
+      mutationPayload: { action: 'activate', orderId },
+    })
+    if (!guard.ok) return guard.response
+
     const service = ctx.container.resolve('cpqOrderService') as DefaultCpqOrderService
     const result = await service.activateOrder(orderId, scope)
+    // Callback failures are caught and logged by the wrapper, so a committed
+    // activation still answers 200.
+    await guard.runAfterSuccess()
     return NextResponse.json(result)
   } catch (err) {
     if (isOrderError(err)) {
@@ -58,11 +75,19 @@ export const openApi: OpenApiRouteDoc = {
     POST: {
       summary: 'Activate a CPQ order and provision customer inventory',
       description:
-        'Moves the order to active and creates or updates the customer subscriptions and assets. For ARC quotes (amend, renew, cancel) the change is applied to the target subscriptions. A concurrent activation touching the same subscription returns 409 and the order stays retryable.',
+        'Moves a `draft` / `pending_activation` order to `active` and creates or updates the customer subscriptions and ' +
+        'assets: a new-sale order creates its subscription, an ARC order (amend / renew / cancel) applies its changes to ' +
+        'the target subscriptions; lifecycle events fire after commit. Registered mutation guards run first (resource ' +
+        'kind `cpq.order`, operation `update`, payload `{ action: "activate", orderId }`). A guard that blocks returns ' +
+        'its own status and body, typically 422 `{ error, code, ...details }` — add-on packages use this to enforce ' +
+        'rules CPQ does not own (e.g. no activation before a date). A concurrent activation touching the same ' +
+        'subscription returns 409 and the order stays retryable.',
       responses: [{ status: 200, description: 'Activated order' }],
       errors: [
+        cpqErrorDoc(401, 'Unauthorized'),
         cpqErrorDoc(404, 'Order not found'),
         cpqErrorDoc(409, 'Order cannot be activated in its status, or concurrent modification detected'),
+        cpqErrorDoc(422, 'Blocked by a mutation guard (body passed through from the guard: `error`, usually `code` and details)'),
         cpqErrorDoc(500, 'Internal error'),
       ],
     },

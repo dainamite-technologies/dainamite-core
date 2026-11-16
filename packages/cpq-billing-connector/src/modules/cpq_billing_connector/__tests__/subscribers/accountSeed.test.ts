@@ -34,14 +34,20 @@ describe('buildAccountSeed', () => {
     expect(buildAccountSeed(payload()).invoiceLanguage).toBe('en')
   })
 
-  it('starts billing on the activation date (billed in advance), not a month later', () => {
-    expect(buildAccountSeed(payload({ activationDate: '2026-11-14' })).nextBillDate.toISOString().slice(0, 10)).toBe(
-      '2026-11-14',
-    )
+  it('omits nextBillDate unless upstream gave one (billing derives it from the cycle)', () => {
+    expect('nextBillDate' in buildAccountSeed(payload({ activationDate: '2026-11-14' }))).toBe(false)
     expect(
-      buildAccountSeed(payload({ activationDate: '2026-11-14', nextBillDate: '2026-12-01' })).nextBillDate
-        .toISOString()
+      buildAccountSeed(payload({ activationDate: '2026-11-14', nextBillDate: '2026-12-01' }))
+        .nextBillDate?.toISOString()
         .slice(0, 10),
     ).toBe('2026-12-01')
+  })
+
+  it('sends the bill cycle as unit + interval + day (default every 1 month on day 1)', () => {
+    expect(buildAccountSeed(payload())).toMatchObject({ billCycle: 'monthly', billCycleInterval: 1, billCycleDay: '1' })
+    expect('billCycleAnchor' in buildAccountSeed(payload())).toBe(false)
+    expect(
+      buildAccountSeed(payload(), { overrides: { billCycle: 'weekly', billCycleInterval: 2, billCycleDay: 'fri' } }),
+    ).toMatchObject({ billCycle: 'weekly', billCycleInterval: 2, billCycleDay: 'fri' })
   })
 })

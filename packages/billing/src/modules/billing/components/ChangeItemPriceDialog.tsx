@@ -16,6 +16,7 @@ import { flash } from '@open-mercato/ui/backend/FlashMessages'
 import { apiCallOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
 import { normalizeCrudServerError } from '@open-mercato/ui/backend/utils/serverErrors'
 import { MoneyInput } from './MoneyInput'
+import { CreditReasonField, isCreditReasonRequired } from './CreditReasonField'
 
 /**
  * "Change price" for a recurring item: effective date + new price →
@@ -34,6 +35,9 @@ export type ChangeItemPriceDialogProps = {
   /** The earliest allowed effective date is the day after this (YYYY-MM-DD). */
   billStartDate: string
   billEndDate?: string | null
+  /** Credit preview inputs (Part 2): how far the item is billed and whether it prorates. */
+  billedToDate?: string | null
+  prorate?: boolean
   onChanged: (newItemId: string) => void
 }
 
@@ -62,6 +66,8 @@ export function ChangeItemPriceDialog({
   priceBasis,
   billStartDate,
   billEndDate,
+  billedToDate = null,
+  prorate = true,
   onChanged,
 }: ChangeItemPriceDialogProps) {
   const t = useT()
@@ -69,6 +75,7 @@ export function ChangeItemPriceDialog({
   const maxDate = billEndDate ? billEndDate.slice(0, 10) : undefined
   const [effectiveDate, setEffectiveDate] = React.useState('')
   const [price, setPrice] = React.useState('')
+  const [reason, setReason] = React.useState('')
   const [saving, setSaving] = React.useState(false)
 
   React.useEffect(() => {
@@ -76,20 +83,30 @@ export function ChangeItemPriceDialog({
     const today = todayIso()
     setEffectiveDate(today < minDate ? minDate : today)
     setPrice(currentPrice != null ? String(currentPrice) : '')
+    setReason('')
   }, [currentPrice, minDate, open])
 
   const parsedPrice = Number.parseFloat(price)
   const priceValid = price.trim() !== '' && Number.isFinite(parsedPrice) && parsedPrice >= 0
   const dateValid = effectiveDate >= minDate && (!maxDate || effectiveDate <= maxDate)
+  const creditItem = { type: 'recurring', prorate, billStartDate, billedToDate }
+  const oldItemEnd = effectiveDate && dateValid ? previousDay(effectiveDate) : null
+  const reasonRequired = isCreditReasonRequired(creditItem, oldItemEnd)
+  const reasonValid = !reasonRequired || reason.trim() !== ''
 
   const handleSubmit = React.useCallback(async () => {
-    if (!priceValid || !dateValid || saving) return
+    if (!priceValid || !dateValid || !reasonValid || saving) return
     setSaving(true)
     try {
       const call = await apiCallOrThrow<{ previousItemId: string; newItemId: string }>('/api/billing/items/change-price', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: itemId, effectiveDate, unitPrice: parsedPrice }),
+        body: JSON.stringify({
+          id: itemId,
+          effectiveDate,
+          unitPrice: parsedPrice,
+          ...(reasonRequired ? { creditReason: reason.trim() } : {}),
+        }),
       })
       const newItemId = call.result?.newItemId
       flash(t('billing.items.change_price.success', 'Price changed — the new item is active from the effective date'), 'success')
@@ -102,7 +119,7 @@ export function ChangeItemPriceDialog({
     } finally {
       setSaving(false)
     }
-  }, [dateValid, effectiveDate, itemId, onChanged, onOpenChange, parsedPrice, priceValid, saving, t])
+  }, [dateValid, effectiveDate, itemId, onChanged, onOpenChange, parsedPrice, priceValid, reason, reasonRequired, reasonValid, saving, t])
 
   const basisLabel =
     priceBasis === 'gross' ? t('billing.items.price_basis.gross', 'Gross') : t('billing.items.price_basis.net', 'Net')
@@ -122,7 +139,7 @@ export function ChangeItemPriceDialog({
           <DialogDescription>
             {t(
               'billing.items.change_price.description',
-              'This item ends the day before the effective date and a copy with the new price starts on it. Days already billed after the change are credited and charged again at the new price, per the item proration setting.',
+              'This item ends the day before the effective date and a copy with the new price starts on it.',
             )}
           </DialogDescription>
         </DialogHeader>
@@ -160,6 +177,7 @@ export function ChangeItemPriceDialog({
             ) : null}
           </label>
         </div>
+        <CreditReasonField item={creditItem} newEndDate={oldItemEnd} value={reason} onChange={setReason} />
         <DialogFooter className="flex items-center justify-between gap-3 sm:justify-between">
           <span className="text-xs text-muted-foreground">
             <KbdShortcut keys={['Ctrl/⌘', 'Enter']} /> {t('billing.items.form.submit_hint', 'to save,')} <Kbd>Esc</Kbd>{' '}
@@ -169,7 +187,7 @@ export function ChangeItemPriceDialog({
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
               {t('billing.common.cancel', 'Cancel')}
             </Button>
-            <Button type="button" onClick={() => void handleSubmit()} disabled={!priceValid || !dateValid || saving}>
+            <Button type="button" onClick={() => void handleSubmit()} disabled={!priceValid || !dateValid || !reasonValid || saving}>
               {saving ? t('billing.items.form.saving', 'Saving…') : t('billing.items.change_price.action', 'Change price')}
             </Button>
           </div>

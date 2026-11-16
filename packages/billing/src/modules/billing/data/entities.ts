@@ -31,6 +31,8 @@ import { Entity, Index, PrimaryKey, Property, Unique } from '@mikro-orm/decorato
 export class BillingAccount {
   [OptionalProps]?:
     | 'customerKind'
+    | 'billCycleInterval'
+    | 'billCycleDay'
     | 'taxId'
     | 'lastBillDate'
     | 'billingMode'
@@ -71,14 +73,21 @@ export class BillingAccount {
   @Property({ name: 'currency_code', type: 'text' })
   currencyCode!: string
 
-  // 'monthly' | 'quarterly' | 'annually' | 'weekly'. Validated at API ingress.
+  // Cycle unit: 'daily' | 'weekly' | 'monthly' | 'annually' (`lib/billCycle.ts`).
+  // Validated at API ingress. One cycle = `bill_cycle_interval` units.
   @Property({ name: 'bill_cycle', type: 'text' })
   billCycle!: string
 
-  // Day-of-month for monthly/quarterly/annually (1–28), or weekday code
-  // ('mon'…'sun') for weekly. Text so both shapes coexist.
-  @Property({ name: 'bill_cycle_anchor', type: 'text' })
-  billCycleAnchor!: string
+  // "Every N units" — 1 = every month, 3 = quarterly, 30 + daily = every 30 days.
+  @Property({ name: 'bill_cycle_interval', type: 'integer', default: 1 })
+  billCycleInterval: number = 1
+
+  // Bill cycle day the cycle is pinned to: '1'…'31' for monthly/annually (a
+  // day past the end of a short month means its last day), 'mon'…'sun' for
+  // weekly, null for daily (the cycle counts from `next_bill_date`). Bill Runs
+  // re-pin every advance to this day (`lib/billPeriod.ts`).
+  @Property({ name: 'bill_cycle_day', type: 'text', nullable: true })
+  billCycleDay?: string | null
 
   @Property({ name: 'invoice_email', type: 'text' })
   invoiceEmail!: string
@@ -179,6 +188,7 @@ export class BillingItem {
     | 'sourceRef'
     | 'currencyMismatch'
     | 'billedToDate'
+    | 'creditReason'
     | 'chargeTiming'
     | 'prorate'
     | 'taxRate'
@@ -248,6 +258,12 @@ export class BillingItem {
   // "Why two anti-duplicate guards".
   @Property({ name: 'billed_to_date', type: 'date', columnType: 'date', nullable: true })
   billedToDate?: Date | null
+
+  // Why ending this item credited already-billed days (Part 2, D8): operator
+  // text or a generated code ({ kind, … } — `lib/creditReason.ts`). Copied
+  // into the credit line's metadata at bill time; last end-date change wins.
+  @Property({ name: 'credit_reason', type: 'jsonb', nullable: true })
+  creditReason?: Record<string, unknown> | null
 
   // Spec A — recurring items only. 'in_advance' (default) bills the coming
   // period on the bill date; 'in_arrears' bills the period just ended.

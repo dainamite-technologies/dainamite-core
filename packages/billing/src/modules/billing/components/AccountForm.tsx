@@ -28,6 +28,15 @@ import {
 } from '../lib/customerLookup'
 import { DEFAULT_INVOICE_LANGUAGE, SUPPORTED_INVOICE_LANGUAGES } from '../lib/invoiceLanguages'
 import { fetchCustomerAddressRows } from './customerNames'
+import { BillCycleFields, type BillCycleFieldsProps } from './account/BillCycleFields'
+import {
+  BILL_CYCLE_INTERVAL_MAX,
+  DEFAULT_BILL_CYCLE,
+  DEFAULT_BILL_CYCLE_DAY,
+  DEFAULT_BILL_CYCLE_INTERVAL,
+  type BillCycle,
+} from '../lib/billCycle'
+import { parseCycleInterval } from '../lib/billCyclePayload'
 
 /**
  * Shared form for Billing Account create + edit.
@@ -60,8 +69,13 @@ export type AccountFormValues = {
   customerKind: CustomerKind
   name: string
   currencyCode: string
-  billCycle: 'weekly' | 'monthly' | 'quarterly' | 'annually'
-  billCycleAnchor: string
+  billCycle: BillCycle
+  /** "Every N" — text input value. */
+  billCycleInterval: string
+  /** '1'…'31' | 'mon'…'sun'; '' for daily. */
+  billCycleDay: string
+  /** Off → the API derives (create) or re-aligns (edit) the next bill date. */
+  nextBillDateOverride: boolean
   invoiceEmail: string
   invoiceLanguage: string
   taxId: string
@@ -90,6 +104,8 @@ export type AccountFormProps = {
   submitting?: boolean
   onSubmit: (values: AccountFormValues) => Promise<void> | void
   onCancel: () => void
+  /** Edit mode: end of the last billed period — previews a re-aligned next bill date. */
+  lastBillDate?: string | null
 }
 
 const EMPTY_VALUES: AccountFormValues = {
@@ -97,8 +113,10 @@ const EMPTY_VALUES: AccountFormValues = {
   customerKind: 'company',
   name: '',
   currencyCode: 'EUR',
-  billCycle: 'monthly',
-  billCycleAnchor: '1',
+  billCycle: DEFAULT_BILL_CYCLE,
+  billCycleInterval: String(DEFAULT_BILL_CYCLE_INTERVAL),
+  billCycleDay: DEFAULT_BILL_CYCLE_DAY,
+  nextBillDateOverride: false,
   invoiceEmail: '',
   invoiceLanguage: DEFAULT_INVOICE_LANGUAGE,
   taxId: '',
@@ -118,15 +136,10 @@ const EMPTY_VALUES: AccountFormValues = {
   autoSendInvoice: false,
 }
 
-function todayIso(): string {
-  return new Date().toISOString().slice(0, 10)
-}
-
 function mergeInitial(initial: Partial<AccountFormValues> | undefined): AccountFormValues {
-  if (!initial) return { ...EMPTY_VALUES, nextBillDate: todayIso() }
+  if (!initial) return { ...EMPTY_VALUES }
   return {
     ...EMPTY_VALUES,
-    nextBillDate: EMPTY_VALUES.nextBillDate || todayIso(),
     ...initial,
     invoiceAddress: {
       ...EMPTY_VALUES.invoiceAddress,
@@ -141,11 +154,25 @@ export function AccountForm({
   submitting = false,
   onSubmit,
   onCancel,
+  lastBillDate = null,
 }: AccountFormProps) {
   const t = useT()
   const [values, setValues] = React.useState<AccountFormValues>(() => mergeInitial(initial))
   const [error, setError] = React.useState<string | null>(null)
   const isEdit = mode === 'edit'
+  // The cycle as stored (edit) — the form's `initial` values are the saved row.
+  const storedCycle = React.useMemo<BillCycleFieldsProps['stored']>(() => {
+    if (!isEdit || !initial?.billCycle) return undefined
+    return {
+      spec: {
+        cycle: initial.billCycle,
+        interval: parseCycleInterval(initial.billCycleInterval ?? '1') ?? 1,
+        day: initial.billCycleDay || null,
+      },
+      nextBillDate: initial.nextBillDate ?? '',
+      lastBillDate,
+    }
+  }, [initial, isEdit, lastBillDate])
 
   // Customer cache for the combobox — populated as the user searches, so the
   // picker can render "Acme Telecom" after selection instead of the raw UUID
@@ -305,7 +332,16 @@ export function AccountForm({
       )
       return
     }
-    if (!values.nextBillDate) {
+    const interval = parseCycleInterval(values.billCycleInterval)
+    if (interval === null || interval > BILL_CYCLE_INTERVAL_MAX[values.billCycle]) {
+      setError(
+        t('billing.accounts.form.error.cycle_interval_invalid', 'Bill every 1–{max} units', {
+          max: BILL_CYCLE_INTERVAL_MAX[values.billCycle],
+        }),
+      )
+      return
+    }
+    if (values.nextBillDateOverride && !values.nextBillDate) {
       setError(t('billing.accounts.form.error.next_bill_date_required', 'Next bill date is required'))
       return
     }
@@ -441,54 +477,12 @@ export function AccountForm({
           ) : null}
         </label>
 
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="text-muted-foreground">
-            {t('billing.accounts.form.bill_cycle', 'Bill cycle')}
-          </span>
-          <Select
-            value={values.billCycle}
-            onValueChange={(next) =>
-              set('billCycle', next as AccountFormValues['billCycle'])
-            }
-          >
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="weekly">{t('billing.cycle.weekly', 'Weekly')}</SelectItem>
-              <SelectItem value="monthly">{t('billing.cycle.monthly', 'Monthly')}</SelectItem>
-              <SelectItem value="quarterly">{t('billing.cycle.quarterly', 'Quarterly')}</SelectItem>
-              <SelectItem value="annually">{t('billing.cycle.annually', 'Annually')}</SelectItem>
-            </SelectContent>
-          </Select>
-        </label>
-
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="text-muted-foreground">
-            {t('billing.accounts.form.cycle_anchor', 'Cycle anchor')}
-          </span>
-          <Input
-            value={values.billCycleAnchor}
-            placeholder={
-              values.billCycle === 'weekly'
-                ? t('billing.accounts.form.cycle_anchor.weekly_hint', 'mon | tue | … | sun')
-                : t('billing.accounts.form.cycle_anchor.month_hint', '1 — 28')
-            }
-            onChange={(event) => set('billCycleAnchor', event.currentTarget.value)}
-          />
-        </label>
-
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="text-muted-foreground">
-            {t('billing.accounts.form.next_bill_date', 'Next bill date')}
-            <span className="text-destructive"> *</span>
-          </span>
-          <Input
-            type="date"
-            value={values.nextBillDate}
-            onChange={(event) => set('nextBillDate', event.currentTarget.value)}
-          />
-        </label>
+        <BillCycleFields
+          mode={mode}
+          values={values}
+          stored={storedCycle}
+          onChange={(patch) => setValues((prev) => ({ ...prev, ...patch }))}
+        />
 
         <label className="flex flex-col gap-1 text-sm">
           <span className="text-muted-foreground">

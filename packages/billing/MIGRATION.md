@@ -12,6 +12,38 @@ billing data.
 
 ---
 
+## Credit reason + item date guard (2026-11-16)
+
+**Migration:** `Migration20261122000000_billing_item_credit_reason.ts` adds
+`billing_items.credit_reason jsonb null`. It is additive and changes no data.
+
+- **API behaviour change:**
+  - Ending a prorated recurring item before its `billed_to_date` now requires
+    `creditReason`, or `creditReasonCode` + `creditReasonParams`. Without one the
+    request returns 422 `billing.item.credit_reason_required`.
+  - An end date more than one day before the start date returns 422
+    `billing.item.end_before_start`.
+  - `@dainamite/cpq-billing-connector` sends generated reasons and keeps end
+    dates in range from the release that pairs with this one.
+
+---
+
+## Bill cycle day + every-N cycles (2026-11-16)
+
+**Migration:** `Migration20261121000000_billing_cycle_day.ts`. It renames
+`billing_accounts.bill_cycle_anchor` to `bill_cycle_day` (now nullable), adds
+`bill_cycle_interval integer not null default 1`, and converts `quarterly` rows
+to `monthly` × 3. It is hand-written like the earlier billing migrations.
+
+- **Breaking API change:** `billCycleAnchor` is removed (no alias). Send
+  `billCycleDay` + `billCycleInterval` instead. `billCycle: 'quarterly'` is
+  rejected; use `monthly` with `billCycleInterval: 3`.
+- Existing rows keep their stored day. The day was never read before, so check
+  that it matches `next_bill_date`: the first Bill Run aligns a mismatched
+  account to the day with one short period.
+
+---
+
 ## AI tools and agent (2026-11-16)
 
 **New required peer (breaking for consumers):** `@open-mercato/ai-assistant` `^0.9.0`.

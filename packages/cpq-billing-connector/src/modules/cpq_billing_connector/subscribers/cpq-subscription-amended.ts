@@ -6,6 +6,8 @@ import {
 } from '../lib/chargeMapper'
 import { arcItemBillStart, loadArcBillStartSetup, markArcSetupApplied } from '../lib/arcBillStart'
 import type { BillStartSetup } from '../lib/orderSetupResolution'
+import { arcItemEndDate, buildArcEndDateUpdates, type ArcEndDateItem } from '../lib/arcEndDate'
+import { resolveOrderReference } from '../lib/orderReference'
 
 /**
  * Subscriber: `cpq.subscription.amended` → mid-cycle add / remove.
@@ -17,7 +19,9 @@ import type { BillStartSetup } from '../lib/orderSetupResolution'
  *      line override → CPQ service start → the order's default bill start
  *      → `effectiveDate`.
  *   2. End-dates every Billing Item of each removed subscription item at
- *      `effectiveDate - 1 day`.
+ *      `effectiveDate - 1 day`, clamped to `billStartDate - 1 day` for an
+ *      item that has not started yet (`lib/arcEndDate.ts`), with the
+ *      generated credit reason `subscription_amended`.
  *
  * Proration is billing's job (billing Spec A): the Bill Run engine prorates
  * the partial period of an item that starts mid-cycle, and credits the
@@ -47,12 +51,6 @@ export type AmendedPayload = {
   sourceOrderId?: string
 }
 
-function isoDateMinusOneDay(iso: string): string {
-  const d = new Date(`${iso}T00:00:00.000Z`)
-  d.setUTCDate(d.getUTCDate() - 1)
-  return d.toISOString().slice(0, 10)
-}
-
 /** Billing Item payloads for the added charges — pure, no proration lines. */
 export function buildAddedItemPayloads(
   billAccountId: string,
@@ -76,9 +74,26 @@ export function buildAddedItemPayloads(
   }))
 }
 
-/** `bill_end_date` for the items of removed subscription items. */
-export function removedItemEndDate(effectiveDate: string): string {
-  return isoDateMinusOneDay(effectiveDate)
+/**
+ * `bill_end_date` for an item of a removed subscription item: the day before
+ * the effective date, or the day before the item's own start when it has not
+ * started yet.
+ */
+export function removedItemEndDate(effectiveDate: string, billStartDate?: Date | string | null): string {
+  return arcItemEndDate(effectiveDate, billStartDate)
+}
+
+/** End-date updates (with the `subscription_amended` reason) for removed items. */
+export function buildRemovedItemUpdates(
+  items: ArcEndDateItem[],
+  payload: Pick<AmendedPayload, 'effectiveDate'>,
+  reference?: string,
+) {
+  return buildArcEndDateUpdates(items, {
+    effectiveDate: payload.effectiveDate,
+    code: 'subscription_amended',
+    reference,
+  })
 }
 
 export default async function handle(payload: AmendedPayload): Promise<void> {
@@ -122,14 +137,12 @@ export default async function handle(payload: AmendedPayload): Promise<void> {
   }
 
   // 2. End-date every Billing Item of each removed subscription item.
-  const endDate = removedItemEndDate(payload.effectiveDate)
+  if (removed.length === 0) return
+  const reference = await resolveOrderReference(container, scope, payload.sourceOrderId)
   for (const removedSubItemId of removed) {
     const items = await billingApi.findItemsBySubscriptionItem(scope, removedSubItemId)
-    for (const item of items) {
-      await billingApi.updateItem(scope, {
-        id: item.id,
-        billEndDate: endDate,
-      })
+    for (const update of buildRemovedItemUpdates(items, payload, reference)) {
+      await billingApi.updateItem(scope, update)
     }
   }
 }

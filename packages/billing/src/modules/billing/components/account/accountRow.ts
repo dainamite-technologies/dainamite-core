@@ -1,3 +1,4 @@
+import type { BillCycle } from '../../lib/billCycle'
 import type { AccountFormValues } from '../AccountForm'
 
 /**
@@ -10,8 +11,9 @@ export type AccountRow = {
   customer_kind: 'company' | 'person'
   name: string
   currency_code: string
-  bill_cycle: 'weekly' | 'monthly' | 'quarterly' | 'annually'
-  bill_cycle_anchor: string
+  bill_cycle: BillCycle
+  bill_cycle_interval: number
+  bill_cycle_day: string | null
   invoice_email: string
   invoice_language: string
   tax_id: string | null
@@ -46,7 +48,9 @@ export function toFormValues(row: AccountRow): AccountFormValues {
     name: row.name,
     currencyCode: row.currency_code,
     billCycle: row.bill_cycle,
-    billCycleAnchor: row.bill_cycle_anchor,
+    billCycleInterval: String(row.bill_cycle_interval ?? 1),
+    billCycleDay: row.bill_cycle_day ?? '',
+    nextBillDateOverride: false,
     invoiceEmail: row.invoice_email,
     invoiceLanguage: row.invoice_language,
     taxId: row.tax_id ?? '',

@@ -29,7 +29,7 @@ async function createBilledAccount(request: APIRequestContext, token: string): P
       name: `Ledger ${uniq()}`,
       currencyCode: 'PLN',
       billCycle: 'monthly',
-      billCycleAnchor: '1',
+      billCycleDay: '1',
       invoiceEmail: `inv-${uniq()}@example.com`,
       nextBillDate: '2026-10-01',
       invoiceAddress: { line1: 'ul. Testowa 1', city: 'Warszawa', postal_code: '00-001', country: 'PL' },

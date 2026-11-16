@@ -30,6 +30,9 @@ import { AccountSummaryCards } from '../../../../components/account/AccountSumma
 import { AccountRunBillingDialog } from '../../../../components/account/AccountRunBillingDialog'
 import { toFormValues, type AccountRow } from '../../../../components/account/accountRow'
 import { accountHref, isAccountTab, type AccountTab } from '../../../../lib/navigation'
+import { AccountBillingPill } from '../../../../components/account/AccountBillingPill'
+import { localTodayIso } from '../../../../lib/dateOnly'
+import { billCyclePayload } from '../../../../lib/billCyclePayload'
 
 /**
  * `/backend/billing/accounts/[id]` — the Billing Account workspace
@@ -122,8 +125,7 @@ export default function BillingAccountDetailPage(props: { params?: { id?: string
         const payload: Record<string, unknown> = {
           id: row.id,
           name: values.name.trim(),
-          billCycle: values.billCycle,
-          billCycleAnchor: values.billCycleAnchor.trim(),
+          ...billCyclePayload(values),
           invoiceEmail: values.invoiceEmail.trim(),
           invoiceLanguage: values.invoiceLanguage.trim().toLowerCase(),
           invoiceAddress: {
@@ -135,7 +137,6 @@ export default function BillingAccountDetailPage(props: { params?: { id?: string
             postal_code: values.invoiceAddress.postal_code.trim(),
             country: values.invoiceAddress.country.trim().toUpperCase(),
           },
-          nextBillDate: values.nextBillDate,
           isActive: values.isActive,
         }
         payload.taxId = values.taxId.trim() === '' ? null : values.taxId.trim()
@@ -231,6 +232,7 @@ export default function BillingAccountDetailPage(props: { params?: { id?: string
           <AccountForm
             mode="edit"
             initial={toFormValues(row)}
+            lastBillDate={row.last_bill_date?.slice(0, 10) ?? null}
             submitting={saving}
             onSubmit={handleSubmit}
             onCancel={() => setEditing(false)}
@@ -298,6 +300,7 @@ export default function BillingAccountDetailPage(props: { params?: { id?: string
             ) : (
               <Tag variant="neutral">{t('billing.mode.postpaid', 'Postpaid')}</Tag>
             )}
+            {row.is_active ? <AccountBillingPill account={row} today={localTodayIso()} /> : null}
           </span>
         }
         actionsContent={

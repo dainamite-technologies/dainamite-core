@@ -202,7 +202,7 @@ export async function seedBillingDemo(
         name: spec.account.name,
         currencyCode: spec.account.currencyCode,
         billCycle: 'monthly',
-        billCycleAnchor: '1',
+        billCycleDay: '1',
         invoiceEmail: `billing@${spec.account.customerId}.demo`,
         invoiceLanguage: spec.account.invoiceLanguage,
         taxId: null,

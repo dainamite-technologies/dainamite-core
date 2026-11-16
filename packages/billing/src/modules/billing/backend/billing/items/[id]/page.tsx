@@ -292,6 +292,7 @@ export default function BillingItemDetailPage(props: { params?: { id?: string } 
         if (assembled.prorate !== undefined) payload.prorate = assembled.prorate
         if (assembled.taxRate !== undefined) payload.taxRate = assembled.taxRate
         if (assembled.priceBasis !== undefined) payload.priceBasis = assembled.priceBasis
+        if (assembled.creditReason) payload.creditReason = assembled.creditReason
 
         await apiCallOrThrow('/api/billing/items', {
           method: 'PUT',
@@ -408,6 +409,7 @@ export default function BillingItemDetailPage(props: { params?: { id?: string } 
             initial={toFormValues(row)}
             accountCurrency={row.bill_account_currency ?? undefined}
             accountBillingMode={row.bill_account_mode ?? undefined}
+            billedToDate={row.billed_to_date}
             submitting={saving}
             onSubmit={handleSubmit}
             onCancel={() => setEditing(false)}
@@ -425,6 +427,8 @@ export default function BillingItemDetailPage(props: { params?: { id?: string } 
             priceBasis={row.price_basis === 'gross' ? 'gross' : 'net'}
             billStartDate={row.bill_start_date}
             billEndDate={row.bill_end_date}
+            billedToDate={row.billed_to_date}
+            prorate={row.prorate !== false}
             onChanged={(newItemId) => router.push(`/backend/billing/items/${encodeURIComponent(newItemId)}`)}
           />
         ) : null}

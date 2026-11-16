@@ -162,4 +162,62 @@ describe('changeItemPriceCommand', () => {
       ),
     ).rejects.toMatchObject({ status: 422, body: { code: 'billing.item.price_change_recurring_only' } })
   })
+
+  describe('credit reason (Part 2)', () => {
+    const billed = (): Record<string, unknown> => ({
+      id: ITEM,
+      tenantId: TENANT,
+      organizationId: ORG,
+      billAccountId: 'acc',
+      type: 'recurring',
+      isActive: true,
+      deletedAt: null,
+      billStartDate: '2026-11-01',
+      billEndDate: null,
+      billedToDate: '2026-12-31',
+      description: 'Plan',
+      rateJson: { unit_price: 49 },
+      prorate: true,
+    })
+
+    it('requires a reason when the change credits billed days', async () => {
+      const { ctx } = env(billed())
+      await expect(
+        changeItemPriceCommand.execute(
+          { tenantId: TENANT, organizationId: ORG, id: ITEM, effectiveDate: d('2026-12-15'), unitPrice: 59 },
+          ctx as never,
+        ),
+      ).rejects.toMatchObject({ status: 422, body: { code: 'billing.item.credit_reason_required' } })
+    })
+
+    it('stores the operator reason on the ended item, not on the copy', async () => {
+      const record = billed()
+      const { ctx, created } = env(record)
+      await changeItemPriceCommand.execute(
+        {
+          tenantId: TENANT,
+          organizationId: ORG,
+          id: ITEM,
+          effectiveDate: d('2026-12-15'),
+          unitPrice: 59,
+          creditReason: 'Loyalty discount from 15 Dec',
+        },
+        ctx as never,
+      )
+      expect(record.creditReason).toEqual({ kind: 'text', text: 'Loyalty discount from 15 Dec' })
+      expect(created[0].creditReason).toBeUndefined()
+    })
+
+    it('needs no reason when nothing was billed past the date, or proration is off', async () => {
+      for (const overrides of [{ billedToDate: '2026-12-14' }, { prorate: false }]) {
+        const record: Record<string, unknown> = { ...billed(), ...overrides }
+        const { ctx } = env(record)
+        await changeItemPriceCommand.execute(
+          { tenantId: TENANT, organizationId: ORG, id: ITEM, effectiveDate: d('2026-12-15'), unitPrice: 59 },
+          ctx as never,
+        )
+        expect(record.creditReason).toBeUndefined()
+      }
+    })
+  })
 })

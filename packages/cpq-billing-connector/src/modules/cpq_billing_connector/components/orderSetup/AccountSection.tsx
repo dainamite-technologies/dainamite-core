@@ -4,11 +4,59 @@ import { Input } from '@open-mercato/ui/primitives/input'
 import { Label } from '@open-mercato/ui/primitives/label'
 import { RadioGroup, Radio } from '@open-mercato/ui/primitives/radio'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@open-mercato/ui/primitives/select'
-import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { useLocale, useT } from '@open-mercato/shared/lib/i18n/context'
 import { SUPPORTED_INVOICE_LANGUAGES } from '@dainamite/billing/modules/billing/lib/invoiceLanguages'
-import type { AccountFields, AccountOption, OrderSetupFormState } from '../../lib/orderSetupForm'
+import {
+  BILL_CYCLES,
+  BILL_CYCLE_INTERVAL_MAX,
+  WEEKDAYS,
+  type BillCycle,
+} from '@dainamite/billing/modules/billing/lib/billCycle'
+import {
+  changeCycleUnit,
+  parseCycleInterval,
+  type AccountFields,
+  type AccountOption,
+  type OrderSetupFormState,
+} from '../../lib/orderSetupForm'
 
-const BILL_CYCLE_OPTIONS = ['monthly', 'quarterly', 'annually', 'weekly'] as const
+const MONTH_DAYS = Array.from({ length: 31 }, (_, index) => String(index + 1))
+// Monday-first for the picker; storage codes stay `sun`…`sat`.
+const WEEKDAY_ORDER = [...WEEKDAYS.slice(1), WEEKDAYS[0]]
+const PLURAL_KEYS = new Set(['one', 'few', 'many', 'other'])
+
+const UNIT_FALLBACK: Record<BillCycle, [string, string]> = {
+  daily: ['day', 'days'],
+  weekly: ['week', 'weeks'],
+  monthly: ['month', 'months'],
+  annually: ['year', 'years'],
+}
+
+/** Unit label agreeing with N ("1 month" / "3 months"; Polish few / many forms). */
+function useCycleUnitLabel() {
+  const t = useT()
+  const locale = useLocale()
+  const rules = React.useMemo(() => {
+    try {
+      return new Intl.PluralRules(locale)
+    } catch {
+      return new Intl.PluralRules('en')
+    }
+  }, [locale])
+  return React.useCallback(
+    (unit: BillCycle, count: number) => {
+      const category = rules.select(count)
+      const key = PLURAL_KEYS.has(category) ? category : 'other'
+      const [one, other] = UNIT_FALLBACK[unit]
+      return t(`cpq_billing_connector.orderSetup.billCycle.unit.${unit}.${key}`, count === 1 ? one : other)
+    },
+    [rules, t],
+  )
+}
+
+function isBillCycle(value: string | null): value is BillCycle {
+  return value !== null && (BILL_CYCLES as readonly string[]).includes(value)
+}
 
 type AccountSectionProps = {
   state: OrderSetupFormState
@@ -30,6 +78,23 @@ function Field({ id, label, children }: { id: string; label: string; children: R
 
 export function AccountSection({ state, candidates, canListAccounts, disabled, onChange }: AccountSectionProps) {
   const t = useT()
+  const unitLabel = useCycleUnitLabel()
+  const cycle: BillCycle = isBillCycle(state.account.billCycle) ? state.account.billCycle : 'monthly'
+  const interval = parseCycleInterval(state.account.billCycleInterval)
+  const dayLabel = (day: string) =>
+    (WEEKDAYS as readonly string[]).includes(day)
+      ? t(`cpq_billing_connector.orderSetup.billCycle.weekday.${day}`, day)
+      : t('cpq_billing_connector.orderSetup.billCycle.dayOfMonth', 'day {day}', { day })
+  /** "every 3 months · day 15" for an existing account (older rows may lack N / day). */
+  const optionCycle = (option: AccountOption) => {
+    if (!isBillCycle(option.billCycle)) return option.billCycle
+    const count = option.billCycleInterval ?? 1
+    const every = t('cpq_billing_connector.orderSetup.billCycle.every', 'Every {count} {unit}', {
+      count,
+      unit: unitLabel(option.billCycle, count),
+    })
+    return option.billCycleDay ? `${every} · ${dayLabel(option.billCycleDay)}` : every
+  }
   const setAccount = (patch: Partial<AccountFields>) => onChange({ ...state, account: { ...state.account, ...patch } })
   const text = (key: keyof AccountFields) => ({
     id: `cpq-billing-setup-${key}`,
@@ -90,7 +155,7 @@ export function AccountSection({ state, candidates, canListAccounts, disabled, o
             <SelectContent>
               {candidates.map((option) => (
                 <SelectItem key={option.id} value={option.id}>
-                  {[option.name, option.currencyCode, option.billCycle, option.nextBillDate]
+                  {[option.name, option.currencyCode, optionCycle(option), option.nextBillDate]
                     .filter(Boolean)
                     .join(' · ')}
                 </SelectItem>
@@ -153,42 +218,95 @@ export function AccountSection({ state, candidates, canListAccounts, disabled, o
               <Input maxLength={3} {...text('country')} />
             </Field>
           </div>
-          <Field
-            id="cpq-billing-setup-billCycle"
-            label={t('cpq_billing_connector.orderSetup.account.billCycle', 'Bill cycle')}
-          >
-            <Select
-              value={state.account.billCycle}
-              onValueChange={(value) => setAccount({ billCycle: value })}
-              disabled={disabled}
-            >
-              <SelectTrigger id="cpq-billing-setup-billCycle">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {BILL_CYCLE_OPTIONS.map((cycle) => (
-                  <SelectItem key={cycle} value={cycle}>
-                    {t(`cpq_billing_connector.orderSetup.billCycle.${cycle}`, cycle)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </Field>
-          <Field
-            id="cpq-billing-setup-billCycleAnchor"
-            label={t('cpq_billing_connector.orderSetup.account.billCycleAnchor', 'Bill cycle anchor')}
-          >
-            <Input {...text('billCycleAnchor')} />
-          </Field>
+          <div className="space-y-1 md:col-span-2">
+            <Label htmlFor="cpq-billing-setup-billCycleInterval">
+              {t('cpq_billing_connector.orderSetup.account.billCycle', 'Bill cycle')}
+            </Label>
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              <span>{t('cpq_billing_connector.orderSetup.account.billCycleEvery', 'Every')}</span>
+              <Input
+                id="cpq-billing-setup-billCycleInterval"
+                type="number"
+                inputMode="numeric"
+                min={1}
+                max={BILL_CYCLE_INTERVAL_MAX[cycle]}
+                className="w-20"
+                aria-label={t('cpq_billing_connector.orderSetup.account.billCycleInterval', 'Number of units per cycle')}
+                value={state.account.billCycleInterval}
+                disabled={disabled}
+                onChange={(event) => setAccount({ billCycleInterval: event.target.value })}
+              />
+              <Select
+                value={cycle}
+                onValueChange={(value) => onChange({ ...state, account: changeCycleUnit(state.account, value as BillCycle) })}
+                disabled={disabled}
+              >
+                <SelectTrigger
+                  id="cpq-billing-setup-billCycle"
+                  className="w-36"
+                  aria-label={t('cpq_billing_connector.orderSetup.account.billCycleUnit', 'Cycle unit')}
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {BILL_CYCLES.map((unit) => (
+                    <SelectItem key={unit} value={unit}>
+                      {unitLabel(unit, interval ?? 1)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {cycle !== 'daily' && (
+                <>
+                  <span>{t('cpq_billing_connector.orderSetup.account.billCycleOn', 'on')}</span>
+                  <Select
+                    value={state.account.billCycleDay || undefined}
+                    onValueChange={(value) => setAccount({ billCycleDay: value })}
+                    disabled={disabled}
+                  >
+                    <SelectTrigger
+                      id="cpq-billing-setup-billCycleDay"
+                      className="w-36"
+                      aria-label={t('cpq_billing_connector.orderSetup.account.billCycleDay', 'Bill cycle day')}
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {(cycle === 'weekly' ? WEEKDAY_ORDER : MONTH_DAYS).map((day) => (
+                        <SelectItem key={day} value={day}>
+                          {dayLabel(day)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </>
+              )}
+            </div>
+            {cycle !== 'daily' && cycle !== 'weekly' && Number(state.account.billCycleDay) > 28 && (
+              <p className="text-xs text-muted-foreground">
+                {t(
+                  'cpq_billing_connector.orderSetup.account.billCycleShortMonthHint',
+                  'Shorter months bill on their last day.',
+                )}
+              </p>
+            )}
+            {interval === null || interval < 1 || interval > BILL_CYCLE_INTERVAL_MAX[cycle] ? (
+              <p className="text-xs text-destructive">
+                {t('cpq_billing_connector.orderSetup.account.billCycleIntervalRange', 'Enter a whole number from 1 to {max}.', {
+                  max: BILL_CYCLE_INTERVAL_MAX[cycle],
+                })}
+              </p>
+            ) : null}
+          </div>
           <Field
             id="cpq-billing-setup-nextBillDate"
-            label={t('cpq_billing_connector.orderSetup.account.nextBillDate', 'First bill date')}
+            label={t('cpq_billing_connector.orderSetup.account.nextBillDate', 'First bill date (optional)')}
           >
             <Input type="date" {...text('nextBillDate')} />
             <p className="text-xs text-muted-foreground">
               {t(
                 'cpq_billing_connector.orderSetup.account.nextBillDateHint',
-                'Empty = the earliest bill start of the order lines.',
+                'Empty = the next bill cycle day on or after the day the account is created.',
               )}
             </p>
           </Field>

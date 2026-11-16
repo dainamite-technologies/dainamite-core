@@ -211,7 +211,9 @@ function makeAccount(overrides: Partial<BillingAccount>): BillingAccount {
     name: overrides.name ?? 'Acme',
     currencyCode: overrides.currencyCode ?? 'EUR',
     billCycle: overrides.billCycle ?? 'monthly',
-    billCycleAnchor: overrides.billCycleAnchor ?? '1',
+    billCycleInterval: overrides.billCycleInterval ?? 1,
+    // Unpinned by default: the cycle follows `nextBillDate` (pre-cycle-day behaviour).
+    billCycleDay: overrides.billCycleDay ?? null,
     invoiceEmail: overrides.invoiceEmail ?? 'ar@acme.test',
     invoiceLanguage: overrides.invoiceLanguage ?? 'en',
     taxId: overrides.taxId ?? null,
@@ -626,6 +628,48 @@ describe('runBillRun — Spec A cycles', () => {
     expect(day(account.nextBillDate)).toBe('2027-02-14')
     expect(day(item.billedToDate)).toBe('2027-02-13')
     expect(billRun.summary).toMatchObject({ drafts_created: 3, cycles_processed: 3 })
+  })
+
+  it('bill cycle day 31 re-pins every advance (31 Jan → 28 Feb → 31 Mar)', async () => {
+    const account = makeAccount({ nextBillDate: new Date('2027-01-31T00:00:00Z'), billCycleDay: '31' })
+    const item = makeRecurringItem(account.id, 'internet', {
+      billStartDate: new Date('2027-01-31T00:00:00Z'),
+      rateJson: { unit_price: 100 },
+    })
+    const env = createEnvironment({ accounts: [account], itemsByAccount: new Map([[account.id, [item]]]) })
+    const { outcomes } = await runBillRun(
+      env.em as never,
+      env.container as never,
+      params({ asOfDate: new Date('2027-03-31T00:00:00Z') }),
+    )
+    expect(cyclesOf(outcomes[0]).map((c) => c.bill_date)).toEqual(['2027-01-31', '2027-02-28', '2027-03-31'])
+    expect(day(account.nextBillDate)).toBe('2027-04-30')
+    expect(day(item.billedToDate)).toBe('2027-04-29')
+  })
+
+  it('a moved bill cycle day bills one short alignment period, then the new day', async () => {
+    // Was billed on the 15th through 14 Nov (items paid ahead to 14 Dec); day changed to 1.
+    const account = makeAccount({
+      nextBillDate: new Date('2026-12-01T00:00:00Z'),
+      lastBillDate: new Date('2026-11-14T00:00:00Z'),
+      billCycleDay: '1',
+    })
+    const item = makeRecurringItem(account.id, 'internet', {
+      billStartDate: new Date('2026-10-15T00:00:00Z'),
+      billedToDate: new Date('2026-12-14T00:00:00Z'),
+      rateJson: { unit_price: 100 },
+    })
+    const env = createEnvironment({ accounts: [account], itemsByAccount: new Map([[account.id, [item]]]) })
+    const { outcomes } = await runBillRun(
+      env.em as never,
+      env.container as never,
+      params({ asOfDate: new Date('2027-01-01T00:00:00Z') }),
+    )
+    expect(cyclesOf(outcomes[0]).map((c) => c.bill_date)).toEqual(['2026-12-01', '2027-01-01'])
+    expect(day(account.lastBillDate)).toBe('2026-12-31')
+    expect(day(account.nextBillDate)).toBe('2027-02-01')
+    expect(day(item.billedToDate)).toBe('2027-01-31')
+    expect(invoicesOf(env.captured.persisted)).toHaveLength(2)
   })
 
   it('a scheduled run catches up exactly like a manual one', async () => {

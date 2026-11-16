@@ -6,6 +6,7 @@ import type { RecurringLine } from './servicePeriods'
 import { draftNumber, testNumber } from './numbering'
 import { sumTotals } from './vat'
 import { lineVat, priceBasisOf, unitPriceNetOf, type PriceBasis } from './lineAmounts'
+import { parseCreditReason } from './creditReason'
 
 /**
  * Writes a billing-owned draft invoice (`billing_invoices` +
@@ -242,9 +243,13 @@ export function displayPeriod(lines: readonly InvoiceLineDescriptor[], fallback:
  * localized labels later).
  */
 export function buildRecurringLineDescriptors(
-  item: Pick<BillingItem, 'id' | 'description' | 'chargeTiming' | 'taxRate' | 'priceBasis'>,
+  item: Pick<BillingItem, 'id' | 'description' | 'chargeTiming' | 'taxRate' | 'priceBasis'> &
+    Partial<Pick<BillingItem, 'creditReason'>>,
   lines: readonly RecurringLine[],
 ): InvoiceLineDescriptor[] {
+  // Part 2 (D8): the customer-facing reason travels with the credit lines,
+  // frozen into line metadata at bill time.
+  const creditReason = parseCreditReason(item.creditReason ?? null)
   return lines.map((line) => {
     const amount = format4dp(line.amount)
     const dated = line.proration !== null || line.kind === 'credit'
@@ -268,6 +273,7 @@ export function buildRecurringLineDescriptors(
           ? { proration: { active_days: line.proration.activeDays, period_days: line.proration.periodDays } }
           : {}),
         ...(line.kind === 'credit' ? { credit_for: item.id } : {}),
+        ...(line.kind === 'credit' && creditReason ? { credit_reason: creditReason } : {}),
       },
     }
   })

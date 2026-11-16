@@ -19,6 +19,8 @@ import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import { ItemPriceField } from './ItemPriceField'
 import { BILLING_SETTINGS_HREF } from './BillingSettingsLink'
 import { counterpartAmount, type PriceBasis } from '../lib/lineAmounts'
+import { CreditReasonField, isCreditReasonRequired } from './CreditReasonField'
+import { endsBeforeStart } from '../lib/itemDates'
 
 /**
  * Shared form for Billing Item create + edit.
@@ -87,6 +89,8 @@ export type ItemFormProps = {
   accountBillingMode?: 'postpaid' | 'prepaid'
   /** Edit mode: the item's account currency, shown next to the rate (Spec F, F2). */
   accountCurrency?: string
+  /** Edit mode: how far the item is billed — drives the credit warning (Part 2). */
+  billedToDate?: string | null
   submitting?: boolean
   /** Returns the assembled payload (with rate_json built). */
   onSubmit: (assembled: AssembledItemPayload) => Promise<void> | void
@@ -108,6 +112,8 @@ export type AssembledItemPayload = {
   prorate?: boolean
   taxRate?: number
   priceBasis?: PriceBasis
+  /** Part 2: set when the new end date credits already-billed days. */
+  creditReason?: string
 }
 
 const EMPTY_VALUES: ItemFormValues = {
@@ -155,6 +161,7 @@ export function ItemForm({
   initial,
   accountBillingMode,
   accountCurrency,
+  billedToDate = null,
   submitting = false,
   onSubmit,
   onCancel,
@@ -167,6 +174,18 @@ export function ItemForm({
   const currencyCode = accountCurrency ?? selectedAccount?.currency_code ?? ''
   const [error, setError] = React.useState<string | null>(null)
   const isEdit = mode === 'edit'
+  const [creditReason, setCreditReason] = React.useState('')
+  // Part 2: an earlier end date on a billed recurring item credits days — ask why.
+  const initialEndDate = initial?.billEndDate ?? ''
+  const endDateChanged = isEdit && values.billEndDate !== initialEndDate
+  const creditItem = {
+    type: values.type,
+    prorate: initial?.prorate ?? true,
+    billStartDate: values.billStartDate || initial?.billStartDate || '',
+    billedToDate,
+  }
+  const creditReasonRequired =
+    endDateChanged && isCreditReasonRequired(creditItem, values.billEndDate || null)
 
   const initialKey = React.useMemo(() => JSON.stringify(initial ?? null), [initial])
   React.useEffect(() => {
@@ -324,6 +343,14 @@ export function ItemForm({
       setError(t('billing.items.form.error.uom_required', 'UoM code is required for usage items'))
       return
     }
+    if (values.billEndDate && endsBeforeStart(values.billStartDate, values.billEndDate)) {
+      setError(t('billing.items.form.error.end_before_start', 'The end date cannot be more than one day before the start date'))
+      return
+    }
+    if (creditReasonRequired && !creditReason.trim()) {
+      setError(t('billing.items.form.error.credit_reason_required', 'Give the reason for the credit — it is shown on the invoice'))
+      return
+    }
     const taxRate = toNumber(values.taxRate)
     if (values.taxRate.trim() !== '' && (taxRate == null || taxRate < 0 || taxRate > 100)) {
       setError(t('billing.items.form.error.tax_rate_invalid', 'VAT rate must be between 0 and 100'))
@@ -359,8 +386,9 @@ export function ItemForm({
     if (taxRate != null) payload.taxRate = taxRate
     payload.priceBasis = effectiveBasis
     if (isEdit) payload.isActive = values.isActive
+    if (creditReasonRequired) payload.creditReason = creditReason.trim()
     await onSubmit(payload)
-  }, [buildRateJson, effectiveBasis, isEdit, onSubmit, t, values])
+  }, [buildRateJson, creditReason, creditReasonRequired, effectiveBasis, isEdit, onSubmit, t, values])
 
   const handleKeyDown = React.useCallback(
     (event: React.KeyboardEvent<HTMLDivElement>) => {
@@ -452,6 +480,17 @@ export function ItemForm({
             onChange={(event) => set('billEndDate', event.currentTarget.value)}
           />
         </label>
+
+        {endDateChanged ? (
+          <div className="col-span-2">
+            <CreditReasonField
+              item={creditItem}
+              newEndDate={values.billEndDate || null}
+              value={creditReason}
+              onChange={setCreditReason}
+            />
+          </div>
+        ) : null}
 
         <label className="flex flex-col gap-1 text-sm col-span-2">
           <span className="text-muted-foreground">

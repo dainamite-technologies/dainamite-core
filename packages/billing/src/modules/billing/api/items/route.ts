@@ -47,6 +47,8 @@ const billingItemListItemSchema = z.object({
   source_ref: z.string().nullable(),
   currency_mismatch: z.boolean(),
   billed_to_date: z.string().nullable(),
+  /** Part 2: why ending the item credited billed days (`{ kind: 'text' | 'code', … }`). */
+  credit_reason: z.record(z.string(), z.unknown()).nullable().optional(),
   charge_timing: z.enum(['in_advance', 'in_arrears']),
   prorate: z.boolean(),
   tax_rate: z.union([z.string(), z.number()]),
@@ -94,6 +96,7 @@ const crud = makeCrudRoute({
       'source_ref',
       'currency_mismatch',
       'billed_to_date',
+      'credit_reason',
       'charge_timing',
       'prorate',
       'tax_rate',
@@ -252,7 +255,9 @@ export const openApi = createBillingCrudOpenApi({
       '`deduplicated: true` instead of creating a duplicate. The unique index ' +
       'on `(tenant_id, bill_account_id, source_ref)` is the correctness gate. ' +
       'Recurring items accept `chargeTiming` (`in_advance` default | `in_arrears`) and ' +
-      '`prorate` (default true); other types reject non-default values (400).',
+      '`prorate` (default true); other types reject non-default values (400). ' +
+      'An end date more than one day before the start date returns 422 `billing.item.end_before_start` ' +
+      '(`end = start − 1` means cancelled before start; the item never bills).',
   },
   update: {
     schema: billingItemUpdateSchema,
@@ -261,7 +266,11 @@ export const openApi = createBillingCrudOpenApi({
       'Updates a billing item. `type` and `sourceRef` are immutable — to change ' +
       'either, soft-delete the item and create a new one. `chargeTiming` / `prorate` ' +
       'may change at any time on recurring items — billing resumes from `billed_to_date`, ' +
-      'so no day is billed twice.',
+      'so no day is billed twice. Moving `billEndDate` before `billed_to_date` on a prorated recurring item credits ' +
+      'the billed days: the request must then carry a customer-facing reason — `creditReason` (operator text, ≤ 500 chars) ' +
+      'or `creditReasonCode` + `creditReasonParams` (generated, rendered in the invoice language) — else 422 ' +
+      '`billing.item.credit_reason_required`. A reason sent when nothing is credited is ignored. ' +
+      '422 `billing.item.end_before_start` when the end date is more than one day before the start.',
   },
   del: {
     schema: z.object({ id: z.string().uuid() }),

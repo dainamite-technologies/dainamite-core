@@ -4,7 +4,6 @@ import { mapSubscriptionItemsToBillingItems } from '../lib/chargeMapper'
 import type { CpqSubscriptionItem } from '../lib/chargeMapper'
 import {
   buildAccountSeedValues,
-  earliestIsoDate,
   isUsableAccount,
   pickDefaultAccount,
   resolveLineBillStart,
@@ -64,8 +63,11 @@ export type ActivatedPayload = {
   invoiceEmail?: string
   invoiceLanguage?: string
   invoiceAddress?: Record<string, unknown>
-  billCycle?: BillCycle
-  billCycleAnchor?: string
+  /** Optional bill cycle ("every N <unit> on <day>"); default every 1 month on day 1. */
+  billCycle?: BillCycle | 'quarterly'
+  billCycleInterval?: number
+  billCycleDay?: string | number | null
+  /** Optional first bill date; omitted → billing's first cycle day on or after today. */
   nextBillDate?: string
   taxId?: string | null
   items: CpqSubscriptionItem[]
@@ -85,16 +87,15 @@ export type AppliedSetup = {
 
 export function buildAccountSeed(
   payload: ActivatedPayload,
-  options: { overrides?: AccountOverrides | null; earliestBillStart?: string | null } = {},
+  options: { overrides?: AccountOverrides | null } = {},
 ): AccountSeed {
-  const values = buildAccountSeedValues({
+  const { nextBillDate, ...values } = buildAccountSeedValues({
     defaults: payload,
     currencyCode: payload.currencyCode,
     overrides: options.overrides,
-    earliestBillStart: options.earliestBillStart,
-    activationDate: payload.activationDate,
   })
-  return { ...values, nextBillDate: new Date(values.nextBillDate) }
+  // Only an explicit date is sent; billing derives it from the cycle otherwise.
+  return nextBillDate ? { ...values, nextBillDate: new Date(`${nextBillDate}T00:00:00Z`) } : values
 }
 
 export function itemBillStart(
@@ -118,9 +119,8 @@ export async function resolveBillingAccount(params: {
   scope: Scope
   payload: ActivatedPayload
   setup: AppliedSetup | null
-  earliestBillStart: string | null
 }): Promise<{ id: string; accountMode: 'existing' | 'new' }> {
-  const { billing, scope, payload, setup, earliestBillStart } = params
+  const { billing, scope, payload, setup } = params
   const target = { customerId: payload.customerId, currencyCode: payload.currencyCode }
 
   // Re-fired event: reuse what the first run created or picked.
@@ -139,7 +139,7 @@ export async function resolveBillingAccount(params: {
   }
 
   const create = async (overrides: AccountOverrides | null) => {
-    const created = await billing.createAccount(scope, buildAccountSeed(payload, { overrides, earliestBillStart }))
+    const created = await billing.createAccount(scope, buildAccountSeed(payload, { overrides }))
     if (!created.id) throw new Error('[cpq-billing-connector] billing.accounts.create returned no id')
     return { id: created.id, accountMode: 'new' as const }
   }
@@ -182,14 +182,12 @@ export default async function handle(payload: ActivatedPayload): Promise<void> {
 
   const activationDate = toIsoDate(payload.activationDate) ?? todayIsoDate()
   const billStartFor = (item: CpqSubscriptionItem) => itemBillStart(item, setup, activationDate)
-  const earliestBillStart = earliestIsoDate(payload.items.map(billStartFor))
 
   const account = await resolveBillingAccount({
     billing: billingApi,
     scope,
     payload,
     setup,
-    earliestBillStart,
   })
 
   if (payload.sourceOrderId) {

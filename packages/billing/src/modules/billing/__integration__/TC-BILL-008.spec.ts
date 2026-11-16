@@ -34,7 +34,7 @@ async function postedInvoiceFor(request: APIRequestContext, token: string, invoi
       name: `Send ${uniq()}`,
       currencyCode: 'PLN',
       billCycle: 'monthly',
-      billCycleAnchor: '1',
+      billCycleDay: '1',
       invoiceEmail,
       nextBillDate: '2026-10-01',
       invoiceAddress: { line1: 'ul. Testowa 1', city: 'Warszawa', postal_code: '00-001', country: 'PL' },

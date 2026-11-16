@@ -1,5 +1,6 @@
-import type { BillCycle, ChargeTiming } from '../data/validators'
-import { addDays, cloneAtMidnight, shiftCycles } from './billPeriod'
+import type { ChargeTiming } from '../data/validators'
+import type { CycleInput } from './billCycle'
+import { addDays, advanceNextBillDate, approxCycleDays, cloneAtMidnight, gridAnchorFor, shiftCycles } from './billPeriod'
 
 /**
  * Recurring-charge computation for one bill date (Spec A).
@@ -10,10 +11,13 @@ import { addDays, cloneAtMidnight, shiftCycles } from './billPeriod'
  * per simulated bill date and owns persistence.
  *
  * Model:
- *   - The account's cycle grid is anchored at the bill date `D`:
+ *   - The account's cycle grid is anchored at the bill date `D` (or, when `D`
+ *     is off the bill cycle day, at the cycle day before it):
  *     …, D − cycle, D, D + cycle, …  (each period `[g_k, g_{k+1} − 1]`).
  *   - Horizon — how far the item is billed on `D`:
- *       in_advance → D + cycle − 1     in_arrears → D − 1
+ *       in_advance → next bill date − 1     in_arrears → D − 1
+ *     (next bill date = D + cycle on the cycle day; the next cycle day when
+ *     aligning, so the short alignment period is prorated).
  *   - Cursor — first unbilled day: `billed_to_date + 1`, else `bill_start_date`.
  *   - The unbilled window `[cursor, min(horizon, bill_end_date)]` is cut along
  *     the grid; each grid period becomes one line (full → unit price,
@@ -108,18 +112,17 @@ export function roundHalfUp2dp(value: number): number {
 
 type GridPeriod = { index: number; start: Date; end: Date }
 
-function gridPeriod(anchor: Date, cycle: BillCycle, index: number): GridPeriod {
+function gridPeriod(anchor: Date, cycle: CycleInput, index: number): GridPeriod {
   const start = shiftCycles(anchor, cycle, index)
   const end = addDays(shiftCycles(anchor, cycle, index + 1), -1)
   return { index, start, end }
 }
 
 /** Grid period (anchored at `anchor`) containing `date`. */
-export function gridPeriodContaining(anchor: Date, cycle: BillCycle, date: Date): GridPeriod {
+export function gridPeriodContaining(anchor: Date, cycle: CycleInput, date: Date): GridPeriod {
   const target = date.getTime()
   // Coarse estimate first so long gaps don't walk one cycle at a time.
-  const approxDays: Record<BillCycle, number> = { weekly: 7, monthly: 30.44, quarterly: 91.31, annually: 365.25 }
-  let index = Math.floor((target - anchor.getTime()) / DAY_MS / approxDays[cycle])
+  let index = Math.floor((target - anchor.getTime()) / DAY_MS / approxCycleDays(cycle))
   let period = gridPeriod(anchor, cycle, index)
   let guard = 0
   while (period.start.getTime() > target && guard++ < 1000) period = gridPeriod(anchor, cycle, --index)
@@ -134,7 +137,7 @@ export function gridPeriodContaining(anchor: Date, cycle: BillCycle, date: Date)
 function slice(
   item: RecurringItemState,
   anchor: Date,
-  cycle: BillCycle,
+  cycle: CycleInput,
   from: Date,
   to: Date,
   kind: RecurringLine['kind'],
@@ -181,7 +184,7 @@ function slice(
 
 export function computeRecurringLines(
   item: RecurringItemState,
-  params: { billDate: Date | string; cycle: BillCycle },
+  params: { billDate: Date | string; cycle: CycleInput },
 ): RecurringComputation {
   const billedTo = optDate(item.billedToDate)
   if (item.deletedAt) {
@@ -191,8 +194,11 @@ export function computeRecurringLines(
     return { lines: [], newBilledToDate: billedTo, skipped: [{ billingItemId: item.id, reason: 'item-inactive', servicePeriodStart: null, servicePeriodEnd: null }] }
   }
 
-  const anchor = toDate(params.billDate)
+  const billDate = toDate(params.billDate)
   const { cycle } = params
+  // Grid = the cycle-day boundaries. Equal to the bill date in steady state;
+  // the cycle day before it when the bill date is off-day (alignment).
+  const anchor = gridAnchorFor(billDate, cycle)
   const start = toDate(item.billStartDate)
   const end = optDate(item.billEndDate)
 
@@ -211,7 +217,7 @@ export function computeRecurringLines(
 
   // ── Charge: bill the unbilled window up to the horizon. ──
   const horizon =
-    item.chargeTiming === 'in_arrears' ? addDays(anchor, -1) : addDays(shiftCycles(anchor, cycle, 1), -1)
+    item.chargeTiming === 'in_arrears' ? addDays(billDate, -1) : addDays(advanceNextBillDate(billDate, cycle), -1)
   const cursor = billedTo ? maxDate(addDays(billedTo, 1), start) : start
   const windowEnd = end ? minDate(horizon, end) : horizon
   if (cursor.getTime() > windowEnd.getTime()) {

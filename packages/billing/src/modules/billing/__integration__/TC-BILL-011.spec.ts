@@ -31,7 +31,7 @@ async function createPrepaidAccount(request: APIRequestContext, token: string, n
       name: `Prepaid ${uniq()}`,
       currencyCode: 'EUR',
       billCycle: 'monthly',
-      billCycleAnchor: '14',
+      billCycleDay: '14',
       invoiceEmail: `inv-${uniq()}@example.com`,
       invoiceLanguage: 'en',
       nextBillDate,

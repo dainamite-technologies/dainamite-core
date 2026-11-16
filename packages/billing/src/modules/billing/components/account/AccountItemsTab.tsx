@@ -7,6 +7,7 @@ import { BillingDataTable as DataTable } from '../BillingDataTable'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
 import { itemBillingState, type ItemBillingState } from '../../lib/itemBillingState'
+import { localTodayIso } from '../../lib/dateOnly'
 import { formatDate } from './accountRow'
 
 // Snake_case projection of `GET /api/billing/items` (see its `fields`).
@@ -22,13 +23,6 @@ type AccountItemRow = {
   price_basis?: 'net' | 'gross'
   uom_code: string | null
   is_active: boolean
-}
-
-function localToday(): string {
-  const now = new Date()
-  const month = String(now.getMonth() + 1).padStart(2, '0')
-  const date = String(now.getDate()).padStart(2, '0')
-  return `${now.getFullYear()}-${month}-${date}`
 }
 
 function stateVariant(state: ItemBillingState): 'success' | 'warning' | 'neutral' | 'info' {
@@ -61,7 +55,7 @@ export function AccountItemsTab({ accountId, currencyCode }: { accountId: string
   const [totalPages, setTotalPages] = React.useState(1)
   const [loading, setLoading] = React.useState(true)
   const pageSize = 25
-  const today = React.useMemo(() => localToday(), [])
+  const today = React.useMemo(() => localTodayIso(), [])
 
   const load = React.useCallback(async () => {
     setLoading(true)
@@ -112,6 +106,8 @@ export function AccountItemsTab({ accountId, currencyCode }: { accountId: string
       switch (state.status) {
         case 'inactive':
           return t('billing.common.inactive', 'Inactive')
+        case 'cancelled':
+          return t('billing.accounts.items.state.cancelled', 'Cancelled before start')
         case 'metered':
           return t('billing.accounts.items.state.metered', 'Billed from usage')
         case 'scheduled':

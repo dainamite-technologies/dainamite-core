@@ -25,7 +25,7 @@ function accountPayload(overrides: Record<string, unknown> = {}) {
     name: `B2C Account ${uniq()}`,
     currencyCode: 'PLN',
     billCycle: 'monthly',
-    billCycleAnchor: '1',
+    billCycleDay: '1',
     invoiceEmail: `inv-${uniq()}@example.com`,
     invoiceLanguage: 'pl',
     nextBillDate: '2026-12-01',

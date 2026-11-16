@@ -293,7 +293,7 @@ describe('billing.accounts.create side effects', () => {
         name: 'Acme',
         currencyCode: 'EUR',
         billCycle: 'monthly',
-        billCycleAnchor: '1',
+        billCycleDay: '1',
         invoiceEmail: 'billing@acme.test',
         invoiceLanguage: 'en',
         invoiceAddress: { line1: 'Main St 1', city: 'Berlin', postal_code: '10115', country: 'DE' },

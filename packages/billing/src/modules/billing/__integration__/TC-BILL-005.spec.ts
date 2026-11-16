@@ -29,7 +29,7 @@ async function createAccountWithItem(request: APIRequestContext, token: string):
       name: `Catch-up ${uniq()}`,
       currencyCode: 'PLN',
       billCycle: 'monthly',
-      billCycleAnchor: '1',
+      billCycleDay: '1',
       invoiceEmail: `inv-${uniq()}@example.com`,
       invoiceLanguage: 'en',
       nextBillDate: '2026-08-01',

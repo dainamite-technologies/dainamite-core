@@ -1,3 +1,10 @@
+import {
+  BILL_CYCLES,
+  BILL_CYCLE_INTERVAL_MAX,
+  defaultCycleDay,
+  validateCycleSpec,
+  type BillCycle,
+} from '@dainamite/billing/modules/billing/lib/billCycle'
 import type { AccountOverrides, OrderSetupUpsertBody } from '../data/validators'
 import type { OrderSetupView } from '../services/orderSetupService'
 import { isArcQuoteType } from './orderSetupResolution'
@@ -13,6 +20,8 @@ export type AccountOption = {
   name: string
   currencyCode: string
   billCycle: string | null
+  billCycleInterval: number | null
+  billCycleDay: string | null
   nextBillDate: string | null
 }
 
@@ -27,7 +36,11 @@ export type AccountFields = {
   postalCode: string
   country: string
   billCycle: string
-  billCycleAnchor: string
+  /** "Every N units" as typed (validated by `validateForm`). */
+  billCycleInterval: string
+  /** '1'–'31' | 'mon'–'sun'; '' for a daily cycle. */
+  billCycleDay: string
+  /** '' = billing's first cycle day on or after today. */
   nextBillDate: string
   taxId: string
 }
@@ -42,7 +55,7 @@ export type OrderSetupFormState = {
   lineBillStarts: Record<string, string>
 }
 
-export type FormIssue = 'accountRequired' | 'nameRequired' | 'emailInvalid' | 'addressIncomplete'
+export type FormIssue = 'accountRequired' | 'nameRequired' | 'emailInvalid' | 'addressIncomplete' | 'cycleInvalid'
 
 /** New-account fields as the customer defines them (no operator overrides). */
 export function defaultAccountFields(defaults: OrderSetupView['defaults']['account']): AccountFields {
@@ -57,7 +70,8 @@ export function defaultAccountFields(defaults: OrderSetupView['defaults']['accou
     postalCode: defaults.invoiceAddress?.postal_code ?? '',
     country: defaults.invoiceAddress?.country ?? '',
     billCycle: defaults.billCycle,
-    billCycleAnchor: defaults.billCycleAnchor,
+    billCycleInterval: String(defaults.billCycleInterval),
+    billCycleDay: defaults.billCycleDay ?? '',
     nextBillDate: '',
     taxId: '',
   }
@@ -77,34 +91,96 @@ function applyOverrides(base: AccountFields, overrides: AccountOverrides): Accou
     next.country = overrides.invoiceAddress.country
   }
   if (overrides.billCycle !== undefined) next.billCycle = overrides.billCycle
-  if (overrides.billCycleAnchor !== undefined) next.billCycleAnchor = overrides.billCycleAnchor
+  if (overrides.billCycleInterval !== undefined) next.billCycleInterval = String(overrides.billCycleInterval)
+  if (overrides.billCycleDay !== undefined) next.billCycleDay = overrides.billCycleDay ?? ''
   if (overrides.nextBillDate !== undefined) next.nextBillDate = overrides.nextBillDate
   if (overrides.taxId !== undefined) next.taxId = overrides.taxId ?? ''
   return next
 }
 
 /**
- * Initial form state. A saved setup wins. Otherwise (D4): exactly one usable
- * account → preselect it; none → "create new"; several → "use existing"
- * with nothing selected, so the operator must pick.
+ * The saved setup points at an account that is no longer offered (deactivated,
+ * deleted, or its currency / customer no longer match). Only decidable when
+ * the user may list accounts — otherwise every saved account looks missing.
  */
-export function initialFormState(view: OrderSetupView, candidates: AccountOption[]): OrderSetupFormState {
+export function isSavedAccountUnavailable(
+  view: OrderSetupView,
+  candidates: AccountOption[],
+  canListAccounts: boolean,
+): boolean {
+  const saved = view.setup
+  if (!canListAccounts || !saved || saved.appliedAt) return false
+  if (saved.accountMode !== 'existing' || !saved.billingAccountId) return false
+  return !candidates.some((option) => option.id === saved.billingAccountId)
+}
+
+/**
+ * Initial form state. A saved setup wins — unless its account is no longer
+ * offered (`savedAccountUnavailable`): then the account choice is re-derived
+ * from the candidates below, so the operator is not left on a selection the
+ * server would reject with 422. Otherwise (D4): exactly one usable account →
+ * preselect it; none → "create new"; several → "use existing" with nothing
+ * selected, so the operator must pick.
+ */
+export function initialFormState(
+  view: OrderSetupView,
+  candidates: AccountOption[],
+  options: { savedAccountUnavailable?: boolean } = {},
+): OrderSetupFormState {
   const base = defaultAccountFields(view.defaults.account)
+  const derivedAccount = {
+    accountMode: candidates.length === 0 ? ('new' as const) : ('existing' as const),
+    billingAccountId: candidates.length === 1 ? candidates[0].id : null,
+  }
   if (view.setup) {
     return {
-      accountMode: view.setup.accountMode,
-      billingAccountId: view.setup.billingAccountId,
+      ...(options.savedAccountUnavailable
+        ? derivedAccount
+        : { accountMode: view.setup.accountMode, billingAccountId: view.setup.billingAccountId }),
       account: applyOverrides(base, view.setup.accountOverrides),
       defaultBillStartDate: view.setup.defaultBillStartDate ?? '',
       lineBillStarts: { ...view.setup.lineBillStarts },
     }
   }
   return {
-    accountMode: candidates.length === 0 ? 'new' : 'existing',
-    billingAccountId: candidates.length === 1 ? candidates[0].id : null,
+    ...derivedAccount,
     account: base,
     defaultBillStartDate: '',
     lineBillStarts: {},
+  }
+}
+
+/** "Every N" as a whole number, or null when it is not one. */
+export function parseCycleInterval(value: string): number | null {
+  const trimmed = value.trim()
+  if (!/^\d+$/.test(trimmed)) return null
+  return Number.parseInt(trimmed, 10)
+}
+
+function isBillCycle(value: string): value is BillCycle {
+  return (BILL_CYCLES as readonly string[]).includes(value)
+}
+
+/** True when the form's unit / N / day make a cycle billing accepts. */
+export function isCycleValid(fields: Pick<AccountFields, 'billCycle' | 'billCycleInterval' | 'billCycleDay'>): boolean {
+  const interval = parseCycleInterval(fields.billCycleInterval)
+  if (!isBillCycle(fields.billCycle) || interval === null) return false
+  const day = fields.billCycle === 'daily' ? null : fields.billCycleDay || null
+  return validateCycleSpec({ cycle: fields.billCycle, interval, day }) === null
+}
+
+/**
+ * Switching the unit: the day shape changes (day of month ↔ weekday), so the
+ * day resets to the unit default, and N is capped at the unit's maximum.
+ */
+export function changeCycleUnit(fields: AccountFields, unit: BillCycle): AccountFields {
+  const interval = parseCycleInterval(fields.billCycleInterval)
+  const max = BILL_CYCLE_INTERVAL_MAX[unit]
+  return {
+    ...fields,
+    billCycle: unit,
+    billCycleDay: defaultCycleDay(unit, null) ?? '',
+    billCycleInterval: interval !== null && interval > max ? String(max) : fields.billCycleInterval,
   }
 }
 
@@ -124,6 +200,7 @@ export function validateForm(state: OrderSetupFormState, quoteType = 'new'): For
   const addressParts = [a.line1, a.city, a.postalCode, a.country].map((v) => v.trim())
   const anyAddress = addressParts.some(Boolean) || a.line2.trim().length > 0
   if (anyAddress && addressParts.some((v) => !v)) issues.push('addressIncomplete')
+  if (!isCycleValid(a)) issues.push('cycleInvalid')
   return issues
 }
 
@@ -148,8 +225,14 @@ export function buildOverrides(fields: AccountFields, base: AccountFields): Acco
       country: fields.country.trim().toUpperCase(),
     }
   }
-  if (changed('billCycle')) o.billCycle = fields.billCycle as AccountOverrides['billCycle']
-  if (changed('billCycleAnchor') && fields.billCycleAnchor.trim()) o.billCycleAnchor = fields.billCycleAnchor.trim()
+  // The cycle is one spec: any change sends unit, N and day together, so the
+  // server validates (and billing applies) a consistent combination.
+  if (changed('billCycle') || changed('billCycleInterval') || changed('billCycleDay')) {
+    o.billCycle = fields.billCycle as AccountOverrides['billCycle']
+    const interval = parseCycleInterval(fields.billCycleInterval)
+    if (interval !== null) o.billCycleInterval = interval
+    o.billCycleDay = fields.billCycle === 'daily' ? null : fields.billCycleDay.trim() || null
+  }
   if (fields.nextBillDate) o.nextBillDate = fields.nextBillDate
   if (fields.taxId.trim()) o.taxId = fields.taxId.trim()
   return o
@@ -194,6 +277,9 @@ export function toAccountOptions(rows: unknown, target: { currencyCode: string }
       name: String(row.name ?? id),
       currencyCode: currency,
       billCycle: typeof (row.bill_cycle ?? row.billCycle) === 'string' ? String(row.bill_cycle ?? row.billCycle) : null,
+      billCycleInterval: toPositiveInt(row.bill_cycle_interval ?? row.billCycleInterval),
+      billCycleDay:
+        typeof (row.bill_cycle_day ?? row.billCycleDay) === 'string' ? String(row.bill_cycle_day ?? row.billCycleDay) : null,
       nextBillDate:
         typeof (row.next_bill_date ?? row.nextBillDate) === 'string'
           ? String(row.next_bill_date ?? row.nextBillDate).slice(0, 10)
@@ -201,4 +287,9 @@ export function toAccountOptions(rows: unknown, target: { currencyCode: string }
     })
   }
   return out
+}
+
+function toPositiveInt(value: unknown): number | null {
+  const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : Number.NaN
+  return Number.isInteger(n) && n > 0 ? n : null
 }

@@ -16,6 +16,9 @@ import { billingEntityIds } from '../data/entityIds'
 import { findBySourceRef } from '../lib/idempotency'
 import { getBillingSettings, taxRateColumn } from '../lib/billingSettings'
 import { planPriceChange } from '../lib/itemPriceChange'
+import { assertItemDates } from '../lib/itemDates'
+import { previewCredit } from '../lib/creditPreview'
+import { toCreditReason, type CreditReason, type CreditReasonInput } from '../lib/creditReason'
 import {
   billingItemBulkCreateSchema,
   billingItemChangePriceSchema,
@@ -42,6 +45,30 @@ import {
  * underlying unique index is the correctness gate; this pre-check keeps
  * the happy path single-round-trip and the response body informative.
  */
+
+export const CREDIT_REASON_REQUIRED = 'billing.item.credit_reason_required'
+
+/**
+ * Part 2 (D9): when ending `item` on `newEndDate` credits already-billed days,
+ * a reason is required; returns it (to store on the item) or null when the
+ * change credits nothing (a sent reason is then ignored).
+ */
+function requireCreditReason(
+  item: Pick<BillingItem, 'type' | 'prorate' | 'billStartDate' | 'billedToDate'>,
+  newEndDate: Date | null,
+  input: CreditReasonInput,
+): CreditReason | null {
+  const preview = previewCredit(item, newEndDate)
+  if (!preview.credited) return null
+  const reason = toCreditReason(input)
+  if (!reason) {
+    throw new CrudHttpError(422, {
+      error: 'This change credits days already billed — give a reason to show on the invoice',
+      code: CREDIT_REASON_REQUIRED,
+    })
+  }
+  return reason
+}
 
 const itemIndexer = { entityType: billingEntityIds.item } as const
 const itemEvents = { module: 'billing', entity: 'item', persistent: true } as const
@@ -104,6 +131,7 @@ const createItemCommand: CommandHandler<
     // future-proof against schema drift between the API surface and
     // the persistence layer.
     validateRateJson(parsed.type, parsed.rateJson)
+    assertItemDates(parsed.billStartDate, parsed.billEndDate)
 
     // Spec B (B-D1): an omitted rate takes the org default, stored on the item.
     const taxRate =
@@ -182,8 +210,17 @@ const updateItemCommand: CommandHandler<BillingItemUpdateInput, { id: string }> 
       throw new CrudHttpError(404, { error: 'Billing item not found' })
     }
 
+    const previousEnd = record.billEndDate ? new Date(record.billEndDate).getTime() : null
     if (parsed.billStartDate !== undefined) record.billStartDate = parsed.billStartDate
     if (parsed.billEndDate !== undefined) record.billEndDate = parsed.billEndDate
+    assertItemDates(record.billStartDate, record.billEndDate)
+    const nextEnd = record.billEndDate ? new Date(record.billEndDate).getTime() : null
+    if (nextEnd !== previousEnd) {
+      // Part 2 (D9): moving the end date into the billed window credits days —
+      // the customer-facing reason is then required.
+      const reason = requireCreditReason(record, record.billEndDate ?? null, parsed)
+      if (reason) record.creditReason = reason
+    }
     if (parsed.description !== undefined) record.description = parsed.description
     if (parsed.rateJson !== undefined) {
       // Re-validate against the current (immutable) type before persist.
@@ -406,6 +443,7 @@ const bulkCreateItemsCommand: CommandHandler<
       }
 
       validateRateJson(entry.type, entry.rateJson)
+      assertItemDates(entry.billStartDate, entry.billEndDate)
       const item = em.create(BillingItem, {
         organizationId: parsed.organizationId,
         tenantId: parsed.tenantId,
@@ -514,6 +552,8 @@ const changeItemPriceCommand: CommandHandler<
       }
       const { plan } = planned
       const now = new Date()
+      const reason = requireCreditReason(record, plan.oldItemEndDate, parsed)
+      if (reason) record.creditReason = reason
       record.billEndDate = plan.oldItemEndDate
       record.updatedAt = now
       const copy = tem.create(BillingItem, {

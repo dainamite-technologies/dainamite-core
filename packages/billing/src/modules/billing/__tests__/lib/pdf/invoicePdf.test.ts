@@ -267,3 +267,21 @@ describe('renderInvoicePdf', () => {
     expect(sanitizeForFont('Zażółć 🚀', new Set([...'Zażółć '].map((c) => c.codePointAt(0)!)))).toBe('Zażółć ?')
   }, 30_000)
 })
+
+describe('credit reason row (Part 2)', () => {
+  it('prints a generated reason in the invoice language under the credit line', () => {
+    const credit = line({
+      description: 'Plan · 2026-12-10 – 2026-12-31',
+      creditReason: { kind: 'code', code: 'subscription_amended', params: { reference: 'SO-1234', effectiveDate: '2026-12-10' } },
+    })
+    const es = model('es', {}, [credit])
+    expect(es.table.rows[0][1]).toBe(
+      `Plan · 2026-12-10 – 2026-12-31\n${DICTIONARIES.es['billing.pdf.credit_reason']}: Suscripción modificada (pedido SO-1234), con efecto 10/12/2026`,
+    )
+  })
+
+  it('prints operator text verbatim', () => {
+    const credit = line({ description: 'Plan · 2026-12-10 – 2026-12-31', creditReason: { kind: 'text', text: 'Goodwill' } })
+    expect(model('en', {}, [credit]).table.rows[0][1]).toBe('Plan · 2026-12-10 – 2026-12-31\nReason: Goodwill')
+  })
+})

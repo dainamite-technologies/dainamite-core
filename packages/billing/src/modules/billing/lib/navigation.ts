@@ -58,6 +58,24 @@ export function resolveInvoiceReturnTarget(params: { from?: string | null; accou
   return params.from === FROM_ACCOUNT && accountId ? accountHref(accountId, 'invoices') : INVOICES_LIST_HREF
 }
 
+/**
+ * Where a payment detail page returns to: the account it was opened from
+ * (`?from=account`), otherwise the global Payments list. Same contract as
+ * invoices.
+ */
+export const PAYMENTS_LIST_HREF = '/backend/billing/payments'
+
+export function paymentDetailHref(paymentId: string, opts: { fromAccountId?: string | null } = {}): string {
+  const base = `${PAYMENTS_LIST_HREF}/${encodeURIComponent(paymentId)}`
+  const accountId = (opts.fromAccountId ?? '').trim()
+  return accountId ? `${base}?from=${FROM_ACCOUNT}&accountId=${encodeURIComponent(accountId)}` : base
+}
+
+export function resolvePaymentReturnTarget(params: { from?: string | null; accountId?: string | null }): string {
+  const accountId = (params.accountId ?? '').trim()
+  return params.from === FROM_ACCOUNT && accountId ? accountHref(accountId, 'payments') : PAYMENTS_LIST_HREF
+}
+
 /** PDF of a billing document — frozen when posted, a watermarked preview otherwise. */
 export function invoicePdfHref(invoiceId: string): string {
   return `/api/billing/invoices/${encodeURIComponent(invoiceId)}/pdf`

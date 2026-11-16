@@ -1,4 +1,5 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
+import { UniqueConstraintViolationException } from '@mikro-orm/core'
 import type { AwilixContainer } from 'awilix'
 import { CpqBillingOrderSetup } from '../data/entities'
 import type { AccountOverrides, OrderSetupUpsertBody } from '../data/validators'
@@ -9,9 +10,15 @@ import {
   normalizeInvoiceAddress,
   resolveInvoiceLanguage,
   toIsoDate,
+  type BillCycle,
   type BillStartSetup,
   type BillingInvoiceAddress,
 } from '../lib/orderSetupResolution'
+import {
+  computeEarliestActivation,
+  isActivationConstrained,
+  type EarliestActivation,
+} from '../lib/earliestActivation'
 
 /**
  * The slice of `@dainamite/cpq`'s `cpqOrderService` the connector reads.
@@ -24,10 +31,14 @@ export type CpqOrderReader = {
     scope: Scope,
   ): Promise<{
     id: string
+    /** Sales order number (e.g. `SO-1234`). */
+    orderNumber?: string
     customerId: string
     cpqStatus: string
     currencyCode: string
     quoteType: string
+    /** `CpqQuoteConfiguration.id` of the source quote — the key of its ARC targets. */
+    sourceQuoteId?: string | null
     lines: Array<{
       lineId: string
       offeringName: string
@@ -50,6 +61,33 @@ export type CpqOrderReader = {
   }>
 }
 
+/**
+ * The slice of `@dainamite/cpq`'s `cpqQuotingService` the connector reads:
+ * the ARC target subscriptions of a quote (`cpq_quote_target_subscriptions`).
+ */
+export type CpqQuoteTargetReader = {
+  listTargetSubscriptions(
+    quoteId: string,
+    scope: Scope,
+  ): Promise<Array<{ subscriptionId: string; quoteType: string }>>
+}
+
+/** The earliest-activation part of the order-setup read model (Part 2, 6c). */
+export type EarliestActivationView = {
+  /** YYYY-MM-DD, or null when activation is not constrained. */
+  earliestActivationDate: string | null
+  earliestActivationReason: { subscriptionId: string; itemDescription: string } | null
+}
+
+export function toEarliestActivationView(earliest: EarliestActivation | null): EarliestActivationView {
+  return earliest
+    ? {
+        earliestActivationDate: earliest.date,
+        earliestActivationReason: { subscriptionId: earliest.subscriptionId, itemDescription: earliest.itemDescription },
+      }
+    : { earliestActivationDate: null, earliestActivationReason: null }
+}
+
 export class OrderSetupError extends Error {
   constructor(
     readonly status: 404 | 409 | 422,
@@ -57,6 +95,31 @@ export class OrderSetupError extends Error {
   ) {
     super(message)
     this.name = 'OrderSetupError'
+  }
+}
+
+/**
+ * A concurrent writer created the order's setup row first (unique index on
+ * organization + tenant + order). Constructor-name fallback survives class
+ * duplication across bundles.
+ */
+export function isUniqueViolation(err: unknown): boolean {
+  return (
+    err instanceof UniqueConstraintViolationException ||
+    (err as { constructor?: { name?: string } } | null)?.constructor?.name === 'UniqueConstraintViolationException'
+  )
+}
+
+/**
+ * Run a find-or-create write; if it loses a create race, run it once more on
+ * a fresh fork — the retry finds the winner's row and updates it instead.
+ */
+async function retryOnCreateRace<T>(write: (em: EntityManager) => Promise<T>, fork: () => EntityManager): Promise<T> {
+  try {
+    return await write(fork())
+  } catch (err) {
+    if (!isUniqueViolation(err)) throw err
+    return write(fork())
   }
 }
 
@@ -81,7 +144,7 @@ export type OrderSetupSnapshot = {
   updatedAt: string
 }
 
-export type OrderSetupView = {
+export type OrderSetupView = EarliestActivationView & {
   orderId: string
   orderStatus: string
   quoteType: string
@@ -98,8 +161,10 @@ export type OrderSetupView = {
       invoiceEmail: string | null
       invoiceLanguage: string
       invoiceAddress: Partial<BillingInvoiceAddress> | null
-      billCycle: 'monthly'
-      billCycleAnchor: string
+      /** Default bill cycle of a new account: every 1 month on day 1. */
+      billCycle: BillCycle
+      billCycleInterval: number
+      billCycleDay: string | null
     }
     lines: Array<{
       lineId: string
@@ -185,6 +250,10 @@ export class CpqBillingOrderSetupService {
     return this.deps.container.resolve('cpqOrderService') as CpqOrderReader
   }
 
+  private cpqQuotes(): CpqQuoteTargetReader {
+    return this.deps.container.resolve('cpqQuotingService') as CpqQuoteTargetReader
+  }
+
   private billing(): BillingApiClient {
     return new BillingApiClient(this.deps.container)
   }
@@ -209,6 +278,29 @@ export class CpqBillingOrderSetupService {
     })
   }
 
+  /**
+   * Earliest activation date of an ARC `amend` / `cancel` order: the latest
+   * bill start among its target subscriptions' billing items (Part 2, 6c).
+   * Two bounded reads — the quote's targets (CPQ), then their items
+   * (billing) — and none for other quote types.
+   */
+  async resolveEarliestActivation(
+    scope: Scope,
+    order: { quoteType: string; sourceQuoteId?: string | null },
+  ): Promise<EarliestActivation | null> {
+    if (!isActivationConstrained(order.quoteType) || !order.sourceQuoteId) return null
+    const targets = await this.cpqQuotes().listTargetSubscriptions(order.sourceQuoteId, scope)
+    const subscriptionIds = [...new Set(targets.map((target) => target.subscriptionId).filter(Boolean))]
+    const items = await this.billing().findItemsBySubscriptions(scope, subscriptionIds)
+    return computeEarliestActivation(order.quoteType, items)
+  }
+
+  /** `resolveEarliestActivation` by order id (the activation guard's entry point). */
+  async resolveEarliestActivationForOrder(scope: Scope, orderId: string): Promise<EarliestActivation | null> {
+    const order = await this.loadOrder(scope, orderId)
+    return this.resolveEarliestActivation(scope, order)
+  }
+
   async getView(scope: Scope, orderId: string): Promise<OrderSetupView> {
     const order = await this.loadOrder(scope, orderId)
     type CustomerFields = Awaited<ReturnType<CpqOrderReader['getOrderCustomerFields']>>
@@ -219,8 +311,18 @@ export class CpqBillingOrderSetupService {
       typeof reader.getOrderCustomerFields === 'function'
         ? reader.getOrderCustomerFields(orderId, scope).catch(() => ({}))
         : Promise.resolve({})
-    const [setup, customer] = await Promise.all([this.findSetup(scope, orderId), customerFields])
+    const [setup, customer, earliest] = await Promise.all([
+      this.findSetup(scope, orderId),
+      customerFields,
+      // A hint only: a failed read hides the callout instead of the whole tab
+      // (the activation guard computes the rule again and enforces it).
+      this.resolveEarliestActivation(scope, order).catch((err) => {
+        console.warn('[cpq_billing_connector] earliest activation date unavailable', err)
+        return null
+      }),
+    ])
     return {
+      ...toEarliestActivationView(earliest),
       orderId: order.id,
       orderStatus: order.cpqStatus,
       quoteType: order.quoteType,
@@ -235,7 +337,8 @@ export class CpqBillingOrderSetupService {
           invoiceLanguage: resolveInvoiceLanguage(undefined),
           invoiceAddress: partialBillingAddress(customer.invoiceAddress),
           billCycle: 'monthly',
-          billCycleAnchor: '1',
+          billCycleInterval: 1,
+          billCycleDay: '1',
         },
         lines: billableLines(order.quoteType, order.lines).map((line) => ({
             lineId: line.lineId,
@@ -286,31 +389,34 @@ export class CpqBillingOrderSetupService {
       throw new OrderSetupError(422, `Lines that get no billing item on this order: ${unknownLines.join(', ')}`)
     }
 
-    const em = this.fork()
-    const existing = await this.findSetup(scope, orderId, em)
-    if (existing?.appliedAt) {
-      throw new OrderSetupError(409, 'Billing setup was already applied at activation')
-    }
-    const before = existing ? serializeOrderSetup(existing) : null
-    const row =
-      existing ??
-      em.create(CpqBillingOrderSetup, {
-        tenantId: scope.tenantId,
-        organizationId: scope.organizationId,
-        cpqOrderId: orderId,
-        customerId: order.customerId,
-        currencyCode: order.currencyCode.toUpperCase(),
-        accountMode,
-      })
-    row.accountMode = accountMode
-    row.billingAccountId = !arc && accountMode === 'existing' ? (body.billingAccountId ?? null) : null
-    row.accountOverrides = !arc && accountMode === 'new' ? { ...(body.accountOverrides ?? {}) } : {}
-    row.defaultBillStartDate = body.defaultBillStartDate ?? null
-    row.lineBillStarts = { ...(body.lineBillStarts ?? {}) }
-    row.updatedAt = new Date()
-    if (!existing) em.persist(row)
-    await em.flush()
-    return { before, after: serializeOrderSetup(row) }
+    // PUT replaces the whole setup, so a concurrent save that created the row
+    // first is simply overwritten (last writer wins) instead of surfacing a 500.
+    return retryOnCreateRace(async (em) => {
+      const existing = await this.findSetup(scope, orderId, em)
+      if (existing?.appliedAt) {
+        throw new OrderSetupError(409, 'Billing setup was already applied at activation')
+      }
+      const before = existing ? serializeOrderSetup(existing) : null
+      const row =
+        existing ??
+        em.create(CpqBillingOrderSetup, {
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          cpqOrderId: orderId,
+          customerId: order.customerId,
+          currencyCode: order.currencyCode.toUpperCase(),
+          accountMode,
+        })
+      row.accountMode = accountMode
+      row.billingAccountId = !arc && accountMode === 'existing' ? (body.billingAccountId ?? null) : null
+      row.accountOverrides = !arc && accountMode === 'new' ? { ...(body.accountOverrides ?? {}) } : {}
+      row.defaultBillStartDate = body.defaultBillStartDate ?? null
+      row.lineBillStarts = { ...(body.lineBillStarts ?? {}) }
+      row.updatedAt = new Date()
+      if (!existing) em.persist(row)
+      await em.flush()
+      return { before, after: serializeOrderSetup(row) }
+    }, () => this.fork())
   }
 
   /** Undo of `save`: put the row back as it was (or remove the row `save` created). */
@@ -348,23 +454,27 @@ export class CpqBillingOrderSetupService {
     scope: Scope,
     input: { orderId: string; customerId: string; currencyCode: string; billingAccountId: string; accountMode: 'existing' | 'new' },
   ): Promise<void> {
-    const em = this.fork()
-    const existing = await this.findSetup(scope, input.orderId, em)
-    const row =
-      existing ??
-      em.create(CpqBillingOrderSetup, {
-        tenantId: scope.tenantId,
-        organizationId: scope.organizationId,
-        cpqOrderId: input.orderId,
-        customerId: input.customerId,
-        currencyCode: input.currencyCode.toUpperCase(),
-        accountMode: input.accountMode,
-      })
-    row.appliedAt = new Date()
-    row.appliedBillingAccountId = input.billingAccountId
-    row.updatedAt = new Date()
-    if (!existing) em.persist(row)
-    await em.flush()
+    // Two events for one order (an ARC order touching several subscriptions)
+    // can race to create the row; the loser retries and updates it.
+    await retryOnCreateRace(async (em) => {
+      const existing = await this.findSetup(scope, input.orderId, em)
+      const row =
+        existing ??
+        em.create(CpqBillingOrderSetup, {
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          cpqOrderId: input.orderId,
+          customerId: input.customerId,
+          currencyCode: input.currencyCode.toUpperCase(),
+          accountMode: input.accountMode,
+        })
+      // Keep the first application time: it is what locks the setup.
+      row.appliedAt = row.appliedAt ?? new Date()
+      row.appliedBillingAccountId = input.billingAccountId
+      row.updatedAt = new Date()
+      if (!existing) em.persist(row)
+      await em.flush()
+    }, () => this.fork())
   }
 }
 

@@ -25,7 +25,7 @@ async function createAccount(request: APIRequestContext, token: string, nextBill
       name: `Run delete ${uniq()}`,
       currencyCode: 'PLN',
       billCycle: 'monthly',
-      billCycleAnchor: '1',
+      billCycleDay: '1',
       invoiceEmail: `inv-${uniq()}@example.com`,
       invoiceLanguage: 'en',
       nextBillDate,

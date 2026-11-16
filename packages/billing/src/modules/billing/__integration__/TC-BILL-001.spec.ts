@@ -30,7 +30,7 @@ function accountPayload(overrides: Record<string, unknown> = {}) {
     name: `Account ${uniq()}`,
     currencyCode: 'PLN',
     billCycle: 'monthly',
-    billCycleAnchor: '1',
+    billCycleDay: '1',
     invoiceEmail: `inv-${uniq()}@example.com`,
     invoiceLanguage: 'pl',
     nextBillDate: '2026-07-01',

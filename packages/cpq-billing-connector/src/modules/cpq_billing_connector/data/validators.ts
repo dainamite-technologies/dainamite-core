@@ -1,9 +1,11 @@
 import { z } from 'zod'
 import {
   BILL_CYCLES,
-  billCycleAnchorSchema,
+  billCycleDaySchema,
+  billCycleIntervalSchema,
   invoiceAddressSchema,
 } from '@dainamite/billing/modules/billing/data/validators'
+import { defaultCycleDay, validateCycleSpec } from '@dainamite/billing/modules/billing/lib/billCycle'
 import { INVOICE_LANGUAGE_CODES } from '@dainamite/billing/modules/billing/lib/invoiceLanguages'
 
 /** Same rule as billing's account schema: a code its document template supports. */
@@ -25,6 +27,12 @@ export type OrderSetupAccountMode = (typeof ORDER_SETUP_ACCOUNT_MODES)[number]
  * New-account fields an operator may override. Validated with billing's own
  * schemas so a saved override can never fail `billing.accounts.create` later.
  * Strict: unknown keys are rejected rather than silently stored.
+ *
+ * Bill cycle: `billCycleInterval` / `billCycleDay` are checked against the
+ * unit with billing's `validateCycleSpec`. When the unit is not overridden
+ * the connector's default unit (monthly) applies — the order setup view
+ * offers no other upstream unit — so a lone day / interval is checked
+ * against monthly.
  */
 export const accountOverridesSchema = z
   .object({
@@ -34,12 +42,24 @@ export const accountOverridesSchema = z
     invoiceLanguage: invoiceLanguageSchema,
     invoiceAddress: invoiceAddressSchema,
     billCycle: z.enum(BILL_CYCLES),
-    billCycleAnchor: billCycleAnchorSchema,
+    billCycleInterval: billCycleIntervalSchema,
+    billCycleDay: billCycleDaySchema,
     nextBillDate: isoDateSchema,
     taxId: z.string().trim().max(64).nullable(),
   })
   .partial()
   .strict()
+  .superRefine((value, ctx) => {
+    if (value.billCycle === undefined && value.billCycleInterval === undefined && value.billCycleDay === undefined) return
+    const cycle = value.billCycle ?? 'monthly'
+    const anchor = value.nextBillDate ? new Date(`${value.nextBillDate}T00:00:00Z`) : null
+    const issue = validateCycleSpec({
+      cycle,
+      interval: value.billCycleInterval ?? 1,
+      day: value.billCycleDay === undefined ? defaultCycleDay(cycle, anchor) : value.billCycleDay,
+    })
+    if (issue) ctx.addIssue({ code: 'custom', path: [issue.path], message: issue.message })
+  })
 
 export type AccountOverrides = z.infer<typeof accountOverridesSchema>
 

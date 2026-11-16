@@ -6,7 +6,7 @@ import {
   roundHalfUp2dp,
   type RecurringItemState,
 } from '../../lib/servicePeriods'
-import type { BillCycle } from '../../data/validators'
+import type { CycleInput } from '../../lib/billCycle'
 
 const d = (iso: string) => new Date(`${iso}T00:00:00.000Z`)
 const iso = (date: Date | null) => (date ? date.toISOString().slice(0, 10) : null)
@@ -26,7 +26,7 @@ function item(overrides: Partial<RecurringItemState> = {}): RecurringItemState {
   }
 }
 
-function run(state: RecurringItemState, billDate: string, cycle: BillCycle = 'monthly') {
+function run(state: RecurringItemState, billDate: string, cycle: CycleInput = 'monthly') {
   const res = computeRecurringLines(state, { billDate: d(billDate), cycle })
   return {
     ...res,
@@ -169,7 +169,7 @@ describe('computeRecurringLines — edge cases', () => {
     expect(run(item({ billStartDate: d('2026-11-16') }), '2026-11-16', 'weekly').periods).toEqual([
       ['2026-11-16', '2026-11-22', 100],
     ])
-    expect(run(item({ billStartDate: d('2026-10-01') }), '2026-10-01', 'quarterly').periods).toEqual([
+    expect(run(item({ billStartDate: d('2026-10-01') }), '2026-10-01', { cycle: 'monthly', interval: 3, day: '1' }).periods).toEqual([
       ['2026-10-01', '2026-12-31', 100],
     ])
     expect(run(item({ billStartDate: d('2026-01-01') }), '2026-01-01', 'annually').periods).toEqual([
@@ -186,5 +186,33 @@ describe('computeRecurringLines — edge cases', () => {
     const r = run(item({ chargeTiming: 'in_arrears', billStartDate: d('2000-01-01') }), '2026-12-01')
     expect(r.lines).toHaveLength(MAX_PERIODS_PER_ITEM)
     expect(r.skipped.at(-1)?.reason).toBe('period-cap-reached')
+  })
+})
+
+describe('computeRecurringLines — bill cycle day alignment', () => {
+  const on1st = { cycle: 'monthly' as const, interval: 1, day: '1' }
+
+  it('a day change (15th → 1st) prorates the gap up to the new grid, then bills full periods', () => {
+    // Billed through 14 Dec on the old 15th cycle; the next bill moved to 1 Dec.
+    const first = run(item({ billStartDate: d('2026-10-15'), billedToDate: d('2026-12-14') }), '2026-12-01', on1st)
+    expect(first.periods).toEqual([['2026-12-15', '2026-12-31', 54.84]])
+    expect(first.watermark).toBe('2026-12-31')
+    const next = run(item({ billStartDate: d('2026-10-15'), billedToDate: d('2026-12-31') }), '2027-01-01', on1st)
+    expect(next.periods).toEqual([['2027-01-01', '2027-01-31', 100]])
+  })
+
+  it('an off-day first bill date charges only up to the next cycle day', () => {
+    const res = run(item({ billStartDate: d('2027-01-10') }), '2027-01-10', on1st)
+    expect(res.periods).toEqual([['2027-01-10', '2027-01-31', 70.97]])
+  })
+
+  it('every 2 months on day 1 bills one two-month period', () => {
+    const res = run(item({ billStartDate: d('2027-01-01') }), '2027-01-01', { cycle: 'monthly', interval: 2, day: '1' })
+    expect(res.periods).toEqual([['2027-01-01', '2027-02-28', 100]])
+  })
+
+  it('every 30 days', () => {
+    const res = run(item({ billStartDate: d('2027-01-01') }), '2027-01-01', { cycle: 'daily', interval: 30, day: null })
+    expect(res.periods).toEqual([['2027-01-01', '2027-01-30', 100]])
   })
 })

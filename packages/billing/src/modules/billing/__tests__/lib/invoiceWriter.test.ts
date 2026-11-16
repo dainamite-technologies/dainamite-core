@@ -172,6 +172,35 @@ describe('line builders carry the item VAT rate (Spec B)', () => {
     ] as never)
     expect(lines.map((l) => l.taxRate)).toEqual(['23', '23'])
   })
+
+  it('freezes the item credit reason into credit lines only (Part 2)', () => {
+    const item = {
+      id: 'r',
+      description: 'Plan',
+      chargeTiming: 'in_advance' as const,
+      taxRate: '23',
+      priceBasis: 'net' as const,
+      creditReason: { kind: 'text', text: 'Downgrade' },
+    }
+    const lines = buildRecurringLineDescriptors(item, [
+      {
+        kind: 'charge',
+        servicePeriodStart: new Date('2026-12-01T00:00:00Z'),
+        servicePeriodEnd: new Date('2026-12-31T00:00:00Z'),
+        amount: 100,
+        proration: null,
+      },
+      {
+        kind: 'credit',
+        servicePeriodStart: new Date('2026-12-10T00:00:00Z'),
+        servicePeriodEnd: new Date('2026-12-31T00:00:00Z'),
+        amount: -71,
+        proration: { activeDays: 22, periodDays: 31 },
+      },
+    ] as never)
+    expect(lines[0].metadataExtra).not.toHaveProperty('credit_reason')
+    expect(lines[1].metadataExtra).toMatchObject({ credit_reason: { kind: 'text', text: 'Downgrade' } })
+  })
 })
 
 type Created = { entity: string; data: Record<string, unknown> }

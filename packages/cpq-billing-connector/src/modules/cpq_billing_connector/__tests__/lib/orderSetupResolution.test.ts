@@ -4,6 +4,7 @@ import {
   isUsableAccount,
   normalizeInvoiceAddress,
   pickDefaultAccount,
+  resolveCycleSpec,
   resolveLineBillStart,
   toIsoDate,
   type AccountCandidate,
@@ -61,16 +62,17 @@ describe('buildAccountSeedValues (D5)', () => {
   }
 
   it('takes customer data instead of placeholders', () => {
-    const seed = buildAccountSeedValues({ defaults, currencyCode: 'COP', activationDate: '2026-11-15' })
+    const seed = buildAccountSeedValues({ defaults, currencyCode: 'COP' })
     expect(seed).toMatchObject({
       name: 'Test S.A.S.',
       invoiceEmail: 'ap@test.co',
       customerKind: 'company',
       invoiceAddress: { line1: 'Calle 93', city: 'Bogotá', postal_code: '110221', country: 'CO' },
-      nextBillDate: '2026-11-15',
       billCycle: 'monthly',
-      billCycleAnchor: '1',
+      billCycleInterval: 1,
+      billCycleDay: '1',
     })
+    expect(seed).not.toHaveProperty('nextBillDate')
     expect(seed.invoiceAddress).not.toHaveProperty('region')
   })
 
@@ -90,19 +92,32 @@ describe('buildAccountSeedValues (D5)', () => {
     expect(seed.invoiceAddress).toEqual({ line1: 'TBD', city: 'TBD', postal_code: 'TBD', country: 'XX' })
   })
 
-  it('starts billing at the earliest bill start when it is later than activation', () => {
+  it('sends a first bill date only when the operator or upstream gave one', () => {
+    expect(buildAccountSeedValues({ defaults, currencyCode: 'COP' })).not.toHaveProperty('nextBillDate')
     expect(
-      buildAccountSeedValues({ defaults, currencyCode: 'COP', earliestBillStart: '2026-12-01', activationDate: '2026-11-15' })
+      buildAccountSeedValues({ defaults: { ...defaults, nextBillDate: '2026-12-01T00:00:00Z' }, currencyCode: 'COP' })
         .nextBillDate,
     ).toBe('2026-12-01')
     expect(
       buildAccountSeedValues({
-        defaults,
+        defaults: { ...defaults, nextBillDate: '2026-12-01' },
         currencyCode: 'COP',
         overrides: { nextBillDate: '2027-01-01' },
-        earliestBillStart: '2026-12-01',
       }).nextBillDate,
     ).toBe('2027-01-01')
+  })
+
+  it('takes the operator cycle over upstream, and pins the default day to an explicit first bill date', () => {
+    expect(
+      buildAccountSeedValues({
+        defaults: { ...defaults, billCycle: 'weekly', billCycleDay: 'tue' },
+        currencyCode: 'COP',
+        overrides: { billCycle: 'monthly', billCycleInterval: 3, billCycleDay: '15' },
+      }),
+    ).toMatchObject({ billCycle: 'monthly', billCycleInterval: 3, billCycleDay: '15' })
+    expect(
+      buildAccountSeedValues({ defaults, currencyCode: 'COP', overrides: { nextBillDate: '2026-12-20' } }),
+    ).toMatchObject({ billCycle: 'monthly', billCycleInterval: 1, billCycleDay: '20', nextBillDate: '2026-12-20' })
   })
 })
 
@@ -159,5 +174,53 @@ describe('date helpers', () => {
     expect(toIsoDate('soon')).toBeNull()
     expect(earliestIsoDate(['2026-12-01', null, '2026-11-20'])).toBe('2026-11-20')
     expect(earliestIsoDate([])).toBeNull()
+  })
+})
+
+describe('resolveCycleSpec', () => {
+  it('defaults to every 1 month on day 1', () => {
+    expect(resolveCycleSpec({})).toEqual({ cycle: 'monthly', interval: 1, day: '1' })
+  })
+
+  it('defaults the day per unit and to the weekday / day of the first bill date', () => {
+    expect(resolveCycleSpec({ overrides: { billCycle: 'weekly' } })).toEqual({ cycle: 'weekly', interval: 1, day: 'mon' })
+    expect(resolveCycleSpec({ overrides: { billCycle: 'daily', billCycleInterval: 30 } })).toEqual({
+      cycle: 'daily',
+      interval: 30,
+      day: null,
+    })
+    // 2026-12-04 is a Friday.
+    expect(resolveCycleSpec({ overrides: { billCycle: 'weekly' }, nextBillDate: '2026-12-04' }).day).toBe('fri')
+    expect(resolveCycleSpec({ nextBillDate: '2026-12-31' }).day).toBe('31')
+  })
+
+  it('lets the source of the unit own the day (no weekly unit with a day of month)', () => {
+    expect(
+      resolveCycleSpec({ overrides: { billCycle: 'weekly' }, defaults: { billCycle: 'monthly', billCycleDay: '15' } }),
+    ).toEqual({ cycle: 'weekly', interval: 1, day: 'mon' })
+    // An override of N / day alone applies on top of the upstream unit.
+    expect(
+      resolveCycleSpec({ overrides: { billCycleInterval: 2 }, defaults: { billCycle: 'weekly', billCycleDay: 'thu' } }),
+    ).toEqual({ cycle: 'weekly', interval: 2, day: 'thu' })
+  })
+
+  it('normalizes upstream day values', () => {
+    expect(resolveCycleSpec({ defaults: { billCycle: 'monthly', billCycleDay: 5 } }).day).toBe('5')
+    expect(resolveCycleSpec({ defaults: { billCycle: 'weekly', billCycleDay: ' WED ' } }).day).toBe('wed')
+  })
+
+  it('repairs invalid upstream data instead of failing onboarding', () => {
+    expect(resolveCycleSpec({ defaults: { billCycle: 'quarterly' } })).toEqual({ cycle: 'monthly', interval: 3, day: '1' })
+    expect(resolveCycleSpec({ defaults: { billCycle: 'fortnightly' } })).toEqual({ cycle: 'monthly', interval: 1, day: '1' })
+    expect(resolveCycleSpec({ defaults: { billCycle: 'weekly', billCycleDay: '15' } })).toEqual({
+      cycle: 'weekly',
+      interval: 1,
+      day: 'mon',
+    })
+    expect(resolveCycleSpec({ defaults: { billCycle: 'annually', billCycleInterval: 10 } })).toEqual({
+      cycle: 'annually',
+      interval: 1,
+      day: '1',
+    })
   })
 })

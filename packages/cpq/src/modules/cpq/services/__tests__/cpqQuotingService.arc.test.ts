@@ -966,6 +966,23 @@ describe('Amend mirror carries the subscription item costs (ARC costs spec step 
       expect(idle.deletedAt).toBeInstanceOf(Date)
       expect(published.flat()).toEqual([expect.objectContaining({ kind: 'request_cancelled', costRequestId: 'req-9', reason: 'reconfigured' })])
     })
+
+    it('re-freezes a cost-plus line at the item\'s contracted charges, quantity and totals, not the last re-price', async () => {
+      const first = standalone()
+      const { service, salesLine } = demotion(first, [])
+      await service.attachTargetSubscription('cpq-1', { quoteType: 'renew', subscriptionId: 'sub-2' } as never, SCOPE)
+      expect(first.configuration).toEqual({ _arcMirroredFromItemId: 'item-1', _arcPriceFrozen: true, _arcCostPlusFrozen: true })
+      expect(first.charges).toEqual([{ chargeCode: 'mrc', pricingMethod: 'cost_plus', chargeType: 'mrc', unitPrice: 300, totalPrice: 300 }])
+      expect(first).toMatchObject({ quantity: 1, mrcTotal: '300', nrcTotal: '0' })
+      expect(salesLine.quantity).toBe('1')
+    })
+
+    it('a line marked for removal keeps its empty charges', async () => {
+      const first = { ...standalone(), action: 'cancel', charges: [], mrcTotal: '0', quantity: 1 }
+      const { service } = demotion(first, [])
+      await service.attachTargetSubscription('cpq-1', { quoteType: 'renew', subscriptionId: 'sub-2' } as never, SCOPE)
+      expect(first).toMatchObject({ charges: [], mrcTotal: '0' })
+    })
   })
 
   it('refuses restoring a removed line once the quote has an order: 409 QUOTE_CONVERTED, the line stays removed', async () => {

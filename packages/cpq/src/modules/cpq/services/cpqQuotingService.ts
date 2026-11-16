@@ -2428,6 +2428,13 @@ DefaultCpqQuotingService.prototype.attachTargetSubscription = async function (
         })
         : []
       const demotedItemById = new Map(demotedItems.map((item) => [item.id, item]))
+      // The demoted lines' sales lines are read before any change (quantity is re-mirrored with the charges).
+      const demotedSalesLines = demoted.length
+        ? await em.find(SalesQuoteLine, {
+          id: { $in: demoted.map((lc) => lc.quoteLineId) }, organizationId: scope.organizationId, tenantId: scope.tenantId, deletedAt: null,
+        })
+        : []
+      const demotedSalesLineById = new Map(demotedSalesLines.map((line) => [line.id, line]))
       if (demoted.length) {
         const now = new Date()
         const carriedRows = await em.find(CpqQuoteLineCost, {
@@ -2443,7 +2450,21 @@ DefaultCpqQuotingService.prototype.attachTargetSubscription = async function (
         if (!demoted.includes(lc)) continue
         const { [ARC_COSTS_CARRIED_KEY]: _carried, [ARC_CARRIED_COST_SET_HASH_KEY]: _hash, ...rest } = lc.configuration as Record<string, unknown>
         const item = lc.sourceSubscriptionItemId ? demotedItemById.get(lc.sourceSubscriptionItemId) : undefined
-        lc.configuration = item && isCostPlusItem(item) ? { ...rest, [ARC_PRICE_FROZEN_KEY]: true, [ARC_COST_PLUS_FROZEN_KEY]: true } : rest
+        if (item && isCostPlusItem(item)) {
+          lc.configuration = { ...rest, [ARC_PRICE_FROZEN_KEY]: true, [ARC_COST_PLUS_FROZEN_KEY]: true }
+          // Frozen like a fresh merge mirror: at the item's contracted charges, not the last re-price of the standalone line.
+          // A line marked for removal sells nothing and keeps its empty charges.
+          if (lc.action !== 'cancel') {
+            lc.charges = pickArcMirrorCharges(item, cpqConfig.currencyCode)
+            lc.quantity = item.quantity
+            lc.nrcTotal = String(item.nrcAmount ?? 0)
+            lc.mrcTotal = String(item.mrcAmount)
+            const salesLine = demotedSalesLineById.get(lc.quoteLineId)
+            if (salesLine) salesLine.quantity = String(item.quantity)
+          }
+        } else {
+          lc.configuration = rest
+        }
       }
     }
 

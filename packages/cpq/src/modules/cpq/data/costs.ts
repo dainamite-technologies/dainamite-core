@@ -12,6 +12,9 @@ export const COST_PLUS_TOGGLE = 'cpq.cost_plus'
 export const COST_REQUEST_OVERDUE_TOGGLE = 'cpq.cost_requests.overdue_working_days'
 export const COST_REQUEST_OVERDUE_DEFAULT_DAYS = 5
 
+/** Days before `valid_until` a supplier cost starts warning (expiry warnings, Q4). */
+export const COST_EXPIRY_LEAD_DAYS_TOGGLE = 'cpq.cost_expiry_lead_days'
+export const COST_EXPIRY_LEAD_DAYS_DEFAULT = 14
 /** Numeric tenant toggle (FX Q1): how many days the FX rate lookup goes back from today (clamped 0-30). */
 export const FX_MAX_DAYS_BACK_TOGGLE = 'cpq.cost_plus.fx_max_days_back'
 export const FX_MAX_DAYS_BACK_DEFAULT = 7

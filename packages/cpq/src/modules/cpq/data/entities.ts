@@ -2353,3 +2353,54 @@ export class CpqCostIndexValue {
   @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
   createdAt: Date = new Date()
 }
+
+// ─── CpqCostExpiryWarning ────────────────────────────────────────
+// Append-only ledger of supplier cost expiry warnings (index-costs spec Q2 / §Data Model): one row per
+// (cost line, valid_until), so a validity extension earns a new warning at the new due date. It sits outside the
+// quote aggregate (the cost line is never touched). Ids and dates only, never an amount or supplier.
+// `emitted_at` is stamped after the event + notification went out (Q15); a row left un-stamped is re-emitted.
+// The unique key is the dedupe (`ON CONFLICT DO NOTHING`).
+
+@Entity({ tableName: 'cpq_cost_expiry_warnings' })
+@Unique({ name: 'cpq_cost_expiry_warnings_line_valid_until_unique', properties: ['quoteLineCostId', 'validUntil'] })
+@Index({ name: 'cpq_cost_expiry_warnings_emitted_idx', properties: ['organizationId', 'tenantId', 'emittedAt'] })
+export class CpqCostExpiryWarning {
+  [OptionalProps]?: 'emittedAt' | 'createdAt'
+
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @Property({ name: 'organization_id', type: 'uuid' })
+  organizationId!: string
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  @Property({ name: 'quote_line_cost_id', type: 'uuid' })
+  quoteLineCostId!: string
+
+  /** The CPQ quote (configuration) id, the id the event and the notification link carry. */
+  @Property({ name: 'quote_id', type: 'uuid' })
+  quoteId!: string
+
+  @Property({ name: 'quote_line_id', type: 'uuid' })
+  quoteLineId!: string
+
+  /** The validity warned for (YYYY-MM-DD). */
+  @Property({ name: 'valid_until', type: 'date' })
+  validUntil!: string
+
+  /** N at warning time. */
+  @Property({ name: 'lead_days', type: 'integer' })
+  leadDays!: number
+
+  /** `valid_until < today` at warning time. */
+  @Property({ type: 'boolean' })
+  expired!: boolean
+
+  @Property({ name: 'emitted_at', type: Date, nullable: true })
+  emittedAt: Date | null = null
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+}

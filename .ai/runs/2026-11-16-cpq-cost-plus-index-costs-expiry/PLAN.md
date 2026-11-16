@@ -13,7 +13,7 @@ Engine: om-auto-create-pr-loop (steps: 18, --loop: no)
 | Phase | Step | Title | Exec | Status | Commit |
 |-------|------|-------|------|--------|--------|
 | A | 1 | Index entities and migration | group:A1 | done | |
-| A | 2 | costIndexService | group:A1 | todo | |
+| A | 2 | costIndexService | group:A1 | done | |
 | A | 3 | Index commands and routes | group:A2 | todo | |
 | A | 4 | Index pages | group:A3 | todo | |
 | A | 5 | Phase A close-out | group:A3 | todo | |

@@ -1,5 +1,11 @@
 # @dainamite/billing
 
+## 1.0.1
+
+### Patch Changes
+
+- 55e5fbe: The `billing.operator_assistant` description no longer says "Read-only by default". The agent uses `mutationPolicy: 'confirm-required'`: it can start dry or test Bill Runs and record manual payments, and every write goes through the approval card.
+
 ## 1.0.0
 
 ### Major Changes

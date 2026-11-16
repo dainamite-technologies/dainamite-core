@@ -2,12 +2,13 @@
 
 import * as React from 'react'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
-import { Check, CircleCheck, CircleX, Pencil, Plus, RefreshCw, RotateCcw, Send, Trash2, TrendingUp, X } from 'lucide-react'
+import { Check, CircleCheck, Handshake, CircleX, Pencil, Plus, RefreshCw, RotateCcw, Send, Trash2, TrendingUp, X } from 'lucide-react'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { IconButton } from '@open-mercato/ui/primitives/icon-button'
 import type { FullQuoteCost } from '../../../../../lib/quoteCostView'
 import { sourcingActions } from '../../../../../lib/costSourcingView'
 import { useQuoteCostsUi, type CostLineRef } from './quoteCostsContext'
+import { useArcCostActionsUi } from './arcCostActions'
 
 /**
  * Supplier sourcing actions of one cost row: Request / Re-request / Cancel request (`cpq.quotes.manage`),
@@ -48,11 +49,18 @@ export function CostSourcingRowActions({ cost, line }: { cost: FullQuoteCost; li
 export function CostRowActions({ cost, line }: { cost: FullQuoteCost; line: CostLineRef }) {
   const t = useT()
   const actions = useQuoteCostsUi()?.actions
+  const arc = useArcCostActionsUi()
   if (!actions) return <CostSourcingRowActions cost={cost} line={line} />
   const canConfirm = cost.valueStatus !== 'confirmed' && cost.unitAmount !== null
   return (
     <span className="inline-flex items-center gap-0.5">
       <CostSourcingRowActions cost={cost} line={line} />
+      {arc?.keepCurrentVisible(cost) && (
+        <IconButton variant="ghost" size="xs" aria-label={t('cpq.arc.keepCurrent.action', 'Keep current cost')} title={t('cpq.arc.keepCurrent.action', 'Keep current cost')}
+          onClick={() => arc.keepCurrent(cost, line)} data-testid="cpq-cost-keep-current">
+          <Handshake className="h-3.5 w-3.5" />
+        </IconButton>
+      )}
       {canConfirm && (
         <IconButton variant="ghost" size="xs" aria-label={t('cpq.quoteCosts.actions.confirm', 'Confirm cost')} title={t('cpq.quoteCosts.actions.confirm', 'Confirm cost')}
           onClick={() => actions.confirm(cost, line)} data-testid="cpq-cost-confirm">

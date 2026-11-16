@@ -71,3 +71,24 @@ describe('OrderCostsSummaryView', () => {
     expect(content).not.toContain('frozen')
   })
 })
+
+describe('OrderCostsSection ARC additions', () => {
+  it('shows Carried, the Was diff, the re-confirmed date, the actions column and the exposure panel for holders', () => {
+    const carried: FullCostRow = { ...cost, origin: 'carried', unitAmount: '240', supplierTermEnd: '2027-06-30', reconfirmedAt: '2026-11-14T10:00:00.000Z',
+      previous: { unitAmount: '270', currencyCode: 'EUR', supplierName: 'Carrier X', validUntil: '2026-12-31', supplierTermEnd: '2028-11-30' } }
+    const response: OrderCostsResponse = { ...holder, lines: [{ orderLineId: 'l1', costs: [carried] }], exposure: { referenceDate: '2026-11-14', items: [
+      { inventoryCostId: 'a', costKey: 'k', name: 'tail', supplierName: 'Carrier X', supplierTermEnd: '2028-11-30', exposureMonths: 12, termUnknown: false }] } }
+    const html = wrap(<OrderCostsSection response={response} lines={lines} currency="EUR" today="2026-11-14" renderCostActions={() => <span data-testid="act">Re-confirm</span>} />)
+    const content = text(html)
+    expect(content).toContain('Carried')
+    expect(content).toContain('Was 270.00 EUR · Carrier X · term to 2028-11-30')
+    expect(content).toContain('Re-confirmed on 2026-11-14')
+    expect(html).toContain('data-testid="act"')
+    expect(content).toContain('Supplier exposure as of today')
+  })
+  it('status-only projection: no actions, no exposure, no Carried', () => {
+    const html = wrap(<OrderCostsSection response={statusOnly} lines={lines} currency="EUR" today="2026-11-14" renderCostActions={() => <span data-testid="act" />} />)
+    expect(html).not.toContain('data-testid="act"')
+    expect(html).not.toContain('cpq-exposure-panel')
+  })
+})

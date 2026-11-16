@@ -18,3 +18,13 @@ describe('Renew cost banner', () => {
     expect(isFrozenCostPlusRenewLine({ action: 'cancel', ...frozen })).toBe(false)
   })
 })
+
+describe('Renew cost banner: Phase 1 lines only (ARC costs Q6)', () => {
+  it('keeps the banner for a Phase 1 standalone line and drops it for a merge line', () => {
+    expect(shouldShowRenewCostBanner('renew', [{ ...frozen, targetSubscriptionId: 'sub-1' }])).toBe(true)
+    expect(shouldShowRenewCostBanner('renew', [{ ...frozen, targetSubscriptionId: null }])).toBe(false)
+  })
+  it('shows nothing for a new standalone Renew (carried, not frozen)', () => {
+    expect(shouldShowRenewCostBanner('renew', [{ targetSubscriptionId: 'sub-1', configuration: { _arcMirroredFromItemId: 'i', _arcCostsCarried: true } }])).toBe(false)
+  })
+})

@@ -17,7 +17,9 @@ import { PricingSummaryCard, type PricingSummaryView } from '../../../../compone
 import { ArcLineDiff, LineActionBadge } from '../../../../components/ArcLineDiff'
 import { OrderCostsPanel } from '../../../../components/costs/OrderCostsPanel'
 import { useCostsRead } from '../../../../components/costs/useCostsRead'
-import { orderArcCostsOfLine } from '../../../../lib/arcCostView'
+import { costSourceChangedView, orderArcCostsOfLine, parseCostSourceChanged, type CostSourceChangedEntry } from '../../../../lib/arcCostView'
+import { CostSourceChangedBanner } from '../../../../components/costs/CostSourceChangedBanner'
+import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import type { OrderCostsResponse } from '../../../../lib/orderInventoryCostView'
 import { arcRecurringDelta } from '../../../../lib/quoteSummaryView'
 import { isArcCancelledLine } from '../../../../services/arcLineRemoval'
@@ -126,6 +128,8 @@ export default function CpqOrderDetailPage(props: { params?: { id?: string } }) 
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState<string | null>(null)
   const [activating, setActivating] = React.useState(false)
+  // 409 COST_SOURCE_CHANGED at activation: the subscription's costs changed since the quote mirrored them.
+  const [costSourceChanged, setCostSourceChanged] = React.useState<CostSourceChangedEntry[] | null>(null)
   const [expandedLines, setExpandedLines] = React.useState<Set<string>>(new Set())
   const [pricingDetail, setPricingDetail] = React.useState<{ lineIdx: number; chargeIdx: number } | null>(null)
   const [customerName, setCustomerName] = React.useState<string | null>(null)
@@ -217,13 +221,20 @@ export default function CpqOrderDetailPage(props: { params?: { id?: string } }) 
     try {
       setActivating(true)
       setError(null)
-      const result = await apiJson<OrderResult>(`/api/cpq/orders/${order.id}/activate`, {
+      setCostSourceChanged(null)
+      const call = await apiCall<OrderResult & { error?: string }>(`/api/cpq/orders/${order.id}/activate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({}),
       })
-      setOrder(result)
-      void fetchLinkedSubscriptions(result.id, result.sourceQuoteId)
+      if (call.ok && call.result) {
+        setOrder(call.result)
+        void fetchLinkedSubscriptions(call.result.id, call.result.sourceQuoteId)
+        return
+      }
+      const changed = parseCostSourceChanged(call.status, call.result)
+      if (changed) { setCostSourceChanged(changed); return }
+      setError(call.result?.error ?? `Request failed (${call.status})`)
     } catch (err) {
       setError((err as Error).message)
     } finally {
@@ -359,6 +370,11 @@ export default function CpqOrderDetailPage(props: { params?: { id?: string } }) 
       </div>
 
       {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
+      {costSourceChanged && (
+        <CostSourceChangedBanner
+          view={costSourceChangedView(costSourceChanged, new Map(order.lines.flatMap((line) => (line.sourceQuoteLineId ? [[line.sourceQuoteLineId, line.offeringName] as const] : []))), 'order')}
+        />
+      )}
 
       {/* Linked subscriptions — one card per subscription this order
           touches. NEW orders write one fresh subscription; ARC orders
@@ -441,6 +457,7 @@ export default function CpqOrderDetailPage(props: { params?: { id?: string } }) 
         currency={currency}
         subscriptionIds={linkedSubscriptions.map((sub) => sub.id)}
         read={orderCosts}
+        orderStatus={order.cpqStatus}
         refreshKey={`${order.cpqStatus}:${order.activatedAt ?? ''}`}
       />
 

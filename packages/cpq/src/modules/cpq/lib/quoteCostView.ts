@@ -335,7 +335,7 @@ export function costFormIssues(form: CostForm, existing: FullQuoteCost | null): 
   if (existing) {
     const next = Number.isNaN(amount) ? null : amount
     const valueChanged = !sameAmount(existing.unitAmount, next) || (existing.currencyCode !== null && existing.currencyCode !== form.currencyCode.trim())
-    if (existing.valueOrigin === 'catalog' && valueChanged && !note) issues.push('NOTE_REQUIRED')
+    if ((existing.valueOrigin === 'catalog' || existing.valueOrigin === 'carried') && valueChanged && !note) issues.push('NOTE_REQUIRED')
     const extended = (form.validUntil && (!existing.validUntil || form.validUntil > existing.validUntil))
       || (form.supplierTermEnd && (!existing.supplierTermEnd || form.supplierTermEnd > existing.supplierTermEnd))
     const newRef = form.supplierQuoteRef.trim()

@@ -10,6 +10,8 @@ import {
 } from '../../lib/orderInventoryCostView'
 import { MarginCard } from '../../backend/cpq/quotes/[id]/_components/MarginCard'
 import { CostChips, CostRowsTable } from './CostRowsTable'
+import { ExposurePanel } from './ExposurePanel'
+import type { FullCostRow } from '../../lib/orderInventoryCostView'
 
 export type OrderCostLine = { lineId: string; name: string; isBundle?: boolean }
 
@@ -19,8 +21,10 @@ export type OrderCostLine = { lineId: string; name: string; isBundle?: boolean }
  * of `GET /api/cpq/orders/{id}/costs`; the caller renders nothing on a 404 (toggle off). `assetLinks` maps an order
  * line to the asset that owns its costs once activated.
  */
-export function OrderCostsSection({ response, lines, currency, assetLinks, today }: {
+export function OrderCostsSection({ response, lines, currency, assetLinks, today, renderCostActions }: {
   response: OrderCostsResponse
+  /** Order costs: the per-row actions (Re-confirm) for a full cost of the given order line; absent = read-only. */
+  renderCostActions?: (cost: FullCostRow, line: OrderCostLine) => React.ReactNode
   lines: ReadonlyArray<OrderCostLine>
   currency: string
   assetLinks?: ReadonlyMap<string, string>
@@ -43,6 +47,7 @@ export function OrderCostsSection({ response, lines, currency, assetLinks, today
           emptyText={t('cpq.orderCosts.marginEmpty', 'No costs on this order. Margin is tracked once a line carries costs.')}
         />
       )}
+      {holder && <ExposurePanel exposure={response.exposure} today={today} />}
       {shown.length > 0 && (
         <section className="rounded-lg border bg-card" aria-label={t('cpq.orderCosts.title', 'Costs')}>
           <h3 className="border-b px-4 py-2 text-sm font-medium">{t('cpq.orderCosts.title', 'Costs')}</h3>
@@ -64,7 +69,7 @@ export function OrderCostsSection({ response, lines, currency, assetLinks, today
                   {costs.length === 0 ? (
                     <p className="text-xs text-muted-foreground" data-testid="cpq-order-line-no-costs">{t('cpq.orderCosts.noCosts', 'No costs')}</p>
                   ) : (
-                    <CostRowsTable costs={costs} currency={currency} today={today} />
+                    <CostRowsTable costs={costs} currency={currency} today={today} renderRowActions={renderCostActions ? (cost) => renderCostActions(cost, line) : undefined} />
                   )}
                 </div>
               )

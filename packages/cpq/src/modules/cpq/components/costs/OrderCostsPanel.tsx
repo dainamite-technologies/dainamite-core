@@ -3,13 +3,20 @@
 import * as React from 'react'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
+import { flash } from '@open-mercato/ui/backend/FlashMessages'
+import { RotateCcw } from 'lucide-react'
+import { IconButton } from '@open-mercato/ui/primitives/icon-button'
 import { ErrorMessage, LoadingMessage } from '@open-mercato/ui/backend/detail'
 import {
   assetLinksByOrderLine,
   hasCostAccess,
   type OrderCostsResponse,
+  type FullCostRow,
   type SubscriptionCostsResponse,
 } from '../../lib/orderInventoryCostView'
+import { canReconfirm } from '../../lib/orderReconfirmView'
+import { useGrantedFeatures } from '../useGrantedFeatures'
+import { ReconfirmCostDialog } from './ReconfirmCostDialog'
 import { OrderCostsSection, type OrderCostLine } from './OrderCostsSection'
 import { useCostsRead, type CostsReadResult } from './useCostsRead'
 
@@ -20,7 +27,7 @@ const todayIso = () => new Date().toISOString().slice(0, 10)
  * is activated, the costs of its linked subscriptions are read (holders only) to link asset-owned costs to their asset.
  * `refreshKey` changes when the order changes (for example after activation).
  */
-export function OrderCostsPanel({ orderId, lines, currency, subscriptionIds, refreshKey, read }: {
+export function OrderCostsPanel({ orderId, lines, currency, subscriptionIds, refreshKey, read, orderStatus }: {
   orderId: string
   /** The page's own costs read (shared with the line diff); the panel loads its own when absent. */
   read?: CostsReadResult<OrderCostsResponse>
@@ -28,8 +35,12 @@ export function OrderCostsPanel({ orderId, lines, currency, subscriptionIds, ref
   currency: string
   subscriptionIds: ReadonlyArray<string>
   refreshKey?: string
+  /** The order's CPQ status: Re-confirm is offered on draft / pending orders only. */
+  orderStatus?: string
 }) {
   const t = useT()
+  const granted = useGrantedFeatures(['cpq.costs.view', 'cpq.costs.manage', 'cpq.orders.manage'])
+  const [reconfirming, setReconfirming] = React.useState<{ cost: FullCostRow; line: OrderCostLine } | null>(null)
   const own = useCostsRead<OrderCostsResponse>(read ? null : `/api/cpq/orders/${orderId}/costs`)
   const { state, data, reload } = read ?? own
   const [subscriptions, setSubscriptions] = React.useState<SubscriptionCostsResponse[]>([])
@@ -57,5 +68,25 @@ export function OrderCostsPanel({ orderId, lines, currency, subscriptionIds, ref
   if (state === 'off') return null
   if (state === 'loading') return <LoadingMessage label={t('cpq.orderCosts.loading', 'Loading costs…')} />
   if (state === 'error' || !data) return <ErrorMessage label={t('cpq.orderCosts.error', 'Costs could not be loaded.')} />
-  return <OrderCostsSection response={data} lines={lines} currency={currency} assetLinks={links} today={todayIso()} />
+  const reconfirmable = orderStatus !== undefined && canReconfirm(orderStatus, granted)
+  return (
+    <>
+      <OrderCostsSection
+        response={data} lines={lines} currency={currency} assetLinks={links} today={todayIso()}
+        renderCostActions={reconfirmable ? (cost, line) => (
+          <IconButton variant="ghost" size="xs" aria-label={t('cpq.orderCosts.reconfirm.action', 'Re-confirm')} title={t('cpq.orderCosts.reconfirm.action', 'Re-confirm')}
+            onClick={() => setReconfirming({ cost, line })} data-testid="cpq-cost-reconfirm">
+            <RotateCcw className="h-3.5 w-3.5" />
+          </IconButton>
+        ) : undefined}
+      />
+      {reconfirming && (
+        <ReconfirmCostDialog
+          orderId={orderId} cost={reconfirming.cost} lineName={reconfirming.line.name} currency={data.currencyCode ?? currency}
+          onClose={() => setReconfirming(null)}
+          onDone={() => { setReconfirming(null); flash(t('cpq.orderCosts.reconfirm.flash', 'Cost re-confirmed'), 'success'); void reload() }}
+        />
+      )}
+    </>
+  )
 }

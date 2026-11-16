@@ -59,3 +59,4 @@
 - 2026-11-16 review1-b: Re-confirm always sends currencyCode with an amount; the server answers 422 CURRENCY_REQUIRED for an amount without a currency on a cost that has none (no silent order-currency fallback); a foreign currency still resolves the FX rate or refuses CURRENCY_NO_RATE.
 - 2026-11-16 review1-c: Q10 demotion to merge cancels open cost requests on the soft-deleted carried rows (reason reconfigured), request_cancelled signals published after the flush.
 - 2026-11-16 review1-d: demotion to merge re-freezes cost-plus lines at the subscription item's contracted charges, quantity and totals (re-mirror from the item), not the last standalone re-price.
+- 2026-11-16 review1-e: cost PATCH on a carried cost of a frozen mirror line, and Keep current, are refused with 409 QUOTE_CONVERTED (orderId, orderLineCostId) once the quote has an order; Re-confirm on the order is the path.

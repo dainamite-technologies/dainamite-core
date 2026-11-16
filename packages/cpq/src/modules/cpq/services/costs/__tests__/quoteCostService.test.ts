@@ -50,6 +50,7 @@ function setup(opts: { status?: string; orders?: number; costs?: Row[]; override
       if (entity === CpqQuoteLineCost) return live(costs).find((row) => row.id === where.id) ?? null
       if (entity === CpqQuoteMarkupOverride) return live(overrides).find((row) => row.quoteLineId === where.quoteLineId && row.chargeCode === where.chargeCode) ?? null
       if (entity === CpqQuoteConfiguration) return quote
+      if (entity === CpqOrderConfiguration) return (opts.orders ?? 0) > 0 ? { id: 'order-1', sourceQuoteId: where.sourceQuoteId } : null
       if (entity === CpqQuoteTargetSubscription) return opts.newTermEnd ? { subscriptionId: where.subscriptionId, newTermEnd: opts.newTermEnd } : null
       return null
     }),
@@ -458,11 +459,13 @@ describe('carried costs on frozen Amend mirror lines (ARC costs spec step 7, Q4)
     expect(signal!.marginHash).not.toBe(signal!.previousMarginHash)
   })
 
-  it('an order locks the quote too, and the frozen carried write is still allowed (until the order is activated by its own flow)', async () => {
+  it('review: once the quote has an order, an edit of a carried cost on a frozen line is refused with 409 QUOTE_CONVERTED (Re-confirm on the order is the path); nothing is written', async () => {
     const row = carriedRow()
-    const { service } = amend({ status: 'ready', orders: 1, costs: [row] })
-    await service.updateCost(ids.quote, ids.cost, { unitAmount: 240, note: 'renegotiated' }, ACTOR, SCOPE)
-    expect(row.unitAmount).toBe('240')
+    const { service, recalculate } = amend({ status: 'ready', orders: 1, costs: [row] })
+    await expect(service.updateCost(ids.quote, ids.cost, { unitAmount: 240, note: 'renegotiated' }, ACTOR, SCOPE))
+      .rejects.toMatchObject({ status: 409, message: 'QUOTE_CONVERTED', details: { orderId: 'order-1' } })
+    expect(row).toMatchObject({ unitAmount: '270.0000', valueOrigin: 'carried' })
+    expect(recalculate).not.toHaveBeenCalled()
   })
 
   it('overwriting a carried value needs a note (NOTE_REQUIRED); keeping it with new validity and evidence does not', async () => {
@@ -576,12 +579,17 @@ describe('Keep current cost (ARC costs step 15, App Spec R13)', () => {
     expect(row.renegotiationDue).toBe(false)
   })
 
-  it('is lock-exempt (R11): works on a locked quote (with_customer, an order) and re-prices nothing', async () => {
-    for (const ctx of [renew({ status: 'with_customer' }), renew({ status: 'ready', orders: 1 })]) {
-      await ctx.service.updateCost(ids.quote, ids.cost, keep({ supplierTermEnd: null }), ACTOR, SCOPE)
-      expect(ctx.costs[0]).toMatchObject({ renegotiationDue: false, valueStatus: 'confirmed' })
-      expect(ctx.recalculate).not.toHaveBeenCalled()
-    }
+  it('is lock-exempt (R11): works on a locked quote (with_customer) and re-prices nothing', async () => {
+    const ctx = renew({ status: 'with_customer' })
+    await ctx.service.updateCost(ids.quote, ids.cost, keep({ supplierTermEnd: null }), ACTOR, SCOPE)
+    expect(ctx.costs[0]).toMatchObject({ renegotiationDue: false, valueStatus: 'confirmed' })
+    expect(ctx.recalculate).not.toHaveBeenCalled()
+  })
+
+  it('review: once the quote has an order Keep current is refused with 409 QUOTE_CONVERTED and writes nothing', async () => {
+    const ctx = renew({ status: 'ready', orders: 1 })
+    await expect(ctx.service.updateCost(ids.quote, ids.cost, keep({ supplierTermEnd: null }), ACTOR, SCOPE)).rejects.toMatchObject({ status: 409, message: 'QUOTE_CONVERTED', details: { orderId: 'order-1' } })
+    expect(ctx.costs[0]).toMatchObject({ renegotiationDue: true, valueStatus: 'estimated' })
   })
 
   it('a rejected or cancelled quote still refuses it', async () => {

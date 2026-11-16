@@ -33,6 +33,7 @@ import { computeCostPlusPrice, type MarkupRule } from './costPlusPrice'
 import type { QuoteMargin } from './quoteMargin'
 import { createMarginTracker } from './quoteMarginTracker'
 import { cancelRowRequests } from './costRequestCancel'
+import { findQuoteOrder } from './quoteOrderLookup'
 import { liveQuoteConfigurationIds, resolveOverdueThreshold } from './costRequestQueue'
 import { costLineEligibility, overdueCutoff } from './costSourcing'
 import type { CpqFxRateResolver } from './fxRateResolver'
@@ -363,6 +364,12 @@ export class CpqQuoteCostService {
     return this.write(quoteId, scope, parsed.expectedRevision, actor, async (em, quote, signals) => {
       const row = await this.requireCost(em, quote, costId, scope)
       const line = await this.requireLine(em, quote, row.quoteLineId, scope, 'value', row)
+      // A carried cost on a frozen mirror line (Q4: margin-only, so no lock stops it) and Keep current are edits the order
+      // never sees once the quote is converted: refuse them, Re-confirm on the order is the path (`orderLineCostId` names it).
+      if (parsed.keepCurrent || (row.origin === 'carried' && isFrozenMirrorLine(line.configuration, quote.quoteType))) {
+        const order = await findQuoteOrder(em, quote, scope, row.id)
+        if (order) throw new QuotingError(409, 'QUOTE_CONVERTED', undefined, order)
+      }
       if (parsed.keepCurrent) return this.keepCurrent(em, quote, line, row, parsed, actor, scope, signals)
       const before = lockState(row)
       const auditBefore = costAudit(row)

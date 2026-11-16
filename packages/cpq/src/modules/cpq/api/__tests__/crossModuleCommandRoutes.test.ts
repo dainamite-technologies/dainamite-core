@@ -18,7 +18,10 @@ const ctx = {
   em,
   container: { resolve: (name: string) => (name === 'commandBus' ? { execute } : {}) },
 }
-jest.mock('../context', () => ({ resolveCpqRouteContext: jest.fn(async () => ctx) }))
+jest.mock('../context', () => ({
+  cpqContextError: jest.requireActual('../context').cpqContextError,
+  resolveCpqRouteContext: jest.fn(async () => ctx),
+}))
 
 import { DELETE as deleteQuote } from '../quotes/[quoteId]/route'
 import { POST as createSpec } from '../product-specifications/route'

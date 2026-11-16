@@ -331,3 +331,26 @@ The system SHALL report in `GET /api/cpq/cost-plus/usage`, as `missingFxPairs`, 
 Frozen by: `packages/cpq/src/modules/cpq/api/__tests__/quoteCostReadRoutes.test.ts`, `services/costs/__tests__/quoteCostService.test.ts`
 
 Source: .ai/specs/2026-11-12-cpq-cost-plus-foreign-currency-costs.md
+
+## Requirement: Index cost resolution and snapshot
+The system SHALL resolve an `index` cost line, on a saved recalculation while the quote's cost lock does not apply and its `value_origin` is `catalog`, to `unit_amount = value in force on the recalculation date × factor + offset` in the index currency. It SHALL store `index_snapshot {indexId, currencyCode, effectiveDate, revision, value, factor, offset, asOfDate}`. It SHALL leave the stored value and snapshot unchanged on unsaved recalculations, on locked quotes and once an order exists. When no value is in force it SHALL set `value_status = none` with `INDEX_NO_VALUE`, and a price-basis line SHALL then not be ready. The snapshot, factor, offset and value are cost data, visible only with `cpq.costs.view`.
+
+### Scenario: New value on an unlocked quote
+- WHEN Brent 82.40 (2026-11-10) is added and a `ready` quote using Brent is saved on 2026-11-12
+- THEN its index cost line snapshots 82.40 / 2026-11-10 / its revision, the cost-plus list price is recomputed, and `pricing_changed` and `margin_changed` are emitted
+
+### Scenario: Sent quote is frozen
+- WHEN the same value is added while another quote is `with_customer`
+- THEN that quote's `index_snapshot`, cost values and `charges` stay byte-identical on any recalculation
+
+### Scenario: No value on or before the date
+- WHEN a quote line uses an index whose first value is dated after today
+- THEN the cost line is `none` with `INDEX_NO_VALUE`, the cost-plus charge has error `COST_PENDING`, and the line is not ready
+
+### Scenario: Preview does not store
+- WHEN the quote is recalculated with `save: false`
+- THEN the response prices from the value in force, and the stored snapshot is unchanged
+
+Frozen by: `packages/cpq/src/modules/cpq/services/costs/__tests__/indexCostResolution.test.ts`, `packages/cpq/src/modules/cpq/services/costs/__tests__/costResolution.test.ts`, `packages/cpq/src/modules/cpq/api/__tests__/quoteCostReadRoutes.test.ts`, `packages/cpq/src/modules/cpq/services/__tests__/costConfidentiality.test.ts`, `packages/cpq/src/modules/cpq/__integration__/TC-CPQ-COST-INDEX-002.spec.ts`
+
+Source: .ai/specs/2026-11-12-cpq-cost-plus-index-costs-expiry.md

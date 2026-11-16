@@ -264,6 +264,106 @@ describe('quote cost API', () => {
   })
 })
 
+/**
+ * Index costs, Phase B (index-costs spec §Risks, PR 2 part): the index snapshot (index id, effective date, revision,
+ * value, factor, offset) and the index-derived unit amount are cost data. Only `cpq.costs.view` holders see them on the
+ * quote cost API, the cost write routes and the order cost copy; calculate-price and the pricing output expose none.
+ */
+describe('index cost surfaces (index costs, Phase B)', () => {
+  const IDX_FACTOR = '0.7373'
+  const IDX_OFFSET = '5151.5151'
+  const IDX_ID = 'ZXQ-sentinel-index-id'
+  const IDX_DATE = '2031-07-19'
+  const INDEX_SENTINELS = ['7777.77', IDX_FACTOR, IDX_OFFSET, IDX_ID, IDX_DATE]
+  const indexLeaked = (value: unknown) => { const json = JSON.stringify(value) ?? ''; return INDEX_SENTINELS.filter((s) => json.includes(s)) }
+  const snapshot = { indexId: IDX_ID, currencyCode: 'USD', effectiveDate: IDX_DATE, revision: 3, value: COST, factor: IDX_FACTOR, offset: IDX_OFFSET, asOfDate: IDX_DATE }
+  const indexRow = (over: Row = {}) => costRow({
+    costKey: 'idx', source: 'index', valueOrigin: 'catalog', supplierName: null, note: null, fxRate: null, fxRateDate: null, fxRateSource: null, fxRateDerivation: null,
+    indexSnapshot: snapshot, ...over,
+  })
+
+  function readService(costs: Row[]) {
+    const quote = { id: ids.quote, quoteId: ids.quote, cpqStatus: 'ready', quoteType: 'new', currencyCode: 'USD', pricingRevision: 1 }
+    const line = { quoteLineId: ids.line, ...SCOPE, quoteConfigurationId: ids.quote, quantity: '1', charges: [], termMonths: 12, parentLineId: null, configuration: {}, offeringId: 'off', deletedAt: null }
+    const em: Row = {
+      __quote: quote, fork: jest.fn(() => em),
+      findOne: jest.fn(async (entity: unknown) => (entity === CpqQuoteConfiguration ? quote : entity === CpqQuoteLineConfiguration ? line : null)),
+      find: jest.fn(async (entity: unknown) => (entity === CpqQuoteLineConfiguration ? [line] : entity === CpqQuoteLineCost ? costs : [])),
+      count: jest.fn(async () => 0),
+    }
+    return new CpqQuoteCostService({ em: em as never, costService: { enabled: async () => true }, quotingService: { recalculateLockedQuote: async () => ({}) } as never })
+  }
+
+  it('the cost API read: an index line is status-only without cpq.costs.view (no snapshot, factor, offset, value, date); a holder sees the snapshot (control)', async () => {
+    const service = readService([indexRow(), indexRow({ id: 'c2', costKey: 'idx-none', valueStatus: 'none', unitAmount: null, instanceAmount: null, errorCode: 'INDEX_NO_VALUE', indexSnapshot: null })])
+    const redacted = await service.read(ids.quote, SCOPE, false)
+    expect(redacted.lines[0].costs).toHaveLength(2)
+    expect(indexLeaked(redacted)).toEqual([])
+    const flat = JSON.stringify(redacted)
+    expect(flat).toContain('INDEX_NO_VALUE') // the badge needs the code, nothing else
+    expect(flat).not.toMatch(/indexSnapshot|factor|offset|"source"|"currencyCode"|unitAmount|instanceAmount/)
+    const full = await service.read(ids.quote, SCOPE, true)
+    expect(indexLeaked(full)).toEqual(expect.arrayContaining(['7777.77', IDX_FACTOR, IDX_OFFSET, IDX_ID]))
+    expect((full.lines[0].costs as Array<Record<string, unknown>>)[0].indexSnapshot).toMatchObject({ factor: IDX_FACTOR, offset: IDX_OFFSET })
+    expect(indexLeaked(redactedCostView(indexRow() as never))).toEqual([])
+    expect(indexLeaked(fullCostView(indexRow() as never))).toEqual(expect.arrayContaining([IDX_FACTOR, IDX_OFFSET]))
+  })
+
+  it('the cost write routes whitelist drops the index snapshot for a user without cpq.costs.view', async () => {
+    const { costCommandRoute } = await import('../../api/_helpers/costCommandRoute')
+    const fullResult = { cost: fullCostView(indexRow() as never), override: null, margin: { contractMargin: 7777.77, marginHash: 'h' }, pricingRevision: 2, audit: {} }
+    const ctx = { tenantId: 'tenant', organizationId: 'org', auth: { sub: 'user' }, organizationScope: null,
+      container: { resolve: (name: string) => name === 'cpqCostService' ? { enabled: async () => true } : { execute: async () => ({ result: fullResult }) } } }
+    const options = { quoteId: ids.quote, commandId: 'x', resourceKind: 'k', operation: 'update' as const, body: {}, schema: { parse: (v: unknown) => v } as never, ownedKeys: [], buildInput: () => ({}), status: 200 }
+    mockCanView.mockResolvedValue(false)
+    const redacted = await (await costCommandRoute(new Request('http://localhost/x', { method: 'POST' }), ctx as never, options)).json()
+    expect(redacted.cost.costKey).toBe('idx')
+    expect(indexLeaked(redacted)).toEqual([])
+    expect(redacted.cost).not.toHaveProperty('indexSnapshot')
+    mockCanView.mockResolvedValue(true)
+    expect(indexLeaked(await (await costCommandRoute(new Request('http://localhost/x', { method: 'POST' }), ctx as never, options)).json())).toEqual(expect.arrayContaining(['7777.77', IDX_FACTOR]))
+  })
+
+  it('pricing output for a charge with an index price basis carries no index value, factor, offset, snapshot or cost (calculate-price shares this path)', async () => {
+    const context = {
+      enabled: true, errors: [] as never[],
+      costs: [{ chargeCode: 'tail', costKey: 'idx', role: 'price_basis', costType: 'mrc', source: 'index', valueStatus: 'confirmed', instanceAmount: COST, errorCode: null, indexSnapshot: snapshot }] as never[],
+      overrides: new Map(),
+    }
+    const charges = await pricingService([costPlusCharge()]).resolveProductCharges({ offeringId: 'off', configuration: {}, currencyCode: 'USD', ...SCOPE, costPlus: context as never })
+    expect(charges[0].totalPrice).toBeGreaterThan(0) // positive control: the index cost flowed into the price
+    expect(indexLeaked(charges)).toEqual([])
+    expect(JSON.stringify(charges)).not.toMatch(/indexSnapshot|factor|offset/)
+  })
+
+  it('a locked recalculation of a quote with an index cost line returns no index data, even for the stored snapshot', async () => {
+    const line = { id: 'lc', ...SCOPE, quoteConfigurationId: ids.quote, quoteLineId: ids.line, offeringId: 'off', productId: null, configuration: {}, quantity: 1, usageEstimates: null, charges: [], termMonths: 12, deletedAt: null }
+    const stored = [indexRow()]
+    const em: Row = {
+      find: jest.fn(async (entity: unknown) => (entity === CpqQuoteLineConfiguration ? [line] : entity === CpqQuoteLineCost ? stored : [])),
+      findOne: jest.fn(async () => ({})), count: jest.fn().mockResolvedValue(0),
+      assign: jest.fn((entity: Row, updates: Row) => Object.assign(entity, updates)), persist: jest.fn(), create: jest.fn((_e: unknown, d: Row) => d), flush: jest.fn(),
+    }
+    const pricing = pricingService([costPlusCharge()])
+    const quoting = new DefaultCpqQuotingService({
+      em: em as never,
+      cpqPricingService: { resolveProductCharges: (params: never) => pricing.resolveProductCharges(params) } as never,
+      cpqValidationService: { validateOfferingConfiguration: async () => ({ valid: true, errors: [] }), validateRelationships: async () => [] } as never,
+      cpqProductService: {} as never, salesDocumentNumberGenerator: {} as never, cpqCostService: { enabled: async () => true },
+    })
+    const quote = { id: ids.quote, quoteId: 'sales', cpqStatus: 'with_customer', quoteType: 'new', currencyCode: 'USD', quoteContext: {} } as unknown as CpqQuoteConfiguration
+    const result = await quoting.recalculateLockedQuote(em as never, quote, SCOPE, false)
+    expect(JSON.stringify(result)).toContain('cost_plus') // positive control: the cost-plus line was priced
+    expect(indexLeaked(result)).toEqual([])
+  })
+
+  it('broadcast events declare no index field (the snapshot and the value stay in cost_changed-free, holder-only surfaces)', () => {
+    const declared = (eventsConfig as unknown as { events: Array<{ id: string; clientBroadcast?: boolean }> }).events
+    expect(declared.filter((e) => e.clientBroadcast)).not.toEqual([])
+    expect(JSON.stringify(eventsConfig)).not.toMatch(/indexSnapshot|indexFactor|indexOffset|indexValue/)
+  })
+})
+
 describe('command logs and audit snapshots', () => {
   it('cost and markup command logs carry no sentinel, whatever the input held', async () => {
     const { service, costs } = (() => {

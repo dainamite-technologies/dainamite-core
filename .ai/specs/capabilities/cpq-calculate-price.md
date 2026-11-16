@@ -34,3 +34,14 @@ Frozen by: `packages/cpq/src/modules/cpq/api/quotes/price/__tests__/route.test.t
 
 Source: .ai/specs/2026-11-12-cpq-cost-plus-quote-pricing-margin.md
 Source: .ai/specs/2026-11-12-cpq-cost-plus-foreign-currency-costs.md
+
+## Requirement: Index-costed charges in the calculate-price API
+The system SHALL price a cost-plus charge whose price-basis costs include `index` elements from the value in force today, return its list price without `indicative`, and return `priceOnRequest: true` when no value is in force or its currency cannot be converted. It SHALL never return the index value, factor, offset or cost.
+
+### Scenario: Puffin calculator with an index cost
+- WHEN an offering's cost-plus charge has one `index` price-basis element with a value in force
+- THEN the charge returns `unitPrice` and no cost, index or markup field
+
+Frozen by: `packages/cpq/src/modules/cpq/api/quotes/price/__tests__/route.test.ts`, `packages/cpq/src/modules/cpq/services/__tests__/costConfidentiality.test.ts`
+
+Source: .ai/specs/2026-11-12-cpq-cost-plus-index-costs-expiry.md

@@ -32,7 +32,7 @@ The system SHALL let a user with `cpq.products.manage` and `cpq.costs.view` set 
 Source: .ai/specs/2026-11-12-cpq-cost-plus-quote-pricing-margin.md
 
 ## Requirement: Charge cost elements
-The system SHALL store a charge's default costs as cost elements, each with an immutable code, a role (`price_basis` / `margin_only`), source (`fixed`, `table`, `on_request`; `index` is refused until a later feature), cost type and cost model, and SHALL reject combinations that App Spec §1.4.4 forbids. The code becomes the quote cost key, so it SHALL be unique across every charge priced together on one quote line (all charges of the offering, or of the product for a product-level charge), not only within one charge.
+The system SHALL store a charge's default costs as cost elements, each with an immutable code, a role (`price_basis` / `margin_only`), source (`fixed`, `table`, `index`, `on_request`), cost type and cost model, and SHALL reject combinations that App Spec §1.4.4 forbids. An `index` element SHALL reference an active index of the same tenant and organization, with `index_factor > 0` (default 1) and `index_offset ≥ 0` (default 0, in the index currency), no own amount or currency, and cost model `flat` or `per_unit`. The code becomes the quote cost key, so it SHALL be unique across every charge priced together on one quote line (all charges of the offering, or of the product for a product-level charge), not only within one charge.
 
 ### Scenario: Price-basis on a fixed charge
 - WHEN a `price_basis` element is added to a `fixed` charge
@@ -50,7 +50,22 @@ The system SHALL store a charge's default costs as cost elements, each with an i
 - WHEN an element is created with a code that another charge of the same offering already uses
 - THEN the API returns `422 DUPLICATE_CODE`
 
+### Scenario: Index element
+- WHEN an element with `source = index`, Brent, factor 0.5 and offset 2 is saved
+- THEN it is stored, and the cost preview at Brent 82.40 shows unit cost 43.20 USD
+
+### Scenario: Index element without an index, or with a tiered model
+- WHEN an `index` element omits `costIndexId`, references an inactive index, or uses `cost_model = tiered`
+- THEN the API returns `422 INDEX_REQUIRED`, `INDEX_INACTIVE` or `MODEL_REQUIRES_TABLE`
+
+### Scenario: Index fields on another source
+- WHEN a `fixed` or `table` element is saved with `costIndexId`, `indexFactor` or `indexOffset`
+- THEN the API returns `422 INDEX_FIELDS_NOT_ALLOWED`
+
+Frozen by: `packages/cpq/src/modules/cpq/api/__tests__/chargeCostElementsRoute.test.ts`, `packages/cpq/src/modules/cpq/data/__tests__/costElements.test.ts`
+
 Source: .ai/specs/2026-11-12-cpq-cost-plus-quote-pricing-margin.md
+Source: .ai/specs/2026-11-12-cpq-cost-plus-index-costs-expiry.md
 
 ## Requirement: Cost tables are confidential
 The system SHALL hide pricing tables with `purpose = cost`, and their entries, from users without `cpq.costs.view` on every list, read and write route. The system SHALL refuse to change `purpose` on a table referenced by any charge or cost element (`422 PURPOSE_LOCKED`).

@@ -166,6 +166,50 @@ the `@dainamite/cpq` package, per
 
 ## Schema / API changelog (track breaking changes here)
 
+### 2026-11-16 — Index costs, Phase B: index cost elements and pricing (cost-plus pricing, feature 6)
+
+Spec: `.ai/specs/2026-11-12-cpq-cost-plus-index-costs-expiry.md`. Minor release of
+`@dainamite/cpq`, on top of Phase A. The `index` cost source now prices.
+
+**Schema (run `yarn mercato db migrate`).**
+- `Migration20261116060621` on `cpq_charge_cost_elements`: `cost_index_id` (uuid, null),
+  `index_factor` numeric(18, 6) (null), `index_offset` numeric(18, 4) (null); hand-added
+  partial index `cpq_charge_cost_elements_cost_index_idx` and three CHECKs (`source = 'index'`
+  iff `cost_index_id` is set; `index_factor > 0`; `index_offset >= 0`). No CHECK on `source`
+  exists on cost elements or on quote / order / inventory cost tables, so the new value needs
+  no widening. `down()` parks index elements as inactive `on_request` elements before dropping
+  the columns. Quote cost lines already carry `index_snapshot` (PR #93 column): no change.
+
+**Cost elements** (`/api/cpq/charge-cost-elements`). `source: 'index'` is accepted with
+`costIndexId`, `indexFactor` (> 0, default 1) and `indexOffset` (>= 0, default 0, in the index
+currency); responses carry the three fields. New / extended errors: `INDEX_REQUIRED` (no or
+unknown index), `INDEX_INACTIVE`, `INDEX_FIELDS_NOT_ALLOWED` (index fields on another source),
+`MODEL_REQUIRES_TABLE` (an index element must be `flat` or `per_unit`). The index is read
+`FOR SHARE` on element writes. `INDEX_NO_VALUE` is a new cost-line error (no value in force;
+the charge is `COST_PENDING`, the line not ready). The index detail "Used by" and the in-use
+guard (`INDEX_IN_USE`) read the new columns.
+
+**Pricing (R4).** A saved recalculation of an unlocked quote resolves `catalog`-origin index
+lines to `factor x value in force today + offset` and stores `index_snapshot`; locked quotes,
+unsaved recalculations and quotes with an order keep the stored value. The value in force is
+read once per recalculation. Cost preview and calculate-price resolve at today's value in
+memory (`priceOnRequest` on no value / no rate; no new response field). Renew re-evaluates
+carried index lines (`reevaluateCarriedIndexCosts`, only `unit_amount` and `index_snapshot`
+change); Amend keeps the contracted value. Golden fixtures are unchanged (no index element in
+them).
+
+**Confidentiality.** Index value, factor, offset, snapshot and index id are `cpq.costs.view`
+data on every surface; the quote cost read answers status-only without it. Events add no field.
+
+**UI.** Cost element dialog: Index source with index picker, factor, offset and a "value today"
+help; Costs sub-panel: snapshot line, lock hint and `INDEX_NO_VALUE` badge.
+
+**Demo (`demo_gix`).** `DEMO-DC-POWER` with values, a dedicated index-costed offering and a
+ready and a with_customer quote (idempotent, examples-gated).
+
+**Rollback.** Switch `index` elements to `fixed` first (the usage endpoint lists cost-plus
+charges), then roll the code back; snapshots on cost lines survive.
+
 ### 2026-11-16 — Index costs, Phase A: cost index catalogue (cost-plus pricing, feature 6)
 
 Spec: `.ai/specs/2026-11-12-cpq-cost-plus-index-costs-expiry.md`. Minor release of

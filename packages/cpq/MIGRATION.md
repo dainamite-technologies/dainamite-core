@@ -193,9 +193,12 @@ No route contract change. Data retention changes for installers:
   `deleted_at`. Reports or joins that relied on soft-deleted `sales_quotes`
   rows no longer find them. CPQ rows (`CpqQuoteConfiguration`,
   `CpqQuoteLineConfiguration`) are still soft-deleted.
-- Undoing that delete from the audit log restores the sales quote only; the
-  CPQ configuration stays soft-deleted, so the quote comes back as a plain
-  sales quote.
+- Undoing that delete from the audit log restores the sales quote, and the
+  CPQ interceptor `cpq.restore-quote-configuration-after-sales-undo`
+  (`commands/interceptors.ts`, `afterUndo` on `sales.quotes.delete`) restores
+  the CPQ configuration and the lines deleted with it. Lines removed earlier
+  on their own stay deleted. Run `yarn generate` after upgrading so the
+  interceptor is registered.
 - `POST /api/cpq/product-specifications` creates the catalog product with
   `catalog.products.create`, so catalog validation limits apply (title 255,
   description 4000, handle 150 characters) and return 400.

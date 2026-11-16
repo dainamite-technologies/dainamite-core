@@ -12,6 +12,11 @@ import { Tag } from '@open-mercato/ui/primitives/tag'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
 import { CustomerLabel } from '../../../components/CustomerLabel'
+import { AccountBillingPill } from '../../../components/account/AccountBillingPill'
+import { localTodayIso } from '../../../lib/dateOnly'
+import { accountCycleSpec, rowCycle } from '../../../lib/accountCycle'
+import type { BillCycle } from '../../../lib/billCycle'
+import { useBillCycleSummary } from '../../../components/account/useBillCycleSummary'
 import { fetchCustomerNames } from '../../../components/customerNames'
 import type { CustomerSummary } from '../../../lib/customerLookup'
 
@@ -31,8 +36,9 @@ type BillingAccountRow = {
   customer_kind: 'company' | 'person'
   name: string
   currency_code: string
-  bill_cycle: 'monthly' | 'quarterly' | 'annually' | 'weekly'
-  bill_cycle_anchor: string
+  bill_cycle: BillCycle
+  bill_cycle_interval: number
+  bill_cycle_day: string | null
   invoice_email: string
   next_bill_date: string
   last_bill_date: string | null
@@ -58,6 +64,8 @@ function formatDate(value: string | null | undefined): string {
 
 export default function BillingAccountsListPage() {
   const t = useT()
+  const today = React.useMemo(() => localTodayIso(), [])
+  const summarizeCycle = useBillCycleSummary()
   const router = useRouter()
   const [rows, setRows] = React.useState<BillingAccountRow[]>([])
   const [page, setPage] = React.useState(1)
@@ -76,9 +84,9 @@ export default function BillingAccountsListPage() {
         label: t('billing.accounts.filters.cycle', 'Bill cycle'),
         type: 'select',
         options: [
+          { value: 'daily', label: t('billing.cycle.daily', 'Daily') },
           { value: 'weekly', label: t('billing.cycle.weekly', 'Weekly') },
           { value: 'monthly', label: t('billing.cycle.monthly', 'Monthly') },
-          { value: 'quarterly', label: t('billing.cycle.quarterly', 'Quarterly') },
           { value: 'annually', label: t('billing.cycle.annually', 'Annually') },
         ],
       },
@@ -207,12 +215,7 @@ export default function BillingAccountsListPage() {
       {
         accessorKey: 'bill_cycle',
         header: t('billing.accounts.columns.cycle', 'Cycle'),
-        cell: ({ row }) => (
-          <span>
-            {row.original.bill_cycle}
-            <span className="text-muted-foreground"> · {row.original.bill_cycle_anchor}</span>
-          </span>
-        ),
+        cell: ({ row }) => summarizeCycle(accountCycleSpec(rowCycle(row.original))),
       },
       {
         accessorKey: 'billing_mode',
@@ -230,9 +233,9 @@ export default function BillingAccountsListPage() {
         cell: ({ row }) => formatDate(row.original.next_bill_date),
       },
       {
-        accessorKey: 'last_bill_date',
-        header: t('billing.accounts.columns.last_bill', 'Last bill'),
-        cell: ({ row }) => formatDate(row.original.last_bill_date),
+        id: 'billing_state',
+        header: t('billing.accounts.columns.billing', 'Billing'),
+        cell: ({ row }) => <AccountBillingPill account={row.original} today={today} />,
       },
       {
         accessorKey: 'balance_due',
@@ -272,7 +275,7 @@ export default function BillingAccountsListPage() {
           ),
       },
     ],
-    [customerNames, t],
+    [customerNames, summarizeCycle, t, today],
   )
 
   return (

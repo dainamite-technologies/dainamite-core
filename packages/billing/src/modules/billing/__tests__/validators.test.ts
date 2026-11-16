@@ -9,7 +9,7 @@ import {
   BILLING_ITEM_TYPES,
   BILL_RUN_STATUSES,
   INVOICE_STATUSES,
-  billCycleAnchorSchema,
+  billCycleDaySchema,
   invoiceAddressSchema,
   rateJsonOneTime,
   rateJsonRecurring,
@@ -244,17 +244,24 @@ describe('validateRateJson dispatcher', () => {
   })
 })
 
-describe('billCycleAnchorSchema', () => {
-  it.each(['1', '15', '28'])('accepts day-of-month %s', (day) => {
-    expect(billCycleAnchorSchema.parse(day)).toBe(day)
+describe('billCycleDaySchema', () => {
+  it.each([
+    ['1', '1'],
+    ['05', '5'],
+    ['31', '31'],
+    [15, '15'],
+    ['MON', 'mon'],
+    ['sun', 'sun'],
+  ])('accepts %s → %s', (input, expected) => {
+    expect(billCycleDaySchema.parse(input)).toBe(expected)
   })
 
-  it.each(['0', '29', '32', 'foo'])('rejects invalid anchor %s', (val) => {
-    expect(() => billCycleAnchorSchema.parse(val)).toThrow()
+  it('accepts null (daily cycles)', () => {
+    expect(billCycleDaySchema.parse(null)).toBeNull()
   })
 
-  it.each(['mon', 'tue', 'sun', 'MON'])('accepts weekday anchor %s', (day) => {
-    expect(billCycleAnchorSchema.parse(day)).toBe(day)
+  it.each(['0', '32', 'foo', 'monday'])('rejects invalid day %s', (val) => {
+    expect(() => billCycleDaySchema.parse(val)).toThrow()
   })
 })
 
@@ -282,7 +289,7 @@ describe('exported enums', () => {
   })
 
   it('BILL_CYCLES matches spec', () => {
-    expect([...BILL_CYCLES]).toEqual(['weekly', 'monthly', 'quarterly', 'annually'])
+    expect([...BILL_CYCLES]).toEqual(['daily', 'weekly', 'monthly', 'annually'])
   })
 
   it('BILL_RUN_STATUSES matches spec', () => {
@@ -332,7 +339,7 @@ const validAccountCreate = {
   name: 'Acme Sp. z o.o.',
   currencyCode: 'eur', // lowercase; schema upcases
   billCycle: 'monthly',
-  billCycleAnchor: '1',
+  billCycleDay: '1',
   invoiceEmail: 'AR@acme.test',
   invoiceLanguage: 'PL', // schema downcases
   invoiceAddress: validAddress,
@@ -353,10 +360,44 @@ describe('billingAccountCreateSchema', () => {
     ).toThrow()
   })
 
-  it('rejects an invalid bill cycle anchor (day 32)', () => {
+  it('rejects an invalid bill cycle day (day 32)', () => {
     expect(() =>
-      billingAccountCreateSchema.parse({ ...validAccountCreate, billCycleAnchor: '32' }),
+      billingAccountCreateSchema.parse({ ...validAccountCreate, billCycleDay: '32' }),
     ).toThrow()
+  })
+
+  it('defaults to every 1 month and leaves day / next bill date for the command', () => {
+    const { billCycle: _c, billCycleDay: _d, nextBillDate: _n, ...rest } = validAccountCreate
+    const parsed = billingAccountCreateSchema.parse(rest)
+    expect(parsed.billCycle).toBe('monthly')
+    expect(parsed.billCycleInterval).toBe(1)
+    expect(parsed.billCycleDay).toBeUndefined()
+    expect(parsed.nextBillDate).toBeUndefined()
+  })
+
+  it('accepts every 30 days without a day', () => {
+    const parsed = billingAccountCreateSchema.parse({
+      ...validAccountCreate,
+      billCycle: 'daily',
+      billCycleInterval: 30,
+      billCycleDay: null,
+    })
+    expect(parsed.billCycleInterval).toBe(30)
+  })
+
+  it.each([
+    [{ billCycle: 'weekly', billCycleDay: '1' }, 'billCycleDay'],
+    [{ billCycle: 'monthly', billCycleDay: 'mon' }, 'billCycleDay'],
+    [{ billCycle: 'daily', billCycleInterval: 30, billCycleDay: '1' }, 'billCycleDay'],
+    [{ billCycle: 'monthly', billCycleInterval: 25 }, 'billCycleInterval'],
+  ])('rejects an invalid cycle combination %o', (patch, path) => {
+    const result = billingAccountCreateSchema.safeParse({ ...validAccountCreate, ...patch })
+    expect(result.success).toBe(false)
+    expect(result.error?.issues[0]?.path).toEqual([path])
+  })
+
+  it('rejects the retired quarterly unit (use monthly × 3)', () => {
+    expect(billingAccountCreateSchema.safeParse({ ...validAccountCreate, billCycle: 'quarterly' }).success).toBe(false)
   })
 
   it('rejects unknown bill cycle', () => {

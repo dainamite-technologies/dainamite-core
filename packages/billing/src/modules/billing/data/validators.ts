@@ -2,14 +2,25 @@ import { z } from 'zod'
 import { DEFAULT_INVOICE_LANGUAGE, INVOICE_LANGUAGE_CODES } from '../lib/invoiceLanguages'
 import { DOCUMENT_SERIES, validateMask } from '../lib/numbering'
 import { isValidBic, isValidIban, normalizeIban } from '../lib/iban'
+import { creditReasonInputFields, refineCreditReasonInput } from '../lib/creditReason'
 
 // ─── Enums ───────────────────────────────────────────────────────
 
 export const BILLING_ITEM_TYPES = ['one_time', 'recurring', 'usage'] as const
 export type BillingItemType = (typeof BILLING_ITEM_TYPES)[number]
 
-export const BILL_CYCLES = ['weekly', 'monthly', 'quarterly', 'annually'] as const
-export type BillCycle = (typeof BILL_CYCLES)[number]
+// Bill cycle units + day semantics live in `lib/billCycle.ts` (shared with the
+// cycle math and the UI); re-exported here as the validators' public surface.
+import {
+  BILL_CYCLES,
+  DEFAULT_BILL_CYCLE,
+  DEFAULT_BILL_CYCLE_INTERVAL,
+  defaultCycleDay,
+  normalizeCycleDay,
+  validateCycleSpec,
+} from '../lib/billCycle'
+export { BILL_CYCLES }
+export type { BillCycle } from '../lib/billCycle'
 
 // Spec A: when a recurring item is charged relative to the bill date —
 // for the coming period (in advance, default) or the period just ended.
@@ -94,25 +105,26 @@ export type BalanceStatus = (typeof BALANCE_STATUSES)[number]
 export const CREDIT_STATUSES = ['within_limit', 'near_limit', 'over_limit'] as const
 export type CreditStatus = (typeof CREDIT_STATUSES)[number]
 
-// `mon`–`sun` for weekly cycles; 1–28 (as text) for the others.
-// Why text for numeric anchors: the column type stays uniform across cycles
-// and we never do arithmetic on the raw value (the engine parses it on use).
-const WEEKLY_ANCHORS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as const
+// Bill cycle day: '1'–'31' (monthly / annually; a day past the end of a short
+// month means its last day) or 'mon'–'sun' (weekly); null for daily cycles.
+// Stored as text so both shapes share one column. Numbers are accepted and
+// normalized ('05' / 5 → '5'). Which shape is valid depends on the unit —
+// checked cross-field by `validateCycleSpec`.
+export const billCycleDaySchema = z
+  .union([z.string(), z.number()])
+  .nullable()
+  .transform((value, ctx) => {
+    if (value === null) return null
+    const normalized = normalizeCycleDay(value)
+    if (normalized === null) {
+      ctx.addIssue({ code: 'custom', message: 'bill_cycle_day must be 1–31 or mon–sun' })
+      return z.NEVER
+    }
+    return normalized
+  })
 
-export const billCycleAnchorSchema = z
-  .string()
-  .min(1)
-  .refine(
-    (val) => {
-      if ((WEEKLY_ANCHORS as readonly string[]).includes(val.toLowerCase())) return true
-      const n = Number.parseInt(val, 10)
-      return Number.isInteger(n) && n >= 1 && n <= 28
-    },
-    {
-      message:
-        'bill_cycle_anchor must be 1–28 (monthly/quarterly/annually) or mon–sun (weekly)',
-    },
-  )
+// "Every N units" — the per-unit upper bound is enforced by `validateCycleSpec`.
+export const billCycleIntervalSchema = z.coerce.number().int().min(1).max(366)
 
 // ─── rate_json — pricing definitions ─────────────────────────────
 //
@@ -304,8 +316,10 @@ export const billingAccountCreateSchema = scopedSchema.extend({
   customerKind: z.enum(CUSTOMER_KINDS).default('company'),
   name: z.string().trim().min(1).max(255),
   currencyCode: z.string().trim().toUpperCase().length(3),
-  billCycle: z.enum(BILL_CYCLES),
-  billCycleAnchor: billCycleAnchorSchema,
+  billCycle: z.enum(BILL_CYCLES).default(DEFAULT_BILL_CYCLE),
+  billCycleInterval: billCycleIntervalSchema.default(DEFAULT_BILL_CYCLE_INTERVAL),
+  // Omitted → the day `nextBillDate` falls on, else '1' / 'mon' (create command).
+  billCycleDay: billCycleDaySchema.optional(),
   invoiceEmail: z.string().trim().email().max(320),
   invoiceLanguage: invoiceLanguageSchema.default(DEFAULT_INVOICE_LANGUAGE),
   // Nullable + optional — consistent with the update schema, and the
@@ -313,7 +327,9 @@ export const billingAccountCreateSchema = scopedSchema.extend({
   // for customers with no tax id.
   taxId: z.string().trim().max(64).nullable().optional(),
   invoiceAddress: invoiceAddressSchema,
-  nextBillDate: z.coerce.date(),
+  // Omitted → the first bill cycle day on or after today. An explicit date
+  // off the cycle day bills one short alignment period first.
+  nextBillDate: z.coerce.date().optional(),
   lastBillDate: z.coerce.date().optional(),
   isActive: z.boolean().optional(),
   // SPEC-002: mode is immutable after create (like currencyCode). Default
@@ -327,6 +343,15 @@ export const billingAccountCreateSchema = scopedSchema.extend({
   // Spec B: null/omitted = the organization default payment terms.
   paymentTermsDays: paymentTermsDaysSchema.nullable().optional(),
   autoSendInvoice: z.boolean().optional(),
+}).superRefine((value, ctx) => {
+  // Full cross-field check only when the day is given; an omitted day is
+  // defaulted by the create command, so only the interval range applies.
+  const issue = validateCycleSpec({
+    cycle: value.billCycle,
+    interval: value.billCycleInterval,
+    day: value.billCycleDay === undefined ? defaultCycleDay(value.billCycle, value.nextBillDate ?? null) : value.billCycleDay,
+  })
+  if (issue) ctx.addIssue({ code: 'custom', path: [issue.path], message: issue.message })
 })
 
 export type BillingAccountCreateInput = z.infer<typeof billingAccountCreateSchema>
@@ -334,8 +359,12 @@ export type BillingAccountCreateInput = z.infer<typeof billingAccountCreateSchem
 export const billingAccountUpdateSchema = scopedSchema.extend({
   id: z.string().uuid(),
   name: z.string().trim().min(1).max(255).optional(),
+  // Cycle fields are validated against the stored record by the update
+  // command (a partial patch cannot be cross-checked here). Changing any of
+  // them without an explicit `nextBillDate` re-aligns the next bill date.
   billCycle: z.enum(BILL_CYCLES).optional(),
-  billCycleAnchor: billCycleAnchorSchema.optional(),
+  billCycleInterval: billCycleIntervalSchema.optional(),
+  billCycleDay: billCycleDaySchema.optional(),
   invoiceEmail: z.string().trim().email().max(320).optional(),
   invoiceLanguage: invoiceLanguageSchema.optional(),
   taxId: z.string().trim().max(64).nullable().optional(),
@@ -559,7 +588,9 @@ export const billingItemUpdateSchema = scopedSchema.extend({
   // Safe to change after billing: the `billed_to_date` watermark prevents
   // any day from being billed twice.
   ...chargeTimingFields,
-})
+  // Part 2: required (by the command) when a new end date credits billed days.
+  ...creditReasonInputFields,
+}).superRefine(refineCreditReasonInput)
 
 export type BillingItemUpdateInput = z.infer<typeof billingItemUpdateSchema>
 
@@ -569,7 +600,9 @@ export const billingItemChangePriceSchema = scopedSchema.extend({
   id: z.string().uuid(),
   effectiveDate: z.coerce.date(),
   unitPrice: z.coerce.number().finite().nonnegative(),
-})
+  // Part 2: required (by the command) when the change credits billed days.
+  ...creditReasonInputFields,
+}).superRefine(refineCreditReasonInput)
 
 export type BillingItemChangePriceInput = z.infer<typeof billingItemChangePriceSchema>
 

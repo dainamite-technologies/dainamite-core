@@ -1,7 +1,7 @@
 "use client"
 import * as React from 'react'
 import Link from 'next/link'
-import { useParams } from 'next/navigation'
+import { useParams, useSearchParams } from 'next/navigation'
 import type { LegacyColumnDef as ColumnDef } from '@tanstack/react-table/legacy'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
@@ -22,7 +22,7 @@ import { AccountPicker } from '../../../../components/AccountPicker'
 import { AllocatePaymentDialog } from '../../../../components/AllocatePaymentDialog'
 import { formatMoney } from '../../../../components/InvoicesTable'
 import { PAYMENT_STATUS_VARIANT, usePaymentLabels } from '../../../../components/PaymentsTable'
-import { accountHref, invoiceDetailHref } from '../../../../lib/navigation'
+import { accountHref, invoiceDetailHref, PAYMENTS_LIST_HREF, resolvePaymentReturnTarget } from '../../../../lib/navigation'
 
 /**
  * Payment detail (Spec C): fields, match reason, allocations (with
@@ -139,6 +139,15 @@ export default function PaymentDetailPage(props: { params?: { id?: string } }) {
   // segment arrives as a page prop; `useParams()` is only the fallback.
   const urlParams = useParams<{ id: string }>()
   const id = props.params?.id ?? urlParams?.id
+  const searchParams = useSearchParams()
+  const backHref = resolvePaymentReturnTarget({
+    from: searchParams?.get('from'),
+    accountId: searchParams?.get('accountId'),
+  })
+  const backLabel =
+    backHref === PAYMENTS_LIST_HREF
+      ? t('billing.payments.title', 'Payments')
+      : t('billing.payments.detail.back_to_account', 'Billing account')
   const { confirm, ConfirmDialogElement } = useConfirmDialog()
   const [data, setData] = React.useState<DetailResponse | null>(null)
   const [error, setError] = React.useState<string | null>(null)
@@ -217,7 +226,7 @@ export default function PaymentDetailPage(props: { params?: { id?: string } }) {
     return (
       <Page>
         <PageBody>
-          <RecordNotFoundState label={t('billing.payments.not_found', 'Payment not found')} backHref="/backend/billing/payments" backLabel={t('billing.payments.title', 'Payments')} />
+          <RecordNotFoundState label={t('billing.payments.not_found', 'Payment not found')} backHref={backHref} backLabel={backLabel} />
         </PageBody>
       </Page>
     )
@@ -251,7 +260,7 @@ export default function PaymentDetailPage(props: { params?: { id?: string } }) {
     <Page>
       <FormHeader
         mode="detail"
-        backHref="/backend/billing/payments"
+        backHref={backHref}
         entityTypeLabel={t('billing.payments.detail.title', 'Payment')}
         title={formatMoney(payment.amount, payment.currency_code)}
         statusBadge={<Tag variant={PAYMENT_STATUS_VARIANT[payment.status] ?? 'default'}>{labels.status(payment.status)}</Tag>}

@@ -494,6 +494,17 @@ Click **Restore** → the line is back to **modify** with **price kept**.
 - **One ARC quote per subscription at a time.** `validateArcQuote` and the attach endpoint reject attaching a sub that is already on a non-terminal ARC quote. Operators must resolve the existing quote first (accept, reject, or cancel). UI surfaces this via a confirm dialog (Scenario 8).
 - **Optimistic locking on `subscription.version`.** Concurrent activations of two ARC orders touching the same sub: the second activation fails with 409, the order stays in `pending_activation`, retryable. Surfaced as `Concurrent modification detected`.
 
+## Activation constraint: not before billing starts (billing connector)
+
+Applies when `@dainamite/cpq-billing-connector` is installed. An Amend or Cancel order takes effect the moment it is activated (there is no separate effective date). If the target subscription's billing has not started yet, for example because its bill start was set to a future date in the original order's **Billing** tab, activating the change now would end billing items that have never billed.
+
+- **Billing tab hint.** On an Amend / Cancel order whose earliest activation date is still ahead, the **Billing** tab shows an amber callout: *"This amendment can be activated from 20/11/2026, when billing for this subscription starts. Activating earlier is blocked."* The date is when billing of every target subscription has begun: for each subscription, the earliest bill start of its active billing items. A future-dated item, such as an upsell starting next term, does not block; it is ended before it starts and never bills. The callout disappears on that date.
+- **Hard stop.** Clicking **Activate Order** before that date fails with 422 (`code: cpq_billing_connector.activation_before_billing_start`, `earliestActivationDate`). The order stays in its current status. Activating on the date itself succeeds.
+- **Renewals and new business** are not constrained.
+- **Workaround** for a same-day test: change the bill start of the original order (its Billing tab, before it is activated), or wait until the date.
+- **Mechanism.** CPQ's activate route runs the framework mutation guards (resource kind `cpq.order`, operation `update`, payload `{ action: "activate", orderId }`). The connector registers the guard. CPQ itself knows nothing about billing.
+- **End dates.** When a change is activated, the connector ends each billing item the day before the effective date. An item that has not started yet ends the day before its own start, so it never bills. Every end-date write carries a generated credit reason (`subscription_amended` / `_cancelled` / `_superseded`, with the order number and the effective date), which billing prints under any credit line in the invoice language.
+
 ## ETF (Early Termination Fee)
 
 V1 stores ETF as an operator-entered amount (`arcEtfAmount` + `arcEtfCurrency`) on the cancel quote, surfaced on the `cpq.subscription.cancelled` event. There is no formula engine — billing computes the actual delta from the event payload. Customers wanting policy-driven ETF can override `cpqQuotingService.createQuoteFromSubscription` via DI to pre-populate ETF lines from a `CpqEtfPolicy` entity (extension point EP-ARC-1).

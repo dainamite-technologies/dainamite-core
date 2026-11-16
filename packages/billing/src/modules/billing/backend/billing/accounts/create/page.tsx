@@ -7,6 +7,7 @@ import { flash } from '@open-mercato/ui/backend/FlashMessages'
 import { apiCallOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
 import { normalizeCrudServerError } from '@open-mercato/ui/backend/utils/serverErrors'
 import { AccountForm, type AccountFormValues } from '../../../../components/AccountForm'
+import { billCyclePayload } from '../../../../lib/billCyclePayload'
 
 /**
  * `/backend/billing/accounts/create` — create a Billing Account.
@@ -30,8 +31,7 @@ export default function CreateBillingAccountPage() {
           customerKind: values.customerKind,
           name: values.name.trim(),
           currencyCode: values.currencyCode.trim().toUpperCase(),
-          billCycle: values.billCycle,
-          billCycleAnchor: values.billCycleAnchor.trim(),
+          ...billCyclePayload(values),
           invoiceEmail: values.invoiceEmail.trim(),
           invoiceLanguage: values.invoiceLanguage.trim().toLowerCase(),
           invoiceAddress: {
@@ -43,7 +43,6 @@ export default function CreateBillingAccountPage() {
             postal_code: values.invoiceAddress.postal_code.trim(),
             country: values.invoiceAddress.country.trim().toUpperCase(),
           },
-          nextBillDate: values.nextBillDate,
           billingMode: values.billingMode,
         }
         if (values.taxId.trim()) payload.taxId = values.taxId.trim()

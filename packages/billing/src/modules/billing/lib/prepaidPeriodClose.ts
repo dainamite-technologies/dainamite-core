@@ -7,7 +7,6 @@ import {
   BillingStatement,
   BillingRun,
 } from '../data/entities'
-import type { BillCycle } from '../data/validators'
 import {
   addDays,
   advanceNextBillDate,
@@ -16,6 +15,7 @@ import {
   shiftCycles,
   type BillPeriod,
 } from './billPeriod'
+import { accountCycleSpec } from './accountCycle'
 import { applyBalanceMovement } from './balanceLedger'
 import { resolveLowBalanceThreshold } from './balanceStatus'
 import {
@@ -178,7 +178,7 @@ export async function processPrepaidAccount(
   params: ProcessPrepaidParams,
 ): Promise<PrepaidAccountResult> {
   const scope = { tenantId: account.tenantId, organizationId: account.organizationId }
-  const cycle = account.billCycle as BillCycle
+  const cycle = accountCycleSpec(account)
   const balanceRow = await em.findOne(BillingAccountBalance, {
     tenantId: account.tenantId,
     billAccountId: account.id,
@@ -210,6 +210,8 @@ export async function processPrepaidAccount(
   )
   const billedOneTimes = new Set<string>(oneTimeItems.filter((it) => it.billedToDate).map((it) => it.id))
   let billDate = toUtcMidnight(account.nextBillDate)
+  // End of the last closed period — starts the next one (alignment periods).
+  let lastBilled: Date | null = account.lastBillDate ? toUtcMidnight(account.lastBillDate) : null
   // Chain opening → closing across cycles. Null on the first cycle →
   // resolved from the prior statement / ledger.
   let previousClosing: string | null = null
@@ -233,7 +235,7 @@ export async function processPrepaidAccount(
       break
     }
     const nextBillDate = advanceNextBillDate(billDate, cycle)
-    const period = deriveBillPeriod(billDate, cycle)
+    const period = deriveBillPeriod(billDate, cycle, lastBilled)
 
     // ── Recurring: service periods against the in-memory watermarks ──
     const charges: ChargeLine[] = []
@@ -304,6 +306,7 @@ export async function processPrepaidAccount(
       await em.flush()
     }
     billDate = nextBillDate
+    lastBilled = period.periodEnd
   }
 
   const finalWarnings: PrepaidAccountWarnings = {

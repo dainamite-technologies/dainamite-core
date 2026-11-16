@@ -1,3 +1,4 @@
+import { UniqueConstraintViolationException } from '@mikro-orm/core'
 import { CpqBillingOrderSetupService, OrderSetupError } from '../../services/orderSetupService'
 import { CpqBillingOrderSetup } from '../../data/entities'
 
@@ -85,7 +86,11 @@ describe('CpqBillingOrderSetupService.getView', () => {
       name: 'Test S.A.S.',
       invoiceEmail: 'ap@test.co',
       invoiceAddress: { line1: 'Calle 93', city: 'Bogotá', postal_code: '110221', country: 'CO' },
+      billCycle: 'monthly',
+      billCycleInterval: 1,
+      billCycleDay: '1',
     })
+    expect(view.defaults.account).not.toHaveProperty('billCycleAnchor')
     // A new sale bills every billable line; only ARC orders narrow to added lines.
     expect(view.defaults.lines.map((l) => l.lineId)).toEqual([LINE, MODIFIED])
   })
@@ -221,5 +226,73 @@ describe('CpqBillingOrderSetupService.markApplied', () => {
     expect(rows).toHaveLength(1)
     expect(rows[0]).toMatchObject({ appliedBillingAccountId: ACCOUNT, currencyCode: 'COP' })
     expect(rows[0].appliedAt).toBeInstanceOf(Date)
+  })
+})
+
+describe('concurrent create race (review follow-up #2)', () => {
+  function loseCreateRaceOnce(ctx: ReturnType<typeof setup>, winner: Partial<Row>) {
+    let raced = false
+    ctx.em.flush.mockImplementation(async () => {
+      if (raced) return undefined
+      raced = true
+      // Another request inserted the row between our find and our flush.
+      ctx.rows.splice(0, ctx.rows.length, {
+        id: 'winner',
+        tenantId: scope.tenantId,
+        organizationId: scope.organizationId,
+        cpqOrderId: ORDER,
+        customerId: 'cust-1',
+        currencyCode: 'COP',
+        accountMode: 'new',
+        billingAccountId: null,
+        accountOverrides: {},
+        defaultBillStartDate: null,
+        lineBillStarts: {},
+        appliedAt: null,
+        appliedBillingAccountId: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        deletedAt: null,
+        ...winner,
+      } as unknown as Row)
+      throw new UniqueConstraintViolationException(new Error('duplicate key value violates unique constraint'))
+    })
+  }
+
+  it('save: the loser retries and overwrites the winner (PUT = last writer wins), with before = winner', async () => {
+    const ctx = setup()
+    loseCreateRaceOnce(ctx, { defaultBillStartDate: '2026-12-01' })
+    const { before, after } = await ctx.service.save(scope, ORDER, { accountMode: 'new', defaultBillStartDate: '2027-01-01' })
+    expect(ctx.rows).toHaveLength(1)
+    expect(after).toMatchObject({ id: 'winner', defaultBillStartDate: '2027-01-01' })
+    expect(before).toMatchObject({ id: 'winner', defaultBillStartDate: '2026-12-01' })
+  })
+
+  it('save: a retry that finds the winner already applied still returns 409', async () => {
+    const ctx = setup()
+    loseCreateRaceOnce(ctx, { appliedAt: new Date() })
+    await expect(ctx.service.save(scope, ORDER, { accountMode: 'new' })).rejects.toMatchObject({ status: 409 })
+  })
+
+  it('save: other database errors are not retried', async () => {
+    const ctx = setup()
+    ctx.em.flush.mockRejectedValueOnce(new Error('connection lost'))
+    await expect(ctx.service.save(scope, ORDER, { accountMode: 'new' })).rejects.toThrow('connection lost')
+    expect(ctx.em.flush).toHaveBeenCalledTimes(1)
+  })
+
+  it('markApplied: the loser retries, records its account and keeps the first appliedAt', async () => {
+    const ctx = setup()
+    const firstApplied = new Date('2026-11-15T10:00:00Z')
+    loseCreateRaceOnce(ctx, { appliedAt: firstApplied, appliedBillingAccountId: 'acc-first' })
+    await ctx.service.markApplied(scope, {
+      orderId: ORDER,
+      customerId: 'cust-1',
+      currencyCode: 'COP',
+      billingAccountId: ACCOUNT,
+      accountMode: 'existing',
+    })
+    expect(ctx.rows).toHaveLength(1)
+    expect(ctx.rows[0]).toMatchObject({ id: 'winner', appliedBillingAccountId: ACCOUNT, appliedAt: firstApplied })
   })
 })

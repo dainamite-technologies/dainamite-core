@@ -2,6 +2,16 @@ import {
   DEFAULT_INVOICE_LANGUAGE,
   isSupportedInvoiceLanguage,
 } from '@dainamite/billing/modules/billing/lib/invoiceLanguages'
+import {
+  BILL_CYCLES,
+  DEFAULT_BILL_CYCLE,
+  DEFAULT_BILL_CYCLE_INTERVAL,
+  defaultCycleDay,
+  normalizeCycleDay,
+  validateCycleSpec,
+  type BillCycle,
+  type CycleSpec,
+} from '@dainamite/billing/modules/billing/lib/billCycle'
 import type { AccountOverrides } from '../data/validators'
 
 /**
@@ -11,7 +21,7 @@ import type { AccountOverrides } from '../data/validators'
  * (what the operator is shown), so the two can never disagree.
  */
 
-export type BillCycle = 'monthly' | 'quarterly' | 'annually' | 'weekly'
+export type { BillCycle, CycleSpec }
 
 /**
  * Amend / renew orders add lines to an existing subscription: only the bill
@@ -39,8 +49,11 @@ export type CustomerDefaults = {
   invoiceLanguage?: string
   /** CPQ sends `postalCode`; older payloads may already use `postal_code`. */
   invoiceAddress?: Record<string, unknown>
-  billCycle?: BillCycle
-  billCycleAnchor?: string
+  /** 'quarterly' (pre-0.23 payloads) is read as monthly × 3. */
+  billCycle?: BillCycle | 'quarterly'
+  billCycleInterval?: number
+  /** '1'–'31' (monthly / annually) | 'mon'–'sun' (weekly) | null (daily). */
+  billCycleDay?: string | number | null
   nextBillDate?: string
   taxId?: string | null
 }
@@ -51,12 +64,16 @@ export type AccountSeedValues = {
   name: string
   currencyCode: string
   billCycle: BillCycle
-  billCycleAnchor: string
+  billCycleInterval: number
+  billCycleDay: string | null
   invoiceEmail: string
   invoiceLanguage: string
   invoiceAddress: BillingInvoiceAddress
-  /** `YYYY-MM-DD`. */
-  nextBillDate: string
+  /**
+   * `YYYY-MM-DD`, only when the operator or upstream gave one. Omitted →
+   * billing starts the account on the first cycle day on or after today.
+   */
+  nextBillDate?: string
   taxId: string | null
 }
 
@@ -123,42 +140,90 @@ export function normalizeInvoiceAddress(raw: Record<string, unknown> | undefined
   return address
 }
 
+/** Cycle fields as they arrive from one source (override or upstream). */
+type CycleSource = {
+  /** A unit outside `BILL_CYCLES` (e.g. a legacy 'quarterly') is mapped, not trusted. */
+  billCycle?: string
+  billCycleInterval?: number
+  billCycleDay?: string | number | null
+}
+
+/**
+ * The account's bill cycle (`every N <unit> on <day>`). The source that sets
+ * the unit owns the interval and day, so an operator switching to weekly is
+ * never combined with an upstream day of the month; an override that only
+ * changes N or the day applies on top of the upstream unit. An omitted day
+ * follows billing's own default (the day of `nextBillDate`, else '1' / 'mon').
+ *
+ * Overrides are validated on save, but upstream data is not: an invalid
+ * combination falls back to the unit's defaults rather than failing the
+ * persistent subscriber forever. Default: every 1 month on day 1.
+ */
+export function resolveCycleSpec(input: {
+  overrides?: CycleSource | null
+  defaults?: CycleSource | null
+  nextBillDate?: string | null
+}): CycleSpec {
+  const o = input.overrides ?? {}
+  const unitSource = o.billCycle !== undefined ? o : (input.defaults ?? {})
+  const unit = resolveUnit(unitSource.billCycle)
+  const cycle = unit.cycle
+  const interval = o.billCycleInterval ?? unitSource.billCycleInterval ?? unit.interval
+  const rawDay = o.billCycleDay !== undefined ? o.billCycleDay : unitSource.billCycleDay
+  const anchor = input.nextBillDate ? new Date(`${input.nextBillDate}T00:00:00Z`) : null
+  const fallbackDay = defaultCycleDay(cycle, anchor)
+  const day = cycle === 'daily' ? null : rawDay === undefined || rawDay === null ? fallbackDay : normalizeCycleDay(rawDay)
+  const spec: CycleSpec = { cycle, interval, day }
+  const issue = validateCycleSpec(spec)
+  if (!issue) return spec
+  // Invalid upstream combination: keep the unit, replace what does not fit.
+  return {
+    cycle,
+    interval: issue.path === 'billCycleInterval' ? DEFAULT_BILL_CYCLE_INTERVAL : interval,
+    day: issue.path === 'billCycleDay' ? fallbackDay : day,
+  }
+}
+
+/** Unknown units fall back to monthly; a legacy 'quarterly' is monthly × 3. */
+function resolveUnit(raw: string | undefined): { cycle: BillCycle; interval: number } {
+  if (raw === 'quarterly') return { cycle: 'monthly', interval: 3 }
+  if (raw && (BILL_CYCLES as readonly string[]).includes(raw)) return { cycle: raw as BillCycle, interval: DEFAULT_BILL_CYCLE_INTERVAL }
+  return { cycle: DEFAULT_BILL_CYCLE, interval: DEFAULT_BILL_CYCLE_INTERVAL }
+}
+
 /**
  * New-account values. Precedence per field (D5): operator override →
  * customer defaults from CPQ → placeholder.
  *
- * `nextBillDate`: override → upstream → the earliest effective bill start of
- * the subscription's items (recurring items bill in advance, Billing Spec A,
- * so a delayed start must not bill the gap) → activation date → today.
+ * `nextBillDate`: override → upstream → omitted. Billing then starts the
+ * account on the first bill cycle day on or after today; recurring items
+ * that start later produce empty cycles until their bill start, so a delayed
+ * start never bills the gap.
  */
 export function buildAccountSeedValues(input: {
   defaults: CustomerDefaults
   currencyCode: string
   overrides?: AccountOverrides | null
-  earliestBillStart?: string | null
-  activationDate?: string | null
 }): AccountSeedValues {
   const { defaults, overrides } = input
   const o = overrides ?? {}
   const customerKind = o.customerKind ?? defaults.customerKind
+  const nextBillDate = o.nextBillDate ?? toIsoDate(defaults.nextBillDate) ?? undefined
+  const cycle = resolveCycleSpec({ overrides: o, defaults, nextBillDate })
   return {
     customerId: defaults.customerId,
     ...(customerKind ? { customerKind } : {}),
     name: o.name ?? text(defaults.customerName) ?? placeholderName(defaults.customerId),
     currencyCode: input.currencyCode,
-    billCycle: o.billCycle ?? defaults.billCycle ?? 'monthly',
-    billCycleAnchor: o.billCycleAnchor ?? defaults.billCycleAnchor ?? '1',
+    billCycle: cycle.cycle,
+    billCycleInterval: cycle.interval,
+    billCycleDay: cycle.day,
     invoiceEmail: o.invoiceEmail ?? text(defaults.invoiceEmail) ?? placeholderEmail(defaults.customerId),
     invoiceLanguage: o.invoiceLanguage ?? resolveInvoiceLanguage(defaults.invoiceLanguage),
     invoiceAddress: o.invoiceAddress
       ? { ...o.invoiceAddress }
       : normalizeInvoiceAddress(defaults.invoiceAddress),
-    nextBillDate:
-      o.nextBillDate ??
-      toIsoDate(defaults.nextBillDate) ??
-      input.earliestBillStart ??
-      toIsoDate(input.activationDate) ??
-      todayIsoDate(),
+    ...(nextBillDate ? { nextBillDate } : {}),
     taxId: o.taxId !== undefined ? o.taxId : (defaults.taxId ?? null),
   }
 }

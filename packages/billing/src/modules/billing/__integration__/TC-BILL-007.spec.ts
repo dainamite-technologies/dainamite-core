@@ -41,7 +41,7 @@ async function createAccountWithVatItems(request: APIRequestContext, token: stri
       name: `VAT ${uniq()}`,
       currencyCode: 'PLN',
       billCycle: 'monthly',
-      billCycleAnchor: '1',
+      billCycleDay: '1',
       invoiceEmail: `vat-${uniq()}@example.com`,
       invoiceLanguage: 'pl',
       nextBillDate: '2026-10-01',

@@ -5,6 +5,7 @@ import { Plus } from 'lucide-react'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { PaymentsTable } from './PaymentsTable'
+import { paymentDetailHref } from '../lib/navigation'
 import { ManualPaymentDialog } from './ManualPaymentDialog'
 
 /**
@@ -35,7 +36,7 @@ export function AccountPaymentsSection({ accountId, currencyCode }: { accountId:
         onClose={() => setOpen(false)}
         billAccountId={accountId}
         currencyCode={currencyCode}
-        onCreated={(paymentId) => router.push(`/backend/billing/payments/${encodeURIComponent(paymentId)}`)}
+        onCreated={(paymentId) => router.push(paymentDetailHref(paymentId, { fromAccountId: accountId }))}
       />
     </div>
   )

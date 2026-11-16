@@ -13,15 +13,18 @@ import type { OrderSetupView } from '../../../services/orderSetupService'
 import {
   buildUpsertBody,
   initialFormState,
+  isSavedAccountUnavailable,
   toAccountOptions,
   validateForm,
   type AccountOption,
   type FormIssue,
   type OrderSetupFormState,
 } from '../../../lib/orderSetupForm'
-import { isArcQuoteType } from '../../../lib/orderSetupResolution'
+import { isArcQuoteType, todayIsoDate } from '../../../lib/orderSetupResolution'
+import { activationHintDate } from '../../../lib/earliestActivation'
 import { AccountSection } from '../../../components/orderSetup/AccountSection'
 import { BillStartSection } from '../../../components/orderSetup/BillStartSection'
+import { EarliestActivationNotice } from '../../../components/orderSetup/EarliestActivationNotice'
 
 /** What `@dainamite/cpq` passes as context to `cpq.order.detail:tabs` widgets. */
 type OrderContext = {
@@ -35,6 +38,8 @@ type Loaded = {
   view: OrderSetupView
   candidates: AccountOption[]
   canListAccounts: boolean
+  /** The saved account is no longer offered — warn and re-derive the choice. */
+  savedAccountUnavailable: boolean
 }
 
 const ISSUE_MESSAGES: Record<FormIssue, [string, string]> = {
@@ -45,6 +50,10 @@ const ISSUE_MESSAGES: Record<FormIssue, [string, string]> = {
     'cpq_billing_connector.orderSetup.issues.addressIncomplete',
     'An address needs line 1, city, postal code and country.',
   ],
+  cycleInvalid: [
+    'cpq_billing_connector.orderSetup.issues.cycleInvalid',
+    'Check the bill cycle: the number of units or the day does not fit the unit.',
+  ],
 }
 
 async function loadSetup(context: OrderContext): Promise<Loaded> {
@@ -53,7 +62,9 @@ async function loadSetup(context: OrderContext): Promise<Loaded> {
   )
   const view = viewCall.result as OrderSetupView
   // Amend / renew orders bill to the subscription's account — no account choice.
-  if (isArcQuoteType(view.quoteType)) return { view, candidates: [], canListAccounts: true }
+  if (isArcQuoteType(view.quoteType)) {
+    return { view, candidates: [], canListAccounts: true, savedAccountUnavailable: false }
+  }
   const query = new URLSearchParams({
     customerId: context.customerId,
     currencyCode: context.currencyCode,
@@ -61,10 +72,15 @@ async function loadSetup(context: OrderContext): Promise<Loaded> {
     pageSize: '50',
   })
   const accountsCall = await apiCall<unknown>(`/api/billing/accounts?${query.toString()}`)
+  const candidates = accountsCall.ok ? toAccountOptions(accountsCall.result, context) : []
+  // Only a successful list proves the saved account is gone (a 403 or an
+  // error says nothing about it).
+  const canListAccounts = accountsCall.status !== 403
   return {
     view,
-    candidates: accountsCall.ok ? toAccountOptions(accountsCall.result, context) : [],
-    canListAccounts: accountsCall.status !== 403,
+    candidates,
+    canListAccounts,
+    savedAccountUnavailable: accountsCall.ok && isSavedAccountUnavailable(view, candidates, canListAccounts),
   }
 }
 
@@ -87,7 +103,9 @@ export default function OrderBillingSetupWidget({ context }: InjectionWidgetComp
     try {
       setError(null)
       const next = await loadSetup(orderContext)
-      const nextState = initialFormState(next.view, next.candidates)
+      const nextState = initialFormState(next.view, next.candidates, {
+        savedAccountUnavailable: next.savedAccountUnavailable,
+      })
       setLoaded(next)
       setState(nextState)
       setInitial(JSON.stringify(nextState))
@@ -145,36 +163,46 @@ export default function OrderBillingSetupWidget({ context }: InjectionWidgetComp
 
   const { view } = loaded
   const applied = view.setup?.appliedAt ? view.setup : null
+  // Amend / cancel orders: activation is blocked until billing of the target
+  // subscription starts — say so before the operator clicks Activate.
+  const hintDate = activationHintDate(view, todayIsoDate())
+  const notice = hintDate ? <EarliestActivationNotice date={hintDate} /> : null
 
   const arc = isArcQuoteType(view.quoteType)
   if (view.quoteType !== 'new' && !arc) {
     return (
-      <Alert status="information">
-        <AlertDescription>
-          {t('cpq_billing_connector.orderSetup.nothingToBill', 'This order adds nothing to bill.')}
-        </AlertDescription>
-      </Alert>
+      <div className="space-y-4">
+        {notice}
+        <Alert status="information">
+          <AlertDescription>
+            {t('cpq_billing_connector.orderSetup.nothingToBill', 'This order adds nothing to bill.')}
+          </AlertDescription>
+        </Alert>
+      </div>
     )
   }
 
   if (applied || !view.editable) {
     return (
-      <div className="space-y-3 rounded-lg border bg-card p-4 text-sm">
-        {applied?.appliedBillingAccountId ? (
-          <p>
-            {t('cpq_billing_connector.orderSetup.applied', 'Billing for this order was set up at activation.')}{' '}
-            <Link className="font-medium text-primary underline" href={`/backend/billing/accounts/${applied.appliedBillingAccountId}`}>
-              {t('cpq_billing_connector.orderSetup.openAccount', 'Open billing account')}
-            </Link>
-          </p>
-        ) : (
-          <p className="text-muted-foreground">
-            {t(
-              'cpq_billing_connector.orderSetup.notApplied',
-              'The billing setup can no longer be changed. Billing is created shortly after activation.',
-            )}
-          </p>
-        )}
+      <div className="space-y-4">
+        {notice}
+        <div className="space-y-3 rounded-lg border bg-card p-4 text-sm">
+          {applied?.appliedBillingAccountId ? (
+            <p>
+              {t('cpq_billing_connector.orderSetup.applied', 'Billing for this order was set up at activation.')}{' '}
+              <Link className="font-medium text-primary underline" href={`/backend/billing/accounts/${applied.appliedBillingAccountId}`}>
+                {t('cpq_billing_connector.orderSetup.openAccount', 'Open billing account')}
+              </Link>
+            </p>
+          ) : (
+            <p className="text-muted-foreground">
+              {t(
+                'cpq_billing_connector.orderSetup.notApplied',
+                'The billing setup can no longer be changed. Billing is created shortly after activation.',
+              )}
+            </p>
+          )}
+        </div>
       </div>
     )
   }
@@ -189,6 +217,7 @@ export default function OrderBillingSetupWidget({ context }: InjectionWidgetComp
 
   return (
     <div className="space-y-4" onKeyDown={onKeyDown}>
+      {notice}
       {arc ? (
         <Alert status="information">
           <AlertDescription>
@@ -209,6 +238,16 @@ export default function OrderBillingSetupWidget({ context }: InjectionWidgetComp
             </AlertDescription>
           </Alert>
         )
+      )}
+      {loaded.savedAccountUnavailable && (
+        <Alert status="warning">
+          <AlertDescription>
+            {t(
+              'cpq_billing_connector.orderSetup.savedAccountUnavailable',
+              'The billing account saved for this order is no longer active for this customer and currency. Choose another account or create a new one, then save.',
+            )}
+          </AlertDescription>
+        </Alert>
       )}
       {issues.length > 0 && (
         <Alert status="error">

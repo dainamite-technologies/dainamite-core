@@ -36,3 +36,6 @@ export function runCpqMutationGuards(
     input,
   })
 }
+
+/** Mutation-guard resource kind for CPQ order writes (e.g. activation). */
+export const CPQ_ORDER_RESOURCE_KIND = 'cpq.order'

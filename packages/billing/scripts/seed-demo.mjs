@@ -3,7 +3,7 @@
  *
  * Populates the billing module with a small, realistic data set so the
  * admin UI has something to click through:
- *   - 5 billing accounts (PLN / EUR, monthly / quarterly / annually)
+ *   - 5 billing accounts (PLN / EUR, monthly / every 3 months / annually)
  *   - 10 billing items (recurring / one-time / usage)
  *   - 3 usage records on the metered Acme Telecom item
  *   - 1 Bill Run -> 3 draft invoices (ready to review + post)
@@ -66,7 +66,7 @@ const ACCOUNTS = [
     name: 'Acme Telecom Sp. z o.o.',
     currencyCode: 'PLN',
     billCycle: 'monthly',
-    billCycleAnchor: '1',
+    billCycleDay: '1',
     invoiceEmail: 'faktury@acme-telecom.example',
     invoiceLanguage: 'pl',
     nextBillDate: '2026-05-01',
@@ -83,7 +83,7 @@ const ACCOUNTS = [
     name: 'Globex Networks Sp. z o.o.',
     currencyCode: 'PLN',
     billCycle: 'monthly',
-    billCycleAnchor: '15',
+    billCycleDay: '15',
     invoiceEmail: 'rozliczenia@globex-networks.example',
     invoiceLanguage: 'pl',
     nextBillDate: '2026-05-15',
@@ -99,8 +99,9 @@ const ACCOUNTS = [
     customerId: 'cust-initech-003',
     name: 'Initech Cloud GmbH',
     currencyCode: 'EUR',
-    billCycle: 'quarterly',
-    billCycleAnchor: '1',
+    billCycle: 'monthly',
+    billCycleInterval: 3,
+    billCycleDay: '1',
     invoiceEmail: 'billing@initech-cloud.example',
     invoiceLanguage: 'en',
     nextBillDate: '2026-07-01',
@@ -116,7 +117,7 @@ const ACCOUNTS = [
     name: 'Contoso Analytics Ltd.',
     currencyCode: 'EUR',
     billCycle: 'annually',
-    billCycleAnchor: '1',
+    billCycleDay: '1',
     invoiceEmail: 'ap@contoso-analytics.example',
     invoiceLanguage: 'en',
     nextBillDate: '2026-06-01',
@@ -131,7 +132,7 @@ const ACCOUNTS = [
     name: 'Northwind Studio s.c.',
     currencyCode: 'PLN',
     billCycle: 'monthly',
-    billCycleAnchor: '1',
+    billCycleDay: '1',
     invoiceEmail: 'biuro@northwind-studio.example',
     invoiceLanguage: 'pl',
     nextBillDate: '2026-05-01',

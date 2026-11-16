@@ -28,6 +28,7 @@ import {
   StatCard,
 } from '../../../../components/DetailFields'
 import { billRunName } from '../../../../lib/billRunLabel'
+import { InvoiceLineExtras } from '../../../../components/InvoiceLineExtras'
 import { invoicePdfHref, resolveInvoiceReturnTarget } from '../../../../lib/navigation'
 import { CreateMemoDialog } from '../../../../components/CreateMemoDialog'
 
@@ -558,6 +559,12 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
           return (
             <div className="flex flex-col gap-1">
               <span>{row.original.description ?? '—'}</span>
+              <InvoiceLineExtras
+                description={row.original.description}
+                servicePeriodStart={row.original.service_period_start}
+                servicePeriodEnd={row.original.service_period_end}
+                metadata={row.original.metadata}
+              />
               <div className="flex items-center gap-1 flex-wrap">
                 {type ? <Tag variant={lineKindVariant(type)}>{type}</Tag> : null}
                 {operatorAdded ? (

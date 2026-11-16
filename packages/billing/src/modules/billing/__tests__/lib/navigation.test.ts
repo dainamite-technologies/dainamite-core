@@ -7,6 +7,9 @@ import {
   invoiceDetailHref,
   invoicePdfHref,
   resolveInvoiceReturnTarget,
+  paymentDetailHref,
+  resolvePaymentReturnTarget,
+  PAYMENTS_LIST_HREF,
   isAccountTab,
 } from '../../lib/navigation'
 
@@ -67,5 +70,21 @@ describe('account workspace tabs (Spec F, F8)', () => {
     expect(isAccountTab('invoices')).toBe(true)
     expect(isAccountTab('nope')).toBe(false)
     expect(isAccountTab(null)).toBe(false)
+  })
+})
+
+describe('payment navigation', () => {
+  it('links a payment opened from an account back to that account', () => {
+    expect(paymentDetailHref('pay-1')).toBe('/backend/billing/payments/pay-1')
+    expect(paymentDetailHref('pay-1', { fromAccountId: 'acc-1' })).toBe(
+      '/backend/billing/payments/pay-1?from=account&accountId=acc-1',
+    )
+    expect(paymentDetailHref('pay-1', { fromAccountId: ' ' })).toBe('/backend/billing/payments/pay-1')
+  })
+
+  it('returns to the account Payments tab only when opened from the account', () => {
+    expect(resolvePaymentReturnTarget({ from: 'account', accountId: 'acc-1' })).toBe(accountHref('acc-1', 'payments'))
+    expect(resolvePaymentReturnTarget({ from: 'account', accountId: '' })).toBe(PAYMENTS_LIST_HREF)
+    expect(resolvePaymentReturnTarget({ from: null, accountId: 'acc-1' })).toBe(PAYMENTS_LIST_HREF)
   })
 })

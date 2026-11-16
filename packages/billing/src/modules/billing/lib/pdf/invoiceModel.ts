@@ -13,6 +13,8 @@
  */
 
 import { invoiceIntlLocale } from '../invoiceLanguages'
+import { lineServicePeriod } from '../linePeriod'
+import { creditReasonText, type CreditReason } from '../creditReason'
 
 export type DocumentTranslate =(key: string, fallback: string) => string
 
@@ -70,6 +72,8 @@ export type PdfLine = {
   grossAmount: string
   servicePeriodStart: Date | string | null
   servicePeriodEnd: Date | string | null
+  /** Part 2: why this credit line exists (from line metadata), rendered in the document language. */
+  creditReason?: CreditReason | null
 }
 
 export type InvoiceDocumentModel = {
@@ -210,12 +214,13 @@ export function buildInvoiceDocumentModel(params: {
   ].filter((line) => line !== '')
 
   const rows = lines.map((line, index) => {
-    const start = line.servicePeriodStart
-    const end = line.servicePeriodEnd
-    const description =
-      start && end && !line.description.includes(' – ')
-        ? `${line.description} (${date(start)} – ${date(end)})`
-        : line.description
+    const servicePeriod = lineServicePeriod(line)
+    const described = servicePeriod
+      ? `${line.description} (${date(servicePeriod.start)} – ${date(servicePeriod.end)})`
+      : line.description
+    const description = line.creditReason
+      ? `${described}\n${t('billing.pdf.credit_reason', 'Reason')}: ${creditReasonText(line.creditReason, t, (day) => date(day))}`
+      : described
     return [
       String(index + 1),
       description,

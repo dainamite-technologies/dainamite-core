@@ -40,3 +40,19 @@ describe('itemBillingState', () => {
     expect(itemBillingState({ ...fee, bill_start_date: '2027-01-01' }, TODAY).status).toBe('scheduled')
   })
 })
+
+describe('itemBillingState — cancelled before start', () => {
+  it('an item that ends before it starts never bills', () => {
+    expect(itemBillingState(recurring({ bill_start_date: '2026-11-20', bill_end_date: '2026-11-19' }), TODAY)).toEqual({
+      status: 'cancelled',
+      date: null,
+    })
+    expect(
+      itemBillingState(recurring({ type: 'one_time', bill_start_date: '2026-11-20', bill_end_date: '2026-11-14', billed_to_date: '2026-11-20' }), TODAY).status,
+    ).toBe('cancelled')
+  })
+
+  it('a one-day item is not cancelled', () => {
+    expect(itemBillingState(recurring({ bill_start_date: '2026-11-20', bill_end_date: '2026-11-20' }), TODAY).status).toBe('scheduled')
+  })
+})

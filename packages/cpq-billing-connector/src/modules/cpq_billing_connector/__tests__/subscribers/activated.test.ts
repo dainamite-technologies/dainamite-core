@@ -62,7 +62,7 @@ describe('resolveBillingAccount', () => {
   it('reuses the account a previous run applied (idempotent re-fire)', async () => {
     const { billing, created } = fakeBilling([acc('acc-applied')])
     const setup: AppliedSetup = { accountMode: 'new', appliedBillingAccountId: 'acc-applied' }
-    await expect(resolveBillingAccount({ billing, scope, payload, setup, earliestBillStart: null })).resolves.toEqual({
+    await expect(resolveBillingAccount({ billing, scope, payload, setup })).resolves.toEqual({
       id: 'acc-applied',
       accountMode: 'new',
     })
@@ -72,7 +72,7 @@ describe('resolveBillingAccount', () => {
   it('uses the operator’s existing account while it is usable', async () => {
     const { billing } = fakeBilling([acc('acc-chosen'), acc('acc-newer', { createdAt: new Date('2027-01-01') })])
     const setup: AppliedSetup = { accountMode: 'existing', billingAccountId: 'acc-chosen' }
-    await expect(resolveBillingAccount({ billing, scope, payload, setup, earliestBillStart: null })).resolves.toEqual({
+    await expect(resolveBillingAccount({ billing, scope, payload, setup })).resolves.toEqual({
       id: 'acc-chosen',
       accountMode: 'existing',
     })
@@ -82,7 +82,7 @@ describe('resolveBillingAccount', () => {
     const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined)
     const { billing } = fakeBilling([acc('acc-chosen', { isActive: false }), acc('acc-other')])
     const setup: AppliedSetup = { accountMode: 'existing', billingAccountId: 'acc-chosen' }
-    await expect(resolveBillingAccount({ billing, scope, payload, setup, earliestBillStart: null })).resolves.toEqual({
+    await expect(resolveBillingAccount({ billing, scope, payload, setup })).resolves.toEqual({
       id: 'acc-other',
       accountMode: 'existing',
     })
@@ -94,10 +94,28 @@ describe('resolveBillingAccount', () => {
     const { billing, created } = fakeBilling([acc('acc-existing')])
     const setup: AppliedSetup = { accountMode: 'new', accountOverrides: { name: 'Sede Norte' } }
     await expect(
-      resolveBillingAccount({ billing, scope, payload, setup, earliestBillStart: '2026-12-01' }),
+      resolveBillingAccount({ billing, scope, payload, setup }),
     ).resolves.toEqual({ id: 'acc-created', accountMode: 'new' })
-    expect(created[0]).toMatchObject({ name: 'Sede Norte', currencyCode: 'COP' })
-    expect((created[0].nextBillDate as Date).toISOString().slice(0, 10)).toBe('2026-12-01')
+    expect(created[0]).toMatchObject({
+      name: 'Sede Norte',
+      currencyCode: 'COP',
+      billCycle: 'monthly',
+      billCycleInterval: 1,
+      billCycleDay: '1',
+    })
+    // No operator / upstream date → billing picks the first cycle day on or after today.
+    expect(created[0]).not.toHaveProperty('nextBillDate')
+  })
+
+  it('creates a new account on the operator’s cycle and first bill date', async () => {
+    const { billing, created } = fakeBilling([])
+    const setup: AppliedSetup = {
+      accountMode: 'new',
+      accountOverrides: { billCycle: 'monthly', billCycleInterval: 3, billCycleDay: '15', nextBillDate: '2026-12-15' },
+    }
+    await resolveBillingAccount({ billing, scope, payload, setup })
+    expect(created[0]).toMatchObject({ billCycle: 'monthly', billCycleInterval: 3, billCycleDay: '15' })
+    expect((created[0].nextBillDate as Date).toISOString().slice(0, 10)).toBe('2026-12-15')
   })
 
   it('without a setup, reuses the newest same-currency account', async () => {
@@ -106,7 +124,7 @@ describe('resolveBillingAccount', () => {
       acc('acc-new', { createdAt: new Date('2026-06-01') }),
       acc('acc-usd', { currencyCode: 'USD', createdAt: new Date('2027-01-01') }),
     ])
-    await expect(resolveBillingAccount({ billing, scope, payload, setup: null, earliestBillStart: null })).resolves.toEqual({
+    await expect(resolveBillingAccount({ billing, scope, payload, setup: null })).resolves.toEqual({
       id: 'acc-new',
       accountMode: 'existing',
     })
@@ -115,7 +133,7 @@ describe('resolveBillingAccount', () => {
 
   it('without a setup, never reuses an account in another currency — it creates one from the customer data', async () => {
     const { billing, created } = fakeBilling([acc('acc-usd', { currencyCode: 'USD' })])
-    await expect(resolveBillingAccount({ billing, scope, payload, setup: null, earliestBillStart: null })).resolves.toEqual({
+    await expect(resolveBillingAccount({ billing, scope, payload, setup: null })).resolves.toEqual({
       id: 'acc-created',
       accountMode: 'new',
     })
@@ -126,7 +144,7 @@ describe('resolveBillingAccount', () => {
     const { billing, mock } = fakeBilling([])
     mock.createAccount.mockResolvedValueOnce({ id: '' })
     await expect(
-      resolveBillingAccount({ billing, scope, payload, setup: null, earliestBillStart: null }),
+      resolveBillingAccount({ billing, scope, payload, setup: null }),
     ).rejects.toThrow('returned no id')
   })
 })

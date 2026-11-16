@@ -8,6 +8,7 @@ import { BillingDataTable as DataTable } from './BillingDataTable'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
 import { formatMoney } from './InvoicesTable'
+import { paymentDetailHref } from '../lib/navigation'
 
 /**
  * Billing payments table (Spec C) — shared by the Payments list page and the
@@ -191,7 +192,7 @@ export function PaymentsTable({ title, tableId, billAccountId, importId, pageSiz
       error={error}
       emptyState={t('billing.payments.empty', 'No payments yet.')}
       isLoading={loading}
-      onRowClick={(row) => router.push(`/backend/billing/payments/${encodeURIComponent(row.id)}`)}
+      onRowClick={(row) => router.push(paymentDetailHref(row.id, { fromAccountId: billAccountId }))}
       pagination={{ page, pageSize, total, totalPages, onPageChange: setPage }}
       filters={filterDefs}
       filterValues={filters}

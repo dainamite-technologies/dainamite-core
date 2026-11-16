@@ -3,6 +3,7 @@
  * and through which date? Pure — computed from the item row and today's date.
  *
  *   inactive      the item is switched off
+ *   cancelled     ends before it starts (end < start) — never bills
  *   metered       usage item (billed from usage records, no watermark)
  *   scheduled     starts after today, nothing billed yet
  *   awaiting_run  started, but no Bill Run has charged it yet
@@ -15,6 +16,7 @@
 
 export type ItemBillingStatus =
   | 'inactive'
+  | 'cancelled'
   | 'metered'
   | 'scheduled'
   | 'awaiting_run'
@@ -50,6 +52,9 @@ function nextDay(iso: string): string {
 /** `today` is a YYYY-MM-DD string (the viewer's calendar day). */
 export function itemBillingState(item: ItemBillingInput, today: string): ItemBillingState {
   if (!item.is_active) return { status: 'inactive', date: null }
+  const startDay = day(item.bill_start_date)
+  const endDay = day(item.bill_end_date)
+  if (startDay && endDay && endDay < startDay) return { status: 'cancelled', date: null }
   if (item.type === 'usage') return { status: 'metered', date: null }
   const start = day(item.bill_start_date) ?? today
   const billedTo = day(item.billed_to_date)

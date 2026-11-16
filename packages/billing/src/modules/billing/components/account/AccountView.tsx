@@ -7,10 +7,13 @@ import { CustomerLabel } from '../CustomerLabel'
 import { fetchCustomerNames } from '../customerNames'
 import { SUPPORTED_INVOICE_LANGUAGES } from '../../lib/invoiceLanguages'
 import { formatDate, type AccountRow } from './accountRow'
+import { useBillCycleSummary } from './useBillCycleSummary'
+import { accountCycleSpec, rowCycle } from '../../lib/accountCycle'
 
 /** Read-only account fields (workspace Overview tab). */
 export function AccountView({ row }: { row: AccountRow }) {
   const t = useT()
+  const summarizeCycle = useBillCycleSummary()
   const customerKind = row.customer_kind ?? 'company'
   const [customerName, setCustomerName] = React.useState<string | null>(null)
   React.useEffect(() => {
@@ -72,8 +75,7 @@ export function AccountView({ row }: { row: AccountRow }) {
         <span className="font-mono text-xs">{row.id}</span>
       </DetailField>
       <DetailField label={t('billing.accounts.columns.cycle', 'Cycle')}>
-        {row.bill_cycle}
-        <span className="text-muted-foreground"> · {row.bill_cycle_anchor}</span>
+        {summarizeCycle(accountCycleSpec(rowCycle(row)))}
       </DetailField>
       <DetailField label={t('billing.accounts.columns.next_bill', 'Next bill')}>
         {formatDate(row.next_bill_date)}

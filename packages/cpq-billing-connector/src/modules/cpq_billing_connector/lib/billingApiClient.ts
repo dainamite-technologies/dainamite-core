@@ -10,6 +10,7 @@ import type { CommandBus } from '@open-mercato/shared/lib/commands/command-bus'
 // Migrate to billing REST list endpoints once the connector graduates to
 // stable v1 — track in the dainamite-cpq packaging plan.
 import { BillingAccount, BillingItem } from '@dainamite/billing/modules/billing/data/entities'
+import type { BillCycle } from '@dainamite/billing/modules/billing/lib/billCycle'
 
 /**
  * Thin facade the connector uses to talk to billing.
@@ -40,12 +41,16 @@ export type AccountSeed = {
   customerKind?: 'company' | 'person'
   name: string
   currencyCode: string
-  billCycle: 'monthly' | 'quarterly' | 'annually' | 'weekly'
-  billCycleAnchor: string
+  /** Bill cycle "every `billCycleInterval` `billCycle` on `billCycleDay`" (billing >= 0.23). */
+  billCycle: BillCycle
+  billCycleInterval: number
+  /** '1'–'31' | 'mon'–'sun' | null (daily). */
+  billCycleDay: string | null
   invoiceEmail: string
   invoiceLanguage: string
   invoiceAddress: Record<string, unknown>
-  nextBillDate: Date
+  /** Omitted → billing starts the account on the first cycle day on or after today. */
+  nextBillDate?: Date
   taxId?: string | null
 }
 
@@ -68,12 +73,29 @@ export type ItemCreatePayload = {
   taxRate?: number
 }
 
+/** Generated credit reasons billing renders in the invoice language (billing Part 2, D10). */
+export type CreditReasonCode = 'subscription_amended' | 'subscription_cancelled' | 'subscription_superseded'
+
+export type CreditReasonParams = {
+  /** e.g. the CPQ order number. */
+  reference?: string
+  /** YYYY-MM-DD the change took effect. */
+  effectiveDate: string
+}
+
 export type ItemUpdatePayload = {
   id: string
   billEndDate?: Date | string | null
   subscriptionId?: string | null
   subscriptionItemId?: string | null
   isActive?: boolean
+  /**
+   * Why the end date credits already-billed days. Billing requires a reason
+   * when the change produces a credit and ignores it otherwise, so the
+   * connector sends it with every ARC end-date write.
+   */
+  creditReasonCode?: CreditReasonCode
+  creditReasonParams?: CreditReasonParams
 }
 
 function buildSystemCtx(container: AwilixContainer, scope: Scope) {
@@ -164,6 +186,17 @@ export class BillingApiClient {
       tenantId: scope.tenantId,
       organizationId: scope.organizationId,
       subscriptionId,
+      deletedAt: null,
+    } as never)
+  }
+
+  /** Items of several subscriptions in one query (empty input → no query). */
+  async findItemsBySubscriptions(scope: Scope, subscriptionIds: string[]): Promise<BillingItem[]> {
+    if (subscriptionIds.length === 0) return []
+    return this.em.find(BillingItem, {
+      tenantId: scope.tenantId,
+      organizationId: scope.organizationId,
+      subscriptionId: { $in: subscriptionIds },
       deletedAt: null,
     } as never)
   }

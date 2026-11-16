@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { handleArcError } from '../../../_helpers/handleArcError'
 import { z } from 'zod'
 import { resolveCpqRouteContext } from '../../../context'
 import { cpqInventoryStatusTransitionSchema } from '../../../../data/validators'
@@ -21,17 +22,7 @@ export async function POST(req: Request) {
     const result = await service.transitionSubscriptionStatus(body.id, body.targetStatus, scope)
     return NextResponse.json(result)
   } catch (err) {
-    if (err instanceof z.ZodError) {
-      return NextResponse.json({ error: 'Validation error', details: err.issues }, { status: 400 })
-    }
-    if (err && typeof err === 'object' && 'status' in err && (err as any).status === 409) {
-      return NextResponse.json(
-        { error: (err as any).error ?? 'Conflict' },
-        { status: 409 },
-      )
-    }
-    console.error('[cpq/inventory/subscriptions/status.POST]', err)
-    return NextResponse.json({ error: 'Internal error' }, { status: 500 })
+    return handleArcError(err, 'cpq/inventory/subscriptions/status.POST')
   }
 }
 
@@ -47,7 +38,7 @@ export const openApi: OpenApiRouteDoc = {
       errors: [
         cpqErrorDoc(400, 'Validation error'),
         cpqErrorDoc(409, 'Transition not allowed'),
-        cpqErrorDoc(500, 'Internal error (also returned when the subscription does not exist)'),
+        cpqErrorDoc(404, 'Subscription not found'), cpqErrorDoc(500, 'Internal error'),
       ],
     },
   },

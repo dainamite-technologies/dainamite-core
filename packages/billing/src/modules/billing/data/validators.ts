@@ -270,6 +270,13 @@ const scopedSchema = z.object({
 
 // ─── List pagination (shared shape) ──────────────────────────────
 
+// Query-string boolean: only the literal strings count ("false" must NOT
+// coerce to true the way z.coerce.boolean() would).
+const queryBoolean = z.preprocess(
+  (value) => (value === 'true' || value === true ? true : value === 'false' || value === false ? false : undefined),
+  z.boolean().optional(),
+)
+
 const listPaginationBase = {
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(50),
@@ -369,7 +376,7 @@ export const billingAccountListQuerySchema = z
     currencyCode: z.string().optional(),
     billCycle: z.enum(BILL_CYCLES).optional(),
     billingMode: z.enum(BILLING_MODES).optional(),
-    isActive: z.coerce.boolean().optional(),
+    isActive: queryBoolean,
     search: z.string().optional(),
     // Spec F (F8): only accounts with at least one overdue receivable.
     hasOverdue: z
@@ -580,7 +587,7 @@ export const billingItemListQuerySchema = z
     billAccountId: z.string().uuid().optional(),
     type: z.enum(BILLING_ITEM_TYPES).optional(),
     subscriptionId: z.string().optional(),
-    isActive: z.coerce.boolean().optional(),
+    isActive: queryBoolean,
     activeAt: z.coerce.date().optional(), // bill_start_date <= X AND (bill_end_date IS NULL OR bill_end_date >= X)
   })
   .passthrough()
@@ -616,7 +623,7 @@ export const billingUsageListQuerySchema = z
     ...listPaginationBase,
     billAccountId: z.string().uuid().optional(),
     uomCode: z.string().optional(),
-    rated: z.coerce.boolean().optional(), // true → already rated; false → unrated
+    rated: queryBoolean, // true → already rated; false → unrated
     periodEndFrom: z.coerce.date().optional(),
     periodEndTo: z.coerce.date().optional(),
   })
@@ -855,12 +862,6 @@ export type BillingStatementListQuery = z.infer<typeof billingStatementListQuery
 
 // ─── Spec 0 — invoice ledger + billing settings ──────────────────
 
-// Query-string boolean: only the literal strings count ("false" must NOT
-// coerce to true the way z.coerce.boolean() would).
-const queryBoolean = z.preprocess(
-  (value) => (value === 'true' || value === true ? true : value === 'false' || value === false ? false : undefined),
-  z.boolean().optional(),
-)
 
 export const billingInvoiceListQuerySchema = z
   .object({

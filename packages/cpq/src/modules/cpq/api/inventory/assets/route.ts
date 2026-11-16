@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { handleArcError } from '../../_helpers/handleArcError'
 import { z } from 'zod'
 import { resolveCpqRouteContext } from '../../context'
 import {
@@ -59,8 +60,7 @@ export async function GET(req: Request) {
     const result = await service.listAssets(filters, scope)
     return NextResponse.json(result)
   } catch (err) {
-    console.error('[cpq/inventory/assets.GET]', err)
-    return NextResponse.json({ error: 'Internal error' }, { status: 500 })
+    return handleArcError(err, 'cpq/inventory/assets.GET')
   }
 }
 
@@ -76,11 +76,7 @@ export async function POST(req: Request) {
     const result = await service.createAsset(body, scope)
     return NextResponse.json(result, { status: 201 })
   } catch (err) {
-    if (err instanceof z.ZodError) {
-      return NextResponse.json({ error: 'Validation error', details: err.issues }, { status: 400 })
-    }
-    console.error('[cpq/inventory/assets.POST]', err)
-    return NextResponse.json({ error: 'Internal error' }, { status: 500 })
+    return handleArcError(err, 'cpq/inventory/assets.POST')
   }
 }
 
@@ -97,11 +93,7 @@ export async function PUT(req: Request) {
     const result = await service.updateAsset(id, updates, scope)
     return NextResponse.json(result)
   } catch (err) {
-    if (err instanceof z.ZodError) {
-      return NextResponse.json({ error: 'Validation error', details: err.issues }, { status: 400 })
-    }
-    console.error('[cpq/inventory/assets.PUT]', err)
-    return NextResponse.json({ error: 'Internal error' }, { status: 500 })
+    return handleArcError(err, 'cpq/inventory/assets.PUT')
   }
 }
 
@@ -119,8 +111,7 @@ export async function DELETE(req: Request) {
     await service.deleteAsset(id, scope)
     return NextResponse.json({ success: true })
   } catch (err) {
-    console.error('[cpq/inventory/assets.DELETE]', err)
-    return NextResponse.json({ error: 'Internal error' }, { status: 500 })
+    return handleArcError(err, 'cpq/inventory/assets.DELETE')
   }
 }
 
@@ -144,7 +135,7 @@ export const openApi: OpenApiRouteDoc = {
         sortDir: cpqSortDirQuery,
       }),
       responses: [{ status: 200, description: 'Asset, or paged list of assets' }],
-      errors: [cpqErrorDoc(500, 'Internal error (also returned when `id` does not exist)')],
+      errors: [cpqErrorDoc(404, 'Asset not found'), cpqErrorDoc(500, 'Internal error')],
     },
     POST: {
       summary: 'Create an asset in CPQ inventory',
@@ -152,7 +143,7 @@ export const openApi: OpenApiRouteDoc = {
       responses: [{ status: 201, description: 'Created asset' }],
       errors: [
         cpqErrorDoc(400, 'Validation error'),
-        cpqErrorDoc(500, 'Internal error (also returned when the linked subscription or item does not exist)'),
+        cpqErrorDoc(404, 'Linked subscription or item not found'), cpqErrorDoc(500, 'Internal error'),
       ],
     },
     PUT: {
@@ -162,7 +153,7 @@ export const openApi: OpenApiRouteDoc = {
       responses: [{ status: 200, description: 'Updated asset' }],
       errors: [
         cpqErrorDoc(400, 'Validation error'),
-        cpqErrorDoc(500, 'Internal error (also returned when the asset does not exist)'),
+        cpqErrorDoc(404, 'Asset not found'), cpqErrorDoc(500, 'Internal error'),
       ],
     },
     DELETE: {
@@ -171,7 +162,7 @@ export const openApi: OpenApiRouteDoc = {
       responses: [{ status: 200, description: 'Deleted', schema: cpqSuccessResponseSchema }],
       errors: [
         cpqErrorDoc(400, 'Missing id'),
-        cpqErrorDoc(500, 'Internal error (also returned when the asset does not exist)'),
+        cpqErrorDoc(404, 'Asset not found'), cpqErrorDoc(500, 'Internal error'),
       ],
     },
   },

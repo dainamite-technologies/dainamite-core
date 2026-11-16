@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { handleArcError } from '../../_helpers/handleArcError'
 import { z } from 'zod'
 import { resolveCpqRouteContext } from '../../context'
 import {
@@ -42,8 +43,7 @@ export async function GET(req: Request) {
     const result = await service.listSubscriptionItems(filters, scope)
     return NextResponse.json(result)
   } catch (err) {
-    console.error('[cpq/inventory/subscription-items.GET]', err)
-    return NextResponse.json({ error: 'Internal error' }, { status: 500 })
+    return handleArcError(err, 'cpq/inventory/subscription-items.GET')
   }
 }
 
@@ -60,11 +60,7 @@ export async function POST(req: Request) {
     const result = await service.addSubscriptionItem(subscriptionId, input, scope)
     return NextResponse.json(result, { status: 201 })
   } catch (err) {
-    if (err instanceof z.ZodError) {
-      return NextResponse.json({ error: 'Validation error', details: err.issues }, { status: 400 })
-    }
-    console.error('[cpq/inventory/subscription-items.POST]', err)
-    return NextResponse.json({ error: 'Internal error' }, { status: 500 })
+    return handleArcError(err, 'cpq/inventory/subscription-items.POST')
   }
 }
 
@@ -81,11 +77,7 @@ export async function PUT(req: Request) {
     const result = await service.updateSubscriptionItem(id, updates, scope)
     return NextResponse.json(result)
   } catch (err) {
-    if (err instanceof z.ZodError) {
-      return NextResponse.json({ error: 'Validation error', details: err.issues }, { status: 400 })
-    }
-    console.error('[cpq/inventory/subscription-items.PUT]', err)
-    return NextResponse.json({ error: 'Internal error' }, { status: 500 })
+    return handleArcError(err, 'cpq/inventory/subscription-items.PUT')
   }
 }
 
@@ -103,8 +95,7 @@ export async function DELETE(req: Request) {
     await service.deleteSubscriptionItem(id, scope)
     return NextResponse.json({ success: true })
   } catch (err) {
-    console.error('[cpq/inventory/subscription-items.DELETE]', err)
-    return NextResponse.json({ error: 'Internal error' }, { status: 500 })
+    return handleArcError(err, 'cpq/inventory/subscription-items.DELETE')
   }
 }
 
@@ -132,7 +123,7 @@ export const openApi: OpenApiRouteDoc = {
       responses: [{ status: 201, description: 'Created subscription item' }],
       errors: [
         cpqErrorDoc(400, 'Validation error'),
-        cpqErrorDoc(500, 'Internal error (also returned when the subscription or parent item does not exist)'),
+        cpqErrorDoc(404, 'Subscription or parent item not found'), cpqErrorDoc(500, 'Internal error'),
       ],
     },
     PUT: {
@@ -141,7 +132,7 @@ export const openApi: OpenApiRouteDoc = {
       responses: [{ status: 200, description: 'Updated subscription item' }],
       errors: [
         cpqErrorDoc(400, 'Validation error'),
-        cpqErrorDoc(500, 'Internal error (also returned when the item does not exist)'),
+        cpqErrorDoc(404, 'Item not found'), cpqErrorDoc(500, 'Internal error'),
       ],
     },
     DELETE: {
@@ -150,7 +141,7 @@ export const openApi: OpenApiRouteDoc = {
       responses: [{ status: 200, description: 'Deleted', schema: cpqSuccessResponseSchema }],
       errors: [
         cpqErrorDoc(400, 'Missing id'),
-        cpqErrorDoc(500, 'Internal error (also returned when the item does not exist)'),
+        cpqErrorDoc(404, 'Item not found'), cpqErrorDoc(500, 'Internal error'),
       ],
     },
   },

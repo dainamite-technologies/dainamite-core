@@ -25,7 +25,14 @@ export async function GET(req: Request) {
     }
 
     const scope = { organizationId: ctx.organizationId, tenantId: ctx.tenantId }
-    const currentConfig = configParam ? JSON.parse(configParam) : {}
+    let currentConfig: Record<string, unknown> = {}
+    if (configParam) {
+      try {
+        currentConfig = JSON.parse(configParam) as Record<string, unknown>
+      } catch {
+        return NextResponse.json({ error: 'Invalid configuration JSON' }, { status: 400 })
+      }
+    }
 
     // Use ctx.em directly to avoid DI scope issues
     const productService = new DefaultCpqProductService(ctx.em)

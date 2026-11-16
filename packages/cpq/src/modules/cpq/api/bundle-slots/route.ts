@@ -59,7 +59,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: err.message }, { status: 400 })
     }
     console.error('[cpq/bundle-slots.POST]', err)
-    return NextResponse.json({ error: err instanceof Error ? err.message : 'Internal error' }, { status: 500 })
+    return NextResponse.json({ error: 'Internal error' }, { status: 500 })
   }
 }
 

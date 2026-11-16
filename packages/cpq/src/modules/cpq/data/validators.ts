@@ -1,6 +1,24 @@
 import { z } from 'zod'
 import { normalizeChargePricing } from './charge-pricing'
 
+/**
+ * Update schemas must not inject defaults. `.partial()` keeps `.default()`
+ * wrappers, so a PUT that sends `{ id, isActive }` got every defaulted field
+ * (sortOrder, offeringType, lifecycleStatus, ...) filled in and the route
+ * silently overwrote the stored values. This strips the top-level defaults
+ * before making every field optional. `.extend` keeps the object's
+ * unknown-key policy.
+ */
+export function partialWithoutDefaults<Shape extends z.ZodRawShape>(
+  schema: z.ZodObject<Shape>,
+): ReturnType<z.ZodObject<Shape>['partial']> {
+  const overrides: Record<string, z.ZodType> = {}
+  for (const [key, field] of Object.entries(schema.shape)) {
+    if (field instanceof z.ZodDefault) overrides[key] = field.unwrap() as z.ZodType
+  }
+  return schema.extend(overrides).partial() as unknown as ReturnType<z.ZodObject<Shape>['partial']>
+}
+
 // ─── Product Specification ───────────────────────────────────────
 
 export const cpqProductSpecificationCreateSchema = z.object({
@@ -23,7 +41,7 @@ export const cpqProductSpecificationCreateSchema = z.object({
   isActive: z.boolean().optional().default(true),
 })
 
-export const cpqProductSpecificationUpdateSchema = cpqProductSpecificationCreateSchema.partial().extend({
+export const cpqProductSpecificationUpdateSchema = partialWithoutDefaults(cpqProductSpecificationCreateSchema).extend({
   id: z.string().uuid(),
 })
 
@@ -47,7 +65,7 @@ export const cpqProductOfferingCreateSchema = z.object({
   isActive: z.boolean().optional().default(true),
 })
 
-export const cpqProductOfferingUpdateSchema = cpqProductOfferingCreateSchema.partial().extend({
+export const cpqProductOfferingUpdateSchema = partialWithoutDefaults(cpqProductOfferingCreateSchema).extend({
   id: z.string().uuid(),
 })
 
@@ -109,7 +127,7 @@ export const cpqProductRelationshipCreateSchema = z.object({
   isActive: z.boolean().optional().default(true),
 })
 
-export const cpqProductRelationshipUpdateSchema = cpqProductRelationshipCreateSchema.partial().extend({
+export const cpqProductRelationshipUpdateSchema = partialWithoutDefaults(cpqProductRelationshipCreateSchema).extend({
   id: z.string().uuid(),
 })
 
@@ -134,7 +152,7 @@ export const cpqProductAttributeCreateSchema = z.object({
   isActive: z.boolean().optional().default(true),
 })
 
-export const cpqProductAttributeUpdateSchema = cpqProductAttributeCreateSchema.partial().extend({
+export const cpqProductAttributeUpdateSchema = partialWithoutDefaults(cpqProductAttributeCreateSchema).extend({
   id: z.string().uuid(),
 })
 
@@ -251,7 +269,7 @@ export const cpqProductChargeCreateSchema = cpqProductChargeBase.superRefine((da
   refineChargePricingShape(ctx, data)
 })
 
-export const cpqProductChargeUpdateSchema = cpqProductChargeBase.partial().extend({
+export const cpqProductChargeUpdateSchema = partialWithoutDefaults(cpqProductChargeBase).extend({
   id: z.string().uuid(),
 }).superRefine((data, ctx) => {
   // Enforce shape whenever either pricing axis is being changed — a
@@ -278,7 +296,7 @@ export const cpqPriceRuleCreateSchema = z.object({
   isActive: z.boolean().optional().default(true),
 })
 
-export const cpqPriceRuleUpdateSchema = cpqPriceRuleCreateSchema.partial().extend({
+export const cpqPriceRuleUpdateSchema = partialWithoutDefaults(cpqPriceRuleCreateSchema).extend({
   id: z.string().uuid(),
 })
 
@@ -316,7 +334,7 @@ export const cpqPricingTableCreateSchema = z.object({
   isActive: z.boolean().optional().default(true),
 })
 
-export const cpqPricingTableUpdateSchema = cpqPricingTableCreateSchema.partial().extend({
+export const cpqPricingTableUpdateSchema = partialWithoutDefaults(cpqPricingTableCreateSchema).extend({
   id: z.string().uuid(),
 })
 
@@ -331,7 +349,7 @@ export const cpqPricingTableEntryCreateSchema = z.object({
   isActive: z.boolean().optional().default(true),
 })
 
-export const cpqPricingTableEntryUpdateSchema = cpqPricingTableEntryCreateSchema.partial().extend({
+export const cpqPricingTableEntryUpdateSchema = partialWithoutDefaults(cpqPricingTableEntryCreateSchema).extend({
   id: z.string().uuid(),
 })
 
@@ -560,7 +578,7 @@ export const cpqWizardDefinitionCreateSchema = z.object({
   metadata: z.record(z.string(), z.unknown()).nullish(),
 })
 
-export const cpqWizardDefinitionUpdateSchema = cpqWizardDefinitionCreateSchema.partial().extend({
+export const cpqWizardDefinitionUpdateSchema = partialWithoutDefaults(cpqWizardDefinitionCreateSchema).extend({
   id: z.string().uuid(),
 })
 // ─── Inventory Subscription ──────────────────────────────────────

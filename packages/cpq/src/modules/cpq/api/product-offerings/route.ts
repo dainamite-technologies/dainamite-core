@@ -281,6 +281,26 @@ export async function PUT(req: Request) {
     const entity = await ctx.em.findOne(CpqProductOffering, { id, ...scope })
     if (!entity) return NextResponse.json({ error: 'Not found' }, { status: 404 })
 
+    // V-OFF-7 on update: when the spec or the offering type changes, the
+    // resulting offeringType must still match the specification's specType.
+    // Edits that touch neither field skip the check, so legacy rows stay editable.
+    if (updates.specId !== undefined || updates.offeringType !== undefined) {
+      const spec = await ctx.em.findOne(CpqProductSpecification, {
+        id: updates.specId ?? entity.specId,
+        organizationId: ctx.organizationId,
+        tenantId: ctx.tenantId,
+        deletedAt: null,
+      })
+      if (!spec) return NextResponse.json({ error: 'Specification not found' }, { status: 400 })
+      const offeringType = updates.offeringType ?? entity.offeringType ?? 'simple'
+      if (offeringType !== spec.specType) {
+        return NextResponse.json(
+          { error: `V-OFF-7: offeringType '${offeringType}' must match specification's specType '${spec.specType}'` },
+          { status: 400 },
+        )
+      }
+    }
+
     ctx.em.assign(entity, updates)
     await ctx.em.flush()
 

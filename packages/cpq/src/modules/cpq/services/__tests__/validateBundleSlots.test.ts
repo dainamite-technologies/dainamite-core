@@ -120,6 +120,19 @@ describe('DefaultCpqValidationService.validateBundleSlots', () => {
     expect(errors).toEqual([])
   })
 
+  it('does not flag a mirrored child whose component was later removed from the catalog', async () => {
+    const errors = await service(catalog).validateBundleSlots({
+      lines: [
+        line('L1', 'b', null, { isArcMirrored: true, action: 'modify' }),
+        line('L2', 'fiber', 'L1', { isArcMirrored: true, action: 'modify' }),
+        line('L3', 'legacy-cpe', 'L1', { isArcMirrored: true, action: 'modify' }),
+        line('L4', 'ont', 'L1', { action: 'add' }), // the quote adds a child, so the bundle is re-checked
+      ],
+      scope: SCOPE,
+    })
+    expect(errors).toEqual([])
+  })
+
   it('V-QBUN-4: checks a nested bundle on its own', async () => {
     const nested = {
       offerings: [...catalog.offerings, { id: 'tv', specId: 'spec-tv', offeringType: 'bundle', name: 'TV Pack' }],

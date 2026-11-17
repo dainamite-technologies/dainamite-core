@@ -195,10 +195,15 @@ export class DefaultCpqValidationService {
    *   and no `parent_child` relationship from the bundle's spec allows it
    * - V-QBUN-4 — nested bundles are bundle lines too, so they are checked the same way
    *
-   * Child lines marked for removal by ARC are not counted. A bundle mirrored
-   * from a live subscription is grandfathered: V-QBUN-1/2 only apply when this
-   * quote changes its children (a child is added or cancelled), so renewing a
-   * subscription sold before default expansion existed is not blocked.
+   * Child lines marked for removal by ARC are not counted, and mirrored
+   * children are never flagged by V-QBUN-3. A bundle mirrored from a live
+   * subscription is grandfathered: it is only checked when this quote changes
+   * its children (a child is added or cancelled), so renewing a subscription
+   * sold before default expansion existed is not blocked. The caller skips
+   * Cancel quotes entirely (everything on them is being terminated).
+   *
+   * Cardinality counts component *lines*, as XD-223 defines it; a line's
+   * quantity does not count as several components.
    *
    * Child → slot mapping uses the component row (V-COMP-5 makes the child
    * offering unique per bundle), so quote lines need no slot column.
@@ -258,6 +263,11 @@ export class DefaultCpqValidationService {
       )
 
       const allChildren = lines.filter((l) => l.parentLineId === bundleLine.lineId)
+      // A bundle mirrored from a live subscription whose children this quote
+      // leaves untouched is what was sold: it is not re-checked.
+      const grandfathered = bundleLine.isArcMirrored && allChildren.every((child) => child.action === 'modify')
+      if (grandfathered) continue
+
       const countByGroup = new Map<string, number>()
       for (const child of allChildren) {
         if (child.isArcCancelled) continue
@@ -267,6 +277,9 @@ export class DefaultCpqValidationService {
           countByGroup.set(slot.componentGroup, (countByGroup.get(slot.componentGroup) ?? 0) + 1)
           continue
         }
+        // Add-ons allowed by a parent_child relationship, and items mirrored
+        // from the subscription (sold under an older catalog), are not flagged.
+        if (child.isArcMirrored) continue
         if (child.specId && addOnSpecIds.has(child.specId)) continue
         errors.push({
           lineId: child.lineId,
@@ -274,9 +287,6 @@ export class DefaultCpqValidationService {
           message: `V-QBUN-3: This item is not a component of bundle ${bundle.name}`,
         })
       }
-
-      const grandfathered = bundleLine.isArcMirrored && allChildren.every((child) => child.action === 'modify')
-      if (grandfathered) continue
 
       const groups = new Map<string, { min: number; max: number | null; names: string[] }>()
       for (const slot of bundleSlots) {

@@ -7,6 +7,10 @@ import type { ValidationError } from './types'
  * `validationResult`, so conversion reads the stored state instead of
  * re-pricing (the same approach as `storedAdjustmentFailure`).
  *
+ * A quote last recalculated before slot validation existed has no such
+ * errors stored, so it is not retro-blocked until its next write — the same
+ * trade-off as the stored adjustment snapshot.
+ *
  * Only bundle slot errors block conversion: an incomplete bundle would become
  * a subscription missing required components. Other invalid states convert as
  * they did before.

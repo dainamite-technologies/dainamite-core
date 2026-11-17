@@ -9,7 +9,7 @@ jest.mock('../priceAdjustments/quotePricingWrite', () => ({
 }))
 
 import { DefaultCpqQuotingService } from '../cpqQuotingService'
-import { CpqProductOffering, CpqProductSpecification, CpqQuoteLineConfiguration } from '../../data/entities'
+import { CpqProductAttribute, CpqProductOffering, CpqProductSpecification, CpqQuoteLineConfiguration } from '../../data/entities'
 import { SalesQuote, SalesQuoteLine } from '@open-mercato/core/modules/sales/data/entities'
 import type { BundleTreeNode } from '../cpqBundleService'
 import type { TenantScope } from '../types'
@@ -30,7 +30,7 @@ const slot = (group: string, children: Array<[BundleTreeNode, boolean]>): Bundle
   components: children.map(([child, isDefault], i) => ({ componentId: `c-${child.offeringId}`, childOffering: child, isDefault, sortOrder: i })),
 })
 
-function setup(tree: BundleTreeNode) {
+function setup(tree: BundleTreeNode, attributesBySpec: Record<string, Row[]> = {}) {
   const quote = { id: 'cpq-1', quoteId: 'sq-1', cpqStatus: 'new', customerId: 'cust', currencyCode: 'USD', version: 1, quoteType: 'new', quoteContext: null }
   ;(globalThis as Record<string, unknown>).__cpqTestQuote = quote
   const offerings = new Map<string, Row>([
@@ -50,7 +50,11 @@ function setup(tree: BundleTreeNode) {
       if (entity === SalesQuoteLine) return salesLines.find((l) => l.id === where.id) ?? null
       return null
     }),
-    find: jest.fn(async (entity: unknown) => (entity === CpqQuoteLineConfiguration ? lineConfigs : [])),
+    find: jest.fn(async (entity: unknown, where: Row) => {
+      if (entity === CpqQuoteLineConfiguration) return lineConfigs
+      if (entity === CpqProductAttribute) return attributesBySpec[where.specId as string] ?? []
+      return []
+    }),
     create: jest.fn((entity: unknown, data: Row) => {
       const row = { id: data.id ?? `lc-${lineConfigs.length + 1}`, ...data }
       if (entity === CpqQuoteLineConfiguration) lineConfigs.push(row)
@@ -116,5 +120,23 @@ describe('addQuoteItem with expandBundleDefaults (#123)', () => {
     await service.addQuoteItem('cpq-1', { offeringId: 'fiber', configuration: {}, expandBundleDefaults: true }, SCOPE)
     expect(lineConfigs).toHaveLength(1)
     expect(bundleService.resolveBundleTree).not.toHaveBeenCalled()
+  })
+
+  it('gives default components the bundle term and the attribute values it can (inherited, else attribute default)', async () => {
+    const { service, lineConfigs } = setup(fiberHome, {
+      'spec-fiber': [
+        { code: 'region', defaultValue: 'ams1' },
+        { code: 'speed', defaultValue: '1G' },
+        { code: 'serial', defaultValue: null },
+      ],
+    })
+    await service.addQuoteItem('cpq-1', {
+      offeringId: 'bundle', configuration: { region: 'fra1' }, termMonths: 24, startDate: '2026-12-01', expandBundleDefaults: true,
+    }, SCOPE)
+
+    const fiberLine = lineConfigs.find((l) => l.offeringId === 'fiber')!
+    expect(fiberLine.configuration).toEqual({ region: 'fra1', speed: '1G' })
+    expect(fiberLine.termMonths).toBe(24)
+    expect(fiberLine.quantity).toBe(1)
   })
 })

@@ -634,3 +634,36 @@ describe('conversion stored-adjustment baseline', () => {
     expect(orderLine?.configuration).not.toHaveProperty('_arcRepriced')
   })
 })
+
+describe('conversion of a quote with an incomplete bundle (#124)', () => {
+  const quoteWith = (errors: unknown[]) => ({
+    id: 'quote', quoteId: 'sales', cpqStatus: 'accepted', currencyCode: 'USD', customerId: 'customer',
+    pricingSummary: { nrcTotal: 0, mrcTotal: 0 }, validationResult: { valid: errors.length === 0, errors },
+  })
+  const bundleLine = { quoteLineId: 'L1', quantity: 1, action: 'add', nrcTotal: '0', mrcTotal: '0', charges: [], configuration: {}, offeringId: 'b' }
+
+  it('refuses with 422 BUNDLE_INCOMPLETE and lists the stored V-QBUN errors', async () => {
+    const { em, service } = createService()
+    em.findOne.mockResolvedValueOnce(quoteWith([
+      { lineId: 'L1', type: 'bundle_slot', slotGroup: 'cpe', slotName: 'CPE', message: 'V-QBUN-1: CPE requires at least 1 component(s) (0 selected)' },
+    ])).mockResolvedValueOnce(null) // no existing order
+    em.find.mockResolvedValueOnce([bundleLine]).mockResolvedValueOnce([])
+
+    await expect(service.convertQuoteToOrder('quote', SCOPE)).rejects.toMatchObject({
+      status: 422,
+      message: 'BUNDLE_INCOMPLETE',
+      details: { errors: [{ lineId: 'L1', slotGroup: 'cpe', slotName: 'CPE', message: expect.stringMatching(/^V-QBUN-1/) }] },
+    })
+    expect(em.create).not.toHaveBeenCalled()
+  })
+
+  it('does not block on other stored validation errors (unchanged behaviour)', async () => {
+    const { em, service } = createService()
+    em.findOne.mockResolvedValueOnce(quoteWith([{ lineId: 'L1', type: 'attribute', message: 'speed is required' }]))
+      .mockResolvedValueOnce(null)
+    em.find.mockResolvedValueOnce([bundleLine]).mockResolvedValueOnce([])
+    em.create.mockImplementation((_entity, values: Record<string, unknown>) => ({ createdAt: new Date(), ...values }))
+
+    await expect(service.convertQuoteToOrder('quote', SCOPE)).resolves.toBeDefined()
+  })
+})

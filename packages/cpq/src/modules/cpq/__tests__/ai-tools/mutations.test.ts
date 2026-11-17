@@ -182,6 +182,26 @@ describe('cpq.add_quote_line preview', () => {
     expect(ctxArg.tenantId).toBe(makeCtx().tenantId)
   })
 
+  it('counts the default component lines a bundle will add', async () => {
+    api.on('GET', `/cpq/quotes/${QUOTE_ID}`, quote())
+    const leaf = (id: string) => ({ offeringId: id, offeringType: 'simple', isActive: true, slots: [] })
+    api.on('GET', '/cpq/bundle-tree', {
+      tree: {
+        offeringId: OFFERING_ID_2, offeringType: 'bundle', isActive: true,
+        slots: [
+          { componentGroup: 'access', cardinalityMin: 1, cardinalityMax: 1, components: [{ isDefault: true, childOffering: leaf('fiber') }] },
+          { componentGroup: 'cpe', cardinalityMin: 1, cardinalityMax: 1, components: [{ isDefault: true, childOffering: leaf('ont') }] },
+        ],
+      },
+    })
+    const tool = getTool('cpq.add_quote_line')
+    const preview = await tool.loadBeforeRecord!(
+      { quoteId: QUOTE_ID, offeringId: OFFERING_ID_2, configuration: {}, expandBundleDefaults: true },
+      makeCtx(),
+    )
+    expect(preview).toMatchObject({ before: { lineCount: 1 }, after: { lineCount: 4, defaultComponentLines: 2 } })
+  })
+
   it('returns null when the quote is not visible', async () => {
     const tool = getTool('cpq.add_quote_line')
     const preview = await tool.loadBeforeRecord!({ quoteId: QUOTE_ID, offeringId: OFFERING_ID, configuration: {} }, makeCtx())

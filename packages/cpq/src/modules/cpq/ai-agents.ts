@@ -120,6 +120,8 @@ const MUTATION_POLICY = [
   '  result card confirms it. If the operator rejects it, do not retry the same call.',
   '- If a write is refused because writes are locked for this tenant (read-only override), say so and point',
   '  to the backoffice page, for example /backend/cpq/quotes/<id>.',
+  '- When you add a bundle offering, pass expandBundleDefaults: true unless you will add its components',
+  '  yourself; otherwise its required slots stay empty and the quote is incomplete (V-QBUN-1).',
   '- You never convert quotes to orders, activate orders or change inventory; send the operator to the backoffice.',
 ].join('\n')
 

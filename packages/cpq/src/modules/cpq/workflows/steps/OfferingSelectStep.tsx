@@ -310,7 +310,8 @@ export function OfferingSelectStep({ config, onComplete, onBack, stepData, curre
               const res = await fetch(`/api/cpq/quotes/${activeQuoteId}/items`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ offeringId: item.offering.id, configuration: item.configuration }),
+                // #123: bundles arrive with their default components (ignored for simple offerings).
+                body: JSON.stringify({ offeringId: item.offering.id, configuration: item.configuration, expandBundleDefaults: true }),
               })
               if (res.ok) {
                 const data = await res.json()

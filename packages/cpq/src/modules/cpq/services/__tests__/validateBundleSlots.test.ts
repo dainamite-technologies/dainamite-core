@@ -133,6 +133,22 @@ describe('DefaultCpqValidationService.validateBundleSlots', () => {
     expect(errors).toEqual([])
   })
 
+  it('does not enforce minimums on an amended legacy bundle whose mirrored children no longer map to a slot', async () => {
+    const errors = await service({
+      ...catalog,
+      relationships: [{ sourceSpecId: 'spec-b', targetSpecId: 'spec-static-ip', relationshipType: 'parent_child' }],
+    }).validateBundleSlots({
+      lines: [
+        line('L1', 'b', null, { isArcMirrored: true, action: 'modify' }),
+        line('L2', 'legacy-access', 'L1', { isArcMirrored: true, action: 'modify' }),
+        line('L3', 'legacy-cpe', 'L1', { isArcMirrored: true, action: 'modify' }),
+        line('L4', 'static-ip', 'L1', { action: 'add' }), // the amend adds an add-on
+      ],
+      scope: SCOPE,
+    })
+    expect(errors).toEqual([])
+  })
+
   it('V-QBUN-4: checks a nested bundle on its own', async () => {
     const nested = {
       offerings: [...catalog.offerings, { id: 'tv', specId: 'spec-tv', offeringType: 'bundle', name: 'TV Pack' }],

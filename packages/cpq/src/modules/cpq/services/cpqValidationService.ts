@@ -269,6 +269,10 @@ export class DefaultCpqValidationService {
       if (grandfathered) continue
 
       const countByGroup = new Map<string, number>()
+      // A mirrored child that maps to no live component was sold under an
+      // older catalog shape: the slot it filled can no longer be known, so
+      // minimums are not enforced for this bundle (maximums still are).
+      let hasLegacyChild = false
       for (const child of allChildren) {
         if (child.isArcCancelled) continue
         const slotId = child.offeringId ? slotIdByChildOffering.get(child.offeringId) : undefined
@@ -279,8 +283,11 @@ export class DefaultCpqValidationService {
         }
         // Add-ons allowed by a parent_child relationship, and items mirrored
         // from the subscription (sold under an older catalog), are not flagged.
-        if (child.isArcMirrored) continue
         if (child.specId && addOnSpecIds.has(child.specId)) continue
+        if (child.isArcMirrored) {
+          hasLegacyChild = true
+          continue
+        }
         errors.push({
           lineId: child.lineId,
           type: 'bundle_slot',
@@ -297,7 +304,7 @@ export class DefaultCpqValidationService {
       for (const [componentGroup, group] of groups) {
         const count = countByGroup.get(componentGroup) ?? 0
         const slotName = group.names.join(' / ')
-        if (group.min > 0 && count < group.min) {
+        if (!hasLegacyChild && group.min > 0 && count < group.min) {
           errors.push({
             lineId: bundleLine.lineId,
             type: 'bundle_slot',

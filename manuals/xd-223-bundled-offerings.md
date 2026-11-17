@@ -155,6 +155,8 @@ You should see a JSON with `tree` (slots with components) and `validation` (comp
 
 **Slot rules.** Expand the bundle line to see its slots. A required slot group with too few components (or one over its maximum) shows its counter in red with an **incomplete** tag, the bundle line is not configured, and the quote stays **incomplete** with an error such as `V-QBUN-1: Access Port requires at least 1 component(s) (0 selected)`. A child line whose offering is not a component of the bundle gets `V-QBUN-3`. A quote with such errors cannot be converted to an order (`422 BUNDLE_INCOMPLETE`).
 
+> The check uses the result of the quote's last change. If you change a bundle's slots or components in the catalog, open quotes are re-checked the next time they are edited or recalculated (**Recalculate** button). Amend / Renew quotes of subscriptions sold under an older bundle shape are not held to the new slot minimums.
+
 ### Step 2.3 — Add or Change Child Lines (Bundle Components)
 
 Default components are already on the quote (Step 2.2). To add optional ones, use the bundle line's **"Add Component"** button (+ icon), or the **+ <offering>** buttons in each slot.

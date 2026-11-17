@@ -81,6 +81,7 @@ These guides ship automatically when the corresponding module is installed.
 | **Any new page / service / list view / bulk op / report / refactor — START HERE** | `.ai/skills/engineering-principles/SKILL.md` |
 | Debug / fix errors | `.ai/skills/troubleshooter/SKILL.md` |
 | Review code changes | `.ai/skills/code-review/SKILL.md` |
+| Any task: read known pitfalls first; record a new lesson learned | `.ai/lessons.md`, `.ai/skills/lessons/SKILL.md` |
 | Write a spec | `.ai/skills/spec-writing/SKILL.md`, `.ai/specs/SPEC-000-template.md` |
 | Implement a spec (or selected phases) | `.ai/skills/implement-spec/SKILL.md` |
 | Write / run unit tests (services, validators, state machines, seeds) | `.ai/skills/unit-tests/SKILL.md` |

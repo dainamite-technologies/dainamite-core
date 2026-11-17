@@ -166,6 +166,28 @@ the `@dainamite/cpq` package, per
 
 ## Schema / API changelog (track breaking changes here)
 
+### 2026-11-17 - Bundle setup, default components, slot validation (#122-#125)
+
+**Migration.** `Migration20261117120000_cpq_offering_components_partial_unique`
+replaces the `cpq_off_comp_unique` constraint with a partial unique index
+(`WHERE deleted_at IS NULL`), so a removed bundle component can be added back.
+Rollback dedupes soft-deleted copies before restoring the full constraint.
+Written by hand in the generator's style (no database was available to run
+`yarn mercato db generate`); the module snapshot was updated to match.
+
+**API (additive).** `POST /product-offerings`: `offeringType` optional, defaults
+to the spec's `specType`. `POST /quotes/{id}/items`: `expandBundleDefaults`.
+`ValidationError.type` gains `'charge'` (V-LINE-1) and `'bundle_slot'`
+(V-QBUN-1..3, with `slotGroup` / `slotName`). `BundleTreeNode` gains `isActive`.
+`offering-components` / `bundle-slots` POST: 404 / 409 instead of 500.
+
+**Behaviour changes.** `POST /orders` returns 422 `BUNDLE_INCOMPLETE` while a
+quote has stored bundle-slot errors. A valid line whose offering defines no
+charges is configured; one whose charges exist but none applies is incomplete
+with V-LINE-1. Lines are now decided by one rule in `lib/lineCompleteness.ts`,
+run by `recalculateInternal`; `DefaultCpqQuotingService` takes an optional
+`cpqBundleService` dependency.
+
 ### 2026-11-16 - Date column props are strings; 400 without organization
 
 **Entity typings (consumers reading these props).** Every `type: 'date'`

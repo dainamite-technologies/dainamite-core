@@ -96,8 +96,10 @@ Each slot defines a "place" in the bundle filled by a child specification.
 **To create a new bundle offering from scratch:**
 
 1. Click **"+ New Offering"**
-2. Set **Offering Type = `bundle`** and link to a bundle specification
-3. Save — a **"Components"** tab appears (only visible when Offering Type = bundle)
+2. Select a bundle specification. The **Type** tag shows **Bundle**: an offering's type always follows its specification (V-OFF-7), so there is nothing to choose
+3. Save — a **"Components"** tab appears (only visible for bundle offerings)
+
+> The same applies on the specification's **Offerings** tab: the new offering takes the specification's type.
 
 ### Step 1.4 — Verify / Add Offering Components
 
@@ -116,6 +118,8 @@ Components link child offerings to the bundle's slots.
 | Cloud Connect | GIX Cloud Connect Standard Offering | No |
 
 **To add components manually:** click **"+ Add"** in the relevant slot section, select the child offering, save.
+
+> **Default? = Yes** means the component is added automatically when the bundle is added to a quote (Step 2.2). A component you removed can be added again.
 
 ### Step 1.5 — Verify the Bundle Tree (optional)
 
@@ -145,13 +149,15 @@ You should see a JSON with `tree` (slots with components) and `validation` (comp
 3. Click on it
 4. The configure panel appears — since the bundle spec has no attributes, just set **Quantity = 1**
 5. Click **"Add to Quote"**
-6. The bundle line item appears in the summary
+6. The bundle line appears in the summary **with a child line for every default component** (Default? = Yes): in the seeded bundle, Access Port and Internet Peering
 
-> Note: This adds the bundle as a single parent line. The child components need to be added separately as child lines (see next step).
+> A slot group never gets more defaults than its maximum. A default component with required attributes is added incomplete: open it and fill them in.
 
-### Step 2.3 — Add Child Lines (Bundle Components)
+**Slot rules.** Expand the bundle line to see its slots. A required slot group with too few components (or one over its maximum) shows its counter in red with an **incomplete** tag, the bundle line is not configured, and the quote stays **incomplete** with an error such as `V-QBUN-1: Access Port requires at least 1 component(s) (0 selected)`. A child line whose offering is not a component of the bundle gets `V-QBUN-3`. A quote with such errors cannot be converted to an order (`422 BUNDLE_INCOMPLETE`).
 
-The bundle line has an **"Add Component"** button (+ icon) that lets you attach child offerings directly from the UI.
+### Step 2.3 — Add or Change Child Lines (Bundle Components)
+
+Default components are already on the quote (Step 2.2). To add optional ones, use the bundle line's **"Add Component"** button (+ icon), or the **+ <offering>** buttons in each slot.
 
 1. On the quote summary, find the **GIX Connectivity Bundle** line — it has a purple **bundle** badge and shows "0 components"
 2. Click the **+** (Add Component) button on the bundle line
@@ -231,7 +237,7 @@ GET    /api/cpq/bundle-tree?offeringId=<ID>
 
 ```
 POST   /api/cpq/quotes                        { customerId }
-POST   /api/cpq/quotes/<id>/items              { offeringId, configuration, quantity }
+POST   /api/cpq/quotes/<id>/items              { offeringId, configuration, quantity, expandBundleDefaults: true }
 POST   /api/cpq/quotes/<id>/items              { offeringId, configuration, parentLineId }
 POST   /api/cpq/quotes/<id>/recalculate        { save: true }
 PUT    /api/cpq/quotes/<id>/status             { status: "ready" }

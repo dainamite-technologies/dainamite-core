@@ -97,8 +97,15 @@ export interface QuoteItemInput {
 export interface ValidationError {
   lineId?: string
   adjustmentId?: string
-  type?: 'attribute' | 'relationship'
+  /**
+   * `charge` — V-LINE-1 (offering has charges but none applies).
+   * `bundle_slot` — V-QBUN-* (bundle slot cardinality / membership).
+   */
+  type?: 'attribute' | 'relationship' | 'charge' | 'bundle_slot'
   attribute?: string
+  /** Bundle slot errors: the slot group and slot name the error is about. */
+  slotGroup?: string
+  slotName?: string
   relationshipType?: string
   sourceSpec?: string
   targetSpec?: string

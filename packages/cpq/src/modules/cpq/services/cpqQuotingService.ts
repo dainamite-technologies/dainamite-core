@@ -1,5 +1,6 @@
 import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import { dateColumnToIso, toDateColumn } from '../lib/dateColumns'
+import { evaluateLineCompleteness, type LineCompletenessInput } from '../lib/lineCompleteness'
 import { cloneQuoteAdjustments, removeQuoteLineTree } from './priceAdjustments/quoteAdjustmentLifecycle'
 import type { PriceAdjustment } from '../data/price-adjustments'
 import { withAtomicFlush } from '@open-mercato/shared/lib/commands/flush'
@@ -20,6 +21,7 @@ import {
   CpqInventorySubscription,
   CpqInventorySubscriptionItem,
   CpqOrderConfiguration,
+  CpqProductCharge,
   CpqProductOffering,
   CpqProductSpecification,
 } from '../data/entities'
@@ -262,8 +264,6 @@ export class DefaultCpqQuotingService {
     // Compute line totals
     const { nrcTotal, mrcTotal, usageEstimates, usageTotalEstimated } = computeLineTotals(charges, quantity, item.usageEstimates)
 
-    const isBundleOffering = offering?.offeringType === 'bundle'
-    const isConfigured = validationErrors.length === 0 && (charges.length > 0 || isBundleOffering)
 
     // Compute end date
     const endDate = computeEndDate(item.startDate, item.termMonths, item.endDate)
@@ -353,7 +353,8 @@ export class DefaultCpqQuotingService {
       usageEstimates: usageEstimates ?? null,
       usageTotalEstimated: usageTotalEstimated != null ? String(usageTotalEstimated) : null,
       validationErrors: validationErrors.length > 0 ? validationErrors as unknown as Array<Record<string, unknown>> : null,
-      isConfigured,
+      // Decided by recalculateInternal below (lib/lineCompleteness.ts).
+      isConfigured: false,
       targetSubscriptionId: arcTargetSubscriptionId,
     })
     em.persist(lineConfig)
@@ -483,7 +484,6 @@ export class DefaultCpqQuotingService {
     // mirror lines were created free-form). Without this guard, edits like
     // changing quantity wipe the synthesized charges and the line collapses
     // to "incomplete" with mrcTotal=0.
-    const isArcMirrored = !!(arcMarkers._arcMirroredFromItemId)
     let charges: ResolvedCharge[]
     if ((lineConfig.offeringId || lineConfig.productId) && !staysFrozen) {
       charges = await this.pricingService.resolveProductCharges({
@@ -499,9 +499,6 @@ export class DefaultCpqQuotingService {
 
     const quantity = update.quantity ?? lineConfig.quantity
     const { nrcTotal, mrcTotal, usageEstimates, usageTotalEstimated } = computeLineTotals(charges, quantity, update.usageEstimates)
-    const isBundleOffering = offering?.offeringType === 'bundle'
-    const isConfigured =
-      validationErrors.length === 0 && (charges.length > 0 || isBundleOffering || isArcMirrored)
 
     const endDate = computeEndDate(update.startDate ?? (dateColumnToIso(lineConfig.startDate) ?? undefined), update.termMonths ?? lineConfig.termMonths ?? undefined, update.endDate)
 
@@ -515,7 +512,7 @@ export class DefaultCpqQuotingService {
       usageEstimates: usageEstimates ?? null,
       usageTotalEstimated: usageTotalEstimated != null ? String(usageTotalEstimated) : null,
       validationErrors: validationErrors.length > 0 ? validationErrors as unknown as Array<Record<string, unknown>> : null,
-      isConfigured,
+      // isConfigured is decided by recalculateInternal below (lib/lineCompleteness.ts).
       startDate: update.startDate ? toDateColumn(update.startDate) : lineConfig.startDate,
       termMonths: update.termMonths ?? lineConfig.termMonths,
       endDate: endDate ? toDateColumn(endDate) : lineConfig.endDate,
@@ -958,6 +955,7 @@ export class DefaultCpqQuotingService {
 
     let allValid = true
     const allErrors: ValidationError[] = []
+    const completenessInputs = new Map<string, LineCompletenessInput>()
 
     // Collect freshly computed data for each line (used for response regardless of save)
     const computedLines: Array<{
@@ -1037,14 +1035,43 @@ export class DefaultCpqQuotingService {
         lineConfig.usageEstimates?.map((e) => ({ chargeCode: e.chargeCode, estimatedQuantity: e.estimatedQuantity })),
       )
 
-      const isBundleOffering = offering?.offeringType === 'bundle'
-      const isConfigured =
-        validationErrors.length === 0 && (charges.length > 0 || isBundleOffering || isArcMirrored)
-      if (!isConfigured) allValid = false
-      allErrors.push(...validationErrors)
+      completenessInputs.set(lineConfig.quoteLineId, {
+        lineId: lineConfig.quoteLineId,
+        attributeErrors: validationErrors,
+        chargeCount: charges.length,
+        hasChargeDefinitions: true, // resolved below, in one batch, only where it matters
+        isBundleOffering: offering?.offeringType === 'bundle',
+        isArcMirrored,
+        isArcCancelled: isArcCancelledLine(lineConfig, cpqConfig.quoteType),
+      })
+      computedLines.push({ lineConfig, charges, nrcTotal, mrcTotal, usageEstimates, usageTotalEstimated, validationErrors, isConfigured: false })
 
-      computedLines.push({ lineConfig, charges, nrcTotal, mrcTotal, usageEstimates, usageTotalEstimated, validationErrors, isConfigured })
+    }
 
+    // One rule decides "configured" (lib/lineCompleteness.ts). Charge
+    // definitions are only looked up for lines that are otherwise valid but
+    // priced nothing — whether the offering is intentionally free (#125).
+    const chargelessLines = computedLines.filter(({ lineConfig, charges, validationErrors }) => {
+      const input = completenessInputs.get(lineConfig.quoteLineId)!
+      return charges.length === 0 && validationErrors.length === 0 &&
+        !input.isArcCancelled && !input.isArcMirrored && !input.isBundleOffering
+    })
+    if (chargelessLines.length > 0) {
+      const definitions = await this.loadChargeDefinitionKeys(em, chargelessLines.map(({ lineConfig }) => lineConfig), scope)
+      for (const { lineConfig } of chargelessLines) {
+        completenessInputs.get(lineConfig.quoteLineId)!.hasChargeDefinitions = lineConfig.offeringId
+          ? definitions.offeringIds.has(lineConfig.offeringId)
+          : lineConfig.productId
+            ? definitions.productIds.has(lineConfig.productId)
+            : true // no offering and no product: nothing can price it, keep it incomplete
+      }
+    }
+    for (const computed of computedLines) {
+      const completeness = evaluateLineCompleteness(completenessInputs.get(computed.lineConfig.quoteLineId)!)
+      computed.isConfigured = completeness.isConfigured
+      computed.validationErrors = completeness.errors
+      if (!completeness.isConfigured) allValid = false
+      allErrors.push(...completeness.errors)
     }
     const adjustments = draftAdjustments ?? await loadQuoteAdjustments(em, cpqConfig.id, scope)
     const adjusted = resolveManualAdjustments(computedLines.map(({ lineConfig, charges }) => ({
@@ -1169,6 +1196,35 @@ export class DefaultCpqQuotingService {
   }
 
   // ─── Helpers ───────────────────────────────────────────────────
+
+  /**
+   * Which of the lines' offerings / products define at least one active
+   * charge. Uses the same keys as `resolveProductCharges`: the offering when
+   * the line has one, otherwise the product.
+   */
+  private async loadChargeDefinitionKeys(
+    em: EntityManager,
+    lines: CpqQuoteLineConfiguration[],
+    scope: TenantScope,
+  ): Promise<{ offeringIds: Set<string>; productIds: Set<string> }> {
+    const offeringIds = [...new Set(lines.map((l) => l.offeringId).filter((id): id is string => !!id))]
+    const productIds = [...new Set(lines.filter((l) => !l.offeringId).map((l) => l.productId).filter((id): id is string => !!id))]
+    const or: Array<Record<string, unknown>> = []
+    if (offeringIds.length) or.push({ offeringId: { $in: offeringIds } })
+    if (productIds.length) or.push({ productId: { $in: productIds } })
+    if (or.length === 0) return { offeringIds: new Set(), productIds: new Set() }
+    const charges = await em.find(CpqProductCharge, {
+      organizationId: scope.organizationId,
+      tenantId: scope.tenantId,
+      isActive: true,
+      deletedAt: null,
+      $or: or,
+    } as never)
+    return {
+      offeringIds: new Set(charges.map((c) => c.offeringId).filter((id): id is string => !!id)),
+      productIds: new Set(charges.map((c) => c.productId).filter((id): id is string => !!id)),
+    }
+  }
 
   private async loadCpqConfig(em: EntityManager, quoteId: string, scope: TenantScope): Promise<CpqQuoteConfiguration> {
     // Try finding by CpqQuoteConfiguration.id first, then by quoteId

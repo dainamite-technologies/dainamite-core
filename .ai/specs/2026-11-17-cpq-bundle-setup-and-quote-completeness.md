@@ -22,7 +22,7 @@ The questions below were resolved with the recommended answer, without waiting f
 | **Q3** | When is a valid line with no charges "configured"? | **B** — configured when the offering has **no active charge definitions**. If charges exist but none applies, the line stays incomplete with `V-LINE-1`. | Zero-priced included equipment is intended. A pricing gap where every charge's applicability condition is false is not, and quoting it silently at 0 hides mistakes. Every incomplete line gets a stated reason. |
 | **Q4** | How do we fix "re-add after remove returns 500"? | **A** — make `cpq_off_comp_unique` a partial unique index (`WHERE deleted_at IS NULL`). A unique violation maps to 409 and not-found maps to 404. | Follows the partial-unique-on-`deleted_at IS NULL` precedent in `packages/cpq-billing-connector/src/modules/cpq_billing_connector/data/entities.ts:24`, and keeps removed rows as history. |
 | **Q5** | Do the catalog routes we change also get new AI write tools? | **A** — update only `cpq.add_quote_line`. The catalog write routes (`POST /product-offerings`, `POST /offering-components`) stay without tools; the PR says why. Follow-up: #128. ⚠ NEEDS HUMAN CONFIRMATION | Those routes change in a backward-compatible way, and `catalog-pack` is read-only by design. But `.ai/skills/mcp-tools/SKILL.md` requires a tool for every changed route, so this exception needs explicit sign-off. |
-| **Q6** | One implementation PR or three? | **B** — three PRs, in phase order (Phasing below). The four issues stay in one spec, as requested. | Each phase ships and tests on its own. Phase 3 depends on phase 2's shared rule. |
+| **Q6** | One implementation PR or three? | **A** — **one implementation PR** (decided by the owner, 2026-11-17). The phases below are commit groups inside that PR. It stays in draft until every phase is done and verified, then it is marked ready. | Owner decision. |
 
 ---
 
@@ -211,8 +211,10 @@ Every changed route updates its typed `openApi` export. `openapi-coverage.test.t
 
 ## 📋 Phasing
 
-- **Phase 1 — Bundle setup (#122).** The offering type follows the specification; re-adding a component works; error status codes are fixed. Ships alone.
-- **Phase 2 — One completeness rule (#125).** `evaluateLineCompleteness` replaces the three copies; zero-charge offerings become configured (Q3); V-LINE-1 is added. Ships alone.
+Delivered as **one implementation PR** (Q6). Each phase is a group of commits that leaves the app working, so the PR can be reviewed commit by commit.
+
+- **Phase 1 — Bundle setup (#122).** The offering type follows the specification; re-adding a component works; error status codes are fixed.
+- **Phase 2 — One completeness rule (#125).** `evaluateLineCompleteness` replaces the three copies; zero-charge offerings become configured (Q3); V-LINE-1 is added.
 - **Phase 3 — Bundle quoting (#123, #124).** Default expansion (Q1), V-QBUN validation, UI error display, conversion guard (Q2). Depends on Phase 2.
 
 ## 📋 Implementation Plan
@@ -242,10 +244,11 @@ Every changed route updates its typed `openApi` export. `openapi-coverage.test.t
 8. Playwright: add a bundle with defaults to a quote → children present, line configured. Remove a required child → V-QBUN-1 shown and conversion returns 422.
 9. Update `manuals/xd-223-bundled-offerings.md` (quoting section) and add a lesson to `.ai/lessons.md` (the partial unique index for soft-deleted rows; `.default()` in the create schema hides "omitted").
 
-**Archive:** after merge, add the outcome of each Delta to this spec's Changelog. Then close #122–#125 from the implementation PRs, not from this spec PR.
+**Archive:** after merge, add the outcome of each Delta to this spec's Changelog. The single implementation PR closes #122–#125; this spec PR only references them.
 
 ## Changelog
 
 - 2026-11-17 — Draft spec for #122–#125.
 - 2026-11-17 — Open Questions Q1–Q6 resolved with the recommended defaults; Q2 and Q5 flagged ⚠ for human confirmation.
 - 2026-11-17 — Revised after an independent review against the code: conversion guard reads stored state and covers bundle-slot errors only; slot validation runs before the line loop; dead add/update `isConfigured` writes deleted; add-ons via `parent_child` exempt from V-QBUN-3; ARC legacy bundles grandfathered; wizard steps and AI preview added to scope; Puffin rationale corrected.
+- 2026-11-17 — Q6 decided by the owner: one implementation PR, in draft until complete.

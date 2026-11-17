@@ -53,7 +53,9 @@ export const cpqProductOfferingCreateSchema = z.object({
   code: z.string().min(1),
   name: z.string().min(1),
   description: z.string().nullish(),
-  offeringType: z.enum(['simple', 'bundle']).optional().default('simple'),
+  // No default: when omitted, the create route derives it from the
+  // specification's `specType` (V-OFF-7 — the two must match).
+  offeringType: z.enum(['simple', 'bundle']).optional(),
   designTimeValues: z.record(z.string(), z.unknown()).optional().default({}),
   // `retired` was merged into `deprecated` — see migration
   // `<timestamp>-merge-offering-retired-into-deprecated.ts`. Aligned with

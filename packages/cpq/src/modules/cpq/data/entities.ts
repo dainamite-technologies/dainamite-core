@@ -256,7 +256,15 @@ export class CpqBundleSlot {
 @Index({ name: 'cpq_off_comp_offering_idx', properties: ['organizationId', 'tenantId', 'offeringId'] })
 @Index({ name: 'cpq_off_comp_slot_idx', properties: ['organizationId', 'tenantId', 'offeringId', 'slotId'] })
 @Index({ name: 'cpq_off_comp_child_idx', properties: ['organizationId', 'tenantId', 'childOfferingId'] })
-@Unique({ name: 'cpq_off_comp_unique', properties: ['organizationId', 'tenantId', 'offeringId', 'childOfferingId'] })
+// V-COMP-5 (one live component per child offering) is enforced on live rows
+// only: removal soft-deletes, so the index must ignore deleted rows or the
+// same child could never be added back (#122).
+@Index({
+  name: 'cpq_off_comp_unique',
+  properties: ['organizationId', 'tenantId', 'offeringId', 'childOfferingId'],
+  expression:
+    'CREATE UNIQUE INDEX "cpq_off_comp_unique" ON "cpq_offering_components" ("organization_id", "tenant_id", "offering_id", "child_offering_id") WHERE "deleted_at" IS NULL',
+})
 export class CpqOfferingComponent {
   [OptionalProps]?: 'isDefault' | 'sortOrder' | 'isActive' | 'createdAt' | 'updatedAt' | 'deletedAt'
 

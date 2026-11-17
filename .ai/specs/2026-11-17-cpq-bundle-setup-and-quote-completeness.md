@@ -3,7 +3,7 @@
 Extends: `specs/implementation/xd-223-bundled-offerings.md` (Add-to-Quote Flow, V-QBUN-1..5 — designed, never built)
 Extends: `specs/implementation/xd-201-quoting.md` (line `isConfigured` / quote `cpqStatus`)
 
-Issues: #122, #123, #124, #125 · Package: `@dainamite/cpq` · Status: **Draft — Open Questions pending**
+Issues: #122, #123, #124, #125 · Package: `@dainamite/cpq` · Status: **Draft — autonomous defaults applied; Q2 and Q5 need human confirmation**
 
 ## 📝 TLDR
 
@@ -11,18 +11,18 @@ Bundles can't be set up or quoted end to end today. Bundle offerings can't be cr
 
 **Proposed:** fix the two setup defects (#122). Build the add-to-quote expansion and the quote-time slot validation that XD-223 designed but never built (#123, #124). Replace the three copies of the `isConfigured` formula with one rule that handles zero-charge offerings and always says why a line is incomplete (#125).
 
-## ❓ Open Questions (answer before implementation)
+## Resolved assumptions (autonomous defaults)
 
-Each question has a **recommended** answer. Reply with the question number and your choice, e.g. "Q1 A, Q2 B, …". Recommended answers are marked ★.
+The questions below were resolved with the recommended answer, without waiting for a reply. Each can be overridden before merge: comment on the PR with the question id and the option you want, and the dependent sections are updated. Items marked ⚠ keep this spec PR in **draft** until a human confirms them.
 
-| # | Question | Options | ★ Recommendation and why |
+| # | Question | Chosen answer | Rationale |
 |---|---|---|---|
-| **Q1** | Which callers get default components when a bundle line is added? | **A** — every `POST …/items` for a bundle offering (the API default becomes "expand").<br>**B** — opt-in flag `expandBundleDefaults` on `POST …/items`; it defaults to `false`. The admin quote page and the `cpq.add_quote_line` AI tool send `true`.<br>**C** — only the admin UI does it, client-side. | **B ★.** The Puffin public calculator (`demo_puffin/api/cloud-pricing-calculator/quotes/route.ts`) already posts the bundle line and then each child line with `parentLineId`. Its seeded bundles have `isDefault` components (`demo_puffin/seeds/seeders/bundles.ts`). Under **A**, every Puffin quote gets duplicate child lines and goes over the slot maximum. **B** is additive and changes no existing contract. **C** puts domain logic in the UI and leaves agents and API clients without it. |
-| **Q2** | How strictly should an incomplete bundle (empty required slot, too many components, a component not allowed in the bundle) be enforced? | **A** — line and quote become `incomplete` with a V-QBUN error that names the slot. No transition is blocked.<br>**B** — A, plus **quote → order conversion** returns 422 while the quote has errors.<br>**C** — B, plus submit-for-approval (`in_approval` / `pre_approved` / `with_customer`) returns 422. | **B ★.** #124 asks to block submission and conversion. But `types.ts:66` and `cpqQuotingService.ts:907` record a product decision to "let operators jump between any pair of statuses", and the Puffin flow moves quotes straight to `with_customer`. Blocking conversion stops an incomplete bundle from becoming a broken subscription, and it does not reopen the status-jump decision. **C** overturns that decision; it needs a product-owner call. |
-| **Q3** | When is a valid line for an offering with no charges "configured" (#125)? | **A** — always: a valid line with no charges is configured, at price 0.<br>**B** — configured only when the offering has **no active charge definitions**. If it has charges but none applies to the configuration, the line stays incomplete with error `V-LINE-1: No charge applies to this configuration`.<br>**C** — configured only for assetizable offerings or bundle components. | **B ★.** Included equipment priced at zero (CPE/ONT) is a normal, intended case. A pricing gap is not: an offering with charges whose applicability conditions all evaluate false. **A** would silently quote such gaps at 0. **C** is an arbitrary rule that does not cover a standalone free add-on. With **B** every incomplete line has a stated reason. |
-| **Q4** | How do we fix "re-add after remove returns 500" (#122 bug 2)? | **A** — migration: make `cpq_off_comp_unique` partial (`WHERE deleted_at IS NULL`).<br>**B** — no schema change: `addComponent` revives the soft-deleted row (clears `deletedAt`, updates `slotId` / `isDefault` / `sortOrder`).<br>**C** — both. | **A ★.** This matches the soft-delete convention already used elsewhere (`billing` uses partial `WHERE "deleted_at" IS NULL` indexes). Removed rows stay as history, and a re-add creates a fresh row with a new id. The migration runs after a package upgrade. In every option, a unique-violation race maps to **409**, and the plain `Error('… not found')` throws map to **404**, never 500. |
-| **Q5** | The agent rule ("every changed route ships with its AI tool") applies to the routes we touch. `POST /product-offerings` and `POST /offering-components` have **no write tool today**: `catalog-pack` is read-only. | **A** — update only `cpq.add_quote_line` (the new `expandBundleDefaults` field). Record in the PR why the catalog write routes are left out.<br>**B** — A, plus new `cpq.create_offering` and `cpq.add_bundle_component` write tools. | **A ★.** The catalog routes change in a backward-compatible way (an optional field, better status codes). Opening catalog writes to agents is a separate product decision and needs its own allowlist and approval review. File it as a follow-up issue. |
-| **Q6** | One spec covers four issues. Deliver as one PR or three? | **A** — one PR.<br>**B** — three PRs in phase order: (1) #122 setup, (2) #125 + the shared `isConfigured` rule, (3) #123 + #124 bundle expansion and validation. | **B ★.** Each phase can ship and be tested on its own. Phase 1 alone unblocks demo setup. Phase 3 depends on phase 2's single rule. |
+| **Q1** | Which callers get default components when a bundle line is added? | **B** — opt-in `expandBundleDefaults` on `POST …/items` (default `false`). The admin quote page and the `cpq.add_quote_line` tool send `true`. | Today, callers that add a bundle and then post its children themselves get exactly what they send. That includes the admin "+ component" buttons, agents using `parentLineId`, and seeds. Expanding on every call would silently add duplicate default lines to their quotes and push slot groups over `cardinalityMax`. The flag is additive and changes no existing contract. (Puffin is not one of these callers: its calculator posts slot children as **root** lines with `parentLineKey: null`, `CalculatorShell.tsx:140-151`, and posts the bundle line alone only as a fallback, `:157-165`.) Rejected: A (silent behaviour change for every API caller) and C (UI-only: agents and API clients would not get it, and it is not atomic). |
+| **Q2** | How strictly should an incomplete bundle be enforced? | **B** — the line and quote become `incomplete` with a V-QBUN error that names the slot, **and** quote → order conversion returns 422 while the quote's **stored** validation result has bundle-slot errors (`type: 'bundle_slot'`). Other invalid states convert as today. Submit and status transitions stay free. ⚠ NEEDS HUMAN CONFIRMATION | #124 asks to block submission as well. The code records a product decision to allow any status transition (`services/types.ts:66`, `cpqQuotingService.ts:907`). The guard is limited to bundle-slot errors so this change doesn't also start blocking attribute, relationship or `V-LINE-1` errors that convert today. Blocking only conversion stops broken subscriptions without reopening that decision. It is still a new 422 on an existing route, so the product owner should confirm it, or choose C (also block submit) or A (block nothing). |
+| **Q3** | When is a valid line with no charges "configured"? | **B** — configured when the offering has **no active charge definitions**. If charges exist but none applies, the line stays incomplete with `V-LINE-1`. | Zero-priced included equipment is intended. A pricing gap where every charge's applicability condition is false is not, and quoting it silently at 0 hides mistakes. Every incomplete line gets a stated reason. |
+| **Q4** | How do we fix "re-add after remove returns 500"? | **A** — make `cpq_off_comp_unique` a partial unique index (`WHERE deleted_at IS NULL`). A unique violation maps to 409 and not-found maps to 404. | Follows the partial-unique-on-`deleted_at IS NULL` precedent in `packages/cpq-billing-connector/src/modules/cpq_billing_connector/data/entities.ts:24`, and keeps removed rows as history. |
+| **Q5** | Do the catalog routes we change also get new AI write tools? | **A** — update only `cpq.add_quote_line`. The catalog write routes (`POST /product-offerings`, `POST /offering-components`) stay without tools; the PR says why. Follow-up: #128. ⚠ NEEDS HUMAN CONFIRMATION | Those routes change in a backward-compatible way, and `catalog-pack` is read-only by design. But `.ai/skills/mcp-tools/SKILL.md` requires a tool for every changed route, so this exception needs explicit sign-off. |
+| **Q6** | One implementation PR or three? | **B** — three PRs, in phase order (Phasing below). The four issues stay in one spec, as requested. | Each phase ships and tests on its own. Phase 3 depends on phase 2's shared rule. |
 
 ---
 
@@ -38,7 +38,7 @@ These are the defects behind the four issues. Each was checked against `main` at
 | #124 | A bundle with empty required slots shows **configured** | `isConfigured = errors.length === 0 && (charges.length > 0 \|\| isBundleOffering)` at `:266`. `cpqValidationService.validateRelationships` checks only `CpqProductRelationship` cardinality, never `CpqBundleSlot`. XD-223 rules V-QBUN-1..4 were never built. |
 | #125 | A valid line with no charges stays "incomplete" and shows no error | The same formula appears at `:266`, `:503-504` and `:1041-1042`. Every valid line with `charges.length === 0` is incomplete, and no `ValidationError` is added. The quote shows "Validation Issues" with an empty list. |
 
-The formula is copied in three places (add, update, recalculate), and the copies have already drifted: `isArcMirrored` is missing in the add path. Any fix that patches only one copy reopens the bug.
+The formula is copied in three places (add, update, recalculate). The add and update copies are dead writes. Both paths finish with `recalculateInternal(save=true)` (`:364`, `:540`), which overwrites `isConfigured`. Only the recalculate copy (`:1041`) decides what is persisted and returned. A fix applied anywhere else has no effect.
 
 ## 📝 Prior spec drift
 
@@ -56,7 +56,9 @@ The formula is copied in three places (add, update, recalculate), and the copies
 
 ### 2. One rule for "configured" (#125, needed by #124)
 
-Create a pure function `lib/lineCompleteness.ts → evaluateLineCompleteness(input): { isConfigured, errors }`. It is called from add, update and recalculate. The `:266 / :503 / :1041` copies are deleted.
+Create a pure function `lib/lineCompleteness.ts → evaluateLineCompleteness(input): { isConfigured, errors }`. `recalculateInternal` calls it. The dead add and update computations (`:266`, `:503-504`) are **deleted**, not routed through the function, because the recalculation that follows overwrites them anyway. The `:1041` copy is replaced by the call.
+
+Bundle-slot errors need the whole set of lines, so `recalculateInternal` runs `validateBundleSlots` (§4) as a **first pass, before the per-line loop**, and hands each line its `bundleSlotErrors`. Price-adjustment errors (`:1061-1068`) keep their current post-step. That step still sets `isConfigured = false` after the function has run, and this is documented in the function's JSDoc.
 
 ```
 input: { attributeErrors, charges, offeringHasChargeDefinitions, isBundleOffering,
@@ -72,15 +74,15 @@ isConfigured =
 errors += V-LINE-1 when the line is not configured only because no charge applied
 ```
 
-`offeringHasChargeDefinitions` costs one extra query per line. `count(CpqProductCharge {offeringId, isActive, deletedAt:null})` is batched once per recalculation for all offering ids on the quote. It is not run per line.
+`offeringHasChargeDefinitions` must use the same keys as pricing (`cpqPricingService.ts:92-98`): `offeringId` when set, otherwise `productId`. It is computed with one batched query per recalculation over all keys on the quote (`CpqProductCharge {isActive, deletedAt: null}`), not one query per line. A line with **neither** offering nor product is treated as having charge definitions, so it stays incomplete as today, unless it is an ARC mirror line.
 
 ### 3. Default components on add (#123)
 
 `addQuoteItemInTransaction` gets `expandBundleDefaults` (per **Q1**). When it is true and the offering is a bundle with `action = 'add'`:
 
-1. Call `cpqBundleService.resolveBundleTree(offeringId)` once. The service is already in DI. Inject it into `DefaultCpqQuotingService`.
+1. Call `cpqBundleService.resolveBundleTree(offeringId, scope)` once. The service is already in DI; inject it into `DefaultCpqQuotingService`. Skip child offerings that are inactive or deleted: the tree filters component rows, not child offerings (`cpqBundleService.ts:457-466`).
 2. For each slot **group** (cardinality is defined per group, V-SLOT-3), take the active `isDefault` components in `sortOrder` order. Stop at the group's `cardinalityMax`.
-3. Create one child line per default component. Factor the line-creation part of `addQuoteItemInTransaction` into a private `createLine(em, cpqConfig, input)` helper, and call it with `parentLineId = bundle line`, `quantity = 1`, `configuration = {}` and the parent's `targetSubscriptionId` (ARC). The new lines are flushed **without** recalculating.
+3. Create one child line per default component. Factor the line-creation part of `addQuoteItemInTransaction` into a private `createLine(em, cpqConfig, input)` helper, and call it with `parentLineId = bundle line`, `quantity = 1`, `configuration = {}` and the parent's `targetSubscriptionId` (ARC). Line numbers come from a running counter seeded once from the existing line count; today each add re-queries the count (`:272-278`), which would hand out duplicate numbers inside one transaction. The new lines are flushed **without** recalculating.
 4. If a default child is itself a bundle, repeat steps 2–3 for it (XD-223 step 3). `resolveBundleTree` already guards against cycles.
 5. Recalculate **once**, at the end, in the same `writeQuote` transaction. The response is the whole quote, as today.
 
@@ -90,14 +92,16 @@ A default child with required attributes is created without them and is incomple
 
 Add `validateBundleSlots({ lines, scope })` to `cpqValidationService`. It runs in `recalculateInternal` next to `validateRelationships`. Per bundle line, recursively (V-QBUN-4):
 
-- **Mapping a child line to its slot:** use the bundle's `CpqOfferingComponent` row where `childOfferingId === child.offeringId`. V-COMP-5 makes that row unique per bundle, so no `slot_id` column is needed. The column was designed in XD-223 but dropped (see Data Model).
+- **Mapping a child line to its slot:** use the bundle's **active** `CpqOfferingComponent` row (`deletedAt: null`, `isActive: true`) where `childOfferingId === child.offeringId`. V-COMP-5 makes that row unique per bundle, so no `slot_id` column is needed. The column was designed in XD-223 but dropped (see Data Model).
+- **Add-ons are not components.** Some child lines match no component but are allowed by a `parent_child` `CpqProductRelationship` from the bundle's spec (`cpqValidationService.ts:152-156`; the AI tool describes `parentLineId` as "bundle child or add-on"). These are left to `validateRelationships` and are neither counted in a slot nor flagged.
 - Count children per slot **group**. Lines cancelled by ARC are not counted.
-- Errors use `type: 'bundle_slot'` (extending the `ValidationError['type']` union), with `lineId` set to the bundle line and `slotGroup` / `slotName` as fields:
+- **ARC mirror bundles are grandfathered.** A bundle line mirrored from a live subscription (`_arcMirroredFromItemId`) may predate expansion and have fewer children than its slots require. V-QBUN-1/2 are raised on it only when this quote changes its children (a child is cancelled or added). Otherwise renewals of legacy subscriptions would be blocked.
+- Errors use `type: 'bundle_slot'` (extending the `ValidationError['type']` union), with `lineId` set to the bundle line and `slotGroup` / `slotName` as fields. `ValidationError` has no `code` field, so the code is the message prefix, following the existing `V-*` convention:
   - `V-QBUN-1` — "*{slot}* requires at least {min} component(s) ({n} selected)"
   - `V-QBUN-2` — "*{slot}* allows at most {max} component(s) ({n} selected)"
-  - `V-QBUN-3` — set on the **child** line: "*{offering}* is not a component of bundle *{bundle}*"
+  - `V-QBUN-3` — set on the **child** line: "*{offering}* is not a component of bundle *{bundle}*" (not raised for relationship add-ons, see above)
 - The bundle line's slot errors feed `bundleSlotErrors` in §2, so the line is incomplete and the quote status becomes `incomplete`.
-- **Enforcement** per **Q2**. With B: `cpqOrderService.convertFromConfig` returns 422 `Quote has validation errors: …` when it recalculates and the quote is not valid. Cancelled and rejected quotes are still blocked first, as today.
+- **Enforcement** per **Q2**. With B, `cpqOrderService.convertFromConfig` returns 422 `BUNDLE_INCOMPLETE` when the quote's **stored** `validationResult.errors` contains `type: 'bundle_slot'` entries. Conversion does not recalculate, and `cpqOrderService` has no quoting service, so the guard reads stored state, the same way `storedAdjustmentFailure` does at `:180`. Every quote write already recalculates and persists, so the stored state is current. Cancelled and rejected quotes are still blocked first, as today.
 
 ### Alternatives rejected
 
@@ -123,11 +127,12 @@ Add `validateBundleSlots({ lines, scope })` to `cpqValidationService`. It runs i
 ### Capability: cpq-quote-bundle-lines
 - **ADDED** — *Default components are added with the bundle line.*
   - WHEN a bundle offering is added with `expandBundleDefaults: true` THEN each active `isDefault` component (capped at the slot group's `cardinalityMax`) becomes a child line, recursively for nested bundles, in one transaction.
-  - WHEN `expandBundleDefaults` is omitted THEN only the bundle line is created (unchanged; the Puffin path).
+  - WHEN `expandBundleDefaults` is omitted THEN only the bundle line is created (unchanged for every existing caller).
 - **ADDED** — *Bundle slot cardinality is validated on quotes (V-QBUN-1..4).*
   - WHEN a required slot group has fewer component lines than `cardinalityMin` THEN the bundle line is not configured, the quote is `incomplete`, and a `V-QBUN-1` error names the slot.
   - WHEN a slot group has more than `cardinalityMax` THEN a `V-QBUN-2` error is returned.
-  - WHEN a child line's offering is not a component of its bundle THEN a `V-QBUN-3` error is set on the child.
+  - WHEN a child line's offering is not a component of its bundle and no `parent_child` relationship allows it THEN a `V-QBUN-3` error is set on the child.
+  - WHEN an ARC-mirrored bundle's children are unchanged by the quote THEN no V-QBUN-1/2 is raised for it.
 - **MODIFIED** — *A bundle line is configured when its attributes are valid (`isBundleOffering` short-circuit).* It now also requires no slot errors.
   - Frozen by: new `services/__tests__/lineCompleteness.test.ts` plus extended `cpqQuotingService` tests.
 
@@ -136,11 +141,12 @@ Add `validateBundleSlots({ lines, scope })` to `cpqValidationService`. It runs i
   - WHEN the attributes are valid and the offering has no active charge definitions THEN the line is configured at price 0.
   - WHEN the offering has charges but none applies THEN the line is not configured and gets error `V-LINE-1`.
   - WHEN a line is not configured THEN at least one `ValidationError` names the reason (no more silent "incomplete").
-  - Frozen by: `services/__tests__/lineCompleteness.test.ts` (characterize the current three copies first).
+  - Frozen by: `services/__tests__/cpqQuotingService.test.ts` (characterize today's persisted `isConfigured` after recalculation first).
 
-### Capability: cpq-quote-conversion (only if Q2 = B or C)
+### Capability: cpq-quote-conversion (Q2 = B)
 - **MODIFIED** — *Any quote that isn't cancelled or rejected converts.*
-  - WHEN `validationResult.valid` is false after recalculation THEN conversion returns 422 and lists the errors.
+  - WHEN the stored `validationResult.errors` contains `type: 'bundle_slot'` THEN conversion returns 422 `BUNDLE_INCOMPLETE` and lists those errors.
+  - WHEN the quote is invalid for other reasons only THEN conversion behaves as today.
   - Frozen by: `services/__tests__/cpqOrderService.test.ts` (extend it).
 
 ## 📝 Architecture
@@ -148,14 +154,16 @@ Add `validateBundleSlots({ lines, scope })` to `cpqValidationService`. It runs i
 Everything stays inside `@dainamite/cpq`, with no new cross-module imports. `DefaultCpqQuotingService` gets `cpqBundleService` through DI (`di.ts`). `cpqValidationService` reads `CpqBundleSlot` and `CpqOfferingComponent`, which are CPQ entities. The order conversion change (Q2) is inside `cpqOrderService`.
 
 Consumers affected:
-- **Admin quote page:** sends `expandBundleDefaults: true` when adding a root bundle. It shows V-QBUN errors under the bundle's slot header. The `filledCount / min` badge already exists; it turns red when the slot is short.
-- **Puffin calculator:** no change under Q1-B. Its quotes now get correct V-QBUN validation, which is a behavior change if any calculator cart under-fills a required slot. See Risks.
-- **AI agent `cpq.add_quote_line`:** gains `expandBundleDefaults` (described as: "set true when adding a bundle unless you will add its components yourself").
-- **ARC (XD-250):** mirror lines are never auto-expanded (their `action` is not `add`). Slot counting leaves out ARC-cancelled lines, so removing a required component in an amend now shows V-QBUN-1. That is the intended outcome.
+- **Admin quote page:** sends `expandBundleDefaults: true` whenever it adds a bundle offering, root or nested; its own "+ component" buttons post without the flag. It shows V-QBUN errors under the bundle's slot header. The `filledCount / min` badge already exists; it turns red when the slot is short.
+- **Puffin calculator:** no request change. It posts slot children as root lines, so they are not under a bundle and V-QBUN does not apply to them. Its fallback cart, the bundle line alone, now shows V-QBUN-1 when the bundle has required slots. See Risks.
+- **Wizard steps** (`workflows/steps/OfferingSelectStep.tsx:310`, `ProductConfigureStep.tsx:153`): both send `expandBundleDefaults: true` when the chosen offering is a bundle, so wizard quotes get complete bundles instead of turning `incomplete`.
+- **Seeds** (`demo_puffin/seeds/seeders/examples.ts`, `demo_gix/seeds/examples.ts:89` which converts quotes): run them in Phase 3 verification. Any seeded bundle quote must be complete, or its conversion will now fail (Q2-B).
+- **AI agent `cpq.add_quote_line`:** gains `expandBundleDefaults` (described as: "set true when adding a bundle unless you will add its components yourself"). Its approval preview (`previewAddLine`, `ai-tools/quotes-pack.ts:190-197`) must count the default lines too; otherwise the operator approves an understated change.
+- **ARC (XD-250):** mirror lines are never auto-expanded (their `action` is not `add`). Slot counting leaves out ARC-cancelled lines, so removing a required component in an amend now shows V-QBUN-1. That is the intended outcome. Untouched legacy bundles are grandfathered (§4).
 
 ## 📝 Data Model
 
-- **Q4 = A:** a migration created with `yarn mercato db generate` (never hand-written) drops `cpq_off_comp_unique` and recreates it as a partial unique index `… WHERE deleted_at IS NULL`. The entity decorator changes to `@Index({ name, properties, expression: 'CREATE UNIQUE INDEX … WHERE "deleted_at" IS NULL' })`, following the `billing` precedent. The migration ships in `packages/cpq/src/modules/cpq/migrations/`. Log it in `packages/cpq/MIGRATION.md`.
+- **Q4 = A:** a migration created with `yarn mercato db generate` (never hand-written) drops `cpq_off_comp_unique` and recreates it as a partial unique index `… WHERE deleted_at IS NULL`. The entity decorator changes from `@Unique` to `@Index({ name, properties, expression: 'CREATE UNIQUE INDEX … WHERE "deleted_at" IS NULL' })`, following `cpq-billing-connector/.../data/entities.ts:24`. The current rule is a table **constraint**, so check that the generated SQL uses `drop constraint`, not `drop index`. The migration ships in `packages/cpq/src/modules/cpq/migrations/`. Log it in `packages/cpq/MIGRATION.md`.
 - No new columns. `slot_id` on quote lines stays out of scope (see Alternatives).
 - No sensitive data is added.
 
@@ -167,7 +175,7 @@ Consumers affected:
 | `POST /api/cpq/offering-components` | Not found → 404; duplicate race → 409 `V-COMP-5` (was 500) | Status codes improve; `openApi` `errors` updated |
 | `POST /api/cpq/quotes/:id/items` | New optional `expandBundleDefaults: boolean` (default `false`) | Additive (Q1-B) |
 | `GET/POST quote responses` | `validationResult.errors[]` may contain `type: 'bundle_slot'` items with `slotGroup`, `slotName` and codes `V-QBUN-1..3`, `V-LINE-1` | Additive union member. The UI tolerates unknown types today: it renders `message`. |
-| `POST /api/cpq/orders` (quote → order, Q2-B) | New 422 when the quote is invalid | **Behavior change.** Add it to `CHANGELOG.md` (changeset: minor). |
+| `POST /api/cpq/orders` (quote → order, Q2-B) | New 422 `BUNDLE_INCOMPLETE` when the stored validation has bundle-slot errors | **Behavior change.** Add it to `CHANGELOG.md` (changeset: minor). |
 
 Every changed route updates its typed `openApi` export. `openapi-coverage.test.ts` must stay green.
 
@@ -183,19 +191,20 @@ Every changed route updates its typed `openApi` export. `openapi-coverage.test.t
 |---|---|
 | A slot group has more defaults than `cardinalityMax` | The first `max` defaults by `sortOrder` are added. The rest are skipped silently, which is a configuration choice of the catalog author. |
 | A slot group has fewer defaults than `cardinalityMin` | The defaults are added, and the bundle shows V-QBUN-1 until the user adds the rest. |
-| A default child is inactive, deleted or `deprecated` | `resolveBundleTree` already filters out inactive and deleted components. Deprecated child offerings are **still added** (catalog lifecycle is not a quoting blocker today). Flag this if you disagree. |
+| A default child is inactive, deleted or `deprecated` | Inactive and deleted component rows are filtered by `resolveBundleTree`. Inactive child offerings are skipped by the expansion loop. Deprecated child offerings are **still added**: catalog lifecycle is not a quoting blocker today. |
 | A nested bundle default (a bundle inside a bundle) | Expanded recursively. The cycle guard in `resolveBundleTree` stops at an offering it has already visited. |
 | A default child has required attributes | Its line is created incomplete with attribute errors, and the bundle shows the child's state. |
 | Expansion fails halfway (pricing throws) | Everything runs inside one `writeQuote` transaction. Nothing persists, and the error surfaces as today. |
-| A child line was added through the API under a bundle but isn't a component | V-QBUN-3 on the child, and the quote is incomplete. |
+| A child line was added through the API under a bundle but isn't a component | V-QBUN-3 on the child and the quote is incomplete, unless a `parent_child` relationship allows it as an add-on. |
+| An Amend/Renew of a subscription sold before expansion existed | The mirrored bundle is grandfathered and gets no V-QBUN-1/2 unless the quote changes its children. |
 | A catalog author removes a component that quotes already use | Existing quote lines get V-QBUN-3 on the next recalculation. Expected: the catalog changed under the quote. |
 | A slot group spread over two slots (V-SLOT-3) | Counting is per group (sum over its slots). The UI badge stays per slot, and the error text names the group. |
-| A Puffin cart under-fills a required slot | The quote is now `incomplete`. Under Q2-B the transition to `with_customer` still succeeds, so the calculator is not broken. |
+| The Puffin fallback cart (bundle line alone, required slots) | The quote is now `incomplete` with V-QBUN-1. The transition to `with_customer` still succeeds (Q2-B), so the calculator keeps working; conversion of that quote is blocked until it is completed. |
 
 ## 📝 Risks & Impact Review
 
 - **Puffin and demo quotes:** any seeded quote or calculator cart with an under-filled required slot turns `incomplete` after its next recalculation. Before merge, run `yarn mercato demo_tenants seed --all` and the Puffin calculator integration tests, and fix the seed data rather than weakening the rule.
-- **Q2-B makes conversion stricter.** Quotes that converted before will now fail if invalid. This is intentional and reversible (drop the guard), and it is documented in the changelog.
+- **Q2-B makes conversion stricter.** Quotes with incomplete bundles that converted before now fail with 422. Other invalid states are unaffected. This is intentional and reversible (drop the guard), and it is documented in the changelog. Known caller: `demo_gix/seeds/examples.ts:89`.
 - **Migration (Q4-A):** dropping and recreating a unique constraint is safe on existing data. The current constraint is stricter than the new index. Rollback recreates the full constraint, which fails if two rows now exist for the same pair (one deleted, one live). The `down()` migration therefore dedupes first or documents that rollback is not possible.
 - **Performance:** `validateBundleSlots` adds two batched queries per recalculation (slots plus components for the bundle offering ids on the quote). Expansion adds one `resolveBundleTree` call (N+1 per level, bounded by catalog size), and only on add.
 - **Product decisions in play:** the free status transitions (Q2) and catalog writes for agents (Q5). These are direction calls, not defects.
@@ -217,19 +226,19 @@ Every changed route updates its typed `openApi` export. `openapi-coverage.test.t
 6. Playwright: create a bundle spec → slot → bundle offering from the UI → add, remove and re-add a component. (Covers #122 "add a UI/integration test".)
 
 **Phase 2 — Completeness rule (#125)**
-1. Characterization tests that freeze today's three `isConfigured` results (add / update / recalculate), including the `isArcMirrored` drift on add.
+1. Characterization tests that freeze today's persisted `isConfigured` after add, update and recalculate. All three end in `recalculateInternal`.
 2. `lib/lineCompleteness.ts` + unit tests (table-driven: valid without charge definitions → configured; charges defined but none applicable → V-LINE-1; ARC cancelled; mirrored; bundle).
-3. Batch-load `offeringHasChargeDefinitions` in `recalculateInternal`; use the shared function in all three paths; delete the copies.
+3. Batch-load `offeringHasChargeDefinitions` (offering, else product keys) in `recalculateInternal`. Call the shared function there. Delete the dead add and update computations.
 4. Service tests: a zero-charge assetizable offering with valid attributes → configured, and quote `ready`.
 
 **Phase 3 — Bundle quoting (#123, #124)**
-1. Extend `ValidationError` (`type: 'bundle_slot'`, `slotGroup`, `slotName`). Add `validateBundleSlots` with unit tests for V-QBUN-1..4, including counting by slot group and leaving out ARC-cancelled lines.
-2. Wire it into `recalculateInternal` → `bundleSlotErrors` → `evaluateLineCompleteness`. Test: a bundle with an empty 1..1 slot → incomplete with a V-QBUN-1 error naming the slot.
-3. Factor out the `createLine` helper (no behavior change; the existing tests must stay green).
+1. Extend `ValidationError` (`type: 'bundle_slot'`, `slotGroup`, `slotName`). Add `validateBundleSlots` with unit tests for V-QBUN-1..4. Cover counting by slot group, leaving out ARC-cancelled lines, inactive components, `parent_child` add-ons not being flagged, and grandfathering of ARC mirror bundles.
+2. Wire it into `recalculateInternal` as a first pass before the line loop → `bundleSlotErrors` → `evaluateLineCompleteness`. Test: a bundle with an empty 1..1 slot → incomplete with a V-QBUN-1 error naming the slot.
+3. Factor out the `createLine` helper, taking a line-number counter (no behavior change; the existing tests must stay green).
 4. Add `expandBundleDefaults` to `cpqAddQuoteItemSchema` and the route `openApi`. Inject `cpqBundleService`. Expansion loop: recursive, capped at max, one recalculation. Tests: two 1..1 slots with defaults → 2 children and quote `ready`; flag omitted → 1 line; nested bundle; cap at max.
-5. `cpq.add_quote_line` AI tool: add the field with `.describe()`; update the tool test and the agent prompt note.
-6. Admin quote page: send the flag on root bundle add; render slot errors and the error-variant counter.
-7. (Q2-B) Conversion guard + `cpqOrderService` test; changeset entry.
+5. `cpq.add_quote_line` AI tool: add the field with `.describe()`. Make `previewAddLine` include the default lines in its count. Update the tool test and the agent prompt note.
+6. Admin quote page and wizard steps (`OfferingSelectStep`, `ProductConfigureStep`): send the flag whenever a bundle offering is added. Render slot errors and the error-variant counter.
+7. (Q2-B) Conversion guard on the stored bundle-slot errors, plus a `cpqOrderService` test and a changeset entry. Run `yarn mercato demo_tenants seed --all` and fix any seeded bundle quote that fails conversion.
 8. Playwright: add a bundle with defaults to a quote → children present, line configured. Remove a required child → V-QBUN-1 shown and conversion returns 422.
 9. Update `manuals/xd-223-bundled-offerings.md` (quoting section) and add a lesson to `.ai/lessons.md` (the partial unique index for soft-deleted rows; `.default()` in the create schema hides "omitted").
 
@@ -237,4 +246,6 @@ Every changed route updates its typed `openApi` export. `openapi-coverage.test.t
 
 ## Changelog
 
-- 2026-11-17 — Draft spec for #122–#125; Open Questions Q1–Q6 pending.
+- 2026-11-17 — Draft spec for #122–#125.
+- 2026-11-17 — Open Questions Q1–Q6 resolved with the recommended defaults; Q2 and Q5 flagged ⚠ for human confirmation.
+- 2026-11-17 — Revised after an independent review against the code: conversion guard reads stored state and covers bundle-slot errors only; slot validation runs before the line loop; dead add/update `isConfigured` writes deleted; add-ons via `parent_child` exempt from V-QBUN-3; ARC legacy bundles grandfathered; wizard steps and AI preview added to scope; Puffin rationale corrected.

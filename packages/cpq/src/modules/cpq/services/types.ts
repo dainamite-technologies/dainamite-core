@@ -92,6 +92,8 @@ export interface QuoteItemInput {
    * the quote's single attached target when omitted. Required when the ARC
    * quote has multiple non-merge targets (operator must pick). */
   targetSubscriptionId?: string | null
+  /** #123: also add the bundle's default components as child lines. */
+  expandBundleDefaults?: boolean
 }
 
 export interface ValidationError {

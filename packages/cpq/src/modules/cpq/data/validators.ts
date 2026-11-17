@@ -426,6 +426,10 @@ export const cpqAddQuoteItemSchema = z.object({
   targetSubscriptionId: z.string().uuid().nullish(),
   // ARC (XD-250): existing item being changed by cancel/modify lines.
   sourceSubscriptionItemId: z.string().uuid().nullish(),
+  // #123: when the offering is a bundle, also add its default components
+  // (recursively, capped at each slot group's cardinalityMax). Opt-in so
+  // callers that post the children themselves get exactly what they send.
+  expandBundleDefaults: z.boolean().optional(),
 })
 
 export const cpqUpdateQuoteItemSchema = z.object({

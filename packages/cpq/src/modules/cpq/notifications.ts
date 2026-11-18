@@ -17,6 +17,11 @@ export const COST_REQUEST_NOTIFICATION = {
   declined: 'cpq.cost_request.declined',
 } as const
 
+/** Supplier cost expiry warning (index-costs spec step 16): cost managers of the quote's organization. No amount, no supplier. */
+export const COST_EXPIRY_NOTIFICATION = {
+  expiring: 'cpq.cost.expiring',
+} as const
+
 const base: Pick<NotificationTypeDefinition, 'module' | 'channels' | 'category' | 'expiresAfterHours'> = {
   module: 'cpq',
   // Ships without push: operators re-enable it per type from the Notification Delivery settings.
@@ -62,6 +67,16 @@ export const notificationTypes: NotificationTypeDefinition[] = [
     titleKey: 'cpq.notifications.costRequest.declined.title',
     bodyKey: 'cpq.notifications.costRequest.declined.body',
     icon: 'x-circle',
+    severity: 'warning',
+    actions: [{ id: 'view', labelKey: 'cpq.notifications.costRequest.action.openQuote', variant: 'outline', href: '/backend/cpq/quotes', icon: 'external-link' }],
+    linkHref: '/backend/cpq/quotes',
+  },
+  {
+    ...base,
+    type: COST_EXPIRY_NOTIFICATION.expiring,
+    titleKey: 'cpq.notifications.costExpiring.title',
+    bodyKey: 'cpq.notifications.costExpiring.body',
+    icon: 'clock-alert',
     severity: 'warning',
     actions: [{ id: 'view', labelKey: 'cpq.notifications.costRequest.action.openQuote', variant: 'outline', href: '/backend/cpq/quotes', icon: 'external-link' }],
     linkHref: '/backend/cpq/quotes',

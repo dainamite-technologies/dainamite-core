@@ -22,6 +22,7 @@ export async function POST(req: Request) {
 
 const previewCost = z.object({ costKey: z.string(), name: z.string(), role: z.string(), source: z.string(), valueStatus: z.string(), unitAmount: z.string().nullable(), instanceAmount: z.string().nullable(), currencyCode: z.string().nullable(), error: z.string().optional(),
   fxRate: z.string().nullable().optional(), fxRateDate: z.string().nullable().optional(), fxRateSource: z.string().nullable().optional(), fxRateDerivation: z.enum(['direct', 'inverse']).nullable().optional(),
+  indexSnapshot: z.record(z.string(), z.unknown()).nullable().optional().describe('Index costs: { indexId, currencyCode, effectiveDate, revision, value, factor, offset, asOfDate } of the value in force today; error INDEX_NO_VALUE when none'),
   convertedInstanceAmount: z.string().nullable().optional().describe('Per-instance amount in the quote currency (4 dp) when a rate applies'),
   errorDetail: z.object({ code: z.literal('CURRENCY_NO_RATE'), from: z.string(), to: z.string(), date: z.string() }).optional().describe('The missing pair and the date it was looked up for'),
 })

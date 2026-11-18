@@ -1,9 +1,11 @@
 import {
   CpqChargeCostElement, CpqOrderConfiguration, CpqPricingTable, CpqPricingTableEntry, CpqProductCharge,
   CpqQuoteConfiguration, CpqQuoteLineConfiguration, CpqQuoteLineCost, CpqPriceRule, CpqProductOffering, CpqQuoteTargetSubscription,
+  CpqCostIndex, CpqCostIndexValue,
 } from '../../../data/entities'
 import { DefaultCpqQuotingService } from '../../cpqQuotingService'
-import { isQuoteCostLocked, resolveCostPlusInputs, resolveQuoteCosts } from '../costResolution'
+import { isQuoteCostLocked, previewCatalogCosts, resolveCostPlusInputs, resolveQuoteCosts } from '../costResolution'
+import { computeMarginHash } from '../quoteMargin'
 import type { SourcingSignal } from '../sourcingSignals'
 import type { CpqFxRateResolver, FxResolveResult } from '../fxRateResolver'
 
@@ -14,14 +16,15 @@ const OFFERING = 'offering-1'
 
 type Row = Record<string, unknown>
 
-function store(rows: { charges?: Row[]; elements?: Row[]; tables?: Row[]; entries?: Row[]; costs?: Row[]; orders?: Row[]; targets?: Row[] }) {
+function store(rows: { charges?: Row[]; elements?: Row[]; tables?: Row[]; entries?: Row[]; costs?: Row[]; orders?: Row[]; targets?: Row[]; indices?: Row[]; indexValues?: Row[] }) {
   const byEntity = new Map<unknown, Row[]>([
     [CpqProductCharge, rows.charges ?? []], [CpqChargeCostElement, rows.elements ?? []], [CpqPricingTable, rows.tables ?? []],
     [CpqPricingTableEntry, rows.entries ?? []], [CpqQuoteLineCost, rows.costs ?? []], [CpqOrderConfiguration, rows.orders ?? []],
-    [CpqQuoteTargetSubscription, rows.targets ?? []],
+    [CpqQuoteTargetSubscription, rows.targets ?? []], [CpqCostIndex, rows.indices ?? []], [CpqCostIndexValue, rows.indexValues ?? []],
   ])
   const matches = (row: Row, where: Row) => Object.entries(where).every(([key, value]) => {
     if (value && typeof value === 'object' && '$in' in value) return (value as { $in: unknown[] }).$in.includes(row[key])
+    if (value && typeof value === 'object' && '$lte' in value) return String(row[key]) <= String((value as { $lte: unknown }).$lte)
     return (row[key] ?? null) === value
   })
   const em: Record<string, jest.Mock> = {
@@ -89,6 +92,36 @@ describe('resolveQuoteCosts', () => {
     expect(stored.deletedAt).toBeNull()
     expect(stored.unitAmount).toBe('77')
     expect(s.em.persist).not.toHaveBeenCalled()
+  })
+
+  // Index costs step 6 characterization: a SAVED recalculation never rewrites the cost lines of a locked quote.
+  describe('a saved recalculation leaves a locked quote cost lines byte-identical', () => {
+    const lockedCases: Array<[string, Row, Row[]]> = [
+      ['with_customer', { cpqStatus: 'with_customer' }, []],
+      ['accepted', { cpqStatus: 'accepted' }, []],
+      ['ready with an order', { cpqStatus: 'ready' }, [{ ...SCOPE, sourceQuoteId: QUOTE_ID, deletedAt: null }]],
+    ]
+    it.each(lockedCases)('%s', async (_label, quoteOver, orders) => {
+      const stored = [
+        catalogCost({ unitAmount: '77', instanceAmount: '77' }),
+        catalogCost({ id: 'c-2', costKey: 'power', source: 'index', valueStatus: 'confirmed', unitAmount: '43.2', instanceAmount: '43.2',
+          indexSnapshot: { indexId: 'idx-1', value: '82.4', factor: '0.5', offset: '2' } }),
+        catalogCost({ id: 'c-3', costKey: 'manual', origin: 'manual', valueOrigin: 'manual', unitAmount: '5', instanceAmount: '5' }),
+      ]
+      const s = store({ charges: [charge()], elements: [element({ amount: '150' }), element({ id: 'el-2', code: 'gone', isActive: false })], costs: stored, orders })
+      const before = JSON.stringify(s.costs)
+      const count = s.costs.length
+      await run(s, { quoteOver })
+      await resolveCostPlusInputs({
+        em: s.em as never, quote: quote(quoteOver), scope: SCOPE, save: true, isEnabled: async () => true,
+        lines: [{ lineConfig: lineConfig(), mergedConfig: {} }],
+      })
+      expect(JSON.stringify(s.costs)).toBe(before)
+      expect(s.costs).toHaveLength(count)
+      expect(s.em.persist).not.toHaveBeenCalled()
+      expect(s.em.create).not.toHaveBeenCalled()
+      expect(s.em.flush).not.toHaveBeenCalled()
+    })
   })
 
   it('treats a quote with an order as locked even in a mutable status', async () => {
@@ -1117,4 +1150,189 @@ describe('Renew reconciliation (ARC costs step 14)', () => {
   async function go2(s: ReturnType<typeof store>, stub: unknown) {
     return run(s, { quoteOver: { quoteType: 'renew' }, lines: [{ lineConfig: managed(), mergedConfig: {} }], reevaluateCarriedIndexCosts: stub as never })
   }
+})
+
+// Index costs step 9 (spec "Index cost resolution and snapshot", Q11, R3, R4): the `index` source resolves from the value in
+// force at the recalculation date; stored values move only on a SAVED recalculation of an unlocked quote.
+describe('index costs (value in force, snapshot, freeze)', () => {
+  const INDEX = 'idx-1'
+  const indexRow = (over: Row = {}) => ({ id: INDEX, ...SCOPE, deletedAt: null, code: 'BRENT', currencyCode: 'USD', ...over })
+  const value = (effectiveDate: string, revision: number, amount: string, over: Row = {}) => ({ ...SCOPE, costIndexId: INDEX, effectiveDate, revision, value: amount, ...over })
+  const indexElement = (over: Row = {}) => element({ source: 'index', amount: null, currencyCode: null, costIndexId: INDEX, indexFactor: '0.500000', indexOffset: '2.0000', ...over })
+  const ASOF = '2026-11-12'
+  const build = (over: { values?: Row[]; costs?: Row[]; element?: Row; indices?: Row[]; orders?: Row[] } = {}) => store({
+    charges: [charge()], elements: [indexElement(over.element)], indices: over.indices ?? [indexRow()],
+    indexValues: over.values ?? [value('2026-11-10', 1, '80.000000'), value('2026-11-10', 2, '82.400000'), value('2026-11-13', 1, '99.000000')],
+    costs: over.costs ?? [], orders: over.orders ?? [],
+  })
+  const go = (s: ReturnType<typeof store>, quoteOver: Row = {}, extra: Row = {}) => resolveCostPlusInputs({
+    em: s.em as never, quote: quote(quoteOver), scope: SCOPE, save: true, asOfDate: ASOF, isEnabled: async () => true,
+    lines: [{ lineConfig: lineConfig(), mergedConfig: {} }], ...extra,
+  })
+  const valueQueries = (s: ReturnType<typeof store>) => s.em.find.mock.calls.filter(([entity]) => entity === CpqCostIndexValue).length
+
+  it('instantiates factor x value in force + offset (latest date, highest revision, future ignored) with the snapshot', async () => {
+    const s = build()
+    await go(s)
+    expect(s.costs[0]).toMatchObject({
+      source: 'index', valueStatus: 'confirmed', valueOrigin: 'catalog', unitAmount: '43.2', instanceAmount: '43.2', currencyCode: 'USD', errorCode: null,
+      indexSnapshot: { indexId: INDEX, currencyCode: 'USD', effectiveDate: '2026-11-10', revision: 2, value: '82.4', factor: '0.5', offset: '2', asOfDate: ASOF },
+    })
+    expect(s.costs[0].fxRate ?? null).toBeNull()
+  })
+
+  it('reads the values with ONE query per recalculation, however many index lines', async () => {
+    const s = store({
+      charges: [charge()], elements: [indexElement(), indexElement({ id: 'el-2', code: 'power2', indexFactor: '2.000000', indexOffset: '0.0000' })],
+      indices: [indexRow()], indexValues: [value('2026-11-10', 1, '10.000000')],
+    })
+    await go(s)
+    expect(valueQueries(s)).toBe(1)
+    expect(s.costs.map((row) => row.unitAmount)).toEqual(['7', '20'])
+  })
+
+  it('a per_unit index element multiplies the rounded unit amount by the quantity', async () => {
+    const s = build({ element: { costModel: 'per_unit' } })
+    await resolveCostPlusInputs({
+      em: s.em as never, quote: quote(), scope: SCOPE, save: true, asOfDate: ASOF, isEnabled: async () => true,
+      lines: [{ lineConfig: lineConfig(), mergedConfig: { qty: 3 } }],
+    })
+    expect(s.costs[0]).toMatchObject({ unitAmount: '43.2', instanceAmount: '129.6' })
+  })
+
+  it('refreshes an unlocked quote on a saved recalculation: the new revision / value replaces the stored one', async () => {
+    const stored = catalogCost({ source: 'index', costElementId: 'el-1', unitAmount: '42', instanceAmount: '42', indexSnapshot: { indexId: INDEX, revision: 1, value: '80' } })
+    const s = build({ costs: [stored] })
+    await go(s)
+    expect(stored).toMatchObject({ unitAmount: '43.2', instanceAmount: '43.2', indexSnapshot: { revision: 2, value: '82.4', asOfDate: ASOF } })
+    expect(s.em.flush).toHaveBeenCalled()
+  })
+
+  it('reads the value in force AT the as-of date, not today', async () => {
+    const s = build({ values: [value('2026-11-10', 1, '80.000000'), value('2026-11-12', 1, '90.000000')] })
+    await go(s, {}, { asOfDate: '2026-11-11' })
+    expect(s.costs[0]).toMatchObject({ unitAmount: '42', indexSnapshot: { effectiveDate: '2026-11-10', asOfDate: '2026-11-11' } })
+  })
+
+  it.each([
+    ['with_customer', { cpqStatus: 'with_customer' }, []],
+    ['accepted', { cpqStatus: 'accepted' }, []],
+    ['ready with an order', { cpqStatus: 'ready' }, [{ ...SCOPE, sourceQuoteId: QUOTE_ID, deletedAt: null }]],
+  ] as Array<[string, Row, Row[]]>)('a locked quote (%s) keeps its snapshot, values and reads no index value', async (_label, quoteOver, orders) => {
+    const stored = catalogCost({ source: 'index', unitAmount: '42', instanceAmount: '42', indexSnapshot: { indexId: INDEX, revision: 1, value: '80' } })
+    const s = build({ costs: [stored], orders })
+    const before = JSON.stringify(s.costs)
+    await go(s, quoteOver)
+    await run(s, { quoteOver })
+    expect(JSON.stringify(s.costs)).toBe(before)
+    expect(valueQueries(s)).toBe(0)
+    expect(s.em.flush).not.toHaveBeenCalled()
+  })
+
+  it('a preview prices from the value in force but stores nothing; a save stores the same values', async () => {
+    const stored = catalogCost({ source: 'index', unitAmount: '42', instanceAmount: '42', indexSnapshot: { indexId: INDEX, revision: 1 } })
+    const s = build({ costs: [stored] })
+    const before = JSON.stringify(s.costs)
+    const preview = await go(s, {}, { save: false })
+    expect(JSON.stringify(s.costs)).toBe(before)
+    expect(s.em.flush).not.toHaveBeenCalled()
+    expect(preview.costsByLine.get(LINE_ID)).toEqual([expect.objectContaining({ instanceAmount: '43.2', valueStatus: 'confirmed' })])
+    const saved = build({ costs: [catalogCost({ source: 'index', unitAmount: '42', instanceAmount: '42' })] })
+    expect((await go(saved)).costsByLine).toEqual(preview.costsByLine)
+  })
+
+  it('persist: false forbids the write even on a save (the caller computed the lock)', async () => {
+    const stored = catalogCost({ source: 'index', unitAmount: '42', instanceAmount: '42' })
+    const s = build({ costs: [stored] })
+    await go(s, {}, { persist: false })
+    expect(stored).toMatchObject({ unitAmount: '42' })
+    expect(s.em.flush).not.toHaveBeenCalled()
+  })
+
+  it('previewCatalogCosts resolves at the given date (default today) and returns the snapshot in memory', async () => {
+    const s = build()
+    const [cost] = await previewCatalogCosts({ em: s.em as never, scope: SCOPE, quote: quote(), asOfDate: ASOF, lines: [{ lineConfig: lineConfig(), mergedConfig: {} }] })
+    expect(cost).toMatchObject({ unitAmount: '43.2', indexSnapshot: { revision: 2, asOfDate: ASOF } })
+    expect(s.costs).toHaveLength(0)
+  })
+
+  describe('no value in force', () => {
+    it('first value dated after the as-of date: none + INDEX_NO_VALUE, no snapshot, not ready', async () => {
+      const s = build({ values: [value('2026-11-13', 1, '99.000000')] })
+      const out = await go(s)
+      expect(s.costs[0]).toMatchObject({ valueStatus: 'none', unitAmount: null, instanceAmount: null, errorCode: 'INDEX_NO_VALUE', indexSnapshot: null })
+      expect(out.costsByLine.get(LINE_ID)).toEqual([expect.objectContaining({ valueStatus: 'none', errorCode: 'INDEX_NO_VALUE' })])
+    })
+
+    it('an index without any value, or one that no longer exists, is INDEX_NO_VALUE too', async () => {
+      for (const over of [{ values: [] }, { indices: [] }]) {
+        const s = build(over)
+        await go(s)
+        expect(s.costs[0]).toMatchObject({ valueStatus: 'none', errorCode: 'INDEX_NO_VALUE' })
+      }
+    })
+
+    it('a stored value drops to none when no value is in force any more', async () => {
+      const stored = catalogCost({ source: 'index', unitAmount: '42', instanceAmount: '42', indexSnapshot: { indexId: INDEX, revision: 1 } })
+      const s = build({ values: [], costs: [stored] })
+      await go(s)
+      expect(stored).toMatchObject({ valueStatus: 'none', errorCode: 'INDEX_NO_VALUE', unitAmount: null, indexSnapshot: null })
+    })
+  })
+
+  it('a manual overwrite is kept: not refreshed, snapshot and origin untouched (Q11)', async () => {
+    const manual = catalogCost({ source: 'index', valueOrigin: 'manual', unitAmount: '50', instanceAmount: '50', note: 'negotiated', indexSnapshot: { indexId: INDEX, revision: 1, value: '80' } })
+    const s = build({ costs: [manual] })
+    await go(s)
+    expect(manual).toMatchObject({ valueOrigin: 'manual', unitAmount: '50', instanceAmount: '50', indexSnapshot: { revision: 1, value: '80' }, valueStatus: 'confirmed' })
+  })
+
+  it('an element switched away from index drops the old snapshot with the value', async () => {
+    const stored = catalogCost({ source: 'index', unitAmount: '42', instanceAmount: '42', indexSnapshot: { indexId: INDEX, revision: 1 } })
+    const s = store({ charges: [charge()], elements: [element({ amount: '100' })], costs: [stored] })
+    await go(s)
+    expect(stored).toMatchObject({ source: 'fixed', unitAmount: '100', indexSnapshot: null })
+  })
+
+  describe('R3: an index in another currency goes through the FX resolver', () => {
+
+    it('USD index on a EUR quote: own currency and amount, rate snapshot beside it, index snapshot kept', async () => {
+      const s = build()
+      const resolver = fxStub()
+      await go(s, { currencyCode: 'EUR' }, { fxResolver: resolver })
+      expect(resolver.resolve).toHaveBeenCalledWith({ from: 'USD', to: 'EUR', scope: SCOPE })
+      expect(s.costs[0]).toMatchObject({
+        valueStatus: 'confirmed', unitAmount: '43.2', currencyCode: 'USD', fxRate: '0.92000000', fxRateDate: '2026-11-11', fxRateSource: 'Manual', fxRateDerivation: 'direct',
+        indexSnapshot: { revision: 2, currencyCode: 'USD' },
+      })
+    })
+
+    it('no rate: none + CURRENCY_NO_RATE, never 1:1; the index snapshot is still recorded', async () => {
+      const s = build()
+      await go(s, { currencyCode: 'EUR' }, { fxResolver: fxStub({}) })
+      expect(s.costs[0]).toMatchObject({ valueStatus: 'none', errorCode: 'CURRENCY_NO_RATE', unitAmount: '43.2', instanceAmount: null, currencyCode: 'USD', indexSnapshot: { revision: 2 } })
+    })
+
+    it('without a resolver it is CURRENCY_NO_RATE as well', async () => {
+      const s = build()
+      await go(s, { currencyCode: 'EUR' })
+      expect(s.costs[0]).toMatchObject({ valueStatus: 'none', errorCode: 'CURRENCY_NO_RATE' })
+    })
+  })
+
+  describe('margin_hash moves only when the value moves', () => {
+    const hashOf = async (values: Row[], asOfDate: string) => {
+      const s = build({ values })
+      const out = await go(s, {}, { asOfDate })
+      const costs = out.costsByLine.get(LINE_ID)!.map((cost) => ({ ...cost, costType: 'mrc', currencyCode: 'USD' }))
+      return computeMarginHash({ currencyCode: 'USD', lines: [], costs: costs as never })
+    }
+    it('a later as-of date, a new revision or a new date with the SAME value keeps the hash; a different value changes it', async () => {
+      const base = await hashOf([value('2026-11-10', 1, '82.400000')], '2026-11-12')
+      expect(await hashOf([value('2026-11-10', 1, '82.400000')], '2026-11-20')).toBe(base)
+      expect(await hashOf([value('2026-11-10', 1, '80.000000'), value('2026-11-10', 2, '82.400000')], '2026-11-12')).toBe(base)
+      expect(await hashOf([value('2026-11-10', 1, '82.400000'), value('2026-11-11', 1, '82.400000')], '2026-11-12')).toBe(base)
+      expect(await hashOf([value('2026-11-10', 1, '82.400000'), value('2026-11-11', 1, '83.000000')], '2026-11-12')).not.toBe(base)
+    })
+  })
 })

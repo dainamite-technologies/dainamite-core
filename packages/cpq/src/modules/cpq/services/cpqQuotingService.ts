@@ -1171,6 +1171,9 @@ export class DefaultCpqQuotingService {
     save: boolean,
     draftAdjustments?: PriceAdjustment[],
     sourcing?: RecalcSourcingContext,
+    // Internal date of the recalculation (index values in force, spec Q6): the UTC calendar date of the server clock.
+    // Public signatures never carry it; tests of this private method pass a fixed date.
+    asOfDate: string = new Date().toISOString().slice(0, 10),
   ): Promise<QuoteResult> {
     const lineConfigs = await em.find(CpqQuoteLineConfiguration, {
       quoteConfigurationId: cpqConfig.id,
@@ -1225,9 +1228,12 @@ export class DefaultCpqQuotingService {
     // (never `charges` or a price); previews compute the same values in memory; locked quotes read the
     // stored lines. Resolution always runs BEFORE pricing so both see the same values.
     const costService = this.costService
+    // `persist` (index-costs spec step 8): only an unlocked, SAVED recalculation may store resolved costs / snapshots.
+    // A preview, a locked status or an existing order never persists (same lock predicate as the cost resolver itself).
+    const persist = !!this.costService && save && !(await isQuoteCostLocked(em, cpqConfig, scope))
     const costInputs = costService
       ? await resolveCostPlusInputs({
-        em, quote: cpqConfig, scope, save, isEnabled: (tenantId) => costService.enabled(tenantId), fxResolver: this.fxRateResolver,
+        em, quote: cpqConfig, scope, save, asOfDate, persist, isEnabled: (tenantId) => costService.enabled(tenantId), fxResolver: this.fxRateResolver,
         actorUserId: sourcing?.actorUserId ?? null, signals: sourcing?.signals, autoOpen: sourcing?.autoOpen,
         lines: prepared.map(({ lineConfig, mergedConfig }) => ({ lineConfig, mergedConfig })),
       })

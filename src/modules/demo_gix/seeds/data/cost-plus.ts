@@ -100,3 +100,43 @@ export const ARC_COST_DEMO = {
   scenario: 'cost-arc-supplier-term-ending',
   label: 'Demo — IP Transit, partner tail supplier term ends before renewal',
 } as const
+
+/**
+ * Index cost demo: a EUR cost-plus charge whose only price-basis cost is an `index` element (factor 0.5 of the demo
+ * data-centre power index, EUR/MWh). Value dates are offsets in days from the seed run (negative = past). The value in
+ * force today is 100.00 (-7 days), so the unit cost is 50.00 and the list price 62.50 EUR at 25 % markup. The future
+ * value only takes effect at `futureDays`: unlocked quotes re-price then (R4), the sent quote never does.
+ *
+ * It lives on its own offering rather than on "IP Transit with partner tail": that charge is a USD worked example
+ * (300 + 100 at 25 % = 500.00) that the cost-state demos rely on, and a second price-basis element in EUR would
+ * change it and drag the EUR index through the FX path.
+ */
+export const INDEX_DEMO = {
+  indexCode: 'DEMO-DC-POWER',
+  indexName: 'Demo data-centre power, EUR/MWh',
+  unit: 'EUR/MWh',
+  currency: 'EUR',
+  /** Past values, oldest first; `correctedValue` is appended afterwards as revision 2 of the same date. */
+  values: [
+    { days: -90, value: 92 },
+    { days: -60, value: 97.5 },
+    { days: -30, value: 98, correctedValue: 99.5 },
+    { days: -7, value: 100 },
+  ],
+  /** A value that is not in force yet: must stay > today. */
+  future: { days: 45, value: 120 },
+  sku: 'GIX-IP-TRANSIT-INDEX',
+  title: 'GIX IP Transit with indexed power (EUR)',
+  description: 'IP transit whose price follows a data-centre power index',
+  specCode: 'SPEC-GIX-IP-TRANSIT-INDEX',
+  offerCode: 'OFFER-GIX-IP-TRANSIT-INDEX',
+  chargeCode: 'transit_fee_index',
+  markupPercent: 25,
+  elementCode: 'power_index',
+  factor: '0.5',
+  offset: '0',
+  readyScenario: 'cost-index-ready',
+  readyLabel: 'Demo — IP Transit, index cost (ready: refreshes on save)',
+  sentScenario: 'cost-index-sent',
+  sentLabel: 'Demo — IP Transit, index cost (with customer: frozen)',
+} as const

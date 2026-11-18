@@ -48,8 +48,10 @@ export type FullQuoteCost = RedactedQuoteCost & FxFields & {
   chargeCode: string | null
   origin: 'catalog' | 'manual' | string
   costType: 'nrc' | 'mrc' | string
-  source: 'fixed' | 'table' | 'on_request' | string
+  source: 'fixed' | 'table' | 'index' | 'on_request' | string
   costModel: string
+  /** Index costs (`cpq.costs.view`): the value, date and revision the unit amount was computed from; null otherwise. */
+  indexSnapshot?: Record<string, unknown> | null
   /** Where the stored value came from; a `catalog` value needs a note to be overwritten. */
   valueOrigin?: 'catalog' | 'manual' | string | null
   unitAmount: string | null
@@ -142,7 +144,7 @@ export const isCostLocked = (cpqStatus: string, convertedOrderId?: string | null
 
 export const COST_STATUS_FALLBACKS: Record<string, string> = { none: 'Cost pending', estimated: 'Estimated', confirmed: 'Confirmed' }
 export const COST_ROLE_FALLBACKS: Record<string, string> = { price_basis: 'Price basis', margin_only: 'Margin only' }
-export const COST_SOURCE_FALLBACKS: Record<string, string> = { fixed: 'Fixed', table: 'Cost table', on_request: 'On request', manual: 'Manual' }
+export const COST_SOURCE_FALLBACKS: Record<string, string> = { fixed: 'Fixed', table: 'Cost table', index: 'Market index', on_request: 'On request', manual: 'Manual' }
 
 /** How an unpriced cost-plus charge is shown: "≈ fallback" while a fallback exists, else "Price on request". */
 export function unpricedChargeLabel(charge: { fallbackPrice?: number | null }): { kind: 'approx'; amount: number } | { kind: 'on_request' } {
@@ -232,6 +234,7 @@ export const COST_ERROR_FALLBACKS: Record<string, string> = {
   ITEM_NOT_ACTIVE: 'The subscription item is no longer active',
   COST_SOURCE_CHANGED: 'The subscription\'s costs changed since this quote was created',
   CURRENCY_NO_RATE: 'No exchange rate is available for this currency',
+  INDEX_NO_VALUE: 'The index has no value in force yet',
   FIELD_NOT_ALLOWED: 'This field cannot be changed on a catalog cost',
   QUANTITY_ATTRIBUTE_REQUIRED: 'The line has no quantity attribute for a per-unit cost',
   FORBIDDEN: 'You do not have permission to change costs',

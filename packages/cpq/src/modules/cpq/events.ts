@@ -245,6 +245,32 @@ const events = [
       ],
     },
   },
+  // Supplier cost expiry warning (non-broadcast; emitted by costExpiryService after the ledger row commits, persistent).
+  // Ids, keys and dates only: no amount, no supplier (App Spec I-4). `daysLeft` is negative once expired.
+  {
+    id: 'cpq.quote.cost_expiring',
+    label: 'Supplier Cost Expiring',
+    entity: 'quote',
+    category: 'custom',
+    clientBroadcast: false,
+    payloadSchema: {
+      fields: [
+        { path: 'tenantId', type: 'text' },
+        { path: 'organizationId', type: 'text' },
+        { path: 'warningId', type: 'text', label: 'Ledger row id (dedupe key for consumers)' },
+        { path: 'quoteId', type: 'text', label: 'CPQ quote id' },
+        { path: 'quoteLineId', type: 'text' },
+        { path: 'costLineId', type: 'text' },
+        { path: 'costKey', type: 'text' },
+        { path: 'chargeCode', type: 'text', optional: true },
+        { path: 'validUntil', type: 'text', label: 'YYYY-MM-DD' },
+        { path: 'daysLeft', type: 'number' },
+        { path: 'expired', type: 'boolean' },
+        { path: 'leadDays', type: 'number' },
+        { path: 'occurredAt', type: 'date' },
+      ],
+    },
+  },
 ] as const
 
 export const eventsConfig = createModuleEvents({

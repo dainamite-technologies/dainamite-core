@@ -124,3 +124,42 @@ describe('CostStatusBadges missing rate', () => {
     expect(content).not.toContain('rate missing')
   })
 })
+
+describe('CostsPanel index costs', () => {
+  const indexed: FullQuoteCost = {
+    ...cost, source: 'index', valueStatus: 'confirmed', expired: false, currencyCode: 'EUR', unitAmount: '41.2000', instanceAmount: '41.2000',
+    indexSnapshot: { indexId: 'i1', currencyCode: 'EUR', effectiveDate: '2026-11-01', revision: 2, value: '82.4', factor: '0.5', offset: '0', asOfDate: '2026-11-16' },
+  }
+  const labels = { i1: { code: 'DEMO-DC-POWER', unit: 'MWh' } }
+
+  it('shows the snapshot line next to the value, and the lock hint only while locked', () => {
+    const open = wrap(panel({ costs: [indexed], indexLabels: labels }))
+    expect(text(open)).toContain('DEMO-DC-POWER 82.40 EUR/MWh · 2026-11-01 r2 · × 0.5')
+    expect(text(open)).toContain('Market index')
+    expect(open).not.toContain('cpq-cost-index-frozen')
+    const locked = wrap(panel({ costs: [indexed], indexLabels: labels, locked: true, status: 'in_approval' }))
+    expect(locked).toContain('cpq-cost-index-frozen')
+    expect(text(locked)).toContain('Frozen while the quote is locked')
+  })
+
+  it('names no index without a label and shows nothing for a line without a snapshot', () => {
+    expect(text(wrap(panel({ costs: [indexed], indexLabels: {} })))).toContain('82.40 EUR · 2026-11-01 r2 · × 0.5')
+    expect(wrap(panel({ costs: [{ ...indexed, indexSnapshot: null }], indexLabels: labels }))).not.toContain('cpq-cost-index-snapshot')
+  })
+
+  it('shows the No index value badge for a line without a value in force', () => {
+    const none: FullQuoteCost = { ...indexed, valueStatus: 'none', unitAmount: null, instanceAmount: null, indexSnapshot: null, error: 'INDEX_NO_VALUE' }
+    const html = wrap(panel({ costs: [none], indexLabels: labels }))
+    expect(html).toContain('cpq-cost-index-no-value')
+    expect(text(html)).toContain('No index value')
+  })
+})
+
+describe('CostStatusBadges index costs', () => {
+  it('shows No index value to everyone (status only: no index, no amount)', () => {
+    const html = wrap(<CostStatusBadges costs={[{ valueStatus: 'none', expired: false, error: 'INDEX_NO_VALUE' }]} />)
+    expect(html).toContain('cpq-cost-badge-indexNoValue')
+    expect(text(html)).toContain('No index value')
+    expect(text(html)).toContain('Cost pending')
+  })
+})

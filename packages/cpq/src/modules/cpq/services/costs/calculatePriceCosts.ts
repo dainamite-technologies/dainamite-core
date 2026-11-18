@@ -21,6 +21,8 @@ export async function resolveCalculatePriceCostContexts(params: {
   items: PriceItemInput[]
   currencyCode: string
   scope: TenantScope
+  /** Date index values are read at (`YYYY-MM-DD`, UTC); absent = today. Test seam. */
+  asOfDate?: string
 }): Promise<CostPlusLineContext[]> {
   const { items, currencyCode, scope } = params
   if (!(await params.isEnabled(scope.tenantId))) {
@@ -31,7 +33,7 @@ export async function resolveCalculatePriceCostContexts(params: {
   for (const item of items) {
     const lineConfig = { quoteLineId: randomUUID(), offeringId: item.offeringId ?? null, productId: item.productId ?? null, configuration: item.configuration } as unknown as CpqQuoteLineConfiguration
     const costs = await previewCatalogCosts({
-      em, scope, fxResolver: params.fxResolver, lines: [{ lineConfig, mergedConfig: item.configuration }],
+      em, scope, fxResolver: params.fxResolver, asOfDate: params.asOfDate, lines: [{ lineConfig, mergedConfig: item.configuration }],
       quote: { id: randomUUID(), quoteId: randomUUID(), cpqStatus: 'new', quoteType: 'new', currencyCode },
     })
     contexts.push({

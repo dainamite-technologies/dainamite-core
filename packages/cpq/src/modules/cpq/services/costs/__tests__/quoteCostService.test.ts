@@ -1,5 +1,5 @@
 import {
-  CpqInventoryAsset, CpqInventoryCost, CpqInventorySubscription, CpqInventorySubscriptionItem, CpqOrderConfiguration, CpqProductCharge, CpqQuoteConfiguration, CpqQuoteLineConfiguration, CpqQuoteLineCost, CpqQuoteMarkupOverride, CpqQuoteTargetSubscription,
+  CpqChargeCostElement, CpqCostIndex, CpqCostIndexValue, CpqInventoryAsset, CpqInventoryCost, CpqInventorySubscription, CpqInventorySubscriptionItem, CpqOrderConfiguration, CpqProductCharge, CpqQuoteConfiguration, CpqQuoteLineConfiguration, CpqQuoteLineCost, CpqQuoteMarkupOverride, CpqQuoteTargetSubscription,
 } from '../../../data/entities'
 import { SalesQuote } from '@open-mercato/core/modules/sales/data/entities'
 
@@ -891,5 +891,51 @@ describe('preview: fxFrom rate hint (cost dialog)', () => {
     const { service } = setup({ fx: jest.fn(async () => FX_OK) })
     await expect(service.preview({ configuration: {} } as never, SCOPE)).rejects.toBeDefined()
     await expect(service.preview({ offeringId: ids.line, productId: ids.line, configuration: {} } as never, SCOPE)).rejects.toBeDefined()
+  })
+})
+
+// Index costs step 10: the cost preview resolves index costs at today, in memory, and exposes the snapshot (cost-guarded route).
+describe('preview: index costs', () => {
+  const productId = '55555555-5555-4555-8555-555555555555'
+  const today = new Date().toISOString().slice(0, 10)
+  function indexPreview(values: Row[]) {
+    const rows = new Map<unknown, Row[]>([
+      [CpqProductCharge, [{ id: 'ch', ...SCOPE, deletedAt: null, isActive: true, productId, code: 'power', pricingMethod: 'cost_plus', chargeModel: 'flat', chargeType: 'mrc',
+        quantityAttributeCode: null, applicabilityCondition: null, markupRule: 'markup_percent', markupValue: '10', currencyCode: 'EUR', sortOrder: 0 }]],
+      [CpqChargeCostElement, [{ id: 'el', ...SCOPE, deletedAt: null, isActive: true, productChargeId: 'ch', code: 'energy', name: 'Energy', role: 'price_basis', costType: 'mrc',
+        source: 'index', costModel: 'flat', costIndexId: 'idx', indexFactor: '0.500000', indexOffset: '2.0000', applicabilityCondition: null, sortOrder: 0 }]],
+      [CpqCostIndex, [{ id: 'idx', ...SCOPE, deletedAt: null, code: 'POWER', currencyCode: 'EUR' }]],
+      [CpqCostIndexValue, values],
+    ])
+    const em: Row = {
+      fork: () => em,
+      findOne: jest.fn(async () => null),
+      find: jest.fn(async (entity: unknown, where: Row) => (rows.get(entity) ?? []).filter((row) => !where.effectiveDate || String(row.effectiveDate) <= String(where.effectiveDate.$lte))),
+    }
+    const service = new CpqQuoteCostService({ em: em as never, costService: { enabled: jest.fn(async () => true) } } as never)
+    return { service, em }
+  }
+  const value = (effectiveDate: string, revision: number, amount: string) => ({ ...SCOPE, costIndexId: 'idx', effectiveDate, revision, value: amount })
+
+  it('prices from the value in force today and returns the in-memory snapshot; nothing is written', async () => {
+    const { service, em } = indexPreview([value('2020-01-01', 1, '80.000000'), value('2020-01-01', 2, '82.400000')])
+    const body = await service.preview({ productId, currencyCode: 'EUR', configuration: {} }, SCOPE) as Row
+    const [charge] = body.charges
+    expect(charge.costs[0]).toMatchObject({
+      source: 'index', valueStatus: 'confirmed', unitAmount: '43.2', instanceAmount: '43.2', currencyCode: 'EUR',
+      indexSnapshot: { indexId: 'idx', currencyCode: 'EUR', effectiveDate: '2020-01-01', revision: 2, value: '82.4', factor: '0.5', offset: '2', asOfDate: today },
+    })
+    expect(charge.costTotal).toBe('43.2')
+    expect(charge.listTotalPrice).toBeCloseTo(47.52, 4)
+    expect(em.persist).toBeUndefined()
+  })
+
+  it('no value in force today: INDEX_NO_VALUE, no snapshot, the charge has no list price (COST_PENDING)', async () => {
+    const { service } = indexPreview([value('2999-01-01', 1, '99.000000')])
+    const body = await service.preview({ productId, currencyCode: 'EUR', configuration: {} }, SCOPE) as Row
+    const [charge] = body.charges
+    expect(charge.costs[0]).toMatchObject({ valueStatus: 'none', error: 'INDEX_NO_VALUE', indexSnapshot: null, unitAmount: null })
+    expect(charge.listTotalPrice).toBeNull()
+    expect(charge.error).toBe('COST_PENDING')
   })
 })

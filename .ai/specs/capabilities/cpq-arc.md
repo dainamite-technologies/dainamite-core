@@ -258,3 +258,32 @@ The system SHALL show in the ARC line diff, only to holders of `cpq.costs.view`,
 Frozen by: `packages/cpq/src/modules/cpq/components/__tests__/ArcLineDiff.test.tsx`
 
 Source: .ai/specs/2026-11-12-cpq-cost-plus-arc-costs.md
+
+## Requirement: Index carried costs re-evaluated on Renew
+The system SHALL, on a saved recalculation of an unlocked Renew quote, after the Renew carried-cost reconciliation, re-resolve every `carried` cost line with `source = index`, `value_origin = carried` and no renegotiation-due flag, at the value in force on the recalculation date. It SHALL use the carried snapshot's index, factor and offset. It SHALL change only that line's value (`unit_amount`, with its per-instance amount derived from it) and `index_snapshot`, never its `value_status` or renegotiation-due flag, and SHALL keep every other carried value unchanged. Amend mirror lines SHALL NOT be re-evaluated. Subscription item costs SHALL change only when the Renew activates, in place from the order line cost.
+
+### Scenario: Renew after the market moved
+- WHEN an item was activated with Brent 70.00 and a Renew quote is saved when Brent is 82.40
+- THEN the carried index cost line snapshots 82.40 with the item's factor and offset, and the item cost still holds 70.00 until the Renew activates
+
+### Scenario: Renew activation
+- WHEN that Renew is converted and activated
+- THEN the same item cost row (same id) holds 82.40 with the new snapshot, and `cost_changed` is emitted with cause `renew`
+
+### Scenario: Renegotiation-due line is not touched
+- WHEN the carried index line is flagged renegotiation due (`estimated`)
+- THEN its value, snapshot and `value_status` are unchanged, and it still blocks conversion (`422 COSTS_NOT_CONFIRMED`)
+
+### Scenario: Supplier or manual value kept
+- WHEN the carried index line's value was replaced by a supplier answer or a manual entry (`value_origin` `supplier` / `manual`)
+- THEN it is not re-evaluated
+
+### Scenario: Amend keeps the contracted value
+- WHEN an Amend quote mirrors the same item
+- THEN the carried index cost line keeps 70.00
+
+This requirement is the declared exception to the ARC costs "carried costs keep their values" Renew rule (App Spec R13).
+
+Frozen by: `packages/cpq/src/modules/cpq/services/costs/__tests__/indexCostResolution.renew.test.ts`
+
+Source: .ai/specs/2026-11-12-cpq-cost-plus-index-costs-expiry.md

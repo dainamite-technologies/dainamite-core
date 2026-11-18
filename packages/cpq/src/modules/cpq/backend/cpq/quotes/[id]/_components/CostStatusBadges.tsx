@@ -5,6 +5,7 @@ import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { COST_BADGE_FALLBACKS, lineCostBadges, type CostBadge, type RedactedQuoteCost } from '../../../../../lib/quoteCostView'
 import { pendingIsRateOnly } from '../../../../../lib/fxView'
+import { hasIndexNoValue, INDEX_NO_VALUE_FALLBACK } from '../../../../../lib/indexView'
 import { ARC_COST_BADGE_FALLBACKS, arcCostBadges, type ArcCostBadge } from '../../../../../lib/arcCostView'
 import { SOURCING_BADGE_FALLBACKS, sourcingBadges, type SourcingBadge } from '../../../../../lib/costSourcingView'
 
@@ -20,7 +21,9 @@ export function CostStatusBadges({ costs }: { costs: ReadonlyArray<Pick<Redacted
   const rateOnly = pendingIsRateOnly(costs)
   const sourcing = sourcingBadges(costs)
   const arc = arcCostBadges(costs)
-  if (badges.length === 0 && sourcing.length === 0 && arc.length === 0) return null
+  // An index cost with no value in force: status only (the redacted view carries the code, never an index or amount).
+  const indexNoValue = costs.some(hasIndexNoValue)
+  if (badges.length === 0 && !indexNoValue && sourcing.length === 0 && arc.length === 0) return null
   return (
     <div className="flex flex-wrap items-center gap-1.5 pb-1" data-testid="cpq-cost-badges">
       {badges.map((badge) => (
@@ -30,6 +33,11 @@ export function CostStatusBadges({ costs }: { costs: ReadonlyArray<Pick<Redacted
             : t(`cpq.quoteCosts.badges.${badge}`, COST_BADGE_FALLBACKS[badge])}
         </Tag>
       ))}
+      {indexNoValue && (
+        <Tag variant="warning" dot className="px-1.5 text-xs" data-testid="cpq-cost-badge-indexNoValue">
+          {t('cpq.quoteCosts.badges.indexNoValue', INDEX_NO_VALUE_FALLBACK)}
+        </Tag>
+      )}
       {arc.map((badge) => (
         <Tag key={badge} variant={ARC_VARIANTS[badge]} dot className="px-1.5 text-xs" data-testid={`cpq-cost-badge-${badge}`}>
           {t(`cpq.quoteCosts.badges.${badge}`, ARC_COST_BADGE_FALLBACKS[badge])}

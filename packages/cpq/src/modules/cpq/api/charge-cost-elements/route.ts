@@ -134,6 +134,9 @@ const elementSchema = z.object({
   costTableId: z.string().uuid().nullable(),
   costColumnKey: z.string().nullable(),
   estimateAmount: z.string().nullable(),
+  costIndexId: z.string().uuid().nullable(),
+  indexFactor: z.string().nullable(),
+  indexOffset: z.string().nullable(),
   defaultSupplierId: z.string().uuid().nullable(),
   defaultSupplierName: z.string().nullable(),
   defaultValidityDays: z.number().nullable(),
@@ -148,7 +151,7 @@ const writeErrors = [
   toggleOff,
   cpqErrorDoc(422, 'Rule violation: PRICE_BASIS_REQUIRES_COST_PLUS, COST_TYPE_MISMATCH, WRONG_TABLE_PURPOSE, '
     + 'COST_TABLE_NOT_FOUND, COLUMN_NOT_FOUND, DUPLICATE_CODE, MODEL_REQUIRES_TABLE, QUANTITY_ATTRIBUTE_REQUIRED, '
-    + 'SOURCE_NOT_AVAILABLE (index), AMOUNT_REQUIRED, CURRENCY_REQUIRED, TABLE_REQUIRED, FIELD_NOT_ALLOWED, '
+    + 'INDEX_REQUIRED (index source without an existing index), INDEX_INACTIVE, INDEX_FIELDS_NOT_ALLOWED (index fields on another source), AMOUNT_REQUIRED, CURRENCY_REQUIRED, TABLE_REQUIRED, FIELD_NOT_ALLOWED, '
     + 'NO_PRICE_BASIS_ELEMENT, or a mutation-guard rejection'),
 ]
 

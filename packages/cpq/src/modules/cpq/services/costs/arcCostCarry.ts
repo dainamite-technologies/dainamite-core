@@ -153,7 +153,7 @@ export type RenewCostRow = Pick<
   CpqQuoteLineCost,
   'costKey' | 'origin' | 'role' | 'costType' | 'source' | 'chargeCode' | 'costElementId' | 'valueStatus' | 'valueOrigin' | 'unitAmount'
   | 'validUntil' | 'supplierTermEnd' | 'renegotiationDue'
-> & Partial<Pick<CpqQuoteLineCost, 'sourcingStatus' | 'instanceAmount' | 'indexSnapshot'>>
+> & Partial<Pick<CpqQuoteLineCost, 'sourcingStatus' | 'instanceAmount' | 'indexSnapshot' | 'costModel' | 'currencyCode'>>
 
 /** The only fields renegotiation-due flagging writes. */
 export type RenewDuePatch = { renegotiationDue: boolean; valueStatus?: 'estimated' | 'confirmed' }
@@ -235,9 +235,10 @@ export type IndexReevaluation = { row: CarriedIndexLine; patch: IndexReevaluatio
 export type ReevaluateCarriedIndexCosts = (input: { lines: readonly CarriedIndexLine[]; asOf: string }) => Promise<IndexReevaluation[]>
 
 /**
- * Seam of the index-costs feature (`.ai/specs/2026-11-12-cpq-cost-plus-index-costs-expiry.md`): filled by the index-costs
- * feature. The `index` cost source is not available yet (`AVAILABLE_COST_SOURCES`), so there is nothing to re-evaluate and
- * this changes nothing. Contract it must keep: it receives ONLY carried `index` lines with `value_origin = carried` that
+ * Seam of the index-costs feature (`.ai/specs/2026-11-12-cpq-cost-plus-index-costs-expiry.md`). This default is the no-op for
+ * callers that supply no implementation (pure unit tests of the reconciliation). The saved recalculation (`costResolution`)
+ * always passes the real one, `reevaluateCarriedIndexCosts` of `indexCostResolution.ts`, bound to the index values in force
+ * at the recalculation date. Contract it must keep: it receives ONLY carried `index` lines with `value_origin = carried` that
  * are not renegotiation due, and may change only `unit_amount` / `instance_amount` / `index_snapshot` (anything else it
  * returns is discarded by `reconcileRenewLine`).
  */

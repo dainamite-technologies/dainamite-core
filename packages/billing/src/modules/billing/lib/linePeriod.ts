@@ -29,6 +29,26 @@ export function lineServicePeriod(line: LinePeriodInput): LineServicePeriod | nu
 }
 
 /**
+ * Service period of a balance transaction, for display (prepaid ledger lists).
+ *
+ * Recurring charges posted by the period close store the period in
+ * `metadata.service_period_start/end` (ISO days). Same dedupe rule as
+ * `lineServicePeriod`: nothing is added when the description already shows it.
+ */
+export function transactionServicePeriod(txn: {
+  description: string | null | undefined
+  metadata: Record<string, unknown> | null | undefined
+}): LineServicePeriod | null {
+  const start = txn.metadata?.service_period_start
+  const end = txn.metadata?.service_period_end
+  return lineServicePeriod({
+    description: txn.description,
+    servicePeriodStart: typeof start === 'string' ? start : null,
+    servicePeriodEnd: typeof end === 'string' ? end : null,
+  })
+}
+
+/**
  * The dated suffix `buildRecurringLineDescriptors` appends to prorated and
  * credit lines (`Fee · 2026-12-01 – 2026-12-14`), anchored at the end of the
  * description. That text is stored (frozen at bill time and copied into

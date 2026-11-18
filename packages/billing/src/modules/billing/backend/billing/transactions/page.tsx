@@ -3,12 +3,12 @@ import * as React from 'react'
 import { useRouter } from 'next/navigation'
 import type { LegacyColumnDef as ColumnDef } from '@tanstack/react-table/legacy'
 import { useLocale, useT } from '@open-mercato/shared/lib/i18n/context'
-import { formatBillingDateTime, formatBillingDay } from '../../../lib/displayDate'
-import { localizeDescriptionPeriod } from '../../../lib/linePeriod'
+import { formatBillingDateTime } from '../../../lib/displayDate'
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
 import { BillingDataTable as DataTable } from '../../../components/BillingDataTable'
 import { Tag } from '@open-mercato/ui/primitives/tag'
+import { TransactionDescription } from '../../../components/TransactionDescription'
 import { readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
 import { fetchAccountNames } from '../../../components/accountNames'
 
@@ -27,6 +27,7 @@ type TransactionRow = {
   currency_code: string
   balance_after: string
   description: string
+  metadata: Record<string, unknown> | null
   created_at: string
 }
 
@@ -122,7 +123,9 @@ export default function BillingTransactionsListPage() {
       {
         accessorKey: 'description',
         header: t('billing.transactions.columns.description', 'Description'),
-        cell: ({ row }) => <span className="text-sm">{localizeDescriptionPeriod(row.original.description, (day) => formatBillingDay(day, locale))}</span>,
+        cell: ({ row }) => (
+          <TransactionDescription description={row.original.description} metadata={row.original.metadata} />
+        ),
       },
       {
         accessorKey: 'amount',

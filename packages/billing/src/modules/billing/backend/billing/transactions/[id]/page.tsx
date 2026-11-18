@@ -3,8 +3,7 @@ import * as React from 'react'
 import Link from 'next/link'
 import { useParams } from 'next/navigation'
 import { useLocale, useT } from '@open-mercato/shared/lib/i18n/context'
-import { formatBillingDateTime, formatBillingDay } from '../../../../lib/displayDate'
-import { localizeDescriptionPeriod } from '../../../../lib/linePeriod'
+import { formatBillingDateTime } from '../../../../lib/displayDate'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
 import { FormHeader } from '@open-mercato/ui/backend/forms'
 import { Tag } from '@open-mercato/ui/primitives/tag'
@@ -12,6 +11,7 @@ import { Button } from '@open-mercato/ui/primitives/button'
 import { LoadingMessage, ErrorMessage } from '@open-mercato/ui/backend/detail'
 import { readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
 import { DetailCard, DetailField } from '../../../../components/DetailFields'
+import { TransactionDescription } from '../../../../components/TransactionDescription'
 import { txnVariant } from '../page'
 
 type TransactionRow = {
@@ -27,6 +27,7 @@ type TransactionRow = {
   statement_id: string | null
   description: string
   source_ref: string | null
+  metadata: Record<string, unknown> | null
   user_id: string | null
   created_at: string
 }
@@ -137,7 +138,11 @@ export default function BillingTransactionDetailPage(props: { params?: { id?: st
             {formatBillingDateTime(row.created_at, locale)}
           </DetailField>
           <DetailField label={t('billing.transactions.columns.description', 'Description')} fullWidth>
-            {row.description ? localizeDescriptionPeriod(row.description, (day) => formatBillingDay(day, locale)) : '—'}
+            {row.description ? (
+              <TransactionDescription description={row.description} metadata={row.metadata} />
+            ) : (
+              '—'
+            )}
           </DetailField>
           <DetailField label={t('billing.transactions.detail.source_ref', 'Source ref')}>
             <span className="font-mono text-xs">{row.source_ref || '—'}</span>

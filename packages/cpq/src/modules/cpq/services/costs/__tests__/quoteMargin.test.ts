@@ -85,6 +85,38 @@ describe('computeQuoteMargin', () => {
   })
 })
 
+describe('foreign-currency costs (FX spec R2)', () => {
+  const usd = (over: Partial<MarginCost> = {}) => cost('l1', { instanceAmount: '300', currencyCode: 'USD', fxRate: '0.92000000', ...over })
+
+  it('converts a cost at its stored rate, in full precision, before the single rounding', () => {
+    // 300 USD x 0.92 = 276.00 EUR per month; offer 500, 12-month horizon
+    const result = margin([line('l1', {}, 500)], [usd()])
+    expect(result).toMatchObject({ mrcCost: 276, mrcOffer: 500, mrcMargin: 224, contractCost: 3312 })
+    // an unrounded product is rounded once at the figure: 0.3333 x 0.3333 x 3 lines of quantity
+    expect(margin([line('l1', { quantity: 3 })], [usd({ instanceAmount: '0.3333', fxRate: '0.33330000' })]).mrcCost).toBe(0.3333)
+  })
+
+  it('a cost without a rate (quote currency) is unchanged', () => {
+    expect(margin([line('l1', {}, 500)], [cost('l1', { instanceAmount: '276' })]).mrcCost).toBe(276)
+    expect(margin([line('l1', {}, 500)], [cost('l1', { instanceAmount: '276', fxRate: null })]).mrcCost).toBe(276)
+  })
+
+  it('mixes quote-currency and converted costs in one charge', () => {
+    expect(margin([line('l1', {}, 500)], [usd(), cost('l1', { costKey: 'k2', instanceAmount: '24' })]).mrcCost).toBe(300)
+  })
+
+  it('the hash changes with the rate and not when the same rate is reused', () => {
+    const at = (fxRate: string) => margin([line('l1')], [usd({ fxRate })]).marginHash
+    expect(at('0.93000000')).not.toBe(at('0.92000000'))
+    expect(at('0.92000000')).toBe(at('0.92')) // reused snapshot, same canonical value
+  })
+
+  it('a quote without FX hashes exactly as before (Q15)', () => {
+    const plain = margin([line('l1')], [cost('l1'), cost('l1', { costKey: 'k2', instanceAmount: '5', valueStatus: 'estimated' })])
+    expect(plain.marginHash).toBe('70c5f837aa59e65ce477241272505243e4d6331103c024fe35192d2955bce799')
+  })
+})
+
 describe('marginHash', () => {
   const base = () => margin([line('l1')], [cost('l1'), cost('l1', { costKey: 'k2', instanceAmount: '5', valueStatus: 'estimated' })])
 
@@ -96,6 +128,10 @@ describe('marginHash', () => {
   it('is independent of input order', () => {
     const reversed = margin([line('l1')], [cost('l1', { costKey: 'k2', instanceAmount: '5', valueStatus: 'estimated' }), cost('l1')])
     expect(reversed.marginHash).toBe(base().marginHash)
+  })
+
+  it('Q15 characterization: a quote whose costs are all in the quote currency keeps this exact hash (FX must not change it)', () => {
+    expect(base().marginHash).toBe('70c5f837aa59e65ce477241272505243e4d6331103c024fe35192d2955bce799')
   })
 
   it('changes when a cost value changes', () => {

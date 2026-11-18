@@ -4,7 +4,6 @@ import { withAtomicFlush } from '@open-mercato/shared/lib/commands/flush'
 import { SalesQuote } from '@open-mercato/core/modules/sales/data/entities'
 import {
   CpqChargeCostElement,
-  CpqOrderConfiguration,
   CpqProductCharge,
   CpqQuoteConfiguration,
   CpqQuoteLineConfiguration,
@@ -31,12 +30,15 @@ import type { TenantScope } from '../types'
 import { COST_CLOSED_STATUSES } from './costLock'
 import type { CpqCostService } from './costService'
 import { isQuoteCostLocked } from './costResolution'
+import { findQuoteOrder } from './quoteOrderLookup'
+import { isFrozenMirrorLine } from '../arcPriceFreeze'
 import { cancelRequestPatch, isRequestOpen, openRequestPatch } from './costRequestState'
 import { cancelOpenRequests as cancelOpenCostRequests } from './costRequestCancel'
 import {
   appendRequestHistory, buildHistoryEntry, classifyAnswer, costLineEligibility, declineEffect, hashAnswer, normalizeAnswer,
   type AnswerVerdict, type CancelReason, type NormalizedAnswer,
 } from './costSourcing'
+import type { CpqFxRateResolver } from './fxRateResolver'
 import { createMarginTracker } from './quoteMarginTracker'
 import { costInstanceAmount } from './quoteCostService'
 import { fullCostView, type FullCostView } from './quoteCostView'
@@ -49,8 +51,12 @@ type Dependencies = {
   quotingService: Pick<DefaultCpqQuotingService, 'recalculateLockedQuote'>
   /** Publishes the signals of a committed write (the sourcing events, step 12). Absent = nothing is published. */
   publisher?: SourcingSignalPublisher
+  /** Dated FX rates for a foreign-currency answer (FX spec Q9); absent = every foreign answer stays `CURRENCY_NO_RATE`. */
+  fxRateResolver?: CpqFxRateResolver
 }
 
+type FxColumns = { fxRate: string | null; fxRateDate: string | null; fxRateSource: string | null; fxRateDerivation: string | null }
+const NO_FX: FxColumns = { fxRate: null, fxRateDate: null, fxRateSource: null, fxRateDerivation: null }
 const scoped = (scope: TenantScope) => ({ organizationId: scope.organizationId, tenantId: scope.tenantId, deletedAt: null })
 
 /** What an action-log entry may carry of a sourcing write: ids, statuses, sequence numbers, reasons. Never an amount, supplier or note. */
@@ -101,11 +107,13 @@ const audit = (row: CpqQuoteLineCost, reason?: string): SourcingAudit => ({
  * cancelled quote or a deleted sales quote is `409 QUOTE_CLOSED`, a quote with an order is
  * `409 QUOTE_CONVERTED { orderId }`. Reads only; throws before anything is written.
  */
-export async function assertQuoteOpenForSourcing(em: EntityManager, quote: CpqQuoteConfiguration, scope: TenantScope): Promise<void> {
+export async function assertQuoteOpenForSourcing(em: EntityManager, quote: CpqQuoteConfiguration, scope: TenantScope, costId?: string): Promise<void> {
   const sales = await findOneWithDecryption(em, SalesQuote, { id: quote.quoteId, ...scoped(scope) }, undefined, scope)
   if (!sales || COST_CLOSED_STATUSES.includes(quote.cpqStatus as never)) throw new QuotingError(409, 'QUOTE_CLOSED')
-  const order = await em.findOne(CpqOrderConfiguration, { sourceQuoteId: quote.id, ...scoped(scope) })
-  if (order) throw new QuotingError(409, 'QUOTE_CONVERTED', undefined, { orderId: order.id })
+  // ARC costs Q7 (additive): `orderLineCostId` is the order line cost copied from this quote cost line, so the Cost requests
+  // page can link to Re-confirm on the order. Null when the cost line has no copy (or no cost line was named).
+  const order = await findQuoteOrder(em, quote, scope, costId)
+  if (order) throw new QuotingError(409, 'QUOTE_CONVERTED', undefined, order)
 }
 
 /**
@@ -125,7 +133,7 @@ export class CpqCostSourcingService {
     const parsed = cpqCostRequestSchema.parse(input)
     await this.requireEnabled(scope)
     return this.write(quoteId, scope, parsed.expectedRevision, actor, async (em, quote, signals) => {
-      await assertQuoteOpenForSourcing(em, quote, scope)
+      await assertQuoteOpenForSourcing(em, quote, scope, costId)
       const row = await this.requireCost(em, quote, costId, scope)
       const line = await em.findOne(CpqQuoteLineConfiguration, { ...scoped(scope), quoteConfigurationId: quote.id, quoteLineId: row.quoteLineId })
       if (!line) throw new QuotingError(404, 'Quote line not found')
@@ -163,7 +171,7 @@ export class CpqCostSourcingService {
     const parsed = cpqCostCancelRequestSchema.parse(input)
     await this.requireEnabled(scope)
     return this.write(quoteId, scope, parsed.expectedRevision, actor, async (em, quote, signals) => {
-      await assertQuoteOpenForSourcing(em, quote, scope)
+      await assertQuoteOpenForSourcing(em, quote, scope, costId)
       const row = await this.requireCost(em, quote, costId, scope)
       // I-13: only the current request id can be cancelled; a replaced one is superseded, a closed one is not open.
       if (!row.costRequestId || row.costRequestId !== parsed.costRequestId) throw new QuotingError(409, 'COST_REQUEST_SUPERSEDED')
@@ -192,7 +200,7 @@ export class CpqCostSourcingService {
     let verdict: AnswerVerdict | undefined
     let locked = false
     const result = (quote: CpqQuoteConfiguration, row: CpqQuoteLineCost, outcome: CostAnswerOutcome, before: SourcingAudit): CostAnswerWriteResult => ({
-      response: { outcome, cost: fullCostView(row), lineReady: lineReady(quote, row.quoteLineId), pricingRevision: quote.pricingRevision ?? 0 },
+      response: { outcome, cost: fullCostView(row, { quoteCurrencyCode: quote.currencyCode }), lineReady: lineReady(quote, row.quoteLineId), pricingRevision: quote.pricingRevision ?? 0 },
       audit: { before, after: audit(row, outcome) }, signals,
     })
     return this.write(quoteId, scope, undefined, actor, async (em, quote) => {
@@ -213,7 +221,7 @@ export class CpqCostSourcingService {
           Object.assign(row, closed, { proposedAmount: normalized.unitAmount, proposedAnswer: payload })
         } else if (verdict === 'confirmed_unchanged') {
           Object.assign(row, closed, { proposedAmount: null, proposedAnswer: null }, this.supplierFields(row, payload),
-            payload.valueStatus === 'confirmed' ? { valueStatus: 'confirmed', valueOrigin: 'supplier' } : {})
+            payload.valueStatus === 'confirmed' && this.hasValidSnapshot(row, quote) ? { valueStatus: 'confirmed', valueOrigin: 'supplier' } : {})
         } else {
           Object.assign(row, closed, { proposedAmount: null, proposedAnswer: null }, await this.valuePatch(em, quote, line, row, payload, scope))
         }
@@ -225,7 +233,7 @@ export class CpqCostSourcingService {
       marginTracker: true, events: { pricingCause: 'cost', actorUserId: actor },
       shortCircuit: async (em, quote) => {
         const row = await this.requireCost(em, quote, costId, scope)
-        await assertQuoteOpenForSourcing(em, quote, scope)
+        await assertQuoteOpenForSourcing(em, quote, scope, costId)
         if (!(await this.deps.costService.enabled(scope.tenantId))) throw new QuotingError(409, 'COST_PLUS_DISABLED')
         const line = await em.findOne(CpqQuoteLineConfiguration, { ...scoped(scope), quoteConfigurationId: quote.id, quoteLineId: row.quoteLineId })
         if (!line) throw new QuotingError(404, 'Quote line not found')
@@ -234,6 +242,7 @@ export class CpqCostSourcingService {
         locked = await isQuoteCostLocked(em, quote, scope)
         verdict = classifyAnswer({
           answer: parsed, elementActive: await this.elementActive(em, row, scope), locked,
+          frozenMirror: isFrozenMirrorLine(line.configuration, quote.quoteType),
           cost: {
             sourcingStatus: row.sourcingStatus, costRequestId: row.costRequestId ?? null, lastAnswerHash: row.lastAnswerHash ?? null,
             supplierQuoteRef: row.supplierQuoteRef ?? null, unitAmount: row.unitAmount ?? null, currencyCode: row.currencyCode ?? null,
@@ -260,10 +269,12 @@ export class CpqCostSourcingService {
     const signals: SourcingSignal[] = []
     return this.write(quoteId, scope, undefined, actor, async (em, quote) => {
       const row = await this.requireCost(em, quote, costId, scope)
+      const line = await em.findOne(CpqQuoteLineConfiguration, { ...scoped(scope), quoteConfigurationId: quote.id, quoteLineId: row.quoteLineId })
       const locked = await isQuoteCostLocked(em, quote, scope)
       const before = audit(row)
       const prior = { valueStatus: row.valueStatus, unitAmount: row.unitAmount ?? null, currencyCode: row.currencyCode ?? null }
-      const effect = declineEffect({ unitAmount: row.unitAmount ?? null, valueStatus: row.valueStatus, note: row.note ?? null, role: row.role }, locked)
+      const effect = declineEffect({ unitAmount: row.unitAmount ?? null, valueStatus: row.valueStatus, note: row.note ?? null, role: row.role }, locked,
+        isFrozenMirrorLine(line?.configuration, quote.quoteType))
       const now = new Date()
       const history = this.closedHistory(row, 'declined', now, actor, { declineReason: parsed.reason })
       await this.persistAndPrice(em, quote, scope, !locked, signals, actor, () => {
@@ -276,14 +287,14 @@ export class CpqCostSourcingService {
       })
       this.valuedSignal(signals, row, quote, 'decline', prior, now)
       return {
-        response: { outcome: 'declined' as const, cost: fullCostView(row), pricingRevision: quote.pricingRevision ?? 0 },
+        response: { outcome: 'declined' as const, cost: fullCostView(row, { quoteCurrencyCode: quote.currencyCode }), pricingRevision: quote.pricingRevision ?? 0 },
         audit: { before, after: audit(row, 'declined') }, signals,
       }
     }, {
       marginTracker: true, events: { pricingCause: 'cost', actorUserId: actor },
       shortCircuit: async (em, quote) => {
         const row = await this.requireCost(em, quote, costId, scope)
-        await assertQuoteOpenForSourcing(em, quote, scope)
+        await assertQuoteOpenForSourcing(em, quote, scope, costId)
         if (!(await this.deps.costService.enabled(scope.tenantId))) throw new QuotingError(409, 'COST_PLUS_DISABLED')
         if (!row.costRequestId || row.costRequestId !== parsed.costRequestId || !(await this.elementActive(em, row, scope))) throw new QuotingError(409, 'COST_REQUEST_SUPERSEDED')
         if (!isRequestOpen(row)) throw new QuotingError(409, 'REQUEST_NOT_OPEN')
@@ -304,7 +315,7 @@ export class CpqCostSourcingService {
     const signals: SourcingSignal[] = []
     return this.write(quoteId, scope, parsed.expectedRevision, actor, async (em, quote) => {
       const row = await this.requireCost(em, quote, costId, scope)
-      await assertQuoteOpenForSourcing(em, quote, scope)
+      await assertQuoteOpenForSourcing(em, quote, scope, costId)
       const proposal = row.proposedAnswer as AnswerPayload | null
       if (row.proposedAmount === null || row.proposedAmount === undefined || !proposal) throw new QuotingError(409, 'NO_PENDING_ANSWER')
       const line = await em.findOne(CpqQuoteLineConfiguration, { ...scoped(scope), quoteConfigurationId: quote.id, quoteLineId: row.quoteLineId })
@@ -319,7 +330,7 @@ export class CpqCostSourcingService {
       }, (value) => { quoteResult = value as unknown as Record<string, unknown> })
       this.valuedSignal(signals, row, quote, 'apply_answer', prior, new Date())
       return {
-        response: { ...quoteResult, cpqStatus: quote.cpqStatus, pricingRevision: quote.pricingRevision ?? 0, cost: fullCostView(row) },
+        response: { ...quoteResult, cpqStatus: quote.cpqStatus, pricingRevision: quote.pricingRevision ?? 0, cost: fullCostView(row, { quoteCurrencyCode: quote.currencyCode }) },
         audit: { before, after: audit(row, 'apply_answer') }, signals,
       }
     }, { marginTracker: true, events: { pricingCause: 'cost', statusCause: 'manual', actorUserId: actor } })
@@ -477,6 +488,14 @@ export class CpqCostSourcingService {
     return entry ? { requestHistory: appendRequestHistory(row.requestHistory as Array<Record<string, unknown>> | undefined, entry as unknown as Record<string, unknown>) } : {}
   }
 
+  /**
+   * A status promotion must never leave a foreign-currency row without a rate snapshot (it would read 1:1): only a row in
+   * the quote currency, or one that holds a snapshot, may be promoted to `confirmed` without re-resolving FX.
+   */
+  private hasValidSnapshot(row: CpqQuoteLineCost, quote: CpqQuoteConfiguration): boolean {
+    return (row.currencyCode ?? quote.currencyCode) === quote.currencyCode || (row.fxRate !== null && row.fxRate !== undefined)
+  }
+
   /** Supplier columns of an answer; an answer without supplier fields keeps the targeted supplier of the request. */
   private supplierFields(row: CpqQuoteLineCost, answer: AnswerPayload) {
     return {
@@ -488,15 +507,22 @@ export class CpqCostSourcingService {
   }
 
   /**
-   * The value fields an answer writes (`value_origin = supplier`). An answer in a non-quote currency is STORED (the
-   * supplier's unit amount in its own currency, so the FX feature can convert it) but resolves to `none` +
-   * `CURRENCY_NO_RATE` with no instance amount (no FX yet, Q15; spec edge case "Answer in a non-quote currency"):
-   * pricing and margin ignore a `none` cost, so there is never a silent 1:1 conversion.
+   * The value fields an answer writes (`value_origin = supplier`). The supplier's unit amount is stored in its own
+   * currency. A foreign-currency answer resolves its dated rate in the same write like a manual value (FX spec Q9; a
+   * locked margin-only cost takes the rate at the write date, a locked price-basis answer never gets here: it is a
+   * proposal or an unchanged confirmation, which keeps the stored snapshot). Rate found: the answered status is kept and
+   * the snapshot stored. No rate: `none` + `CURRENCY_NO_RATE` with no instance amount, so pricing and margin ignore it
+   * (never 1:1).
    */
   private async valuePatch(em: EntityManager, quote: CpqQuoteConfiguration, line: CpqQuoteLineConfiguration, row: CpqQuoteLineCost, answer: AnswerPayload, scope: TenantScope) {
     const supplier = this.supplierFields(row, answer)
+    let fx: FxColumns = { ...NO_FX }
     if (answer.currencyCode !== quote.currencyCode) {
-      return { ...supplier, valueStatus: 'none', valueOrigin: 'supplier', unitAmount: money(Number(answer.unitAmount)), instanceAmount: null, currencyCode: answer.currencyCode, errorCode: 'CURRENCY_NO_RATE' }
+      const result = this.deps.fxRateResolver ? await this.deps.fxRateResolver.resolve({ from: answer.currencyCode, to: quote.currencyCode, scope }) : null
+      if (!result?.ok) {
+        return { ...supplier, valueStatus: 'none', valueOrigin: 'supplier', unitAmount: money(Number(answer.unitAmount)), instanceAmount: null, currencyCode: answer.currencyCode, errorCode: 'CURRENCY_NO_RATE', ...NO_FX }
+      }
+      fx = { fxRate: result.rate, fxRateDate: result.rateDate, fxRateSource: result.source, fxRateDerivation: result.derivation }
     }
     const unit = Number(answer.unitAmount)
     let quantityAttributeCode: string | null = null
@@ -507,16 +533,15 @@ export class CpqCostSourcingService {
     const instance = await costInstanceAmount(em, quote, line, quantityAttributeCode, row.costModel, unit)
     return {
       ...supplier, valueStatus: answer.valueStatus, valueOrigin: 'supplier', unitAmount: money(unit), instanceAmount: money(instance),
-      currencyCode: answer.currencyCode, errorCode: null,
+      currencyCode: answer.currencyCode, errorCode: null, ...fx,
     }
   }
 
   /**
-   * A confirming answer on a renegotiation-due `carried` cost clears the ARC spec's `renegotiation_due`. The column
-   * exists only once that spec ships, so until then this is a no-op (guarded on the property).
+   * A confirming answer on a renegotiation-due `carried` cost clears the ARC spec's `renegotiation_due`.
    */
   private confirmRenegotiation(row: CpqQuoteLineCost, valueStatus: string) {
-    if (row.origin === 'carried' && valueStatus === 'confirmed' && 'renegotiationDue' in row) (row as unknown as { renegotiationDue: boolean }).renegotiationDue = false
+    if (row.origin === 'carried' && valueStatus === 'confirmed') row.renegotiationDue = false
   }
 
   /** Q11: the value / status change of a sourcing action, as an amount-free signal for step 12's `cost_valued` event. */

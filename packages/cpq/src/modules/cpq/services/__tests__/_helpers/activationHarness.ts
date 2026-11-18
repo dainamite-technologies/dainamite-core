@@ -1,5 +1,8 @@
 import { SalesOrder } from '@open-mercato/core/modules/sales/data/entities'
+import { LockMode } from '@mikro-orm/core'
 import {
+  CpqInventoryCost,
+  CpqInventorySubscription,
   CpqInventorySubscriptionItem,
   CpqOrderConfiguration,
   CpqOrderLineConfiguration,
@@ -7,6 +10,7 @@ import {
   CpqProductSpecification,
   CpqQuoteConfiguration,
   CpqQuoteLineConfiguration,
+  CpqQuoteLineCost,
   CpqQuoteTargetSubscription,
 } from '../../../data/entities'
 import { DefaultCpqOrderService } from '../../cpqOrderService'
@@ -22,7 +26,9 @@ import type { TenantScope } from '../../types'
  * when the callback resolves; a throw rolls them back). The inventory service is
  * a mock bound through `withEntityManager`. Transaction boundaries, flushes and
  * inventory calls are appended to `trace` so a test can pin the ORDER of
- * persistence steps inside the transaction.
+ * persistence steps inside the transaction. `lockTrace` records the row locks (`lock:order`, `lock:quote`,
+ * `lock:subscriptions[ids]`) interleaved with the inventory primitives, to pin the lock ORDER (ARC costs Q2); the
+ * locking reads are also kept raw in `lockCalls`.
  */
 type Row = Record<string, unknown>
 
@@ -43,6 +49,18 @@ export interface ActivationFixture {
   orderLineCosts?: Row[]
   /** What `createSubscriptionWithCosts` reports besides the subscription (default: nothing). */
   createdCosts?: { inventoryCostChanges?: unknown[]; inventoryCostLinks?: unknown[] }
+  /**
+   * ARC cost guard fixtures (COST_SOURCE_CHANGED): the live `CpqInventoryCost` rows (a shared array lets two harnesses
+   * model one database; `find` filters by `status` and `subscriptionItemId`), the subscription items (`subscriptionItems`,
+   * also read by new-sale activation) and the carried quote cost lines that name the differing keys.
+   */
+  inventoryCosts?: Row[]
+  carriedQuoteCosts?: Row[]
+  /**
+   * Shared subscription row lock (a stand-in for `SELECT ... FOR UPDATE`): the locking read of the subscriptions waits
+   * for the holder and the lock is released when the transaction commits or rolls back.
+   */
+  subscriptionMutex?: { acquire(): Promise<() => void> }
   /** Inject a failure: `createSubscription` throws AFTER it wrote the subscription, items, costs and change log. */
   failInventory?: 'createSubscription'
   /** Inject a failure on the final order-status flush. */
@@ -54,6 +72,9 @@ export interface ActivationFixture {
 
 export function createActivationHarness(fixture: ActivationFixture) {
   const trace: string[] = []
+  const lockTrace: string[] = []
+  const lockCalls: Array<{ entity: unknown; where: Row; options: Row }> = []
+  let releaseSubscriptionLock: (() => void) | null = null
   const orderConfig: Row = {
     id: 'oc-1', orderId: 'so-1', cpqStatus: 'draft', customerId: 'cust-1', currencyCode: 'USD', sourceQuoteId: 'quote-1',
     pricingSummary: { nrcTotal: 0, mrcTotal: 0, currencyCode: 'USD' }, activatedAt: null, createdAt: new Date('2026-01-01T00:00:00.000Z'),
@@ -89,6 +110,9 @@ export function createActivationHarness(fixture: ActivationFixture) {
         orderConfig.cpqStatus = 'draft'
         trace.push('tx:rollback')
         throw err
+      } finally {
+        releaseSubscriptionLock?.()
+        releaseSubscriptionLock = null
       }
     }),
     persist: jest.fn(),
@@ -98,13 +122,30 @@ export function createActivationHarness(fixture: ActivationFixture) {
       if (fixture.failFinalFlush && orderConfig.cpqStatus === 'active') throw new Error('final flush failed')
       if (orderConfig.cpqStatus === 'active') store.pending.push('order:active')
     }),
-    findOne: jest.fn(async (entity: unknown) => {
+    findOne: jest.fn(async (entity: unknown, where?: Row, options?: Row) => {
+      if (options?.lockMode !== undefined) {
+        lockCalls.push({ entity, where: where ?? {}, options })
+        if (entity === CpqOrderConfiguration) lockTrace.push('lock:order')
+        if (entity === CpqQuoteConfiguration) lockTrace.push('lock:quote')
+      }
       if (entity === CpqOrderConfiguration) return orderConfig
       if (entity === SalesOrder) return salesOrder
       if (entity === CpqQuoteConfiguration) return quote
       return null
     }),
-    find: jest.fn(async (entity: unknown) => {
+    find: jest.fn(async (entity: unknown, where?: Row, options?: Row) => {
+      if (entity === CpqInventorySubscription && options?.lockMode === LockMode.PESSIMISTIC_WRITE) {
+        lockCalls.push({ entity, where: where ?? {}, options })
+        const ids = ((where?.id as { $in?: string[] } | undefined)?.$in ?? []).join(',')
+        if (fixture.subscriptionMutex) releaseSubscriptionLock = await fixture.subscriptionMutex.acquire()
+        lockTrace.push(`lock:subscriptions[${ids}]`)
+        return []
+      }
+      if (entity === CpqInventoryCost) {
+        const itemIds = (where?.subscriptionItemId as { $in?: string[] } | undefined)?.$in
+        return (fixture.inventoryCosts ?? []).filter((row) => (!where?.status || row.status === where.status) && (!itemIds || itemIds.includes(String(row.subscriptionItemId))))
+      }
+      if (entity === CpqQuoteLineCost) return fixture.carriedQuoteCosts ?? []
       if (entity === CpqOrderLineConfiguration) return fixture.orderLines ?? []
       if (entity === CpqProductSpecification) return fixture.specs ?? []
       if (entity === CpqInventorySubscriptionItem) return fixture.subscriptionItems ?? []
@@ -119,6 +160,7 @@ export function createActivationHarness(fixture: ActivationFixture) {
   const inventoryCall = (name: string, result: unknown, rows: string[] = []) =>
     jest.fn(async (..._args: unknown[]) => {
       trace.push(name)
+      lockTrace.push(name)
       store.pending.push(...rows)
       if (name === 'createSubscription' && fixture.failInventory === 'createSubscription') throw new Error('createSubscription failed')
       return result
@@ -150,5 +192,5 @@ export function createActivationHarness(fixture: ActivationFixture) {
     salesDocumentNumberGenerator: { generate: jest.fn() } as unknown as never,
     ...(fixture.costPlusEnabled === undefined ? {} : { cpqCostService: costService as unknown as never }),
   })
-  return { service, costService, em, txEm, inventory, trace, orderConfig, salesOrder, store }
+  return { service, costService, em, txEm, inventory, trace, lockTrace, lockCalls, orderConfig, salesOrder, store }
 }

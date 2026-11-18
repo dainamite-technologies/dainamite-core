@@ -20,7 +20,9 @@ export async function GET(req: Request) {
 
 export const openApi: OpenApiRouteDoc = { tag: 'CPQ Pricing', methods: { GET: {
   summary: 'Cost-plus usage: toggle state, active cost-plus charges, open quotes with costs',
-  responses: [{ status: 200, description: 'Usage counters (openRequests: open supplier cost requests on live quotes)',
-    schema: z.object({ enabled: z.boolean(), costPlusCharges: z.number(), openQuotes: z.number(), openRequests: z.number(), liveSubscriptions: z.number() }) }],
+  responses: [{ status: 200, description: 'Usage counters (openRequests: open supplier cost requests on live quotes; missingFxPairs: grouped pairs and the number of open quotes missing a rate)',
+    schema: z.object({ enabled: z.boolean(), costPlusCharges: z.number(), openQuotes: z.number(), openRequests: z.number(), liveSubscriptions: z.number(),
+      openArcQuotesWithCarriedCosts: z.number().describe('Open (not converted, not rejected / cancelled) ARC quotes holding at least one carried cost line'),
+      missingFxPairs: z.array(z.object({ from: z.string(), to: z.string(), openQuotes: z.number() })).describe('Currency pairs open, unconverted, non-closed quotes have no rate for (cost lines none + CURRENCY_NO_RATE), by openQuotes descending') }) }],
   errors: [cpqErrorDoc(403, 'Missing permission')],
 } } }

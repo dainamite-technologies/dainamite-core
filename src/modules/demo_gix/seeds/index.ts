@@ -4,6 +4,9 @@ import { seedGixPriceAdjustmentExample } from './price-adjustment-examples'
 import { seedCpqArcExamples } from './arc-examples'
 import { seedGixCostPlusCatalog, seedGixCostPlusExamples } from './cost-plus-examples'
 import { seedGixCostSourcingExamples } from './cost-sourcing-examples'
+import { seedGixCostFxExamples } from './cost-fx-examples'
+import { seedGixCostIndexExamples } from './cost-index-examples'
+import { seedGixCostArcExamples } from './cost-arc-examples'
 import { seedGixCostSourcingWorkflow } from './cost-sourcing-workflow'
 import {
   seedGixBundleData,
@@ -60,4 +63,10 @@ export async function seedGixExamples(ctx: CpqUseCaseSeedContext): Promise<void>
   await seedGixCostPlusExamples(ctx.em, ctx.container, scope)
   // Supplier cost sourcing demo quotes: partner tail requested (overdue), declined, answered with a pending proposal.
   await seedGixCostSourcingExamples(ctx.em, ctx.container, scope)
+  // Foreign-currency cost demo: USD→EUR rates (source Manual, UTC midnight, 3 days) + a EUR quote with a converted USD tail.
+  await seedGixCostFxExamples(ctx.em, ctx.container, scope)
+  // Index cost demo: DEMO-DC-POWER (3 months of values, one correction, one future value) + an index-costed offering with a ready (refreshes) and a with_customer (frozen) quote.
+  await seedGixCostIndexExamples(ctx.em, ctx.container, scope)
+  // ARC costs demo: one live subscription whose partner-tail supplier term ends before its renewal (Renew flags it renegotiation due).
+  await seedGixCostArcExamples(ctx.em, ctx.container, scope)
 }

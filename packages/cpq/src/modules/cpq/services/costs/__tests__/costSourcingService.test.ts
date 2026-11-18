@@ -1,5 +1,5 @@
 import {
-  CpqChargeCostElement, CpqOrderConfiguration, CpqQuoteConfiguration, CpqQuoteLineConfiguration, CpqQuoteLineCost,
+  CpqChargeCostElement, CpqOrderConfiguration, CpqOrderLineCost, CpqQuoteConfiguration, CpqQuoteLineConfiguration, CpqQuoteLineCost,
 } from '../../../data/entities'
 import { SalesQuote } from '@open-mercato/core/modules/sales/data/entities'
 
@@ -31,7 +31,7 @@ jest.mock('@open-mercato/shared/lib/commands/flush', () => ({
 jest.mock('../costResolution', () => ({
   isQuoteCostLocked: async (_em: unknown, quote: { cpqStatus: string }) => !['new', 'incomplete', 'ready'].includes(quote.cpqStatus),
 }))
-import { CpqCostSourcingService } from '../costSourcingService'
+import { assertQuoteOpenForSourcing, CpqCostSourcingService } from '../costSourcingService'
 import type { SourcingSignal } from '../sourcingSignals'
 
 const SCOPE = { organizationId: 'org', tenantId: 'tenant' }
@@ -39,7 +39,7 @@ const ids = { quote: '11111111-1111-4111-8111-111111111111', line: '22222222-222
 const ACTOR = '44444444-4444-4444-8444-444444444444'
 type Row = Record<string, any>
 
-function setup(opts: { status?: string; orders?: Row[]; costs?: Row[]; line?: Row; quoteType?: string; sales?: boolean; element?: Row | null; enabled?: boolean } = {}) {
+function setup(opts: { status?: string; orders?: Row[]; costs?: Row[]; line?: Row; quoteType?: string; sales?: boolean; element?: Row | null; enabled?: boolean; fx?: jest.Mock } = {}) {
   const quote = { id: ids.quote, quoteId: 'sales-1', cpqStatus: opts.status ?? 'ready', quoteType: opts.quoteType ?? 'new', currencyCode: 'EUR', pricingRevision: 4 }
   const line = { quoteLineId: ids.line, ...SCOPE, quoteConfigurationId: ids.quote, action: null, configuration: {}, deletedAt: null, ...opts.line }
   const costs: Row[] = opts.costs ?? [cost()]
@@ -70,7 +70,7 @@ function setup(opts: { status?: string; orders?: Row[]; costs?: Row[]; line?: Ro
   }
   const publisher = jest.fn()
   const recalculate = jest.fn(async () => ({ id: ids.quote, cpqStatus: quote.cpqStatus, lines: [] }))
-  const service = new CpqCostSourcingService({ em: em as never, costService: { enabled: jest.fn(async () => opts.enabled ?? true) }, quotingService: { recalculateLockedQuote: recalculate } as never, publisher })
+  const service = new CpqCostSourcingService({ em: em as never, costService: { enabled: jest.fn(async () => opts.enabled ?? true) }, quotingService: { recalculateLockedQuote: recalculate } as never, publisher, fxRateResolver: opts.fx ? { resolve: opts.fx } as never : undefined })
   return { service, em, quote, costs, publisher, recalculate }
 }
 
@@ -163,6 +163,23 @@ describe('request', () => {
     await expect(setup({ sales: false }).service.request(ids.quote, ids.cost, {}, ACTOR, SCOPE)).rejects.toMatchObject({ status: 409, message: 'QUOTE_CLOSED' })
     await expect(setup({ orders: [{ id: 'order-1' }] }).service.request(ids.quote, ids.cost, {}, ACTOR, SCOPE))
       .rejects.toMatchObject({ status: 409, message: 'QUOTE_CONVERTED', details: { orderId: 'order-1' } })
+  })
+
+  it('QUOTE_CONVERTED is additive (ARC costs Q7): orderLineCostId is the order line cost copied from this cost line, else null', async () => {
+    const withCopy = setup({ orders: [{ id: 'order-1' }] })
+    const original = withCopy.em.findOne.getMockImplementation()!
+    withCopy.em.findOne.mockImplementation(async (entity: unknown, where: Record<string, unknown>) => {
+      if (entity === CpqOrderLineCost) return where.sourceQuoteLineCostId === ids.cost && where.orderConfigurationId === 'order-1' ? { id: 'olc-1' } : null
+      return original(entity, where)
+    })
+    const quote = { id: ids.quote, quoteId: ids.quote, cpqStatus: 'ready' }
+    await expect(assertQuoteOpenForSourcing(withCopy.em as never, quote as never, SCOPE, ids.cost))
+      .rejects.toMatchObject({ status: 409, message: 'QUOTE_CONVERTED', details: { orderId: 'order-1', orderLineCostId: 'olc-1' } })
+    // no copy (or no cost line named): the order id still comes back, the order line cost id is null
+    await expect(assertQuoteOpenForSourcing(setup({ orders: [{ id: 'order-1' }] }).em as never, quote as never, SCOPE, ids.cost))
+      .rejects.toMatchObject({ details: { orderId: 'order-1', orderLineCostId: null } })
+    await expect(assertQuoteOpenForSourcing(withCopy.em as never, quote as never, SCOPE))
+      .rejects.toMatchObject({ details: { orderId: 'order-1', orderLineCostId: null } })
   })
 
   it('404s an unknown quote or cost line, honours expectedRevision, and 404s with the toggle off before touching anything', async () => {
@@ -298,7 +315,7 @@ describe('answer: unlocked quote', () => {
     expect(JSON.stringify(result.signals)).not.toMatch(/280|7777/)
   })
 
-  it('an estimated answer applies as estimated; a non-quote currency is stored and resolves to none + CURRENCY_NO_RATE', async () => {
+  it('[FX step 7: foreign leg without a rate is unchanged] an estimated answer applies as estimated; a non-quote currency with no rate is stored and resolves to none + CURRENCY_NO_RATE', async () => {
     const a = setup({ costs: [requested()] })
     await a.service.answer(ids.quote, ids.cost, answerInput({ valueStatus: 'estimated' }), ACTOR, SCOPE)
     expect(a.costs[0].valueStatus).toBe('estimated')
@@ -307,16 +324,80 @@ describe('answer: unlocked quote', () => {
     // The supplier's amount is kept in its own currency (for the FX feature); no instance amount, so nothing prices from it.
     expect(b.costs[0]).toMatchObject({ valueStatus: 'none', instanceAmount: null, currencyCode: 'USD', errorCode: 'CURRENCY_NO_RATE', sourcingStatus: 'answered' })
     expect(Number(b.costs[0].unitAmount)).toBe(280)
+    expect(b.costs[0]).toMatchObject({ fxRate: null, fxRateSource: null })
   })
 
-  it('a carried line is accepted; a confirming answer clears renegotiationDue only where the column exists', async () => {
-    const withColumn = setup({ costs: [requested({ origin: 'carried', costElementId: null, renegotiationDue: true })] })
-    await withColumn.service.answer(ids.quote, ids.cost, answerInput(), ACTOR, SCOPE)
-    expect(withColumn.costs[0]).toMatchObject({ sourcingStatus: 'answered', renegotiationDue: false })
-    const without = setup({ costs: [requested({ origin: 'carried', costElementId: null })] })
-    await without.service.answer(ids.quote, ids.cost, answerInput(), ACTOR, SCOPE)
-    expect(without.costs[0]).not.toHaveProperty('renegotiationDue')
-    expect(without.costs[0].sourcingStatus).toBe('answered')
+  it('FX step 7: a foreign answer resolves its rate in the same write, like a manual value, and keeps the answered status', async () => {
+    const fx = jest.fn(async () => ({ ok: true, rate: '0.92000000', rateDate: '2026-11-11', source: 'ECB', derivation: 'direct' }))
+    const a = setup({ costs: [requested()], fx })
+    await a.service.answer(ids.quote, ids.cost, answerInput({ currencyCode: 'USD', valueStatus: 'confirmed' }), ACTOR, SCOPE)
+    expect(fx).toHaveBeenCalledWith({ from: 'USD', to: 'EUR', scope: SCOPE })
+    expect(a.costs[0]).toMatchObject({
+      valueStatus: 'confirmed', valueOrigin: 'supplier', currencyCode: 'USD', unitAmount: '280', instanceAmount: '280', errorCode: null,
+      fxRate: '0.92000000', fxRateDate: '2026-11-11', fxRateSource: 'ECB', fxRateDerivation: 'direct',
+    })
+    // A quote-currency answer never reads a rate and clears a snapshot left by an earlier foreign value.
+    const b = setup({ costs: [requested({ currencyCode: 'USD', fxRate: '0.9', fxRateDate: '2026-10-01', fxRateSource: 'ECB', fxRateDerivation: 'direct' })], fx })
+    fx.mockClear()
+    await b.service.answer(ids.quote, ids.cost, answerInput(), ACTOR, SCOPE)
+    expect(fx).not.toHaveBeenCalled()
+    expect(b.costs[0]).toMatchObject({ currencyCode: 'EUR', fxRate: null, fxRateDate: null, fxRateSource: null, fxRateDerivation: null })
+  })
+
+  it('review1-a: confirmed_unchanged never promotes a foreign row that has no rate snapshot (it would read 1:1)', async () => {
+    const noSnapshot = { currencyCode: 'USD', unitAmount: '280.0000', instanceAmount: null, valueStatus: 'none', errorCode: 'CURRENCY_NO_RATE', fxRate: null, fxRateDate: null, fxRateSource: null, fxRateDerivation: null }
+    const b = setup({ costs: [requested({ ...noSnapshot })], status: 'with_customer' })
+    const result = await b.service.answer(ids.quote, ids.cost, answerInput({ currencyCode: 'USD', unitAmount: 280 }), ACTOR, SCOPE)
+    expect(result.response.outcome).toBe('confirmed_unchanged')
+    expect(b.costs[0]).toMatchObject({ valueStatus: 'none', errorCode: 'CURRENCY_NO_RATE', fxRate: null, instanceAmount: null })
+  })
+
+  it('FX step 7: locked quote, price-basis: a foreign answer is a proposal (compared in the cost currency + code), same amount and currency confirms and keeps the snapshot', async () => {
+    const fx = jest.fn(async () => ({ ok: true, rate: '0.95000000', rateDate: '2026-11-14', source: 'Manual', derivation: 'direct' }))
+    const frozen = { currencyCode: 'USD', unitAmount: '280.0000', instanceAmount: '280.0000', fxRate: '0.92000000', fxRateDate: '2026-11-11', fxRateSource: 'ECB', fxRateDerivation: 'direct' }
+    const proposal = setup({ costs: [requested({ ...frozen })], status: 'with_customer', fx })
+    const result = await proposal.service.answer(ids.quote, ids.cost, answerInput({ currencyCode: 'USD', unitAmount: 300 }), ACTOR, SCOPE)
+    expect(result.response.outcome).toBe('proposed')
+    expect(fx).not.toHaveBeenCalled()
+    expect(proposal.costs[0]).toMatchObject({ fxRate: '0.92000000', unitAmount: '280.0000', proposedAmount: '300.0000' })
+    const same = setup({ costs: [requested({ ...frozen })], status: 'with_customer', fx })
+    const confirmed = await same.service.answer(ids.quote, ids.cost, answerInput({ currencyCode: 'USD', unitAmount: 280 }), ACTOR, SCOPE)
+    expect(confirmed.response.outcome).toBe('confirmed_unchanged')
+    expect(fx).not.toHaveBeenCalled()
+    expect(same.costs[0]).toMatchObject({ fxRate: '0.92000000', fxRateDate: '2026-11-11', fxRateSource: 'ECB' })
+    // A different currency is a different value, even with the same number.
+    const other = setup({ costs: [requested({ ...frozen })], status: 'with_customer', fx })
+    expect((await other.service.answer(ids.quote, ids.cost, answerInput({ currencyCode: 'GBP', unitAmount: 280 }), ACTOR, SCOPE)).response.outcome).toBe('proposed')
+  })
+
+  it('FX step 7: a locked margin-only foreign answer takes the rate at the write date, without re-pricing', async () => {
+    const fx = jest.fn(async () => ({ ok: true, rate: '0.95000000', rateDate: '2026-11-14', source: 'Manual', derivation: 'direct' }))
+    const { service, costs, recalculate } = setup({ costs: [requested({ role: 'margin_only' })], status: 'with_customer', fx })
+    const result = await service.answer(ids.quote, ids.cost, answerInput({ currencyCode: 'USD', unitAmount: 100 }), ACTOR, SCOPE)
+    expect(result.response.outcome).toBe('applied')
+    expect(costs[0]).toMatchObject({ currencyCode: 'USD', fxRate: '0.95000000', valueStatus: 'confirmed' })
+    expect(recalculate).not.toHaveBeenCalled()
+  })
+
+  it('a carried line is accepted; a confirming answer clears renegotiationDue (ARC step 5: the column exists)', async () => {
+    const carried = setup({ costs: [requested({ origin: 'carried', costElementId: null, renegotiationDue: true })] })
+    await carried.service.answer(ids.quote, ids.cost, answerInput(), ACTOR, SCOPE)
+    expect(carried.costs[0]).toMatchObject({ sourcingStatus: 'answered', renegotiationDue: false })
+  })
+
+  it('step 14: a supplier answer on a due carried cost of a standalone Renew line (not frozen) clears the flag and confirms it', async () => {
+    const { service, costs } = setup({
+      quoteType: 'renew', line: { configuration: { _arcMirroredFromItemId: 'item-1', _arcCostsCarried: true, _arcCarriedCostSetHash: 'h' } }, element: null,
+      costs: [requested({ origin: 'carried', costElementId: null, renegotiationDue: true, valueStatus: 'estimated', valueOrigin: 'carried' })],
+    })
+    await service.answer(ids.quote, ids.cost, answerInput(), ACTOR, SCOPE)
+    expect(costs[0]).toMatchObject({ sourcingStatus: 'answered', renegotiationDue: false, valueStatus: 'confirmed', valueOrigin: 'supplier' })
+  })
+
+  it('a non-confirming answer or a non-carried cost keeps renegotiationDue untouched', async () => {
+    const catalog = setup({ costs: [requested({ origin: 'catalog', renegotiationDue: true })] })
+    await catalog.service.answer(ids.quote, ids.cost, answerInput(), ACTOR, SCOPE)
+    expect(catalog.costs[0]).toMatchObject({ renegotiationDue: true })
   })
 
   it('a margin-only cost applies even on a locked quote, without re-pricing', async () => {
@@ -324,6 +405,37 @@ describe('answer: unlocked quote', () => {
     const result = await service.answer(ids.quote, ids.cost, answerInput({ unitAmount: 999 }), ACTOR, SCOPE)
     expect(result.response.outcome).toBe('applied')
     expect(costs[0]).toMatchObject({ unitAmount: '999', proposedAmount: null })
+    expect(recalculate).not.toHaveBeenCalled()
+  })
+})
+
+describe('answer / decline: frozen ARC mirror line (ARC costs Q4)', () => {
+  const frozen = { configuration: { _arcMirroredFromItemId: 'item-1', _arcPriceFrozen: true } }
+
+  it('a different-value answer on a locked quote\'s frozen carried price-basis line applies (no proposal), without re-pricing', async () => {
+    const { service, costs, recalculate } = setup({ costs: [requested({ origin: 'carried', valueOrigin: 'carried' })], status: 'with_customer', quoteType: 'amend', line: frozen })
+    const result = await service.answer(ids.quote, ids.cost, answerInput({ unitAmount: 999 }), ACTOR, SCOPE)
+    expect(result.response.outcome).toBe('applied')
+    expect(costs[0]).toMatchObject({ unitAmount: '999', proposedAmount: null, proposedAnswer: null, sourcingStatus: 'answered' })
+    expect(recalculate).not.toHaveBeenCalled()
+  })
+
+  it('a reconfigured (un-frozen) mirror line keeps the lock: a different value stays a proposal', async () => {
+    const { service, costs } = setup({
+      costs: [requested({ origin: 'carried', valueOrigin: 'carried', unitAmount: '300.0000' })], status: 'with_customer', quoteType: 'amend',
+      line: { configuration: { _arcMirroredFromItemId: 'item-1', _arcReconfigured: true } },
+    })
+    const result = await service.answer(ids.quote, ids.cost, answerInput({ unitAmount: 999 }), ACTOR, SCOPE)
+    expect(result.response.outcome).toBe('proposed')
+    expect(costs[0]).toMatchObject({ unitAmount: '300.0000', proposedAmount: '999.0000' })
+  })
+
+  it('decline on a locked quote\'s frozen carried line follows the unlocked rule: no locked downgrade', async () => {
+    const { service, costs, recalculate } = setup({
+      costs: [requested({ origin: 'carried', valueOrigin: 'carried', unitAmount: '300.0000', valueStatus: 'confirmed' })], status: 'with_customer', quoteType: 'amend', line: frozen,
+    })
+    await service.decline(ids.quote, ids.cost, { costRequestId: ids.req, reason: 'No coverage' }, ACTOR, SCOPE)
+    expect(costs[0]).toMatchObject({ sourcingStatus: 'declined', valueStatus: 'none', unitAmount: null })
     expect(recalculate).not.toHaveBeenCalled()
   })
 })

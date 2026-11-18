@@ -1,6 +1,6 @@
 import { FeatureToggle } from '@open-mercato/core/modules/feature_toggles/data/entities'
 import { seedCostPlusDefaults } from '../costPlusDefaults'
-import { COST_PLUS_TOGGLE, COST_REQUEST_OVERDUE_TOGGLE } from '../../data/costs'
+import { COST_EXPIRY_LEAD_DAYS_TOGGLE, COST_PLUS_TOGGLE, COST_REQUEST_OVERDUE_TOGGLE, FX_MAX_DAYS_BACK_TOGGLE, FX_SOURCE_PRIORITY_TOGGLE } from '../../data/costs'
 import { CpqCostService } from '../../services/costs/costService'
 import { setup } from '../../setup'
 import { features } from '../../acl'
@@ -38,7 +38,40 @@ describe('seedCostPlusDefaults', () => {
     rows.get(COST_REQUEST_OVERDUE_TOGGLE)!.defaultValue = 3
     await seedCostPlusDefaults(em as never)
     expect(rows.get(COST_REQUEST_OVERDUE_TOGGLE)).toMatchObject({ defaultValue: 3 })
-    expect(rows.size).toBe(2)
+    expect(rows.size).toBe(5)
+  })
+
+  it('registers the FX look-back (number 7) and source priority (json []) toggles, never overwriting tenant-tuned defaults', async () => {
+    const { rows, em } = toggleStore()
+    await seedCostPlusDefaults(em as never)
+    expect(FX_MAX_DAYS_BACK_TOGGLE).toBe('cpq.cost_plus.fx_max_days_back')
+    expect(FX_SOURCE_PRIORITY_TOGGLE).toBe('cpq.cost_plus.fx_source_priority')
+    expect(em.upsert).toHaveBeenCalledWith(FeatureToggle,
+      expect.objectContaining({ identifier: 'cpq.cost_plus.fx_max_days_back', type: 'number', defaultValue: 7, category: 'CPQ', createdAt: expect.any(Date), updatedAt: expect.any(Date) }),
+      { onConflictFields: ['identifier'], onConflictAction: 'ignore' })
+    expect(em.upsert).toHaveBeenCalledWith(FeatureToggle,
+      expect.objectContaining({ identifier: 'cpq.cost_plus.fx_source_priority', type: 'json', defaultValue: [], category: 'CPQ', createdAt: expect.any(Date), updatedAt: expect.any(Date) }),
+      { onConflictFields: ['identifier'], onConflictAction: 'ignore' })
+    rows.get(FX_MAX_DAYS_BACK_TOGGLE)!.defaultValue = 14
+    rows.get(FX_SOURCE_PRIORITY_TOGGLE)!.defaultValue = ['ecb']
+    await seedCostPlusDefaults(em as never)
+    await seedCostPlusDefaults(em as never)
+    expect(rows.get(FX_MAX_DAYS_BACK_TOGGLE)).toMatchObject({ defaultValue: 14 })
+    expect(rows.get(FX_SOURCE_PRIORITY_TOGGLE)).toMatchObject({ defaultValue: ['ecb'] })
+    expect(rows.size).toBe(5)
+  })
+
+  it('registers the cost expiry lead-days toggle (number 14), never overwriting a tenant-tuned default', async () => {
+    const { rows, em } = toggleStore()
+    await seedCostPlusDefaults(em as never)
+    expect(COST_EXPIRY_LEAD_DAYS_TOGGLE).toBe('cpq.cost_expiry_lead_days')
+    expect(em.upsert).toHaveBeenCalledWith(FeatureToggle,
+      expect.objectContaining({ identifier: 'cpq.cost_expiry_lead_days', type: 'number', defaultValue: 14, category: 'CPQ', createdAt: expect.any(Date), updatedAt: expect.any(Date) }),
+      { onConflictFields: ['identifier'], onConflictAction: 'ignore' })
+    rows.get(COST_EXPIRY_LEAD_DAYS_TOGGLE)!.defaultValue = 30
+    await seedCostPlusDefaults(em as never)
+    expect(rows.get(COST_EXPIRY_LEAD_DAYS_TOGGLE)).toMatchObject({ defaultValue: 30 })
+    expect(rows.size).toBe(5)
   })
 
   it('is idempotent and never overwrites an operator-changed toggle', async () => {
@@ -48,7 +81,7 @@ describe('seedCostPlusDefaults', () => {
     rows.get(COST_PLUS_TOGGLE)!.name = 'Renamed by operator'
     await seedCostPlusDefaults(em as never)
     await seedCostPlusDefaults(em as never)
-    expect(rows.size).toBe(2)
+    expect(rows.size).toBe(5)
     expect(rows.get(COST_PLUS_TOGGLE)).toMatchObject({ defaultValue: true, name: 'Renamed by operator' })
   })
 

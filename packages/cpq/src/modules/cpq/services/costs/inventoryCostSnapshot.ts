@@ -32,6 +32,8 @@ export type InventoryCostSnapshot = {
   currencyCode: string | null
   fxRate: string | null
   fxRateDate: string | null
+  fxRateSource: string | null
+  fxRateDerivation: string | null
   supplierId: string | null
   supplierName: string | null
   supplierQuoteRef: string | null
@@ -58,6 +60,8 @@ export function snapshotInventoryCost(row: CpqInventoryCost): InventoryCostSnaps
     currencyCode: row.currencyCode ?? null,
     fxRate: row.fxRate ?? null,
     fxRateDate: row.fxRateDate ?? null,
+    fxRateSource: row.fxRateSource ?? null,
+    fxRateDerivation: row.fxRateDerivation ?? null,
     supplierId: row.supplierId ?? null,
     supplierName: row.supplierName ?? null,
     supplierQuoteRef: row.supplierQuoteRef ?? null,

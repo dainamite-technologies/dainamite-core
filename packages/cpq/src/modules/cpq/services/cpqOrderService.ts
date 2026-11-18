@@ -2,6 +2,8 @@ import { storedAdjustmentFailure } from './priceAdjustments/storedAdjustmentFail
 import { loadConversionBlockers } from './costs/conversionGuard'
 import { copyQuoteCostsToOrder } from './costs/orderCostCopy'
 import { costSeedFromOrderLineCost, type CostSeed, type InventoryCostChange } from './costs/inventoryCostSync'
+import { assertCarriedCostsFresh, carriedCostLines, type CarriedSourceLine, type StaleCarriedCostLine } from './costs/itemCostState'
+import { lockSourceQuote, lockSubscriptions } from './costs/sourceQuoteLock'
 import { withQuotePricingWrite } from './priceAdjustments/quotePricingWrite'
 import { LockMode } from '@mikro-orm/core'
 import type { EntityManager } from '@mikro-orm/postgresql'
@@ -33,7 +35,9 @@ import {
   type TenantScope,
 } from './types'
 import { emitCpqEvent } from '../events'
-import { isArcReconfigured, stripQuoteOnlyArcMarkers } from './arcPriceFreeze'
+import {
+  ARC_CARRIED_COST_SET_HASH_KEY, ARC_CONVERTED_COST_SET_HASH_KEY, ARC_COSTS_CARRIED_KEY, isArcReconfigured, stripQuoteOnlyArcMarkers,
+} from './arcPriceFreeze'
 import { isArcTerminationLine } from './arcLineRemoval'
 import type { CpqCostService } from './costs/costService'
 import { cancelOpenRequests } from './costs/costRequestCancel'
@@ -208,6 +212,9 @@ export class DefaultCpqOrderService {
     // comes first, because such a line is usually also `estimated`.
     if (pendingAnswers.length > 0) throw new OrderError(422, 'COST_ANSWER_PENDING', { lines: pendingAnswers })
     if (unconfirmed.length > 0) throw new OrderError(422, 'COSTS_NOT_CONFIRMED', { lines: unconfirmed })
+    // I-12: carried costs (ARC mirror lines carrying `_arcCostsCarried`) must still match the subscription's open item
+    // costs. A no-op, with no read, for every quote without carried lines.
+    await assertCarriedCostsFresh(em, carriedCostLines(quoteLines, cpqConfig.quoteType), scope, costSourceChanged)
 
     // The quote becomes an order: requests still open (margin-only ones never block) are meaningless now. They are
     // cancelled in this same transaction, before anything is created (read, then mutate); the cost lines are
@@ -337,8 +344,15 @@ export class DefaultCpqOrderService {
         startDate: ql.startDate,
         termMonths: ql.termMonths ?? null,
         endDate: ql.endDate,
-        // Quote-only ARC pricing markers stay on the quote.
-        configuration: { ...stripQuoteOnlyArcMarkers(ql.configuration), offeringName },
+        // Quote-only ARC pricing markers stay on the quote. The carried-cost set hash is frozen onto the order line (under its
+        // own key, stripped from every response) so activation compares against it, never against the mutable quote line.
+        configuration: {
+          ...stripQuoteOnlyArcMarkers(ql.configuration),
+          offeringName,
+          ...(typeof (ql.configuration as Record<string, unknown> | null)?.[ARC_CARRIED_COST_SET_HASH_KEY] === 'string'
+            ? { [ARC_CONVERTED_COST_SET_HASH_KEY]: (ql.configuration as Record<string, unknown>)[ARC_CARRIED_COST_SET_HASH_KEY] }
+            : {}),
+        },
         quantity: ql.quantity,
         charges: ql.charges ? [...ql.charges] : null,
         nrcTotal: ql.nrcTotal,
@@ -405,6 +419,13 @@ export class DefaultCpqOrderService {
         throw new OrderError(409, `Cannot activate order in '${currentStatus}' status`)
       }
 
+      // Lock order (ARC costs Q2): order row (above), then the source quote row on EVERY path, then, for ARC, the
+      // target subscription rows by id (in applyArcOrder). It serializes this activation with a cost re-confirmation
+      // and with another activation of the same subscriptions. No revision bump, no event: a lock is not a change.
+      // Branch on the locked quote's quoteType: ARC quotes mutate existing subscriptions; new-sale quotes
+      // materialize a fresh subscription.
+      const sourceQuote = await lockSourceQuote(tx, orderConfig.sourceQuoteId, scope)
+
       const salesOrder = await this.loadSalesOrder(tx, orderConfig.orderId, scope)
       const orderLines = await tx.find(CpqOrderLineConfiguration, {
         orderConfigurationId: orderConfig.id,
@@ -412,17 +433,6 @@ export class DefaultCpqOrderService {
         tenantId: scope.tenantId,
         deletedAt: null,
       })
-
-      // Branch on the source quote's quoteType. ARC quotes mutate existing
-      // subscriptions; new-sale quotes materialize a fresh subscription.
-      const sourceQuote = orderConfig.sourceQuoteId
-        ? await tx.findOne(CpqQuoteConfiguration, {
-            id: orderConfig.sourceQuoteId,
-            organizationId: scope.organizationId,
-            tenantId: scope.tenantId,
-            deletedAt: null,
-          })
-        : null
 
       const quoteType = sourceQuote?.quoteType ?? 'new'
 
@@ -497,6 +507,10 @@ export class DefaultCpqOrderService {
       )
     }
 
+    // Lock the target subscriptions (sorted by id) after the source quote (taken by activateOrder) and before any
+    // read that feeds a write or any write (ARC costs Q2). Merge-renew locks every absorbed source.
+    await lockSubscriptions(em, targets.map((target) => target.subscriptionId), scope)
+
     // Bound to the transaction EM: never the DI `this.em`.
     const inventory = this.inventoryService.withEntityManager(em)
 
@@ -511,6 +525,12 @@ export class DefaultCpqOrderService {
       tenantId: scope.tenantId,
       deletedAt: null,
     })
+    // I-12, under the locks and before the first write: refuse when another ARC changed a carried item cost since
+    // this quote mirrored it. A no-op, with no read, for lines without carried-cost markers.
+    // The baseline is the hash frozen onto the order line at conversion, not the live quote line (nothing done to the quote
+    // after conversion may reset it); an order converted before the freeze falls back to the quote line's own hash.
+    await assertCarriedCostsFresh(em, carriedCostLines(withConversionHashes(sourceQuoteLines, orderLines), quoteType), scope, costSourceChanged)
+
     const linesByTarget = new Map<string | null, CpqQuoteLineConfiguration[]>()
     for (const line of sourceQuoteLines) {
       const key = line.targetSubscriptionId ?? null
@@ -1194,6 +1214,14 @@ export class OrderError extends Error {
   }
 }
 
+/**
+ * `409 COST_SOURCE_CHANGED` (App Spec I-12): the body names every cost-managed line whose subscription item costs
+ * changed since the quote mirrored them, with the differing cost keys. Raised at conversion and at activation.
+ */
+function costSourceChanged(lines: StaleCarriedCostLine[]): OrderError {
+  return new OrderError(409, 'COST_SOURCE_CHANGED', { lines })
+}
+
 export function isOrderError(err: unknown): err is OrderError {
   return !!err && typeof err === 'object' && (err as Record<symbol, unknown>)[ORDER_ERROR_BRAND] === true
 }
@@ -1240,15 +1268,23 @@ function buildArcLineChange(
       sourceSubscriptionItemId: line.sourceSubscriptionItemId ?? null,
     }
   }
-  // modify. Only a RECONFIGURED mirror line (marker read here, from the source quote line, before the quote-only
-  // markers are stripped) replaces its item's costs (Q5); any other mirror line leaves them untouched.
+  // modify. Markers are read here, from the source quote line, before the quote-only markers are stripped.
+  //  - A cost-managed mirror line (`_arcCostsCarried`, ARC costs Q5) ALWAYS replaces: its carried rows are the full image
+  //    of the item's costs (a removed carried key ends that item cost), whatever the `cpq.cost_plus` toggle says now.
+  //    Unchanged rows stay unwritten (the sync's no-op rule), so an untouched carried line writes nothing.
+  //  - Otherwise only a RECONFIGURED mirror line replaces (Q5 of the sibling; catalog-only ending, upsert when the toggle
+  //    is off); any other mirror line (frozen, never reconfigured) leaves item costs untouched.
+  const costManaged = line.configuration?.[ARC_COSTS_CARRIED_KEY] === true
+  const costSync = costManaged
+    ? { mode: 'replace' as const, seeds: seedsForQuoteLine(line.quoteLineId), fullImage: true }
+    : isArcReconfigured(line.configuration)
+      ? { mode: costPlusOn ? 'replace' as const : 'upsert' as const, seeds: seedsForQuoteLine(line.quoteLineId) }
+      : undefined
   return {
     quoteLineId: line.quoteLineId,
     action,
     sourceSubscriptionItemId: line.sourceSubscriptionItemId ?? null,
-    ...(isArcReconfigured(line.configuration)
-      ? { costSync: { mode: costPlusOn ? 'replace' as const : 'upsert' as const, seeds: seedsForQuoteLine(line.quoteLineId) } }
-      : {}),
+    ...(costSync ? { costSync } : {}),
     modifyPatch: {
       configuration: stripQuoteOnlyArcMarkers(line.configuration) ?? undefined,
       charges: (line.charges ?? undefined) as Array<Record<string, unknown>> | undefined,
@@ -1516,4 +1552,27 @@ async function emitSupersededEvent(
     sourceOrderId: envelope.sourceOrderId,
     timestamp: new Date().toISOString(),
   } as never)
+}
+
+/**
+ * The quote lines with their carried-cost baseline replaced by the one frozen on the matching order line at conversion
+ * (`_arcConvertedCostSetHash`). A line whose order line has no frozen hash (converted before the freeze) is unchanged.
+ */
+function withConversionHashes(
+  quoteLines: CpqQuoteLineConfiguration[], orderLines: CpqOrderLineConfiguration[],
+): CarriedSourceLine[] {
+  const frozen = new Map<string, string>()
+  for (const orderLine of orderLines) {
+    const hash = (orderLine.configuration as Record<string, unknown> | null)?.[ARC_CONVERTED_COST_SET_HASH_KEY]
+    if (orderLine.sourceQuoteLineId && typeof hash === 'string') frozen.set(orderLine.sourceQuoteLineId, hash)
+  }
+  if (frozen.size === 0) return quoteLines
+  return quoteLines.map((line) => {
+    const hash = frozen.get(line.quoteLineId)
+    if (!hash) return line
+    return {
+      quoteLineId: line.quoteLineId, action: line.action, sourceSubscriptionItemId: line.sourceSubscriptionItemId,
+      configuration: { ...(line.configuration ?? {}), [ARC_COSTS_CARRIED_KEY]: true, [ARC_CARRIED_COST_SET_HASH_KEY]: hash },
+    }
+  })
 }

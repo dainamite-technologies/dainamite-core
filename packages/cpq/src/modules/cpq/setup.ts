@@ -1,5 +1,6 @@
 import { seedPriceAdjustmentDefaults } from './lib/priceAdjustmentDefaults'
 import { seedCostPlusDefaults } from './lib/costPlusDefaults'
+import { registerCostExpirySchedule } from './lib/costExpirySchedule'
 import type { ModuleSetupConfig } from '@open-mercato/shared/modules/setup'
 
 /**
@@ -20,9 +21,18 @@ import type { ModuleSetupConfig } from '@open-mercato/shared/modules/setup'
  *   - GIX wizard definition → `src/modules/demo_gix/seeds/wizards.ts`
  */
 export const setup: ModuleSetupConfig = {
-  async seedDefaults({ em, tenantId, organizationId }) {
+  async seedDefaults({ em, tenantId, organizationId, container }) {
     if (tenantId && organizationId) await seedPriceAdjustmentDefaults(em, { tenantId, organizationId })
     await seedCostPlusDefaults(em)
+    // Daily supplier cost expiry schedule: optional (skipped without the scheduler module) and never re-enabled once an
+    // admin disabled it. A scheduler failure must not abort tenant setup; `seed-cost-plus` retries it.
+    if (tenantId && organizationId) {
+      try {
+        await registerCostExpirySchedule(container, { tenantId, organizationId })
+      } catch (error) {
+        console.warn('[cpq setup] cost expiry schedule not registered (run "mercato cpq seed-cost-plus" to retry)', error)
+      }
+    }
   },
   defaultRoleFeatures: {
     admin: [

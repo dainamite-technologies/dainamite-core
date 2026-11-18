@@ -1,5 +1,5 @@
 import {
-  CpqInventoryAsset, CpqInventoryCost, CpqInventorySubscription, CpqInventorySubscriptionItem, CpqOrderConfiguration, CpqProductCharge, CpqQuoteConfiguration, CpqQuoteLineConfiguration, CpqQuoteLineCost, CpqQuoteMarkupOverride,
+  CpqChargeCostElement, CpqCostIndex, CpqCostIndexValue, CpqInventoryAsset, CpqInventoryCost, CpqInventorySubscription, CpqInventorySubscriptionItem, CpqOrderConfiguration, CpqProductCharge, CpqQuoteConfiguration, CpqQuoteLineConfiguration, CpqQuoteLineCost, CpqQuoteMarkupOverride, CpqQuoteTargetSubscription,
 } from '../../../data/entities'
 import { SalesQuote } from '@open-mercato/core/modules/sales/data/entities'
 
@@ -11,31 +11,37 @@ jest.mock('../../priceAdjustments/quotePricingWrite', () => ({
     if (!quote || quote.id !== quoteId) throw makeError(404, 'Quote not found')
     if (expectedRevision !== undefined && expectedRevision !== (quote.pricingRevision ?? 0)) throw makeError(409, 'STALE_REVISION')
     quote.pricingRevision = (quote.pricingRevision ?? 0) + 1
+    // Opt-in (`em.__trackMargin`): run the real margin tracker around the write, as the real write transaction does.
+    if (em.__trackMargin) await options.marginTracker?.before(em, quote)
     const result = await execute(em, quote)
+    if (em.__trackMargin) em.__margin = await options.marginTracker?.after(em, quote)
     await options.afterCommit?.(result, quote)
     return result
   },
 }))
 import { CpqQuoteCostService } from '../quoteCostService'
 import { COST_CLOSED_STATUSES } from '../costLock'
+import { ADJUSTMENT_MUTABLE_STATUSES } from '../../../data/price-adjustments'
 
 const SCOPE = { organizationId: 'org', tenantId: 'tenant' }
 const ids = { quote: '11111111-1111-4111-8111-111111111111', line: '22222222-2222-4222-8222-222222222222', cost: '33333333-3333-4333-8333-333333333333' }
 type Row = Record<string, any>
 
-function setup(opts: { status?: string; orders?: number; costs?: Row[]; overrides?: Row[]; line?: Row; charges?: Row[]; enabled?: boolean; publisher?: jest.Mock } = {}) {
-  const quote = { id: ids.quote, quoteId: ids.quote, cpqStatus: opts.status ?? 'ready', quoteType: 'new', currencyCode: 'EUR', pricingRevision: 4, quoteContext: {} }
+function setup(opts: { status?: string; orders?: number; costs?: Row[]; overrides?: Row[]; line?: Row; charges?: Row[]; enabled?: boolean; publisher?: jest.Mock; fx?: jest.Mock; fxPairs?: Row[]; trackMargin?: boolean; newTermEnd?: string | null } = {}) {
+  const quote = { id: ids.quote, quoteId: ids.quote, cpqStatus: opts.status ?? 'ready', quoteType: 'new', currencyCode: 'EUR', pricingRevision: 4, quoteContext: {}, pricingSummary: { snapshotHash: 'snap-1' } }
   const line = { id: 'l', quoteLineId: ids.line, ...SCOPE, quoteConfigurationId: ids.quote, offeringId: 'off', productId: 'prod', configuration: {}, quantity: '1', charges: [], termMonths: 12, parentLineId: null, deletedAt: null, ...opts.line }
   const charges = opts.charges ?? [
     { code: 'tail', pricingMethod: 'cost_plus', chargeType: 'mrc', quantityAttributeCode: 'qty', offeringId: 'off' },
     { code: 'fixed_fee', pricingMethod: 'fixed', chargeType: 'nrc', quantityAttributeCode: null, offeringId: 'off' },
   ]
   const costs: Row[] = opts.costs ?? []
+  const fxPairs = jest.fn(async (..._args: unknown[]): Promise<Row[]> => opts.fxPairs ?? [])
   const overrides: Row[] = opts.overrides ?? []
   const live = <T extends Row>(rows: T[]) => rows.filter((row) => !row.deletedAt)
   const subquery: Row = { select: jest.fn(() => subquery), where: jest.fn(() => subquery) }
   const em: Row = {
     __quote: quote,
+    __trackMargin: opts.trackMargin === true,
     fork: jest.fn(() => em),
     createQueryBuilder: jest.fn(() => subquery),
     findOne: jest.fn(async (entity: unknown, where: Row) => {
@@ -44,6 +50,8 @@ function setup(opts: { status?: string; orders?: number; costs?: Row[]; override
       if (entity === CpqQuoteLineCost) return live(costs).find((row) => row.id === where.id) ?? null
       if (entity === CpqQuoteMarkupOverride) return live(overrides).find((row) => row.quoteLineId === where.quoteLineId && row.chargeCode === where.chargeCode) ?? null
       if (entity === CpqQuoteConfiguration) return quote
+      if (entity === CpqOrderConfiguration) return (opts.orders ?? 0) > 0 ? { id: 'order-1', sourceQuoteId: where.sourceQuoteId } : null
+      if (entity === CpqQuoteTargetSubscription) return opts.newTermEnd ? { subscriptionId: where.subscriptionId, newTermEnd: opts.newTermEnd } : null
       return null
     }),
     find: jest.fn(async (entity: unknown) => {
@@ -56,6 +64,7 @@ function setup(opts: { status?: string; orders?: number; costs?: Row[]; override
     create: jest.fn((entity: unknown, data: Row) => ({ createdAt: new Date(), updatedAt: new Date(), deletedAt: null, ...data })),
     persist: jest.fn((row: Row) => { (row.costKey !== undefined ? costs : overrides).push(row) }),
     flush: jest.fn(async () => undefined),
+    getConnection: jest.fn(() => ({ execute: fxPairs })),
   }
   const recalculate = jest.fn(async () => ({}))
   const service = new CpqQuoteCostService({
@@ -63,8 +72,9 @@ function setup(opts: { status?: string; orders?: number; costs?: Row[]; override
     costService: { enabled: jest.fn(async () => opts.enabled ?? true) },
     quotingService: { recalculateLockedQuote: recalculate } as never,
     publisher: opts.publisher as never,
+    fxRateResolver: opts.fx ? { resolve: opts.fx } as never : undefined,
   })
-  return { service, em, quote, costs, overrides, recalculate, subquery }
+  return { service, em, quote, costs, overrides, recalculate, subquery, fxPairs, margin: () => em.__margin as Row | null | undefined }
 }
 
 const catalogRow = (over: Row = {}): Row => ({
@@ -75,6 +85,7 @@ const catalogRow = (over: Row = {}): Row => ({
 })
 const manualRow = (over: Row = {}) => catalogRow({ costKey: 'manual:abcd1234', origin: 'manual', costElementId: null, valueOrigin: 'manual', source: 'fixed', valueStatus: 'confirmed', ...over })
 const create = { quoteLineId: ids.line, name: 'Special build', role: 'margin_only' as const, costType: 'nrc' as const, source: 'fixed' as const, costModel: 'flat' as const, unitAmount: 1500 }
+const FX_OK = { ok: true, rate: '0.92000000', rateDate: '2026-11-11', source: 'ECB', derivation: 'direct' }
 const ACTOR = '44444444-4444-4444-8444-444444444444'
 
 describe('reads', () => {
@@ -89,7 +100,7 @@ describe('reads', () => {
       overrides: [{ id: 'o', quoteLineId: ids.line, chargeCode: 'tail', markupRule: 'markup_percent', markupValue: '31.0000', note: 'why' }],
     })
     const body = await service.read(ids.quote, SCOPE, false)
-    expect(body).toEqual({ lines: [{ quoteLineId: ids.line, costs: [{ id: ids.cost, costKey: 'tail', name: 'Tail', role: 'price_basis', valueStatus: 'estimated', expired: true,
+    expect(body).toEqual({ lines: [{ quoteLineId: ids.line, frozen: false, renegotiationDue: false, costs: [{ id: ids.cost, costKey: 'tail', name: 'Tail', role: 'price_basis', valueStatus: 'estimated', expired: true, carried: false, renegotiationDue: false,
       // sourcing status projection (statuses only)
       sourcingStatus: 'not_requested', requestSeq: null, requestedAt: null, hasAnswerPending: false, overdue: false, requestEligible: true }] }], pricingRevision: 4 })
     const json = JSON.stringify(body)
@@ -108,14 +119,14 @@ describe('reads', () => {
   })
   it('usage works with the toggle off', async () => {
     const { service } = setup({ enabled: false })
-    await expect(service.usage(SCOPE)).resolves.toEqual({ enabled: false, costPlusCharges: 0, openQuotes: 0, openRequests: 0, liveSubscriptions: 0 })
+    await expect(service.usage(SCOPE)).resolves.toEqual({ enabled: false, costPlusCharges: 0, openQuotes: 0, openRequests: 0, liveSubscriptions: 0, openArcQuotesWithCarriedCosts: 0, missingFxPairs: [] })
   })
   it('usage counts with one aggregate query per figure: no cost row hydrated, no bound id list', async () => {
     const { service, em, subquery } = setup({ costs: [catalogRow()] })
     em.count.mockImplementation(async (entity: unknown) => (entity === CpqProductCharge ? 3 : entity === CpqQuoteConfiguration ? 2 : entity === CpqInventorySubscription ? 4 : entity === CpqQuoteLineCost ? 5 : 0))
-    await expect(service.usage(SCOPE)).resolves.toEqual({ enabled: true, costPlusCharges: 3, openQuotes: 2, openRequests: 5, liveSubscriptions: 4 })
+    await expect(service.usage(SCOPE)).resolves.toEqual({ enabled: true, costPlusCharges: 3, openQuotes: 2, openRequests: 5, liveSubscriptions: 4, openArcQuotesWithCarriedCosts: 2, missingFxPairs: [] })
     expect(em.find).not.toHaveBeenCalled()
-    expect(em.count).toHaveBeenCalledTimes(4)
+    expect(em.count).toHaveBeenCalledTimes(5)
     // Open requests: one COUNT of status-requested rows, restricted to quotes alive on both sides by a semi-join.
     const reqWhere = em.count.mock.calls.find(([entity]: unknown[]) => entity === CpqQuoteLineCost)[1]
     expect(reqWhere).toMatchObject({ ...SCOPE, deletedAt: null, sourcingStatus: 'requested' })
@@ -144,12 +155,70 @@ describe('reads', () => {
     // Accepted-but-unconverted quotes are open; ordered quotes (NOT IN order sources) are not.
     expect(quoteWhere.cpqStatus.$nin).not.toContain('accepted')
     expect(quoteWhere.id.$nin).toBe(subquery)
-    expect(em.createQueryBuilder).toHaveBeenCalledTimes(7) // + sales quotes and quote configurations of the open-request semi-join
+    expect(em.createQueryBuilder).toHaveBeenCalledTimes(8) // + the carried-cost semi-join, + sales quotes and quote configurations of the open-request semi-join
     expect(em.createQueryBuilder).toHaveBeenCalledWith(CpqQuoteLineCost, 'qlc')
     expect(em.createQueryBuilder).toHaveBeenCalledWith(CpqOrderConfiguration, 'oc')
     expect(subquery.select).toHaveBeenCalledWith('oc.sourceQuoteId')
     expect(subquery.select).toHaveBeenCalledWith('qlc.quoteConfigurationId')
     expect(subquery.where).toHaveBeenCalledWith({ ...SCOPE, deletedAt: null })
+    // ARC exposure: same open definition, restricted by a semi-join on carried cost lines (the partial index predicate).
+    const arcCall = em.count.mock.calls.find(([entity, where]: unknown[]) => entity === CpqQuoteConfiguration && (where as Row).id.$in === subquery && (where as Row) !== quoteWhere)
+    expect(arcCall).toBeDefined()
+    expect(arcCall[1]).toMatchObject({ ...SCOPE, deletedAt: null, cpqStatus: { $nin: [...COST_CLOSED_STATUSES] } })
+    expect(arcCall[1].id.$nin).toBe(subquery)
+    expect(subquery.where).toHaveBeenCalledWith({ ...SCOPE, deletedAt: null, carriedFromItemCostId: { $ne: null } })
+  })
+})
+
+describe('FX projection (FX step 8)', () => {
+  const snapshot = { currencyCode: 'USD', unitAmount: '300', instanceAmount: '300', fxRate: '0.92000000', fxRateDate: '2026-11-11', fxRateSource: 'ECB', fxRateDerivation: 'inverse' }
+  it('a costs.view holder gets the snapshot, the converted amount (quote currency, 4 dp) and the pair of a missing rate; a non-holder only the code', async () => {
+    const costs = [
+      catalogRow({ costKey: 'a', ...snapshot }),
+      catalogRow({ id: 'c2', costKey: 'b', currencyCode: 'GBP', unitAmount: '10', instanceAmount: null, valueStatus: 'none', errorCode: 'CURRENCY_NO_RATE' }),
+    ]
+    const holder = await setup({ costs }).service.read(ids.quote, SCOPE, true) as any
+    expect(holder.lines[0].costs[0]).toMatchObject({ currencyCode: 'USD', fxRate: '0.92000000', fxRateDate: '2026-11-11', fxRateSource: 'ECB', fxRateDerivation: 'inverse', convertedInstanceAmount: '276', quoteCurrencyCode: 'EUR' })
+    expect(holder.lines[0].costs[0]).not.toHaveProperty('errorDetail')
+    expect(holder.lines[0].costs[1]).toMatchObject({ error: 'CURRENCY_NO_RATE', convertedInstanceAmount: null, errorDetail: { code: 'CURRENCY_NO_RATE', from: 'GBP', to: 'EUR', date: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/) } })
+    const other = await setup({ costs }).service.read(ids.quote, SCOPE, false) as any
+    expect(other.lines[0].costs[1]).toMatchObject({ error: 'CURRENCY_NO_RATE' })
+    expect(JSON.stringify(other)).not.toMatch(/fx|GBP|USD|0\.92|ECB|errorDetail|converted/)
+  })
+  it('a write result carries the snapshot of the written line', async () => {
+    const fx = jest.fn(async () => FX_OK)
+    const { service } = setup({ fx })
+    const result = await service.createCost(ids.quote, { ...create, currencyCode: 'USD' }, ACTOR, SCOPE)
+    expect(result.cost).toMatchObject({ currencyCode: 'USD', fxRate: '0.92000000', fxRateSource: 'ECB', convertedInstanceAmount: '1380', quoteCurrencyCode: 'EUR' })
+  })
+})
+
+describe('usage: missingFxPairs (FX step 8)', () => {
+  it('groups the pairs with open-quote counts in ONE grouped query scoped to the tenant, excluding closed and converted quotes', async () => {
+    const { service, fxPairs, em } = setup({ fxPairs: [{ from: 'USD', to: 'EUR', openQuotes: '2' }, { from: 'GBP', to: 'EUR', openQuotes: 1 }] })
+    const usage = await service.usage(SCOPE)
+    expect(usage.missingFxPairs).toEqual([{ from: 'USD', to: 'EUR', openQuotes: 2 }, { from: 'GBP', to: 'EUR', openQuotes: 1 }])
+    expect(fxPairs).toHaveBeenCalledTimes(1)
+    const [sql, params] = fxPairs.mock.calls[0] as [string, unknown[]]
+    expect(params).toEqual([SCOPE.organizationId, SCOPE.tenantId, ...ADJUSTMENT_MUTABLE_STATUSES])
+    // review1-b: locked statuses (in_approval, with_customer, accepted, ...) never pick up a rate, so they are not counted
+    expect(params).not.toContain('with_customer')
+    expect(params).not.toContain('accepted')
+    for (const closed of COST_CLOSED_STATUSES) expect(params).not.toContain(closed)
+    const flat = sql.replace(/\s+/g, ' ')
+    expect(flat).toMatch(/group by c\.currency_code, q\.currency_code/)
+    expect(flat).toMatch(/count\(distinct c\.quote_configuration_id\)/)
+    expect(flat).toMatch(/c\.error_code = 'CURRENCY_NO_RATE'/)
+    expect(flat).toMatch(/c\.deleted_at is null/)
+    expect(flat).toMatch(/q\.deleted_at is null/)
+    expect(flat).toMatch(/q\.cpq_status in \(\?, \?, \?\)/)
+    expect(flat).toMatch(/not exists \(select 1 from cpq_order_configurations o where o\.source_quote_id = q\.id/)
+    expect(flat).toMatch(/o\.organization_id = q\.organization_id and o\.tenant_id = q\.tenant_id and o\.deleted_at is null/)
+    expect(em.find).not.toHaveBeenCalled() // no cost row is hydrated
+  })
+  it('is empty without pairs and also works with the toggle off', async () => {
+    const { service } = setup({ enabled: false })
+    expect((await service.usage(SCOPE)).missingFxPairs).toEqual([])
   })
 })
 
@@ -183,9 +252,47 @@ describe('createCost', () => {
     expect(costs[0]).toMatchObject({ role: 'price_basis', chargeCode: 'tail', valueStatus: 'confirmed' })
     expect(recalculate).toHaveBeenCalled()
   })
-  it('refuses a foreign-currency amount (no silent FX)', async () => {
-    const { service } = setup()
-    await expect(service.createCost(ids.quote, { ...create, currencyCode: 'USD' }, ACTOR, SCOPE)).rejects.toMatchObject({ status: 422, message: 'CURRENCY_NO_RATE' })
+  it('[FX step 7: replaces the step-1 refusal] a foreign-currency amount is stored as entered with the rate resolved at the write', async () => {
+    const fx = jest.fn(async () => FX_OK)
+    const { service, costs, recalculate } = setup({ fx })
+    const result = await service.createCost(ids.quote, { ...create, currencyCode: 'USD' }, ACTOR, SCOPE)
+    expect(fx).toHaveBeenCalledWith({ from: 'USD', to: 'EUR', scope: SCOPE })
+    expect(costs[0]).toMatchObject({
+      unitAmount: '1500', instanceAmount: '1500', currencyCode: 'USD', valueStatus: 'confirmed', valueOrigin: 'manual', errorCode: null,
+      fxRate: '0.92000000', fxRateDate: '2026-11-11', fxRateSource: 'ECB', fxRateDerivation: 'direct',
+    })
+    expect(recalculate).toHaveBeenCalledTimes(1)
+    expect(result.cost).toMatchObject({ currencyCode: 'USD', fxRate: '0.92000000' })
+  })
+  it('no rate: the value is stored (entered amount and currency) as none + CURRENCY_NO_RATE, never converted 1:1', async () => {
+    const fx = jest.fn(async () => ({ ok: false, code: 'CURRENCY_NO_RATE', reason: 'not_found' }))
+    const { service, costs } = setup({ fx })
+    await service.createCost(ids.quote, { ...create, currencyCode: 'USD' }, ACTOR, SCOPE)
+    expect(costs[0]).toMatchObject({ valueStatus: 'none', unitAmount: '1500', instanceAmount: null, currencyCode: 'USD', errorCode: 'CURRENCY_NO_RATE', valueOrigin: 'manual', fxRate: null, fxRateDate: null, fxRateSource: null, fxRateDerivation: null })
+    // Without any resolver (currencies not installed) the outcome is the same.
+    const bare = setup()
+    await bare.service.createCost(ids.quote, { ...create, currencyCode: 'USD' }, ACTOR, SCOPE)
+    expect(bare.costs[0]).toMatchObject({ valueStatus: 'none', errorCode: 'CURRENCY_NO_RATE', unitAmount: '1500', currencyCode: 'USD' })
+  })
+  it('a quote-currency amount never calls the resolver and carries no FX columns', async () => {
+    const fx = jest.fn(async () => FX_OK)
+    const { service, costs } = setup({ fx })
+    await service.createCost(ids.quote, create, ACTOR, SCOPE)
+    expect(fx).not.toHaveBeenCalled()
+    expect(costs[0]).toMatchObject({ fxRate: null, fxRateSource: null })
+  })
+  it('Q9: a new lock-exempt margin-only foreign line on a locked quote takes the rate at the write and does not re-price', async () => {
+    const fx = jest.fn(async () => FX_OK)
+    const { service, costs, recalculate } = setup({ status: 'with_customer', fx })
+    await service.createCost(ids.quote, { ...create, currencyCode: 'GBP' }, ACTOR, SCOPE)
+    expect(costs[0]).toMatchObject({ currencyCode: 'GBP', fxRate: '0.92000000', valueStatus: 'confirmed' })
+    expect(recalculate).not.toHaveBeenCalled()
+  })
+  it('a foreign price-basis create on a locked quote is still COST_LOCKED (price never moves while locked)', async () => {
+    const fx = jest.fn(async () => FX_OK)
+    const { service, costs } = setup({ status: 'with_customer', fx })
+    await expect(service.createCost(ids.quote, { ...create, role: 'price_basis', chargeCode: 'tail', costType: 'mrc', currencyCode: 'USD' }, ACTOR, SCOPE)).rejects.toMatchObject({ status: 409, message: 'COST_LOCKED' })
+    expect(costs).toHaveLength(0)
   })
   it('refuses cancel / mirror lines', async () => {
     const mirror = setup({ line: { configuration: { _arcMirroredFromItemId: 'i' } } })
@@ -329,6 +436,207 @@ describe('ARC lines', () => {
   })
 })
 
+describe('carried costs on frozen Amend mirror lines (ARC costs spec step 7, Q4)', () => {
+  const FROZEN = { configuration: { _arcMirroredFromItemId: 'item-1', _arcPriceFrozen: true, _arcCostsCarried: true, _arcCarriedCostSetHash: 'h' } }
+  const carriedRow = (over: Row = {}) => catalogRow({ origin: 'carried', valueOrigin: 'carried', valueStatus: 'confirmed', source: 'fixed', costElementId: null,
+    unitAmount: '270.0000', instanceAmount: '270.0000', carriedFromItemCostId: 'ic-1', carriedFromHash: 'h1', supplierName: 'Carrier X', supplierQuoteRef: 'CX-1', ...over })
+  function amend(opts: { status?: string; orders?: number; line?: Row; costs?: Row[]; quoteType?: string } = {}) {
+    const ctx = setup({ status: opts.status ?? 'with_customer', orders: opts.orders, line: opts.line ?? FROZEN, costs: opts.costs ?? [carriedRow()], trackMargin: true })
+    ctx.quote.quoteType = opts.quoteType ?? 'amend'
+    return ctx
+  }
+
+  it('stores a changed price-basis value on a locked quote, leaves the price alone (no re-pricing, snapshotHash unchanged) and moves margin_hash', async () => {
+    const row = carriedRow()
+    const { service, quote, recalculate, margin } = amend({ costs: [row] })
+    await service.updateCost(ids.quote, ids.cost, { unitAmount: 240, supplierQuoteRef: 'CX-2207', note: 'renegotiated' }, ACTOR, SCOPE)
+    expect(row).toMatchObject({ unitAmount: '240', instanceAmount: '240', valueOrigin: 'manual', origin: 'carried', supplierQuoteRef: 'CX-2207', carriedFromItemCostId: 'ic-1', carriedFromHash: 'h1' })
+    expect(recalculate).not.toHaveBeenCalled()
+    expect(quote.pricingSummary.snapshotHash).toBe('snap-1')
+    // the margin signal the write emits as margin_changed: the hash moved, an approval given on the old margin no longer holds
+    const signal = margin()
+    expect(signal).toMatchObject({ approvalInvalidated: true })
+    expect(signal!.marginHash).not.toBe(signal!.previousMarginHash)
+  })
+
+  it('review: once the quote has an order, an edit of a carried cost on a frozen line is refused with 409 QUOTE_CONVERTED (Re-confirm on the order is the path); nothing is written', async () => {
+    const row = carriedRow()
+    const { service, recalculate } = amend({ status: 'ready', orders: 1, costs: [row] })
+    await expect(service.updateCost(ids.quote, ids.cost, { unitAmount: 240, note: 'renegotiated' }, ACTOR, SCOPE))
+      .rejects.toMatchObject({ status: 409, message: 'QUOTE_CONVERTED', details: { orderId: 'order-1' } })
+    expect(row).toMatchObject({ unitAmount: '270.0000', valueOrigin: 'carried' })
+    expect(recalculate).not.toHaveBeenCalled()
+  })
+
+  it('overwriting a carried value needs a note (NOTE_REQUIRED); keeping it with new validity and evidence does not', async () => {
+    const row = carriedRow({ validUntil: '2026-12-01' })
+    const { service } = amend({ costs: [row] })
+    await expect(service.updateCost(ids.quote, ids.cost, { unitAmount: 240 }, ACTOR, SCOPE)).rejects.toMatchObject({ status: 422, message: 'NOTE_REQUIRED' })
+    expect(row).toMatchObject({ unitAmount: '270.0000', valueOrigin: 'carried' })
+    await service.updateCost(ids.quote, ids.cost, { validUntil: '2027-06-01', supplierQuoteRef: 'CX-NEW' }, ACTOR, SCOPE)
+    expect(row).toMatchObject({ validUntil: '2027-06-01', supplierQuoteRef: 'CX-NEW', unitAmount: '270', valueOrigin: 'carried' })
+  })
+
+  it('a carried line refuses structural edits and deletion (its structure is the subscription item\'s)', async () => {
+    const { service } = amend()
+    await expect(service.updateCost(ids.quote, ids.cost, { role: 'margin_only' }, ACTOR, SCOPE)).rejects.toMatchObject({ status: 422, message: 'FIELD_NOT_ALLOWED' })
+    await expect(service.deleteCost(ids.quote, ids.cost, ACTOR, SCOPE)).rejects.toMatchObject({ status: 422, message: 'CATALOG_COST_NOT_DELETABLE' })
+  })
+
+  it('a rejected or cancelled quote still refuses the write', async () => {
+    for (const status of ['rejected', 'cancelled']) {
+      await expect(amend({ status }).service.updateCost(ids.quote, ids.cost, { unitAmount: 240, note: 'x' }, ACTOR, SCOPE)).rejects.toMatchObject({ status: 409, message: 'COST_LOCKED' })
+    }
+  })
+
+  it('once the line is un-frozen (reconfigured) the normal price-basis lock applies again', async () => {
+    const row = carriedRow()
+    const { service } = amend({ line: { configuration: { _arcMirroredFromItemId: 'item-1', _arcReconfigured: true, _arcCostsCarried: true } }, costs: [row] })
+    await expect(service.updateCost(ids.quote, ids.cost, { unitAmount: 240, note: 'x' }, ACTOR, SCOPE)).rejects.toMatchObject({ status: 409, message: 'COST_LOCKED' })
+    expect(row.unitAmount).toBe('270.0000')
+  })
+
+  it('a cost-plus Renew frozen mirror takes the same rule (frozen mirror line)', async () => {
+    const row = carriedRow()
+    const { service } = amend({ quoteType: 'renew', line: { configuration: { _arcMirroredFromItemId: 'item-1', _arcPriceFrozen: true, _arcCostPlusFrozen: true } }, costs: [row] })
+    await service.updateCost(ids.quote, ids.cost, { unitAmount: 240, note: 'x' }, ACTOR, SCOPE)
+    expect(row.unitAmount).toBe('240')
+  })
+
+  it('does not widen anything else: a catalog cost on a frozen Amend line is still LINE_NOT_ELIGIBLE, and a manual cost cannot be created there', async () => {
+    const catalog = catalogRow()
+    const a = amend({ costs: [catalog] })
+    await expect(a.service.updateCost(ids.quote, ids.cost, { valueStatus: 'confirmed' }, ACTOR, SCOPE)).rejects.toMatchObject({ status: 422, message: 'LINE_NOT_ELIGIBLE' })
+    await expect(a.service.createCost(ids.quote, create, ACTOR, SCOPE)).rejects.toMatchObject({ status: 422, message: 'LINE_NOT_ELIGIBLE' })
+  })
+
+  it('a carried cost on a cancel (removal) line is still refused', async () => {
+    const { service } = amend({ line: { action: 'cancel', configuration: { _arcMirroredFromItemId: 'item-1', _arcPriceFrozen: true } } })
+    await expect(service.updateCost(ids.quote, ids.cost, { unitAmount: 240, note: 'x' }, ACTOR, SCOPE)).rejects.toMatchObject({ status: 422, message: 'LINE_NOT_ELIGIBLE' })
+  })
+})
+
+describe('Keep current cost (ARC costs step 15, App Spec R13)', () => {
+  const RENEW_LINE = { targetSubscriptionId: 'sub-1', configuration: { _arcMirroredFromItemId: 'item-1', _arcCostsCarried: true, _arcCarriedCostSetHash: 'h' } }
+  const dueRow = (over: Row = {}) => catalogRow({
+    origin: 'carried', valueOrigin: 'carried', valueStatus: 'estimated', renegotiationDue: true, source: 'fixed', costElementId: null, unitAmount: '320.0000', instanceAmount: '320.0000',
+    currencyCode: 'EUR', fxRate: null, validUntil: '2027-06-30', supplierTermEnd: '2027-06-30', supplierQuoteRef: 'CX-1', carriedFromItemCostId: 'ic-1', carriedFromHash: 'h1', ...over,
+  })
+  function renew(opts: { status?: string; orders?: number; row?: Row; newTermEnd?: string | null; line?: Row } = {}) {
+    const ctx = setup({ status: opts.status ?? 'with_customer', orders: opts.orders, line: opts.line ?? RENEW_LINE, costs: [opts.row ?? dueRow()], newTermEnd: opts.newTermEnd === undefined ? '2028-12-31' : opts.newTermEnd, trackMargin: true })
+    ctx.quote.quoteType = 'renew'
+    return ctx
+  }
+  const keep = (over: Row = {}) => ({ keepCurrent: true as const, validUntil: '2028-12-31', note: 'Carrier confirmed rolling term', ...over })
+
+  it('confirms the cost unchanged: flag cleared, value / currency kept, new validity and evidence stored, margin_hash unchanged', async () => {
+    const row = dueRow()
+    const { service, margin } = renew({ row })
+    const result = await service.updateCost(ids.quote, ids.cost, keep({ supplierTermEnd: '2029-01-31' }), ACTOR, SCOPE)
+    expect(row).toMatchObject({
+      renegotiationDue: false, valueStatus: 'confirmed', valueOrigin: 'carried', origin: 'carried', unitAmount: '320.0000', instanceAmount: '320.0000', currencyCode: 'EUR',
+      validUntil: '2028-12-31', supplierTermEnd: '2029-01-31', note: 'Carrier confirmed rolling term', supplierQuoteRef: 'CX-1',
+    })
+    const signal = margin()
+    expect(signal!.marginHash).toBe(signal!.previousMarginHash)
+    expect(result.cost).toMatchObject({ id: ids.cost, valueStatus: 'confirmed' })
+  })
+
+  it('the supplier term may be cleared to rolling (null) with the validity extended', async () => {
+    const row = dueRow()
+    const { service } = renew({ row })
+    await service.updateCost(ids.quote, ids.cost, keep({ supplierTermEnd: null }), ACTOR, SCOPE)
+    expect(row).toMatchObject({ supplierTermEnd: null, validUntil: '2028-12-31', renegotiationDue: false })
+  })
+
+  it('a new supplier quote ref is evidence on its own, and replaces the stored ref', async () => {
+    const row = dueRow()
+    const { service } = renew({ row })
+    await service.updateCost(ids.quote, ids.cost, { keepCurrent: true, validUntil: '2028-12-31', supplierTermEnd: '2029-01-31', supplierQuoteRef: 'CX-2300' }, ACTOR, SCOPE)
+    expect(row).toMatchObject({ supplierQuoteRef: 'CX-2300', supplierTermEnd: '2029-01-31', renegotiationDue: false, valueStatus: 'confirmed' })
+  })
+
+  it('VALIDITY_EVIDENCE_REQUIRED without a note or a new supplier quote ref (the same ref is not evidence); nothing is written', async () => {
+    const row = dueRow()
+    const { service, recalculate } = renew({ row })
+    for (const patch of [{ keepCurrent: true as const, validUntil: '2028-12-31' }, { keepCurrent: true as const, validUntil: '2028-12-31', supplierQuoteRef: 'CX-1' }]) {
+      await expect(service.updateCost(ids.quote, ids.cost, patch, ACTOR, SCOPE)).rejects.toMatchObject({ status: 422, message: 'VALIDITY_EVIDENCE_REQUIRED' })
+    }
+    expect(row).toMatchObject({ renegotiationDue: true, valueStatus: 'estimated', validUntil: '2027-06-30' })
+    expect(recalculate).not.toHaveBeenCalled()
+  })
+
+  it('RENEGOTIATION_DATES_SHORT while the validity or the (unchanged) supplier term is before the new term end', async () => {
+    const row = dueRow()
+    const { service } = renew({ row })
+    // validity extended, supplier term still short (2027-06-30)
+    await expect(service.updateCost(ids.quote, ids.cost, keep(), ACTOR, SCOPE)).rejects.toMatchObject({ status: 422, message: 'RENEGOTIATION_DATES_SHORT', details: { newTermEnd: '2028-12-31', fields: ['supplierTermEnd'] } })
+    // validity still short
+    await expect(service.updateCost(ids.quote, ids.cost, keep({ validUntil: '2028-12-30', supplierTermEnd: null }), ACTOR, SCOPE)).rejects.toMatchObject({ status: 422, message: 'RENEGOTIATION_DATES_SHORT' })
+    expect(row).toMatchObject({ renegotiationDue: true, valueStatus: 'estimated' })
+    // the new term end itself is enough
+    await service.updateCost(ids.quote, ids.cost, keep({ validUntil: '2028-12-31', supplierTermEnd: '2028-12-31' }), ACTOR, SCOPE)
+    expect(row.renegotiationDue).toBe(false)
+  })
+
+  it('is lock-exempt (R11): works on a locked quote (with_customer) and re-prices nothing', async () => {
+    const ctx = renew({ status: 'with_customer' })
+    await ctx.service.updateCost(ids.quote, ids.cost, keep({ supplierTermEnd: null }), ACTOR, SCOPE)
+    expect(ctx.costs[0]).toMatchObject({ renegotiationDue: false, valueStatus: 'confirmed' })
+    expect(ctx.recalculate).not.toHaveBeenCalled()
+  })
+
+  it('review: once the quote has an order Keep current is refused with 409 QUOTE_CONVERTED and writes nothing', async () => {
+    const ctx = renew({ status: 'ready', orders: 1 })
+    await expect(ctx.service.updateCost(ids.quote, ids.cost, keep({ supplierTermEnd: null }), ACTOR, SCOPE)).rejects.toMatchObject({ status: 409, message: 'QUOTE_CONVERTED', details: { orderId: 'order-1' } })
+    expect(ctx.costs[0]).toMatchObject({ renegotiationDue: true, valueStatus: 'estimated' })
+  })
+
+  it('a rejected or cancelled quote still refuses it', async () => {
+    for (const status of ['rejected', 'cancelled']) {
+      await expect(renew({ status }).service.updateCost(ids.quote, ids.cost, keep({ supplierTermEnd: null }), ACTOR, SCOPE)).rejects.toMatchObject({ status: 409, message: 'COST_LOCKED' })
+    }
+  })
+
+  it('accepts nothing but the keep fields beside the flag (FIELD_NOT_ALLOWED), and only a due carried cost (NOT_RENEGOTIATION_DUE)', async () => {
+    const row = dueRow()
+    const { service } = renew({ row })
+    await expect(service.updateCost(ids.quote, ids.cost, keep({ unitAmount: 100 }), ACTOR, SCOPE)).rejects.toMatchObject({ status: 422, message: 'FIELD_NOT_ALLOWED', details: { fields: ['unitAmount'] } })
+    await expect(service.updateCost(ids.quote, ids.cost, keep({ valueStatus: 'confirmed' }), ACTOR, SCOPE)).rejects.toMatchObject({ status: 422, message: 'FIELD_NOT_ALLOWED' })
+    expect(row.unitAmount).toBe('320.0000')
+    await expect(renew({ row: dueRow({ renegotiationDue: false }) }).service.updateCost(ids.quote, ids.cost, keep({ supplierTermEnd: null }), ACTOR, SCOPE))
+      .rejects.toMatchObject({ status: 422, message: 'NOT_RENEGOTIATION_DUE' })
+    const catalog = renew({ row: dueRow({ origin: 'catalog', valueOrigin: 'catalog' }), line: { targetSubscriptionId: 'sub-1', configuration: { _arcMirroredFromItemId: 'item-1', _arcReconfigured: true } } })
+    await expect(catalog.service.updateCost(ids.quote, ids.cost, keep({ supplierTermEnd: null }), ACTOR, SCOPE)).rejects.toMatchObject({ status: 422, message: 'NOT_RENEGOTIATION_DUE' })
+  })
+
+  it('cancels an open supplier request on the cost (manual_value) and drops an unapplied proposal', async () => {
+    const row = dueRow({ sourcingStatus: 'requested', costRequestId: 'req-1', requestSeq: 1, requestHistory: [], proposedAmount: '300', proposedAnswer: { unitAmount: 300 } })
+    const { service } = renew({ row })
+    await service.updateCost(ids.quote, ids.cost, keep({ supplierTermEnd: null }), ACTOR, SCOPE)
+    expect(row).toMatchObject({ sourcingStatus: 'cancelled', cancelReason: 'manual_value', proposedAmount: null, proposedAnswer: null, renegotiationDue: false })
+  })
+
+  it('entering a new confirmed value by hand on a due carried cost clears the flag too', async () => {
+    const row = dueRow()
+    const { service } = renew({ row, status: 'ready' })
+    await service.updateCost(ids.quote, ids.cost, { unitAmount: 300, valueStatus: 'confirmed', note: 'phone quote', validUntil: '2028-12-31' }, ACTOR, SCOPE)
+    expect(row).toMatchObject({ renegotiationDue: false, valueStatus: 'confirmed', valueOrigin: 'manual', unitAmount: '300' })
+  })
+
+  it('a cancel line stays LINE_NOT_ELIGIBLE', async () => {
+    const { service } = renew({ line: { action: 'cancel', configuration: { _arcMirroredFromItemId: 'item-1' } } })
+    await expect(service.updateCost(ids.quote, ids.cost, keep({ supplierTermEnd: null }), ACTOR, SCOPE)).rejects.toMatchObject({ status: 422, message: 'LINE_NOT_ELIGIBLE' })
+  })
+
+  it('without a known new term end the dates are not checked', async () => {
+    const row = dueRow()
+    const { service } = renew({ row, newTermEnd: null })
+    await service.updateCost(ids.quote, ids.cost, keep({ validUntil: '2027-07-01' }), ACTOR, SCOPE)
+    expect(row.renegotiationDue).toBe(false)
+  })
+})
+
 describe('updateCost rules', () => {
   it('overwriting a catalog value needs a note and then becomes manual', async () => {
     const row = catalogRow()
@@ -350,6 +658,78 @@ describe('updateCost rules', () => {
   })
   it('404 for an unknown cost line', async () => {
     await expect(setup().service.updateCost(ids.quote, ids.cost, { note: 'x' }, ACTOR, SCOPE)).rejects.toMatchObject({ status: 404 })
+  })
+})
+
+describe('foreign-currency value edits (FX spec Q9)', () => {
+  const fxFrozen = { fxRate: '0.90000000', fxRateDate: '2026-10-01', fxRateSource: 'ECB', fxRateDerivation: 'direct' }
+  const usdRow = (over: Row = {}) => manualRow({ role: 'margin_only', chargeCode: null, unitAmount: '300', instanceAmount: '300', currencyCode: 'USD', ...fxFrozen, ...over })
+  const FX_NEW = { ok: true, rate: '0.95000000', rateDate: '2026-11-14', source: 'Manual', derivation: 'inverse' }
+
+  it('unlocked: re-entering a value in a foreign currency refreshes the snapshot at the write date', async () => {
+    const row = usdRow()
+    const fx = jest.fn(async () => FX_NEW)
+    const { service, recalculate } = setup({ costs: [row], fx })
+    await service.updateCost(ids.quote, ids.cost, { unitAmount: 400 }, ACTOR, SCOPE)
+    expect(fx).toHaveBeenCalledWith({ from: 'USD', to: 'EUR', scope: SCOPE })
+    expect(row).toMatchObject({ unitAmount: '400', instanceAmount: '400', currencyCode: 'USD', fxRate: '0.95000000', fxRateDate: '2026-11-14', fxRateSource: 'Manual', fxRateDerivation: 'inverse', valueStatus: 'confirmed', errorCode: null })
+    expect(recalculate).toHaveBeenCalledTimes(1)
+  })
+  it('locked: a margin-only value re-entered takes the rate at the write date; the price is not re-priced', async () => {
+    const row = usdRow()
+    const fx = jest.fn(async () => FX_NEW)
+    const { service, recalculate } = setup({ status: 'with_customer', costs: [row], fx })
+    await service.updateCost(ids.quote, ids.cost, { unitAmount: 400 }, ACTOR, SCOPE)
+    expect(row).toMatchObject({ unitAmount: '400', fxRate: '0.95000000' })
+    expect(recalculate).not.toHaveBeenCalled()
+  })
+  it('locked: a same-value confirmation keeps the stored snapshot and never reads a rate', async () => {
+    const row = usdRow({ valueStatus: 'estimated' })
+    const fx = jest.fn(async () => FX_NEW)
+    const { service } = setup({ status: 'with_customer', costs: [row], fx })
+    await service.updateCost(ids.quote, ids.cost, { valueStatus: 'confirmed' }, ACTOR, SCOPE)
+    expect(fx).not.toHaveBeenCalled()
+    expect(row).toMatchObject({ valueStatus: 'confirmed', ...fxFrozen })
+  })
+  it('locked: a currency change counts as a value change (not a confirmation): margin-only re-rates, price-basis is COST_LOCKED', async () => {
+    const margin = usdRow({ currencyCode: 'EUR', fxRate: null, fxRateDate: null, fxRateSource: null, fxRateDerivation: null })
+    const fx = jest.fn(async () => FX_NEW)
+    const a = setup({ status: 'with_customer', costs: [margin], fx })
+    await a.service.updateCost(ids.quote, ids.cost, { currencyCode: 'GBP' }, ACTOR, SCOPE)
+    expect(fx).toHaveBeenCalledWith({ from: 'GBP', to: 'EUR', scope: SCOPE })
+    expect(margin).toMatchObject({ currencyCode: 'GBP', fxRate: '0.95000000' })
+    const basis = manualRow({ unitAmount: '300', currencyCode: 'USD', ...fxFrozen })
+    const b = setup({ status: 'with_customer', costs: [basis], fx })
+    await expect(b.service.updateCost(ids.quote, ids.cost, { currencyCode: 'GBP' }, ACTOR, SCOPE)).rejects.toMatchObject({ status: 409, message: 'COST_LOCKED' })
+    expect(basis).toMatchObject({ currencyCode: 'USD', ...fxFrozen })
+  })
+  it('locked: a price-basis foreign value is COST_LOCKED and keeps its snapshot (R4)', async () => {
+    const basis = manualRow({ unitAmount: '300', currencyCode: 'USD', ...fxFrozen })
+    const { service } = setup({ status: 'with_customer', costs: [basis], fx: jest.fn(async () => FX_NEW) })
+    await expect(service.updateCost(ids.quote, ids.cost, { unitAmount: 100 }, ACTOR, SCOPE)).rejects.toMatchObject({ status: 409, message: 'COST_LOCKED' })
+    expect(basis).toMatchObject({ unitAmount: '300', ...fxFrozen })
+  })
+  it('a value moved back to the quote currency clears the snapshot', async () => {
+    const row = usdRow()
+    const fx = jest.fn(async () => FX_NEW)
+    const { service } = setup({ costs: [row], fx })
+    await service.updateCost(ids.quote, ids.cost, { currencyCode: 'EUR' }, ACTOR, SCOPE)
+    expect(fx).not.toHaveBeenCalled()
+    expect(row).toMatchObject({ currencyCode: 'EUR', fxRate: null, fxRateDate: null, fxRateSource: null, fxRateDerivation: null })
+  })
+  it('no rate on edit: none + CURRENCY_NO_RATE with the entered amount kept and the old snapshot dropped', async () => {
+    const row = usdRow()
+    const { service } = setup({ costs: [row], fx: jest.fn(async () => ({ ok: false, code: 'CURRENCY_NO_RATE', reason: 'not_found' })) })
+    await service.updateCost(ids.quote, ids.cost, { unitAmount: 400 }, ACTOR, SCOPE)
+    expect(row).toMatchObject({ valueStatus: 'none', unitAmount: '400', instanceAmount: null, currencyCode: 'USD', errorCode: 'CURRENCY_NO_RATE', fxRate: null, fxRateSource: null })
+  })
+  it('a note-only edit of a none + CURRENCY_NO_RATE line keeps it as it is (no FX_NOT_ALLOWED, no re-rate)', async () => {
+    const row = usdRow({ valueStatus: 'none', errorCode: 'CURRENCY_NO_RATE', instanceAmount: null, fxRate: null, fxRateDate: null, fxRateSource: null, fxRateDerivation: null })
+    const fx = jest.fn(async () => FX_NEW)
+    const { service } = setup({ costs: [row], fx })
+    await service.updateCost(ids.quote, ids.cost, { note: 'waiting for treasury' }, ACTOR, SCOPE)
+    expect(fx).not.toHaveBeenCalled()
+    expect(row).toMatchObject({ valueStatus: 'none', errorCode: 'CURRENCY_NO_RATE', unitAmount: '300', note: 'waiting for treasury' })
   })
 })
 
@@ -488,5 +868,74 @@ describe('manual value writes and the sourcing columns', () => {
     const { service } = setup({ costs: [manualRow()], publisher })
     await service.deleteCost(ids.quote, ids.cost, ACTOR, SCOPE)
     expect(publisher).not.toHaveBeenCalled()
+  })
+})
+
+describe('preview: fxFrom rate hint (cost dialog)', () => {
+  it('answers the rate a currency converts at, with no offering and no charges; nothing is stored', async () => {
+    const fx = jest.fn(async () => FX_OK)
+    const { service, em } = setup({ fx })
+    const body = await service.preview({ fxFrom: 'USD', currencyCode: 'EUR', configuration: {} }, SCOPE)
+    expect(body).toEqual({ currencyCode: 'EUR', charges: [], fxHint: { from: 'USD', to: 'EUR', fxRate: '0.92000000', fxRateDate: '2026-11-11', fxRateSource: 'ECB', fxRateDerivation: 'direct' } })
+    expect(fx).toHaveBeenCalledWith(expect.objectContaining({ from: 'USD', to: 'EUR' }))
+    expect(em.persist).not.toHaveBeenCalled()
+  })
+  it('names the missing pair when no rate exists, and answers null for the quote currency', async () => {
+    const { service } = setup({ fx: jest.fn(async () => ({ ok: false, code: 'CURRENCY_NO_RATE', reason: 'not_found' })) })
+    const body = await service.preview({ fxFrom: 'USD', currencyCode: 'EUR', configuration: {} }, SCOPE) as { fxHint: Record<string, unknown> }
+    expect(body.fxHint).toMatchObject({ from: 'USD', to: 'EUR', error: 'CURRENCY_NO_RATE', errorDetail: { code: 'CURRENCY_NO_RATE', from: 'USD', to: 'EUR' } })
+    const same = await service.preview({ fxFrom: 'EUR', currencyCode: 'EUR', configuration: {} }, SCOPE) as { fxHint?: unknown }
+    expect(same.fxHint).toBeUndefined()
+  })
+  it('still requires exactly one of offeringId / productId unless only fxFrom is sent', async () => {
+    const { service } = setup({ fx: jest.fn(async () => FX_OK) })
+    await expect(service.preview({ configuration: {} } as never, SCOPE)).rejects.toBeDefined()
+    await expect(service.preview({ offeringId: ids.line, productId: ids.line, configuration: {} } as never, SCOPE)).rejects.toBeDefined()
+  })
+})
+
+// Index costs step 10: the cost preview resolves index costs at today, in memory, and exposes the snapshot (cost-guarded route).
+describe('preview: index costs', () => {
+  const productId = '55555555-5555-4555-8555-555555555555'
+  const today = new Date().toISOString().slice(0, 10)
+  function indexPreview(values: Row[]) {
+    const rows = new Map<unknown, Row[]>([
+      [CpqProductCharge, [{ id: 'ch', ...SCOPE, deletedAt: null, isActive: true, productId, code: 'power', pricingMethod: 'cost_plus', chargeModel: 'flat', chargeType: 'mrc',
+        quantityAttributeCode: null, applicabilityCondition: null, markupRule: 'markup_percent', markupValue: '10', currencyCode: 'EUR', sortOrder: 0 }]],
+      [CpqChargeCostElement, [{ id: 'el', ...SCOPE, deletedAt: null, isActive: true, productChargeId: 'ch', code: 'energy', name: 'Energy', role: 'price_basis', costType: 'mrc',
+        source: 'index', costModel: 'flat', costIndexId: 'idx', indexFactor: '0.500000', indexOffset: '2.0000', applicabilityCondition: null, sortOrder: 0 }]],
+      [CpqCostIndex, [{ id: 'idx', ...SCOPE, deletedAt: null, code: 'POWER', currencyCode: 'EUR' }]],
+      [CpqCostIndexValue, values],
+    ])
+    const em: Row = {
+      fork: () => em,
+      findOne: jest.fn(async () => null),
+      find: jest.fn(async (entity: unknown, where: Row) => (rows.get(entity) ?? []).filter((row) => !where.effectiveDate || String(row.effectiveDate) <= String(where.effectiveDate.$lte))),
+    }
+    const service = new CpqQuoteCostService({ em: em as never, costService: { enabled: jest.fn(async () => true) } } as never)
+    return { service, em }
+  }
+  const value = (effectiveDate: string, revision: number, amount: string) => ({ ...SCOPE, costIndexId: 'idx', effectiveDate, revision, value: amount })
+
+  it('prices from the value in force today and returns the in-memory snapshot; nothing is written', async () => {
+    const { service, em } = indexPreview([value('2020-01-01', 1, '80.000000'), value('2020-01-01', 2, '82.400000')])
+    const body = await service.preview({ productId, currencyCode: 'EUR', configuration: {} }, SCOPE) as Row
+    const [charge] = body.charges
+    expect(charge.costs[0]).toMatchObject({
+      source: 'index', valueStatus: 'confirmed', unitAmount: '43.2', instanceAmount: '43.2', currencyCode: 'EUR',
+      indexSnapshot: { indexId: 'idx', currencyCode: 'EUR', effectiveDate: '2020-01-01', revision: 2, value: '82.4', factor: '0.5', offset: '2', asOfDate: today },
+    })
+    expect(charge.costTotal).toBe('43.2')
+    expect(charge.listTotalPrice).toBeCloseTo(47.52, 4)
+    expect(em.persist).toBeUndefined()
+  })
+
+  it('no value in force today: INDEX_NO_VALUE, no snapshot, the charge has no list price (COST_PENDING)', async () => {
+    const { service } = indexPreview([value('2999-01-01', 1, '99.000000')])
+    const body = await service.preview({ productId, currencyCode: 'EUR', configuration: {} }, SCOPE) as Row
+    const [charge] = body.charges
+    expect(charge.costs[0]).toMatchObject({ valueStatus: 'none', error: 'INDEX_NO_VALUE', indexSnapshot: null, unitAmount: null })
+    expect(charge.listTotalPrice).toBeNull()
+    expect(charge.error).toBe('COST_PENDING')
   })
 })

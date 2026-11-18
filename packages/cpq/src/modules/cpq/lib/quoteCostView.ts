@@ -4,6 +4,7 @@
  * server's lock matrix for display only; the API stays the authority.
  */
 import type { MarginFigures, QuoteMargin } from '../services/costs/quoteMargin'
+import type { FxFields } from './fxView'
 
 /** Same set `isQuoteCostLocked` uses: costs that change the price are editable only in these statuses. */
 export const COST_EDITABLE_STATUSES = ['new', 'incomplete', 'ready'] as const
@@ -26,16 +27,31 @@ export type RedactedQuoteCost = {
   overdue?: boolean
   /** `false` on a Cancel line or a frozen-unpriceable cost line: the server refuses requests there (Q14). */
   requestEligible?: boolean
+  /** ARC costs: the cost was carried from the subscription item (booleans only, safe for everyone). */
+  carried?: boolean
+  /** ARC Renew: a carried cost whose supplier term or validity ends before the renewal's new term end. */
+  renegotiationDue?: boolean
+}
+
+/** The carried-from item cost as it stands now, for the "Was …" diff (`cpq.costs.view` only). */
+export type CostPrevious = {
+  unitAmount: string | null
+  currencyCode: string | null
+  supplierName: string | null
+  validUntil: string | null
+  supplierTermEnd: string | null
 }
 
 /** The full cost line, `cpq.costs.view` only. Decimals are strings. */
-export type FullQuoteCost = RedactedQuoteCost & {
+export type FullQuoteCost = RedactedQuoteCost & FxFields & {
   quoteLineId: string
   chargeCode: string | null
   origin: 'catalog' | 'manual' | string
   costType: 'nrc' | 'mrc' | string
-  source: 'fixed' | 'table' | 'on_request' | string
+  source: 'fixed' | 'table' | 'index' | 'on_request' | string
   costModel: string
+  /** Index costs (`cpq.costs.view`): the value, date and revision the unit amount was computed from; null otherwise. */
+  indexSnapshot?: Record<string, unknown> | null
   /** Where the stored value came from; a `catalog` value needs a note to be overwritten. */
   valueOrigin?: 'catalog' | 'manual' | string | null
   unitAmount: string | null
@@ -55,13 +71,46 @@ export type FullQuoteCost = RedactedQuoteCost & {
   requestSupplierId?: string | null
   requestSupplierName?: string | null
   supplierId?: string | null
+  /** Carried costs only (ARC costs): the item cost the line was carried from, as it stands now. */
+  previous?: CostPrevious
+}
+
+/** What a Cancel quote / cancel line would leave outliving the cancellation (`cpq.costs.view` only; no amounts). */
+export type CancelExposureView = {
+  referenceDate: string
+  items: Array<{
+    inventoryCostId: string
+    costKey: string
+    name: string
+    supplierName: string | null
+    supplierTermEnd: string | null
+    exposureMonths: number | null
+    termUnknown: boolean
+  }>
+}
+
+/** `ArcLineDiff`'s cost figures (`cpq.costs.view` only): the subscription item's costs before, the line's after. */
+export type ArcCostsView = { before: { mrcCost: number; nrcCost: number }; after: { mrcCost: number; nrcCost: number } }
+
+export type QuoteCostLineEntry = {
+  quoteLineId: string
+  costs: Array<RedactedQuoteCost | FullQuoteCost>
+  /** ARC: the line keeps the subscription's contracted price (everyone). */
+  frozen?: boolean
+  renegotiationDue?: boolean
+  /** `cpq.costs.view` only. */
+  droppedItemCosts?: Array<{ inventoryCostId: string; costKey: string; name: string; reason: string }>
+  exposure?: CancelExposureView
+  arcCosts?: ArcCostsView
 }
 
 export type QuoteMarkupOverride = { id: string; quoteLineId: string; chargeCode: string; markupRule: string; markupValue: string; note: string | null }
 
 export type QuoteCostsResponse = {
-  lines: Array<{ quoteLineId: string; costs: Array<RedactedQuoteCost | FullQuoteCost> }>
+  lines: QuoteCostLineEntry[]
   pricingRevision: number
+  /** Cancel quotes: the whole-quote exposure (`cpq.costs.view` only; absent when nothing outlives the cancellation). */
+  exposure?: CancelExposureView
   markupOverrides?: QuoteMarkupOverride[]
   margin?: QuoteMargin
 }
@@ -95,7 +144,7 @@ export const isCostLocked = (cpqStatus: string, convertedOrderId?: string | null
 
 export const COST_STATUS_FALLBACKS: Record<string, string> = { none: 'Cost pending', estimated: 'Estimated', confirmed: 'Confirmed' }
 export const COST_ROLE_FALLBACKS: Record<string, string> = { price_basis: 'Price basis', margin_only: 'Margin only' }
-export const COST_SOURCE_FALLBACKS: Record<string, string> = { fixed: 'Fixed', table: 'Cost table', on_request: 'On request', manual: 'Manual' }
+export const COST_SOURCE_FALLBACKS: Record<string, string> = { fixed: 'Fixed', table: 'Cost table', index: 'Market index', on_request: 'On request', manual: 'Manual' }
 
 /** How an unpriced cost-plus charge is shown: "≈ fallback" while a fallback exists, else "Price on request". */
 export function unpricedChargeLabel(charge: { fallbackPrice?: number | null }): { kind: 'approx'; amount: number } | { kind: 'on_request' } {
@@ -178,7 +227,14 @@ export const COST_ERROR_FALLBACKS: Record<string, string> = {
   COST_TYPE_MISMATCH: 'The cost type does not match the charge type',
   LINE_NOT_ELIGIBLE: 'This line cannot carry costs',
   AMOUNT_REQUIRED: 'Enter the cost amount',
+  RENEGOTIATION_DATES_SHORT: 'A kept date is before the renewal\'s new term end — extend it or clear the supplier term',
+  NOT_RENEGOTIATION_DUE: 'This cost no longer needs renegotiation',
+  NOT_ARC_MIRROR: 'Only lines that mirror a subscription item can be refreshed',
+  MERGE_LINE: 'Lines of a merged subscription have no single item to refresh from',
+  ITEM_NOT_ACTIVE: 'The subscription item is no longer active',
+  COST_SOURCE_CHANGED: 'The subscription\'s costs changed since this quote was created',
   CURRENCY_NO_RATE: 'No exchange rate is available for this currency',
+  INDEX_NO_VALUE: 'The index has no value in force yet',
   FIELD_NOT_ALLOWED: 'This field cannot be changed on a catalog cost',
   QUANTITY_ATTRIBUTE_REQUIRED: 'The line has no quantity attribute for a per-unit cost',
   FORBIDDEN: 'You do not have permission to change costs',
@@ -282,7 +338,7 @@ export function costFormIssues(form: CostForm, existing: FullQuoteCost | null): 
   if (existing) {
     const next = Number.isNaN(amount) ? null : amount
     const valueChanged = !sameAmount(existing.unitAmount, next) || (existing.currencyCode !== null && existing.currencyCode !== form.currencyCode.trim())
-    if (existing.valueOrigin === 'catalog' && valueChanged && !note) issues.push('NOTE_REQUIRED')
+    if ((existing.valueOrigin === 'catalog' || existing.valueOrigin === 'carried') && valueChanged && !note) issues.push('NOTE_REQUIRED')
     const extended = (form.validUntil && (!existing.validUntil || form.validUntil > existing.validUntil))
       || (form.supplierTermEnd && (!existing.supplierTermEnd || form.supplierTermEnd > existing.supplierTermEnd))
     const newRef = form.supplierQuoteRef.trim()

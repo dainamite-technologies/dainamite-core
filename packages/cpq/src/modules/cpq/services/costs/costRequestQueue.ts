@@ -33,9 +33,9 @@ const escapeLike = (value: string) => value.replace(/[\\%_]/g, (char) => `\\${ch
  * `SELECT id FROM cpq_quote_configurations WHERE <scope> AND quote_id IN (SELECT id FROM sales_quotes WHERE <scope>)`:
  * quotes alive on both sides, as a nested semi-join (no rows hydrated, no bound id list).
  */
-export function liveQuoteConfigurationIds(em: EntityManager, scope: TenantScope) {
+export function liveQuoteConfigurationIds(em: EntityManager, scope: TenantScope, extra: { cpqStatus?: { $nin: string[] } } = {}) {
   const liveSalesQuotes = em.createQueryBuilder(SalesQuote, 'sq').select('sq.id').where(scoped(scope))
-  return em.createQueryBuilder(CpqQuoteConfiguration, 'qc').select('qc.id').where({ ...scoped(scope), quoteId: { $in: liveSalesQuotes } })
+  return em.createQueryBuilder(CpqQuoteConfiguration, 'qc').select('qc.id').where({ ...scoped(scope), ...extra, quoteId: { $in: liveSalesQuotes } })
 }
 
 export type CostRequestItem = {

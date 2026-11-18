@@ -4,6 +4,7 @@ import type { FeatureTogglesService } from '@open-mercato/core/modules/feature_t
 import {
   COST_PLUS_TOGGLE,
   costElementContextError,
+  costElementIndexError,
   costElementShapeError,
   cpqChargeCostElementCreateSchema,
   cpqChargeCostElementUpdateSchema,
@@ -11,8 +12,9 @@ import {
   type ChargeCostElementPatch,
   type CostElementShape,
 } from '../../data/costs'
-import { CpqChargeCostElement, CpqPricingTable, CpqProductCharge } from '../../data/entities'
+import { CpqChargeCostElement, CpqCostIndex, CpqPricingTable, CpqProductCharge } from '../../data/entities'
 import { QuotingError } from '../cpqQuotingService'
+import type { CpqFxRateResolver } from './fxRateResolver'
 import type { TenantScope } from '../types'
 
 /**
@@ -24,6 +26,8 @@ export const COST_PLUS_PRICING_AVAILABLE = true
 type Dependencies = {
   em: EntityManager
   featureTogglesService: Pick<FeatureTogglesService, 'getBoolConfig'>
+  /** Dated FX rates for foreign-currency costs (FX spec). Absent = no FX (every foreign cost stays CURRENCY_NO_RATE). */
+  fxRateResolver?: CpqFxRateResolver
   /**
    * Called AFTER an element write committed, with the ids of the elements it deactivated (or deleted): the supplier
    * sourcing fan-out that cancels their open cost requests, one quote write each (sourcing spec Q4). Best effort:
@@ -52,6 +56,9 @@ export function serializeCostElement(row: CpqChargeCostElement) {
     costTableId: row.costTableId,
     costColumnKey: row.costColumnKey,
     estimateAmount: row.estimateAmount,
+    costIndexId: row.costIndexId,
+    indexFactor: row.indexFactor,
+    indexOffset: row.indexOffset,
     defaultSupplierId: row.defaultSupplierId,
     defaultSupplierName: row.defaultSupplierName,
     defaultValidityDays: row.defaultValidityDays,
@@ -74,6 +81,11 @@ const needsPriceBasis = (charge: ChargeState) => charge.pricingMethod === 'cost_
  */
 export class CpqCostService {
   constructor(private readonly deps: Dependencies) {}
+
+  /** The request-scoped FX rate resolver, when wired. */
+  get fxRateResolver(): CpqFxRateResolver | undefined {
+    return this.deps.fxRateResolver
+  }
 
   /** Whether `cpq.cost_plus` is on for the tenant (R14). Missing / failing toggles count as off. */
   async enabled(tenantId: string): Promise<boolean> {
@@ -160,6 +172,10 @@ export class CpqCostService {
         costTableId: parsed.costTableId ?? null,
         costColumnKey: parsed.costColumnKey ?? null,
         estimateAmount: decimal(parsed.estimateAmount) ?? null,
+        costIndexId: parsed.costIndexId ?? null,
+        // Defaults of an index element (factor 1, offset 0); other sources carry none (INDEX_FIELDS_NOT_ALLOWED).
+        indexFactor: parsed.source === 'index' ? decimal(parsed.indexFactor ?? 1) ?? null : null,
+        indexOffset: parsed.source === 'index' ? decimal(parsed.indexOffset ?? 0) ?? null : null,
         defaultSupplierId: parsed.defaultSupplierId ?? null,
         defaultSupplierName: parsed.defaultSupplierName ?? null,
         defaultValidityDays: parsed.defaultValidityDays ?? null,
@@ -181,7 +197,10 @@ export class CpqCostService {
     const view = await this.inElementLock(id, scope, async (tx, row, charge) => {
       deactivated = row.isActive && patch.isActive === false
       const merged = { ...row, ...patch, amount: patch.amount !== undefined ? patch.amount : row.amount,
-        estimateAmount: patch.estimateAmount !== undefined ? patch.estimateAmount : row.estimateAmount }
+        estimateAmount: patch.estimateAmount !== undefined ? patch.estimateAmount : row.estimateAmount,
+        costIndexId: patch.costIndexId !== undefined ? patch.costIndexId : row.costIndexId,
+        indexFactor: patch.indexFactor !== undefined ? patch.indexFactor : row.indexFactor,
+        indexOffset: patch.indexOffset !== undefined ? patch.indexOffset : row.indexOffset }
       // Context rules bind active elements; a price-basis element deactivated
       // when its charge left cost-plus stays editable until reactivated.
       const shapeError = costElementShapeError(merged)
@@ -190,10 +209,17 @@ export class CpqCostService {
       if (isActivePriceBasis(row) && !isActivePriceBasis(merged)) {
         await this.assertCostPlusChargeHasPriceBasis(tx, charge, scope, row.id)
       }
-      const { amount, estimateAmount, ...rest } = patch
+      const { amount, estimateAmount, indexFactor, indexOffset, ...rest } = patch
       Object.assign(row, rest)
       if (amount !== undefined) row.amount = decimal(amount) ?? null
       if (estimateAmount !== undefined) row.estimateAmount = decimal(estimateAmount) ?? null
+      if (indexFactor !== undefined) row.indexFactor = decimal(indexFactor) ?? null
+      if (indexOffset !== undefined) row.indexOffset = decimal(indexOffset) ?? null
+      // An element switched to `index` without a factor / offset gets the defaults (1 / 0).
+      if (row.source === 'index') {
+        row.indexFactor ??= '1'
+        row.indexOffset ??= '0'
+      }
       await tx.flush()
       return serializeCostElement(row)
     })
@@ -230,6 +256,14 @@ export class CpqCostService {
       : null
     const contextError = costElementContextError(element, charge, table)
     if (contextError) throw new QuotingError(422, contextError)
+    if (element.source === 'index') {
+      // FOR SHARE: an index deactivation / delete (index row FOR UPDATE) cannot interleave with this element write.
+      const index = element.costIndexId
+        ? await em.findOne(CpqCostIndex, { ...scoped(scope), id: element.costIndexId }, { lockMode: LockMode.PESSIMISTIC_READ })
+        : null
+      const indexError = costElementIndexError(element, index)
+      if (indexError) throw new QuotingError(422, indexError)
+    }
   }
 
   /**

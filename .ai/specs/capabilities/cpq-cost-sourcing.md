@@ -57,7 +57,7 @@ Frozen by: `packages/cpq/src/modules/cpq/services/costs/__tests__/costSourcingSe
 Source: .ai/specs/2026-11-12-cpq-cost-plus-supplier-sourcing.md
 
 ## Requirement: Answers on unlocked and locked quotes
-The system SHALL apply an answer on an unlocked quote as the cost line's value (`value_origin = supplier`, status `confirmed` or `estimated` as answered) and re-price. On a locked quote it SHALL confirm an answer with the same amount and currency without changing the price, and SHALL store an answer with a different value only as a proposal, leaving the price unchanged, and SHALL refuse conversion (`422 COST_ANSWER_PENDING`, before `COSTS_NOT_CONFIRMED`) while a price-basis proposal is unapplied. Margin-only costs are exempt from the cost lock, so their answers always apply. An answer in a currency other than the quote's SHALL be stored in its own currency with value status `none` and `CURRENCY_NO_RATE` until exchange rates exist, so nothing prices from it; the currency format (`^[A-Z]{3}$`) and a `validUntil` not before today are checked after the idempotency check (`422`).
+The system SHALL apply an answer on an unlocked quote as the cost line's value (`value_origin = supplier`, status `confirmed` or `estimated` as answered) and re-price. On a locked quote it SHALL confirm an answer with the same amount and currency without changing the price, and SHALL store an answer with a different value only as a proposal, leaving the price unchanged, and SHALL refuse conversion (`422 COST_ANSWER_PENDING`, before `COSTS_NOT_CONFIRMED`) while a price-basis proposal is unapplied. Margin-only costs are exempt from the cost lock, so their answers always apply. An answer in a currency other than the quote's SHALL be stored in its own currency and converted like any foreign-currency cost (rate resolved in the same write, answered status kept); when no rate exists it SHALL be stored with value status `none` and `CURRENCY_NO_RATE`, so nothing prices from it; the currency format (`^[A-Z]{3}$`) and a `validUntil` not before today are checked after the idempotency check (`422`).
 
 ### Scenario: Unlocked answer prices the line
 - WHEN procurement answers 280 EUR, confirmed, on a `ready` quote
@@ -72,7 +72,11 @@ The system SHALL apply an answer on an unlocked quote as the cost line's value (
 - THEN the value is applied, no proposal exists, and the price is unchanged
 
 ### Scenario: Foreign-currency answer
-- WHEN a USD answer lands on a EUR quote
+- WHEN a USD answer lands on a EUR quote and a USD→EUR rate exists
+- THEN the cost line keeps the supplier's amount in USD, stores the rate snapshot, keeps the answered status, and prices the line at the converted amount
+
+### Scenario: Foreign-currency answer without a rate
+- WHEN a USD answer lands on a EUR quote and no USD→EUR rate exists
 - THEN the cost line keeps the supplier's amount in USD, its value status is `none` with `CURRENCY_NO_RATE`, and the line is not priced from it
 
 ### Scenario: Different value on a sent quote
@@ -82,6 +86,7 @@ The system SHALL apply an answer on an unlocked quote as the cost line's value (
 Frozen by: `packages/cpq/src/modules/cpq/services/costs/__tests__/costSourcingService.test.ts`, `packages/cpq/src/modules/cpq/services/costs/__tests__/costSourcing.test.ts`
 
 Source: .ai/specs/2026-11-12-cpq-cost-plus-supplier-sourcing.md
+Source: .ai/specs/2026-11-12-cpq-cost-plus-foreign-currency-costs.md
 
 ## Requirement: Reopen and apply supplier answer
 The system SHALL let a user with `cpq.quotes.manage` and `cpq.costs.manage` apply a pending proposal in one write that moves a locked quote back to `ready`, applies the proposed value under the same `cost_request_id` (`value_origin = supplier`), clears the proposal and re-prices. It SHALL require the quote's current `expectedRevision` and SHALL run the quote mutation guards.

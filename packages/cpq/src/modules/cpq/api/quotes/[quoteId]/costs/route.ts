@@ -47,13 +47,13 @@ const readResponse = z.object({
   pricingRevision: z.number(),
   markupOverrides: z.array(z.record(z.string(), z.unknown())).optional(),
   margin: z.record(z.string(), z.unknown()).optional(),
-}).describe('Without cpq.costs.view only id, costKey, name, role, valueStatus, expired and error per cost; with it also values, currency, supplier, validity, markupOverrides and margin (incl. marginHash)')
+}).describe('Without cpq.costs.view only id, costKey, name, role, valueStatus, expired and error per cost; with it also values, currency, the FX snapshot (fxRate, fxRateDate, fxRateSource, fxRateDerivation, convertedInstanceAmount in the quote currency, quoteCurrencyCode), indexSnapshot for index costs, errorDetail {code, from, to, date} for CURRENCY_NO_RATE, supplier, validity, markupOverrides and margin (incl. marginHash)')
 const writeResponse = z.object({ cost: z.record(z.string(), z.unknown()), pricingRevision: z.number(), margin: z.record(z.string(), z.unknown()).optional() })
 export const openApi: OpenApiRouteDoc = { tag: 'CPQ Quotes', pathParams: cpqQuoteIdPathParams, methods: {
-  GET: { summary: 'Read the cost lines of a quote (status only without cpq.costs.view)', responses: [{ status: 200, description: 'Cost lines per quote line and the pricing revision', schema: readResponse }], errors: [cpqErrorDoc(403, 'Missing permission'), toggleOff] },
-  POST: { summary: 'Add a manual cost line to a quote line', requestBody: { schema: cpqQuoteLineCostCreateSchema },
+  GET: { summary: 'Read the cost lines of a quote (status only without cpq.costs.view)', responses: [{ status: 200, description: 'Cost lines per quote line and the pricing revision. ARC quotes add per line frozen / renegotiationDue (everyone) and, for cpq.costs.view holders only, previous, droppedItemCosts, exposure and arcCosts {before, after: {mrcCost, nrcCost}} (the ArcLineDiff cost rows)', schema: readResponse }], errors: [cpqErrorDoc(403, 'Missing permission'), toggleOff] },
+  POST: { summary: 'Add a manual cost line to a quote line (a foreign currencyCode takes the rate resolved at the write, or is stored none + CURRENCY_NO_RATE; a rate is never accepted in the body)', requestBody: { schema: cpqQuoteLineCostCreateSchema },
     responses: [{ status: 201, description: 'Created cost line, margin (cpq.costs.view only) and new pricing revision', schema: writeResponse }],
     errors: [cpqErrorDoc(400, 'Validation error'), cpqErrorDoc(403, 'Missing permission'), toggleOff,
       cpqErrorDoc(409, 'COST_LOCKED or STALE_REVISION'),
-      cpqErrorDoc(422, 'PRICE_BASIS_REQUIRES_COST_PLUS, CHARGE_NOT_FOUND, COST_TYPE_MISMATCH, LINE_NOT_ELIGIBLE, AMOUNT_REQUIRED, CURRENCY_NO_RATE, QUANTITY_ATTRIBUTE_REQUIRED or a mutation-guard rejection')] },
+      cpqErrorDoc(422, 'PRICE_BASIS_REQUIRES_COST_PLUS, CHARGE_NOT_FOUND, COST_TYPE_MISMATCH, LINE_NOT_ELIGIBLE, AMOUNT_REQUIRED, QUANTITY_ATTRIBUTE_REQUIRED or a mutation-guard rejection')] },
 } }

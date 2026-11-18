@@ -4,6 +4,7 @@ import type { CpqQuoteLineConfiguration } from '../../data/entities'
 import type { CostPlusLineContext } from '../cpqPricingService'
 import type { ResolvedCharge, TenantScope } from '../types'
 import { previewCatalogCosts } from './costResolution'
+import type { CpqFxRateResolver } from './fxRateResolver'
 
 export type PriceItemInput = { offeringId?: string | null; productId?: string | null; configuration: Record<string, unknown> }
 
@@ -15,9 +16,13 @@ export type PriceItemInput = { offeringId?: string | null; productId?: string | 
 export async function resolveCalculatePriceCostContexts(params: {
   em: EntityManager
   isEnabled: (tenantId: string) => Promise<boolean>
+  /** Dated FX rates (FX spec Q12: today's rate, in memory); absent = no FX. */
+  fxResolver?: CpqFxRateResolver
   items: PriceItemInput[]
   currencyCode: string
   scope: TenantScope
+  /** Date index values are read at (`YYYY-MM-DD`, UTC); absent = today. Test seam. */
+  asOfDate?: string
 }): Promise<CostPlusLineContext[]> {
   const { items, currencyCode, scope } = params
   if (!(await params.isEnabled(scope.tenantId))) {
@@ -28,7 +33,7 @@ export async function resolveCalculatePriceCostContexts(params: {
   for (const item of items) {
     const lineConfig = { quoteLineId: randomUUID(), offeringId: item.offeringId ?? null, productId: item.productId ?? null, configuration: item.configuration } as unknown as CpqQuoteLineConfiguration
     const costs = await previewCatalogCosts({
-      em, scope, lines: [{ lineConfig, mergedConfig: item.configuration }],
+      em, scope, fxResolver: params.fxResolver, asOfDate: params.asOfDate, lines: [{ lineConfig, mergedConfig: item.configuration }],
       quote: { id: randomUUID(), quoteId: randomUUID(), cpqStatus: 'new', quoteType: 'new', currencyCode },
     })
     contexts.push({
@@ -36,6 +41,7 @@ export async function resolveCalculatePriceCostContexts(params: {
       costs: costs.map((cost) => ({
         chargeCode: (cost.chargeCode as string | null | undefined) ?? null, role: cost.role as string,
         valueStatus: cost.valueStatus as string, instanceAmount: (cost.instanceAmount as string | null | undefined) ?? null,
+        fxRate: (cost.fxRate as string | null | undefined) ?? null,
       })),
     })
   }

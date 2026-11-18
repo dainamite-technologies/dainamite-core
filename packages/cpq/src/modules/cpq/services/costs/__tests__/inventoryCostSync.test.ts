@@ -12,7 +12,7 @@ type Row = Record<string, any>
 const seed = (over: Partial<CostSeed> = {}): CostSeed => ({
   orderLineCostId: 'olc-1', costKey: 'tail', chargeCode: 'mrc', origin: 'catalog', costElementId: 'el-1', name: 'Tail', role: 'price_basis', costType: 'mrc',
   source: 'table', costModel: 'per_unit', valueStatus: 'confirmed', valueOrigin: 'catalog', unitAmount: '270.0000', instanceAmount: '270.0000', totalAmount: '270.0000',
-  currencyCode: 'EUR', fxRate: null, fxRateDate: null, indexSnapshot: null, supplierId: 'sup-1', supplierName: 'Carrier X', supplierQuoteRef: null,
+  currencyCode: 'EUR', fxRate: null, fxRateDate: null, fxRateSource: null, fxRateDerivation: null, indexSnapshot: null, supplierId: 'sup-1', supplierName: 'Carrier X', supplierQuoteRef: null,
   validUntil: null, supplierTermEnd: null, supplierMinTermMonths: null, note: null, ...over,
 })
 
@@ -103,6 +103,22 @@ describe('createItemCosts', () => {
     expect(isInventoryCostUnchanged(row as never, seed({ indexSnapshot: { a: 2, b: 1 } }))).toBe(true)
   })
 
+  it('carries the four fx fields: a re-rated seed writes (changed), an identical one does not', async () => {
+    const fx = { currencyCode: 'USD', fxRate: '0.92000000', fxRateDate: '2026-11-10', fxRateSource: 'ECB', fxRateDerivation: 'direct', totalAmount: '248.4000' }
+    const row = stored(fx)
+    expect(isInventoryCostUnchanged(row as never, seed(fx))).toBe(true)
+    for (const change of [{ fxRate: '0.93000000' }, { fxRateDate: '2026-11-11' }, { fxRateSource: 'NBP' }, { fxRateDerivation: 'inverse' }]) {
+      expect(isInventoryCostUnchanged(row as never, seed({ ...fx, ...change }))).toBe(false)
+    }
+    const { em } = setup([row])
+    const result = await createItemCosts(em as never, [item([seed({ ...fx, fxRateSource: 'NBP', fxRateDerivation: 'inverse' })])], CTX)
+    expect(row).toMatchObject({ fxRateSource: 'NBP', fxRateDerivation: 'inverse' })
+    expect(result.changes).toEqual([expect.objectContaining({ kind: 'changed' })])
+    const same = stored(fx)
+    const second = await createItemCosts(setup([same]).em as never, [item([seed(fx)])], CTX)
+    expect(second.changes).toEqual([])
+  })
+
   it('writes only the rows that differ when several seeds are synced', async () => {
     const same = stored()
     const differs = stored({ id: 'ic-2', costKey: 'install' })
@@ -151,6 +167,59 @@ describe('replaceItemCosts (review1-b)', () => {
   })
 })
 
+describe('replaceItemCosts: carried seeds and the full image (ARC costs step 8, Q5)', () => {
+  const CTX_END = { ...CTX, endedAt: '2026-11-15' }
+  const carried = (over: Partial<CostSeed> = {}) => seed({ origin: 'carried', valueOrigin: 'carried', inventoryCostId: 'ic-1', ...over })
+
+  it('an untouched carried cost is a no-op: the row keeps its origin and value_origin, nothing is written or reported', async () => {
+    const row = stored({ origin: 'manual', valueOrigin: 'manual' })
+    const { em } = setup([row])
+    const result = await replaceItemCosts(em as never, [{ ...item([carried()]), fullImage: true }], CTX_END)
+    expect(result.changes).toEqual([])
+    expect(row).toMatchObject({ origin: 'manual', valueOrigin: 'manual', lastChangeId: 'log-0', lastOrderLineCostId: 'olc-0' })
+    expect(result.links).toEqual([{ orderLineCostId: 'olc-1', inventoryCostId: 'ic-1' }])
+  })
+
+  it('a renegotiated carried cost updates the same row in place and takes the new value_origin; origin stays', async () => {
+    const row = stored()
+    const { em, created } = setup([row])
+    const result = await replaceItemCosts(em as never, [{ ...item([carried({ unitAmount: '240.0000', instanceAmount: '240.0000', totalAmount: '240.0000', valueOrigin: 'supplier' })]), fullImage: true }], CTX_END)
+    expect(created).toHaveLength(0)
+    expect(row).toMatchObject({ id: 'ic-1', origin: 'catalog', valueOrigin: 'supplier', unitAmount: '240.0000', lastOrderLineCostId: 'olc-1' })
+    expect(result.changes.map((c) => [c.inventoryCostId, c.kind])).toEqual([['ic-1', 'changed']])
+  })
+
+  it('asserts the seed link names the row matched by key: a different row, or none, throws and writes nothing', async () => {
+    const other = setup([stored({ id: 'ic-other' })])
+    await expect(replaceItemCosts(other.em as never, [item([carried()])], CTX_END)).rejects.toThrow(/does not match/)
+    const none = setup([])
+    await expect(replaceItemCosts(none.em as never, [item([carried()])], CTX_END)).rejects.toThrow(/does not match/)
+    expect(none.created).toHaveLength(0)
+  })
+
+  it('full image: a carried key removed on the quote ends the item cost whatever its origin (catalog, manual, carried)', async () => {
+    const rows = [stored({ id: 'ic-1' }), stored({ id: 'ic-cat', costKey: 'cat' }), stored({ id: 'ic-man', costKey: 'man', origin: 'manual' }), stored({ id: 'ic-car', costKey: 'car', origin: 'carried' })]
+    const { em } = setup(rows)
+    const result = await replaceItemCosts(em as never, [{ ...item([carried()]), fullImage: true }], CTX_END)
+    expect(rows.map((r) => r.status)).toEqual(['active', 'ended', 'ended', 'ended'])
+    expect(rows[1].endedAt).toBe('2026-11-15')
+    expect(result.changes.map((c) => [c.inventoryCostId, c.kind])).toEqual([['ic-cat', 'ended'], ['ic-man', 'ended'], ['ic-car', 'ended']])
+  })
+
+  it('without fullImage the catalog-only rule of review1-b is unchanged (manual stays open)', async () => {
+    const man = stored({ id: 'ic-man', costKey: 'man', origin: 'manual' })
+    const { em } = setup([man])
+    await replaceItemCosts(em as never, [item([])], CTX_END)
+    expect(man.status).toBe('active')
+  })
+
+  it('costSeedFromOrderLineCost carries the inventory cost id for carried lines only', () => {
+    const base = { id: 'olc-1', costKey: 'tail', name: 'Tail', role: 'price_basis', costType: 'mrc', source: 'table', costModel: 'flat', valueStatus: 'confirmed' }
+    expect(costSeedFromOrderLineCost({ ...base, origin: 'carried', inventoryCostId: 'ic-1' } as never).inventoryCostId).toBe('ic-1')
+    expect(costSeedFromOrderLineCost({ ...base, origin: 'catalog', inventoryCostId: 'ic-1' } as never).inventoryCostId).toBeUndefined()
+  })
+})
+
 describe('createAssetCosts', () => {
   it('creates asset-owned costs: asset_id set, subscription_item_id null (Q2)', async () => {
     const { em, created } = setup()
@@ -176,6 +245,12 @@ describe('costSeedFromOrderLineCost', () => {
   it('maps an order line cost to a seed that remembers its id', () => {
     const row = Object.assign(new CpqOrderLineCost(), { id: 'olc-5', ...seed({ orderLineCostId: null }), note: undefined })
     expect(costSeedFromOrderLineCost(row)).toEqual(seed({ orderLineCostId: 'olc-5' }))
+  })
+
+  it('carries total_amount (document currency) and all four fx fields verbatim', () => {
+    const fx = { currencyCode: 'USD', fxRate: '0.92000000', fxRateDate: '2026-11-10', fxRateSource: 'ECB', fxRateDerivation: 'inverse', totalAmount: '248.4000' }
+    const row = Object.assign(new CpqOrderLineCost(), { id: 'olc-6', ...seed({ orderLineCostId: null, ...fx }) })
+    expect(costSeedFromOrderLineCost(row)).toMatchObject({ orderLineCostId: 'olc-6', ...fx })
   })
 })
 

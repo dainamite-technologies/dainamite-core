@@ -181,3 +181,22 @@ it('refuses to undo a delete when a rep has since added an overlapping adjustmen
     .rejects.toMatchObject({ status: 422, message: 'ADJUSTMENT_OVERLAP' })
   expect(rows.filter((row) => row.isActive)).toHaveLength(1)
 })
+it('publishes the sourcing signals of an adjustment write after commit, once (R1a / R1b cancellations are not dropped)', async () => {
+  const { em, recalculateLockedQuote, rows } = setup()
+  const publisher = jest.fn()
+  const service = new CpqAdjustmentService({ em: em as never, quotingService: { recalculateLockedQuote } as never,
+    featureTogglesService: { getBoolConfig: async () => ({ ok: true, value: true }) } as never, sourcingPublisher: publisher })
+  const cancelled = { kind: 'request_cancelled', costRequestId: 'req-1', requestSeq: 1, reason: 'reconfigured', costLineId: 'cost-1' }
+  recalculateLockedQuote.mockImplementationOnce((async (_em: unknown, _quote: unknown, _scope: unknown, _save: unknown, _draft: unknown, sourcing?: { signals?: unknown[] }) => {
+    sourcing?.signals?.push(cancelled)
+    return { id: quoteId, adjustmentErrors: [], lines: [] }
+  }) as never)
+  await service.create(quoteId, input, actor, scope)
+  expect(rows).toHaveLength(1)
+  expect(publisher).toHaveBeenCalledTimes(1)
+  expect(publisher).toHaveBeenCalledWith([cancelled], expect.objectContaining({ id: quoteId }))
+  // A write that produced no signals publishes nothing.
+  publisher.mockClear()
+  await service.update(quoteId, rows[0].id, { value: 70 }, actor, scope)
+  expect(publisher).not.toHaveBeenCalled()
+})

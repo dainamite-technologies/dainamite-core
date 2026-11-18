@@ -7,6 +7,10 @@ import type {
 } from '@open-mercato/shared/lib/commands/command-interceptor'
 import { CpqQuoteConfiguration, CpqQuoteLineConfiguration } from '../data/entities'
 import { TERMINAL_STATUSES, type CpqStatus } from '../services/types'
+import { cancelOpenRequests } from '../services/costs/costRequestCancel'
+import { createSourcingPublisher } from '../services/costs/sourcingPublisher'
+import type { SourcingSignal, SourcingSignalPublisher } from '../services/costs/sourcingSignals'
+import { resolveAuditActor } from '../lib/auditActor'
 
 /**
  * Command interceptors for CPQ.
@@ -117,22 +121,39 @@ export async function softDeleteCpqQuoteAfterSalesDelete(
   const salesQuoteId = readDeletedSalesQuoteId(input)
   const tenantId = context.auth?.tenantId ?? null
   if (!salesQuoteId || !tenantId) return null
-  const em = (context.container.resolve('em') as EntityManager).fork()
+  const rootEm = context.container.resolve('em') as EntityManager
+  return softDeleteCpqQuote(rootEm.fork(), salesQuoteId, tenantId, resolveAuditActor(context.auth), createSourcingPublisher({ em: rootEm }))
+}
+
+/**
+ * The one place a CPQ quote configuration dies: soft-deletes it and its lines with one shared `deletedAt` and
+ * cancels its open supplier cost requests (`quote_closed`, cost-plus), then publishes the cancellations after the
+ * flush. Idempotent: an already-deleted (or unknown) quote is a no-op, so the quote DELETE route can call it after
+ * `sales.quotes.delete` (whose `afterExecute` already ran it) and for a quote whose sales quote is already gone.
+ * Never soft-deletes a terminal quote (those are refused before the delete). Flushes `em`.
+ */
+export async function softDeleteCpqQuote(
+  em: EntityManager,
+  salesQuoteId: string,
+  tenantId: string,
+  actorUserId: string | null,
+  publish?: SourcingSignalPublisher,
+): Promise<{ deletedConfigurationId: string; deletedLines: number } | null> {
   // Scoped by tenant only: a delete from the sales module may run with no
   // selected organization; the quote id itself is unique.
   const config = await em.findOne(CpqQuoteConfiguration, { quoteId: salesQuoteId, tenantId, deletedAt: null })
   // Terminal quotes are blocked in beforeExecute; never soft-delete one here.
   if (!config || isTerminal(config.cpqStatus)) return null
-  const lines = await em.find(CpqQuoteLineConfiguration, {
-    quoteConfigurationId: config.id,
-    tenantId,
-    organizationId: config.organizationId,
-    deletedAt: null,
-  })
+  const scope = { tenantId, organizationId: config.organizationId }
+  // Reads first (lines, open requests), then one flushed mutation phase.
+  const lines = await em.find(CpqQuoteLineConfiguration, { quoteConfigurationId: config.id, ...scope, deletedAt: null })
+  const signals: SourcingSignal[] = []
+  await cancelOpenRequests(em, config, scope, 'quote_closed', { actorUserId, signals })
   const now = new Date()
   config.deletedAt = now
   for (const line of lines) line.deletedAt = now
   await em.flush()
+  if (signals.length > 0 && publish) await publish(signals, { id: config.id, ...scope })
   return { deletedConfigurationId: config.id, deletedLines: lines.length }
 }
 

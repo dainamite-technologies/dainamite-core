@@ -41,6 +41,8 @@ Entry format (newest first within a section):
 
 ## CPQ
 
+- **A CPQ quote dies in one place: `softDeleteCpqQuote` in `commands/interceptors.ts`.** (2026-11-18, cost-plus × main merge)
+  It runs for the quote DELETE route and for `sales.quotes.delete` from the sales UI (`afterExecute`). Cleanup that must happen on delete (e.g. cancelling open supplier cost requests) goes there, not into the route or `cpqQuotingService.deleteQuote` (seed-only, writes sales rows directly).
 - **A unique constraint on a soft-deleted table blocks re-creating a removed row.** (2026-11-17, #122)
   The service check filters `deletedAt: null` and passes, then the full constraint fails the insert (500). Use a partial unique index (`@Index({ expression: '… WHERE "deleted_at" IS NULL' })`) and update the module snapshot to the `expression` form.
 - **A quote line's `isConfigured` is decided only by `recalculateInternal`.** (2026-11-17, #125)
@@ -75,6 +77,8 @@ Entry format (newest first within a section):
 
 ## Local environment and tooling
 
+- **A fresh git worktree needs `yarn build:packages` before `yarn test`.** (2026-11-18)
+  The `@dainamite/*` workspace packages resolve to `dist/`; without it ~25 suites fail with "Cannot find module '@dainamite/cpq/…'" (demo_*, billing connector), which looks like a code break but is not.
 - **`localhost:5432` is an SSH tunnel to a remote database, not the local Docker Postgres.** (2026-11-16)
   For smoke tests run a separate container (e.g. `:5433`) and pass `DATABASE_URL` to `yarn initialize` / `yarn dev`; the shell env wins over `.env`.
 - **The shell's Anthropic base URL points at the local Caveman gateway (`127.0.0.1:8787`).** (2026-11-16)

@@ -1,4 +1,5 @@
 import { DefaultCpqPricingService } from '../cpqPricingService'
+import { resolveManualAdjustments } from '../priceAdjustments/resolveManualAdjustments'
 import {
   CpqProductCharge,
   CpqPricingTable,
@@ -1220,7 +1221,7 @@ describe('negotiated-pricing baseline — all rule types across charge models', 
       const quantity = model === 'flat' ? 1 : 4
       const expectedTotal = type === 'price_override' && model === 'flat' ? 20 : total
       expect(Math.round((result.totalPrice ?? 0) * 100)).toBe(expectedTotal * 100)
-      expect(Math.round(result.unitPrice * quantity * 100)).toBe(expectedTotal * 100)
+      expect(Math.round(result.unitPrice! * quantity * 100)).toBe(expectedTotal * 100)
       expect(result.quantity).toBe(quantity)
       expect(result.currencyCode).toBe('USD')
       expect(result.listTotalPrice).toBe(100)
@@ -1237,4 +1238,36 @@ describe('negotiated-pricing baseline — all rule types across charge models', 
       }
     },
   )
+})
+
+describe('waterfall order (characterization): list -> price rules -> manual adjustments -> offer', () => {
+  it('captures list before rules, standard after all rules in sortOrder, and the offer after the manual override', async () => {
+    const em = createMockEm()
+    const charge = { ...makeCharge({ code: 'fee', name: 'Fee', chargeType: 'mrc', pricingMethod: 'fixed', fixedPrice: '100' }), chargeModel: 'flat' }
+    em.find.mockImplementation(async (entity) => {
+      if (entity === CpqProductCharge) return [charge]
+      return [
+        { code: 'r1', name: 'R1', ruleType: 'discount_percent', value: '10' },
+        { code: 'r2', name: 'R2', ruleType: 'surcharge_absolute', value: '5' },
+      ]
+    })
+    const service = new DefaultCpqPricingService(em as unknown as never)
+    const charges = await service.resolveProductCharges({ offeringId: 'offer', configuration: {}, currencyCode: 'USD', ...SCOPE })
+    expect(charges).toHaveLength(1)
+    expect(charges[0]).toMatchObject({
+      listUnitPrice: 100, listTotalPrice: 100, standardUnitPrice: 95, standardTotalPrice: 95, unitPrice: 95, totalPrice: 95,
+    })
+    expect(charges[0].adjustments?.map((a) => [a.origin, a.ruleCode, a.unitPriceBefore, a.unitPriceAfter])).toEqual([
+      ['rule', 'r1', 100, 90], ['rule', 'r2', 90, 95],
+    ])
+    const resolved = resolveManualAdjustments(
+      [{ lineId: 'line', parentLineId: null, enginePriced: true, mirrored: false, charges }],
+      [{ id: 'm', quoteLineId: 'line', level: 'charge', chargeCode: 'fee', adjustmentType: 'price_override', value: 80, currencyCode: 'USD', reasonCode: 'other' }] as never,
+      'USD',
+    )
+    const offer = resolved.lines[0].charges[0]
+    expect(resolved.errors).toEqual([])
+    expect(offer).toMatchObject({ listUnitPrice: 100, standardUnitPrice: 95, unitPrice: 80, totalPrice: 80 })
+    expect(offer.adjustments?.map((a) => a.origin)).toEqual(['rule', 'rule', 'manual'])
+  })
 })

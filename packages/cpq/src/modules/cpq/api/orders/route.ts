@@ -105,8 +105,8 @@ export const openApi: OpenApiRouteDoc = {
       errors: [
         cpqErrorDoc(400, 'Validation error'),
         cpqErrorDoc(404, 'Quote not found'),
-        cpqErrorDoc(409, 'Quote cannot be converted in its status or is already converted'),
-        cpqErrorDoc(422, 'Quote has no lines, has invalid stored adjustments, has an incomplete bundle (`BUNDLE_INCOMPLETE`, with the V-QBUN `errors`), or blocked by a mutation guard'),
+        cpqErrorDoc(409, 'Quote cannot be converted in its status or is already converted, or COST_SOURCE_CHANGED (the subscription item costs of an ARC cost-managed line changed since the quote mirrored them; body `lines: [{ quoteLineId, subscriptionItemId, costKeys }]`, nothing was written)'),
+        cpqErrorDoc(422, 'Quote has no lines, has invalid stored adjustments, has an incomplete bundle (`BUNDLE_INCOMPLETE`, with the V-QBUN `errors`), or COSTS_NOT_CONFIRMED (a price-basis cost is not confirmed or has expired, or a cost-plus charge has no price; body `lines: [{ quoteLineId, costKeys, chargeCodes }]` names the blocking cost keys and the unpriced cost-plus charge codes per line, either list may be empty; ARC cancel lines never block), or blocked by a mutation guard'),
       ],
     },
     GET: {

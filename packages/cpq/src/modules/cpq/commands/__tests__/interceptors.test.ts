@@ -1,4 +1,7 @@
-import { CpqQuoteConfiguration, CpqQuoteLineConfiguration } from '../../data/entities'
+import { CpqQuoteConfiguration, CpqQuoteLineConfiguration, CpqQuoteLineCost } from '../../data/entities'
+
+const publish = jest.fn()
+jest.mock('../../services/costs/sourcingPublisher', () => ({ createSourcingPublisher: () => publish }))
 import {
   interceptors,
   readDeletedSalesQuoteId,
@@ -117,6 +120,36 @@ describe('cpq sales.quotes.delete undo interceptor', () => {
       expect(await softDeleteCpqQuoteAfterSalesDelete({ body: { id: QUOTE } }, context)).toBeNull()
       expect(config.deletedAt).toBeNull()
       expect(em.flush).not.toHaveBeenCalled()
+    })
+
+    it('cancels the open supplier cost requests (quote_closed) and publishes them after the flush', async () => {
+      publish.mockClear()
+      const config: Record<string, unknown> = { id: 'cfg', organizationId: 'org', deletedAt: null, cpqStatus: 'ready' }
+      const openRequest: Record<string, unknown> = {
+        id: 'cost-1', quoteConfigurationId: 'cfg', quoteLineId: 'L1', costKey: 'transport', costRequestId: 'req-1', requestSeq: 2,
+        sourcingStatus: 'requested', organizationId: 'org', tenantId: 'tenant',
+      }
+      const em = {
+        findOne: jest.fn(async () => config),
+        find: jest.fn(async (entity: unknown) => (entity === CpqQuoteLineCost ? [openRequest] : [])),
+        flush: jest.fn(),
+      }
+      const context = {
+        commandId: 'sales.quotes.delete',
+        auth: { tenantId: 'tenant', sub: '77777777-7777-4777-8777-777777777777' },
+        selectedOrganizationId: null,
+        container: { resolve: () => ({ fork: () => em }) },
+      } as never
+      await softDeleteCpqQuoteAfterSalesDelete({ body: { id: QUOTE } }, context)
+      expect(em.find).toHaveBeenCalledWith(CpqQuoteLineCost, expect.objectContaining({
+        quoteConfigurationId: 'cfg', organizationId: 'org', tenantId: 'tenant', sourcingStatus: 'requested', deletedAt: null,
+      }))
+      expect(openRequest.sourcingStatus).not.toBe('requested')
+      expect(publish).toHaveBeenCalledWith(
+        [expect.objectContaining({ kind: 'request_cancelled', costRequestId: 'req-1', requestSeq: 2, reason: 'quote_closed' })],
+        { id: 'cfg', tenantId: 'tenant', organizationId: 'org' },
+      )
+      expect(em.flush.mock.invocationCallOrder[0]).toBeLessThan(publish.mock.invocationCallOrder[0])
     })
 
     it('does nothing when CPQ already deleted the configuration or the quote is not a CPQ quote', async () => {

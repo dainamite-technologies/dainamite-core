@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { DefaultCpqQuotingService } from '../cpqQuotingService'
-import { CpqProductOffering, CpqQuoteConfiguration, CpqQuoteLineConfiguration, CpqQuotePriceAdjustment } from '../../data/entities'
+import { CpqProductOffering, CpqQuoteConfiguration, CpqQuoteLineConfiguration, CpqQuotePriceAdjustment, CpqQuoteLineCost, CpqQuoteMarkupOverride } from '../../data/entities'
 import { SalesQuote, SalesQuoteLine } from '@open-mercato/core/modules/sales/data/entities'
 const scope = { tenantId: randomUUID(), organizationId: randomUUID() }
 
@@ -13,6 +13,8 @@ it.each([false, true])('clones with remapped adjustments and safe pricing marker
     [CpqQuoteConfiguration, [original]], [CpqQuoteLineConfiguration, [line]],
     [SalesQuote, [{ id: salesId, quoteNumber: 'Q-1', customerEntityId: userId, currencyCode: 'USD', ...scope }]],
     [SalesQuoteLine, [{ id: lineId, lineNumber: 1, quantity: '1', ...scope }]],
+    [CpqQuoteLineCost, arc ? [] : [{ id: randomUUID(), quoteConfigurationId: quoteId, quoteId: salesId, quoteLineId: lineId, costKey: 'transit', chargeCode: 'fee', origin: 'manual', name: 'Transit', role: 'price_basis', costType: 'recurring', source: 'on_request', costModel: 'flat', valueStatus: 'confirmed', valueOrigin: 'manual', unitAmount: '40', instanceAmount: '40', sourcingStatus: 'answered', costRequestId: randomUUID(), requestSeq: 2, supplierName: 'Acme', supplierQuoteRef: 'Q-77', validUntil: '2999-01-01', proposedAmount: '39.0000', proposedAnswer: { unitAmount: '39' }, lastAnswerHash: 'h', cancelReason: 'x', requestHistory: [{ outcome: 'answered' }], requestSupplierId: randomUUID(), deletedAt: null, ...scope }]],
+    [CpqQuoteMarkupOverride, arc ? [] : [{ id: randomUUID(), quoteConfigurationId: quoteId, quoteId: salesId, quoteLineId: lineId, chargeCode: 'fee', markupRule: 'markup_percent', markupValue: '30', note: 'deal', deletedAt: null, ...scope }]],
     [CpqQuotePriceAdjustment, arc ? [] : [{ id: randomUUID(), quoteConfigurationId: quoteId, quoteId: salesId, quoteLineId: lineId, level: 'charge', chargeCode: 'fee', chargeTypeFilter: null, adjustmentType: 'price_override', value: '80', currencyCode: 'USD', reasonCode: 'inactive_reason', reasonNote: null, windowKind: 'relative', fromMonth: 1, toMonth: null, createdByUserId: userId, deletedAt: null, isActive: true, ...scope }]],
   ])
   const matches = (row: Record<string, unknown>, where: Record<string, unknown>) => Object.entries(where).every(([key, value]) =>
@@ -33,6 +35,7 @@ it.each([false, true])('clones with remapped adjustments and safe pricing marker
     cpqPricingService: { resolveProductCharges: async () => [charge] } as never,
     cpqValidationService: { validateOfferingConfiguration: async () => ({ errors: [] }), validateRelationships: async () => [] } as never,
     cpqProductService: {} as never, salesDocumentNumberGenerator: { generate: async () => ({ number: 'Q-2' }) } as never })
+  const sourceCost = rows.get(CpqQuoteLineCost)?.[0]
   const result = await service.cloneQuote(quoteId, scope)
   expect(result.id).not.toBe(quoteId)
   expect(result.lines[0].lineId).not.toBe(lineId)
@@ -41,5 +44,16 @@ it.each([false, true])('clones with remapped adjustments and safe pricing marker
   if (!arc) {
     const copied = (rows.get(CpqQuotePriceAdjustment) ?? []).find((row) => row.quoteConfigurationId === result.id)
     expect(copied).toMatchObject({ quoteLineId: result.lines[0].lineId, value: '80', reasonCode: 'inactive_reason' })
+    const cost = (rows.get(CpqQuoteLineCost) ?? []).find((row) => row.quoteConfigurationId === result.id)
+    expect(cost).toMatchObject({ quoteLineId: result.lines[0].lineId, costKey: 'transit', origin: 'manual', instanceAmount: '40', sourcingStatus: 'not_requested', costRequestId: null })
+    // MODIFIED by supplier sourcing step 9 (R16): the copy keeps the supplier answer with its validity, but no open
+    // request, request id, history, proposal or idempotency key; the source row is not touched.
+    expect(cost).toMatchObject({ supplierName: 'Acme', supplierQuoteRef: 'Q-77', validUntil: '2999-01-01', requestSeq: null, proposedAmount: null, proposedAnswer: null, lastAnswerHash: null, cancelReason: null, requestHistory: [], requestSupplierId: null })
+    expect(sourceCost).toMatchObject({ quoteConfigurationId: quoteId, sourcingStatus: 'answered', deletedAt: null })
+    expect(sourceCost!.costRequestId).toEqual(expect.any(String))
+    expect(cost!.id).not.toBe(sourceCost!.id)
+    expect(cost!.costRequestId).not.toBe(sourceCost!.costRequestId)
+    const markup = (rows.get(CpqQuoteMarkupOverride) ?? []).find((row) => row.quoteConfigurationId === result.id)
+    expect(markup).toMatchObject({ quoteLineId: result.lines[0].lineId, markupRule: 'markup_percent', markupValue: '30' })
   } else expect(line.configuration).toHaveProperty('_arcPriceFrozen', true)
 })

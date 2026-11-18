@@ -8,6 +8,7 @@ import {
   CpqPricingTable,
   CpqPricingTableEntry,
 } from '../data/entities'
+import { withoutChargeMarkup } from '../lib/chargeView'
 
 export interface ConstrainedAttribute {
   code: string
@@ -66,12 +67,15 @@ export class DefaultCpqProductService {
   }
 
   /**
-   * Load an offering with its spec and charges.
+   * Load an offering with its spec and charges. Charge markup is confidential
+   * (App Spec I-4): it is stripped unless the caller verified `cpq.costs.view`
+   * and passes `canViewCosts: true`.
    */
   async getOfferingWithDetails(params: {
     offeringId: string
     organizationId: string
     tenantId: string
+    canViewCosts?: boolean
   }) {
     const scope = { organizationId: params.organizationId, tenantId: params.tenantId, deletedAt: null }
 
@@ -86,7 +90,7 @@ export class DefaultCpqProductService {
     return {
       ...offering,
       specification: spec,
-      charges,
+      charges: params.canViewCosts ? charges : charges.map((charge) => withoutChargeMarkup(charge)),
     }
   }
 

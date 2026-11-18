@@ -65,3 +65,6 @@ export const DEFAULT_ADJUSTMENT_REASONS = [
   { value: 'price_correction', label: 'Price correction' },
   { value: 'other', label: 'Other' },
 ] as const
+
+/** Quote statuses in which reps may still add / edit / delete manual adjustments (and, with no order, cost lines). */
+export const ADJUSTMENT_MUTABLE_STATUSES: readonly string[] = ['new', 'incomplete', 'ready']

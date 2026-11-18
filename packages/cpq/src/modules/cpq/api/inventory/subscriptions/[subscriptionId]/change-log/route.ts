@@ -3,6 +3,9 @@ import { cpqContextError, resolveCpqRouteContext } from '../../../../context'
 import { cpqChangeLogQuerySchema } from '../../../../../data/validators'
 import type { DefaultCpqInventoryService } from '../../../../../services/cpqInventoryService'
 import { handleArcError } from '../../../../_helpers/handleArcError'
+import { canViewCosts } from '../../../../_helpers/costAccess'
+import { costPlusEnabled } from '../../../../_helpers/costCommandRoute'
+import { stripSnapshotCosts } from '../../../../../services/costs/inventoryCostSnapshot'
 import { z } from 'zod'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { cpqErrorDoc } from '../../../../_helpers/quoteRouteOpenApi'
@@ -38,7 +41,18 @@ export async function GET(
       { page: query.page, pageSize: query.pageSize },
       scope,
     )
-    return NextResponse.json(result)
+    // Snapshots carry `items[].costs` / `assets[].costs` (commercially confidential): kept only for holders of
+    // `cpq.costs.view` while the cost-plus toggle is on, stripped otherwise (feature spec Q7). No 403: the rest is unchanged.
+    const showCosts = (await canViewCosts(ctx)) && (await costPlusEnabled(ctx))
+    if (showCosts) return NextResponse.json(result)
+    return NextResponse.json({
+      ...result,
+      items: result.items.map((entry) => ({
+        ...entry,
+        beforeSnapshot: stripSnapshotCosts(entry.beforeSnapshot),
+        afterSnapshot: stripSnapshotCosts(entry.afterSnapshot),
+      })),
+    })
   } catch (err) {
     return handleArcError(err, 'cpq/inventory/subscriptions/[subscriptionId]/change-log.GET')
   }
@@ -51,7 +65,7 @@ export const openApi: OpenApiRouteDoc = {
   methods: {
     GET: {
       summary: 'List the ARC change-log timeline of a subscription',
-      description: 'Paginated history of ARC changes applied to the subscription, most recent first.',
+      description: 'Paginated history of ARC changes applied to the subscription, most recent first. Snapshot `items[].costs` and `assets[].costs` (optional arrays, omitted when empty) are present only for cpq.costs.view holders while the cpq.cost_plus toggle is on; they are stripped otherwise.',
       query: cpqChangeLogQuerySchema,
       responses: [{ status: 200, description: 'Paginated change-log entries' }],
       errors: [cpqErrorDoc(400, 'Validation error'), cpqErrorDoc(500, 'Internal error')],

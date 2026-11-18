@@ -63,6 +63,8 @@ export function resolveManualAdjustments(
     const rank = (row: PriceAdjustment) =>
       row.level === 'charge' ? 0 : row.quoteLineId === line.lineId ? 1 : 2 + lineage.indexOf(row.quoteLineId)
     for (const charge of line.charges) {
+      // An unpriced cost-plus charge (pending cost) has no standard price to adjust; the line is already not ready.
+      if (charge.standardUnitPrice == null) continue
       const candidates = adjustments.filter((row) => !invalid.has(row.id) && (
         row.level === 'charge'
           ? row.quoteLineId === line.lineId && row.chargeCode === charge.chargeCode
@@ -76,7 +78,7 @@ export function resolveManualAdjustments(
         if (charge.chargeType === 'usage' && row.level === 'line') return false
         let code: AdjustmentError['code'] | undefined
         if (charge.chargeType === 'usage' || total === null || !Number.isFinite(row.value) || row.value < 0 ||
-          (row.adjustmentType === 'price_override' && charge.pricingMethod !== 'flat' && charge.pricingMethod !== 'per_unit') ||
+          (row.adjustmentType === 'price_override' && charge.pricingMethod !== 'flat' && charge.pricingMethod !== 'per_unit' && charge.pricingMethod !== 'cost_plus') ||
           (row.level === 'line' && row.adjustmentType !== 'discount_percent') ||
           (row.adjustmentType === 'discount_percent' && (row.value <= 0 || row.value > 100)) ||
           (row.adjustmentType === 'discount_absolute' && row.value <= 0)) code = 'TYPE_NOT_ALLOWED'

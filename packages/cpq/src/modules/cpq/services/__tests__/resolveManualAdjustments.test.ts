@@ -18,7 +18,7 @@ it.each([
   expect(result.errors).toEqual([])
   const priced = result.lines[0].charges[0]
   expect(Math.round(priced.totalPrice! * 100)).toBe(cents)
-  expect(Math.round(priced.unitPrice * 4 * 100)).toBe(cents)
+  expect(Math.round(priced.unitPrice! * 4 * 100)).toBe(cents)
   expect(priced).toMatchObject({ listTotalPrice: 100, standardTotalPrice: 100 })
   expect(priced.adjustments?.[0]).toMatchObject({ origin: 'manual', adjustmentId: 'adj', unitPriceBefore: 25 })
   expect(charge).not.toHaveProperty('adjustments')

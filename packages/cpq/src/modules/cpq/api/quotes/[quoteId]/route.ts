@@ -4,9 +4,13 @@ import { cpqUpdateQuoteSchema } from '../../../data/validators'
 import { isQuotingError } from '../../../services/cpqQuotingService'
 import { TERMINAL_STATUSES } from '../../../services/types'
 import { resolveQuotingService } from '../../resolveQuotingService'
-import { CpqQuoteConfiguration, CpqQuoteLineConfiguration } from '../../../data/entities'
+import { CpqQuoteConfiguration } from '../../../data/entities'
 import { SalesQuote } from '@open-mercato/core/modules/sales/data/entities'
+import { resolveAuditActor } from '../../../lib/auditActor'
+import { softDeleteCpqQuote } from '../../../commands/interceptors'
+import { createSourcingPublisher } from '../../../services/costs/sourcingPublisher'
 import { handleArcError } from '../../_helpers/handleArcError'
+import { CPQ_QUOTE_RESOURCE_KIND, runCpqMutationGuards } from '../../_helpers/quoteMutationGuard'
 import { buildCpqCommandContext, commandErrorResponse, resolveCommandBus } from '../../_helpers/commandContext'
 import { z } from 'zod'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
@@ -75,9 +79,16 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ quote
 
     const { quoteId } = await params
     const scope = { organizationId: ctx.organizationId, tenantId: ctx.tenantId }
-    const em = ctx.em
-    const now = new Date()
 
+    const guard = await runCpqMutationGuards(ctx, req, {
+      resourceKind: CPQ_QUOTE_RESOURCE_KIND,
+      resourceId: quoteId,
+      operation: 'delete',
+      mutationPayload: { action: 'delete' },
+    })
+    if (!guard.ok) return guard.response
+
+    const em = ctx.em
     let cpqConfig = await em.findOne(CpqQuoteConfiguration, {
       id: quoteId, organizationId: scope.organizationId, tenantId: scope.tenantId, deletedAt: null,
     })
@@ -93,9 +104,6 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ quote
       return NextResponse.json({ error: `Cannot delete a quote in '${cpqConfig.cpqStatus}' status` }, { status: 409 })
     }
 
-    const lineConfigs = await em.find(CpqQuoteLineConfiguration, {
-      quoteConfigurationId: cpqConfig.id, organizationId: scope.organizationId, tenantId: scope.tenantId, deletedAt: null,
-    })
     const salesQuote = await em.findOne(SalesQuote, {
       id: cpqConfig.quoteId, organizationId: scope.organizationId, tenantId: scope.tenantId,
     })
@@ -105,26 +113,25 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ quote
     // log, undo, search/index side effects). That command runs on its own
     // forked EM and transaction, so it cannot share one with the CPQ rows.
     // Order: sales command first, CPQ soft-delete second. If the command
-    // fails, nothing has changed. If the CPQ flush fails afterwards, the
-    // configuration still points at a missing sales quote; a retried DELETE
-    // skips the command (quote already gone) and finishes the cleanup.
+    // fails, nothing has changed. The command's CPQ interceptor
+    // (`afterExecute`) soft-deletes the CPQ configuration and lines and
+    // cancels the quote's open supplier cost requests; `softDeleteCpqQuote`
+    // below is idempotent and finishes that cleanup when the sales quote was
+    // already gone (a retried DELETE after a failed CPQ flush).
     if (salesQuote) {
       await resolveCommandBus(ctx).execute('sales.quotes.delete', {
         input: { body: { id: salesQuote.id } },
         ctx: buildCpqCommandContext(ctx, req),
       })
     }
+    await softDeleteCpqQuote(em, cpqConfig.quoteId, scope.tenantId, resolveAuditActor(ctx.auth), createSourcingPublisher({ em }))
 
-    for (const lc of lineConfigs) lc.deletedAt = now
-    cpqConfig.deletedAt = now
-    await em.flush()
-
+    await guard.runAfterSuccess()
     return NextResponse.json({ ok: true })
   } catch (err) {
     const commandError = commandErrorResponse(err)
     if (commandError) return commandError
-    console.error('[cpq/quotes/[quoteId].DELETE]', err)
-    return NextResponse.json({ error: 'Internal error' }, { status: 500 })
+    return handleArcError(err, 'cpq/quotes/[quoteId].DELETE')
   }
 }
 
@@ -136,7 +143,7 @@ export const openApi: OpenApiRouteDoc = {
     GET: {
       summary: 'Get a CPQ quote with its lines and totals',
       responses: [{ status: 200, description: 'Quote with lines, charges and totals' }],
-      errors: [cpqErrorDoc(404, 'Quote not found'), cpqErrorDoc(500, 'Internal error')],
+      errors: [cpqErrorDoc(401, 'Unauthorized'), cpqErrorDoc(404, 'Quote not found'), cpqErrorDoc(500, 'Internal error')],
     },
     PATCH: {
       summary: 'Change the quote type of a CPQ quote (ARC)',
@@ -154,11 +161,12 @@ export const openApi: OpenApiRouteDoc = {
     DELETE: {
       summary: 'Soft-delete a CPQ quote',
       description:
-        'Soft-deletes the CPQ quote and its line configurations, and deletes the underlying sales quote and its lines through the sales module command `sales.quotes.delete` (sales events, audit log and undo apply). `quoteId` may be the CPQ configuration id or the sales quote id. Quotes in a terminal status (accepted, rejected, cancelled) cannot be deleted.',
+        'Soft-deletes the CPQ quote and its line configurations, and deletes the underlying sales quote and its lines through the sales module command `sales.quotes.delete` (sales events, audit log and undo apply). Open supplier cost requests of the quote are cancelled (`quote_closed`). `quoteId` may be the CPQ configuration id or the sales quote id. Quotes in a terminal status (accepted, rejected, cancelled) cannot be deleted. Registered mutation guards (resource kind `cpq.quote`, operation `delete`) run first.',
       responses: [{ status: 200, description: '`{ ok: true }`', schema: z.object({ ok: z.literal(true) }) }],
       errors: [
         cpqErrorDoc(404, 'Quote not found'),
         cpqErrorDoc(409, 'Quote is in a terminal status'),
+        cpqErrorDoc(422, 'Blocked by a mutation guard'),
         cpqErrorDoc(500, 'Internal error'),
       ],
     },

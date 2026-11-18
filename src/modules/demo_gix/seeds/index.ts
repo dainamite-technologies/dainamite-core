@@ -2,6 +2,12 @@ import type { CpqUseCaseSeedContext } from '@dainamite/cpq/modules/cpq/lib/seeds
 import { seedGixExamples as seedGixExamplesImpl } from './examples'
 import { seedGixPriceAdjustmentExample } from './price-adjustment-examples'
 import { seedCpqArcExamples } from './arc-examples'
+import { seedGixCostPlusCatalog, seedGixCostPlusExamples } from './cost-plus-examples'
+import { seedGixCostSourcingExamples } from './cost-sourcing-examples'
+import { seedGixCostFxExamples } from './cost-fx-examples'
+import { seedGixCostIndexExamples } from './cost-index-examples'
+import { seedGixCostArcExamples } from './cost-arc-examples'
+import { seedGixCostSourcingWorkflow } from './cost-sourcing-workflow'
 import {
   seedGixBundleData,
   seedGixPriceRules,
@@ -18,7 +24,7 @@ import { seedGixBillingSettings } from './billing'
  * Seed the GIX catalog into the given tenant scope. Idempotent.
  *
  * Order matters: products → pricing tables → attributes → charges → specs/offerings
- *   (which links charges to offerings) → price rules → bundles → wizards.
+ *   (which links charges to offerings) → price rules → bundles → wizards → cost-plus catalog.
  */
 export async function seedGixDefaults(ctx: CpqUseCaseSeedContext): Promise<void> {
   const { em } = ctx
@@ -32,6 +38,10 @@ export async function seedGixDefaults(ctx: CpqUseCaseSeedContext): Promise<void>
   await seedGixPriceRules(em, scope)
   await seedGixBundleData(em, scope)
   await seedGixWizards(em, scope)
+  // Cost-plus: tenant toggle ON, cross-connect cost table, IP Transit offering (idempotent).
+  await seedGixCostPlusCatalog(em, ctx.container, scope)
+  // Supplier cost sourcing recipe (workflow `cpq_cost_sourcing`), seeded disabled.
+  await seedGixCostSourcingWorkflow(em, ctx.container, scope)
   // Billing seller details, so the demo tenant can post invoices out of the box.
   await seedGixBillingSettings(em, scope)
 }
@@ -52,4 +62,14 @@ export async function seedGixExamples(ctx: CpqUseCaseSeedContext): Promise<void>
   // Idempotent + self-contained — items use generic name-only inputs so
   // they don't depend on the GIX product catalog.
   await seedCpqArcExamples(ctx.em, ctx.container, scope)
+  // Cost-plus demo quotes in the pending / estimated / confirmed / expired cost states.
+  await seedGixCostPlusExamples(ctx.em, ctx.container, scope)
+  // Supplier cost sourcing demo quotes: partner tail requested (overdue), declined, answered with a pending proposal.
+  await seedGixCostSourcingExamples(ctx.em, ctx.container, scope)
+  // Foreign-currency cost demo: USD→EUR rates (source Manual, UTC midnight, 3 days) + a EUR quote with a converted USD tail.
+  await seedGixCostFxExamples(ctx.em, ctx.container, scope)
+  // Index cost demo: DEMO-DC-POWER (3 months of values, one correction, one future value) + an index-costed offering with a ready (refreshes) and a with_customer (frozen) quote.
+  await seedGixCostIndexExamples(ctx.em, ctx.container, scope)
+  // ARC costs demo: one live subscription whose partner-tail supplier term ends before its renewal (Renew flags it renegotiation due).
+  await seedGixCostArcExamples(ctx.em, ctx.container, scope)
 }

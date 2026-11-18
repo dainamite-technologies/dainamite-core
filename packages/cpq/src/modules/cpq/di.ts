@@ -11,6 +11,16 @@ import { DefaultCpqInventoryService } from './services/cpqInventoryService'
 import { DefaultCpqOrderService } from './services/cpqOrderService'
 import { CpqAdjustmentService } from './services/priceAdjustments/adjustmentService'
 import { DefaultCpqBundleService } from './services/cpqBundleService'
+import { CpqCostService } from './services/costs/costService'
+import { CpqQuoteCostService } from './services/costs/quoteCostService'
+import { CpqOrderCostReconfirmService } from './services/costs/orderCostReconfirm'
+import { CpqCostSourcingService } from './services/costs/costSourcingService'
+import { CpqCostRequestQueueService } from './services/costs/costRequestQueue'
+import { createSourcingPublisher } from './services/costs/sourcingPublisher'
+import { CpqCostIndexService, findIndexReferences } from './services/costs/costIndexService'
+import { CpqCostExpiryService } from './services/costs/costExpiryService'
+import { tryResolveNotificationService } from './lib/costNotifications'
+import { CpqFxRateResolver, type FxExchangeRateService } from './services/costs/fxRateResolver'
 
 /**
  * Resolve dependencies from the container closure rather than via destructured
@@ -20,11 +30,75 @@ import { DefaultCpqBundleService } from './services/cpqBundleService'
  * pre-compiled in node_modules.
  */
 export function register(container: AppContainer) {
+  // Publishes the sourcing signals of every committed quote write as the non-broadcast cost_* events (step 12). One
+  // instance per scope; every producer (sourcing, quote costs, adjustments, quoting, orders) receives the same one.
+  const sourcingPublisher = () => createSourcingPublisher({ em: container.resolve('em') })
   container.register({
+    // Dated FX rates (FX spec Q7): `exchangeRateService` belongs to the optional `currencies` module, so it is resolved only
+    // when registered; without it the resolver is "unavailable" and foreign costs stay CURRENCY_NO_RATE. One instance per
+    // scope, so its memo lives for one request / write.
+    cpqFxRateResolver: asFunction(() => new CpqFxRateResolver({
+      exchangeRateService: container.hasRegistration('exchangeRateService')
+        ? container.resolve('exchangeRateService') as FxExchangeRateService
+        : null,
+      featureTogglesService: container.resolve('featureTogglesService'),
+    })).scoped(),
+    // Cost indices and their append-only values (index-costs spec). `findReferences` is the in-use query over the
+    // elements' `cost_index_id` (INDEX_IN_USE / INDEX_CURRENCY_LOCKED, element counts).
+    cpqCostIndexService: asFunction(() => new CpqCostIndexService({
+      em: container.resolve('em'),
+      findReferences: findIndexReferences,
+    })).scoped(),
+    // Supplier cost expiry warnings (index-costs spec step 16 / 17): used by the `cpq-cost-expiry` worker and the
+    // `run-cost-expiry` CLI. Notifications are an optional peer: with no `notificationService` (or no `rbacService`) the
+    // warnings are events only.
+    cpqCostExpiryService: asFunction(() => {
+      const notificationService = tryResolveNotificationService(container)
+      const rbacService = container.hasRegistration('rbacService') ? container.resolve('rbacService') : null
+      return new CpqCostExpiryService({
+        em: container.resolve('em'),
+        featureTogglesService: container.resolve('featureTogglesService'),
+        notify: notificationService && rbacService ? { notificationService, rbacService } : null,
+      })
+    }).scoped(),
     cpqAdjustmentService: asFunction(() => new CpqAdjustmentService({
       em: container.resolve('em'),
       quotingService: container.resolve('cpqQuotingService'),
       featureTogglesService: container.resolve('featureTogglesService'),
+      costService: container.resolve('cpqCostService'),
+      sourcingPublisher: sourcingPublisher(),
+    })).scoped(),
+    cpqCostService: asFunction(() => new CpqCostService({
+      em: container.resolve('em'),
+      featureTogglesService: container.resolve('featureTogglesService'),
+      fxRateResolver: container.resolve('cpqFxRateResolver'),
+      // Resolved lazily: the sourcing service depends on the cost service (toggle check).
+      onElementsDeactivated: (elementIds: string[], scope: { organizationId: string; tenantId: string }) =>
+        (container.resolve('cpqCostSourcingService') as CpqCostSourcingService).cancelRequestsForElements(elementIds, scope),
+    })).scoped(),
+    cpqQuoteCostService: asFunction(() => new CpqQuoteCostService({
+      em: container.resolve('em'),
+      costService: container.resolve('cpqCostService'),
+      quotingService: container.resolve('cpqQuotingService'),
+      publisher: sourcingPublisher(),
+      featureTogglesService: container.resolve('featureTogglesService'),
+      fxRateResolver: container.resolve('cpqFxRateResolver'),
+    })).scoped(),
+    cpqOrderCostReconfirmService: asFunction(() => new CpqOrderCostReconfirmService({
+      em: container.resolve('em'),
+      costService: container.resolve('cpqCostService'),
+      fxRateResolver: container.resolve('cpqFxRateResolver'),
+    })).scoped(),
+    cpqCostRequestQueueService: asFunction(() => new CpqCostRequestQueueService({
+      em: container.resolve('em'),
+      featureTogglesService: container.resolve('featureTogglesService'),
+    })).scoped(),
+    cpqCostSourcingService: asFunction(() => new CpqCostSourcingService({
+      em: container.resolve('em'),
+      fxRateResolver: container.resolve('cpqFxRateResolver'),
+      costService: container.resolve('cpqCostService'),
+      quotingService: container.resolve('cpqQuotingService'),
+      publisher: sourcingPublisher(),
     })).scoped(),
     cpqPricingService: asFunction(({ em }: { em: EntityManager }) => {
       return new DefaultCpqPricingService(em)
@@ -54,6 +128,9 @@ export function register(container: AppContainer) {
         cpqValidationService: container.resolve('cpqValidationService'),
         cpqProductService: container.resolve('cpqProductService'),
         salesDocumentNumberGenerator: container.resolve('salesDocumentNumberGenerator'),
+        cpqCostService: container.resolve('cpqCostService'),
+        cpqFxRateResolver: container.resolve('cpqFxRateResolver'),
+        sourcingPublisher: sourcingPublisher(),
         cpqBundleService: container.resolve('cpqBundleService'),
       })
     }).scoped().proxy(),
@@ -65,6 +142,8 @@ export function register(container: AppContainer) {
         em: container.resolve('em'),
         cpqInventoryService: container.resolve('cpqInventoryService'),
         salesDocumentNumberGenerator: container.resolve('salesDocumentNumberGenerator'),
+        cpqCostService: container.resolve('cpqCostService'),
+        sourcingPublisher: sourcingPublisher(),
       })
     }).scoped(),
     cpqWizardService: asFunction(({ em }: { em: EntityManager }) => {

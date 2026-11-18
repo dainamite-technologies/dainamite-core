@@ -48,7 +48,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ orderId
       return NextResponse.json({ error: 'Validation error', details: err.issues }, { status: 400 })
     }
     if (isOrderError(err)) {
-      return NextResponse.json({ error: err.message }, { status: err.status })
+      // `details` carries the COST_SOURCE_CHANGED lines when the transition activates the order.
+      return NextResponse.json({ error: err.message, ...err.details }, { status: err.status })
     }
     const errObj = err as Record<string, unknown>
     if (typeof errObj?.status === 'number' && typeof errObj?.error === 'string') {

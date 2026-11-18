@@ -1,6 +1,8 @@
 import { LockMode } from '@mikro-orm/core'
 import { DefaultCpqQuotingService, QuotingError } from '../cpqQuotingService'
 import type { TenantScope } from '../types'
+import { CpqQuoteConfiguration, CpqQuoteLineConfiguration, CpqQuoteLineCost } from '../../data/entities'
+import { SalesQuote, SalesQuoteLine } from '@open-mercato/core/modules/sales/data/entities'
 
 interface MockEm {
   transactional: jest.MockedFunction<(callback: (em: MockEm) => Promise<unknown>) => Promise<unknown>>
@@ -709,5 +711,104 @@ describe('DefaultCpqQuotingService.recalculate', () => {
 
     expect(result.cpqStatus).toBe('accepted')
     expect(em.flush).not.toHaveBeenCalled()
+  })
+})
+
+// Supplier sourcing step 9: closing causes cancel the quote's open cost requests in the same write.
+describe('DefaultCpqQuotingService — cost request cancellation on close and delete', () => {
+  const pricingSummary = { nrcTotal: 0, mrcTotal: 0, usageCharges: [], usageTotalEstimated: null, discountTotal: 0, surchargeTotal: 0, currencyCode: 'USD' }
+  const openCost = (over: Record<string, unknown> = {}) => ({
+    id: 'cost-1', quoteConfigurationId: 'cpq-1', quoteId: 'sq-1', quoteLineId: 'sl-1', costKey: 'tail', name: 'Tail', chargeCode: 'fee', deletedAt: null,
+    sourcingStatus: 'requested', costRequestId: 'req-1', requestSeq: 1, proposedAmount: null, requestHistory: [], requestedAt: new Date('2026-01-01'), requestedByUserId: 'u1', ...over,
+  })
+
+  function setup(cpqStatus: string, costs = [openCost()]) {
+    const { em, service } = makeService()
+    const published: unknown[][] = []
+    const publisher = jest.fn(async (signals: unknown[]) => { published.push(signals) })
+    ;(service as unknown as { sourcingPublisher: unknown }).sourcingPublisher = publisher
+    const config: Record<string, unknown> = {
+      id: 'cpq-1', quoteId: 'sq-1', cpqStatus, customerId: 'cust', currencyCode: 'USD', version: 1, parentQuoteId: null, pricingRevision: 1,
+      validationResult: { valid: true, errors: [] }, pricingSummary, deletedAt: null,
+    }
+    const salesQuote: Record<string, unknown> = { id: 'sq-1', currencyCode: 'USD', quoteNumber: 'Q-001', deletedAt: null }
+    const lineConfigs: Array<Record<string, unknown>> = [{ id: 'lc-1', quoteLineId: 'sl-1', quoteConfigurationId: 'cpq-1', deletedAt: null }]
+    const salesLines: Array<Record<string, unknown>> = [{ id: 'sl-1', deletedAt: null }]
+    em.findOne.mockImplementation(async (entity: unknown, where: Record<string, unknown>) => {
+      if (entity === CpqQuoteConfiguration) return config
+      if (entity === SalesQuote) return salesQuote
+      return null
+    })
+    em.find.mockImplementation(async (entity: unknown, where: Record<string, unknown>) => {
+      if (entity === CpqQuoteLineCost) return where.sourcingStatus === 'requested' ? costs.filter((row) => row.sourcingStatus === 'requested') : costs
+      if (entity === CpqQuoteLineConfiguration) return lineConfigs
+      if (entity === SalesQuoteLine) return salesLines.filter((row) => (where.id as { $in: unknown[] }).$in.includes(row.id))
+      return []
+    })
+    return { em, service, config, salesQuote, lineConfigs, salesLines, costs, published }
+  }
+
+  it.each(['rejected', 'cancelled'])('moving a quote to %s cancels its open requests (quote_closed) and publishes request_cancelled after commit', async (target) => {
+    const { service, config, costs, published } = setup('ready')
+    await service.transitionStatus('cpq-1', target, SCOPE, 'user-1')
+    expect(config.cpqStatus).toBe(target)
+    expect(costs[0]).toMatchObject({ sourcingStatus: 'cancelled', cancelReason: 'quote_closed', costRequestId: 'req-1', proposedAmount: null })
+    expect(costs[0].requestHistory).toEqual([expect.objectContaining({ outcome: 'cancelled', reason: 'quote_closed', closedByUserId: 'user-1' })])
+    expect(published).toEqual([[expect.objectContaining({ kind: 'request_cancelled', reason: 'quote_closed', costRequestId: 'req-1' })]])
+  })
+
+  it('accepting a quote keeps its requests open (Q6); so does any non-closing transition', async () => {
+    for (const target of ['accepted', 'with_customer']) {
+      const { service, costs, published } = setup('ready')
+      await service.transitionStatus('cpq-1', target, SCOPE)
+      expect(costs[0]).toMatchObject({ sourcingStatus: 'requested', costRequestId: 'req-1' })
+      expect(published).toEqual([])
+    }
+  })
+
+  it('a refused transition cancels nothing', async () => {
+    const { service, costs } = setup('new')
+    await expect(service.transitionStatus('cpq-1', 'new', SCOPE)).rejects.toMatchObject({ status: 409 })
+    expect(costs[0].sourcingStatus).toBe('requested')
+  })
+
+  it('deleteQuote soft-deletes config, lines, sales quote and sales lines, cancels open requests and answers { ok: true }', async () => {
+    const { service, config, salesQuote, lineConfigs, salesLines, costs, published } = setup('ready')
+    expect(await service.deleteQuote('cpq-1', SCOPE, 'user-1')).toEqual({ ok: true })
+    for (const row of [config, salesQuote, ...lineConfigs, ...salesLines]) expect(row.deletedAt).toBeInstanceOf(Date)
+    expect(costs[0]).toMatchObject({ sourcingStatus: 'cancelled', cancelReason: 'quote_closed' })
+    expect(published).toEqual([[expect.objectContaining({ kind: 'request_cancelled', reason: 'quote_closed' })]])
+  })
+
+  it('deleteQuote reads the sales lines in ONE tenant-scoped query and the sales quote scoped', async () => {
+    const { em, service } = setup('ready')
+    await service.deleteQuote('cpq-1', SCOPE)
+    const lineReads = em.find.mock.calls.filter((call: unknown[]) => call[0] === SalesQuoteLine)
+    expect(lineReads).toHaveLength(1)
+    expect(lineReads[0][1]).toMatchObject({ id: { $in: ['sl-1'] }, organizationId: SCOPE.organizationId, tenantId: SCOPE.tenantId })
+    const salesRead = em.findOne.mock.calls.find((call: unknown[]) => call[0] === SalesQuote)
+    expect(salesRead?.[1]).toMatchObject({ id: 'sq-1', organizationId: SCOPE.organizationId, tenantId: SCOPE.tenantId })
+  })
+
+  it.each(['accepted', 'rejected', 'cancelled'])('deleteQuote answers 409 for a quote in %s status and writes nothing', async (status) => {
+    const { service, config, salesQuote, lineConfigs, costs, published } = setup(status)
+    await expect(service.deleteQuote('cpq-1', SCOPE)).rejects.toMatchObject({ status: 409, message: expect.stringContaining(status) })
+    expect(config.deletedAt).toBeNull()
+    expect(salesQuote.deletedAt).toBeNull()
+    expect(lineConfigs.every((row) => row.deletedAt === null)).toBe(true)
+    expect(costs[0].sourcingStatus).toBe('requested')
+    expect(published).toEqual([])
+  })
+
+  it('deleteQuote answers 404 for an unknown quote and writes nothing', async () => {
+    const { em, service } = setup('ready')
+    em.findOne.mockResolvedValue(null)
+    await expect(service.deleteQuote('nope', SCOPE)).rejects.toMatchObject({ status: 404 })
+  })
+
+  it('deleteQuote runs under the aggregate lock (pessimistic write, scoped)', async () => {
+    const { em, service } = setup('ready')
+    await service.deleteQuote('cpq-1', SCOPE)
+    expect(em.findOne).toHaveBeenCalledWith(CpqQuoteConfiguration, expect.objectContaining({ id: 'cpq-1', organizationId: SCOPE.organizationId, tenantId: SCOPE.tenantId, deletedAt: null }), expect.objectContaining({ lockMode: LockMode.PESSIMISTIC_WRITE }))
   })
 })

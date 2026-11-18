@@ -1,3 +1,5 @@
+import { canonicalJson as canonical } from '../lib/stateHash'
+
 /**
  * Frozen Amend mirror lines.
  *
@@ -23,8 +25,39 @@ export const ARC_PRICE_FROZEN_KEY = '_arcPriceFrozen'
  */
 export const ARC_REPRICED_KEY = '_arcRepriced'
 
+/**
+ * Set on a Renew mirror line of a cost-plus item (feature spec Q4) beside `_arcPriceFrozen`: the frozen
+ * Renew line keeps its contracted charges until the rep reconfigures it.
+ */
+export const ARC_COST_PLUS_FROZEN_KEY = '_arcCostPlusFrozen'
+
+/**
+ * Set when a mirror line's pricing inputs change (Amend or Renew; un-freezing an Amend or cost-plus Renew
+ * line sets it too). Only a mirror line carrying it gets catalog cost lines (Q13) and writes costs back at
+ * activation (Q5).
+ */
+export const ARC_RECONFIGURED_KEY = '_arcReconfigured'
+
+/**
+ * Set on an ARC mirror line whose subscription item costs are carried onto the quote (ARC costs spec Q5): the
+ * line is cost-managed and always syncs by `replace` at activation. Written by `carryItemCosts` (spec step 6).
+ */
+export const ARC_COSTS_CARRIED_KEY = '_arcCostsCarried'
+
+/** `itemCostSetHash` of the item's open costs at mirroring: the baseline of the `COST_SOURCE_CHANGED` guard (I-12). */
+export const ARC_CARRIED_COST_SET_HASH_KEY = '_arcCarriedCostSetHash'
+
+/**
+ * Set on an ORDER line at conversion: `_arcCarriedCostSetHash` as it was then. Activation compares the subscription's open
+ * item costs with this frozen value, so nothing that happens to the quote afterwards can reset the I-12 baseline.
+ */
+export const ARC_CONVERTED_COST_SET_HASH_KEY = '_arcConvertedCostSetHash'
+
 /** Markers that describe quote-time pricing state and never leave the quote. */
-const QUOTE_ONLY_ARC_KEYS = [ARC_PRICE_FROZEN_KEY, ARC_REPRICED_KEY] as const
+const QUOTE_ONLY_ARC_KEYS = [
+  ARC_PRICE_FROZEN_KEY, ARC_REPRICED_KEY, ARC_COST_PLUS_FROZEN_KEY, ARC_RECONFIGURED_KEY, ARC_COSTS_CARRIED_KEY, ARC_CARRIED_COST_SET_HASH_KEY,
+  ARC_CONVERTED_COST_SET_HASH_KEY,
+] as const
 
 const ARC_MARKER_PREFIX = '_arc'
 
@@ -44,26 +77,48 @@ export function isArcMirrorLine(configuration: Record<string, unknown> | null | 
   return (quoteType === 'amend' || quoteType === 'renew' || quoteType === 'cancel') && typeof configuration?._arcMirroredFromItemId === 'string'
 }
 
-export function isFrozenAmendMirrorLine(
+/**
+ * A mirror line that keeps the item's stored charges: an Amend mirror line carrying `_arcPriceFrozen`, or a
+ * Renew mirror line carrying both `_arcPriceFrozen` and `_arcCostPlusFrozen` (a cost-plus item, Q4).
+ */
+export function isFrozenMirrorLine(
   configuration: Record<string, unknown> | null | undefined,
   quoteType: string | null | undefined,
 ): boolean {
-  return (
-    quoteType === 'amend' &&
-    typeof configuration?._arcMirroredFromItemId === 'string' &&
-    isArcPriceFrozen(configuration)
-  )
+  if (typeof configuration?._arcMirroredFromItemId !== 'string' || !isArcPriceFrozen(configuration)) return false
+  return quoteType === 'amend' || (quoteType === 'renew' && configuration?.[ARC_COST_PLUS_FROZEN_KEY] === true)
+}
+
+/** Whether a mirror line was reconfigured (a pricing input changed): the only mirror line kind with catalog cost lines. */
+export function isArcReconfigured(configuration: Record<string, unknown> | null | undefined): boolean {
+  return configuration?.[ARC_RECONFIGURED_KEY] === true
+}
+
+/**
+ * A cost-managed STANDALONE Renew mirror line (ARC costs spec, R1c): a Renew mirror that is not frozen and carries
+ * `_arcCostsCarried` (set on every standalone Renew mirror, even for an item with no open costs). Its costs are
+ * reconciled with today's catalog on every saved recalculation. Phase 1 frozen lines and merge-renew lines never match.
+ */
+export function isCostManagedRenewLine(
+  configuration: Record<string, unknown> | null | undefined,
+  quoteType: string | null | undefined,
+): boolean {
+  return quoteType === 'renew' && typeof configuration?._arcMirroredFromItemId === 'string'
+    && configuration?.[ARC_COSTS_CARRIED_KEY] === true && !isArcPriceFrozen(configuration)
 }
 
 /**
  * Configuration for a mirror line: the item's configuration plus the ARC
- * markers. Only Amend lines are frozen — Renew re-prices by product decision
- * and Cancel lines are not priced.
+ * markers. Amend lines are frozen; a merge-Renew line is frozen only for a cost-plus
+ * item (`options.costPlus` + `options.mergeMode`, ARC costs spec Q10); a STANDALONE Renew line is no longer frozen
+ * (ARC costs spec, "Renew mirror line pricing": it is re-priced at today's standard from reconciled costs).
+ * Cancel lines are not priced.
  */
 export function buildArcMirrorConfiguration(
   itemConfiguration: Record<string, unknown> | null | undefined,
   item: { id: string; name: string },
   quoteType: ArcMirrorQuoteType,
+  options: { costPlus?: boolean; mergeMode?: boolean } = {},
 ): Record<string, unknown> {
   return {
     // An item's configuration can carry markers from an earlier ARC quote
@@ -72,7 +127,22 @@ export function buildArcMirrorConfiguration(
     _arcMirroredFromItemId: item.id,
     _arcMirroredName: item.name,
     ...(quoteType === 'amend' ? { [ARC_PRICE_FROZEN_KEY]: true } : {}),
+    ...(quoteType === 'renew' && options.costPlus === true && options.mergeMode === true
+      ? { [ARC_PRICE_FROZEN_KEY]: true, [ARC_COST_PLUS_FROZEN_KEY]: true }
+      : {}),
   }
+}
+
+/**
+ * Line configuration as an API response carries it: the I-12 baseline hash is internal (an unsalted hash over cost values
+ * is a guess-confirmation oracle for confidential costs) and never leaves the server. Nothing client-side reads it.
+ */
+export function stripCostHashMarkers(
+  configuration: Record<string, unknown> | null | undefined,
+): Record<string, unknown> | null | undefined {
+  if (!configuration || !(ARC_CARRIED_COST_SET_HASH_KEY in configuration || ARC_CONVERTED_COST_SET_HASH_KEY in configuration)) return configuration
+  const { [ARC_CARRIED_COST_SET_HASH_KEY]: _carried, [ARC_CONVERTED_COST_SET_HASH_KEY]: _converted, ...rest } = configuration
+  return rest
 }
 
 /**
@@ -101,17 +171,6 @@ export function stripArcMarkers(configuration: Record<string, unknown> | null | 
     if (!key.startsWith(ARC_MARKER_PREFIX)) out[key] = value
   }
   return out
-}
-
-function canonical(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`
-  if (value && typeof value === 'object') {
-    const entries = Object.keys(value as Record<string, unknown>)
-      .sort()
-      .map((key) => `${JSON.stringify(key)}:${canonical((value as Record<string, unknown>)[key])}`)
-    return `{${entries.join(',')}}`
-  }
-  return JSON.stringify(value ?? null)
 }
 
 function isoDay(value: Date | string | null | undefined): string | null {

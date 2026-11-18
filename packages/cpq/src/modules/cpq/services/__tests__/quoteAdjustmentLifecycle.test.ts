@@ -60,7 +60,8 @@ describe('cost lines and markup overrides (R16)', () => {
     expect(copy).toMatchObject({ quoteConfigurationId: 'target', quoteId: 'new-sales', quoteLineId: 'new-line', ...scope,
       origin: 'manual', valueOrigin: 'manual', valueStatus: 'confirmed', unitAmount: '40.0000', instanceAmount: '40.0000', supplierName: 'Acme',
       supplierQuoteRef: 'Q-9', validUntil: '2020-01-01', note: 'negotiated',
-      sourcingStatus: 'not_requested', costRequestId: null, requestSeq: null, requestedAt: null, requestedByUserId: null, answeredAt: null, answeredByUserId: null, declineReason: null, proposedAmount: null })
+      sourcingStatus: 'not_requested', costRequestId: null, requestSeq: null, requestedAt: null, requestedByUserId: null, answeredAt: null, answeredByUserId: null, declineReason: null, proposedAmount: null,
+      proposedAnswer: null, requestHistory: [], requestSupplierId: null, requestSupplierName: null, lastAnswerHash: null, cancelReason: null })
     expect(copy.id).not.toBe('cost-1')
     expect(source).toMatchObject({ quoteLineId: 'old-line', sourcingStatus: 'answered', costRequestId: 'req-1' })
     expect(em.persist).toHaveBeenCalled()
@@ -84,6 +85,28 @@ describe('cost lines and markup overrides (R16)', () => {
     expect(costs[0].deletedAt).toBeInstanceOf(Date)
     expect(overrides[0].deletedAt).toBeInstanceOf(Date)
     expect(em.find).toHaveBeenCalledWith(CpqQuoteLineCost, expect.objectContaining({ quoteConfigurationId: 'quote', quoteLineId: { $in: ['root', 'child'] }, ...scope, deletedAt: null }), expect.anything())
+  })
+  it('removing a line tree cancels the open cost requests of its lines (line_removed) before soft-deleting them (MODIFIED, step 9)', async () => {
+    const root = { id: 'root-config', quoteLineId: 'root', parentLineId: null, deletedAt: null }
+    const open = { id: 'c1', quoteConfigurationId: 'quote', quoteId: 'sales', quoteLineId: 'root', costKey: 'tail', name: 'Tail', chargeCode: 'fee', deletedAt: null,
+      sourcingStatus: 'requested', costRequestId: 'req-1', requestSeq: 1, proposedAmount: null, requestHistory: [], requestedAt: new Date('2026-01-01'), requestedByUserId: 'u1' }
+    const answered = { id: 'c2', quoteLineId: 'root', costKey: 'other', deletedAt: null, sourcingStatus: 'answered', costRequestId: 'req-2', requestSeq: 1, proposedAmount: '70.0000' }
+    const em = { find: jest.fn(async (entity: unknown) => entity === CpqQuoteLineConfiguration ? [root] : entity === CpqQuoteLineCost ? [open, answered] : []), flush: jest.fn().mockResolvedValue(undefined) }
+    const signals: Array<Record<string, unknown>> = []
+    await removeQuoteLineTree(em as never, 'quote', root as never, scope, { actorUserId: 'u2', signals: signals as never })
+    expect(open.deletedAt).toBeInstanceOf(Date)
+    expect(open).toMatchObject({ sourcingStatus: 'cancelled', cancelReason: 'line_removed', costRequestId: 'req-1', proposedAmount: null })
+    expect(signals).toEqual([expect.objectContaining({ kind: 'request_cancelled', costRequestId: 'req-1', reason: 'line_removed', costLineId: 'c1' })])
+    // only an OPEN request is cancelled: an answered one (with its proposal) is just soft-deleted with its row
+    expect(answered).toMatchObject({ sourcingStatus: 'answered', proposedAmount: '70.0000' })
+    expect(answered.deletedAt).toBeInstanceOf(Date)
+  })
+  it('cloning leaves the source cost row as it was and copies none of the request identity', async () => {
+    const source = cost({ sourcingStatus: 'requested', costRequestId: 'req-9', requestSeq: 4 })
+    const { created } = await clone([source], [])
+    const copy = created.find((entry) => entry.entity === CpqQuoteLineCost)!.values
+    expect(copy).toMatchObject({ sourcingStatus: 'not_requested', costRequestId: null, requestSeq: null })
+    expect(source).toMatchObject({ sourcingStatus: 'requested', costRequestId: 'req-9', requestSeq: 4, proposedAmount: '39.0000', declineReason: 'x' })
   })
 })
 

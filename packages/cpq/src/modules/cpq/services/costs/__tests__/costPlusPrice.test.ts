@@ -52,6 +52,15 @@ describe('computeCostPlusPrice (R2)', () => {
     expect(price({ markupRule: 'markup_percent', markupValue: 25, markupCurrencyCode: 'USD' })).toMatchObject({ ok: true, listTotal: 500 })
   })
 
+  it('spec scenario: 300 USD at 0.92 with markup_percent 25 gives 345.00 (converted at full precision, rounded once)', () => {
+    expect(price({ costs: [{ ...basis(300), fxRate: '0.92000000' }], markupValue: 25 })).toEqual({ ok: true, listTotal: 345, listUnit: 345, quantity: 1 })
+    // mixed currencies: 300 USD x 0.92 + 100 EUR = 376 -> x 1.25 = 470
+    expect(price({ costs: [{ ...basis(300), fxRate: '0.92' }, basis(100)] })).toMatchObject({ ok: true, listTotal: 470 })
+    // 10 x 0.123456 = 1.23456, rounded once at the list total
+    expect(price({ costs: [{ ...basis(10), fxRate: '0.123456' }], markupValue: 0 })).toMatchObject({ listTotal: 1.23 })
+    expect(price({ costs: [{ ...basis(10), fxRate: null }], markupValue: 0 })).toMatchObject({ listTotal: 10 })
+  })
+
   it('spec scenario: costs 300 + 100 at markup_percent 25 give 500.00', () => {
     expect(price()).toEqual({ ok: true, listTotal: 500, listUnit: 500, quantity: 1 })
   })
@@ -286,5 +295,48 @@ describe('cost-plus pricing in recalculateInternal', () => {
     const { em, quoting, cfg } = harness({ costs: [costRow({ costKey: 'tail', origin: 'catalog' })], elements: [element], status: 'with_customer' })
     const result = await quoting.recalculateLockedQuote(em as never, cfg(), SCOPE, false)
     expect(result.pricingSummary.mrcTotal).toBe(375)
+  })
+})
+
+// FX step 6: a USD fixed cost on a EUR quote converts at the dated rate; without a rate the charge stays unpriced.
+describe('foreign-currency fixed cost on a EUR quote', () => {
+  const usdElement = { id: 'el', ...SCOPE, deletedAt: null, isActive: true, productChargeId: 'charge-1', code: 'tail', name: 'Tail', role: 'price_basis', costType: 'mrc',
+    source: 'fixed', costModel: 'flat', amount: '300', currencyCode: 'USD', costTableId: null, costColumnKey: null, estimateAmount: null, applicabilityCondition: null, sortOrder: 0 }
+  const withRate = (rate: Record<string, unknown> | null) => {
+    const h = harness({ costs: [], elements: [usdElement], status: 'new' })
+    const resolve = jest.fn(async () => rate ?? { ok: false, code: 'CURRENCY_NO_RATE', reason: 'not_found' })
+    ;(h.quoting as unknown as { fxRateResolver: unknown }).fxRateResolver = { resolve }
+    return { ...h, resolve }
+  }
+
+  it('converts: 300 USD x 0.92 x 1.25 = 345.00, the cost line keeps 300 USD and stores the snapshot', async () => {
+    const h = withRate({ ok: true, rate: '0.92000000', rateDate: '2026-11-11', source: 'Manual', derivation: 'direct' })
+    const config = h.cfg()
+    const result = await h.quoting.recalculateLockedQuote(h.em as never, config, SCOPE, true)
+    expect(h.em.create).toHaveBeenCalledWith(CpqQuoteLineCost, expect.objectContaining({
+      valueStatus: 'confirmed', unitAmount: '300', instanceAmount: '300', currencyCode: 'USD',
+      fxRate: '0.92000000', fxRateDate: '2026-11-11', fxRateSource: 'Manual', fxRateDerivation: 'direct',
+    }))
+    expect(h.lineConfig.charges).toEqual([expect.objectContaining({ pricingMethod: 'cost_plus', totalPrice: 345 })])
+    expect(result.pricingSummary.mrcTotal).toBe(345)
+    expect(config.cpqStatus).toBe('ready')
+  })
+
+  it('a preview prices the same 345.00 and persists nothing', async () => {
+    const h = withRate({ ok: true, rate: '0.92000000', rateDate: '2026-11-11', source: 'Manual', derivation: 'direct' })
+    const result = await h.quoting.recalculateLockedQuote(h.em as never, h.cfg(), SCOPE, false)
+    expect(h.em.persist).not.toHaveBeenCalled()
+    expect(result.pricingSummary.mrcTotal).toBe(345)
+  })
+
+  it('without a rate: none + CURRENCY_NO_RATE (unit amount and currency kept) and the charge stays unpriced (incomplete quote)', async () => {
+    const h = withRate(null)
+    const config = h.cfg()
+    const result = await h.quoting.recalculateLockedQuote(h.em as never, config, SCOPE, true)
+    expect(h.em.persist).toHaveBeenCalledTimes(1)
+    expect(h.em.create).toHaveBeenCalledWith(CpqQuoteLineCost, expect.objectContaining({ valueStatus: 'none', unitAmount: '300', instanceAmount: null, currencyCode: 'USD', errorCode: 'CURRENCY_NO_RATE', fxRate: null }))
+    expect(h.lineConfig.charges).toEqual([expect.objectContaining({ pricingMethod: 'cost_plus', unitPrice: null, totalPrice: null })])
+    expect(result.pricingSummary.mrcTotal).toBe(0)
+    expect(config.cpqStatus).toBe('incomplete')
   })
 })

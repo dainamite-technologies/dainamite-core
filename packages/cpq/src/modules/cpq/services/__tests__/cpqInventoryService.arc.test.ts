@@ -607,7 +607,7 @@ describe('change-log snapshots carry inventory costs', () => {
     orderLineCostId: `olc-${costKey}`, costKey, chargeCode: null, origin: 'catalog', costElementId: null,
     name: `Cost ${costKey}`, role: 'price_basis', costType: 'one_off', source: 'supplier', costModel: 'fixed',
     valueStatus: 'known', valueOrigin: null, unitAmount: '270.0000', instanceAmount: '270.0000', totalAmount: '270.0000',
-    currencyCode: 'EUR', fxRate: null, fxRateDate: null, indexSnapshot: null, supplierId: 'sup-1', supplierName: 'Acme',
+    currencyCode: 'EUR', fxRate: null, fxRateDate: null, fxRateSource: null, fxRateDerivation: null, indexSnapshot: null, supplierId: 'sup-1', supplierName: 'Acme',
     supplierQuoteRef: 'Q-9', validUntil: null, supplierTermEnd: null, supplierMinTermMonths: null, note: null,
     ...over,
   })
@@ -678,7 +678,7 @@ describe('ARC inventory cost write-back', () => {
     orderLineCostId: `olc-${costKey}`, costKey, chargeCode: null, origin: 'catalog', costElementId: null,
     name: `Cost ${costKey}`, role: 'price_basis', costType: 'one_off', source: 'supplier', costModel: 'fixed',
     valueStatus: 'known', valueOrigin: null, unitAmount: amount, instanceAmount: amount, totalAmount: amount,
-    currencyCode: 'EUR', fxRate: null, fxRateDate: null, indexSnapshot: null, supplierId: 'sup-1', supplierName: 'Acme',
+    currencyCode: 'EUR', fxRate: null, fxRateDate: null, fxRateSource: null, fxRateDerivation: null, indexSnapshot: null, supplierId: 'sup-1', supplierName: 'Acme',
     supplierQuoteRef: null, validUntil: null, supplierTermEnd: null, supplierMinTermMonths: null, note: null,
     ...over,
   })
@@ -752,6 +752,41 @@ describe('ARC inventory cost write-back', () => {
     expect(result.inventoryCostChanges).toEqual([
       expect.objectContaining({ inventoryCostId: 'ic-1', kind: 'changed', costKey: 'tail', changeLogId: result.changeLog.id }),
     ])
+  })
+
+  it('ARC costs step 8: a cost-managed Amend line writes in place with the same id; the after_snapshot equals the new state; an unchanged key is not written', async () => {
+    const { em, service } = setup()
+    em.seed(CpqInventoryCost, [
+      costRow('ic-1', { subscriptionItemId: 'item-1' }, 'tail', '270'),
+      costRow('ic-2', { subscriptionItemId: 'item-1' }, 'install', '1500', { origin: 'manual' }),
+    ])
+    const result = await amend(service, [
+      { action: 'modify', quoteLineId: 'ql-1', sourceSubscriptionItemId: 'item-1',
+        costSync: { mode: 'replace', fullImage: true, seeds: [seed('tail', '240', { origin: 'carried', valueOrigin: 'manual', inventoryCostId: 'ic-1' }), seed('install', '1500', { origin: 'carried', valueOrigin: 'carried', inventoryCostId: 'ic-2' })] } },
+    ])
+    const rows = em.rows(CpqInventoryCost)
+    expect(rows.map((r) => r.id)).toEqual(['ic-1', 'ic-2'])
+    expect(rows[0]).toMatchObject({ totalAmount: '240', origin: 'catalog', lastChangeId: result.changeLog.id })
+    expect(rows[1]).toMatchObject({ origin: 'manual', lastChangeId: 'log-old' })
+    expect(costsOf(result.changeLog.afterSnapshot, 'item-1').map((c) => [c.id, c.totalAmount])).toEqual([['ic-2', '1500'], ['ic-1', '240']]) // sorted by key: install, tail
+    expect(result.inventoryCostChanges.map((c) => [c.inventoryCostId, c.kind])).toEqual([['ic-1', 'changed']])
+  })
+
+  it('ARC costs step 8: a returning key on a cost-managed Renew line is reactivated on its own row; a removed carried key ends at effective_at', async () => {
+    const { em, service } = setup()
+    em.seed(CpqInventoryCost, [
+      costRow('ic-back', { subscriptionItemId: 'item-1' }, 'back', '5', { status: 'ended', endedAt: '2026-02-01' }),
+      costRow('ic-gone', { subscriptionItemId: 'item-1' }, 'gone', '9', { origin: 'manual' }),
+    ])
+    const result = await service.applyRenewal(
+      { subscriptionId: 'sub-1', sourceQuoteId: 'q', sourceOrderId: 'o', performedByUserId: null, term: { newTermStart: '2027-01-01', newTermEnd: '2028-01-01' },
+        lineChanges: [{ action: 'modify', quoteLineId: 'ql-1', sourceSubscriptionItemId: 'item-1', costSync: { mode: 'replace', fullImage: true, seeds: [seed('back', '5')] } }] },
+      SCOPE,
+    )
+    const byId = Object.fromEntries(em.rows(CpqInventoryCost).map((r) => [r.id as string, r]))
+    expect(byId['ic-back']).toMatchObject({ status: 'active', endedAt: null })
+    expect(byId['ic-gone']).toMatchObject({ status: 'ended', endedAt: result.changeLog.effectiveAt.toISOString().slice(0, 10) })
+    expect(em.rows(CpqInventoryCost)).toHaveLength(2)
   })
 
   it('Amend, reconfigured mirror with an unchanged cost: only the changed key is written and reported', async () => {

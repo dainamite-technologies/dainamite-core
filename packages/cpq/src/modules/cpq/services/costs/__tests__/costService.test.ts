@@ -18,7 +18,7 @@ describe('CpqCostService.assertCostPlusChargeWritable', () => {
 // ─── Cost elements ─────────────────────────────────────────────────
 
 import { LockMode } from '@mikro-orm/core'
-import { CpqChargeCostElement, CpqPricingTable, CpqProductCharge } from '../../../data/entities'
+import { CpqChargeCostElement, CpqCostIndex, CpqPricingTable, CpqProductCharge } from '../../../data/entities'
 
 const SCOPE = { organizationId: 'org', tenantId: 'tenant' }
 const chargeId = '11111111-1111-4111-8111-111111111111'
@@ -27,9 +27,10 @@ const tableId = '22222222-2222-4222-8222-222222222222'
 
 type Row = Record<string, unknown>
 /** Mock EM over in-memory rows, keyed by entity class; `fork` / `transactional` reuse it. */
-function store(rows: { charges?: Row[]; elements?: Row[]; tables?: Row[] }) {
+function store(rows: { charges?: Row[]; elements?: Row[]; tables?: Row[]; indices?: Row[] }) {
   const byEntity = new Map<unknown, Row[]>([
     [CpqProductCharge, rows.charges ?? []], [CpqChargeCostElement, rows.elements ?? []], [CpqPricingTable, rows.tables ?? []],
+    [CpqCostIndex, rows.indices ?? []],
   ])
   const matches = (row: Row, where: Row) => Object.entries(where).every(([key, value]) => {
     if (value && typeof value === 'object' && '$ne' in value) return row[key] !== (value as { $ne: unknown }).$ne
@@ -122,9 +123,77 @@ describe('CpqCostService.createElement', () => {
     await expect(costService(em).createElement(input, SCOPE)).resolves.toMatchObject({ code: 'tail' })
   })
 
-  it('refuses the index source until the index feature ships', async () => {
-    const em = store({ charges: [charge()] })
-    await expect(costService(em).createElement({ ...input, source: 'index' }, SCOPE)).rejects.toMatchObject({ status: 422, message: 'SOURCE_NOT_AVAILABLE' })
+  describe('index elements (index-costs spec, MODIFIED Charge cost elements)', () => {
+    const indexId = '55555555-5555-4555-8555-555555555555'
+    const index = (over: Row = {}) => ({ id: indexId, ...SCOPE, deletedAt: null, isActive: true, code: 'BRENT', ...over })
+    const indexInput = { ...input, source: 'index' as const, costIndexId: indexId, indexFactor: 0.5, indexOffset: 2 }
+
+    it('stores an index element, reading the index FOR SHARE inside the tenant scope', async () => {
+      const em = store({ charges: [charge()], indices: [index()] })
+      const view = await costService(em).createElement(indexInput, SCOPE)
+      expect(view).toMatchObject({ source: 'index', costIndexId: indexId, indexFactor: '0.5', indexOffset: '2', amount: null, currencyCode: null })
+      expect(em.findOne).toHaveBeenCalledWith(CpqCostIndex, { organizationId: 'org', tenantId: 'tenant', deletedAt: null, id: indexId }, { lockMode: LockMode.PESSIMISTIC_READ })
+    })
+
+    it('defaults the factor to 1 and the offset to 0', async () => {
+      const em = store({ charges: [charge()], indices: [index()] })
+      const view = await costService(em).createElement({ ...input, source: 'index', costIndexId: indexId }, SCOPE)
+      expect(view).toMatchObject({ indexFactor: '1', indexOffset: '0' })
+    })
+
+    it('a per_unit index element needs the charge quantity attribute like any per-unit cost', async () => {
+      const em = store({ charges: [charge()], indices: [index()] })
+      await expect(costService(em).createElement({ ...indexInput, costModel: 'per_unit' }, SCOPE)).rejects.toMatchObject({ message: 'QUANTITY_ATTRIBUTE_REQUIRED' })
+      const withQuantity = store({ charges: [charge({ quantityAttributeCode: 'kw' })], indices: [index()] })
+      await expect(costService(withQuantity).createElement({ ...indexInput, costModel: 'per_unit' }, SCOPE)).resolves.toMatchObject({ costModel: 'per_unit' })
+    })
+
+    it.each([
+      ['without an index', { costIndexId: undefined }, [index()], 'INDEX_REQUIRED'],
+      ['with an unknown index', {}, [], 'INDEX_REQUIRED'],
+      ['with an index of another organization', {}, [index({ organizationId: 'other-org' })], 'INDEX_REQUIRED'],
+      ['with a deleted index', {}, [index({ deletedAt: new Date() })], 'INDEX_REQUIRED'],
+      ['with an inactive index', {}, [index({ isActive: false })], 'INDEX_INACTIVE'],
+      ['with a tiered model', { costModel: 'tiered' as const }, [index()], 'MODEL_REQUIRES_TABLE'],
+    ])('refuses an index element %s with 422 %s', async (_label, over, indices, code) => {
+      const em = store({ charges: [charge()], indices })
+      await expect(costService(em).createElement({ ...indexInput, ...over }, SCOPE)).rejects.toMatchObject({ status: 422, message: code })
+      expect(em.persist).not.toHaveBeenCalled()
+    })
+
+    it('refuses index fields on a fixed or table element with 422 INDEX_FIELDS_NOT_ALLOWED', async () => {
+      const em = store({ charges: [charge()], indices: [index()] })
+      const fixedInput = { ...input, source: 'fixed' as const, amount: 10, currencyCode: 'EUR' }
+      for (const extra of [{ costIndexId: indexId }, { indexFactor: 2 }, { indexOffset: 1 }]) {
+        await expect(costService(em).createElement({ ...fixedInput, ...extra }, SCOPE)).rejects.toMatchObject({ status: 422, message: 'INDEX_FIELDS_NOT_ALLOWED' })
+      }
+      await expect(costService(em).createElement({ ...input, source: 'table', costTableId: tableId, costColumnKey: 'mrc', indexFactor: 2 }, SCOPE))
+        .rejects.toMatchObject({ message: 'INDEX_FIELDS_NOT_ALLOWED' })
+    })
+
+    it('updates the factor and offset of an index element', async () => {
+      const row = element({ source: 'index', costIndexId: indexId, indexFactor: '0.5', indexOffset: '2' })
+      const em = store({ charges: [charge()], elements: [row], indices: [index()] })
+      await costService(em).updateElement({ id: elementId, indexFactor: 0.75, indexOffset: 0 }, SCOPE)
+      expect(row).toMatchObject({ indexFactor: '0.75', indexOffset: '0', costIndexId: indexId })
+    })
+
+    it('switching an element to index defaults the factor / offset; switching away needs the index fields cleared', async () => {
+      const row = element({ source: 'on_request' })
+      const em = store({ charges: [charge()], elements: [row], indices: [index()] })
+      await costService(em).updateElement({ id: elementId, source: 'index', costIndexId: indexId }, SCOPE)
+      expect(row).toMatchObject({ source: 'index', costIndexId: indexId, indexFactor: '1', indexOffset: '0' })
+      await expect(costService(em).updateElement({ id: elementId, source: 'on_request' }, SCOPE)).rejects.toMatchObject({ message: 'INDEX_FIELDS_NOT_ALLOWED' })
+      await costService(em).updateElement({ id: elementId, source: 'on_request', costIndexId: null, indexFactor: null, indexOffset: null }, SCOPE)
+      expect(row).toMatchObject({ source: 'on_request', costIndexId: null, indexFactor: null, indexOffset: null })
+    })
+
+    it('an inactive element may keep an inactive index; activating it re-checks the index', async () => {
+      const row = element({ source: 'index', costIndexId: indexId, indexFactor: '1', indexOffset: '0', isActive: false, role: 'margin_only' })
+      const em = store({ charges: [charge()], elements: [row], indices: [index({ isActive: false })] })
+      await expect(costService(em).updateElement({ id: elementId, name: 'Renamed' }, SCOPE)).resolves.toMatchObject({ name: 'Renamed' })
+      await expect(costService(em).updateElement({ id: elementId, isActive: true }, SCOPE)).rejects.toMatchObject({ status: 422, message: 'INDEX_INACTIVE' })
+    })
   })
 })
 
@@ -213,5 +282,39 @@ describe('CpqCostService charge-side helpers', () => {
     await costService(em).deleteChargeElements(em as never, chargeId, SCOPE)
     expect(pb.deletedAt).toBeInstanceOf(Date)
     expect(margin.deletedAt).toBeInstanceOf(Date)
+  })
+})
+
+describe('CpqCostService element deactivation fan-out (sourcing Q4)', () => {
+  const withHook = (em: unknown, hook: jest.Mock) => new CpqCostService({ em: em as never, featureTogglesService: { getBoolConfig: jest.fn() }, onElementsDeactivated: hook })
+
+  it('calls the hook after the deactivation committed, with the element id', async () => {
+    const em = store({ charges: [charge()], elements: [element(), element({ id: 'other', code: 'router' })] })
+    const hook = jest.fn(async () => undefined)
+    await withHook(em, hook).updateElement({ id: elementId, isActive: false }, SCOPE)
+    expect(hook).toHaveBeenCalledWith([elementId], SCOPE)
+    expect(em.flush.mock.invocationCallOrder[0]).toBeLessThan(hook.mock.invocationCallOrder[0])
+  })
+
+  it('also fans out on delete, but not on edits that keep the element active or on refusals', async () => {
+    const hook = jest.fn(async () => undefined)
+    const deleted = store({ charges: [charge()], elements: [element(), element({ id: 'other', code: 'router' })] })
+    await withHook(deleted, hook).deleteElement(elementId, SCOPE)
+    expect(hook).toHaveBeenCalledWith([elementId], SCOPE)
+    hook.mockClear()
+    const edited = store({ charges: [charge()], elements: [element()] })
+    await withHook(edited, hook).updateElement({ id: elementId, name: 'Renamed' }, SCOPE)
+    const refused = store({ charges: [charge()], elements: [element()] })
+    await expect(withHook(refused, hook).updateElement({ id: elementId, isActive: false }, SCOPE)).rejects.toMatchObject({ message: 'NO_PRICE_BASIS_ELEMENT' })
+    expect(hook).not.toHaveBeenCalled()
+  })
+
+  it('a failing fan-out is logged and never fails the catalog write', async () => {
+    const em = store({ charges: [charge()], elements: [element(), element({ id: 'other', code: 'router' })] })
+    const errors = jest.spyOn(console, 'error').mockImplementation(() => undefined)
+    const hook = jest.fn(async () => { throw new Error('boom') })
+    await expect(withHook(em, hook).updateElement({ id: elementId, isActive: false }, SCOPE)).resolves.toMatchObject({ isActive: false })
+    expect(errors).toHaveBeenCalled()
+    errors.mockRestore()
   })
 })

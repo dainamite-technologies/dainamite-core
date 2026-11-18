@@ -8,7 +8,7 @@ const runAfterSuccess = jest.fn()
 
 jest.mock('../context', () => ({
   resolveCpqRouteContext: jest.fn().mockImplementation(async () => ({
-    auth: { sub: 'user-1' }, organizationId: 'org-1', tenantId: 'tenant-1',
+    auth: { sub: '44444444-4444-4444-8444-444444444444' }, organizationId: 'org-1', tenantId: 'tenant-1',
     container: { resolve: () => ({ convertQuoteToOrder }) },
   })),
 }))
@@ -28,6 +28,7 @@ import { POST as convert } from '../orders/route'
 const quoteId = '11111111-1111-4111-8111-111111111111'
 const lineId = '22222222-2222-4222-8222-222222222222'
 const scope = { organizationId: 'org-1', tenantId: 'tenant-1' }
+const ACTOR = '44444444-4444-4444-8444-444444444444'
 const params = { params: Promise.resolve({ quoteId, lineId }) }
 function request(method: string, body?: unknown) {
   return new Request('http://localhost/api/cpq/quotes', {
@@ -80,8 +81,8 @@ it.each(cases.slice(0, 2))('$name validates and applies guard-modified fields', 
   runCpqMutationGuards.mockResolvedValue({ ok: true, modifiedPayload: { quantity: 3 }, runAfterSuccess })
   await invoke()
   const args = name === 'add'
-    ? [quoteId, expect.objectContaining({ quantity: 3 }), scope]
-    : [quoteId, lineId, expect.objectContaining({ quantity: 3 }), scope]
+    ? [quoteId, expect.objectContaining({ quantity: 3 }), scope, ACTOR]
+    : [quoteId, lineId, expect.objectContaining({ quantity: 3 }), scope, ACTOR]
   expect(service).toHaveBeenCalledWith(...args)
 })
 it.each(cases.slice(0, 2))('$name refuses invalid guard-modified fields before writing', async ({ invoke, service }) => {

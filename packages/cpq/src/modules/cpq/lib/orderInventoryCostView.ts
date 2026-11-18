@@ -4,7 +4,8 @@
  * projection without `cpq.costs.view`); these helpers only mirror the shape and never compare feature arrays.
  */
 import type { AssetMargin, ItemMargin } from '../services/costs/itemMargin'
-import { formatMoney, formatPercent, lineCostBadges, type CostBadge, type QuoteMargin } from './quoteCostView'
+import { hasFxRate, type FxFields } from './fxView'
+import { formatMoney, formatPercent, lineCostBadges, type ArcCostsView, type CancelExposureView, type CostBadge, type CostPrevious, type QuoteMargin } from './quoteCostView'
 
 /** What every user with the page's view feature gets for an order or inventory cost. */
 export type CostRow = {
@@ -19,7 +20,7 @@ export type CostRow = {
 }
 
 /** The full projection, `cpq.costs.view` only. Decimals are strings. */
-export type FullCostRow = CostRow & {
+export type FullCostRow = CostRow & FxFields & {
   chargeCode: string | null
   source: string
   costModel: string
@@ -35,6 +36,15 @@ export type FullCostRow = CostRow & {
   endedAt?: string | null
   /** Order costs only: the inventory cost seeded at activation. */
   inventoryCostId?: string | null
+  /** Order costs only: `catalog` | `manual` | `carried` (an ARC cost carried from the subscription item). */
+  origin?: string
+  valueOrigin?: string | null
+  supplierId?: string | null
+  supplierQuoteRef?: string | null
+  /** Order costs only: set when the cost was re-confirmed before activation. */
+  reconfirmedAt?: string | null
+  /** Carried order costs before activation: the item cost as it stands now. */
+  previous?: CostPrevious
 }
 
 export const isFullCostRow = (cost: CostRow | FullCostRow): cost is FullCostRow => 'totalAmount' in cost
@@ -42,8 +52,10 @@ export const isFullCostRow = (cost: CostRow | FullCostRow): cost is FullCostRow 
 export type OrderCostsResponse = {
   orderId: string
   currencyCode?: string
-  lines: Array<{ orderLineId: string; costs: Array<CostRow | FullCostRow> }>
+  lines: Array<{ orderLineId: string; costs: Array<CostRow | FullCostRow>; arcCosts?: ArcCostsView }>
   margin?: QuoteMargin
+  /** Cancel orders (`cpq.costs.view` only): what the cancellation leaves outliving it. */
+  exposure?: CancelExposureView
 }
 
 export type SubscriptionCostsResponse = {
@@ -91,7 +103,9 @@ export function costValueView(cost: FullCostRow, fallbackCurrency: string): Cost
   const raw = cost.totalAmount ?? cost.instanceAmount ?? cost.unitAmount
   const period = cost.costType === 'mrc' ? 'month' : cost.costType === 'nrc' ? 'one_off' : null
   if (raw === null || raw === undefined || raw === '' || Number.isNaN(Number(raw))) return { amount: '—', period: null }
-  return { amount: formatMoney(Number(raw), cost.currencyCode ?? fallbackCurrency), period }
+  // `totalAmount` is in the document currency once a rate applied; the unit / instance amounts stay in the cost currency.
+  const currency = cost.totalAmount !== null && cost.totalAmount !== undefined && hasFxRate(cost) ? fallbackCurrency : cost.currencyCode ?? fallbackCurrency
+  return { amount: formatMoney(Number(raw), currency), period }
 }
 
 export const PERIOD_FALLBACKS: Record<'month' | 'one_off', string> = { month: '/ month', one_off: 'one-off' }

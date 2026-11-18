@@ -22,6 +22,20 @@ const quotePricingSnapshotFields: EventPayloadSchemaField[] = [
   { path: 'occurredAt', type: 'date' },
 ]
 
+/** Identity of the cost line a sourcing event is about (ids and names only; never an amount). */
+const costLineFields: EventPayloadSchemaField[] = [
+  { path: 'tenantId', type: 'text' },
+  { path: 'organizationId', type: 'text' },
+  { path: 'quoteId', type: 'text', label: 'CPQ quote id' },
+  { path: 'quoteConfigurationId', type: 'text', label: 'CPQ quote id (same value as quoteId)' },
+  { path: 'salesQuoteId', type: 'text', label: 'Sales quote id' },
+  { path: 'quoteLineId', type: 'text' },
+  { path: 'costLineId', type: 'text' },
+  { path: 'costKey', type: 'text' },
+  { path: 'costName', type: 'text' },
+  { path: 'chargeCode', type: 'text', optional: true },
+]
+
 /**
  * CPQ Module Events.
  *
@@ -163,6 +177,96 @@ const events = [
         { path: 'hasEstimatedCosts', type: 'boolean' },
         { path: 'hasExpiredCosts', type: 'boolean' },
         { path: 'cause', type: 'select' },
+        { path: 'occurredAt', type: 'date' },
+      ],
+    },
+  },
+  // Supplier cost sourcing signals (non-broadcast; emitted after the quote write commits by the sourcing publisher).
+  // The payloads carry ids, keys and statuses only, never an amount, markup or margin (App Spec I-4).
+  {
+    id: 'cpq.quote.cost_requested',
+    label: 'Cost Requested',
+    entity: 'quote',
+    category: 'custom',
+    clientBroadcast: false,
+    payloadSchema: {
+      fields: [
+        ...costLineFields,
+        { path: 'costRequestId', type: 'text' },
+        { path: 'requestSeq', type: 'number' },
+        { path: 'productId', type: 'text', optional: true },
+        { path: 'offeringId', type: 'text', optional: true },
+        { path: 'attributes', type: 'object', label: 'Line configuration values the cost depends on' },
+        { path: 'supplierId', type: 'text', optional: true, label: 'Request target supplier' },
+        { path: 'requestedByUserId', type: 'text', optional: true },
+        { path: 'auto', type: 'boolean', label: 'Opened by a saved recalculation' },
+        { path: 'occurredAt', type: 'date' },
+      ],
+    },
+  },
+  {
+    id: 'cpq.quote.cost_request_cancelled',
+    label: 'Cost Request Cancelled',
+    entity: 'quote',
+    category: 'custom',
+    clientBroadcast: false,
+    payloadSchema: {
+      fields: [
+        ...costLineFields,
+        { path: 'costRequestId', type: 'text' },
+        { path: 'requestSeq', type: 'number' },
+        { path: 'reason', type: 'select', label: 'reconfigured, line_removed, element_deactivated, re_requested, manual_value, quote_closed or cancelled_by_user' },
+        { path: 'occurredAt', type: 'date' },
+      ],
+    },
+  },
+  {
+    id: 'cpq.quote.cost_valued',
+    label: 'Cost Valued',
+    entity: 'quote',
+    category: 'custom',
+    clientBroadcast: false,
+    payloadSchema: {
+      fields: [
+        ...costLineFields,
+        { path: 'costRequestId', type: 'text', optional: true },
+        { path: 'requestSeq', type: 'number', optional: true },
+        { path: 'valueStatus', type: 'text', label: 'Resolved after the write' },
+        { path: 'previousValueStatus', type: 'text' },
+        { path: 'sourcingStatus', type: 'text' },
+        { path: 'valueChanged', type: 'boolean' },
+        { path: 'answerPending', type: 'boolean', label: 'A different-value answer waits on a locked quote' },
+        { path: 'errorCode', type: 'text', optional: true },
+        { path: 'lineReady', type: 'boolean' },
+        { path: 'leadTimeHours', type: 'number', optional: true, label: 'Hours from request to answer / decline' },
+        { path: 'requestedByUserId', type: 'text', optional: true },
+        { path: 'cause', type: 'select', label: 'answer, decline, apply_answer, manual_value or reset' },
+        { path: 'occurredAt', type: 'date' },
+      ],
+    },
+  },
+  // Supplier cost expiry warning (non-broadcast; emitted by costExpiryService after the ledger row commits, persistent).
+  // Ids, keys and dates only: no amount, no supplier (App Spec I-4). `daysLeft` is negative once expired.
+  {
+    id: 'cpq.quote.cost_expiring',
+    label: 'Supplier Cost Expiring',
+    entity: 'quote',
+    category: 'custom',
+    clientBroadcast: false,
+    payloadSchema: {
+      fields: [
+        { path: 'tenantId', type: 'text' },
+        { path: 'organizationId', type: 'text' },
+        { path: 'warningId', type: 'text', label: 'Ledger row id (dedupe key for consumers)' },
+        { path: 'quoteId', type: 'text', label: 'CPQ quote id' },
+        { path: 'quoteLineId', type: 'text' },
+        { path: 'costLineId', type: 'text' },
+        { path: 'costKey', type: 'text' },
+        { path: 'chargeCode', type: 'text', optional: true },
+        { path: 'validUntil', type: 'text', label: 'YYYY-MM-DD' },
+        { path: 'daysLeft', type: 'number' },
+        { path: 'expired', type: 'boolean' },
+        { path: 'leadDays', type: 'number' },
         { path: 'occurredAt', type: 'date' },
       ],
     },

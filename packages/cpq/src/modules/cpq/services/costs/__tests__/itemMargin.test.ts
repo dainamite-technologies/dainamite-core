@@ -29,6 +29,14 @@ describe('computeItemMargin', () => {
   })
 })
 
+describe('computeItemMargin with a foreign-currency cost', () => {
+  it('subtracts the document-currency total_amount (instance x qty x fx_rate): mrcAmount - total_amount', () => {
+    // USD cost 100 / instance, 2 instances, rate 0.9 -> total_amount 180 in the subscription currency
+    const margin = computeItemMargin({ mrcAmount: '300', nrcAmount: '0', quantity: 2, charges: [{ chargeCode: 'mrc', chargeType: 'mrc', totalPrice: 300 }] as never, costs: [cost({ totalAmount: '180' })] })
+    expect(margin).toMatchObject({ mrcOffer: 300, mrcCost: 180, mrcMargin: 120, mrcMarginPercent: 40, coverage: 100 })
+  })
+})
+
 describe('computeAssetMargin', () => {
   it('NRC margin = purchase price - NRC totals; recurring costs are a recurring cost with no revenue', () => {
     expect(computeAssetMargin({ purchasePrice: '1000', costs: [cost({ costType: 'nrc', totalAmount: '700' }), cost({ totalAmount: '15' })] }))

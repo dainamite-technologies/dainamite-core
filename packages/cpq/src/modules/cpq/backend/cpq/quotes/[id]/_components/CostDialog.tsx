@@ -63,7 +63,7 @@ export function CostDialog({ mode, quoteLineId, lineName, currency, revision, ex
           <DialogDescription>{lineName}</DialogDescription>
         </DialogHeader>
         <CostFormBody form={form} onChange={setForm} mode={mode} existing={existing} charges={charges}
-          issues={showIssues ? issues : []} errorCode={errorCode} onReload={onReload} />
+          issues={showIssues ? issues : []} errorCode={errorCode} onReload={onReload} quoteCurrency={currency} />
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>{t('cpq.quoteCosts.dialog.cancel', 'Cancel')}</Button>
           <Button onClick={() => void save()} disabled={saving} title="Ctrl/Cmd+Enter">

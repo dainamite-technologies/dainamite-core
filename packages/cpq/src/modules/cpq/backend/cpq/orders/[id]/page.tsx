@@ -16,6 +16,11 @@ import { ChargeBreakdownTable, type ChargeRowView } from '../../../../components
 import { PricingSummaryCard, type PricingSummaryView } from '../../../../components/PricingSummaryCard'
 import { ArcLineDiff, LineActionBadge } from '../../../../components/ArcLineDiff'
 import { OrderCostsPanel } from '../../../../components/costs/OrderCostsPanel'
+import { useCostsRead } from '../../../../components/costs/useCostsRead'
+import { costSourceChangedView, orderArcCostsOfLine, parseCostSourceChanged, type CostSourceChangedEntry } from '../../../../lib/arcCostView'
+import { CostSourceChangedBanner } from '../../../../components/costs/CostSourceChangedBanner'
+import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
+import type { OrderCostsResponse } from '../../../../lib/orderInventoryCostView'
 import { arcRecurringDelta } from '../../../../lib/quoteSummaryView'
 import { isArcCancelledLine } from '../../../../services/arcLineRemoval'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
@@ -118,9 +123,13 @@ export default function CpqOrderDetailPage(props: { params?: { id?: string } }) 
   const cpqOrderId = (props.params?.id ?? urlParams?.id) as string
 
   const [order, setOrder] = React.useState<OrderResult | null>(null)
+  // One costs read for the Costs panel and the ArcLineDiff cost rows (holders only; status-only otherwise).
+  const orderCosts = useCostsRead<OrderCostsResponse>(cpqOrderId ? `/api/cpq/orders/${cpqOrderId}/costs` : null)
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState<string | null>(null)
   const [activating, setActivating] = React.useState(false)
+  // 409 COST_SOURCE_CHANGED at activation: the subscription's costs changed since the quote mirrored them.
+  const [costSourceChanged, setCostSourceChanged] = React.useState<CostSourceChangedEntry[] | null>(null)
   const [expandedLines, setExpandedLines] = React.useState<Set<string>>(new Set())
   const [pricingDetail, setPricingDetail] = React.useState<{ lineIdx: number; chargeIdx: number } | null>(null)
   const [customerName, setCustomerName] = React.useState<string | null>(null)
@@ -212,13 +221,20 @@ export default function CpqOrderDetailPage(props: { params?: { id?: string } }) 
     try {
       setActivating(true)
       setError(null)
-      const result = await apiJson<OrderResult>(`/api/cpq/orders/${order.id}/activate`, {
+      setCostSourceChanged(null)
+      const call = await apiCall<OrderResult & { error?: string }>(`/api/cpq/orders/${order.id}/activate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({}),
       })
-      setOrder(result)
-      void fetchLinkedSubscriptions(result.id, result.sourceQuoteId)
+      if (call.ok && call.result) {
+        setOrder(call.result)
+        void fetchLinkedSubscriptions(call.result.id, call.result.sourceQuoteId)
+        return
+      }
+      const changed = parseCostSourceChanged(call.status, call.result)
+      if (changed) { setCostSourceChanged(changed); return }
+      setError(call.result?.error ?? `Request failed (${call.status})`)
     } catch (err) {
       setError((err as Error).message)
     } finally {
@@ -354,6 +370,11 @@ export default function CpqOrderDetailPage(props: { params?: { id?: string } }) 
       </div>
 
       {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
+      {costSourceChanged && (
+        <CostSourceChangedBanner
+          view={costSourceChangedView(costSourceChanged, new Map(order.lines.flatMap((line) => (line.sourceQuoteLineId ? [[line.sourceQuoteLineId, line.offeringName] as const] : []))), 'order')}
+        />
+      )}
 
       {/* Linked subscriptions — one card per subscription this order
           touches. NEW orders write one fresh subscription; ARC orders
@@ -435,6 +456,8 @@ export default function CpqOrderDetailPage(props: { params?: { id?: string } }) 
         lines={order.lines.map((l) => ({ lineId: l.lineId, name: l.offeringName, isBundle: l.offeringType === 'bundle' }))}
         currency={currency}
         subscriptionIds={linkedSubscriptions.map((sub) => sub.id)}
+        read={orderCosts}
+        orderStatus={order.cpqStatus}
         refreshKey={`${order.cpqStatus}:${order.activatedAt ?? ''}`}
       />
 
@@ -445,6 +468,7 @@ export default function CpqOrderDetailPage(props: { params?: { id?: string } }) 
         currency={currency}
         expandedLines={expandedLines}
         pricingDetail={pricingDetail}
+        costsResponse={orderCosts.data}
         onToggleLine={toggleLine}
         onTogglePricingDetail={togglePricingDetail}
       />
@@ -471,6 +495,7 @@ function OrderLineTree({
   currency,
   expandedLines,
   pricingDetail,
+  costsResponse,
   onToggleLine,
   onTogglePricingDetail,
 }: {
@@ -479,6 +504,7 @@ function OrderLineTree({
   currency: string
   expandedLines: Set<string>
   pricingDetail: { lineIdx: number; chargeIdx: number } | null
+  costsResponse: OrderCostsResponse | null
   onToggleLine: (id: string) => void
   onTogglePricingDetail: (lineIdx: number, chargeIdx: number) => void
 }) {
@@ -523,6 +549,7 @@ function OrderLineTree({
                   childCount={children.length}
                   indent={0}
                   pricingDetail={pricingDetail}
+                  costsResponse={costsResponse}
                   onToggle={() => onToggleLine(line.lineId)}
                   onTogglePricingDetail={onTogglePricingDetail}
                 />
@@ -545,6 +572,7 @@ function OrderLineTree({
                           childCount={0}
                           indent={1}
                           pricingDetail={pricingDetail}
+                          costsResponse={costsResponse}
                           onToggle={() => onToggleLine(child.lineId)}
                           onTogglePricingDetail={onTogglePricingDetail}
                         />
@@ -561,9 +589,10 @@ function OrderLineTree({
   )
 }
 
-function OrderLineRow({ line, lineIdx, quoteType, currency, isExpanded, isBundle, childCount, indent, pricingDetail, onToggle, onTogglePricingDetail }: {
+function OrderLineRow({ line, lineIdx, quoteType, currency, isExpanded, isBundle, childCount, indent, pricingDetail, costsResponse, onToggle, onTogglePricingDetail }: {
   line: OrderLineResult; lineIdx: number; quoteType: string; currency: string; isExpanded: boolean; isBundle: boolean; childCount: number; indent: number
   pricingDetail: { lineIdx: number; chargeIdx: number } | null
+  costsResponse: OrderCostsResponse | null
   onToggle: () => void
   onTogglePricingDetail: (lineIdx: number, chargeIdx: number) => void
 }) {
@@ -685,7 +714,7 @@ function OrderLineRow({ line, lineIdx, quoteType, currency, isExpanded, isBundle
                 )}
 
                 {/* XD-250 ARC: before/after preview below the charges, as on the quote. */}
-                {hasArcDiff && <ArcLineDiff line={line} currency={currency} />}
+                {hasArcDiff && <ArcLineDiff line={line} currency={currency} costs={orderArcCostsOfLine(costsResponse, line.lineId)} />}
               </>
             )}
           </div>

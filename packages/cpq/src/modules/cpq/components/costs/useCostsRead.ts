@@ -9,7 +9,9 @@ export type CostsReadState = 'loading' | 'off' | 'error' | 'ready'
  * Loads one of the cost read routes. A `404` means the tenant toggle `cpq.cost_plus` is off (or the owner is
  * gone): the caller renders nothing. The projection (status-only or full) is the server's decision.
  */
-export function useCostsRead<T>(url: string | null): { state: CostsReadState; data: T | null; reload: () => Promise<void> } {
+export type CostsReadResult<T> = { state: CostsReadState; data: T | null; reload: () => Promise<void> }
+
+export function useCostsRead<T>(url: string | null): CostsReadResult<T> {
   const [state, setState] = React.useState<CostsReadState>('loading')
   const [data, setData] = React.useState<T | null>(null)
 

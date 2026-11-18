@@ -86,3 +86,80 @@ describe('ChargeBreakdownTable with an unpriced cost-plus charge', () => {
     expect(text(render(charge({ fallbackPrice: 99 })))).toContain('≈ $99.00')
   })
 })
+
+describe('CostsPanel foreign-currency costs', () => {
+  const usd: FullQuoteCost = {
+    ...cost, currencyCode: 'USD', unitAmount: '300.0000', instanceAmount: '300.0000', fxRate: '0.92000000', fxRateDate: '2026-11-11', fxRateSource: 'ECB',
+    fxRateDerivation: 'direct', convertedInstanceAmount: '276', quoteCurrencyCode: 'EUR',
+  }
+  it('shows the original amount and the converted line, with the frozen tooltip only while locked', () => {
+    const open = wrap(panel({ costs: [usd] }))
+    expect(text(open)).toContain('300.0000')
+    expect(text(open)).toContain('≈ 276.00 EUR · 0.92 · ECB · 2026-11-11')
+    expect(open).not.toContain('Rate frozen')
+    const locked = wrap(panel({ costs: [usd], locked: true, status: 'in_approval' }))
+    expect(locked).toContain('Rate frozen while the quote is locked')
+  })
+  it('a quote-currency cost has no converted line', () => {
+    expect(wrap(panel())).not.toContain('cpq-cost-converted')
+  })
+  it('names the missing pair from errorDetail', () => {
+    const noRate: FullQuoteCost = { ...usd, valueStatus: 'none', fxRate: null, fxRateDate: null, fxRateSource: null, convertedInstanceAmount: null, error: 'CURRENCY_NO_RATE',
+      errorDetail: { code: 'CURRENCY_NO_RATE', from: 'USD', to: 'EUR', date: '2026-11-12' } }
+    const content = text(wrap(panel({ costs: [noRate] })))
+    expect(content).toContain('No USD→EUR rate for 2026-11-12')
+    expect(content).not.toContain('≈')
+  })
+})
+
+describe('CostStatusBadges missing rate', () => {
+  it('non-holders see "Cost pending — currency rate missing" with no currency', () => {
+    const content = text(wrap(<CostStatusBadges costs={[{ valueStatus: 'none', expired: false, error: 'CURRENCY_NO_RATE' }]} />))
+    expect(content).toContain('Cost pending — currency rate missing')
+    expect(content).not.toMatch(/USD|EUR/)
+  })
+  it('keeps the plain "Cost pending" when the pending line has another reason', () => {
+    const content = text(wrap(<CostStatusBadges costs={[{ valueStatus: 'none', expired: false }]} />))
+    expect(content).toContain('Cost pending')
+    expect(content).not.toContain('rate missing')
+  })
+})
+
+describe('CostsPanel index costs', () => {
+  const indexed: FullQuoteCost = {
+    ...cost, source: 'index', valueStatus: 'confirmed', expired: false, currencyCode: 'EUR', unitAmount: '41.2000', instanceAmount: '41.2000',
+    indexSnapshot: { indexId: 'i1', currencyCode: 'EUR', effectiveDate: '2026-11-01', revision: 2, value: '82.4', factor: '0.5', offset: '0', asOfDate: '2026-11-16' },
+  }
+  const labels = { i1: { code: 'DEMO-DC-POWER', unit: 'MWh' } }
+
+  it('shows the snapshot line next to the value, and the lock hint only while locked', () => {
+    const open = wrap(panel({ costs: [indexed], indexLabels: labels }))
+    expect(text(open)).toContain('DEMO-DC-POWER 82.40 EUR/MWh · 2026-11-01 r2 · × 0.5')
+    expect(text(open)).toContain('Market index')
+    expect(open).not.toContain('cpq-cost-index-frozen')
+    const locked = wrap(panel({ costs: [indexed], indexLabels: labels, locked: true, status: 'in_approval' }))
+    expect(locked).toContain('cpq-cost-index-frozen')
+    expect(text(locked)).toContain('Frozen while the quote is locked')
+  })
+
+  it('names no index without a label and shows nothing for a line without a snapshot', () => {
+    expect(text(wrap(panel({ costs: [indexed], indexLabels: {} })))).toContain('82.40 EUR · 2026-11-01 r2 · × 0.5')
+    expect(wrap(panel({ costs: [{ ...indexed, indexSnapshot: null }], indexLabels: labels }))).not.toContain('cpq-cost-index-snapshot')
+  })
+
+  it('shows the No index value badge for a line without a value in force', () => {
+    const none: FullQuoteCost = { ...indexed, valueStatus: 'none', unitAmount: null, instanceAmount: null, indexSnapshot: null, error: 'INDEX_NO_VALUE' }
+    const html = wrap(panel({ costs: [none], indexLabels: labels }))
+    expect(html).toContain('cpq-cost-index-no-value')
+    expect(text(html)).toContain('No index value')
+  })
+})
+
+describe('CostStatusBadges index costs', () => {
+  it('shows No index value to everyone (status only: no index, no amount)', () => {
+    const html = wrap(<CostStatusBadges costs={[{ valueStatus: 'none', expired: false, error: 'INDEX_NO_VALUE' }]} />)
+    expect(html).toContain('cpq-cost-badge-indexNoValue')
+    expect(text(html)).toContain('No index value')
+    expect(text(html)).toContain('Cost pending')
+  })
+})

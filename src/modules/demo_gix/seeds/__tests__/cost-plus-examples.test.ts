@@ -96,7 +96,8 @@ describe('seedGixCostPlusCatalog', () => {
       ['partner_tail', 'price_basis', 'on_request'],
       ['noc_monitoring', 'margin_only', 'fixed'],
     ])
-    expect(elements[1]).toMatchObject({ estimateAmount: '100' })
+    expect(elements[1]).toMatchObject({ estimateAmount: '100', requiresSourcing: true, defaultSupplierName: 'Partner Carrier Ltd.' })
+    expect(elements.filter((element) => element.requiresSourcing === true)).toHaveLength(1)
     expect(elements[0]).toMatchObject({ costTableId: em.store.get(CpqPricingTable)?.[0].id, costColumnKey: 'mrc' })
   })
 

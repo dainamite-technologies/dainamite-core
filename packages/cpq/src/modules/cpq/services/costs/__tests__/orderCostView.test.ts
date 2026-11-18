@@ -68,3 +68,24 @@ describe('order margin equals the quote margin (review1-c)', () => {
     expect(JSON.stringify(read.margin)).toContain('960')
   })
 })
+
+describe('order margin with a foreign-currency cost equals the quote margin', () => {
+  it('converts the cost-currency instance amount with the copied fx_rate, like the quote does', async () => {
+    const quote = { id: 'q', quoteType: 'new', currencyCode: 'EUR' }
+    const lineBase = { parentLineId: null, quantity: 3, termMonths: 12, action: 'add', configuration: {}, charges: charges(500) }
+    const usd = { chargeCode: 'mrc', costKey: 'tail', role: 'price_basis', costType: 'mrc', valueStatus: 'confirmed', instanceAmount: '90.3333', currencyCode: 'USD', fxRate: '0.92345678', fxRateDate: '2026-11-10', fxRateSource: 'ECB', fxRateDerivation: 'direct', validUntil: null }
+    const quoteEm = {
+      find: jest.fn(async (entity: unknown) => entity === CpqQuoteLineConfiguration ? [{ quoteLineId: 'l1', ...lineBase }] : entity === CpqQuoteLineCost ? [{ id: 'qc', quoteLineId: 'l1', ...usd }] : []),
+    }
+    const quoteMargin = (await loadQuoteMarginState(quoteEm as never, quote as never, SCOPE)).margin
+    const orderEm = {
+      findOne: jest.fn(async (entity: unknown) => entity === CpqOrderConfiguration ? { id: 'oc-1', orderId: 'so-1', sourceQuoteId: 'q', currencyCode: 'EUR' } : entity === CpqQuoteConfiguration ? quote : null),
+      find: jest.fn(async (entity: unknown) => entity === CpqOrderLineConfiguration ? [{ orderLineId: 'l1', ...lineBase }] : entity === CpqOrderLineCost ? [{ id: 'oc', orderLineId: 'l1', ...usd }] : []),
+    }
+    const read = await readOrderCosts(orderEm as never, 'oc-1', SCOPE, true)
+    expect(read.margin).toEqual(quoteMargin)
+    // 90.3333 x 0.92345678 x 3 per month, 12 months, converted at full precision
+    expect(read.margin!.mrcCost).toBeCloseTo(90.3333 * 0.92345678 * 3, 3)
+    expect(read.margin!.contractCost).toBeCloseTo(90.3333 * 0.92345678 * 3 * 12, 3)
+  })
+})

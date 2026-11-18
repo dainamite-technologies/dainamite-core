@@ -89,6 +89,7 @@ export function ChargeCostElements({ charge, offeringId, attributes, onChanged }
         const el = row.original
         if (el.source === 'fixed') return `${t('cpq.costElements.sources.fixed', 'Fixed amount')}: ${el.currencyCode ?? ''} ${el.amount ?? ''}`
         if (el.source === 'table') return `${t('cpq.costElements.sources.table', 'Cost table')}: ${el.costColumnKey ?? '?'}`
+        if (el.source === 'index') return `${t('cpq.costElements.sources.index', 'Market index')}: × ${el.indexFactor ?? '1'}${Number(el.indexOffset ?? 0) > 0 ? ` + ${el.indexOffset}` : ''}`
         return `${t('cpq.costElements.sources.on_request', 'On request (supplier)')}${el.estimateAmount ? ` ≈ ${el.currencyCode ?? ''} ${el.estimateAmount}` : ''}`
       },
     },

@@ -44,11 +44,11 @@ export async function DELETE(req: Request, { params }: Params) {
 const toggleOff = cpqErrorDoc(404, 'Quote or cost line not found — also returned while the tenant toggle cpq.cost_plus is off')
 const writeResponse = z.object({ cost: z.record(z.string(), z.unknown()).nullable(), pricingRevision: z.number(), margin: z.record(z.string(), z.unknown()).optional() })
 export const openApi: OpenApiRouteDoc = { tag: 'CPQ Quotes', pathParams, methods: {
-  PATCH: { summary: 'Edit, enter or confirm the value of a quote cost line', requestBody: { schema: cpqQuoteLineCostUpdateSchema },
+  PATCH: { summary: 'Edit, enter or confirm the value of a quote cost line (a foreign currencyCode is converted at the rate resolved at the write; a rate is never accepted in the body). With keepCurrent: true it confirms a renegotiation-due carried cost UNCHANGED (new validUntil / supplierTermEnd (null = rolling) and a new supplierQuoteRef or a note as evidence); lock-exempt, clears renegotiation_due, margin_hash unchanged', requestBody: { schema: cpqQuoteLineCostUpdateSchema },
     responses: [{ status: 200, description: 'Updated cost line, margin (cpq.costs.view only) and new pricing revision', schema: writeResponse }],
     errors: [cpqErrorDoc(400, 'Validation error'), cpqErrorDoc(403, 'Missing permission'), toggleOff,
-      cpqErrorDoc(409, 'COST_LOCKED (price-basis change while locked; margin-only, confirmation and validity changes are exempt) or STALE_REVISION'),
-      cpqErrorDoc(422, 'NOTE_REQUIRED, VALIDITY_EVIDENCE_REQUIRED, FIELD_NOT_ALLOWED, LINE_NOT_ELIGIBLE, AMOUNT_REQUIRED, CURRENCY_NO_RATE, PRICE_BASIS_REQUIRES_COST_PLUS or a mutation-guard rejection')] },
+      cpqErrorDoc(409, 'COST_LOCKED (price-basis change, including a currency change, while locked; margin-only, confirmation and validity changes are exempt) or STALE_REVISION'),
+      cpqErrorDoc(422, 'NOTE_REQUIRED, VALIDITY_EVIDENCE_REQUIRED, RENEGOTIATION_DATES_SHORT (keepCurrent: a kept date is before the renewal new term end), NOT_RENEGOTIATION_DUE (keepCurrent on a cost that is not a renegotiation-due carried cost), FIELD_NOT_ALLOWED, LINE_NOT_ELIGIBLE, AMOUNT_REQUIRED, PRICE_BASIS_REQUIRES_COST_PLUS or a mutation-guard rejection')] },
   DELETE: { summary: 'Delete a manual quote cost line', query: cpqQuoteLineCostDeleteSchema,
     responses: [{ status: 200, description: 'Margin (cpq.costs.view only) and new pricing revision', schema: writeResponse }],
     errors: [cpqErrorDoc(400, 'Validation error'), cpqErrorDoc(403, 'Missing permission'), toggleOff, cpqErrorDoc(409, 'COST_LOCKED or STALE_REVISION'),

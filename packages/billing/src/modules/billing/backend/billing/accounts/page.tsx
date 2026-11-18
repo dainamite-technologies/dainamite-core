@@ -4,7 +4,8 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { Plus } from 'lucide-react'
 import type { LegacyColumnDef as ColumnDef } from '@tanstack/react-table/legacy'
-import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { useLocale, useT } from '@open-mercato/shared/lib/i18n/context'
+import { formatBillingDay } from '../../../lib/displayDate'
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
 import { BillingDataTable as DataTable } from '../../../components/BillingDataTable'
@@ -56,14 +57,9 @@ type ListResponse = {
   totalPages: number
 }
 
-function formatDate(value: string | null | undefined): string {
-  if (!value) return '—'
-  const parsed = new Date(value)
-  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleDateString()
-}
-
 export default function BillingAccountsListPage() {
   const t = useT()
+  const locale = useLocale()
   const today = React.useMemo(() => localTodayIso(), [])
   const summarizeCycle = useBillCycleSummary()
   const router = useRouter()
@@ -230,7 +226,7 @@ export default function BillingAccountsListPage() {
       {
         accessorKey: 'next_bill_date',
         header: t('billing.accounts.columns.next_bill', 'Next bill'),
-        cell: ({ row }) => formatDate(row.original.next_bill_date),
+        cell: ({ row }) => formatBillingDay(row.original.next_bill_date, locale),
       },
       {
         id: 'billing_state',
@@ -275,7 +271,7 @@ export default function BillingAccountsListPage() {
           ),
       },
     ],
-    [customerNames, summarizeCycle, t, today],
+    [customerNames, summarizeCycle, t, today, locale],
   )
 
   return (

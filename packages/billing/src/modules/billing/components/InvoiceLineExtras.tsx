@@ -1,9 +1,9 @@
 "use client"
 
 import * as React from 'react'
-import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { useLocale, useT } from '@open-mercato/shared/lib/i18n/context'
+import { formatBillingDay } from '../lib/displayDate'
 import { lineServicePeriod } from '../lib/linePeriod'
-import { formatDateOnly } from '../lib/dateOnly'
 import { creditReasonText, parseCreditReason } from '../lib/creditReason'
 
 /**
@@ -23,18 +23,19 @@ export function InvoiceLineExtras({
   metadata: Record<string, unknown> | null | undefined
 }) {
   const t = useT()
+  const locale = useLocale()
   const period = lineServicePeriod({ description, servicePeriodStart, servicePeriodEnd })
   const reason = parseCreditReason(metadata?.credit_reason)
   return (
     <>
       {period ? (
         <span className="text-xs text-muted-foreground tabular-nums">
-          {formatDateOnly(period.start)} – {formatDateOnly(period.end)}
+          {formatBillingDay(period.start, locale)} – {formatBillingDay(period.end, locale)}
         </span>
       ) : null}
       {reason ? (
         <span className="text-xs text-muted-foreground">
-          {t('billing.invoices.lines.credit_reason', 'Reason')}: {creditReasonText(reason, t, (day) => formatDateOnly(day))}
+          {t('billing.invoices.lines.credit_reason', 'Reason')}: {creditReasonText(reason, t, (day) => formatBillingDay(day, locale))}
         </span>
       ) : null}
     </>

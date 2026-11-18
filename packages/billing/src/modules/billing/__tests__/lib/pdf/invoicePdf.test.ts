@@ -153,7 +153,8 @@ describe('buildInvoiceDocumentModel', () => {
     expect(m.table.rows[0][1]).toBe('Internet 300 Mb/s (01/11/2026 – 30/11/2026)')
     expect(m.table.rows[2][1]).toBe('Kopie zapasowe')
     const dated = model('en', {}, [line({ description: 'Plan · 2026-11-15 – 2026-11-30' })])
-    expect(dated.table.rows[0][1]).toBe('Plan · 2026-11-15 – 2026-11-30')
+    // The period stored inside a prorated / credit description renders in the document locale (#129).
+    expect(dated.table.rows[0][1]).toBe('Plan · 15/11/2026 – 30/11/2026')
   })
 
   it('watermarks drafts (no issue / due date yet) and test documents', () => {
@@ -276,12 +277,12 @@ describe('credit reason row (Part 2)', () => {
     })
     const es = model('es', {}, [credit])
     expect(es.table.rows[0][1]).toBe(
-      `Plan · 2026-12-10 – 2026-12-31\n${DICTIONARIES.es['billing.pdf.credit_reason']}: Suscripción modificada (pedido SO-1234), con efecto 10/12/2026`,
+      `Plan · 10/12/2026 – 31/12/2026\n${DICTIONARIES.es['billing.pdf.credit_reason']}: Suscripción modificada (pedido SO-1234), con efecto 10/12/2026`,
     )
   })
 
   it('prints operator text verbatim', () => {
     const credit = line({ description: 'Plan · 2026-12-10 – 2026-12-31', creditReason: { kind: 'text', text: 'Goodwill' } })
-    expect(model('en', {}, [credit]).table.rows[0][1]).toBe('Plan · 2026-12-10 – 2026-12-31\nReason: Goodwill')
+    expect(model('en', {}, [credit]).table.rows[0][1]).toBe('Plan · 10/12/2026 – 31/12/2026\nReason: Goodwill')
   })
 })

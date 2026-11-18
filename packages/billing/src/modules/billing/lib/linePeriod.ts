@@ -27,3 +27,24 @@ export function lineServicePeriod(line: LinePeriodInput): LineServicePeriod | nu
   if ((line.description ?? '').includes(PERIOD_DATE_SEPARATOR)) return null
   return { start, end }
 }
+
+/**
+ * The dated suffix `buildRecurringLineDescriptors` appends to prorated and
+ * credit lines (`Fee · 2026-12-01 – 2026-12-14`), anchored at the end of the
+ * description. That text is stored (frozen at bill time and copied into
+ * balance transactions), so surfaces localize it when they show it (#129).
+ */
+const PERIOD_SUFFIX = / · (\d{4}-\d{2}-\d{2}) – (\d{4}-\d{2}-\d{2})$/
+
+/**
+ * The description with its stored ISO service period re-rendered by
+ * `formatDay`. Any other text, including dates typed into an item
+ * description, is left untouched.
+ */
+export function localizeDescriptionPeriod(
+  description: string | null | undefined,
+  formatDay: (isoDay: string) => string,
+): string {
+  if (!description) return description ?? ''
+  return description.replace(PERIOD_SUFFIX, (_match, start: string, end: string) => ` · ${formatDay(start)}${PERIOD_DATE_SEPARATOR}${formatDay(end)}`)
+}

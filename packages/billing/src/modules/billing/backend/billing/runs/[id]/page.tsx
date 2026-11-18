@@ -3,7 +3,8 @@ import * as React from 'react'
 import Link from 'next/link'
 import { useParams, useRouter } from 'next/navigation'
 import type { LegacyColumnDef as ColumnDef } from '@tanstack/react-table/legacy'
-import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { useLocale, useT } from '@open-mercato/shared/lib/i18n/context'
+import { formatBillingDateTime } from '../../../../lib/displayDate'
 import { Page, PageBody, PageHeader } from '@open-mercato/ui/backend/Page'
 import { FormHeader } from '@open-mercato/ui/backend/forms'
 import { BillingDataTable as DataTable } from '../../../../components/BillingDataTable'
@@ -84,12 +85,6 @@ type ListResponse<T> = {
   totalPages: number
 }
 
-function formatDate(value: string | null | undefined): string {
-  if (!value) return '—'
-  const parsed = new Date(value)
-  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString()
-}
-
 function runStatusVariant(
   status: BillRun['status'],
 ): 'default' | 'success' | 'warning' | 'error' {
@@ -123,6 +118,7 @@ function outcomeStatusVariant(
 
 export default function BillRunDetailPage(props: { params?: { id?: string } }) {
   const t = useT()
+  const locale = useLocale()
   // OM serves backend pages through a catch-all route — the dynamic
   // `[id]` segment arrives as a page prop; `useParams()` is the fallback.
   const urlParams = useParams<{ id: string }>()
@@ -364,10 +360,10 @@ export default function BillRunDetailPage(props: { params?: { id?: string } }) {
               {run.as_of_date?.slice(0, 10) ?? '—'}
             </DetailField>
             <DetailField label={t('billing.runs.detail.field.started_at', 'Started')}>
-              {formatDate(run.started_at)}
+              {formatBillingDateTime(run.started_at, locale)}
             </DetailField>
             <DetailField label={t('billing.runs.detail.field.finished_at', 'Finished')}>
-              {formatDate(run.finished_at)}
+              {formatBillingDateTime(run.finished_at, locale)}
             </DetailField>
             {run.parent_run_id ? (
               <DetailField label={t('billing.runs.detail.field.parent_run', 'Parent run')}>

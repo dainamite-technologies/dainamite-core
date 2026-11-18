@@ -2,7 +2,8 @@
 import * as React from 'react'
 import { useRouter } from 'next/navigation'
 import type { LegacyColumnDef as ColumnDef } from '@tanstack/react-table/legacy'
-import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { useLocale, useT } from '@open-mercato/shared/lib/i18n/context'
+import { formatBillingDay } from '../../../lib/displayDate'
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
 import { BillingDataTable as DataTable } from '../../../components/BillingDataTable'
@@ -31,18 +32,13 @@ type StatementRow = {
 
 type ListResponse = { items: StatementRow[]; total: number; totalPages: number }
 
-function formatDate(value: string | null | undefined): string {
-  if (!value) return '—'
-  const d = new Date(value)
-  return Number.isNaN(d.getTime()) ? value : d.toLocaleDateString()
-}
-
 export function statementStatusVariant(status: string): 'success' | 'info' {
   return status === 'sent' ? 'success' : 'info'
 }
 
 export default function BillingStatementsListPage() {
   const t = useT()
+  const locale = useLocale()
   const router = useRouter()
   const [rows, setRows] = React.useState<StatementRow[]>([])
   const [page, setPage] = React.useState(1)
@@ -106,7 +102,7 @@ export default function BillingStatementsListPage() {
         accessorKey: 'period_end',
         header: t('billing.statements.columns.period', 'Period'),
         cell: ({ row }) =>
-          `${formatDate(row.original.period_start)} – ${formatDate(row.original.period_end)}`,
+          `${formatBillingDay(row.original.period_start, locale)} – ${formatBillingDay(row.original.period_end, locale)}`,
       },
       {
         accessorKey: 'bill_account_id',
@@ -159,7 +155,7 @@ export default function BillingStatementsListPage() {
         ),
       },
     ],
-    [t, accountNames],
+    [t, accountNames, locale],
   )
 
   return (

@@ -506,3 +506,182 @@ describe('processPrepaidAccount — statement window includes the bill date (Spe
     expect(second.totalTopups).toBe('0.0000')
   })
 })
+
+describe('processPrepaidAccount — first-cycle period never before the billing start (#138)', () => {
+  // The issue's demo account: monthly, cycle day 10, a 150 EUR in-advance fee
+  // and metered API usage, both from 2026-11-10. Top-ups were posted as manual
+  // adjustments and, like the usage, created on 2026-11-18 (back-dated runs).
+  function demoAccount() {
+    const account = prepaidAccount({ nextBillDate: '2026-11-10', billCycleDay: '10' })
+    const fee = arrearsItem({
+      id: 'item-fee',
+      description: 'Subscription Fee',
+      billStartDate: '2026-11-10',
+      billedToDate: null,
+      chargeTiming: 'in_advance',
+      rateJson: { unit_price: 150 },
+    })
+    const usageItem = {
+      id: 'item-api',
+      type: 'usage',
+      billStartDate: '2026-11-10',
+      billEndDate: null,
+      billedToDate: null,
+      isActive: true,
+      deletedAt: null,
+      uomCode: 'api_call',
+      rateJson: { unit_price: 0.82 },
+      description: 'API Usage',
+    }
+    const em = createPrepaidMockEm({
+      account,
+      balance: { tenantId: TENANT, billAccountId: ACCT, balance: '1063.6600' },
+      items: [fee, usageItem],
+    })
+    const at = new Date('2026-11-18T12:00:00Z')
+    em.transactions.push(
+      { id: 'a1', type: 'adjustment', amount: '120.0000', billAccountId: ACCT, createdAt: at },
+      { id: 'u1', type: 'usage', amount: '-114.8000', billAccountId: ACCT, createdAt: at },
+      { id: 'a2', type: 'adjustment', amount: '1200.0000', billAccountId: ACCT, createdAt: at },
+      { id: 'u2', type: 'usage', amount: '-60.6800', billAccountId: ACCT, createdAt: at },
+      { id: 'u3', type: 'usage', amount: '-100.8600', billAccountId: ACCT, createdAt: at },
+    )
+    return { account, em, fee }
+  }
+
+  function statements(em: MockEm): Row[] {
+    return em.persisted.filter((e) => (e as { status?: string }).status === 'generated') as Row[]
+  }
+
+  it('first bill date = start date: takes the in-advance charge but writes no pre-start statement', async () => {
+    const { account, em, fee } = demoAccount()
+    const result = okResult(
+      await processPrepaidAccount(em as never, account as never, billRun as never, {
+        ...realParams,
+        asOfDate: new Date('2026-11-10'),
+      }),
+    )
+    expect(result.cycles).toEqual([
+      expect.objectContaining({
+        bill_date: '2026-11-10',
+        period_start: null,
+        period_end: null,
+        status: 'charged',
+        total_debit: '150.0000',
+        statement_id: null,
+      }),
+    ])
+    expect(result.statementId).toBeNull()
+    expect(statements(em)).toHaveLength(0)
+    const charge = em.transactions.find((t) => t.type === 'recurring')!
+    expect(charge.sourceRef).toBe('recurring-item-fee-charge-2026-11-10-2026-12-09')
+    expect(charge.metadata).toMatchObject({ bill_date: '2026-11-10', bill_period_start: null, bill_period_end: null })
+    // The next period starts at the first bill date.
+    expect(iso(account.lastBillDate)).toBe('2026-11-09')
+    expect(iso(account.nextBillDate)).toBe('2026-12-10')
+    expect(iso(fee.billedToDate)).toBe('2026-12-09')
+  })
+
+  it('the next run writes the first statement from the start date; opening carries the earlier charge', async () => {
+    const { account, em } = demoAccount()
+    okResult(
+      await processPrepaidAccount(em as never, account as never, billRun as never, {
+        ...realParams,
+        asOfDate: new Date('2026-11-10'),
+      }),
+    )
+    okResult(
+      await processPrepaidAccount(em as never, account as never, billRun as never, {
+        ...realParams,
+        asOfDate: new Date('2026-12-10'),
+      }),
+    )
+    const [first, ...rest] = statements(em)
+    expect(rest).toHaveLength(0)
+    expect([iso(first.periodStart), iso(first.periodEnd)]).toEqual(['2026-11-10', '2026-12-09'])
+    expect(first.openingBalance).toBe('-150.0000')
+    expect(first.totalTopups).toBe('0.0000')
+    expect(first.totalAdjustments).toBe('1320.0000')
+    expect(first.totalUsage).toBe('276.3400')
+    expect(first.totalRecurring).toBe('150.0000')
+    // −150 + 1,320 − 276.34 − 150 — the true ledger balance.
+    expect(first.closingBalance).toBe('743.6600')
+    expect(em.balances.get(`${TENANT}:${ACCT}`)!.balance).toBe('763.6600')
+  })
+
+  it('one catch-up run over both bill dates chains to the same statement', async () => {
+    const { account, em } = demoAccount()
+    const result = okResult(
+      await processPrepaidAccount(em as never, account as never, billRun as never, {
+        ...realParams,
+        asOfDate: new Date('2026-12-10'),
+      }),
+    )
+    expect(result.cycles.map((c) => [c.bill_date, c.period_start, c.period_end])).toEqual([
+      ['2026-11-10', null, null],
+      ['2026-12-10', '2026-11-10', '2026-12-09'],
+    ])
+    const [only, ...rest] = statements(em)
+    expect(rest).toHaveLength(0)
+    expect(only.openingBalance).toBe('-150.0000')
+    expect(only.closingBalance).toBe('743.6600')
+  })
+
+  it('re-running an opening cycle never double-charges', async () => {
+    const { account, em, fee } = demoAccount()
+    const params = { ...realParams, asOfDate: new Date('2026-11-10') }
+    okResult(await processPrepaidAccount(em as never, account as never, billRun as never, params))
+    // Simulate a re-run against the unadvanced state (e.g. a crash before flush).
+    account.nextBillDate = '2026-11-10'
+    account.lastBillDate = null
+    fee.billedToDate = null
+    const again = okResult(await processPrepaidAccount(em as never, account as never, billRun as never, params))
+    expect(again.cycles[0]).toMatchObject({ status: 'empty', statement_id: null })
+    expect(em.transactions.filter((t) => t.type === 'recurring')).toHaveLength(1)
+    expect(statements(em)).toHaveLength(0)
+  })
+
+  it('clamps the first period to a mid-cycle billing start', async () => {
+    const account = prepaidAccount({ nextBillDate: '2026-11-15' })
+    const plan = arrearsItem({
+      billStartDate: '2026-11-01',
+      billedToDate: null,
+      chargeTiming: 'in_advance',
+      rateJson: { unit_price: 49 },
+    })
+    const em = createPrepaidMockEm({ account, balance: { tenantId: TENANT, billAccountId: ACCT, balance: '0' }, items: [plan] })
+    const result = okResult(
+      await processPrepaidAccount(em as never, account as never, billRun as never, {
+        ...realParams,
+        asOfDate: new Date('2026-11-15'),
+      }),
+    )
+    expect(result.cycles[0]).toMatchObject({ period_start: '2026-11-01', period_end: '2026-11-14' })
+    expect(iso(persistedStatement(em).periodStart)).toBe('2026-11-01')
+    expect(iso(account.lastBillDate)).toBe('2026-11-14')
+  })
+
+  it('an existing statement for the same bill date (pre-start, written before the fix) is not duplicated', async () => {
+    const account = prepaidAccount({ nextBillDate: '2026-11-15' })
+    const plan = arrearsItem({ billStartDate: '2026-11-01', billedToDate: null, chargeTiming: 'in_advance' })
+    const em = createPrepaidMockEm({
+      account,
+      balance: { tenantId: TENANT, billAccountId: ACCT, balance: '0' },
+      items: [plan],
+      existingStatement: { id: 'stmt-legacy', periodStart: '2026-10-15', periodEnd: '2026-11-14' },
+    })
+    const result = okResult(
+      await processPrepaidAccount(em as never, account as never, billRun as never, {
+        ...realParams,
+        asOfDate: new Date('2026-11-15'),
+      }),
+    )
+    expect(persistedStatement(em)).toBeUndefined()
+    expect(result.cycles[0]).toMatchObject({ statement_id: 'stmt-legacy' })
+    // The anti-duplicate lookup keys on the bill date's period end.
+    const lookup = em.findOne.mock.calls.find(
+      ([entity, where]) => (entity as { name?: string }).name === 'BillingStatement' && !('$lt' in Object(where.periodEnd)),
+    )!
+    expect(lookup[1]).toEqual({ tenantId: TENANT, billAccountId: ACCT, periodEnd: '2026-11-14' })
+  })
+})

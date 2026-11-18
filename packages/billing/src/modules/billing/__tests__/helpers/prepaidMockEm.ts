@@ -226,7 +226,21 @@ export function createPrepaidMockEm(options: MockEmOptions = {}): MockEm {
           .reduce((acc, t) => addMoney(acc, (t.amount as string) ?? '0'), '0')
         return [{ total }]
       }
-      // sumAmountsBefore: params [tenant, org, acct, before]
+      // sumLedgerBefore: params [tenant, org, acct, billDateIso, before] —
+      // period-close charges by metadata.bill_date, the rest by created_at.
+      if (sql.includes("metadata->>'bill_date'")) {
+        const billDateIso = params[3] as string
+        const before = new Date(params[4] as string).getTime()
+        const total = transactions
+          .filter((t) => {
+            const billDate = (t.metadata as { bill_date?: string } | null | undefined)?.bill_date
+            if ((t.type === 'recurring' || t.type === 'one_time') && billDate) return billDate < billDateIso
+            return Boolean(t.createdAt) && new Date(t.createdAt as Date).getTime() < before
+          })
+          .reduce((acc, t) => addMoney(acc, (t.amount as string) ?? '0'), '0')
+        return [{ total }]
+      }
+      // created_at-only balance: params [tenant, org, acct, before]
       if (sql.includes('created_at < ?')) {
         const before = new Date(params[3] as string).getTime()
         const total = transactions

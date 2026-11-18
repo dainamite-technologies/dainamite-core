@@ -13,7 +13,8 @@ import { fetchAccountNames } from '../../../components/accountNames'
 
 /**
  * Consumption statements admin list (SPEC-002 P3). Non-fiscal period summaries
- * for prepaid accounts — opening / top-ups / usage / recurring / closing.
+ * for prepaid accounts — opening / top-ups / usage / adjustments / charges /
+ * closing, so every row adds up (#138).
  */
 
 type StatementRow = {
@@ -26,6 +27,8 @@ type StatementRow = {
   total_topups: string
   total_usage: string
   total_recurring: string
+  /** Signed: manual adjustments + reversals in the window. */
+  total_adjustments: string
   closing_balance: string
   status: string
 }
@@ -132,8 +135,14 @@ export default function BillingStatementsListPage() {
         cell: ({ row }) => <span className="font-mono tabular-nums">{row.original.total_usage}</span>,
       },
       {
+        accessorKey: 'total_adjustments',
+        header: t('billing.statements.columns.adjustments', 'Adjustments'),
+        cell: ({ row }) => <span className="font-mono tabular-nums">{row.original.total_adjustments}</span>,
+      },
+      {
+        // Charges are taken AT the bill date — in-advance ones cover the next period (#138).
         accessorKey: 'total_recurring',
-        header: t('billing.statements.columns.recurring', 'Recurring'),
+        header: t('billing.statements.columns.charges_on_bill_date', 'Charges (taken on bill date)'),
         cell: ({ row }) => <span className="font-mono tabular-nums">{row.original.total_recurring}</span>,
       },
       {

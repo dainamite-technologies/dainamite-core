@@ -5,6 +5,8 @@ import { useParams } from 'next/navigation'
 import type { LegacyColumnDef as ColumnDef } from '@tanstack/react-table/legacy'
 import { useLocale, useT } from '@open-mercato/shared/lib/i18n/context'
 import { formatBillingDay } from '../../../../lib/displayDate'
+import { addDays } from '../../../../lib/billPeriod'
+import { toIsoDate } from '../../../../lib/dateOnly'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
 import { FormHeader } from '@open-mercato/ui/backend/forms'
 import { Tag } from '@open-mercato/ui/primitives/tag'
@@ -46,7 +48,8 @@ type StatementRow = {
   total_recurring: string
   total_adjustments: string
   closing_balance: string
-  debit_breakdown: { items?: BreakdownEntry[] } | null
+  /** `bill_date` — when the charges were taken (statements before Spec F lack it). */
+  debit_breakdown: { items?: BreakdownEntry[]; bill_date?: string } | null
   vat_summary?: VatSummaryEntry[] | null
   status: string
 }
@@ -87,6 +90,8 @@ export default function BillingStatementDetailPage(props: { params?: { id?: stri
   }, [statementId, t])
 
   const breakdown = row?.debit_breakdown?.items ?? []
+  // Charges are taken AT the bill date = the day after the period end (#138).
+  const billDate = row ? (row.debit_breakdown?.bill_date ?? toIsoDate(addDays(row.period_end, 1))) : null
   const vatSummary = row?.vat_summary ?? []
   // Spec F: VAT columns only when VAT was charged at consumption.
   const showVat = vatSummary.length > 0
@@ -222,7 +227,7 @@ export default function BillingStatementDetailPage(props: { params?: { id?: stri
           <DetailField label={t('billing.statements.columns.usage', 'Usage')}>
             <span className="font-mono tabular-nums">{row.total_usage}</span>
           </DetailField>
-          <DetailField label={t('billing.statements.columns.charges', 'Charges')}>
+          <DetailField label={t('billing.statements.columns.charges_on_bill_date', 'Charges (taken on bill date)')}>
             <span className="font-mono tabular-nums">{row.total_recurring}</span>
           </DetailField>
           <DetailField label={t('billing.statements.columns.adjustments', 'Adjustments')}>
@@ -247,6 +252,15 @@ export default function BillingStatementDetailPage(props: { params?: { id?: stri
           </DetailField>
         </DetailCard>
         <div className="mt-6">
+          {billDate ? (
+            <p className="mb-2 text-sm text-muted-foreground">
+              {t(
+                'billing.statements.detail.charges_hint',
+                'Charges are taken on the bill date ({date}). In-advance items cover the service period shown on each line, which starts on that date — the period after this statement.',
+                { date: formatBillingDay(billDate, locale) },
+              )}
+            </p>
+          ) : null}
           <DataTable
             title={t('billing.statements.detail.breakdown', 'Period-close charges')}
             columns={columns}

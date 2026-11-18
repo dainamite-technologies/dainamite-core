@@ -1,5 +1,6 @@
 import { dateColumnToIso } from '../lib/dateColumns'
 import { storedAdjustmentFailure } from './priceAdjustments/storedAdjustmentFailure'
+import { storedBundleSlotErrors } from './storedBundleSlotErrors'
 import { withQuotePricingWrite } from './priceAdjustments/quotePricingWrite'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { SalesOrder, SalesOrderLine } from '@open-mercato/core/modules/sales/data/entities'
@@ -179,6 +180,15 @@ export class DefaultCpqOrderService {
 
     const invalidAdjustment = storedAdjustmentFailure(cpqConfig, quoteLines)
     if (invalidAdjustment) throw new OrderError(422, 'ADJUSTMENT_INVALID', invalidAdjustment)
+
+    // #124: an incomplete bundle must not become an order (and later a
+    // subscription missing required components).
+    const bundleErrors = storedBundleSlotErrors(cpqConfig)
+    if (bundleErrors.length > 0) {
+      throw new OrderError(422, 'BUNDLE_INCOMPLETE', {
+        errors: bundleErrors.map(({ lineId, slotGroup, slotName, message }) => ({ lineId, slotGroup, slotName, message })),
+      })
+    }
 
     const { number: orderNumber } = await this.numberGenerator.generate({
       kind: 'order',

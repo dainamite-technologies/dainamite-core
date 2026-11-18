@@ -38,6 +38,13 @@ Entry format (newest first within a section):
 
 ## CPQ
 
+- **A unique constraint on a soft-deleted table blocks re-creating a removed row.** (2026-11-17, #122)
+  The service check filters `deletedAt: null` and passes, then the full constraint fails the insert (500). Use a partial unique index (`@Index({ expression: '… WHERE "deleted_at" IS NULL' })`) and update the module snapshot to the `expression` form.
+- **A quote line's `isConfigured` is decided only by `recalculateInternal`.** (2026-11-17, #125)
+  Add and update both end in a saved recalculation that overwrites the value, so logic placed in those paths has no effect. Change `lib/lineCompleteness.ts`.
+- **`.default()` on a create schema hides "the caller omitted it".** (2026-11-17, #122)
+  `offeringType: z.enum(...).default('simple')` made every bundle create from the UI fail V-OFF-7. Leave a field without a default when the server should derive it.
+
 - **Every CPQ route needs an organization context.** (2026-11-16, #116)
   `cpqContextError(ctx)` answers 401 / 400. Route test mocks of `../context` must keep the real one: `cpqContextError: jest.requireActual('../context').cpqContextError`.
 - **A terminal CPQ quote (accepted / rejected / cancelled) may already back an order.** (2026-11-16, #115)

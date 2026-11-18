@@ -1,5 +1,8 @@
 import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import { dateColumnToIso, toDateColumn } from '../lib/dateColumns'
+import { evaluateLineCompleteness, type LineCompletenessInput } from '../lib/lineCompleteness'
+import { selectDefaultComponents } from '../lib/bundleDefaults'
+import { DefaultCpqBundleService, type BundleTreeNode } from './cpqBundleService'
 import { cloneQuoteAdjustments, removeQuoteLineTree } from './priceAdjustments/quoteAdjustmentLifecycle'
 import type { PriceAdjustment } from '../data/price-adjustments'
 import { withAtomicFlush } from '@open-mercato/shared/lib/commands/flush'
@@ -20,6 +23,8 @@ import {
   CpqInventorySubscription,
   CpqInventorySubscriptionItem,
   CpqOrderConfiguration,
+  CpqProductAttribute,
+  CpqProductCharge,
   CpqProductOffering,
   CpqProductSpecification,
 } from '../data/entities'
@@ -65,13 +70,19 @@ interface QuotingServiceDeps {
   cpqValidationService: DefaultCpqValidationService
   cpqProductService: DefaultCpqProductService
   salesDocumentNumberGenerator: SalesDocumentNumberGenerator
+  /** Optional for callers that predate bundle expansion; defaults to one on the same EM. */
+  cpqBundleService?: DefaultCpqBundleService
 }
+
+/** Next SalesQuoteLine number within one add request (null until first counted). */
+type LineNumberCounter = { next: number | null }
 
 export class DefaultCpqQuotingService {
   private em: EntityManager
   private pricingService: DefaultCpqPricingService
   private validationService: DefaultCpqValidationService
   private productService: DefaultCpqProductService
+  private bundleService: DefaultCpqBundleService
   private numberGenerator: SalesDocumentNumberGenerator
 
   constructor(deps: QuotingServiceDeps) {
@@ -79,6 +90,7 @@ export class DefaultCpqQuotingService {
     this.pricingService = deps.cpqPricingService
     this.validationService = deps.cpqValidationService
     this.productService = deps.cpqProductService
+    this.bundleService = deps.cpqBundleService ?? new DefaultCpqBundleService(deps.em)
     this.numberGenerator = deps.salesDocumentNumberGenerator
   }
 
@@ -222,6 +234,37 @@ export class DefaultCpqQuotingService {
       }
     }
 
+    const lineNumbers: LineNumberCounter = { next: null }
+    const created = await this.createQuoteLine(em, cpqConfig, salesQuote, item, scope, lineNumbers)
+
+    // #123: add the bundle's default components as child lines, in this same
+    // transaction, before the single recalculation below.
+    if (item.expandBundleDefaults && (item.action ?? 'add') === 'add' && created.offering?.offeringType === 'bundle') {
+      const tree = await this.bundleService.resolveBundleTree(created.offering.id, scope)
+      if (tree) {
+        await this.addDefaultComponents(em, cpqConfig, salesQuote, tree, created.quoteLineId, created.targetSubscriptionId, scope, lineNumbers, item)
+      }
+    }
+
+    await em.flush()
+
+    // Recalculate quote-level totals
+    return this.recalculateInternal(em, cpqConfig, salesQuote, scope, true)
+  }
+
+  /**
+   * Creates one priced SalesQuoteLine + CpqQuoteLineConfiguration (not
+   * flushed). `isConfigured` is decided later by recalculateInternal.
+   */
+  private async createQuoteLine(
+    em: EntityManager,
+    cpqConfig: CpqQuoteConfiguration,
+    salesQuote: SalesQuote,
+    item: QuoteItemInput,
+    scope: TenantScope,
+    lineNumbers: LineNumberCounter,
+    inheritedTargetSubscriptionId?: string | null,
+  ): Promise<{ quoteLineId: string; offering: CpqProductOffering | null; targetSubscriptionId: string | null }> {
     // Resolve offering -> spec -> product
     const { offering, spec } = await this.resolveOffering(em, item, scope)
 
@@ -262,20 +305,23 @@ export class DefaultCpqQuotingService {
     // Compute line totals
     const { nrcTotal, mrcTotal, usageEstimates, usageTotalEstimated } = computeLineTotals(charges, quantity, item.usageEstimates)
 
-    const isBundleOffering = offering?.offeringType === 'bundle'
-    const isConfigured = validationErrors.length === 0 && (charges.length > 0 || isBundleOffering)
 
     // Compute end date
     const endDate = computeEndDate(item.startDate, item.termMonths, item.endDate)
 
-    // Get current line count
-    const existingLines = await em.find(SalesQuoteLine, {
-      quote: salesQuote,
-      organizationId: scope.organizationId,
-      tenantId: scope.tenantId,
-      deletedAt: null,
-    })
-    const lineNumber = existingLines.length + 1
+    // Line numbers come from one count per add request, then a running
+    // counter: lines created in this transaction are not flushed yet, so a
+    // fresh count per line would hand out the same number twice.
+    if (lineNumbers.next == null) {
+      const existingLines = await em.find(SalesQuoteLine, {
+        quote: salesQuote,
+        organizationId: scope.organizationId,
+        tenantId: scope.tenantId,
+        deletedAt: null,
+      })
+      lineNumbers.next = existingLines.length + 1
+    }
+    const lineNumber = lineNumbers.next++
 
     // Per-instance unit price (NRC + MRC for one instance)
     const perInstanceNrc = charges.filter((c) => c.chargeType === 'nrc').reduce((s, c) => s + (c.totalPrice ?? 0), 0)
@@ -324,12 +370,10 @@ export class DefaultCpqQuotingService {
     // for merge-renew (≥2 targets, all 'absorb') leave it null per spec.
     // The operator can override via item.targetSubscriptionId when a quote
     // has multiple non-merge targets.
-    const arcTargetSubscriptionId = await resolveArcLineTargetSubscriptionId(
-      em,
-      cpqConfig,
-      scope,
-      item.targetSubscriptionId ?? undefined,
-    )
+    // Default components inherit the bundle's already-resolved target.
+    const arcTargetSubscriptionId = inheritedTargetSubscriptionId !== undefined
+      ? inheritedTargetSubscriptionId
+      : await resolveArcLineTargetSubscriptionId(em, cpqConfig, scope, item.targetSubscriptionId ?? undefined)
 
     // Create CpqQuoteLineConfiguration
     const lineConfig = em.create(CpqQuoteLineConfiguration, {
@@ -353,15 +397,78 @@ export class DefaultCpqQuotingService {
       usageEstimates: usageEstimates ?? null,
       usageTotalEstimated: usageTotalEstimated != null ? String(usageTotalEstimated) : null,
       validationErrors: validationErrors.length > 0 ? validationErrors as unknown as Array<Record<string, unknown>> : null,
-      isConfigured,
+      // Decided by recalculateInternal below (lib/lineCompleteness.ts).
+      isConfigured: false,
       targetSubscriptionId: arcTargetSubscriptionId,
     })
     em.persist(lineConfig)
 
-    await em.flush()
 
-    // Recalculate quote-level totals
-    return this.recalculateInternal(em, cpqConfig, salesQuote, scope, true)
+    return { quoteLineId: quoteLine.id, offering, targetSubscriptionId: arcTargetSubscriptionId ?? null }
+  }
+
+  /**
+   * Starting configuration for a default component: for each run-time
+   * attribute of its specification, the value the bundle line already
+   * carries for the same attribute code (e.g. `region`), otherwise the
+   * attribute's own default. Attributes with neither stay empty, so the line
+   * shows what the user still has to fill in.
+   */
+  private async defaultComponentConfiguration(
+    em: EntityManager,
+    specId: string,
+    parentConfiguration: Record<string, unknown>,
+    scope: TenantScope,
+  ): Promise<Record<string, unknown>> {
+    const attributes = await em.find(CpqProductAttribute, {
+      specId,
+      resolutionTime: 'run_time',
+      isActive: true,
+      organizationId: scope.organizationId,
+      tenantId: scope.tenantId,
+      deletedAt: null,
+    })
+    const configuration: Record<string, unknown> = {}
+    for (const attribute of attributes) {
+      const inherited = parentConfiguration[attribute.code]
+      if (inherited !== undefined && inherited !== null && inherited !== '') configuration[attribute.code] = inherited
+      else if (attribute.defaultValue !== undefined && attribute.defaultValue !== null) configuration[attribute.code] = attribute.defaultValue
+    }
+    return configuration
+  }
+
+  /**
+   * #123 / XD-223 "auto-expand defaults": for each slot group of the bundle,
+   * add its active `isDefault` components as child lines (component order,
+   * capped at the group's cardinalityMax). A default that is itself a bundle
+   * is expanded the same way. `resolveBundleTree` stops at cycles.
+   */
+  private async addDefaultComponents(
+    em: EntityManager,
+    cpqConfig: CpqQuoteConfiguration,
+    salesQuote: SalesQuote,
+    node: BundleTreeNode,
+    parentLineId: string,
+    targetSubscriptionId: string | null,
+    scope: TenantScope,
+    lineNumbers: LineNumberCounter,
+    parent: Pick<QuoteItemInput, 'configuration' | 'startDate' | 'termMonths' | 'endDate'>,
+  ): Promise<void> {
+    for (const child of selectDefaultComponents(node)) {
+      const created = await this.createQuoteLine(em, cpqConfig, salesQuote, {
+        offeringId: child.offeringId,
+        configuration: await this.defaultComponentConfiguration(em, child.specId, parent.configuration, scope),
+        quantity: 1,
+        action: 'add',
+        parentLineId,
+        startDate: parent.startDate,
+        termMonths: parent.termMonths,
+        endDate: parent.endDate,
+      }, scope, lineNumbers, targetSubscriptionId)
+      if (child.offeringType === 'bundle') {
+        await this.addDefaultComponents(em, cpqConfig, salesQuote, child, created.quoteLineId, targetSubscriptionId, scope, lineNumbers, parent)
+      }
+    }
   }
 
   // ─── Update Quote Item ─────────────────────────────────────────
@@ -483,7 +590,6 @@ export class DefaultCpqQuotingService {
     // mirror lines were created free-form). Without this guard, edits like
     // changing quantity wipe the synthesized charges and the line collapses
     // to "incomplete" with mrcTotal=0.
-    const isArcMirrored = !!(arcMarkers._arcMirroredFromItemId)
     let charges: ResolvedCharge[]
     if ((lineConfig.offeringId || lineConfig.productId) && !staysFrozen) {
       charges = await this.pricingService.resolveProductCharges({
@@ -499,9 +605,6 @@ export class DefaultCpqQuotingService {
 
     const quantity = update.quantity ?? lineConfig.quantity
     const { nrcTotal, mrcTotal, usageEstimates, usageTotalEstimated } = computeLineTotals(charges, quantity, update.usageEstimates)
-    const isBundleOffering = offering?.offeringType === 'bundle'
-    const isConfigured =
-      validationErrors.length === 0 && (charges.length > 0 || isBundleOffering || isArcMirrored)
 
     const endDate = computeEndDate(update.startDate ?? (dateColumnToIso(lineConfig.startDate) ?? undefined), update.termMonths ?? lineConfig.termMonths ?? undefined, update.endDate)
 
@@ -515,7 +618,7 @@ export class DefaultCpqQuotingService {
       usageEstimates: usageEstimates ?? null,
       usageTotalEstimated: usageTotalEstimated != null ? String(usageTotalEstimated) : null,
       validationErrors: validationErrors.length > 0 ? validationErrors as unknown as Array<Record<string, unknown>> : null,
-      isConfigured,
+      // isConfigured is decided by recalculateInternal below (lib/lineCompleteness.ts).
       startDate: update.startDate ? toDateColumn(update.startDate) : lineConfig.startDate,
       termMonths: update.termMonths ?? lineConfig.termMonths,
       endDate: endDate ? toDateColumn(endDate) : lineConfig.endDate,
@@ -958,6 +1061,7 @@ export class DefaultCpqQuotingService {
 
     let allValid = true
     const allErrors: ValidationError[] = []
+    const completenessInputs = new Map<string, LineCompletenessInput>()
 
     // Collect freshly computed data for each line (used for response regardless of save)
     const computedLines: Array<{
@@ -1037,14 +1141,68 @@ export class DefaultCpqQuotingService {
         lineConfig.usageEstimates?.map((e) => ({ chargeCode: e.chargeCode, estimatedQuantity: e.estimatedQuantity })),
       )
 
-      const isBundleOffering = offering?.offeringType === 'bundle'
-      const isConfigured =
-        validationErrors.length === 0 && (charges.length > 0 || isBundleOffering || isArcMirrored)
-      if (!isConfigured) allValid = false
-      allErrors.push(...validationErrors)
+      completenessInputs.set(lineConfig.quoteLineId, {
+        lineId: lineConfig.quoteLineId,
+        attributeErrors: validationErrors,
+        chargeCount: charges.length,
+        hasChargeDefinitions: true, // resolved below, in one batch, only where it matters
+        isBundleOffering: offering?.offeringType === 'bundle',
+        isArcMirrored,
+        isArcCancelled: isArcCancelledLine(lineConfig, cpqConfig.quoteType),
+      })
+      computedLines.push({ lineConfig, charges, nrcTotal, mrcTotal, usageEstimates, usageTotalEstimated, validationErrors, isConfigured: false })
 
-      computedLines.push({ lineConfig, charges, nrcTotal, mrcTotal, usageEstimates, usageTotalEstimated, validationErrors, isConfigured })
+    }
 
+    // Bundle slot rules (V-QBUN-*, #124) need the whole quote, so they run
+    // once here, before each line's completeness is decided.
+    // A Cancel quote terminates the whole subscription: slot rules do not apply.
+    if (cpqConfig.quoteType !== 'cancel' && [...completenessInputs.values()].some((input) => input.isBundleOffering)) {
+      const slotErrors = await this.validationService.validateBundleSlots({
+        lines: computedLines.map(({ lineConfig }) => {
+          const input = completenessInputs.get(lineConfig.quoteLineId)!
+          return {
+            lineId: lineConfig.quoteLineId,
+            offeringId: lineConfig.offeringId ?? null,
+            specId: lineConfig.specId ?? null,
+            parentLineId: lineConfig.parentLineId ?? null,
+            action: lineConfig.action,
+            isArcCancelled: input.isArcCancelled,
+            isArcMirrored: input.isArcMirrored,
+          }
+        }),
+        scope,
+      })
+      for (const error of slotErrors) {
+        const input = error.lineId ? completenessInputs.get(error.lineId) : undefined
+        if (input) (input.bundleSlotErrors ??= []).push(error)
+      }
+    }
+
+    // One rule decides "configured" (lib/lineCompleteness.ts). Charge
+    // definitions are only looked up for lines that are otherwise valid but
+    // priced nothing — whether the offering is intentionally free (#125).
+    const chargelessLines = computedLines.filter(({ lineConfig, charges, validationErrors }) => {
+      const input = completenessInputs.get(lineConfig.quoteLineId)!
+      return !!lineConfig.offeringId && charges.length === 0 && validationErrors.length === 0 && !input.bundleSlotErrors?.length &&
+        !input.isArcCancelled && !input.isArcMirrored && !input.isBundleOffering
+    })
+    if (chargelessLines.length > 0) {
+      const definitions = await this.loadChargeDefinitionKeys(em, chargelessLines.map(({ lineConfig }) => lineConfig), scope)
+      for (const { lineConfig } of chargelessLines) {
+        // Only offerings can be intentionally free (#125). A line without an
+        // offering keeps its previous rule: no charges means incomplete.
+        completenessInputs.get(lineConfig.quoteLineId)!.hasChargeDefinitions = lineConfig.offeringId
+          ? definitions.has(lineConfig.offeringId)
+          : true
+      }
+    }
+    for (const computed of computedLines) {
+      const completeness = evaluateLineCompleteness(completenessInputs.get(computed.lineConfig.quoteLineId)!)
+      computed.isConfigured = completeness.isConfigured
+      computed.validationErrors = completeness.errors
+      if (!completeness.isConfigured) allValid = false
+      allErrors.push(...completeness.errors)
     }
     const adjustments = draftAdjustments ?? await loadQuoteAdjustments(em, cpqConfig.id, scope)
     const adjusted = resolveManualAdjustments(computedLines.map(({ lineConfig, charges }) => ({
@@ -1169,6 +1327,24 @@ export class DefaultCpqQuotingService {
   }
 
   // ─── Helpers ───────────────────────────────────────────────────
+
+  /** Which of the given offerings define at least one active charge. */
+  private async loadChargeDefinitionKeys(
+    em: EntityManager,
+    lines: CpqQuoteLineConfiguration[],
+    scope: TenantScope,
+  ): Promise<Set<string>> {
+    const offeringIds = [...new Set(lines.map((l) => l.offeringId).filter((id): id is string => !!id))]
+    if (offeringIds.length === 0) return new Set()
+    const charges = await em.find(CpqProductCharge, {
+      organizationId: scope.organizationId,
+      tenantId: scope.tenantId,
+      isActive: true,
+      deletedAt: null,
+      offeringId: { $in: offeringIds },
+    })
+    return new Set(charges.map((c) => c.offeringId).filter((id): id is string => !!id))
+  }
 
   private async loadCpqConfig(em: EntityManager, quoteId: string, scope: TenantScope): Promise<CpqQuoteConfiguration> {
     // Try finding by CpqQuoteConfiguration.id first, then by quoteId

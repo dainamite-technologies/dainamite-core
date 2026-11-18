@@ -92,13 +92,22 @@ export interface QuoteItemInput {
    * the quote's single attached target when omitted. Required when the ARC
    * quote has multiple non-merge targets (operator must pick). */
   targetSubscriptionId?: string | null
+  /** #123: also add the bundle's default components as child lines. */
+  expandBundleDefaults?: boolean
 }
 
 export interface ValidationError {
   lineId?: string
   adjustmentId?: string
-  type?: 'attribute' | 'relationship'
+  /**
+   * `charge` — V-LINE-1 (offering has charges but none applies).
+   * `bundle_slot` — V-QBUN-* (bundle slot cardinality / membership).
+   */
+  type?: 'attribute' | 'relationship' | 'charge' | 'bundle_slot'
   attribute?: string
+  /** Bundle slot errors: the slot group and slot name the error is about. */
+  slotGroup?: string
+  slotName?: string
   relationshipType?: string
   sourceSpec?: string
   targetSpec?: string

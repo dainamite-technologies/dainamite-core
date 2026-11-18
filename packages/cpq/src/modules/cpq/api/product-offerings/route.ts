@@ -230,8 +230,9 @@ export async function POST(req: Request) {
     })
     if (!spec) return NextResponse.json({ error: 'Specification not found' }, { status: 400 })
 
-    // V-OFF-7: offeringType must match spec's specType
-    const offeringType = body.offeringType ?? 'simple'
+    // V-OFF-7: offeringType must match spec's specType. When the caller omits
+    // it, the offering takes the specification's type.
+    const offeringType = body.offeringType ?? (spec.specType === 'bundle' ? 'bundle' : 'simple')
     if (offeringType !== spec.specType) {
       return NextResponse.json(
         { error: `V-OFF-7: offeringType '${offeringType}' must match specification's specType '${spec.specType}'` },
@@ -239,7 +240,7 @@ export async function POST(req: Request) {
       )
     }
 
-    const entity = ctx.em.create(CpqProductOffering, { ...body, ...scope })
+    const entity = ctx.em.create(CpqProductOffering, { ...body, offeringType, ...scope })
     await ctx.em.flush()
 
     return NextResponse.json(
@@ -383,7 +384,7 @@ export const openApi: OpenApiRouteDoc = {
     },
     POST: {
       summary: 'Create a CPQ product offering for a specification',
-      description: "`offeringType` must match the specification's `specType` (V-OFF-7).",
+      description: "`offeringType` is optional: when omitted it is taken from the specification's `specType`. When sent, it must match `specType` (V-OFF-7).",
       requestBody: { schema: cpqProductOfferingCreateSchema },
       responses: [{ status: 201, description: 'Created offering' }],
       errors: [

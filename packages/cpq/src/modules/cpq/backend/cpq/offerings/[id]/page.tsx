@@ -97,6 +97,7 @@ type Specification = {
   code: string
   name: string
   productId: string
+  specType?: string
 }
 
 type PricingTableRef = { id: string; code: string; name: string; dimensions: Array<{ key: string; label: string }>; priceColumns: Array<{ key: string; label: string }> }
@@ -362,8 +363,11 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
     setSaving(true)
     setError(null)
     try {
+      // The offering type always follows the specification's type (V-OFF-7).
+      // On create the server derives it from the spec, so it is never sent.
+      const { offeringType: _derivedType, ...formWithoutType } = form
       const payload = isNew
-        ? { ...form, description: form.description || null, designTimeValues, specId: form.specId }
+        ? { ...formWithoutType, description: form.description || null, designTimeValues, specId: form.specId }
         : { id: offeringId, ...form, description: form.description || null, designTimeValues }
 
       const res = await fetch('/api/cpq/product-offerings', {
@@ -588,7 +592,8 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
               <select
                 value={form.specId}
                 onChange={(e) => {
-                  setForm({ ...form, specId: e.target.value })
+                  const selected = specs.find((s) => s.id === e.target.value)
+                  setForm({ ...form, specId: e.target.value, offeringType: selected?.specType ?? 'simple' })
                   loadSpecAttributes(e.target.value)
                   setDesignTimeValues({})
                 }}
@@ -599,6 +604,16 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                   <option key={s.id} value={s.id}>{s.name} ({s.code})</option>
                 ))}
               </select>
+              {form.specId && (
+                <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+                  <span>{t('cpq.offerings.filters.offeringType', 'Type')}:</span>
+                  <Tag variant={form.offeringType === 'bundle' ? 'info' : 'neutral'} className="px-2 text-[10px]">
+                    {form.offeringType === 'bundle'
+                      ? t('cpq.offerings.type.bundle', 'Bundle')
+                      : t('cpq.offerings.type.simple', 'Simple')}
+                  </Tag>
+                </div>
+              )}
             </div>
           )}
 

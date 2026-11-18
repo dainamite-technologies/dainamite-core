@@ -94,7 +94,7 @@ type QuoteLine = {
   mrcTotal: number
   charges: ResolvedCharge[]
   isConfigured: boolean
-  validationErrors: Array<{ message: string }> | null
+  validationErrors: Array<{ message: string; type?: string; slotGroup?: string }> | null
   arcSource: ArcLineSource | null
   targetSubscriptionId: string | null
 }
@@ -465,6 +465,9 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
         const body: Record<string, unknown> = { offeringId: selectedOffering.id, configuration: config, quantity }
         if (addingToParentLineId) body.parentLineId = addingToParentLineId
         if (tid) body.targetSubscriptionId = tid
+        // #123: a bundle arrives with its default components already added
+        // (the server ignores the flag for simple offerings).
+        body.expandBundleDefaults = true
         lastResult = await apiJson<QuoteResult>(t, `/api/cpq/quotes/${cpqQuote.id}/items`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1119,6 +1122,7 @@ function QuoteLineTree({ lines, currency, expandedLines, pricingDetail, targetCo
                     expandedLines={expandedLines}
                     pricingDetail={pricingDetail}
                     parentLineId={line.lineId}
+                    slotErrors={(line.validationErrors ?? []).filter((e) => e.type === 'bundle_slot' && e.slotGroup)}
                     targetCodes={targetCodes}
                     onToggleLine={onToggleLine}
                     onEditLine={onEditLine}
@@ -1136,11 +1140,13 @@ function QuoteLineTree({ lines, currency, expandedLines, pricingDetail, targetCo
   )
 }
 
-function BundleSlotPanel({ bundleTree, treeLoading, children, allLines, currency, expandedLines, pricingDetail, parentLineId, targetCodes, onToggleLine, onEditLine, onRemoveLine, onAddComponent, onTogglePricingDetail }: {
+function BundleSlotPanel({ bundleTree, treeLoading, children, allLines, currency, expandedLines, pricingDetail, parentLineId, slotErrors = [], targetCodes, onToggleLine, onEditLine, onRemoveLine, onAddComponent, onTogglePricingDetail }: {
   bundleTree: BundleTree | undefined; treeLoading: boolean
   children: QuoteLine[]; allLines: QuoteLine[]; currency: string
   expandedLines: Set<string>; pricingDetail: { lineIdx: number; chargeIdx: number } | null
   parentLineId: string
+  /** V-QBUN-1/2 errors recorded on the bundle line, keyed by slot group (#124). */
+  slotErrors?: Array<{ message: string; slotGroup?: string }>
   targetCodes: Map<string, string>
   onToggleLine: (id: string) => void; onEditLine: (line: QuoteLine) => void
   onRemoveLine: (lineId: string) => void; onAddComponent: (parentLineId: string, offeringId?: string) => void
@@ -1192,6 +1198,7 @@ function BundleSlotPanel({ bundleTree, treeLoading, children, allLines, currency
         const isRequired = slot.cardinalityMin > 0
         const isFull = slot.cardinalityMax != null && filledCount >= slot.cardinalityMax
         const canAdd = !isFull
+        const slotError = slotErrors.find((e) => e.slotGroup === slot.componentGroup)
 
         return (
           <div key={slot.slotId} className="border-b last:border-b-0">
@@ -1203,11 +1210,16 @@ function BundleSlotPanel({ bundleTree, treeLoading, children, allLines, currency
               ) : (
                 <Tag variant="neutral" className="text-[10px] px-1.5">{t('cpq.quotes.bundle.slotOptional', 'optional')}</Tag>
               )}
-              <span className="text-[10px] text-muted-foreground">
+              <span className={`text-[10px] ${slotError ? 'text-status-error-text font-medium' : 'text-muted-foreground'}`}>
                 {filledCount}/{slot.cardinalityMax ?? '∞'}
                 {slot.cardinalityMin > 0 && ' '}
                 {slot.cardinalityMin > 0 && t('cpq.quotes.bundle.slotMin', '(min {min})', { min: slot.cardinalityMin })}
               </span>
+              {slotError && (
+                <Tag variant="error" className="text-[10px] px-1.5" title={slotError.message}>
+                  {t('cpq.quotes.bundle.slotIncomplete', 'incomplete')}
+                </Tag>
+              )}
               <div className="flex-1" />
               {/* Available offerings in this slot */}
               <div className="flex items-center gap-1">

@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { cpqContextError, resolveCpqRouteContext } from '../context'
 import { cpqOfferingComponentCreateSchema, cpqOfferingComponentUpdateSchema } from '../../data/validators'
 import type { DefaultCpqBundleService } from '../../services/cpqBundleService'
+import { bundleErrorResponse } from '../_helpers/bundleErrors'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { cpqErrorDoc, cpqDeleteByIdBody, cpqSuccessResponseSchema, CPQ_CRUD_BY_ID_ERRORS } from '../_helpers/quoteRouteOpenApi'
 
@@ -54,9 +55,8 @@ export async function POST(req: Request) {
     if (err instanceof z.ZodError) {
       return NextResponse.json({ error: 'Validation error', details: err.issues }, { status: 400 })
     }
-    if (err instanceof Error && err.message.startsWith('V-')) {
-      return NextResponse.json({ error: err.message }, { status: 400 })
-    }
+    const mapped = bundleErrorResponse(err)
+    if (mapped) return mapped
     console.error('[cpq/offering-components.POST]', err)
     return NextResponse.json({ error: 'Internal error' }, { status: 500 })
   }
@@ -121,9 +121,13 @@ export const openApi: OpenApiRouteDoc = {
     POST: {
       summary: 'Add a child offering to a slot of a bundle offering',
       requestBody: { schema: cpqOfferingComponentCreateSchema },
+      description:
+        'A removed (soft-deleted) component does not block adding the same child offering again; V-COMP-5 applies to live components only.',
       responses: [{ status: 201, description: 'Created component' }],
       errors: [
         cpqErrorDoc(400, 'Validation error or bundle rule violation (`V-*` code)'),
+        cpqErrorDoc(404, 'Offering, slot or child offering not found'),
+        cpqErrorDoc(409, 'V-COMP-5: the child offering was added concurrently'),
         cpqErrorDoc(500, 'Internal error'),
       ],
     },

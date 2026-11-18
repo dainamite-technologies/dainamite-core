@@ -490,8 +490,11 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
     setError(null)
     try {
       const isEdit = !!editingOffering.id
+      // The offering type always follows this specification's type (V-OFF-7).
+      // On create the server derives it, so the client never sends one.
+      const { offeringType: _derivedType, ...offeringWithoutType } = editingOffering
       const payload = {
-        ...editingOffering,
+        ...(isEdit ? editingOffering : offeringWithoutType),
         designTimeValues: editingDtValues,
         specId,
       }
@@ -534,7 +537,7 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
   }
 
   const startEditOffering = (offering?: Offering) => {
-    const editing = offering ? { ...offering } : { ...EMPTY_OFFERING }
+    const editing = offering ? { ...offering } : { ...EMPTY_OFFERING, offeringType: form.specType === 'bundle' ? 'bundle' : 'simple' }
     setEditingOffering(editing)
     setEditingDtValues(editing.designTimeValues ? { ...editing.designTimeValues } : {})
   }

@@ -143,7 +143,7 @@ export async function seedPuffinExamplesImpl(
     )
     q1 = await quoting.addQuoteItem(
       q1.id,
-      { offeringId: devApp.id, configuration: { region: 'fra1' }, quantity: 1, termMonths: 12 },
+      { offeringId: devApp.id, configuration: { region: 'fra1' }, quantity: 1, termMonths: 12, expandBundleDefaults: true },
       scope,
     )
     try {
@@ -167,7 +167,7 @@ export async function seedPuffinExamplesImpl(
     )
     q2 = await quoting.addQuoteItem(
       q2.id,
-      { offeringId: ecom.id, configuration: { region: 'fra1' }, quantity: 1, termMonths: 12 },
+      { offeringId: ecom.id, configuration: { region: 'fra1' }, quantity: 1, termMonths: 12, expandBundleDefaults: true },
       scope,
     )
     try {

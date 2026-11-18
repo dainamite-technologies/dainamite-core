@@ -17,10 +17,12 @@ import {
   type CostElementForm,
   type CostElementRow,
 } from '../../lib/costPlusView'
+import { indexTodayHelp, type IndexCurrent } from '../../lib/indexView'
 
 type CostTable = { id: string; code: string; name: string; priceColumns: Array<{ key: string; label: string }> }
+type CostIndexOption = { id: string; code: string; name: string; unit: string; currencyCode: string; current: IndexCurrent }
 
-const SOURCE_FALLBACKS = { fixed: 'Fixed amount', table: 'Cost table', on_request: 'On request (supplier)' } as const
+const SOURCE_FALLBACKS = { fixed: 'Fixed amount', table: 'Cost table', index: 'Market index', on_request: 'On request (supplier)' } as const
 const MODEL_FALLBACKS = { flat: 'Flat', per_unit: 'Per unit', tiered: 'Tiered', volume: 'Volume' } as const
 
 const selectClass = 'w-full rounded-md border bg-background px-2 py-1.5 text-sm'
@@ -40,6 +42,7 @@ export function CostElementDialog({ open, charge, element, onClose, onSaved }: P
   const mode = element ? 'edit' : 'create'
   const [form, setForm] = React.useState<CostElementForm>(() => emptyCostElementForm(charge.chargeType, charge.currencyCode, charge.isCostPlus))
   const [tables, setTables] = React.useState<CostTable[]>([])
+  const [indices, setIndices] = React.useState<CostIndexOption[]>([])
   const [errorCode, setErrorCode] = React.useState<string | null>(null)
   const [saving, setSaving] = React.useState(false)
   const set = (patch: Partial<CostElementForm>) => setForm((prev) => ({ ...prev, ...patch }))
@@ -63,8 +66,23 @@ export function CostElementDialog({ open, charge, element, onClose, onSaved }: P
     return () => { cancelled = true }
   }, [open, form.source, tables.length])
 
+  // Active indices only (an inactive index is refused with INDEX_INACTIVE). Loaded once, when the index source is first picked.
+  React.useEffect(() => {
+    if (!open || form.source !== 'index' || indices.length > 0) return
+    let cancelled = false
+    void (async () => {
+      const call = await apiCall<{ items?: CostIndexOption[] }>('/api/cpq/cost-indices?isActive=true&pageSize=100')
+      if (!cancelled && call.ok) setIndices(call.result?.items ?? [])
+    })()
+    return () => { cancelled = true }
+  }, [open, form.source, indices.length])
+
   const models = allowedCostModels(charge.quantityAttributeCode)
   const selectedTable = tables.find((table) => table.id === form.costTableId)
+  const selectedIndex = indices.find((index) => index.id === form.costIndexId)
+  const indexHelp = form.source === 'index' && selectedIndex
+    ? indexTodayHelp({ current: selectedIndex.current, currencyCode: selectedIndex.currencyCode, unit: selectedIndex.unit, factor: form.indexFactor, offset: form.indexOffset }, t)
+    : null
   const localError = costElementFormError(form, mode)
   const message = (code: string) => t(`cpq.costElements.errors.${code}`, costErrorMessage(code, code))
 
@@ -137,7 +155,7 @@ export function CostElementDialog({ open, charge, element, onClose, onSaved }: P
                 })
               }}
             >
-              {(['fixed', 'table', 'on_request'] as const).map((source) => (
+              {(['fixed', 'table', 'index', 'on_request'] as const).map((source) => (
                 <option key={source} value={source}>{t(`cpq.costElements.sources.${source}`, SOURCE_FALLBACKS[source])}</option>
               ))}
             </select>
@@ -193,6 +211,37 @@ export function CostElementDialog({ open, charge, element, onClose, onSaved }: P
                   {selectedTable?.priceColumns.map((column) => <option key={column.key} value={column.key}>{column.label}</option>)}
                 </select>
               </label>
+            </>
+          )}
+          {form.source === 'index' && (
+            <>
+              <label className="col-span-2 space-y-1">
+                <span className="text-xs font-medium">{t('cpq.costElements.index', 'Cost index')} *</span>
+                <select className={selectClass} value={form.costIndexId} data-testid="cpq-cost-element-index" onChange={(e) => set({ costIndexId: e.target.value })}>
+                  <option value="">{t('cpq.costElements.selectIndex', 'Select index…')}</option>
+                  {form.costIndexId && !selectedIndex && indices.length > 0 && (
+                    <option value={form.costIndexId}>{t('cpq.costElements.indexUnavailable', 'Current index (inactive or not listed)')}</option>
+                  )}
+                  {indices.map((index) => <option key={index.id} value={index.id}>{index.name} ({index.code}, {index.currencyCode}/{index.unit})</option>)}
+                </select>
+                {indices.length === 0 && (
+                  <span className="block text-xs text-muted-foreground">
+                    {t('cpq.costElements.noIndices', 'No active cost indices yet. Create one under Cost indices.')}
+                  </span>
+                )}
+              </label>
+              <label className="space-y-1">
+                <span className="text-xs font-medium">{t('cpq.costElements.indexFactor', 'Factor')}</span>
+                <Input inputMode="decimal" value={form.indexFactor} placeholder="1" data-testid="cpq-cost-element-index-factor" onChange={(e) => set({ indexFactor: e.target.value })} />
+              </label>
+              <label className="space-y-1">
+                <span className="text-xs font-medium">{t('cpq.costElements.indexOffset', 'Offset')}</span>
+                <Input inputMode="decimal" value={form.indexOffset} placeholder="0" data-testid="cpq-cost-element-index-offset" onChange={(e) => set({ indexOffset: e.target.value })} />
+              </label>
+              <p className="col-span-2 text-xs text-muted-foreground">
+                {t('cpq.costElements.indexFormula', 'Unit cost = factor × index value in force + offset, in the index currency (converted at the dated rate when it differs from the quote currency).')}
+              </p>
+              {indexHelp && <p className="col-span-2 text-xs" data-testid="cpq-cost-element-index-help">{indexHelp}</p>}
             </>
           )}
           {form.source === 'on_request' && (

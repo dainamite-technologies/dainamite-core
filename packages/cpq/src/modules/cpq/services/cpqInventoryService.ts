@@ -100,8 +100,10 @@ export interface ArcLineChange {
    * open catalog costs missing from the seeds). `upsert`: the same create / update, but nothing is ever ended (used
    * when `cpq.cost_plus` is off at activation, so the quote could not carry costs). Absent for every other line
    * (an unreconfigured mirror line leaves item costs untouched; a `cancel` line ends them).
+   * `fullImage` (replace only, ARC costs Q5): a cost-managed mirror line (`_arcCostsCarried`) — its seeds are the whole
+   * cost set of the item, so every open row missing from them ends, whatever its origin.
    */
-  costSync?: { mode: 'create' | 'replace' | 'upsert'; seeds: CostSeed[] }
+  costSync?: { mode: 'create' | 'replace' | 'upsert'; seeds: CostSeed[]; fullImage?: boolean }
   /** Optional metadata for action='modify' — the configuration / pricing changes. */
   modifyPatch?: {
     configuration?: Record<string, unknown>
@@ -1995,7 +1997,7 @@ export class DefaultCpqInventoryService {
    * creates the change log, then `settleCostWrites`):
    *  - a `cancel` line ends the open costs of its item and of the assets it cancelled;
    *  - an `add` line creates its item's costs;
-   *  - a reconfigured mirror line (`costSync.mode = 'replace'`) replaces its item's costs by `cost_key`;
+   *  - a reconfigured or cost-managed (carried) mirror line (`costSync.mode = 'replace'`) replaces its item's costs by `cost_key`;
    *  - every other line leaves costs untouched.
    * Unchanged rows are neither written nor reported.
    */
@@ -2021,6 +2023,7 @@ export class DefaultCpqInventoryService {
         subscriptionId: sub.id,
         subscriptionItemId: applied.itemIdByQuoteLineId.get(lc.quoteLineId as string) as string,
         seeds: lc.costSync?.seeds ?? [],
+        ...(lc.costSync?.fullImage ? { fullImage: true } : {}),
       }))
     collect(await endItemCosts(this.em, applied.cancelledItemIds, ctx))
     collect(await endAssetCosts(this.em, applied.cancelledAssetIds, ctx))

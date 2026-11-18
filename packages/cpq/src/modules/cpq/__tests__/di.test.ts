@@ -1,6 +1,7 @@
 import { asValue, createContainer, InjectionMode } from 'awilix'
 import { register } from '../di'
 import { CpqFxRateResolver } from '../services/costs/fxRateResolver'
+import { CpqCostExpiryService } from '../services/costs/costExpiryService'
 import { CpqCostService } from '../services/costs/costService'
 
 const featureTogglesService = {
@@ -51,5 +52,13 @@ describe('cpqFxRateResolver DI registration', () => {
     const costService = container.resolve<CpqCostService>('cpqCostService')
     expect(costService.fxRateResolver).toBe(container.resolve('cpqFxRateResolver'))
     expect(new CpqCostService({ em: {} as never, featureTogglesService: featureTogglesService as never }).fxRateResolver).toBeUndefined()
+  })
+
+  it('resolves cpqCostExpiryService with notifications optional', () => {
+    const { container } = setup({ currencies: false })
+    expect(container.resolve('cpqCostExpiryService')).toBeInstanceOf(CpqCostExpiryService)
+    container.register({ notificationService: asValue({ createBatch: jest.fn() }), rbacService: asValue({ userHasAllFeatures: jest.fn() }) })
+    const withNotify = container.createScope().resolve<CpqCostExpiryService>('cpqCostExpiryService')
+    expect((withNotify as unknown as { deps: { notify: unknown } }).deps.notify).toMatchObject({ notificationService: expect.anything(), rbacService: expect.anything() })
   })
 })

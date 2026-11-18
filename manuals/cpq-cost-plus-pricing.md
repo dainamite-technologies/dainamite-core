@@ -12,8 +12,9 @@ adjustments apply to a cost-plus price exactly as to any other list price.
 
 This release covers **known costs on quotes**, their **carry-through to
 orders, subscriptions and assets**, **supplier cost sourcing** (asking a
-carrier for a cost and recording the answer) and **foreign-currency costs**
-(a USD tail on a EUR quote, converted at a dated rate). See
+carrier for a cost and recording the answer), **foreign-currency costs**
+(a USD tail on a EUR quote, converted at a dated rate) and **index costs**
+(a cost that follows a market index such as data-centre power). See
 [Coming with later features](#coming-with-later-features).
 
 ## Concepts
@@ -21,7 +22,7 @@ carrier for a cost and recording the answer) and **foreign-currency costs**
 | Term | Meaning |
 |---|---|
 | **Cost-plus charge** | An NRC or MRC charge whose pricing method is `cost_plus`: flat or per-unit, with a **markup rule** and value, and at least one active price-basis cost element. |
-| **Cost element** | A charge's catalog default cost: code, name, role, cost type (NRC / MRC), source (`fixed`, `table`, `on_request`), cost model (`flat` / `per_unit` / `tiered` / `volume`). The code becomes the **cost key** on the quote and never changes. |
+| **Cost element** | A charge's catalog default cost: code, name, role, cost type (NRC / MRC), source (`fixed`, `table`, `index`, `on_request`), cost model (`flat` / `per_unit` / `tiered` / `volume`). The code becomes the **cost key** on the quote and never changes. |
 | **Price-basis cost** | Part of the price: the charge's list price is computed from the sum of its price-basis costs. |
 | **Margin-only cost** | Counts toward margin but never toward the price (internal monitoring, extra labour). |
 | **Cost table** | An ordinary pricing table with `purpose = cost`. Only users with `cpq.costs.view` can see it. |
@@ -133,6 +134,8 @@ context. Grant those views accordingly.
 3. **Cost elements** (`/api/cpq/charge-cost-elements`):
    - `fixed` — an amount and currency;
    - `table` — a cost table and column; tiered / volume models require a table;
+   - `index` — a cost index, a factor and an offset (see
+     [Index costs](#index-costs)); no amount or currency of its own;
    - `on_request` — no value; an optional **estimate** (needs a currency),
      default supplier and validity days. A catalog estimate starts the quote
      cost line as `estimated`, no estimate starts it as `none`.
@@ -214,13 +217,22 @@ A quote's costs are carried to the order and the subscription (see
 [Orders and subscriptions](#orders-and-subscriptions)); what an ARC quote does with
 them is described there. On an ARC quote:
 
-- **Renew** mirror lines (re-priced at today's standard) and **reconfigured
-  Amend** mirror lines get catalog cost lines like any other line. A pricing
-  manager enters and confirms their values (`PATCH .../costs/{costId}`), so the
-  quote can convert. Manual costs and markup overrides are not available on
+- **Amend** mirror lines **carry the subscription item's open costs** (origin
+  `carried`, shown with a *Carried* badge) instead of getting catalog cost lines;
+  the line keeps the stored price. See [ARC costs](#arc-costs-carry-renegotiation-and-recovery).
+- **Renew** (standalone) mirror lines are re-priced at today's standard and are
+  **reconciled** with the catalog: costs still in the catalog are carried, new
+  catalog costs are added, costs that no longer apply are listed as *Dropped at
+  renewal*. A carried cost whose supplier term or validity ends before the new
+  term is flagged *Renegotiation due*.
+- **Reconfigured Amend** mirror lines get catalog cost lines like any other line.
+  A pricing manager enters and confirms their values (`PATCH .../costs/{costId}`),
+  so the quote can convert. Manual costs and markup overrides are not available on
   mirror lines (`422 LINE_NOT_ELIGIBLE`).
-- **Frozen Amend** mirror lines keep the subscription item's stored price: they
-  get no cost lines and accept no cost write (`422 LINE_NOT_ELIGIBLE`).
+- **Merge-renew** lines and Renew quotes created before cost carry-over keep the
+  contracted price and carry no costs ("Phase 1" lines, see the line notice on
+  the quote page); *Refresh from subscription* turns a Phase 1 line into a
+  carrying one.
 - **Removing an item** on an Amend / Renew quote turns its line into a cancel
   line: its cost lines (catalog and manual) and markup overrides are deleted
   at once, whatever the toggle or the lock. Restoring the item brings the
@@ -281,16 +293,15 @@ hidden (`404` from the cost endpoints).
 
 ### Change quotes (Amend, Renew, Cancel)
 
-- **Renew freezes a cost-plus price.** The Renew mirror line of a cost-plus item
-  (an item whose stored charges contain a cost-plus charge) keeps the
-  **contracted price** instead of being re-priced at today's standard, exactly
-  like an Amend mirror. The quote page shows the banner *"Costs are not carried
-  to change quotes yet"* on such lines (to everyone, no amounts). Changing a
-  pricing input of the line **un-freezes** it and re-prices it from today's costs.
-  Renew mirrors of non-cost-plus items behave as before.
+- **Costs are carried.** An Amend (and a standalone Renew) mirror line carries the
+  subscription item's costs; the activation writes them back in place. A
+  **standalone Renew is no longer frozen**: its cost-plus lines are re-priced at
+  today's standard like any Renew line. Only merge-renew lines and Renews created
+  before this feature (marked `_arcCostPlusFrozen`) keep the contracted price and
+  carry no costs.
 - **Reconfigured lines get cost lines.** A mirror line whose pricing inputs
-  changed (configuration, quantity) gets catalog cost lines like a new line; an
-  unchanged mirror never does, so it keeps the stored costs.
+  changed (configuration, quantity) gets catalog cost lines like a new line for
+  the keys it does not carry; an unchanged Amend mirror carries the stored costs.
 - **Activation writes the costs back.** A reconfigured line updates the item's
   costs **in place** (same cost ids; a cost whose value did not change is not
   touched and is not reported as a change); an added item creates its costs; a
@@ -677,6 +688,286 @@ for a month; re-run the seed to extend it) and the quote "Demo — IP Transit,
 USD partner tail converted to EUR" (fixed 300 USD tail, EUR quote, list price
 345.00 at today's rate). Re-running the seed adds the rate of the new day.
 
+## ARC costs: carry, renegotiation and recovery
+
+Applies to Amend / Renew / Cancel quotes of subscriptions whose items have costs
+(see [Orders and subscriptions](#orders-and-subscriptions)). Nothing here changes
+a billing payload: the `cpq.subscription.amended` / `renewed` payloads are
+byte-identical to those of the same quote without costs.
+
+### Amend carries, Renew reconciles
+
+- **Amend.** Creating the quote (or *Restore* of a removed line) copies every
+  open item cost to the mirror line as a `carried` cost with its supplier,
+  validity, supplier term, FX snapshot and status (`confirmed` when it has an
+  amount). The item is never re-instantiated from the catalog. Merge mirrors
+  carry nothing.
+- **Renew (standalone).** The item's costs are carried and then **reconciled**
+  with the catalog. Costs that match are kept, catalog costs the item lacks are
+  added, costs that no longer apply stay on the item until activation and are
+  listed under *Dropped at renewal* (read only).
+- **Cancel.** Lines carry no costs; activation ends every open cost of the item.
+
+### Cost-only Amend (renegotiation)
+
+A cost change on an Amend mirror line is **margin only**: the line is frozen
+("price kept"), so its price, `snapshotHash` and billing are untouched and the
+quote lock does not apply. Edit the carried cost (`PATCH .../costs/{costId}`);
+overwriting a carried value needs a **note** (`422 NOTE_REQUIRED`). A quote that
+changes only costs shows *"Internal change — no customer document needed; move to
+Accepted when ready."* and can go through the normal status ladder, be
+converted and activated. At activation the item cost is **updated in place**: it
+keeps its id, a `cost_changed` event is emitted and the subscription's Change
+History `amend` entry shows the before / after (for example 270 to 240).
+Reconfiguring the line un-freezes it and the normal price-basis lock applies
+again; a supplier answer on a frozen carried line follows the same margin-only
+rule.
+
+### Renegotiation due (Renew)
+
+A carried cost with a **monthly** value (MRC) whose `valid_until` or
+`supplier_term_end` is **before the Renew's new term end** is marked *Renegotiation
+due*: its status becomes `estimated` (the value is kept), so the quote **cannot be
+converted** (`COSTS_NOT_CONFIRMED`) until each due cost is settled, by
+
+- a **supplier answer** (request the cost; sourcing clears the flag),
+- a **manual value** confirmed by hand, or
+- **Keep current cost**: `PATCH .../costs/{costId}` with `{ "keepCurrent": true }`
+  plus a new `validUntil` / `supplierTermEnd` (`null` = rolling) and a new
+  `supplierQuoteRef` or a `note` as evidence. Dates must not be before the new
+  term end (`422 RENEGOTIATION_DATES_SHORT`); a cost that is not due answers
+  `422 NOT_RENEGOTIATION_DUE`. It is lock-exempt and never changes the price.
+
+The flag is re-evaluated on every saved recalculation (changing the term can set
+or clear it).
+
+### Cancel exposure
+
+A Cancel quote (and a cancel line on an Amend / Renew quote) shows **Supplier
+exposure**: the open costs of the item (and of its assets) whose supplier term
+outlives the cancellation, as whole months to the supplier term end ("Partner
+tail — term ends 2027-03-31 (exposure 4 months)"), or "supplier term unknown".
+Reference date: today on an open quote, the change-log effective date on an
+activated Cancel order. It is information only (no amounts, no gate).
+
+### Re-confirming an order line cost
+
+Before activation, a `draft` / `pending_activation` order lets a pricing manager
+**Re-confirm** one cost (`PATCH /api/cpq/orders/{orderId}/costs/{orderLineCostId}`,
+`cpq.orders.manage` + `cpq.costs.manage`): amount, currency, supplier, validity
+and term. It changes the **margin only** (the order price and charges stay), a
+changed value needs a new supplier quote reference or a note
+(`422 NOTE_REQUIRED`), and the order shows the re-confirmation date. At
+activation the subscription takes the re-confirmed values. After activation
+(`409 ORDER_ACTIVATED`) or cancellation (`409 ORDER_CANCELLED`) it is refused;
+re-confirmation never takes the order lock, so it cannot deadlock with activation.
+
+### The subscription changed under the quote: `COST_SOURCE_CHANGED`
+
+A carried line is a copy. If the subscription's costs change after the quote was
+created (another Amend activated first, a re-confirmation, a cancel) the quote is
+**stale**: converting it, or activating its order, answers
+`409 COST_SOURCE_CHANGED` with `lines[]` (and the cost keys) and **writes
+nothing**. Activation takes a source-quote lock and then the subscription locks
+(sorted), so of two Amends that carry the same cost exactly one succeeds.
+
+Recovery:
+
+1. **At conversion**: the quote page shows *"The subscription's costs changed
+   since this quote was created"*. Use **Refresh from subscription** on each
+   listed line (`POST /api/cpq/quotes/{quoteId}/items/{lineId}/refresh-from-subscription`),
+   then convert again. Refresh re-mirrors the line's configuration, charges and
+   carried costs from the subscription and **discards renegotiated costs and
+   changes on that line** (a confirmation says so); markup overrides stay. It
+   works with the toggle off, needs the quote-type ARC feature, and answers
+   `422 NOT_ARC_MIRROR` (not a mirror line / Cancel quote), `422 MERGE_LINE`
+   (merge quote) or `409` (the line is marked for removal: restore it first; `ITEM_NOT_ACTIVE` when the item ended; `COST_LOCKED` when a cost-priced line sits on a locked quote).
+2. **At activation**: the order cannot be repaired. Cancel it and create a new
+   Amend (the quote page offers *Refresh from subscription* only before
+   conversion).
+
+### Re-price from cost: not shipped
+
+Re-pricing a frozen Amend line from its renegotiated cost is **not available**.
+It must reach billing through `modifiedItems`, which this codebase does not
+have yet; until then a cost-only Amend moves margin only.
+
+### Checking before turning the toggle off
+
+`GET /api/cpq/cost-plus/usage` also returns `openArcQuotesWithCarriedCosts`:
+open ARC quotes holding carried costs.
+
+### Demo data
+
+`demo_gix` (with examples) seeds one **live subscription** for Acme with a
+partner-tail item cost of 270 USD (list price 337.50) whose **supplier term ends in
+45 days, before the subscription renews in 90 days**. It is built through the real
+services (quote, supplier term on the tail, accepted, order, activation) and then
+moved from `pending` to `active`. Start a **Renew** on it to see the tail flagged
+*Renegotiation due*, or an **Amend** to renegotiate it. Identified by
+`quoteContext.scenario = cost-arc-supplier-term-ending`; re-running the seed adds
+nothing.
+
+## Index costs
+
+Some costs are not agreed once but follow a market: data-centre power in
+EUR/MWh, a fuel price, a currency basket. A **cost index** is a named series of
+dated values that a pricing manager maintains (by hand or by import); a cost
+element with source `index` takes its unit cost from the index:
+
+```
+unit cost = factor x value in force on the recalculation date + offset
+```
+
+**Worked example.** `DEMO-DC-POWER` is 100.00 EUR/MWh (dated 2026-11-09), the
+element has factor 0.5 and offset 0, markup 25 %: unit cost `0.5 x 100.00 =
+50.00 EUR`, list price `50.00 x 1.25 = 62.50 EUR`. The offset is in the index
+currency; the factor is any number above 0 (default 1).
+
+### Maintaining indices and values
+
+Open **Cost indices** (`/backend/cpq/cost-indices`, needs `cpq.pricing.manage`
+and `cpq.costs.view`; reading needs `cpq.pricing.view` and `cpq.costs.view`, so
+a rep can look values up but not change them).
+
+- **Index**: a code (unique per tenant, never changes), name, unit and currency.
+  The currency cannot change once the index has values or an element uses it
+  (`INDEX_CURRENCY_LOCKED`). An index used by an active element cannot be
+  deactivated, and one used by any element cannot be deleted (`INDEX_IN_USE`,
+  the response names the elements; the detail page lists them as **Used by**).
+- **Values are append-only.** Add a value with an **effective date** (a day, not
+  a time) and a value above 0. Nothing is ever edited or deleted. To correct a
+  value, add another one for the **same date**: the server numbers it
+  **revision 2** (then 3, ...) and the highest revision of a date is the one in
+  force. Superseded revisions stay visible ("Show superseded").
+- **The value in force** on a date D is the highest-revision value of the
+  **latest effective date on or before D**. A value dated in the future is
+  stored but ignored until its day arrives; a past value keeps being used until a
+  newer date appears, so an index that is updated weekly still prices every day.
+
+### Importing values
+
+**Import values** on the detail page (or `POST /api/cpq/cost-indices/import`)
+takes up to **1000 rows** and is **all-or-nothing**. Paste or upload CSV with the
+columns:
+
+```
+indexCode,effectiveDate,value,note
+DEMO-DC-POWER,2026-11-09,100.00,Weekly print
+DEMO-DC-POWER,2026-11-16,101.50,
+```
+
+The header line is optional; the delimiter may be a comma, a semicolon or a tab
+(spreadsheet paste); `note` is optional; the date is `YYYY-MM-DD`. **Preview**
+runs a dry run that writes nothing and reports each row as `created` or
+`unchanged`. A row equal to the current highest revision of its date is
+`unchanged` and adds nothing, so **re-running the same feed is harmless**. One
+bad row (unknown index code, inactive index, invalid value, a date repeated for
+the same index in the file) refuses the whole file and names the row
+(`422 IMPORT_VALIDATION_FAILED`).
+
+### Index cost elements
+
+Add an element with source **Index** to a cost-plus charge (the usual rules
+apply: price-basis elements match the charge's cost type). It needs an active
+index of your organization (`INDEX_REQUIRED`, `INDEX_INACTIVE`), a factor and an
+optional offset, and a flat or per-unit model (a tiered or volume index element
+is `MODEL_REQUIRES_TABLE`). Index fields on a fixed, table or on-request element
+are refused (`INDEX_FIELDS_NOT_ALLOWED`). If the index currency differs from the
+quote currency the cost is converted like any
+[foreign-currency cost](#foreign-currency-costs) (`CURRENCY_NO_RATE` without a
+rate, never converted 1:1).
+
+### When the value is taken, and when it freezes (R4)
+
+| Situation | Index value |
+|---|---|
+| **Saved** recalculation or cost write on an unlocked quote (New / Incomplete / Ready, no order), cost line still `catalog` | The value in force **today (UTC)** is read and stored in the line's **index snapshot** (index, effective date, revision, value, factor, offset, date asked). A new value moves price and margin on the next save (`pricing_changed` / `margin_changed` are emitted). |
+| Quote **locked** (with customer, in approval, approved, accepted, ...) or **converted** | The stored value and snapshot are reused; a new value changes nothing. |
+| A cost line the user typed in, or a supplier answer (`manual` / `supplier` origin) | Never replaced by the index. |
+| Unsaved recalculation, cost preview, calculate-price | Computed from today's value in memory; nothing is stored. |
+| Conversion to an order, activation | The snapshot is copied unchanged; no look-up. |
+| **Renew** quote (saved, unlocked) | Carried index costs are re-evaluated at today's value with the item's index, factor and offset (the declared exception to "carried costs keep their values"); a cost flagged *renegotiation due* is not touched. **Amend** keeps the contracted value. The subscription item cost changes only when the Renew activates. |
+
+So **a sent quote never moves with the market**; a quote still being worked on
+follows it until it is sent. To re-price a locked quote, move it back to Ready
+and save a recalculation.
+
+**No value in force** (the first value is dated after today, or the index has
+none): the cost line is pending (`none`) with **`INDEX_NO_VALUE`**, the
+cost-plus charge is `COST_PENDING` and the line is not ready until a value
+arrives. A price-basis index cost is never guessed.
+
+The Costs panel shows the snapshot ("Brent 82.40 · 2026-11-10 · r2 · factor
+0.5") and, on a locked quote, a hint that the value is frozen.
+
+### Calculate-price
+
+`POST /api/cpq/quotes/price` prices an index-costed charge from today's value,
+without `indicative`; with no value in force (or no exchange rate) the charge is
+`priceOnRequest`. The index, value, factor, offset and cost are never returned,
+and a public calculator price built on an index **changes whenever a new value
+becomes effective** (accepted; calculator prices are stored nowhere).
+
+### Confidentiality
+
+Index values, factors, offsets and snapshots are cost data: visible only with
+`cpq.costs.view`, never in quote, order, calculate-price, event or action-log
+responses for other users. Index writes log ids, codes, dates and revisions, never a value or note.
+
+### Demo data
+
+`demo_gix` (with examples) seeds the index **`DEMO-DC-POWER`** ("Demo data-centre
+power, EUR/MWh"): values 90, 60, 30 and 7 days back (92.00, 97.50, 98.00 and
+100.00; the 30-days-back date has a correction, revision 2 = 99.50) and a
+**future** value of 120.00 in 45 days. Values are dated relative to the seed run
+and are added once: re-running the seed adds nothing. They sit on their own
+offering "GIX IP Transit with indexed power (EUR)" (an `index` price-basis
+element, factor 0.5, markup 25 %; it is separate from "IP Transit with partner
+tail" so that offering's 500.00 worked example and its USD costs do not change)
+with two quotes for Acme: **"Demo — IP Transit, index cost (ready: refreshes on
+save)"** (62.50 EUR today; add a newer value and save a recalculation to watch
+it move) and **"Demo — IP Transit, index cost (with customer: frozen)"** (same
+price, never moves). In 45 days the future value takes effect (75.00 EUR) for the
+unlocked quote only.
+
+## Supplier cost expiry warnings
+
+A confirmed supplier price is only good until its `valid_until` date. Once a day CPQ
+looks for confirmed price-basis cost lines that expire within the next **N days**
+(toggle `cpq.cost_expiry_lead_days`, default 14, set per tenant) on quotes that are
+still open and have no order, and warns the cost managers: a notification
+"Supplier cost expiring on quote ..." (users holding both `cpq.costs.view` and
+`cpq.costs.manage` in the quote's organization) and the non-broadcast event
+`cpq.quote.cost_expiring` for workflows. Lines that have **already expired** and were
+never warned are included and say "expired on". A line is warned **once per
+`valid_until` date**: extend the validity to a new date and a new warning comes when
+that date gets within N days. Rejected and cancelled quotes, converted quotes and
+quotes while `cpq.cost_plus` is off are skipped. Warnings carry the quote number, cost
+name and date only: never an amount or a supplier.
+
+### The schedule
+
+Each organization gets one schedule, "CPQ supplier cost expiry warnings", daily at
+06:00 UTC, created by tenant setup and by `yarn mercato cpq seed-cost-plus` (run it
+once after upgrading an existing install). It needs the Scheduler module; without it
+nothing is registered and warnings are only produced by the CLI below. A tenant admin
+can disable it on the scheduler page; re-running `seed-cost-plus` keeps it disabled,
+and re-enabling it catches up every missed day without duplicates. The job runs on the
+`cpq-cost-expiry` queue, so a queue worker must be running (the same worker process that serves the other
+queues; with the local queue strategy in development it runs in the app).
+
+### Running it by hand
+
+```
+yarn mercato cpq run-cost-expiry [--org <id>] [--tenant <id>] [--dry-run] [--today YYYY-MM-DD]
+```
+
+`--dry-run` prints how many warnings would go out and writes nothing. `--today` runs the
+scan as of another date (for demos and tests); it is refused in production unless
+`--dry-run` is also given, so no back- or forward-dated warnings can be sent there.
+Running it twice warns nothing the second time.
+
 ## Margin
 
 Holders of `cpq.costs.view` see the **Margin card** on the quote page and
@@ -727,7 +1018,7 @@ change prices.
 ## Calculate-price
 
 `POST /api/cpq/quotes/price` prices cost-plus charges without a quote, from
-catalog costs resolved in memory. Additive charge fields: `indicative: true`
+catalog costs resolved in memory (index costs at today's value, see [Index costs](#index-costs)). Additive charge fields: `indicative: true`
 (priced from at least one estimated price-basis cost) and `priceOnRequest: true` (cannot be
 priced — pending cost, no price basis or toggle off; `unitPrice` and
 `totalPrice` are `null` and the charge is excluded from totals). Costs,
@@ -783,12 +1074,18 @@ invalidate an earlier approval after a lock-exempt cost edit.
 | GET / POST / PUT / DELETE | `/api/cpq/charge-cost-elements` | `cpq.products.view` + `cpq.costs.view` (writes: manage) | Cost elements of a charge. |
 | POST | `/api/cpq/cost-preview` | `cpq.pricing.view` + `cpq.costs.view` | Costs and list price of a configuration. Persists nothing. |
 | GET | `/api/cpq/cost-plus/usage` | `cpq.costs.view` | Counts to check before turning the toggle off. |
+| GET / POST | `/api/cpq/cost-indices` | `cpq.pricing.view` (POST: `cpq.pricing.manage`) + `cpq.costs.view` | Index list (current value, element count) / create an index. |
+| GET / PATCH / DELETE | `/api/cpq/cost-indices/{indexId}` | same | Index detail (current value, future-value count, elements using it) / edit / delete (`INDEX_IN_USE` while referenced). |
+| GET / POST | `/api/cpq/cost-indices/{indexId}/values` | same | Values (superseded hidden unless `includeSuperseded=true`) / append a value (server-assigned revision). |
+| POST | `/api/cpq/cost-indices/import` | `cpq.pricing.manage` + `cpq.costs.view` | Up to 1000 values by index code, all-or-nothing; `dryRun` writes nothing. |
 | GET | `/api/cpq/quotes/{quoteId}/costs` | `cpq.quotes.view` | Cost lines (status only without `cpq.costs.view`); with it: markup overrides and `margin`. |
 | POST | `/api/cpq/quotes/{quoteId}/costs` | `cpq.quotes.manage` + `cpq.costs.manage` | Manual cost. |
 | PATCH / DELETE | `/api/cpq/quotes/{quoteId}/costs/{costId}` | same | Enter / confirm / edit; delete manual only. |
 | PUT / DELETE | `/api/cpq/quotes/{quoteId}/markup-overrides` | same | Set / clear a markup override. |
 | POST | `/api/cpq/quotes/{quoteId}/status` | `cpq.quotes.manage` | Optional `expectedRevision`. |
 | GET | `/api/cpq/orders/{orderId}/costs` | `cpq.orders.view` | Order line costs; status only without `cpq.costs.view`, with it the amounts and `margin`. |
+| PATCH | `/api/cpq/orders/{orderId}/costs/{orderLineCostId}` | `cpq.orders.manage` + `cpq.costs.manage` | Re-confirm an order line cost before activation (margin only). |
+| POST | `/api/cpq/quotes/{quoteId}/items/{lineId}/refresh-from-subscription` | `cpq.quotes.manage` + the quote type's ARC feature | Re-mirror an ARC line (configuration, charges, carried costs) from its subscription item. |
 | GET | `/api/cpq/inventory/subscriptions/{subscriptionId}/costs` | `cpq.inventory.view` | Item and asset costs, margins, roll-up; `?includeEnded=true` adds ended costs. |
 | GET | `/api/cpq/inventory/assets/{assetId}/costs` | `cpq.inventory.view` | Costs and margin of one asset (`ownerItemId` for an asset under an item). |
 | POST | `/api/cpq/quotes/{quoteId}/costs/{costId}/request` | `cpq.quotes.manage` | Open (or re-open) a supplier cost request. Ids and statuses only in the response. |
@@ -814,7 +1111,11 @@ Full contracts: the `openApi` export on each route.
 | 422 | `PRICE_BASIS_REQUIRES_COST_PLUS` | Price-basis element on a non-cost-plus charge (or cost cost-plus line). |
 | 422 | `COST_TYPE_MISMATCH` | Price-basis element type differs from the charge type. |
 | 422 | `WRONG_TABLE_PURPOSE` / `COST_TABLE_NOT_FOUND` / `COLUMN_NOT_FOUND` / `TABLE_REQUIRED` | Table element misconfigured. |
-| 422 | `MODEL_REQUIRES_TABLE` / `QUANTITY_ATTRIBUTE_REQUIRED` / `SOURCE_NOT_AVAILABLE` | Cost model or source not allowed in this shape (`index` arrives later). |
+| 422 | `MODEL_REQUIRES_TABLE` / `QUANTITY_ATTRIBUTE_REQUIRED` / `SOURCE_NOT_AVAILABLE` | Cost model or source not allowed in this shape (an `index` element must be flat or per-unit). |
+| 422 | `INDEX_REQUIRED` / `INDEX_INACTIVE` / `INDEX_FIELDS_NOT_ALLOWED` | Index element without an (existing) index / with an inactive one; index fields on a fixed, table or on-request element. |
+| 422 | `INDEX_IN_USE` / `INDEX_CURRENCY_LOCKED` / `DUPLICATE_CODE` / `UNKNOWN_CURRENCY` | Index catalogue: referenced index deleted or deactivated (lists the elements); currency changed once it has values or references; code already used; not an ISO currency. |
+| 409 | `CONCURRENT_INDEX_WRITE` | Two writes raced on the same index; retry. |
+| 422 | `IMPORT_VALIDATION_FAILED` | Index import with an invalid row (`errors[]`: `UNKNOWN_INDEX`, `INDEX_INACTIVE`, `INVALID_VALUE`, `DUPLICATE_ROW`); nothing written. |
 | 422 | `AMOUNT_REQUIRED` / `CURRENCY_REQUIRED` / `FIELD_NOT_ALLOWED` | Value shape errors. |
 | 422 | `DUPLICATE_CODE` | Element code already used by a charge priced together with this one. |
 | 422 | `PURPOSE_LOCKED` | Table purpose cannot change while referenced. |
@@ -828,9 +1129,16 @@ Full contracts: the `openApi` export on each route.
 | 422 | `INVALID_CURRENCY_CODE` / `VALID_UNTIL_IN_PAST` | Answer format checks. |
 | 422 | `COST_ANSWER_PENDING` | Conversion blocked by an unapplied supplier proposal (`lines[]`). Checked before `COSTS_NOT_CONFIRMED`. |
 | 422 | `COSTS_NOT_CONFIRMED` | Conversion blocked by unconfirmed or expired price-basis costs, or an unpriced cost-plus charge (`lines[].costKeys` / `chargeCodes`). |
-| line error | `COST_PENDING` / `NO_PRICE_BASIS_COST` / `MARKUP_INVALID` / `TABLE_NO_MATCH` / `CURRENCY_NO_RATE` | On the charge or cost line; the line is not ready. |
+| 409 | `COST_SOURCE_CHANGED` | Conversion or activation of an ARC quote whose carried costs no longer match the subscription (`lines[]`, `costKeys`); nothing is written. |
+| 409 | `ORDER_ACTIVATED` / `ORDER_CANCELLED` | Re-confirmation of an order line cost after activation / cancellation. |
+| 422 | `RENEGOTIATION_DATES_SHORT` / `NOT_RENEGOTIATION_DUE` | Keep current cost: a date before the new term end / the cost is not due. |
+| 422 | `NOT_ARC_MIRROR` / `MERGE_LINE` | Refresh from subscription on a line that has no single item to refresh from. |
+| line error | `COST_PENDING` / `NO_PRICE_BASIS_COST` / `MARKUP_INVALID` / `TABLE_NO_MATCH` / `CURRENCY_NO_RATE` / `INDEX_NO_VALUE` | On the charge or cost line; the line is not ready. |
 
 ## Coming with later features
 
-Index-linked costs are added by a later cost-plus feature. Foreign-currency
-costs are described in [Foreign-currency costs](#foreign-currency-costs).
+Re-pricing a frozen Amend line from its cost waits for `modifiedItems`
+([Re-price from cost](#re-price-from-cost-not-shipped)). Foreign-currency
+costs are described in [Foreign-currency costs](#foreign-currency-costs) and
+index-linked costs in [Index costs](#index-costs). Expiring supplier prices are covered in
+[Supplier cost expiry warnings](#supplier-cost-expiry-warnings).

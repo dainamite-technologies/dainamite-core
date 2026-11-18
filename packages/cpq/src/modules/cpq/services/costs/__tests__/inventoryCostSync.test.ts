@@ -167,6 +167,59 @@ describe('replaceItemCosts (review1-b)', () => {
   })
 })
 
+describe('replaceItemCosts: carried seeds and the full image (ARC costs step 8, Q5)', () => {
+  const CTX_END = { ...CTX, endedAt: '2026-11-15' }
+  const carried = (over: Partial<CostSeed> = {}) => seed({ origin: 'carried', valueOrigin: 'carried', inventoryCostId: 'ic-1', ...over })
+
+  it('an untouched carried cost is a no-op: the row keeps its origin and value_origin, nothing is written or reported', async () => {
+    const row = stored({ origin: 'manual', valueOrigin: 'manual' })
+    const { em } = setup([row])
+    const result = await replaceItemCosts(em as never, [{ ...item([carried()]), fullImage: true }], CTX_END)
+    expect(result.changes).toEqual([])
+    expect(row).toMatchObject({ origin: 'manual', valueOrigin: 'manual', lastChangeId: 'log-0', lastOrderLineCostId: 'olc-0' })
+    expect(result.links).toEqual([{ orderLineCostId: 'olc-1', inventoryCostId: 'ic-1' }])
+  })
+
+  it('a renegotiated carried cost updates the same row in place and takes the new value_origin; origin stays', async () => {
+    const row = stored()
+    const { em, created } = setup([row])
+    const result = await replaceItemCosts(em as never, [{ ...item([carried({ unitAmount: '240.0000', instanceAmount: '240.0000', totalAmount: '240.0000', valueOrigin: 'supplier' })]), fullImage: true }], CTX_END)
+    expect(created).toHaveLength(0)
+    expect(row).toMatchObject({ id: 'ic-1', origin: 'catalog', valueOrigin: 'supplier', unitAmount: '240.0000', lastOrderLineCostId: 'olc-1' })
+    expect(result.changes.map((c) => [c.inventoryCostId, c.kind])).toEqual([['ic-1', 'changed']])
+  })
+
+  it('asserts the seed link names the row matched by key: a different row, or none, throws and writes nothing', async () => {
+    const other = setup([stored({ id: 'ic-other' })])
+    await expect(replaceItemCosts(other.em as never, [item([carried()])], CTX_END)).rejects.toThrow(/does not match/)
+    const none = setup([])
+    await expect(replaceItemCosts(none.em as never, [item([carried()])], CTX_END)).rejects.toThrow(/does not match/)
+    expect(none.created).toHaveLength(0)
+  })
+
+  it('full image: a carried key removed on the quote ends the item cost whatever its origin (catalog, manual, carried)', async () => {
+    const rows = [stored({ id: 'ic-1' }), stored({ id: 'ic-cat', costKey: 'cat' }), stored({ id: 'ic-man', costKey: 'man', origin: 'manual' }), stored({ id: 'ic-car', costKey: 'car', origin: 'carried' })]
+    const { em } = setup(rows)
+    const result = await replaceItemCosts(em as never, [{ ...item([carried()]), fullImage: true }], CTX_END)
+    expect(rows.map((r) => r.status)).toEqual(['active', 'ended', 'ended', 'ended'])
+    expect(rows[1].endedAt).toBe('2026-11-15')
+    expect(result.changes.map((c) => [c.inventoryCostId, c.kind])).toEqual([['ic-cat', 'ended'], ['ic-man', 'ended'], ['ic-car', 'ended']])
+  })
+
+  it('without fullImage the catalog-only rule of review1-b is unchanged (manual stays open)', async () => {
+    const man = stored({ id: 'ic-man', costKey: 'man', origin: 'manual' })
+    const { em } = setup([man])
+    await replaceItemCosts(em as never, [item([])], CTX_END)
+    expect(man.status).toBe('active')
+  })
+
+  it('costSeedFromOrderLineCost carries the inventory cost id for carried lines only', () => {
+    const base = { id: 'olc-1', costKey: 'tail', name: 'Tail', role: 'price_basis', costType: 'mrc', source: 'table', costModel: 'flat', valueStatus: 'confirmed' }
+    expect(costSeedFromOrderLineCost({ ...base, origin: 'carried', inventoryCostId: 'ic-1' } as never).inventoryCostId).toBe('ic-1')
+    expect(costSeedFromOrderLineCost({ ...base, origin: 'catalog', inventoryCostId: 'ic-1' } as never).inventoryCostId).toBeUndefined()
+  })
+})
+
 describe('createAssetCosts', () => {
   it('creates asset-owned costs: asset_id set, subscription_item_id null (Q2)', async () => {
     const { em, created } = setup()

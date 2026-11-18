@@ -5,7 +5,7 @@
  */
 import type { AssetMargin, ItemMargin } from '../services/costs/itemMargin'
 import { hasFxRate, type FxFields } from './fxView'
-import { formatMoney, formatPercent, lineCostBadges, type CostBadge, type QuoteMargin } from './quoteCostView'
+import { formatMoney, formatPercent, lineCostBadges, type ArcCostsView, type CancelExposureView, type CostBadge, type CostPrevious, type QuoteMargin } from './quoteCostView'
 
 /** What every user with the page's view feature gets for an order or inventory cost. */
 export type CostRow = {
@@ -36,6 +36,15 @@ export type FullCostRow = CostRow & FxFields & {
   endedAt?: string | null
   /** Order costs only: the inventory cost seeded at activation. */
   inventoryCostId?: string | null
+  /** Order costs only: `catalog` | `manual` | `carried` (an ARC cost carried from the subscription item). */
+  origin?: string
+  valueOrigin?: string | null
+  supplierId?: string | null
+  supplierQuoteRef?: string | null
+  /** Order costs only: set when the cost was re-confirmed before activation. */
+  reconfirmedAt?: string | null
+  /** Carried order costs before activation: the item cost as it stands now. */
+  previous?: CostPrevious
 }
 
 export const isFullCostRow = (cost: CostRow | FullCostRow): cost is FullCostRow => 'totalAmount' in cost
@@ -43,8 +52,10 @@ export const isFullCostRow = (cost: CostRow | FullCostRow): cost is FullCostRow 
 export type OrderCostsResponse = {
   orderId: string
   currencyCode?: string
-  lines: Array<{ orderLineId: string; costs: Array<CostRow | FullCostRow> }>
+  lines: Array<{ orderLineId: string; costs: Array<CostRow | FullCostRow>; arcCosts?: ArcCostsView }>
   margin?: QuoteMargin
+  /** Cancel orders (`cpq.costs.view` only): what the cancellation leaves outliving it. */
+  exposure?: CancelExposureView
 }
 
 export type SubscriptionCostsResponse = {

@@ -4,6 +4,7 @@ import {
   buildArcMirrorConfiguration,
   ARC_REPRICED_KEY,
   ARC_COST_PLUS_FROZEN_KEY,
+  isCostManagedRenewLine,
   ARC_RECONFIGURED_KEY,
   isArcPriceFrozen,
   isFrozenMirrorLine,
@@ -160,25 +161,29 @@ describe('freeze matrix (Amend always; Renew only for a cost-plus item)', () => 
   })
 })
 
-describe('Renew freeze of cost-plus items (Q4)', () => {
-  it('freezes a Renew mirror line only when the item is cost-plus, with both markers', () => {
-    const cfg = buildArcMirrorConfiguration({ port_size: '1G' }, ITEM, 'renew', { costPlus: true })
+describe('Renew freeze of cost-plus items (Q4, narrowed to merge-renew by ARC costs step 14 / Q10)', () => {
+  it('freezes a Renew mirror line only for a cost-plus item on a MERGE quote, with both markers; a standalone Renew is not frozen', () => {
+    const cfg = buildArcMirrorConfiguration({ port_size: '1G' }, ITEM, 'renew', { costPlus: true, mergeMode: true })
     expect(cfg).toMatchObject({ [ARC_PRICE_FROZEN_KEY]: true, [ARC_COST_PLUS_FROZEN_KEY]: true, _arcMirroredFromItemId: 'item-1' })
     expect(isFrozenMirrorLine(cfg, 'renew')).toBe(true)
-    const plain = buildArcMirrorConfiguration({ port_size: '1G' }, ITEM, 'renew', { costPlus: false })
+    const standalone = buildArcMirrorConfiguration({ port_size: '1G' }, ITEM, 'renew', { costPlus: true })
+    expect(standalone).not.toHaveProperty(ARC_COST_PLUS_FROZEN_KEY)
+    expect(standalone).not.toHaveProperty(ARC_PRICE_FROZEN_KEY)
+    expect(isFrozenMirrorLine(standalone, 'renew')).toBe(false)
+    const plain = buildArcMirrorConfiguration({ port_size: '1G' }, ITEM, 'renew', { costPlus: false, mergeMode: true })
     expect(plain).not.toHaveProperty(ARC_COST_PLUS_FROZEN_KEY)
     expect(isFrozenMirrorLine(plain, 'renew')).toBe(false)
   })
 
   it('never freezes a Cancel line, and the cost-plus flag does not change Amend', () => {
-    expect(isFrozenMirrorLine(buildArcMirrorConfiguration({}, ITEM, 'cancel', { costPlus: true }), 'cancel')).toBe(false)
+    expect(isFrozenMirrorLine(buildArcMirrorConfiguration({}, ITEM, 'cancel', { costPlus: true, mergeMode: true }), 'cancel')).toBe(false)
     const amend = buildArcMirrorConfiguration({}, ITEM, 'amend', { costPlus: true })
     expect(amend).not.toHaveProperty(ARC_COST_PLUS_FROZEN_KEY)
     expect(isFrozenMirrorLine(amend, 'amend')).toBe(true)
   })
 
   it('honours the Renew freeze only on a Renew quote, only with both markers and a mirror id', () => {
-    const cfg = buildArcMirrorConfiguration({}, ITEM, 'renew', { costPlus: true })
+    const cfg = buildArcMirrorConfiguration({}, ITEM, 'renew', { costPlus: true, mergeMode: true })
     expect(isFrozenMirrorLine(cfg, 'amend')).toBe(true)
     expect(isFrozenMirrorLine(cfg, 'new')).toBe(false)
     expect(isFrozenMirrorLine({ ...cfg, [ARC_COST_PLUS_FROZEN_KEY]: undefined }, 'renew')).toBe(false)
@@ -186,7 +191,45 @@ describe('Renew freeze of cost-plus items (Q4)', () => {
   })
 
   it('keeps both markers and the reconfigured marker off orders and items', () => {
-    const cfg = { ...buildArcMirrorConfiguration({ port_size: '1G' }, ITEM, 'renew', { costPlus: true }), [ARC_RECONFIGURED_KEY]: true }
+    const cfg = { ...buildArcMirrorConfiguration({ port_size: '1G' }, ITEM, 'renew', { costPlus: true, mergeMode: true }), [ARC_RECONFIGURED_KEY]: true }
     expect(stripQuoteOnlyArcMarkers(cfg)).toEqual({ port_size: '1G', _arcMirroredFromItemId: 'item-1', _arcMirroredName: 'GIX Access Port' })
+  })
+})
+
+describe('isCostManagedRenewLine (step 14)', () => {
+  it('is a standalone Renew mirror carrying the cost-managed marker and not frozen', () => {
+    const cfg = { _arcMirroredFromItemId: 'item-1', _arcCostsCarried: true }
+    expect(isCostManagedRenewLine(cfg, 'renew')).toBe(true)
+    expect(isCostManagedRenewLine(cfg, 'amend')).toBe(false)
+    expect(isCostManagedRenewLine({ _arcMirroredFromItemId: 'item-1' }, 'renew')).toBe(false)
+    expect(isCostManagedRenewLine({ ...cfg, _arcPriceFrozen: true, _arcCostPlusFrozen: true }, 'renew')).toBe(false)
+  })
+})
+
+// ARC costs step 1 (characterization, green on unchanged code): the canonical comparison `arcPricingInputsChanged`
+// runs on, pinned before the private `canonical()` moves to `lib/stateHash.ts` (step 2). Amend / Renew mirror line
+// pricing itself (frozen Amend keeps the stored price, legacy and non-cost-plus Renew re-price, a cost-plus Renew is
+// frozen) is already pinned above and in cpqQuotingService.arc.test.ts; not duplicated here.
+describe('arcPricingInputsChanged canonical comparison (pinned before the stateHash extraction)', () => {
+  const base = { configuration: { a: 1, nested: { x: 1, y: [1, 2] } }, quantity: 1 }
+  const same = (configuration: Record<string, unknown>) => !arcPricingInputsChanged(base, { configuration })
+
+  it('ignores object key order at every depth, but not array order', () => {
+    expect(same({ nested: { y: [1, 2], x: 1 }, a: 1 })).toBe(true)
+    expect(same({ a: 1, nested: { x: 1, y: [2, 1] } })).toBe(false)
+  })
+
+  it('treats an undefined value like null, and a missing key as a change', () => {
+    const before = { configuration: { a: null, b: 1 }, quantity: 1 }
+    expect(arcPricingInputsChanged(before, { configuration: { a: undefined, b: 1 } })).toBe(false)
+    expect(arcPricingInputsChanged(before, { configuration: { b: 1 } })).toBe(true)
+  })
+
+  it('does not normalise numeric strings: "1" and 1 are different inputs', () => {
+    expect(same({ a: '1', nested: { x: 1, y: [1, 2] } })).toBe(false)
+  })
+
+  it('ignores every _arc* marker on both sides', () => {
+    expect(same({ a: 1, nested: { x: 1, y: [1, 2] }, _arcPriceFrozen: true, _arcReconfigured: true, _arcAnything: 'x' })).toBe(true)
   })
 })

@@ -79,7 +79,11 @@ it('openApi response schemas declare the FX fields and missingFxPairs (an undecl
     errorDetail: { code: 'CURRENCY_NO_RATE', from: 'USD', to: 'EUR', date: '2026-11-15' } }
   const parsed = schemaOf(previewApi, 'POST').parse({ currencyCode: 'EUR', charges: [{ chargeCode: 'c', pricingMethod: 'cost_plus', costs: [cost], costTotal: '0.92', markupRule: null, markupValue: null, listTotalPrice: null }] })
   expect(parsed.charges[0].costs[0]).toEqual(cost)
-  const usageBody = { enabled: true, costPlusCharges: 1, openQuotes: 1, openRequests: 0, liveSubscriptions: 0, missingFxPairs: [{ from: 'USD', to: 'EUR', openQuotes: 2 }] }
+  // Index costs: the snapshot survives the response schema (an undeclared key would be stripped) and INDEX_NO_VALUE is a plain string.
+  const indexCost = { ...cost, source: 'index', error: 'INDEX_NO_VALUE', indexSnapshot: { indexId: 'i', currencyCode: 'USD', effectiveDate: '2026-11-10', revision: 2, value: '82.4', factor: '0.5', offset: '2', asOfDate: '2026-11-12' } }
+  const parsedIndex = schemaOf(previewApi, 'POST').parse({ currencyCode: 'EUR', charges: [{ chargeCode: 'c', pricingMethod: 'cost_plus', costs: [indexCost], costTotal: '0', markupRule: null, markupValue: null, listTotalPrice: null }] })
+  expect(parsedIndex.charges[0].costs[0].indexSnapshot).toEqual(indexCost.indexSnapshot)
+  const usageBody = { enabled: true, costPlusCharges: 1, openQuotes: 1, openRequests: 0, liveSubscriptions: 0, openArcQuotesWithCarriedCosts: 3, missingFxPairs: [{ from: 'USD', to: 'EUR', openQuotes: 2 }] }
   expect(schemaOf(usageApi, 'GET').parse(usageBody)).toEqual(usageBody)
   expect((schemaOf(costsApi, 'GET') as unknown as { description: string }).description).toMatch(/fxRateSource.*errorDetail/)
 })
@@ -88,7 +92,7 @@ it('preview maps a toggle-off service 404; usage stays available with the toggle
   preview.mockRejectedValue(new QuotingError(404, 'Not found'))
   expect((await PREVIEW(request('POST', { productId: costId, configuration: {} }))).status).toBe(404)
   enabled.mockResolvedValue(false)
-  const usageBody = { enabled: false, costPlusCharges: 2, openQuotes: 1, openRequests: 0, liveSubscriptions: 0, missingFxPairs: [{ from: 'USD', to: 'EUR', openQuotes: 2 }] }
+  const usageBody = { enabled: false, costPlusCharges: 2, openQuotes: 1, openRequests: 0, liveSubscriptions: 0, openArcQuotesWithCarriedCosts: 3, missingFxPairs: [{ from: 'USD', to: 'EUR', openQuotes: 2 }] }
   usage.mockResolvedValue(usageBody)
   const response = await USAGE(request('GET'))
   expect(response.status).toBe(200)

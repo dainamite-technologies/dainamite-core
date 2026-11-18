@@ -13,7 +13,8 @@ import { loadQuoteCosts } from './quoteCostView'
  * total `computeQuoteMargin` uses in the document currency (instance amount x line quantity x fx_rate when the cost
  * is foreign; null while the cost is unknown), so the order shows the margin the quote showed. The four `fx_*`
  * fields, unit / instance amounts and the cost currency are copied verbatim: no rate lookup happens here.
- * A cost line whose quote line has no order line (a soft-deleted line) is skipped. Persists the rows on `em`; the caller flushes.
+ * A `carried` cost line (ARC Amend mirror) sets `inventory_cost_id` to the item cost it was carried from; every other
+ * line is linked at activation. A cost line whose quote line has no order line (a soft-deleted line) is skipped. Persists the rows on `em`; the caller flushes.
  */
 export async function copyQuoteCostsToOrder(
   em: EntityManager,
@@ -37,6 +38,9 @@ export async function copyQuoteCostsToOrder(
       orderConfigurationId,
       orderLineId,
       sourceQuoteLineCostId: cost.id,
+      // ARC costs spec Q5: a carried line links to the item cost it was carried from at conversion. Activation asserts the
+      // replace write-back matches exactly this row (it is the same row: same id, never a duplicate key).
+      inventoryCostId: cost.origin === 'carried' ? cost.carriedFromItemCostId ?? null : null,
       costKey: cost.costKey,
       chargeCode: cost.chargeCode ?? null,
       origin: cost.origin,

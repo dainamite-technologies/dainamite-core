@@ -24,7 +24,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ orderId
     return NextResponse.json(result)
   } catch (err) {
     if (isOrderError(err)) {
-      return NextResponse.json({ error: err.message }, { status: err.status })
+      // `details` carries the COST_SOURCE_CHANGED lines (same body as conversion).
+      return NextResponse.json({ error: err.message, ...err.details }, { status: err.status })
     }
     // XD-250 ARC: optimistic-lock collision on subscription.version when two
     // ARC orders touching the same sub race to activate. Spec § Risks:
@@ -60,7 +61,7 @@ export const openApi: OpenApiRouteDoc = {
       responses: [{ status: 200, description: 'The activated order with the created or updated subscription', schema: z.record(z.string(), z.unknown()) }],
       errors: [
         cpqErrorDoc(401, 'Unauthorized'), cpqErrorDoc(403, 'Missing permission'), cpqErrorDoc(404, 'Order not found'),
-        cpqErrorDoc(409, 'Order is not in an activatable status, or concurrent modification detected: nothing was persisted, retry'),
+        cpqErrorDoc(409, 'Order is not in an activatable status, concurrent modification detected (nothing was persisted, retry), or COST_SOURCE_CHANGED (the subscription item costs of an ARC cost-managed line changed since the quote mirrored them; body `lines: [{ quoteLineId, subscriptionItemId, costKeys }]`, nothing was written)'),
       ],
     },
   },

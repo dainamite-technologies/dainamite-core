@@ -12,6 +12,9 @@ export const COST_PLUS_TOGGLE = 'cpq.cost_plus'
 export const COST_REQUEST_OVERDUE_TOGGLE = 'cpq.cost_requests.overdue_working_days'
 export const COST_REQUEST_OVERDUE_DEFAULT_DAYS = 5
 
+/** Days before `valid_until` a supplier cost starts warning (expiry warnings, Q4). */
+export const COST_EXPIRY_LEAD_DAYS_TOGGLE = 'cpq.cost_expiry_lead_days'
+export const COST_EXPIRY_LEAD_DAYS_DEFAULT = 14
 /** Numeric tenant toggle (FX Q1): how many days the FX rate lookup goes back from today (clamped 0-30). */
 export const FX_MAX_DAYS_BACK_TOGGLE = 'cpq.cost_plus.fx_max_days_back'
 export const FX_MAX_DAYS_BACK_DEFAULT = 7
@@ -31,11 +34,11 @@ export const isCostTable = (table: { purpose?: string | null }): boolean => tabl
 
 // ─── Quote line costs (App Spec §1.4.6) ─────────────────────────
 
-/** `carried` arrives with the ARC feature. */
-export const COST_LINE_ORIGINS = ['catalog', 'manual'] as const
+/** `carried` is server-set only (ARC Amend mirror); no client schema accepts `origin` / `valueOrigin`. */
+export const COST_LINE_ORIGINS = ['catalog', 'manual', 'carried'] as const
 export const COST_VALUE_STATUSES = ['none', 'estimated', 'confirmed'] as const
-/** `supplier`: a supplier answer (sourcing). `carried` cost lines arrive with the ARC feature. */
-export const COST_VALUE_ORIGINS = ['catalog', 'manual', 'supplier'] as const
+/** `supplier`: a supplier answer (sourcing). `carried`: copied from the subscription item cost (ARC), server-set. */
+export const COST_VALUE_ORIGINS = ['catalog', 'manual', 'supplier', 'carried'] as const
 export const COST_SOURCING_STATUSES = ['not_requested', 'requested', 'answered', 'declined', 'cancelled'] as const
 export const COST_LINE_ERROR_CODES = ['TABLE_NO_MATCH', 'CURRENCY_NO_RATE', 'INDEX_NO_VALUE', 'CHARGE_NOT_FOUND', 'COST_PLUS_DISABLED'] as const
 export type CostValueStatus = (typeof COST_VALUE_STATUSES)[number]
@@ -63,13 +66,15 @@ export const isAssetLive = (asset: { status: string; deletedAt?: Date | null }):
 
 export const COST_ROLES = ['price_basis', 'margin_only'] as const
 export const COST_TYPES = ['nrc', 'mrc'] as const
-/** `index` is declared for the contract but refused until the index-costs feature ships. */
 export const COST_SOURCES = ['fixed', 'table', 'index', 'on_request'] as const
-export const AVAILABLE_COST_SOURCES = ['fixed', 'table', 'on_request'] as const
+export const AVAILABLE_COST_SOURCES = ['fixed', 'table', 'index', 'on_request'] as const
 export const COST_MODELS = ['flat', 'per_unit', 'tiered', 'volume'] as const
 
 // numeric(18,4): never silently round an entered amount.
 export const costAmount = z.number().finite().min(0).max(99_999_999_999_999).multipleOf(0.0001)
+// numeric(18,6) factor, strictly positive; numeric(18,4) offset in the index currency, never negative (index spec Q9).
+export const indexFactorValue = z.number().finite().gt(0).max(999_999_999_999).multipleOf(0.000001)
+export const indexOffsetValue = z.number().finite().min(0).max(99_999_999_999_999).multipleOf(0.0001)
 const elementFields = {
   name: z.string().trim().min(1).max(255),
   role: z.enum(COST_ROLES),
@@ -81,6 +86,9 @@ const elementFields = {
   costTableId: z.string().uuid().nullish(),
   costColumnKey: z.string().trim().min(1).max(255).nullish(),
   estimateAmount: costAmount.nullish(),
+  costIndexId: z.string().uuid().nullish(),
+  indexFactor: indexFactorValue.nullish(),
+  indexOffset: indexOffsetValue.nullish(),
   defaultSupplierId: z.string().uuid().nullish(),
   defaultSupplierName: z.string().trim().max(255).nullish(),
   defaultValidityDays: z.number().int().min(1).max(3650).nullish(),
@@ -116,6 +124,9 @@ export type CostElementShape = {
   costTableId?: string | null
   costColumnKey?: string | null
   estimateAmount?: number | string | null
+  costIndexId?: string | null
+  indexFactor?: number | string | null
+  indexOffset?: number | string | null
 }
 
 const present = (value: unknown) => value !== undefined && value !== null && value !== ''
@@ -127,6 +138,15 @@ const present = (value: unknown) => value !== undefined && value !== null && val
 export function costElementShapeError(element: CostElementShape): string | null {
   if (!(AVAILABLE_COST_SOURCES as readonly string[]).includes(element.source)) return 'SOURCE_NOT_AVAILABLE'
   if ((element.costModel === 'tiered' || element.costModel === 'volume') && element.source !== 'table') return 'MODEL_REQUIRES_TABLE'
+  const hasIndexFields = present(element.costIndexId) || present(element.indexFactor) || present(element.indexOffset)
+  if (element.source === 'index') {
+    // No own amount or currency: the unit cost is factor x index value + offset in the index currency.
+    if (!present(element.costIndexId)) return 'INDEX_REQUIRED'
+    if (present(element.amount) || present(element.currencyCode) || present(element.costTableId) || present(element.costColumnKey)
+      || present(element.estimateAmount)) return 'FIELD_NOT_ALLOWED'
+    return null
+  }
+  if (hasIndexFields) return 'INDEX_FIELDS_NOT_ALLOWED'
   if (element.source === 'fixed') {
     if (!present(element.amount)) return 'AMOUNT_REQUIRED'
     if (!present(element.currencyCode)) return 'CURRENCY_REQUIRED'
@@ -142,6 +162,19 @@ export function costElementShapeError(element: CostElementShape): string | null 
   if (present(element.amount) || present(element.costTableId) || present(element.costColumnKey)) return 'FIELD_NOT_ALLOWED'
   if (present(element.estimateAmount) && !present(element.currencyCode)) return 'CURRENCY_REQUIRED'
   return null
+}
+
+/**
+ * `index` elements: the model is `flat` or `per_unit` (checked first by `costElementShapeError`: `MODEL_REQUIRES_TABLE`
+ * for tiered / volume). The referenced index must exist in the tenant / organization and be active.
+ */
+export function costElementIndexError(
+  element: Pick<CostElementShape, 'source'>,
+  index: { isActive: boolean; deletedAt?: Date | null } | null,
+): string | null {
+  if (element.source !== 'index') return null
+  if (!index || index.deletedAt) return 'INDEX_REQUIRED'
+  return index.isActive ? null : 'INDEX_INACTIVE'
 }
 
 /**

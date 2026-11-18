@@ -166,6 +166,190 @@ the `@dainamite/cpq` package, per
 
 ## Schema / API changelog (track breaking changes here)
 
+### 2026-11-16 — Index costs, Phase C: supplier cost expiry warnings (cost-plus pricing, feature 6)
+
+Spec: `.ai/specs/2026-11-12-cpq-cost-plus-index-costs-expiry.md`. Minor release of
+`@dainamite/cpq`, on top of Phases A and B.
+
+**Schema (run `yarn mercato db migrate`).**
+- `Migration20261116105841`: new table `cpq_cost_expiry_warnings` (the warning ledger: unique
+  `(quote_line_cost_id, valid_until)`, `emitted_at` null until delivered) and a hand-added
+  partial index `cpq_quote_line_costs_expiry_candidate_idx` on `cpq_quote_line_costs`
+  (confirmed price-basis lines with a `valid_until`). `down()` drops both.
+
+**Event.** New `cpq.quote.cost_expiring` (non-broadcast, persistent): ids, `costKey`,
+`chargeCode`, `validUntil`, `daysLeft`, `expired`, `leadDays`, `warningId` (consumers dedupe on
+it). No amount, no supplier. New notification type `cpq.cost.expiring` (in-app + email) to
+cost managers (`cpq.costs.view` + `cpq.costs.manage`).
+
+**Toggle.** `cpq.cost_expiry_lead_days` (number, default 14), registered with the other
+cost-plus toggles (`seed-cost-plus`, existing values kept).
+
+**Worker and schedule.** Worker `cpq:cost-expiry` on queue `cpq-cost-expiry` (concurrency 1,
+not scheduler-safe, tenant scope from the scheduler envelope only). One module-registered
+schedule per organization, cron `0 6 * * *` UTC, created by tenant setup and `seed-cost-plus`
+as an upsert without `isEnabled` (an admin's disable is kept). Skipped when the scheduler
+module is not installed. After upgrading an existing install run
+`yarn mercato cpq seed-cost-plus` and `yarn generate`. `cpqCostExpiryService` is registered in
+DI (notifications optional).
+
+**CLI.** `yarn mercato cpq run-cost-expiry [--org] [--tenant] [--dry-run] [--today YYYY-MM-DD]`;
+`--today` is refused in production unless `--dry-run`. `seed-cost-plus` also registers the
+schedules and accepts `--org` / `--tenant`.
+
+**Rollback.** Disable the schedule on the scheduler page (or delete the row), then roll the
+code back; the ledger table can stay or be dropped by `down()`.
+
+### 2026-11-16 — Index costs, Phase B: index cost elements and pricing (cost-plus pricing, feature 6)
+
+Spec: `.ai/specs/2026-11-12-cpq-cost-plus-index-costs-expiry.md`. Minor release of
+`@dainamite/cpq`, on top of Phase A. The `index` cost source now prices.
+
+**Schema (run `yarn mercato db migrate`).**
+- `Migration20261116060621` on `cpq_charge_cost_elements`: `cost_index_id` (uuid, null),
+  `index_factor` numeric(18, 6) (null), `index_offset` numeric(18, 4) (null); hand-added
+  partial index `cpq_charge_cost_elements_cost_index_idx` and three CHECKs (`source = 'index'`
+  iff `cost_index_id` is set; `index_factor > 0`; `index_offset >= 0`). No CHECK on `source`
+  exists on cost elements or on quote / order / inventory cost tables, so the new value needs
+  no widening. `down()` parks index elements as inactive `on_request` elements before dropping
+  the columns. Quote cost lines already carry `index_snapshot` (PR #93 column): no change.
+
+**Cost elements** (`/api/cpq/charge-cost-elements`). `source: 'index'` is accepted with
+`costIndexId`, `indexFactor` (> 0, default 1) and `indexOffset` (>= 0, default 0, in the index
+currency); responses carry the three fields. New / extended errors: `INDEX_REQUIRED` (no or
+unknown index), `INDEX_INACTIVE`, `INDEX_FIELDS_NOT_ALLOWED` (index fields on another source),
+`MODEL_REQUIRES_TABLE` (an index element must be `flat` or `per_unit`). The index is read
+`FOR SHARE` on element writes. `INDEX_NO_VALUE` is a new cost-line error (no value in force;
+the charge is `COST_PENDING`, the line not ready). The index detail "Used by" and the in-use
+guard (`INDEX_IN_USE`) read the new columns.
+
+**Pricing (R4).** A saved recalculation of an unlocked quote resolves `catalog`-origin index
+lines to `factor x value in force today + offset` and stores `index_snapshot`; locked quotes,
+unsaved recalculations and quotes with an order keep the stored value. The value in force is
+read once per recalculation. Cost preview and calculate-price resolve at today's value in
+memory (`priceOnRequest` on no value / no rate; no new response field). Renew re-evaluates
+carried index lines (`reevaluateCarriedIndexCosts`, only `unit_amount` and `index_snapshot`
+change); Amend keeps the contracted value. Golden fixtures are unchanged (no index element in
+them).
+
+**Confidentiality.** Index value, factor, offset, snapshot and index id are `cpq.costs.view`
+data on every surface; the quote cost read answers status-only without it. Events add no field.
+
+**UI.** Cost element dialog: Index source with index picker, factor, offset and a "value today"
+help; Costs sub-panel: snapshot line, lock hint and `INDEX_NO_VALUE` badge.
+
+**Demo (`demo_gix`).** `DEMO-DC-POWER` with values, a dedicated index-costed offering and a
+ready and a with_customer quote (idempotent, examples-gated).
+
+**Rollback.** Switch `index` elements to `fixed` first (the usage endpoint lists cost-plus
+charges), then roll the code back; snapshots on cost lines survive.
+
+### 2026-11-16 — Index costs, Phase A: cost index catalogue (cost-plus pricing, feature 6)
+
+Spec: `.ai/specs/2026-11-12-cpq-cost-plus-index-costs-expiry.md`. Minor release of
+`@dainamite/cpq`. Requires features 1 to 5. Phase A is the reference-data catalogue
+only: nothing prices from an index yet (the `index` cost source stays refused until
+the engine phase), so no pricing output changes.
+
+**Schema (run `yarn mercato db migrate`).**
+- `Migration20261116054402` (partial unique index and CHECKs hand-added; the
+  generator cannot express them): `cpq_cost_indices` (code unique per tenant among
+  non-deleted rows) and `cpq_cost_index_values` (append-only; unique
+  `(cost_index_id, effective_date, revision)`, `value > 0`, `revision >= 1`).
+  `down()` drops both tables. Neither entity is registered in `ce.ts`.
+
+**New routes** (all `openApi`, `requireFeatures`, 404 while the `cpq.cost_plus`
+toggle is off, `runCpqMutationGuards` on writes). Read = `cpq.pricing.view` +
+`cpq.costs.view`; write = `cpq.pricing.manage` + `cpq.costs.view`.
+- `GET|POST /api/cpq/cost-indices`
+- `GET|PATCH|DELETE /api/cpq/cost-indices/{indexId}` (`code` immutable; soft delete)
+- `GET|POST /api/cpq/cost-indices/{indexId}/values` (server-assigned revision;
+  `includeSuperseded`, `from`, `to`)
+- `POST /api/cpq/cost-indices/import` (1 to 1000 rows by index code, all-or-nothing,
+  `dryRun`; `batchId` is null on a dry run)
+
+New error codes: `INDEX_IN_USE` (with `elements`), `INDEX_CURRENCY_LOCKED`,
+`CODE_IMMUTABLE`, `DUPLICATE_CODE`, `UNKNOWN_CURRENCY`, `INDEX_INACTIVE`,
+`CONCURRENT_INDEX_WRITE` (409), `IMPORT_VALIDATION_FAILED` (422, `errors[]` with
+`UNKNOWN_INDEX` / `INDEX_INACTIVE` / `INVALID_VALUE` / `DUPLICATE_ROW`).
+
+**Commands.** `cpq.cost_index.create` / `update` / `delete` and
+`cpq.cost_index_value.append` (one command per import call). Not undoable, not
+replayable; logs carry ids, codes, dates and revisions, never a value or note.
+
+**UI.** `Cost indices` list (`/backend/cpq/cost-indices`) and detail
+(`/backend/cpq/cost-indices/[id]`) under the CPQ sidebar group (`pageOrder` 22);
+Create, Add value and Import (CSV preview then confirm) dialogs; read-only for users
+without `cpq.pricing.manage`. i18n keys under `cpq.costIndices.*`. Injection spots
+`detail:cpq.cost_index`, `data-table:cpq.cost_indices`,
+`data-table:cpq.cost_index_values`.
+
+**Rollback.** Code first, then the down-migration. Nothing references the tables
+yet, so no data migration is needed.
+
+### 2026-11-15 — ARC costs (cost-plus pricing, feature 5)
+
+Spec: `.ai/specs/2026-11-12-cpq-cost-plus-arc-costs.md`. Minor release of
+`@dainamite/cpq`. Requires features 1 to 4. Operator documentation: "ARC costs:
+carry, renegotiation and recovery" in `manuals/cpq-cost-plus-pricing.md` and
+Scenario 12 of `manuals/xd-250-arc-flow.md`.
+
+**Schema (run `yarn mercato db migrate`).**
+- `Migration20261115151709` (CHECKs and the partial index hand-added; the
+  generator cannot express them): `cpq_quote_line_costs.renegotiation_due`
+  (boolean not null default false); `cpq_quote_line_costs_origin_check` widened to
+  `catalog` / `manual` / `carried` and `..._value_origin_check` to also allow
+  `carried`; partial index `cpq_quote_line_costs_carried_item_cost_idx` on
+  `(organization_id, tenant_id, carried_from_item_cost_id)` (open carried rows).
+  `down()` maps `carried` rows to `manual` before restoring the narrow checks.
+
+**Behaviour changes.**
+- Amend mirror lines (and standalone Renew mirrors, reconciled with the catalog)
+  carry the item's open costs as `carried` lines; activation writes them back in
+  place through `replaceItemCosts` (same cost ids, full image). Cost-only Amends
+  are margin-only: payloads (`amended` / `renewed`) are byte-identical (I-9).
+- **Standalone Renews are no longer frozen** for cost-plus items: they are
+  re-priced at today's standard. Merge-renew lines and Renews created before this
+  release (`_arcCostPlusFrozen` lines) keep the old rules.
+- **Activation lock order**: order row, then the source quote row
+  (`lockSourceQuote`), then the target subscription rows sorted by id. Anything
+  that locks several of them must follow this order.
+- `409 COST_SOURCE_CHANGED` (with `lines[]`, `costKeys`) at conversion and at
+  activation when carried costs no longer match the subscription; nothing is
+  written. The activate and status routes now return the OrderError `details`.
+- Frozen-line lock rule: a cost change on a frozen mirror line is margin-only
+  (never `COST_LOCKED`); overwriting a carried value needs a note.
+- Renew: carried MRC costs whose validity / supplier term ends before the new term
+  are `renegotiation_due` (status `estimated`, conversion blocked) until answered,
+  re-entered or kept (`keepCurrent`).
+- `QUOTE_CONVERTED` bodies of the sourcing writes gain `orderLineCostId`
+  (`{ orderId, orderLineCostId }`).
+- `GET /api/cpq/cost-plus/usage` gains `openArcQuotesWithCarriedCosts`.
+- Cost / quote reads gain `carried`, `renegotiationDue`, `frozen` (everyone) and,
+  for `cpq.costs.view` holders only, `previous`, `droppedItemCosts`, `exposure`
+  and `arcCosts` (before / after MRC and NRC cost per ARC line).
+- Re-price from cost is **not shipped**: it needs `modifiedItems` in the billing
+  payload, which does not exist yet (spec Q3). Until then a cost-only Amend moves
+  margin only.
+
+**New routes** (all `openApi`, `requireFeatures`):
+`POST /api/cpq/quotes/{quoteId}/items/{lineId}/refresh-from-subscription`
+(`cpq.quotes.manage` plus the quote-type ARC feature, enforced in the service);
+`PATCH /api/cpq/orders/{orderId}/costs/{orderLineCostId}` (`cpq.orders.manage` +
+`cpq.costs.manage`, re-confirmation, non-undoable command
+`cpq.order_line_cost.reconfirm`). `PATCH .../costs/{costId}` accepts
+`keepCurrent: true`. New error codes: `COST_SOURCE_CHANGED`,
+`RENEGOTIATION_DATES_SHORT`, `NOT_RENEGOTIATION_DUE`, `NOT_ARC_MIRROR`,
+`MERGE_LINE`, `ITEM_NOT_ACTIVE`, `ORDER_ACTIVATED`, `ORDER_CANCELLED`.
+
+**Demo.** `demo_gix` seeds one live Acme subscription whose 270 USD partner tail
+has a supplier term ending before the subscription renews.
+
+**Rollback.** Code first, then the down-migration (`carried` origins become
+`manual`; open ARC quotes lose their carry markers' meaning, so settle or cancel
+open Amend / Renew quotes first). Orders carrying a re-confirmation keep the
+values; `reconfirmed_*` columns pre-date this release.
+
 ### 2026-11-15 — Foreign-currency costs (cost-plus pricing, feature 4)
 
 Spec: `.ai/specs/2026-11-12-cpq-cost-plus-foreign-currency-costs.md`. Minor

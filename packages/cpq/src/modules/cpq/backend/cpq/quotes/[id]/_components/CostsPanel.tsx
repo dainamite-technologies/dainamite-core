@@ -2,6 +2,7 @@
 
 import * as React from 'react'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import { ChevronDown, ChevronRight, Lock } from 'lucide-react'
 import { IconButton } from '@open-mercato/ui/primitives/icon-button'
 import { Tag } from '@open-mercato/ui/primitives/tag'
@@ -16,8 +17,10 @@ import {
   type FullQuoteCost,
   type RedactedQuoteCost,
 } from '../../../../../lib/quoteCostView'
+import { ARC_COST_BADGE_FALLBACKS, previousParts } from '../../../../../lib/arcCostView'
 import { FxNote } from '../../../../../components/FxNote'
 import { costErrorText, formatConverted, fxTooltip } from '../../../../../lib/fxView'
+import { hasIndexNoValue, indexLockHint, indexSnapshotLine, indexSnapshotTooltip, INDEX_NO_VALUE_FALLBACK, readIndexSnapshot, type IndexLabel } from '../../../../../lib/indexView'
 import { SOURCING_STATUS_FALLBACKS, SOURCING_STATUS_VARIANTS } from '../../../../../lib/costSourcingView'
 import { CostRequestDetailPanel } from '../../../cost-requests/_components/CostRequestDetailPanel'
 
@@ -34,7 +37,46 @@ function QuoteCostConverted({ cost, locked }: { cost: FullQuoteCost; locked: boo
   return line ? <FxNote text={line.text} tooltip={fxTooltip(cost, { locked }, t)} /> : null
 }
 
-export function CostsPanel({ quoteId, lineId, lineName, costs, locked, status, canManage, renderRowActions, headerActions }: {
+/** Index cost: the snapshot line (index, value, date, revision, formula) and, while the quote is locked, the freeze hint. */
+function QuoteCostIndexNote({ cost, locked, labels }: { cost: FullQuoteCost; locked: boolean; labels: Readonly<Record<string, IndexLabel>> }) {
+  const t = useT()
+  const snapshot = readIndexSnapshot(cost.indexSnapshot)
+  if (!snapshot) return null
+  return (
+    <SimpleTooltip content={indexSnapshotTooltip(snapshot, { locked }, t)} size="sm">
+      <span className="cursor-help" tabIndex={0} aria-label={indexSnapshotTooltip(snapshot, { locked }, t)}>
+        <span className="block font-sans text-xs font-normal text-muted-foreground" data-testid="cpq-cost-index-snapshot">{indexSnapshotLine(snapshot, labels[snapshot.indexId], t)}</span>
+        {locked && (
+          <span className="inline-flex items-center gap-1 font-sans text-xs font-normal text-muted-foreground" data-testid="cpq-cost-index-frozen">
+            <Lock className="h-3 w-3" aria-hidden />
+            {indexLockHint(t)}
+          </span>
+        )}
+      </span>
+    </SimpleTooltip>
+  )
+}
+
+/**
+ * Index code and unit by index id, for the snapshot line (the snapshot only carries the id). Fetched once, and only when a
+ * row has a snapshot; a failure (the viewer may lack `cpq.pricing.view`, or cost-plus is off) just leaves the labels out.
+ */
+function useIndexLabels(enabled: boolean, given?: Readonly<Record<string, IndexLabel>>): Readonly<Record<string, IndexLabel>> {
+  const [fetched, setFetched] = React.useState<Record<string, IndexLabel>>({})
+  React.useEffect(() => {
+    if (!enabled || given) return
+    let cancelled = false
+    void (async () => {
+      const call = await apiCall<{ items?: Array<{ id: string; code: string; unit: string }> }>('/api/cpq/cost-indices?pageSize=100')
+      if (cancelled || !call.ok) return
+      setFetched(Object.fromEntries((call.result?.items ?? []).map((item) => [item.id, { code: item.code, unit: item.unit }])))
+    })()
+    return () => { cancelled = true }
+  }, [enabled, given])
+  return given ?? fetched
+}
+
+export function CostsPanel({ quoteId, lineId, lineName, costs, locked, status, canManage, renderRowActions, headerActions, frozen, dropped, indexLabels }: {
   quoteId: string
   lineId: string
   lineName: string
@@ -44,9 +86,16 @@ export function CostsPanel({ quoteId, lineId, lineName, costs, locked, status, c
   canManage: boolean
   renderRowActions?: CostRowActions
   headerActions?: React.ReactNode
+  /** ARC: the line keeps the subscription's contracted price (shows the lock hint). */
+  frozen?: boolean
+  /** ARC Renew, `cpq.costs.view` only: item costs the renewal no longer carries. */
+  dropped?: ReadonlyArray<{ inventoryCostId: string; name: string }>
+  /** Index code and unit by index id (the snapshot line names the index); loaded from the index list when absent. */
+  indexLabels?: Readonly<Record<string, IndexLabel>>
 }) {
   const t = useT()
   const rows = costs.filter(isFullCost)
+  const labels = useIndexLabels(rows.some((cost) => readIndexSnapshot(cost.indexSnapshot) !== null), indexLabels)
   // Request detail (history, supplier answer, proposal) opens inline; read-only for every cost viewer.
   const [openDetails, setOpenDetails] = React.useState<ReadonlySet<string>>(new Set())
   const toggleDetail = (id: string) => setOpenDetails((current) => {
@@ -82,6 +131,11 @@ export function CostsPanel({ quoteId, lineId, lineName, costs, locked, status, c
           {headerActions}
         </div>
       </div>
+      {frozen && (
+        <p className="pb-1 text-xs text-muted-foreground" data-testid="cpq-costs-frozen-hint">
+          {t('cpq.arc.costs.frozenHint', 'Price locked — cost changes move margin only')}
+        </p>
+      )}
       {rows.length === 0 ? (
         <p className="py-1 text-xs text-muted-foreground" data-testid="cpq-costs-empty">
           {t('cpq.quoteCosts.empty', 'No costs on this line. Margin is not tracked for it.')}
@@ -136,11 +190,30 @@ export function CostsPanel({ quoteId, lineId, lineName, costs, locked, status, c
                           {cost.requestSeq ? ` #${cost.requestSeq}` : ''}
                         </Tag>
                       )}
-                      {cost.error && <span className="ml-1 text-destructive" data-testid="cpq-cost-error">{costErrorText(cost, t, costErrorFallback)}</span>}
+                      {cost.origin === 'carried' && (
+                        <Tag variant="neutral" className="ml-1 px-1.5 text-xs" data-testid="cpq-cost-carried">{t('cpq.quoteCosts.badges.carried', ARC_COST_BADGE_FALLBACKS.carried)}</Tag>
+                      )}
+                      {cost.renegotiationDue && (
+                        <Tag variant="warning" className="ml-1 px-1.5 text-xs" data-testid="cpq-cost-renegotiation-due">{t('cpq.quoteCosts.badges.renegotiationDue', ARC_COST_BADGE_FALLBACKS.renegotiationDue)}</Tag>
+                      )}
+                      {(() => {
+                        const parts = previousParts(cost)
+                        if (!parts) return null
+                        return (
+                          <span className="mt-0.5 block text-muted-foreground" data-testid="cpq-cost-was">
+                            {[t('cpq.arc.costs.was', 'Was {value}', { value: parts.value }), parts.supplierName, parts.termEnd ? t('cpq.arc.costs.termTo', 'term to {date}', { date: parts.termEnd }) : null].filter(Boolean).join(' · ')}
+                          </span>
+                        )
+                      })()}
+                      {hasIndexNoValue(cost) && (
+                        <Tag variant="warning" className="ml-1 px-1.5 text-xs" data-testid="cpq-cost-index-no-value">{t('cpq.quoteCosts.badges.indexNoValue', INDEX_NO_VALUE_FALLBACK)}</Tag>
+                      )}
+                      {cost.error && !hasIndexNoValue(cost) && <span className="ml-1 text-destructive" data-testid="cpq-cost-error">{costErrorText(cost, t, costErrorFallback)}</span>}
                     </td>
                     <td className="py-1 text-right font-mono">
                       {cost.unitAmount ?? '—'}
                       <QuoteCostConverted cost={cost} locked={locked} />
+                      <QuoteCostIndexNote cost={cost} locked={locked} labels={labels} />
                     </td>
                     <td className="py-1 pl-2">{cost.currencyCode ?? '—'}</td>
                     <td className="py-1">{cost.supplierName ?? '—'}</td>
@@ -159,6 +232,14 @@ export function CostsPanel({ quoteId, lineId, lineName, costs, locked, status, c
             })}
           </tbody>
         </table>
+      )}
+      {dropped && dropped.length > 0 && (
+        <div className="pt-2 text-xs" data-testid="cpq-costs-dropped">
+          <h5 className="font-medium">{t('cpq.arc.costs.dropped', 'Dropped at renewal')}</h5>
+          <ul className="text-muted-foreground">
+            {dropped.map((item) => <li key={item.inventoryCostId}>{item.name}</li>)}
+          </ul>
+        </div>
       )}
       <InjectionSpot spotId={QUOTE_LINE_COSTS_SPOT_ID} context={{ quoteId, lineId, lineName, costs: rows }} />
     </div>

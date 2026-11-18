@@ -1,5 +1,5 @@
 import {
-  CpqChargeCostElement, CpqOrderConfiguration, CpqQuoteConfiguration, CpqQuoteLineConfiguration, CpqQuoteLineCost,
+  CpqChargeCostElement, CpqOrderConfiguration, CpqOrderLineCost, CpqQuoteConfiguration, CpqQuoteLineConfiguration, CpqQuoteLineCost,
 } from '../../../data/entities'
 import { SalesQuote } from '@open-mercato/core/modules/sales/data/entities'
 
@@ -31,7 +31,7 @@ jest.mock('@open-mercato/shared/lib/commands/flush', () => ({
 jest.mock('../costResolution', () => ({
   isQuoteCostLocked: async (_em: unknown, quote: { cpqStatus: string }) => !['new', 'incomplete', 'ready'].includes(quote.cpqStatus),
 }))
-import { CpqCostSourcingService } from '../costSourcingService'
+import { assertQuoteOpenForSourcing, CpqCostSourcingService } from '../costSourcingService'
 import type { SourcingSignal } from '../sourcingSignals'
 
 const SCOPE = { organizationId: 'org', tenantId: 'tenant' }
@@ -163,6 +163,23 @@ describe('request', () => {
     await expect(setup({ sales: false }).service.request(ids.quote, ids.cost, {}, ACTOR, SCOPE)).rejects.toMatchObject({ status: 409, message: 'QUOTE_CLOSED' })
     await expect(setup({ orders: [{ id: 'order-1' }] }).service.request(ids.quote, ids.cost, {}, ACTOR, SCOPE))
       .rejects.toMatchObject({ status: 409, message: 'QUOTE_CONVERTED', details: { orderId: 'order-1' } })
+  })
+
+  it('QUOTE_CONVERTED is additive (ARC costs Q7): orderLineCostId is the order line cost copied from this cost line, else null', async () => {
+    const withCopy = setup({ orders: [{ id: 'order-1' }] })
+    const original = withCopy.em.findOne.getMockImplementation()!
+    withCopy.em.findOne.mockImplementation(async (entity: unknown, where: Record<string, unknown>) => {
+      if (entity === CpqOrderLineCost) return where.sourceQuoteLineCostId === ids.cost && where.orderConfigurationId === 'order-1' ? { id: 'olc-1' } : null
+      return original(entity, where)
+    })
+    const quote = { id: ids.quote, quoteId: ids.quote, cpqStatus: 'ready' }
+    await expect(assertQuoteOpenForSourcing(withCopy.em as never, quote as never, SCOPE, ids.cost))
+      .rejects.toMatchObject({ status: 409, message: 'QUOTE_CONVERTED', details: { orderId: 'order-1', orderLineCostId: 'olc-1' } })
+    // no copy (or no cost line named): the order id still comes back, the order line cost id is null
+    await expect(assertQuoteOpenForSourcing(setup({ orders: [{ id: 'order-1' }] }).em as never, quote as never, SCOPE, ids.cost))
+      .rejects.toMatchObject({ details: { orderId: 'order-1', orderLineCostId: null } })
+    await expect(assertQuoteOpenForSourcing(withCopy.em as never, quote as never, SCOPE))
+      .rejects.toMatchObject({ details: { orderId: 'order-1', orderLineCostId: null } })
   })
 
   it('404s an unknown quote or cost line, honours expectedRevision, and 404s with the toggle off before touching anything', async () => {
@@ -362,14 +379,25 @@ describe('answer: unlocked quote', () => {
     expect(recalculate).not.toHaveBeenCalled()
   })
 
-  it('a carried line is accepted; a confirming answer clears renegotiationDue only where the column exists', async () => {
-    const withColumn = setup({ costs: [requested({ origin: 'carried', costElementId: null, renegotiationDue: true })] })
-    await withColumn.service.answer(ids.quote, ids.cost, answerInput(), ACTOR, SCOPE)
-    expect(withColumn.costs[0]).toMatchObject({ sourcingStatus: 'answered', renegotiationDue: false })
-    const without = setup({ costs: [requested({ origin: 'carried', costElementId: null })] })
-    await without.service.answer(ids.quote, ids.cost, answerInput(), ACTOR, SCOPE)
-    expect(without.costs[0]).not.toHaveProperty('renegotiationDue')
-    expect(without.costs[0].sourcingStatus).toBe('answered')
+  it('a carried line is accepted; a confirming answer clears renegotiationDue (ARC step 5: the column exists)', async () => {
+    const carried = setup({ costs: [requested({ origin: 'carried', costElementId: null, renegotiationDue: true })] })
+    await carried.service.answer(ids.quote, ids.cost, answerInput(), ACTOR, SCOPE)
+    expect(carried.costs[0]).toMatchObject({ sourcingStatus: 'answered', renegotiationDue: false })
+  })
+
+  it('step 14: a supplier answer on a due carried cost of a standalone Renew line (not frozen) clears the flag and confirms it', async () => {
+    const { service, costs } = setup({
+      quoteType: 'renew', line: { configuration: { _arcMirroredFromItemId: 'item-1', _arcCostsCarried: true, _arcCarriedCostSetHash: 'h' } }, element: null,
+      costs: [requested({ origin: 'carried', costElementId: null, renegotiationDue: true, valueStatus: 'estimated', valueOrigin: 'carried' })],
+    })
+    await service.answer(ids.quote, ids.cost, answerInput(), ACTOR, SCOPE)
+    expect(costs[0]).toMatchObject({ sourcingStatus: 'answered', renegotiationDue: false, valueStatus: 'confirmed', valueOrigin: 'supplier' })
+  })
+
+  it('a non-confirming answer or a non-carried cost keeps renegotiationDue untouched', async () => {
+    const catalog = setup({ costs: [requested({ origin: 'catalog', renegotiationDue: true })] })
+    await catalog.service.answer(ids.quote, ids.cost, answerInput(), ACTOR, SCOPE)
+    expect(catalog.costs[0]).toMatchObject({ renegotiationDue: true })
   })
 
   it('a margin-only cost applies even on a locked quote, without re-pricing', async () => {
@@ -377,6 +405,37 @@ describe('answer: unlocked quote', () => {
     const result = await service.answer(ids.quote, ids.cost, answerInput({ unitAmount: 999 }), ACTOR, SCOPE)
     expect(result.response.outcome).toBe('applied')
     expect(costs[0]).toMatchObject({ unitAmount: '999', proposedAmount: null })
+    expect(recalculate).not.toHaveBeenCalled()
+  })
+})
+
+describe('answer / decline: frozen ARC mirror line (ARC costs Q4)', () => {
+  const frozen = { configuration: { _arcMirroredFromItemId: 'item-1', _arcPriceFrozen: true } }
+
+  it('a different-value answer on a locked quote\'s frozen carried price-basis line applies (no proposal), without re-pricing', async () => {
+    const { service, costs, recalculate } = setup({ costs: [requested({ origin: 'carried', valueOrigin: 'carried' })], status: 'with_customer', quoteType: 'amend', line: frozen })
+    const result = await service.answer(ids.quote, ids.cost, answerInput({ unitAmount: 999 }), ACTOR, SCOPE)
+    expect(result.response.outcome).toBe('applied')
+    expect(costs[0]).toMatchObject({ unitAmount: '999', proposedAmount: null, proposedAnswer: null, sourcingStatus: 'answered' })
+    expect(recalculate).not.toHaveBeenCalled()
+  })
+
+  it('a reconfigured (un-frozen) mirror line keeps the lock: a different value stays a proposal', async () => {
+    const { service, costs } = setup({
+      costs: [requested({ origin: 'carried', valueOrigin: 'carried', unitAmount: '300.0000' })], status: 'with_customer', quoteType: 'amend',
+      line: { configuration: { _arcMirroredFromItemId: 'item-1', _arcReconfigured: true } },
+    })
+    const result = await service.answer(ids.quote, ids.cost, answerInput({ unitAmount: 999 }), ACTOR, SCOPE)
+    expect(result.response.outcome).toBe('proposed')
+    expect(costs[0]).toMatchObject({ unitAmount: '300.0000', proposedAmount: '999.0000' })
+  })
+
+  it('decline on a locked quote\'s frozen carried line follows the unlocked rule: no locked downgrade', async () => {
+    const { service, costs, recalculate } = setup({
+      costs: [requested({ origin: 'carried', valueOrigin: 'carried', unitAmount: '300.0000', valueStatus: 'confirmed' })], status: 'with_customer', quoteType: 'amend', line: frozen,
+    })
+    await service.decline(ids.quote, ids.cost, { costRequestId: ids.req, reason: 'No coverage' }, ACTOR, SCOPE)
+    expect(costs[0]).toMatchObject({ sourcingStatus: 'declined', valueStatus: 'none', unitAmount: null })
     expect(recalculate).not.toHaveBeenCalled()
   })
 })

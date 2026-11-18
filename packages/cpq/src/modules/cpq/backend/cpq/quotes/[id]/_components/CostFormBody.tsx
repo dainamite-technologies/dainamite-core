@@ -69,6 +69,11 @@ export function CostFormBody({ form, onChange, mode, existing, charges, issues, 
           {t('cpq.quoteCosts.dialog.catalogHint', 'This value comes from the catalog. Overwriting it needs a note; the cost then stays as you set it.')}
         </p>
       )}
+      {existing && existing.origin === 'carried' && (
+        <p className="text-xs text-muted-foreground">
+          {t('cpq.arc.costs.carriedHint', 'This value is carried from the subscription. Overwriting it needs a note.')}
+        </p>
+      )}
       <Field label={t('cpq.quoteCosts.name', 'Name')}>
         <Input autoFocus={mode === 'add'} value={form.name} disabled={structureLocked} maxLength={255} onChange={(event) => set('name', event.target.value)} />
       </Field>

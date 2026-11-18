@@ -4,17 +4,20 @@ import { withAtomicFlush } from '@open-mercato/shared/lib/commands/flush'
 import type { CostLineErrorCode } from '../../data/costs'
 import {
   CpqChargeCostElement,
+  CpqCostIndex,
   CpqOrderConfiguration,
   CpqPricingTable,
   CpqPricingTableEntry,
   CpqProductCharge,
   CpqQuoteLineCost,
   CpqQuoteMarkupOverride,
+  CpqQuoteTargetSubscription,
   type CpqQuoteConfiguration,
   type CpqQuoteLineConfiguration,
 } from '../../data/entities'
 import { isArcCancelledLine } from '../arcLineRemoval'
-import { isArcMirrorLine, isArcReconfigured } from '../arcPriceFreeze'
+import { isArcMirrorLine, isArcReconfigured, isCostManagedRenewLine } from '../arcPriceFreeze'
+import { reconcileRenewLine, type ReevaluateCarriedIndexCosts, type RenewCostRow } from './arcCostCarry'
 import { evaluateApplicability } from '../cpqPricingService'
 import { ADJUSTMENT_MUTABLE_STATUSES } from '../../data/price-adjustments'
 import type { TenantScope } from '../types'
@@ -23,6 +26,8 @@ import { shouldAutoOpenRequest, type CancelReason } from './costSourcing'
 import { cancelRequestPatch, isRequestOpen, openRequestPatch, type RequestRowState } from './costRequestState'
 import { sourcingCostRef, type SourcingSignal } from './sourcingSignals'
 import type { CpqFxRateResolver } from './fxRateResolver'
+import { loadValuesInForce, reevaluateCarriedIndexCosts, resolveIndexCost, type IndexCostResult, type IndexSnapshot, type IndexValueInForce } from './indexCostResolution'
+import { readIndexSnapshot } from '../../lib/indexView'
 
 /**
  * Catalog cost resolution on SAVED recalculations (App Spec §1.4.7 R1, R3, R4,
@@ -78,10 +83,12 @@ type ResolvedValue = FxFields & {
   instanceAmount: string | null
   currencyCode: string | null
   errorCode: CostLineErrorCode | null
+  /** Set by `index` elements only (`null` = no value in force); `undefined` for every other source. */
+  indexSnapshot?: IndexSnapshot | null
 }
 
-/** A value a person entered (`manual`) or a supplier answered (`supplier`): the catalog resolver never overwrites it until a driver changes. */
-const isEnteredOrigin = (origin: string | null | undefined): boolean => origin === 'manual' || origin === 'supplier'
+/** A value that is not the catalog's: entered by a user, answered by a supplier, or carried from the subscription item (it survives a recalculation until a driving attribute changes). */
+const isEnteredOrigin = (origin: string | null | undefined): boolean => origin === 'manual' || origin === 'supplier' || origin === 'carried'
 
 const NO_VALUE: ResolvedValue = { valueStatus: 'none', valueOrigin: null, unitAmount: null, instanceAmount: null, currencyCode: null, errorCode: null, ...NO_FX }
 
@@ -111,6 +118,7 @@ async function resolveValue(
   configuration: Record<string, unknown>,
   quoteCurrency: string,
   lookup: FxLookup,
+  indexCost: IndexCostResult | null,
 ): Promise<ResolvedValue> {
   const quantity = element.costModel === 'flat' ? 1 : quantityOf(charge, configuration)
   const instanceOf = (unit: number) => (element.costModel === 'per_unit' ? unit * quantity : unit)
@@ -125,6 +133,18 @@ async function resolveValue(
       return { valueStatus: 'none', valueOrigin: 'catalog', unitAmount: money(unit), instanceAmount: null, currencyCode: currency, errorCode: 'CURRENCY_NO_RATE', ...NO_FX }
     }
     return { valueStatus: status, valueOrigin: 'catalog', unitAmount: money(unit), instanceAmount: money(instance), currencyCode: currency, errorCode: null, ...fx }
+  }
+
+  if (element.source === 'index') {
+    // No value in force (or no index): none + INDEX_NO_VALUE, no snapshot; the line is not ready (R4).
+    if (!indexCost || !indexCost.ok) return { ...NO_VALUE, errorCode: 'INDEX_NO_VALUE', indexSnapshot: null }
+    const unit = Number(indexCost.unitAmount)
+    const instance = instanceOf(unit)
+    // R3: the index currency is the cost currency; another currency than the quote's goes through the FX resolver (never 1:1).
+    const resolved = indexCost.currencyCode === quoteCurrency
+      ? inQuote('confirmed', unit, instance)
+      : await foreign('confirmed', indexCost.currencyCode, unit, instance)
+    return { ...resolved, indexSnapshot: indexCost.snapshot }
   }
 
   if (element.source === 'fixed') {
@@ -225,6 +245,19 @@ export type CostResolutionParams = {
    * re-resolves its catalog costs but opens no request (spec "Clone": the cloned tail is `not_requested`, R16).
    */
   autoOpen?: boolean
+  /**
+   * Date of the recalculation (`YYYY-MM-DD`, UTC): the day index values are read at (index-costs spec Q6). Absent = today
+   * (UTC).
+   */
+  asOfDate?: string
+  /**
+   * Whether this recalculation may store resolved values / snapshots: a SAVED recalculation of an unlocked quote
+   * (no order, status `new | incomplete | ready`). Computed by the caller from the same lock predicate as the resolver.
+   * Only `false` is acted on: it forbids writing even a computed plan (absent = the `save` flag decides, as before).
+   */
+  persist?: boolean
+  /** Test seam / the index-costs feature: the second step of Renew reconciliation (default: the no-op `reevaluateCarriedIndexCosts`). */
+  reevaluateCarriedIndexCosts?: ReevaluateCarriedIndexCosts
 }
 
 /** What cost-plus pricing reads from a cost line (plain values, safe to hand around without persisting). */
@@ -306,7 +339,7 @@ export async function resolveCostPlusInputs(params: CostResolutionParams & { sav
     for (const row of stored) add(toCostLineValue(row as unknown as Record<string, unknown>))
   } else {
     const plan = await planQuoteCosts(params)
-    if (params.save) await applyCostPlan(em, plan, params.signals)
+    if (params.save && params.persist !== false) await applyCostPlan(em, plan, params.signals)
     const patchByRow = new Map(plan.updates.map(({ row, patch }) => [row, patch]))
     const dropped = new Set(plan.drops)
     for (const row of plan.existing) {
@@ -362,18 +395,28 @@ async function planQuoteCosts(params: CostResolutionParams & { save?: boolean })
     signals.push({ ...sourcingCostRef(row), kind: 'request_cancelled', costRequestId: row.costRequestId as string, requestSeq: row.requestSeq ?? 1, reason })
   }
 
-  // R1c: cancelled lines and unreconfigured ARC mirror lines (frozen or not, Q13) never get catalog cost lines.
+  // R1c: cancelled lines never get cost lines, and unreconfigured ARC mirror lines get no CATALOG cost lines (Q13).
+  // ARC costs spec: an unreconfigured Amend mirror keeps its `carried` lines (the subscription's costs), nothing else;
+  // a reconfigured mirror instantiates catalog lines for the elements that apply and keeps carried values whose
+  // cost key matches (unless a driving attribute changed, R1b).
   const lines = params.lines.filter(({ lineConfig }) => (lineConfig.offeringId || lineConfig.productId)
     && !isArcCancelledLine(lineConfig, quote.quoteType)
-    && (!isArcMirrorLine(lineConfig.configuration, quote.quoteType) || isArcReconfigured(lineConfig.configuration)))
+    && (!isArcMirrorLine(lineConfig.configuration, quote.quoteType) || isArcReconfigured(lineConfig.configuration)
+      || isCostManagedRenewLine(lineConfig.configuration, quote.quoteType)))
   // An item removed on an Amend / Renew quote leaves the subscription: its line keeps no cost
-  // (catalog or manual). Line removal already drops them; this also cleans rows stored before.
-  // Rows stored on an unreconfigured mirror line before Q13 (a Renew mirror re-priced at standard) are dropped
+  // (catalog, manual or carried). Line removal already drops them; this also cleans rows stored before.
+  // Non-carried rows stored on an unreconfigured mirror line before Q13 (a Renew mirror re-priced at standard) are dropped
   // too: nothing could confirm them (cost PATCH refuses such a line), so they would block conversion forever.
-  const cancelledLineIds = new Set(params.lines
-    .filter(({ lineConfig }) => isArcCancelledLine(lineConfig, quote.quoteType)
-      || (isArcMirrorLine(lineConfig.configuration, quote.quoteType) && !isArcReconfigured(lineConfig.configuration)))
+  const removedLineIds = new Set(params.lines
+    .filter(({ lineConfig }) => isArcCancelledLine(lineConfig, quote.quoteType))
     .map(({ lineConfig }) => lineConfig.quoteLineId))
+  const unreconfiguredMirrorIds = new Set(params.lines
+    .filter(({ lineConfig }) => !isArcCancelledLine(lineConfig, quote.quoteType)
+      && isArcMirrorLine(lineConfig.configuration, quote.quoteType) && !isArcReconfigured(lineConfig.configuration)
+      && !isCostManagedRenewLine(lineConfig.configuration, quote.quoteType))
+    .map(({ lineConfig }) => lineConfig.quoteLineId))
+  const dropsOnRecalc = (row: CpqQuoteLineCost) => removedLineIds.has(row.quoteLineId)
+    || (unreconfiguredMirrorIds.has(row.quoteLineId) && row.origin !== 'carried')
 
   // FX snapshot policy (spec §Proposed Solution, R4). This plan only runs for an UNLOCKED quote (locked / ordered
   // quotes reuse the stored rows and never reach it) and is only persisted by a SAVED recalculation; a preview resolves
@@ -393,7 +436,7 @@ async function planQuoteCosts(params: CostResolutionParams & { save?: boolean })
 
   // ── Reads first (no mutation before the last query) ──
   const existing = await em.find(CpqQuoteLineCost, { ...scoped(scope), quoteConfigurationId: quote.id })
-  const cancelledDrops = existing.filter((row) => cancelledLineIds.has(row.quoteLineId))
+  const cancelledDrops = existing.filter(dropsOnRecalc)
   stats.dropped += cancelledDrops.length
   // R1a, line removal: an ARC removal / unreconfigured mirror drops its cost lines with their open requests.
   for (const row of cancelledDrops) cancelOnDrop(row, 'line_removed')
@@ -436,10 +479,47 @@ async function planQuoteCosts(params: CostResolutionParams & { save?: boolean })
     table, dimensions: table.dimensions, entries: entries.filter((entry) => entry.pricingTableId === table.id),
   }]))
 
+  // Index costs (R4): ONE value-in-force query for every index the applicable elements use, at the recalculation date.
+  // Reads only: a preview computes the same values in memory, a locked quote never reaches this plan.
+  const asOfDate = params.asOfDate ?? new Date().toISOString().slice(0, 10)
+  const indexIds = [...new Set(elements.filter((element) => element.source === 'index' && element.costIndexId).map((element) => element.costIndexId as string))]
+  const indexById = new Map<string, { id: string; currencyCode: string }>()
+  let valuesInForce: Awaited<ReturnType<typeof loadValuesInForce>> = new Map()
+  if (indexIds.length > 0) {
+    const indices = await em.find(CpqCostIndex, { ...scoped(scope), id: { $in: indexIds } })
+    for (const index of indices) indexById.set(index.id, { id: index.id, currencyCode: index.currencyCode })
+    valuesInForce = await loadValuesInForce(em, [...indexById.keys()], asOfDate, scope)
+  }
+
+  // R1c / R13: the new term end of each cost-managed standalone Renew line's target (due flags are computed against it).
+  const managedRenew = lines.filter(({ lineConfig }) => isCostManagedRenewLine(lineConfig.configuration, quote.quoteType))
+  const newTermEndByTarget = new Map<string, Date | null>()
+  if (managedRenew.length > 0) {
+    const targets = await em.find(CpqQuoteTargetSubscription, { ...scoped(scope), quoteId: quote.id })
+    for (const target of targets ?? []) newTermEndByTarget.set(target.subscriptionId, target.newTermEnd ?? null)
+  }
+
+  // Renew (Q12): the carried index lines re-read the value in force at the recalculation date, on the index of their OWN snapshot
+  // (the contracted formula), not on today's catalog element. One query for all of them; a quote that is not a Renew loads nothing.
+  const carriedValues = new Map<string, IndexValueInForce>()
+  if (managedRenew.length > 0) {
+    const carriedIndexIds = managedRenew.flatMap(({ lineConfig }) => existingByLine.get(lineConfig.quoteLineId) ?? [])
+      .flatMap((row) => (row.origin === 'carried' && row.source === 'index' ? [readIndexSnapshot(row.indexSnapshot)?.indexId ?? ''] : []))
+      .filter(Boolean)
+    for (const [id, value] of await loadValuesInForce(em, carriedIndexIds, asOfDate, scope)) carriedValues.set(id, value)
+  }
+
   // ── Compute ──
   const creates: CostPlan['creates'] = []
   const updates: CostPlan['updates'] = []
   const drops: CostPlan['drops'] = [...cancelledDrops]
+  // One update entry per row: later patches (due flags, index values, FX) merge into it, so previews that key by row see them all.
+  const addPatch = (row: CpqQuoteLineCost, patch: RowPatch) => {
+    const entry = updates.find((candidate) => candidate.row === row)
+    if (entry) Object.assign(entry.patch, patch)
+    else { updates.push({ row, patch }); stats.updated += 1 }
+  }
+  const droppedAtRenewal = new Set<CpqQuoteLineCost>()
   for (const { lineConfig, mergedConfig } of lines) {
     const rows = existingByLine.get(lineConfig.quoteLineId) ?? []
     const rowByKey = new Map(rows.map((row) => [row.costKey, row]))
@@ -463,7 +543,10 @@ async function planQuoteCosts(params: CostResolutionParams & { save?: boolean })
         const attributes = driverAttributes(element, tableEntry?.table ?? null)
         const hash = driverHash(attributes, mergedConfig)
         const lookup = lookupFor(row, lineConfig)
-        const resolved = await resolveValue(element, charge, tableEntry, mergedConfig, quote.currencyCode, lookup)
+        const indexCost = element.source === 'index'
+          ? resolveIndexCost({ element, index: element.costIndexId ? indexById.get(element.costIndexId) ?? null : null, valuesInForce, asOfDate })
+          : null
+        const resolved = await resolveValue(element, charge, tableEntry, mergedConfig, quote.currencyCode, lookup, indexCost)
         const structure = {
           chargeCode: charge.code, costElementId: element.id, name: element.name, role: element.role,
           costType: element.costType, source: element.source, costModel: element.costModel,
@@ -495,7 +578,8 @@ async function planQuoteCosts(params: CostResolutionParams & { save?: boolean })
           continue
         }
 
-        const patch: RowPatch = { ...structure }
+        // A carried line keeps the subscription's own structure (role, type, model, source, name); only the element link is set.
+        const patch: RowPatch = row.origin === 'carried' ? { costElementId: element.id } : { ...structure }
         // R1b: a driving attribute changed since the value was set. On a catalog `on_request` value, or on a value a
         // pricing manager entered / confirmed (origin `manual`), that resets it and keeps the old value in the note.
         const driversChanged = row.driverHash !== null && row.driverHash !== hash
@@ -504,8 +588,11 @@ async function planQuoteCosts(params: CostResolutionParams & { save?: boolean })
           patch.note = resetNote(row, attributes)
         }
         if (driversChanged || !isEnteredOrigin(row.valueOrigin)) {
-          // Catalog values follow the catalog on every saved recalculation while unlocked (R4).
+          // Catalog values follow the catalog on every saved recalculation while unlocked (R4). An index line follows the
+          // value in force (Q11: only `value_origin = catalog` lines get here; a manual overwrite is kept, below).
           Object.assign(patch, toFields(resolved))
+          // The element no longer uses an index: the old snapshot goes with the value.
+          if (resolved.indexSnapshot === undefined && row.indexSnapshot) patch.indexSnapshot = null
         } else if (row.unitAmount !== null && row.unitAmount !== undefined) {
           // An entered / confirmed value survives, but its per-instance amount follows the quantity.
           const unit = Number(row.unitAmount)
@@ -559,11 +646,41 @@ async function planQuoteCosts(params: CostResolutionParams & { save?: boolean })
       stats.dropped += 1
     }
 
-    // A manual cost keeps its entered unit amount (and currency); a `per_unit` one's per-instance amount follows the
+    // R1c, standalone Renew: reconciliation (carried rows: match / keep / drop, due flags), THEN index re-evaluation.
+    if (isCostManagedRenewLine(lineConfig.configuration, quote.quoteType)) {
+      const effective = (row: RenewCostRow) => ({ ...row, ...(updates.find((candidate) => candidate.row === (row as unknown as CpqQuoteLineCost))?.patch ?? {}) }) as RenewCostRow
+      const outcome = await reconcileRenewLine({
+        rows: rows as unknown as RenewCostRow[],
+        applicableKeys: desiredKeys,
+        chargeCodes: new Set(ownerCharges.map((charge) => charge.code)),
+        newTermEnd: (lineConfig.targetSubscriptionId ? newTermEndByTarget.get(lineConfig.targetSubscriptionId) : null) ?? null,
+        asOf: asOfDate,
+        effective,
+      }, {
+        reevaluateCarriedIndexCosts: params.reevaluateCarriedIndexCosts ?? (async ({ lines: carried, asOf }) => reevaluateCarriedIndexCosts(carried, {
+          asOfDate: asOf, quoteType: quote.quoteType, valuesInForce: carriedValues,
+          quantityFor: (line) => {
+            const charge = ownerCharges.find((candidate) => candidate.code === line.chargeCode)
+            return charge ? quantityOf(charge, mergedConfig) : null
+          },
+        })),
+      })
+      for (const row of outcome.dropped as unknown as CpqQuoteLineCost[]) {
+        drops.push(row)
+        droppedAtRenewal.add(row)
+        cancelOnDrop(row, 'reconfigured')
+        stats.dropped += 1
+      }
+      for (const { row, patch } of outcome.due) addPatch(row as unknown as CpqQuoteLineCost, patch)
+      for (const { row, patch } of outcome.indexPatches) addPatch(row as unknown as CpqQuoteLineCost, patch as RowPatch)
+    }
+
+    // A manual cost, and a carried one no element claims, keeps its entered unit amount (and currency); a `per_unit` one's per-instance amount follows the
     // charge quantity, so a reconfigured quantity re-prices from the right cost. A foreign-currency value also gets its
     // FX snapshot refreshed (Q6; a carried / mirror line keeps its stored one) and the Q13 status on rate arrival.
     for (const row of rows) {
-      if (row.origin !== 'manual' || row.unitAmount === null || row.unitAmount === undefined) continue
+      if (droppedAtRenewal.has(row)) continue
+      if ((row.origin !== 'manual' && !(row.origin === 'carried' && !desiredKeys.has(row.costKey))) || row.unitAmount === null || row.unitAmount === undefined) continue
       const charge = ownerCharges.find((candidate) => candidate.code === row.chargeCode)
       const patch: RowPatch = {}
       if (row.costModel === 'per_unit' && charge) patch.instanceAmount = money(Number(row.unitAmount) * quantityOf(charge, mergedConfig))
@@ -572,8 +689,7 @@ async function planQuoteCosts(params: CostResolutionParams & { save?: boolean })
       if (patch.instanceAmount === undefined && (row.instanceAmount === null || row.instanceAmount === undefined) && patch.fxRate) patch.instanceAmount = money(Number(row.unitAmount))
       const changed = Object.fromEntries(Object.entries(patch).filter(([key, value]) => (row as unknown as Record<string, unknown>)[key] !== value))
       if (Object.keys(changed).length === 0) continue
-      updates.push({ row, patch: changed })
-      stats.updated += 1
+      addPatch(row, changed)
     }
   }
   return { stats, creates, updates, drops, dropCancels, signals, existing }
@@ -584,5 +700,6 @@ function toFields(value: ResolvedValue) {
     valueStatus: value.valueStatus, valueOrigin: value.valueOrigin, unitAmount: value.unitAmount,
     instanceAmount: value.instanceAmount, currencyCode: value.currencyCode, errorCode: value.errorCode,
     fxRate: value.fxRate, fxRateDate: value.fxRateDate, fxRateSource: value.fxRateSource, fxRateDerivation: value.fxRateDerivation,
+    ...(value.indexSnapshot === undefined ? {} : { indexSnapshot: value.indexSnapshot }),
   }
 }

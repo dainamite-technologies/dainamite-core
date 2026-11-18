@@ -13,9 +13,13 @@ import { CpqAdjustmentService } from './services/priceAdjustments/adjustmentServ
 import { DefaultCpqBundleService } from './services/cpqBundleService'
 import { CpqCostService } from './services/costs/costService'
 import { CpqQuoteCostService } from './services/costs/quoteCostService'
+import { CpqOrderCostReconfirmService } from './services/costs/orderCostReconfirm'
 import { CpqCostSourcingService } from './services/costs/costSourcingService'
 import { CpqCostRequestQueueService } from './services/costs/costRequestQueue'
 import { createSourcingPublisher } from './services/costs/sourcingPublisher'
+import { CpqCostIndexService, findIndexReferences } from './services/costs/costIndexService'
+import { CpqCostExpiryService } from './services/costs/costExpiryService'
+import { tryResolveNotificationService } from './lib/costNotifications'
 import { CpqFxRateResolver, type FxExchangeRateService } from './services/costs/fxRateResolver'
 
 /**
@@ -39,6 +43,24 @@ export function register(container: AppContainer) {
         : null,
       featureTogglesService: container.resolve('featureTogglesService'),
     })).scoped(),
+    // Cost indices and their append-only values (index-costs spec). `findReferences` is the in-use query over the
+    // elements' `cost_index_id` (INDEX_IN_USE / INDEX_CURRENCY_LOCKED, element counts).
+    cpqCostIndexService: asFunction(() => new CpqCostIndexService({
+      em: container.resolve('em'),
+      findReferences: findIndexReferences,
+    })).scoped(),
+    // Supplier cost expiry warnings (index-costs spec step 16 / 17): used by the `cpq-cost-expiry` worker and the
+    // `run-cost-expiry` CLI. Notifications are an optional peer: with no `notificationService` (or no `rbacService`) the
+    // warnings are events only.
+    cpqCostExpiryService: asFunction(() => {
+      const notificationService = tryResolveNotificationService(container)
+      const rbacService = container.hasRegistration('rbacService') ? container.resolve('rbacService') : null
+      return new CpqCostExpiryService({
+        em: container.resolve('em'),
+        featureTogglesService: container.resolve('featureTogglesService'),
+        notify: notificationService && rbacService ? { notificationService, rbacService } : null,
+      })
+    }).scoped(),
     cpqAdjustmentService: asFunction(() => new CpqAdjustmentService({
       em: container.resolve('em'),
       quotingService: container.resolve('cpqQuotingService'),
@@ -60,6 +82,11 @@ export function register(container: AppContainer) {
       quotingService: container.resolve('cpqQuotingService'),
       publisher: sourcingPublisher(),
       featureTogglesService: container.resolve('featureTogglesService'),
+      fxRateResolver: container.resolve('cpqFxRateResolver'),
+    })).scoped(),
+    cpqOrderCostReconfirmService: asFunction(() => new CpqOrderCostReconfirmService({
+      em: container.resolve('em'),
+      costService: container.resolve('cpqCostService'),
       fxRateResolver: container.resolve('cpqFxRateResolver'),
     })).scoped(),
     cpqCostRequestQueueService: asFunction(() => new CpqCostRequestQueueService({

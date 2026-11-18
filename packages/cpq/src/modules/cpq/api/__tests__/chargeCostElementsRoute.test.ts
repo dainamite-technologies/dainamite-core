@@ -1,4 +1,4 @@
-import { CpqChargeCostElement, CpqPricingTable, CpqProductCharge } from '../../data/entities'
+import { CpqChargeCostElement, CpqCostIndex, CpqPricingTable, CpqProductCharge } from '../../data/entities'
 import { CpqCostService } from '../../services/costs/costService'
 
 const getBoolConfig = jest.fn()
@@ -25,11 +25,13 @@ const chargeId = '33333333-3333-4333-8333-333333333333'
 const siblingChargeId = '77777777-7777-4777-8777-777777777777'
 const tableId = '44444444-4444-4444-8444-444444444444'
 const elementId = '66666666-6666-4666-8666-666666666666'
+const indexId = '55555555-5555-4555-8555-555555555555'
 const scope = { organizationId: 'org', tenantId: 'tenant', deletedAt: null }
 
 let charge: Record<string, unknown>
 let table: Record<string, unknown> | null
 let element: Record<string, unknown> | null
+let costIndex: Record<string, unknown> | null
 let duplicates = 0
 let otherPriceBasis = 0
 
@@ -48,6 +50,7 @@ beforeEach(() => {
   element = { id: elementId, productChargeId: chargeId, code: 'cross_connect', name: 'X', role: 'price_basis', costType: 'mrc',
     source: 'fixed', costModel: 'flat', amount: '10', currencyCode: 'EUR', costTableId: null, costColumnKey: null,
     estimateAmount: null, isActive: true, deletedAt: null }
+  costIndex = { id: indexId, organizationId: 'org', tenantId: 'tenant', isActive: true, deletedAt: null }
   duplicates = 0
   otherPriceBasis = 0
   getBoolConfig.mockResolvedValue({ ok: true, value: true })
@@ -60,6 +63,7 @@ beforeEach(() => {
     if (entity === CpqProductCharge) return charge
     if (entity === CpqPricingTable) return table
     if (entity === CpqChargeCostElement) return element
+    if (entity === CpqCostIndex) return costIndex
     return null
   })
   em.count.mockImplementation(async (_entity: unknown, where: Record<string, unknown>) => (where.code ? duplicates : otherPriceBasis))
@@ -167,6 +171,71 @@ describe('POST', () => {
     const response = await POST(request('POST', { ...fixedBody, costModel: 'tiered' }))
     expect(response.status).toBe(422)
     expect(await response.json()).toMatchObject({ error: 'MODEL_REQUIRES_TABLE' })
+  })
+
+  // Index costs step 7: the step-6 characterization (422 SOURCE_NOT_AVAILABLE for `index`) is replaced by these scenarios.
+  describe('index elements', () => {
+    const indexBody = {
+      productChargeId: chargeId, code: 'brent_power', name: 'Brent power', role: 'price_basis', costType: 'mrc',
+      source: 'index', costModel: 'flat', costIndexId: indexId, indexFactor: 0.5, indexOffset: 2,
+    }
+
+    it('accepts an index element and returns the index fields (no own amount or currency)', async () => {
+      const response = await POST(request('POST', indexBody))
+      expect(response.status).toBe(201)
+      expect((await response.json()).item).toMatchObject({ source: 'index', costIndexId: indexId, indexFactor: '0.5', indexOffset: '2', amount: null, currencyCode: null })
+      expect(em.create).toHaveBeenCalledWith(CpqChargeCostElement, expect.objectContaining({ source: 'index', costIndexId: indexId, amount: null, currencyCode: null }))
+    })
+
+    it('422 INDEX_REQUIRED without costIndexId or with an unknown index', async () => {
+      let response = await POST(request('POST', { ...indexBody, costIndexId: undefined }))
+      expect(response.status).toBe(422)
+      expect(await response.json()).toMatchObject({ error: 'INDEX_REQUIRED' })
+      costIndex = null
+      response = await POST(request('POST', indexBody))
+      expect(await response.json()).toMatchObject({ error: 'INDEX_REQUIRED' })
+    })
+
+    it('422 INDEX_INACTIVE for an inactive index', async () => {
+      costIndex!.isActive = false
+      const response = await POST(request('POST', indexBody))
+      expect(response.status).toBe(422)
+      expect(await response.json()).toMatchObject({ error: 'INDEX_INACTIVE' })
+      expect(em.create).not.toHaveBeenCalled()
+    })
+
+    it('422 MODEL_REQUIRES_TABLE for a tiered or volume index element', async () => {
+      for (const costModel of ['tiered', 'volume']) {
+        const response = await POST(request('POST', { ...indexBody, costModel }))
+        expect(response.status).toBe(422)
+        expect(await response.json()).toMatchObject({ error: 'MODEL_REQUIRES_TABLE' })
+      }
+    })
+
+    it('422 INDEX_FIELDS_NOT_ALLOWED for index fields on a fixed element', async () => {
+      for (const extra of [{ costIndexId: indexId }, { indexFactor: 2 }, { indexOffset: 1 }]) {
+        const response = await POST(request('POST', { ...fixedBody, ...extra }))
+        expect(response.status).toBe(422)
+        expect(await response.json()).toMatchObject({ error: 'INDEX_FIELDS_NOT_ALLOWED' })
+      }
+    })
+
+    it('400 for a non-positive factor or a negative offset', async () => {
+      expect((await POST(request('POST', { ...indexBody, indexFactor: 0 }))).status).toBe(400)
+      expect((await POST(request('POST', { ...indexBody, indexOffset: -1 }))).status).toBe(400)
+    })
+
+    it('PUT switching an element to index validates the index too', async () => {
+      const ok = await PUT(request('PUT', { id: elementId, source: 'index', costIndexId: indexId, amount: null, currencyCode: null }))
+      expect(ok.status).toBe(200)
+      expect((await ok.json()).item).toMatchObject({ source: 'index', costIndexId: indexId, indexFactor: '1', indexOffset: '0' })
+    })
+
+    it('PUT 422 INDEX_REQUIRED when switching to index without an index', async () => {
+      const response = await PUT(request('PUT', { id: elementId, source: 'index', amount: null, currencyCode: null }))
+      expect(response.status).toBe(422)
+      expect(await response.json()).toMatchObject({ error: 'INDEX_REQUIRED' })
+    })
   })
 
   it('400 on an unknown field', async () => {

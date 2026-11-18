@@ -129,6 +129,8 @@ describe('classifyAnswer (defined check order)', () => {
     ['locked with a different amount is a proposal', input({ locked: true }), 'proposed'],
     ['locked without a value is a proposal', input({ locked: true, cost: { unitAmount: null, currencyCode: null } }), 'proposed'],
     ['locked margin-only cost is lock-exempt (R11): a different value is applied', input({ locked: true, cost: { role: 'margin_only' } }), 'applied'],
+    ['locked price-basis cost on a frozen mirror line is lock-exempt (ARC costs Q4): applied', input({ locked: true, frozenMirror: true, cost: { role: 'price_basis' } }), 'applied'],
+    ['frozen mirror lock exemption does not bypass the request checks', input({ locked: true, frozenMirror: true, cost: { sourcingStatus: 'declined' } }), 'not_open'],
     ['locked price-basis cost with an explicit role is a proposal', input({ locked: true, cost: { role: 'price_basis' } }), 'proposed'],
     ['stale request id', input({ cost: { costRequestId: 'req-2' } }), 'superseded'],
     ['no request id at all', input({ cost: { costRequestId: null } }), 'superseded'],
@@ -165,6 +167,10 @@ describe('declineEffect (Q3)', () => {
     expect(declineEffect({ unitAmount: '276.0000', valueStatus: 'confirmed', note: 'n' }, true))
       .toEqual({ valueStatus: 'estimated', clearAmount: false, note: 'n' })
     expect(declineEffect({ unitAmount: null, valueStatus: 'none', note: null }, true).valueStatus).toBe('none')
+  })
+  it('locked cost on a frozen mirror line is lock-exempt (ARC costs Q4): the unlocked rule applies', () => {
+    expect(declineEffect({ unitAmount: '276.0000', valueStatus: 'confirmed', note: null, role: 'price_basis' }, true, true))
+      .toEqual({ valueStatus: 'none', clearAmount: true, note: 'estimate 276 discarded: declined' })
   })
   it('locked margin-only cost is lock-exempt (R11): the unlocked rule applies', () => {
     expect(declineEffect({ unitAmount: '1500.0000', valueStatus: 'estimated', note: null, role: 'margin_only' }, true))

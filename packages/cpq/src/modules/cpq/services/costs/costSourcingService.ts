@@ -4,7 +4,6 @@ import { withAtomicFlush } from '@open-mercato/shared/lib/commands/flush'
 import { SalesQuote } from '@open-mercato/core/modules/sales/data/entities'
 import {
   CpqChargeCostElement,
-  CpqOrderConfiguration,
   CpqProductCharge,
   CpqQuoteConfiguration,
   CpqQuoteLineConfiguration,
@@ -31,6 +30,8 @@ import type { TenantScope } from '../types'
 import { COST_CLOSED_STATUSES } from './costLock'
 import type { CpqCostService } from './costService'
 import { isQuoteCostLocked } from './costResolution'
+import { findQuoteOrder } from './quoteOrderLookup'
+import { isFrozenMirrorLine } from '../arcPriceFreeze'
 import { cancelRequestPatch, isRequestOpen, openRequestPatch } from './costRequestState'
 import { cancelOpenRequests as cancelOpenCostRequests } from './costRequestCancel'
 import {
@@ -106,11 +107,13 @@ const audit = (row: CpqQuoteLineCost, reason?: string): SourcingAudit => ({
  * cancelled quote or a deleted sales quote is `409 QUOTE_CLOSED`, a quote with an order is
  * `409 QUOTE_CONVERTED { orderId }`. Reads only; throws before anything is written.
  */
-export async function assertQuoteOpenForSourcing(em: EntityManager, quote: CpqQuoteConfiguration, scope: TenantScope): Promise<void> {
+export async function assertQuoteOpenForSourcing(em: EntityManager, quote: CpqQuoteConfiguration, scope: TenantScope, costId?: string): Promise<void> {
   const sales = await findOneWithDecryption(em, SalesQuote, { id: quote.quoteId, ...scoped(scope) }, undefined, scope)
   if (!sales || COST_CLOSED_STATUSES.includes(quote.cpqStatus as never)) throw new QuotingError(409, 'QUOTE_CLOSED')
-  const order = await em.findOne(CpqOrderConfiguration, { sourceQuoteId: quote.id, ...scoped(scope) })
-  if (order) throw new QuotingError(409, 'QUOTE_CONVERTED', undefined, { orderId: order.id })
+  // ARC costs Q7 (additive): `orderLineCostId` is the order line cost copied from this quote cost line, so the Cost requests
+  // page can link to Re-confirm on the order. Null when the cost line has no copy (or no cost line was named).
+  const order = await findQuoteOrder(em, quote, scope, costId)
+  if (order) throw new QuotingError(409, 'QUOTE_CONVERTED', undefined, order)
 }
 
 /**
@@ -130,7 +133,7 @@ export class CpqCostSourcingService {
     const parsed = cpqCostRequestSchema.parse(input)
     await this.requireEnabled(scope)
     return this.write(quoteId, scope, parsed.expectedRevision, actor, async (em, quote, signals) => {
-      await assertQuoteOpenForSourcing(em, quote, scope)
+      await assertQuoteOpenForSourcing(em, quote, scope, costId)
       const row = await this.requireCost(em, quote, costId, scope)
       const line = await em.findOne(CpqQuoteLineConfiguration, { ...scoped(scope), quoteConfigurationId: quote.id, quoteLineId: row.quoteLineId })
       if (!line) throw new QuotingError(404, 'Quote line not found')
@@ -168,7 +171,7 @@ export class CpqCostSourcingService {
     const parsed = cpqCostCancelRequestSchema.parse(input)
     await this.requireEnabled(scope)
     return this.write(quoteId, scope, parsed.expectedRevision, actor, async (em, quote, signals) => {
-      await assertQuoteOpenForSourcing(em, quote, scope)
+      await assertQuoteOpenForSourcing(em, quote, scope, costId)
       const row = await this.requireCost(em, quote, costId, scope)
       // I-13: only the current request id can be cancelled; a replaced one is superseded, a closed one is not open.
       if (!row.costRequestId || row.costRequestId !== parsed.costRequestId) throw new QuotingError(409, 'COST_REQUEST_SUPERSEDED')
@@ -230,7 +233,7 @@ export class CpqCostSourcingService {
       marginTracker: true, events: { pricingCause: 'cost', actorUserId: actor },
       shortCircuit: async (em, quote) => {
         const row = await this.requireCost(em, quote, costId, scope)
-        await assertQuoteOpenForSourcing(em, quote, scope)
+        await assertQuoteOpenForSourcing(em, quote, scope, costId)
         if (!(await this.deps.costService.enabled(scope.tenantId))) throw new QuotingError(409, 'COST_PLUS_DISABLED')
         const line = await em.findOne(CpqQuoteLineConfiguration, { ...scoped(scope), quoteConfigurationId: quote.id, quoteLineId: row.quoteLineId })
         if (!line) throw new QuotingError(404, 'Quote line not found')
@@ -239,6 +242,7 @@ export class CpqCostSourcingService {
         locked = await isQuoteCostLocked(em, quote, scope)
         verdict = classifyAnswer({
           answer: parsed, elementActive: await this.elementActive(em, row, scope), locked,
+          frozenMirror: isFrozenMirrorLine(line.configuration, quote.quoteType),
           cost: {
             sourcingStatus: row.sourcingStatus, costRequestId: row.costRequestId ?? null, lastAnswerHash: row.lastAnswerHash ?? null,
             supplierQuoteRef: row.supplierQuoteRef ?? null, unitAmount: row.unitAmount ?? null, currencyCode: row.currencyCode ?? null,
@@ -265,10 +269,12 @@ export class CpqCostSourcingService {
     const signals: SourcingSignal[] = []
     return this.write(quoteId, scope, undefined, actor, async (em, quote) => {
       const row = await this.requireCost(em, quote, costId, scope)
+      const line = await em.findOne(CpqQuoteLineConfiguration, { ...scoped(scope), quoteConfigurationId: quote.id, quoteLineId: row.quoteLineId })
       const locked = await isQuoteCostLocked(em, quote, scope)
       const before = audit(row)
       const prior = { valueStatus: row.valueStatus, unitAmount: row.unitAmount ?? null, currencyCode: row.currencyCode ?? null }
-      const effect = declineEffect({ unitAmount: row.unitAmount ?? null, valueStatus: row.valueStatus, note: row.note ?? null, role: row.role }, locked)
+      const effect = declineEffect({ unitAmount: row.unitAmount ?? null, valueStatus: row.valueStatus, note: row.note ?? null, role: row.role }, locked,
+        isFrozenMirrorLine(line?.configuration, quote.quoteType))
       const now = new Date()
       const history = this.closedHistory(row, 'declined', now, actor, { declineReason: parsed.reason })
       await this.persistAndPrice(em, quote, scope, !locked, signals, actor, () => {
@@ -288,7 +294,7 @@ export class CpqCostSourcingService {
       marginTracker: true, events: { pricingCause: 'cost', actorUserId: actor },
       shortCircuit: async (em, quote) => {
         const row = await this.requireCost(em, quote, costId, scope)
-        await assertQuoteOpenForSourcing(em, quote, scope)
+        await assertQuoteOpenForSourcing(em, quote, scope, costId)
         if (!(await this.deps.costService.enabled(scope.tenantId))) throw new QuotingError(409, 'COST_PLUS_DISABLED')
         if (!row.costRequestId || row.costRequestId !== parsed.costRequestId || !(await this.elementActive(em, row, scope))) throw new QuotingError(409, 'COST_REQUEST_SUPERSEDED')
         if (!isRequestOpen(row)) throw new QuotingError(409, 'REQUEST_NOT_OPEN')
@@ -309,7 +315,7 @@ export class CpqCostSourcingService {
     const signals: SourcingSignal[] = []
     return this.write(quoteId, scope, parsed.expectedRevision, actor, async (em, quote) => {
       const row = await this.requireCost(em, quote, costId, scope)
-      await assertQuoteOpenForSourcing(em, quote, scope)
+      await assertQuoteOpenForSourcing(em, quote, scope, costId)
       const proposal = row.proposedAnswer as AnswerPayload | null
       if (row.proposedAmount === null || row.proposedAmount === undefined || !proposal) throw new QuotingError(409, 'NO_PENDING_ANSWER')
       const line = await em.findOne(CpqQuoteLineConfiguration, { ...scoped(scope), quoteConfigurationId: quote.id, quoteLineId: row.quoteLineId })
@@ -532,11 +538,10 @@ export class CpqCostSourcingService {
   }
 
   /**
-   * A confirming answer on a renegotiation-due `carried` cost clears the ARC spec's `renegotiation_due`. The column
-   * exists only once that spec ships, so until then this is a no-op (guarded on the property).
+   * A confirming answer on a renegotiation-due `carried` cost clears the ARC spec's `renegotiation_due`.
    */
   private confirmRenegotiation(row: CpqQuoteLineCost, valueStatus: string) {
-    if (row.origin === 'carried' && valueStatus === 'confirmed' && 'renegotiationDue' in row) (row as unknown as { renegotiationDue: boolean }).renegotiationDue = false
+    if (row.origin === 'carried' && valueStatus === 'confirmed') row.renegotiationDue = false
   }
 
   /** Q11: the value / status change of a sourcing action, as an amount-free signal for step 12's `cost_valued` event. */

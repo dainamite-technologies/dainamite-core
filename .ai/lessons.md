@@ -47,6 +47,10 @@ Entry format (newest first within a section):
   Add and update both end in a saved recalculation that overwrites the value, so logic placed in those paths has no effect. Change `lib/lineCompleteness.ts`.
 - **`.default()` on a create schema hides "the caller omitted it".** (2026-11-17, #122)
   `offeringType: z.enum(...).default('simple')` made every bundle create from the UI fail V-OFF-7. Leave a field without a default when the server should derive it.
+- **During `mercato init`, persistent subscribers (e.g. the CPQ → billing connector) do not run inline.** (2026-11-18, `src/modules/demo_acme/seeds/cpq.ts`)
+  Single-delivery queues them for the worker, so a seed that activates an order gets no billing account yet. Capture the payload with `registerGlobalEventTap` (`@open-mercato/events/bus`) and call the idempotent handler inline.
+- **`demo_tenants` replays every module's `seedExamples` into each demo tenant (GIX, Puffin).** (2026-11-18, `src/modules/demo_acme/setup.ts`)
+  A seed meant only for the primary ACME tenant must skip itself there; `demo_acme` skips organizations whose name matches a registered use case's `tenant.organizationName`.
 
 - **Every CPQ route needs an organization context.** (2026-11-16, #116)
   `cpqContextError(ctx)` answers 401 / 400. Route test mocks of `../context` must keep the real one: `cpqContextError: jest.requireActual('../context').cpqContextError`.
@@ -75,6 +79,8 @@ Entry format (newest first within a section):
   For smoke tests run a separate container (e.g. `:5433`) and pass `DATABASE_URL` to `yarn initialize` / `yarn dev`; the shell env wins over `.env`.
 - **The shell's Anthropic base URL points at the local Caveman gateway (`127.0.0.1:8787`).** (2026-11-16)
   The app appends `/messages`, the gateway rejects it and agents return an empty response. Run `ANTHROPIC_BASE_URL=https://api.anthropic.com/v1 yarn dev`.
+- **A smoke-test DB still shares the file queue (`QUEUE_BASE_DIR=./.mercato/queue`) with a running `yarn dev`.** (2026-11-18)
+  Jobs queued by `yarn initialize` on a throwaway DB can be drained by the dev worker against the dev DB. Stop `yarn dev` or set a separate `QUEUE_BASE_DIR` for the test run.
 - **MCP API keys from `mcp:ensure-api-key` have no organization.** (2026-11-16, #116)
   CPQ answers 400 to them. Keys for external MCP clients are created in the UI with an organization.
 - **`main` requires resolved conversations.** (2026-11-16)

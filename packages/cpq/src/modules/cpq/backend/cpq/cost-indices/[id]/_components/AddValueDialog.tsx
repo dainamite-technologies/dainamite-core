@@ -106,7 +106,7 @@ export function AddValueDialog({ indexId, indexCode, unit, currencyCode, onClose
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>{t('cpq.costIndices.cancel', 'Cancel')}</Button>
-          <Button onClick={() => void submit()} disabled={saving} title="Ctrl/Cmd+Enter" data-testid="cpq-add-index-value-submit">
+          <Button onClick={() => void submit()} disabled={saving} title={t('cpq.common.submitShortcut', 'Ctrl/Cmd+Enter')} data-testid="cpq-add-index-value-submit">
             {saving ? t('cpq.costIndices.saving', 'Saving…') : t('cpq.costIndices.addValue.submit', 'Add value')}
           </Button>
         </DialogFooter>

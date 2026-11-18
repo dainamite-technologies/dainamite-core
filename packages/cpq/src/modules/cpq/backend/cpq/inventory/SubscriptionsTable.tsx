@@ -1,6 +1,6 @@
 "use client"
 import * as React from 'react'
-import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { useT, type TranslateFn } from '@open-mercato/shared/lib/i18n/context'
 import { useRouter } from 'next/navigation'
 import type { LegacyColumnDef as ColumnDef } from '@tanstack/react-table/legacy'
 import { DataTable } from '@open-mercato/ui/backend/DataTable'
@@ -15,19 +15,21 @@ import {
 } from '@open-mercato/ui/primitives/select'
 import { useCpqListData } from '../../../components/CpqListView'
 import { useCpqRowActions } from '../../../components/useCpqRowActions'
-import { StatusBadge, formatCurrency } from './shared'
+import { StatusBadge, buildInventoryStatusOptions, formatCurrency } from './shared'
 
 // `all` is a sentinel value because Radix Select disallows empty strings
 // as option values. We map it back to "no filter" before writing to the
 // query.
-const EXPIRING_WINDOWS = [
-  { value: 'all', label: 'All subscriptions' },
-  { value: '7', label: 'Expiring in 7 days' },
-  { value: '14', label: 'Expiring in 14 days' },
-  { value: '30', label: 'Expiring in 30 days' },
-  { value: '60', label: 'Expiring in 60 days' },
-  { value: '90', label: 'Expiring in 90 days' },
-]
+function buildExpiringWindows(t: TranslateFn): { value: string; label: string }[] {
+  return [
+    { value: 'all', label: t('cpq.inventory.subscriptions.expiring.all', 'All subscriptions') },
+    { value: '7', label: t('cpq.inventory.subscriptions.expiring.in7Days', 'Expiring in 7 days') },
+    { value: '14', label: t('cpq.inventory.subscriptions.expiring.in14Days', 'Expiring in 14 days') },
+    { value: '30', label: t('cpq.inventory.subscriptions.expiring.in30Days', 'Expiring in 30 days') },
+    { value: '60', label: t('cpq.inventory.subscriptions.expiring.in60Days', 'Expiring in 60 days') },
+    { value: '90', label: t('cpq.inventory.subscriptions.expiring.in90Days', 'Expiring in 90 days') },
+  ]
+}
 
 type Subscription = {
   id: string
@@ -44,14 +46,7 @@ type Subscription = {
 
 const PAGE_SIZE = 50
 
-const SUBSCRIPTION_STATUS_OPTIONS = [
-  { value: 'pending', label: 'Pending' },
-  { value: 'active', label: 'Active' },
-  { value: 'suspended', label: 'Suspended' },
-  { value: 'terminated', label: 'Terminated' },
-  { value: 'expired', label: 'Expired' },
-  { value: 'cancelled', label: 'Cancelled' },
-] as const
+const SUBSCRIPTION_STATUSES = ['pending', 'active', 'suspended', 'terminated', 'expired', 'cancelled'] as const
 
 function buildFilterParams(values: FilterValues, params: URLSearchParams) {
   if (typeof values.status === 'string' && values.status) {
@@ -95,7 +90,7 @@ export function SubscriptionsTable() {
         id: 'status',
         label: t('cpq.inventory.filters.status', 'Status'),
         type: 'select',
-        options: [...SUBSCRIPTION_STATUS_OPTIONS],
+        options: buildInventoryStatusOptions(t, SUBSCRIPTION_STATUSES),
       },
       {
         id: 'billingCycle',
@@ -108,11 +103,11 @@ export function SubscriptionsTable() {
         type: 'select',
         // Pick from common renewal-watch windows. Backend caps at 365.
         options: [
-          { value: '7', label: '7 days' },
-          { value: '14', label: '14 days' },
-          { value: '30', label: '30 days' },
-          { value: '60', label: '60 days' },
-          { value: '90', label: '90 days' },
+          { value: '7', label: t('cpq.inventory.filters.days7', '7 days') },
+          { value: '14', label: t('cpq.inventory.filters.days14', '14 days') },
+          { value: '30', label: t('cpq.inventory.filters.days30', '30 days') },
+          { value: '60', label: t('cpq.inventory.filters.days60', '60 days') },
+          { value: '90', label: t('cpq.inventory.filters.days90', '90 days') },
         ],
       },
     ],
@@ -190,13 +185,14 @@ export function SubscriptionsTable() {
   // Render the picker inline with the DataTable's title-row actions
   // (right next to Refresh / kebab menu) so it sits flush with the
   // card chrome instead of floating outside.
+  const expiringWindows = React.useMemo(() => buildExpiringWindows(t), [t])
   const expiringPicker = (
     <Select value={currentExpiring} onValueChange={onExpiringChange}>
       <SelectTrigger className="h-9 w-[200px]">
-        <SelectValue placeholder="All subscriptions" />
+        <SelectValue placeholder={t('cpq.inventory.subscriptions.expiring.all', 'All subscriptions')} />
       </SelectTrigger>
       <SelectContent>
-        {EXPIRING_WINDOWS.map((w) => (
+        {expiringWindows.map((w) => (
           <SelectItem key={w.value} value={w.value}>
             {w.label}
           </SelectItem>

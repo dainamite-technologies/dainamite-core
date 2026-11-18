@@ -33,6 +33,11 @@ for the full implementation plan.
   Invoices (list + detail pages).
 - **Commands** for every write (accounts / items / runs / invoices / usage),
   validated with Zod.
+- **AI tools and agent** for the Open Mercato AI assistant (in-app chat and
+  MCP): read tools over the billing API, dry / test Bill Runs and manual
+  payments behind the approval card, and the
+  `billing.operator_assistant` agent (writes need confirmation). See
+  [`manuals/billing-ai-agent.md`](../../manuals/billing-ai-agent.md).
 
 ## Installation
 
@@ -53,7 +58,8 @@ yarn mercato db migrate
 
 `sales` (draft invoices are written there), `@open-mercato/queue` (Bill Run
 worker), and `@open-mercato/events` (lifecycle events consumed by the
-connector). Engines: **Node ≥ 24**.
+connector). Engines: **Node ≥ 24**. The AI tools and agent import
+`@open-mercato/ai-assistant` (peer dependency, enable the `ai_assistant` module).
 
 ## CPQ integration
 

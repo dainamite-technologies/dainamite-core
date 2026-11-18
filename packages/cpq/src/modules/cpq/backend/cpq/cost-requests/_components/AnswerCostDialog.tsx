@@ -116,7 +116,7 @@ export function AnswerCostDialog({ target, onClose, onDone, onFailure }: Sourcin
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>{t('cpq.costRequests.cancel', 'Cancel')}</Button>
-          <Button onClick={() => void submit()} disabled={saving} title="Ctrl/Cmd+Enter" data-testid="cpq-answer-submit">
+          <Button onClick={() => void submit()} disabled={saving} title={t('cpq.common.submitShortcut', 'Ctrl/Cmd+Enter')} data-testid="cpq-answer-submit">
             {saving ? t('cpq.costRequests.saving', 'Saving…') : t('cpq.costRequests.answer.submit', 'Answer')}
           </Button>
         </DialogFooter>

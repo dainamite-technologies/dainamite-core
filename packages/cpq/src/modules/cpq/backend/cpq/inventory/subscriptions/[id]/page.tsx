@@ -1,14 +1,13 @@
 "use client"
 import * as React from 'react'
 import { useRouter, useParams } from 'next/navigation'
+import { useT, type TranslateFn } from '@open-mercato/shared/lib/i18n/context'
 import { Alert } from '@open-mercato/ui/primitives/alert'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
-import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { FormHeader } from '@open-mercato/ui/backend/forms'
 import {
-  formatStatusLabel,
   subscriptionStatusMap,
   type SubscriptionStatus,
 } from '../../../../../components/statusMaps'
@@ -19,6 +18,7 @@ import { includeEndedQuery, type SubscriptionCostsResponse } from '../../../../.
 import { costDiffValueText, diffOwners, diffSnapshotCosts, type CostDiffEntry, type SnapshotCost } from './costDiff'
 import { useCostsRead } from '../../../../../components/costs/useCostsRead'
 import { SubscriptionCostsReadError, SubscriptionCostsSection, SubscriptionItemCostChips, SubscriptionItemCosts } from '../../../../../components/costs/SubscriptionCosts'
+import { buildInventoryStatusLabels, inventoryStatusLabel } from '../../shared'
 
 // XD-250 — ARC integration on subscription detail.
 //   • header buttons (Amend / Renew / Cancel) call /from-subscription
@@ -73,13 +73,16 @@ type ChangeLogRow = {
   mergedFromSubscriptionIds: string[] | null
 }
 
-const CHANGE_TYPE_LABELS: Record<string, string> = {
-  created: 'Created',
-  amend: 'Amended',
-  renew: 'Renewed',
-  cancel: 'Cancelled',
-  'merge-result': 'Created from merging contracts',
-  'merge-source': 'Merged into a new contract',
+function changeTypeLabel(t: TranslateFn, changeType: string): string {
+  switch (changeType) {
+    case 'created': return t('cpq.inventory.subscriptions.detail.changeType.created', 'Created')
+    case 'amend': return t('cpq.inventory.subscriptions.detail.changeType.amend', 'Amended')
+    case 'renew': return t('cpq.inventory.subscriptions.detail.changeType.renew', 'Renewed')
+    case 'cancel': return t('cpq.inventory.subscriptions.detail.changeType.cancel', 'Cancelled')
+    case 'merge-result': return t('cpq.inventory.subscriptions.detail.changeType.mergeResult', 'Created from merging contracts')
+    case 'merge-source': return t('cpq.inventory.subscriptions.detail.changeType.mergeSource', 'Merged into a new contract')
+    default: return changeType
+  }
 }
 
 const CHANGE_TYPE_VARIANTS: Record<string, 'info' | 'success' | 'error' | 'brand' | 'warning' | 'neutral'> = {
@@ -165,27 +168,23 @@ const ALLOWED_TRANSITIONS: Record<string, string[]> = {
   expired: [],
 }
 
-const STATUS_LABELS: Record<string, string> = {
-  pending: 'Pending',
-  active: 'Active',
-  suspended: 'Suspended',
-  terminated: 'Terminated',
-  expired: 'Expired',
-}
+const SUBSCRIPTION_STATUSES = ['pending', 'active', 'suspended', 'terminated', 'expired'] as const
 
 function fmt(amount: number | string, currency: string): string {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(Number(amount))
 }
 
 function StatusBadge({ status }: { status: string }) {
+  const t = useT()
   return (
     <Tag variant={subscriptionStatusMap[status as SubscriptionStatus] ?? 'neutral'} dot>
-      {formatStatusLabel(status)}
+      {inventoryStatusLabel(t, status)}
     </Tag>
   )
 }
 
 export default function SubscriptionDetailPage(props: { params?: { id?: string } }) {
+  const t = useT()
   const router = useRouter()
   const urlParams = useParams()
   const subId = (props.params?.id ?? urlParams?.id) as string
@@ -235,15 +234,16 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
           // Offer to navigate to that quote instead of showing a dead alert.
           if (body.existingQuoteId) {
             const ok = window.confirm(
-              `${body.error ?? 'Subscription has another ARC quote in progress.'}\n\n` +
-                `Open the existing quote now?`,
+              t('cpq.inventory.subscriptions.detail.arc.existingQuoteConfirm', '{error}\n\nOpen the existing quote now?', {
+                error: body.error ?? t('cpq.inventory.subscriptions.detail.arc.existingQuoteInProgress', 'Subscription has another ARC quote in progress.'),
+              }),
             )
             if (ok) {
               router.push(`/backend/cpq/quotes/${body.existingQuoteId}`)
             }
             return
           }
-          alert(`Failed to start ${type} quote: ${body.error ?? res.statusText}`)
+          alert(t('cpq.inventory.subscriptions.detail.arc.startFailed', 'Failed to start {type} quote: {error}', { type, error: body.error ?? res.statusText }))
           return
         }
         const data = await res.json()
@@ -252,7 +252,7 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
         setArcInFlight(null)
       }
     },
-    [router, sub],
+    [router, sub, t],
   )
 
   const transitionStatus = async (targetStatus: string) => {
@@ -266,7 +266,7 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
         body: JSON.stringify({ id: sub.id, targetStatus }),
       })
       const data = await res.json()
-      if (!res.ok) throw new Error(data?.error ?? 'Status transition failed')
+      if (!res.ok) throw new Error(data?.error ?? t('cpq.inventory.subscriptions.detail.error.transitionFailed', 'Status transition failed'))
       // The status endpoint cascades to items and linked assets server-side,
       // but only returns the subscription scalar fields. Re-fetch the full
       // detail (which includes the item tree) and the asset list so the UI
@@ -339,7 +339,7 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
     async function load() {
       try {
         const res = await fetch(`/api/cpq/inventory/subscriptions?id=${subId}`)
-        if (!res.ok) throw new Error('Subscription not found')
+        if (!res.ok) throw new Error(t('cpq.inventory.subscriptions.detail.error.notFound', 'Subscription not found'))
         const data: SubscriptionDetail = await res.json()
         if (!cancelled) {
           setSub(data)
@@ -426,7 +426,7 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
     }
     load()
     return () => { cancelled = true }
-  }, [subId])
+  }, [subId, t])
 
   const toggleItem = (id: string) => {
     setExpandedItems((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
@@ -435,7 +435,7 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
   if (loading) {
     return (
       <div className="flex items-center gap-2 py-12 justify-center text-sm text-muted-foreground">
-        <Spinner /> Loading…
+        <Spinner /> {t('cpq.inventory.subscriptions.detail.loading', 'Loading…')}
       </div>
     )
   }
@@ -443,9 +443,9 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
   if (!sub) {
     return (
       <div className="space-y-4">
-        <button onClick={() => router.push('/backend/cpq/inventory')} className="text-sm text-muted-foreground hover:text-foreground">← Back</button>
+        <button onClick={() => router.push('/backend/cpq/inventory')} className="text-sm text-muted-foreground hover:text-foreground">← {t('cpq.common.back', 'Back')}</button>
         {error && <ErrorBanner message={error} />}
-        <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">Subscription not found.</div>
+        <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">{t('cpq.inventory.subscriptions.detail.notFound', 'Subscription not found.')}</div>
       </div>
     )
   }
@@ -455,6 +455,7 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
 
   const canArc = sub.status === 'active' || sub.status === 'suspended'
   const statusTransitions = ALLOWED_TRANSITIONS[sub.status] ?? []
+  const statusLabels = buildInventoryStatusLabels(t, SUBSCRIPTION_STATUSES)
 
   return (
     <div className="space-y-6">
@@ -467,13 +468,13 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
       <FormHeader
         mode="detail"
         backHref="/backend/cpq/inventory"
-        backLabel="Back to Customer Inventory"
-        entityTypeLabel="Subscription"
+        backLabel={t('cpq.inventory.detail.backToInventory', 'Back to Customer Inventory')}
+        entityTypeLabel={t('cpq.inventory.subscriptions.detail.entityType', 'Subscription')}
         title={sub.name}
         statusBadge={
           <div className="flex flex-wrap items-center gap-2 pt-1">
             <Tag variant={subscriptionStatusMap[sub.status as SubscriptionStatus] ?? 'neutral'} dot>
-              {STATUS_LABELS[sub.status] ?? formatStatusLabel(sub.status)}
+              {inventoryStatusLabel(t, sub.status)}
             </Tag>
             <Tag variant="neutral" className="capitalize">{sub.billingCycle}</Tag>
             {transitioning && <Spinner />}
@@ -488,7 +489,7 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
                 disabled={arcInFlight !== null}
                 onClick={() => startArcQuote('amend')}
               >
-                Amend
+                {t('cpq.inventory.subscriptions.detail.arc.amend', 'Amend')}
               </Button>
               <Button
                 type="button"
@@ -496,7 +497,7 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
                 disabled={arcInFlight !== null}
                 onClick={() => startArcQuote('renew')}
               >
-                Renew
+                {t('cpq.inventory.subscriptions.detail.arc.renew', 'Renew')}
               </Button>
               <Button
                 type="button"
@@ -504,7 +505,7 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
                 disabled={arcInFlight !== null}
                 onClick={() => startArcQuote('cancel')}
               >
-                Cancel
+                {t('cpq.inventory.subscriptions.detail.arc.cancel', 'Cancel')}
               </Button>
             </>
           ) : null
@@ -519,11 +520,11 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
           path={['pending', 'active']}
           terminals={['suspended', 'terminated', 'expired']}
           statusMap={subscriptionStatusMap}
-          labels={STATUS_LABELS}
+          labels={statusLabels}
           onTransition={transitionStatus}
           allowedTransitions={statusTransitions}
           disabled={transitioning}
-          ariaLabel="Subscription status path"
+          ariaLabel={t('cpq.inventory.subscriptions.detail.statusPath', 'Subscription status path')}
         />
       </div>
 
@@ -532,46 +533,46 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
       {/* Detail Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div className="rounded-lg border bg-card p-4 space-y-3">
-          <h3 className="text-sm font-medium">Subscription Details</h3>
+          <h3 className="text-sm font-medium">{t('cpq.inventory.subscriptions.detail.sections.details', 'Subscription Details')}</h3>
           <div className="grid grid-cols-2 gap-x-4 gap-y-2">
-            <Field label="Code" value={sub.code} mono />
-            <Field label="Status" value={sub.status} />
-            <Field label="Billing Cycle" value={sub.billingCycle} />
-            <Field label="Currency" value={currency} />
-            <Field label="Auto-Renew" value={sub.autoRenew ? 'Yes' : 'No'} />
-            {sub.termMonths != null && <Field label="Term" value={`${sub.termMonths} months`} />}
-            {sub.startDate && <Field label="Start Date" value={new Date(sub.startDate).toLocaleDateString()} />}
-            {sub.currentTermEnd && <Field label="Term End" value={new Date(sub.currentTermEnd).toLocaleDateString()} />}
-            {sub.activatedAt && <Field label="Activated" value={new Date(sub.activatedAt).toLocaleString()} />}
-            {sub.suspendedAt && <Field label="Suspended" value={new Date(sub.suspendedAt).toLocaleString()} />}
-            {sub.terminatedAt && <Field label="Terminated" value={new Date(sub.terminatedAt).toLocaleString()} />}
+            <Field label={t('cpq.inventory.subscriptions.detail.fields.code', 'Code')} value={sub.code} mono />
+            <Field label={t('cpq.inventory.subscriptions.detail.fields.status', 'Status')} value={sub.status} />
+            <Field label={t('cpq.inventory.subscriptions.detail.fields.billingCycle', 'Billing Cycle')} value={sub.billingCycle} />
+            <Field label={t('cpq.inventory.subscriptions.detail.fields.currency', 'Currency')} value={currency} />
+            <Field label={t('cpq.inventory.subscriptions.detail.fields.autoRenew', 'Auto-Renew')} value={sub.autoRenew ? t('cpq.common.yes', 'Yes') : t('cpq.common.no', 'No')} />
+            {sub.termMonths != null && <Field label={t('cpq.inventory.subscriptions.detail.fields.term', 'Term')} value={t('cpq.inventory.subscriptions.detail.fields.termMonths', '{count} months', { count: sub.termMonths })} />}
+            {sub.startDate && <Field label={t('cpq.inventory.subscriptions.detail.fields.startDate', 'Start Date')} value={new Date(sub.startDate).toLocaleDateString()} />}
+            {sub.currentTermEnd && <Field label={t('cpq.inventory.subscriptions.detail.fields.termEnd', 'Term End')} value={new Date(sub.currentTermEnd).toLocaleDateString()} />}
+            {sub.activatedAt && <Field label={t('cpq.inventory.subscriptions.detail.fields.activated', 'Activated')} value={new Date(sub.activatedAt).toLocaleString()} />}
+            {sub.suspendedAt && <Field label={t('cpq.inventory.subscriptions.detail.fields.suspended', 'Suspended')} value={new Date(sub.suspendedAt).toLocaleString()} />}
+            {sub.terminatedAt && <Field label={t('cpq.inventory.subscriptions.detail.fields.terminated', 'Terminated')} value={new Date(sub.terminatedAt).toLocaleString()} />}
           </div>
           {sub.description && (
             <div className="pt-1">
-              <p className="text-xs text-muted-foreground">Description</p>
+              <p className="text-xs text-muted-foreground">{t('cpq.inventory.subscriptions.detail.fields.description', 'Description')}</p>
               <p className="text-sm">{sub.description}</p>
             </div>
           )}
         </div>
 
         <div className="rounded-lg border bg-card p-4 space-y-3">
-          <h3 className="text-sm font-medium">Pricing & References</h3>
+          <h3 className="text-sm font-medium">{t('cpq.inventory.subscriptions.detail.sections.pricing', 'Pricing & References')}</h3>
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <p className="text-xs text-muted-foreground">Monthly Recurring (MRC)</p>
+              <p className="text-xs text-muted-foreground">{t('cpq.inventory.subscriptions.detail.fields.mrc', 'Monthly Recurring (MRC)')}</p>
               <p className="text-lg font-semibold font-mono">{fmt(sub.mrcAmount, currency)}</p>
             </div>
             <div>
-              <p className="text-xs text-muted-foreground">Non-Recurring (NRC)</p>
+              <p className="text-xs text-muted-foreground">{t('cpq.inventory.subscriptions.detail.fields.nrc', 'Non-Recurring (NRC)')}</p>
               <p className="text-lg font-semibold font-mono">{fmt(sub.nrcAmount, currency)}</p>
             </div>
           </div>
           <div className="grid grid-cols-2 gap-x-4 gap-y-2 pt-1">
-            <Field label="Customer" value={customerName ?? sub.customerId.slice(0, 12) + '…'} />
-            <Field label="Created" value={new Date(sub.createdAt).toLocaleString()} />
+            <Field label={t('cpq.inventory.subscriptions.detail.fields.customer', 'Customer')} value={customerName ?? sub.customerId.slice(0, 12) + '…'} />
+            <Field label={t('cpq.inventory.subscriptions.detail.fields.created', 'Created')} value={new Date(sub.createdAt).toLocaleString()} />
             {sub.sourceQuoteId && (
               <div>
-                <p className="text-xs text-muted-foreground">Source Quote</p>
+                <p className="text-xs text-muted-foreground">{t('cpq.inventory.subscriptions.detail.fields.sourceQuote', 'Source Quote')}</p>
                 <button
                   onClick={() => router.push(`/backend/cpq/quotes/${sub.sourceQuoteId}`)}
                   className="text-sm text-primary hover:underline"
@@ -582,7 +583,7 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
             )}
             {sub.sourceOrderId && (
               <div>
-                <p className="text-xs text-muted-foreground">Source Order</p>
+                <p className="text-xs text-muted-foreground">{t('cpq.inventory.subscriptions.detail.fields.sourceOrder', 'Source Order')}</p>
                 <button
                   onClick={() => router.push(`/backend/cpq/orders/${sub.sourceOrderId}`)}
                   className="text-sm text-primary hover:underline"
@@ -598,7 +599,7 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
       {/* Metadata */}
       {sub.metadata && Object.keys(sub.metadata).length > 0 && (
         <div className="rounded-lg border bg-card p-4">
-          <h3 className="text-sm font-medium mb-2">Metadata</h3>
+          <h3 className="text-sm font-medium mb-2">{t('cpq.inventory.subscriptions.detail.sections.metadata', 'Metadata')}</h3>
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-1">
             {Object.entries(sub.metadata).map(([key, value]) => (
               <div key={key} className="text-xs">
@@ -612,9 +613,9 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
 
       {/* Subscription Items */}
       <div>
-        <h3 className="text-sm font-medium mb-2 px-1">Subscription Items ({flatItems.length})</h3>
+        <h3 className="text-sm font-medium mb-2 px-1">{t('cpq.inventory.subscriptions.detail.items.title', 'Subscription Items ({count})', { count: flatItems.length })}</h3>
         {flatItems.length === 0 ? (
-          <div className="rounded-lg border bg-card py-8 text-center text-sm text-muted-foreground">No items.</div>
+          <div className="rounded-lg border bg-card py-8 text-center text-sm text-muted-foreground">{t('cpq.inventory.subscriptions.detail.items.empty', 'No items.')}</div>
         ) : (
           <div className="rounded-lg border bg-card divide-y">
             {flatItems.map((item) => {
@@ -641,8 +642,8 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
                       </div>
                     </div>
                     <div className="shrink-0 text-right text-xs space-y-0.5">
-                      {Number(item.mrcAmount) > 0 && <div><span className="text-muted-foreground">MRC </span><span className="font-mono font-medium">{fmt(item.mrcAmount, item.currencyCode || currency)}</span></div>}
-                      {Number(item.nrcAmount) > 0 && <div><span className="text-muted-foreground">NRC </span><span className="font-mono font-medium">{fmt(item.nrcAmount, item.currencyCode || currency)}</span></div>}
+                      {Number(item.mrcAmount) > 0 && <div><span className="text-muted-foreground">{t('cpq.inventory.subscriptions.detail.items.mrc', 'MRC')}{' '}</span><span className="font-mono font-medium">{fmt(item.mrcAmount, item.currencyCode || currency)}</span></div>}
+                      {Number(item.nrcAmount) > 0 && <div><span className="text-muted-foreground">{t('cpq.inventory.subscriptions.detail.items.nrc', 'NRC')}{' '}</span><span className="font-mono font-medium">{fmt(item.nrcAmount, item.currencyCode || currency)}</span></div>}
                     </div>
                   </div>
 
@@ -651,7 +652,7 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
                       <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-2">
                         {item.offeringId && (
                           <RefField
-                            label="Offering"
+                            label={t('cpq.inventory.subscriptions.detail.fields.offering', 'Offering')}
                             name={offeringNames[item.offeringId]}
                             fallback={item.offeringId}
                             onClick={() => router.push(`/backend/cpq/offerings/${item.offeringId}`)}
@@ -659,7 +660,7 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
                         )}
                         {item.specId && (
                           <RefField
-                            label="Specification"
+                            label={t('cpq.inventory.subscriptions.detail.fields.specification', 'Specification')}
                             name={specNames[item.specId]}
                             fallback={item.specId}
                             onClick={() => router.push(`/backend/cpq/specifications/${item.specId}`)}
@@ -667,20 +668,20 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
                         )}
                         {item.productId && (
                           <RefField
-                            label="Product"
+                            label={t('cpq.inventory.subscriptions.detail.fields.product', 'Product')}
                             name={productNames[item.productId]}
                             fallback={item.productId}
                             onClick={() => router.push(`/backend/catalog/products/${item.productId}`)}
                           />
                         )}
-                        <Field label="Currency" value={item.currencyCode || currency} />
-                        <Field label="Quantity" value={String(item.quantity)} />
-                        {item.capacityTotal && <Field label="Capacity" value={`${item.capacityUsed ?? '0'} / ${item.capacityTotal} ${item.capacityUnit ?? ''}`} />}
+                        <Field label={t('cpq.inventory.subscriptions.detail.fields.currency', 'Currency')} value={item.currencyCode || currency} />
+                        <Field label={t('cpq.inventory.subscriptions.detail.fields.quantity', 'Quantity')} value={String(item.quantity)} />
+                        {item.capacityTotal && <Field label={t('cpq.inventory.subscriptions.detail.fields.capacity', 'Capacity')} value={`${item.capacityUsed ?? '0'} / ${item.capacityTotal} ${item.capacityUnit ?? ''}`} />}
                       </div>
 
                       {item.configuration && Object.keys(item.configuration).length > 0 && (
                         <div>
-                          <p className="text-xs font-medium text-muted-foreground mb-1">Configuration</p>
+                          <p className="text-xs font-medium text-muted-foreground mb-1">{t('cpq.inventory.subscriptions.detail.items.configuration', 'Configuration')}</p>
                           <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-1">
                             {Object.entries(item.configuration).map(([key, value]) => (
                               <div key={key} className="text-xs">
@@ -694,16 +695,16 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
 
                       {item.charges && item.charges.length > 0 && (
                         <div>
-                          <p className="text-xs font-medium text-muted-foreground mb-1">Charges</p>
+                          <p className="text-xs font-medium text-muted-foreground mb-1">{t('cpq.inventory.subscriptions.detail.items.charges', 'Charges')}</p>
                           <table className="w-full text-xs">
                             <thead>
                               <tr className="text-muted-foreground">
-                                <th className="text-left py-1 font-medium">Charge</th>
-                                <th className="text-left py-1 font-medium">Type</th>
-                                <th className="text-right py-1 font-medium">List</th>
-                                <th className="text-right py-1 font-medium">Offer</th>
-                                <th className="text-right py-1 font-medium">Qty</th>
-                                <th className="text-right py-1 font-medium">Total</th>
+                                <th className="text-left py-1 font-medium">{t('cpq.inventory.subscriptions.detail.charges.charge', 'Charge')}</th>
+                                <th className="text-left py-1 font-medium">{t('cpq.inventory.subscriptions.detail.charges.type', 'Type')}</th>
+                                <th className="text-right py-1 font-medium">{t('cpq.inventory.subscriptions.detail.charges.list', 'List')}</th>
+                                <th className="text-right py-1 font-medium">{t('cpq.inventory.subscriptions.detail.charges.offer', 'Offer')}</th>
+                                <th className="text-right py-1 font-medium">{t('cpq.inventory.subscriptions.detail.charges.qty', 'Qty')}</th>
+                                <th className="text-right py-1 font-medium">{t('cpq.inventory.subscriptions.detail.charges.total', 'Total')}</th>
                               </tr>
                             </thead>
                             <tbody>
@@ -744,7 +745,7 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
 
                       {item.metadata && Object.keys(item.metadata).length > 0 && (
                         <div>
-                          <p className="text-xs font-medium text-muted-foreground mb-1">Metadata</p>
+                          <p className="text-xs font-medium text-muted-foreground mb-1">{t('cpq.inventory.subscriptions.detail.items.metadata', 'Metadata')}</p>
                           <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-1">
                             {Object.entries(item.metadata).map(([key, value]) => (
                               <div key={key} className="text-xs">
@@ -757,8 +758,8 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
                       )}
 
                       <div className="flex gap-4 text-xs text-muted-foreground">
-                        <span>Created: {new Date(item.createdAt).toLocaleString()}</span>
-                        <span>Updated: {new Date(item.updatedAt).toLocaleString()}</span>
+                        <span>{t('cpq.inventory.subscriptions.detail.items.createdAt', 'Created: {date}', { date: new Date(item.createdAt).toLocaleString() })}</span>
+                        <span>{t('cpq.inventory.subscriptions.detail.items.updatedAt', 'Updated: {date}', { date: new Date(item.updatedAt).toLocaleString() })}</span>
                       </div>
                     </div>
                   )}
@@ -782,19 +783,19 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
 
       {/* XD-250 Change History */}
       <div>
-        <h3 className="text-sm font-medium mb-2 px-1">Change History ({changeLog.length})</h3>
+        <h3 className="text-sm font-medium mb-2 px-1">{t('cpq.inventory.subscriptions.detail.changeLog.title', 'Change History ({count})', { count: changeLog.length })}</h3>
         <CostDiffOwnerFilter rows={changeLog} value={costDiffOwner} onChange={setCostDiffOwner} />
         {changeLogLoading ? (
-          <div className="rounded-lg border bg-card py-6 text-center text-sm text-muted-foreground">Loading…</div>
+          <div className="rounded-lg border bg-card py-6 text-center text-sm text-muted-foreground">{t('cpq.inventory.subscriptions.detail.loading', 'Loading…')}</div>
         ) : changeLog.length === 0 ? (
-          <div className="rounded-lg border bg-card py-6 text-center text-sm text-muted-foreground">No ARC changes yet.</div>
+          <div className="rounded-lg border bg-card py-6 text-center text-sm text-muted-foreground">{t('cpq.inventory.subscriptions.detail.changeLog.empty', 'No ARC changes yet.')}</div>
         ) : (
           <div className="rounded-lg border bg-card divide-y">
             {changeLog.map((row) => (
               <div key={row.id} className="px-4 py-3 space-y-1">
                 <div className="flex items-center gap-2">
                   <Tag variant={CHANGE_TYPE_VARIANTS[row.changeType] ?? 'neutral'}>
-                    {CHANGE_TYPE_LABELS[row.changeType] ?? row.changeType}
+                    {changeTypeLabel(t, row.changeType)}
                   </Tag>
                   <span className="text-xs text-muted-foreground">
                     {new Date(row.effectiveAt).toLocaleString()}
@@ -804,7 +805,7 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
                       onClick={() => router.push(`/backend/cpq/quotes/${row.sourceQuoteId}`)}
                       className="text-xs text-primary hover:underline"
                     >
-                      Quote {logQuoteNumbers[row.sourceQuoteId] ?? `${row.sourceQuoteId.slice(0, 8)}…`}
+                      {t('cpq.inventory.subscriptions.detail.changeLog.quote', 'Quote {number}', { number: logQuoteNumbers[row.sourceQuoteId] ?? `${row.sourceQuoteId.slice(0, 8)}…` })}
                     </button>
                   )}
                   {row.sourceOrderId && (
@@ -812,42 +813,47 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
                       onClick={() => router.push(`/backend/cpq/orders/${row.sourceOrderId}`)}
                       className="text-xs text-primary hover:underline"
                     >
-                      Order {logOrderNumbers[row.sourceOrderId] ?? `${row.sourceOrderId.slice(0, 8)}…`}
+                      {t('cpq.inventory.subscriptions.detail.changeLog.order', 'Order {number}', { number: logOrderNumbers[row.sourceOrderId] ?? `${row.sourceOrderId.slice(0, 8)}…` })}
                     </button>
                   )}
                 </div>
                 <ChangeLogLineDetails row={row} currency={currency} costOwnerFilter={costDiffOwner} />
                 {row.termChange && (
                   <div className="text-xs text-muted-foreground">
-                    Term: {String(row.termChange.oldTermEnd ?? '—')} → {String(row.termChange.newTermEnd ?? '—')}
+                    {t('cpq.inventory.subscriptions.detail.changeLog.term', 'Term: {from} → {to}', {
+                      from: String(row.termChange.oldTermEnd ?? '—'),
+                      to: String(row.termChange.newTermEnd ?? '—'),
+                    })}
                   </div>
                 )}
                 {row.reasonCode && (
                   <div className="text-xs text-muted-foreground">
-                    Reason: {row.reasonCode}{row.reasonText ? ` — ${row.reasonText}` : ''}
+                    {row.reasonText
+                      ? t('cpq.inventory.subscriptions.detail.changeLog.reasonWithText', 'Reason: {code} — {text}', { code: row.reasonCode, text: row.reasonText })
+                      : t('cpq.inventory.subscriptions.detail.changeLog.reason', 'Reason: {code}', { code: row.reasonCode })}
                   </div>
                 )}
                 {row.etfAmount && (
                   <div className="text-xs text-muted-foreground">
-                    ETF: {row.etfAmount} {row.etfCurrency ?? ''}
+                    {t('cpq.inventory.subscriptions.detail.changeLog.etf', 'ETF: {amount} {currency}', { amount: row.etfAmount, currency: row.etfCurrency ?? '' })}
                   </div>
                 )}
                 {row.mergedIntoSubscriptionId && (
                   <div className="text-xs text-muted-foreground">
-                    Merged into{' '}
+                    {t('cpq.inventory.subscriptions.detail.changeLog.mergedInto', 'Merged into')}{' '}
                     <button
                       onClick={() =>
                         router.push(`/backend/cpq/inventory/subscriptions/${row.mergedIntoSubscriptionId}`)
                       }
                       className="text-primary hover:underline"
                     >
-                      subscription {row.mergedIntoSubscriptionId.slice(0, 8)}…
+                      {t('cpq.inventory.subscriptions.detail.changeLog.mergedIntoSubscription', 'subscription {id}…', { id: row.mergedIntoSubscriptionId.slice(0, 8) })}
                     </button>
                   </div>
                 )}
                 {row.mergedFromSubscriptionIds && row.mergedFromSubscriptionIds.length > 0 && (
                   <div className="text-xs text-muted-foreground">
-                    Merged from {row.mergedFromSubscriptionIds.length} subscriptions
+                    {t('cpq.inventory.subscriptions.detail.changeLog.mergedFrom', 'Merged from {count} subscriptions', { count: row.mergedFromSubscriptionIds.length })}
                   </div>
                 )}
               </div>
@@ -858,20 +864,20 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
 
       {/* Linked Assets */}
       <div>
-        <h3 className="text-sm font-medium mb-2 px-1">Linked Assets ({assets.length})</h3>
+        <h3 className="text-sm font-medium mb-2 px-1">{t('cpq.inventory.subscriptions.detail.assets.title', 'Linked Assets ({count})', { count: assets.length })}</h3>
         {assets.length === 0 ? (
-          <div className="rounded-lg border bg-card py-8 text-center text-sm text-muted-foreground">No assets linked to this subscription.</div>
+          <div className="rounded-lg border bg-card py-8 text-center text-sm text-muted-foreground">{t('cpq.inventory.subscriptions.detail.assets.empty', 'No assets linked to this subscription.')}</div>
         ) : (
           <div className="rounded-lg border">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b bg-muted/50">
-                  <th className="px-4 py-3 text-left font-medium">Code</th>
-                  <th className="px-4 py-3 text-left font-medium">Name</th>
-                  <th className="px-4 py-3 text-left font-medium">Type</th>
-                  <th className="px-4 py-3 text-left font-medium">Status</th>
-                  <th className="px-4 py-3 text-right font-medium">Price</th>
-                  <th className="px-4 py-3 text-right font-medium">Qty</th>
+                  <th className="px-4 py-3 text-left font-medium">{t('cpq.inventory.subscriptions.detail.assets.table.code', 'Code')}</th>
+                  <th className="px-4 py-3 text-left font-medium">{t('cpq.inventory.subscriptions.detail.assets.table.name', 'Name')}</th>
+                  <th className="px-4 py-3 text-left font-medium">{t('cpq.inventory.subscriptions.detail.assets.table.type', 'Type')}</th>
+                  <th className="px-4 py-3 text-left font-medium">{t('cpq.inventory.subscriptions.detail.assets.table.status', 'Status')}</th>
+                  <th className="px-4 py-3 text-right font-medium">{t('cpq.inventory.subscriptions.detail.assets.table.price', 'Price')}</th>
+                  <th className="px-4 py-3 text-right font-medium">{t('cpq.inventory.subscriptions.detail.assets.table.qty', 'Qty')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -1019,6 +1025,8 @@ function ChangeLogCostDiff({ entries }: { entries: CostDiffEntry[] }) {
 }
 
 function ChangeLogItemLines({ row, currency }: { row: ChangeLogRow; currency: string }) {
+  const t = useT()
+  const itemFallback = t('cpq.inventory.subscriptions.detail.changeLog.item', 'Item')
   const beforeItems = new Map<string, SnapshotItem>(
     (row.beforeSnapshot?.items ?? []).map((it) => [it.id, it]),
   )
@@ -1052,7 +1060,7 @@ function ChangeLogItemLines({ row, currency }: { row: ChangeLogRow; currency: st
       derived.push({
         key: `${itemId}-${i}`,
         action: lc.action,
-        name: item?.name ?? (lc.action === 'add' ? 'New item' : 'Item'),
+        name: item?.name ?? (lc.action === 'add' ? t('cpq.inventory.subscriptions.detail.changeLog.newItem', 'New item') : itemFallback),
         beforeMrc,
         afterMrc:
           lc.action === 'add' && afterMrc == null && lc.mrcAmount != null
@@ -1068,7 +1076,7 @@ function ChangeLogItemLines({ row, currency }: { row: ChangeLogRow; currency: st
       derived.push({
         key: it.id,
         action: 'cancel',
-        name: it.name ?? 'Item',
+        name: it.name ?? itemFallback,
         beforeMrc: mrc,
         afterMrc: 0,
         delta: -mrc,
@@ -1080,7 +1088,7 @@ function ChangeLogItemLines({ row, currency }: { row: ChangeLogRow; currency: st
       derived.push({
         key: it.id,
         action: 'add',
-        name: it.name ?? 'Item',
+        name: it.name ?? itemFallback,
         beforeMrc: null,
         afterMrc: mrc,
         delta: null,
@@ -1092,7 +1100,7 @@ function ChangeLogItemLines({ row, currency }: { row: ChangeLogRow; currency: st
       derived.push({
         key: it.id,
         action: 'cancel',
-        name: it.name ?? 'Item',
+        name: it.name ?? itemFallback,
         beforeMrc: mrc,
         afterMrc: 0,
         delta: -mrc,
@@ -1108,7 +1116,7 @@ function ChangeLogItemLines({ row, currency }: { row: ChangeLogRow; currency: st
     if (row.changeType === 'amend' || row.changeType === 'renew') {
       return (
         <div className="mt-1.5 text-xs text-muted-foreground italic">
-          No item-level changes recorded.
+          {t('cpq.inventory.subscriptions.detail.changeLog.noItemChanges', 'No item-level changes recorded.')}
         </div>
       )
     }
@@ -1124,10 +1132,18 @@ function ChangeLogItemLines({ row, currency }: { row: ChangeLogRow; currency: st
   )
 }
 
-const ACTION_GLYPH: Record<'add' | 'modify' | 'cancel', { sign: string; color: string; label: string }> = {
-  add: { sign: '+', color: 'text-status-success-text', label: 'added' },
-  modify: { sign: '~', color: 'text-status-info-text', label: 'modified' },
-  cancel: { sign: '−', color: 'text-destructive', label: 'removed' },
+const ACTION_GLYPH: Record<'add' | 'modify' | 'cancel', { sign: string; color: string }> = {
+  add: { sign: '+', color: 'text-status-success-text' },
+  modify: { sign: '~', color: 'text-status-info-text' },
+  cancel: { sign: '−', color: 'text-destructive' },
+}
+
+function actionGlyphLabel(t: TranslateFn, action: 'add' | 'modify' | 'cancel'): string {
+  switch (action) {
+    case 'add': return t('cpq.inventory.subscriptions.detail.changeLog.action.add', 'added')
+    case 'modify': return t('cpq.inventory.subscriptions.detail.changeLog.action.modify', 'modified')
+    case 'cancel': return t('cpq.inventory.subscriptions.detail.changeLog.action.cancel', 'removed')
+  }
 }
 
 function ChangeLogLineRow({
@@ -1143,6 +1159,7 @@ function ChangeLogLineRow({
   }
   currency: string
 }) {
+  const t = useT()
   const glyph = ACTION_GLYPH[change.action]
   const showPriceChange =
     change.action === 'modify' &&
@@ -1159,35 +1176,39 @@ function ChangeLogLineRow({
 
   return (
     <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
-      <span className={`font-bold w-3 text-center ${glyph.color}`} title={glyph.label}>
+      <span className={`font-bold w-3 text-center ${glyph.color}`} title={actionGlyphLabel(t, change.action)}>
         {glyph.sign}
       </span>
       <span className="font-medium text-foreground">{change.name}</span>
       {showPriceChange && (
         <span className="font-mono text-muted-foreground">
-          {fmt(change.beforeMrc!, currency)} → {fmt(change.afterMrc!, currency)}/mo
+          {t('cpq.inventory.subscriptions.detail.changeLog.priceChangePerMonth', '{before} → {after}/mo', {
+            before: fmt(change.beforeMrc!, currency),
+            after: fmt(change.afterMrc!, currency),
+          })}
         </span>
       )}
       {showSinglePrice && change.action === 'add' && (
         <span className="font-mono text-muted-foreground">
-          {fmt(change.afterMrc!, currency)}/mo
+          {t('cpq.inventory.subscriptions.detail.changeLog.pricePerMonth', '{price}/mo', { price: fmt(change.afterMrc!, currency) })}
         </span>
       )}
       {showSinglePrice && change.action === 'cancel' && (
         <span className="font-mono text-muted-foreground">
-          was {fmt(change.beforeMrc!, currency)}/mo
+          {t('cpq.inventory.subscriptions.detail.changeLog.wasPricePerMonth', 'was {price}/mo', { price: fmt(change.beforeMrc!, currency) })}
         </span>
       )}
       {showDelta && (
         <span
           className={`font-mono font-medium ${change.delta! > 0 ? 'text-status-success-text' : 'text-destructive'}`}
         >
-          ({change.delta! > 0 ? '+' : ''}
-          {fmt(change.delta!, currency)}/mo)
+          {t('cpq.inventory.subscriptions.detail.changeLog.deltaPerMonth', '({delta}/mo)', {
+            delta: `${change.delta! > 0 ? '+' : ''}${fmt(change.delta!, currency)}`,
+          })}
         </span>
       )}
       {isNoopModify && (
-        <span className="text-muted-foreground italic">no price change</span>
+        <span className="text-muted-foreground italic">{t('cpq.inventory.subscriptions.detail.changeLog.noPriceChange', 'no price change')}</span>
       )}
     </div>
   )

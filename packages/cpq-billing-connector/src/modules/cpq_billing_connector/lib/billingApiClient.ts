@@ -10,6 +10,7 @@ import type { CommandBus } from '@open-mercato/shared/lib/commands/command-bus'
 // Migrate to billing REST list endpoints once the connector graduates to
 // stable v1 — track in the dainamite-cpq packaging plan.
 import { BillingAccount, BillingItem } from '@dainamite/billing/modules/billing/data/entities'
+import type { BillCycle } from '@dainamite/billing/modules/billing/lib/billCycle'
 
 /**
  * Thin facade the connector uses to talk to billing.
@@ -36,14 +37,20 @@ export type Scope = {
 
 export type AccountSeed = {
   customerId: string
+  /** 'company' (default when omitted) | 'person' — B2C accounts (billing Spec E). */
+  customerKind?: 'company' | 'person'
   name: string
   currencyCode: string
-  billCycle: 'monthly' | 'quarterly' | 'annually' | 'weekly'
-  billCycleAnchor: string
+  /** Bill cycle "every `billCycleInterval` `billCycle` on `billCycleDay`" (billing >= 0.23). */
+  billCycle: BillCycle
+  billCycleInterval: number
+  /** '1'–'31' | 'mon'–'sun' | null (daily). */
+  billCycleDay: string | null
   invoiceEmail: string
   invoiceLanguage: string
   invoiceAddress: Record<string, unknown>
-  nextBillDate: Date
+  /** Omitted → billing starts the account on the first cycle day on or after today. */
+  nextBillDate?: Date
   taxId?: string | null
 }
 
@@ -58,6 +65,22 @@ export type ItemCreatePayload = {
   subscriptionId?: string
   subscriptionItemId?: string
   sourceRef?: string
+  /**
+   * Billing Spec B: VAT % of the charge. CPQ charges carry no tax rate yet,
+   * so the connector omits it and billing applies the organization default
+   * at creation. Set it once CPQ exposes a per-charge rate.
+   */
+  taxRate?: number
+}
+
+/** Generated credit reasons billing renders in the invoice language (billing Part 2, D10). */
+export type CreditReasonCode = 'subscription_amended' | 'subscription_cancelled' | 'subscription_superseded'
+
+export type CreditReasonParams = {
+  /** e.g. the CPQ order number. */
+  reference?: string
+  /** YYYY-MM-DD the change took effect. */
+  effectiveDate: string
 }
 
 export type ItemUpdatePayload = {
@@ -66,6 +89,13 @@ export type ItemUpdatePayload = {
   subscriptionId?: string | null
   subscriptionItemId?: string | null
   isActive?: boolean
+  /**
+   * Why the end date credits already-billed days. Billing requires a reason
+   * when the change produces a credit and ignores it otherwise, so the
+   * connector sends it with every ARC end-date write.
+   */
+  creditReasonCode?: CreditReasonCode
+  creditReasonParams?: CreditReasonParams
 }
 
 function buildSystemCtx(container: AwilixContainer, scope: Scope) {
@@ -91,15 +121,48 @@ export class BillingApiClient {
 
   /**
    * Find a non-deleted Billing Account for `(tenant, organization,
-   * customer)`. Returns the first match or `null`. The connector
-   * uses this to skip account creation when the customer already
-   * has one.
+   * customer)`. Returns the first match or `null`. Only a last-resort
+   * fallback for ARC events whose subscription has no billing items yet;
+   * activation uses `findCandidateAccounts` (currency + active aware).
    */
   async findAccountByCustomer(scope: Scope, customerId: string): Promise<BillingAccount | null> {
     return this.em.findOne(BillingAccount, {
       tenantId: scope.tenantId,
       organizationId: scope.organizationId,
       customerId,
+      deletedAt: null,
+    })
+  }
+
+  /**
+   * Accounts the connector may reuse for a CPQ order: same customer, same
+   * currency, active, not deleted — newest first. Never reuse an account in
+   * another currency or an inactive one (order billing setup spec, D4).
+   */
+  async findCandidateAccounts(
+    scope: Scope,
+    customerId: string,
+    currencyCode: string,
+  ): Promise<BillingAccount[]> {
+    return this.em.find(
+      BillingAccount,
+      {
+        tenantId: scope.tenantId,
+        organizationId: scope.organizationId,
+        customerId,
+        currencyCode: currencyCode.toUpperCase(),
+        isActive: true,
+        deletedAt: null,
+      },
+      { orderBy: { createdAt: 'desc' } },
+    )
+  }
+
+  async findAccountById(scope: Scope, id: string): Promise<BillingAccount | null> {
+    return this.em.findOne(BillingAccount, {
+      id,
+      tenantId: scope.tenantId,
+      organizationId: scope.organizationId,
       deletedAt: null,
     })
   }
@@ -116,13 +179,6 @@ export class BillingApiClient {
     return (result as { result?: { id: string } }).result ?? { id: '' }
   }
 
-  async getOrCreateAccount(scope: Scope, seed: AccountSeed): Promise<{ id: string; created: boolean }> {
-    const existing = await this.findAccountByCustomer(scope, seed.customerId)
-    if (existing) return { id: existing.id, created: false }
-    const created = await this.createAccount(scope, seed)
-    return { id: created.id, created: true }
-  }
-
   // ─── Items ──────────────────────────────────────────────────────
 
   async findItemsBySubscription(scope: Scope, subscriptionId: string): Promise<BillingItem[]> {
@@ -130,6 +186,17 @@ export class BillingApiClient {
       tenantId: scope.tenantId,
       organizationId: scope.organizationId,
       subscriptionId,
+      deletedAt: null,
+    } as never)
+  }
+
+  /** Items of several subscriptions in one query (empty input → no query). */
+  async findItemsBySubscriptions(scope: Scope, subscriptionIds: string[]): Promise<BillingItem[]> {
+    if (subscriptionIds.length === 0) return []
+    return this.em.find(BillingItem, {
+      tenantId: scope.tenantId,
+      organizationId: scope.organizationId,
+      subscriptionId: { $in: subscriptionIds },
       deletedAt: null,
     } as never)
   }

@@ -119,7 +119,9 @@ export function ChargeBreakdownTable<C extends ChargeRowView>({
                   <span>{c.chargeName}</span>
                   {errors.length > 0 && (
                     <Tag variant="warning" className="ml-1.5 px-1.5 text-xs" data-testid="cpq-adjustment-invalid">
-                      {t('cpq.priceAdjustments.invalid', 'Invalid')}: {t(`cpq.priceAdjustments.errors.${errors[0].code}`, ADJUSTMENT_ERROR_FALLBACKS[errors[0].code] ?? errors[0].code)}
+                      {t('cpq.priceAdjustments.invalidReason', 'Invalid: {reason}', {
+                        reason: t(`cpq.priceAdjustments.errors.${errors[0].code}`, ADJUSTMENT_ERROR_FALLBACKS[errors[0].code] ?? errors[0].code),
+                      })}
                     </Tag>
                   )}
                 </td>
@@ -174,7 +176,7 @@ function ChargePricingDetail({ charge: c, currency, reasonLabels, renderManualAc
   return (
     <div className="rounded border bg-background p-3 space-y-3 text-xs">
       <div className="flex items-center justify-between">
-        <span className="font-semibold text-sm">{t('cpq.charges.pricingDetails', 'Pricing Details')} — {c.chargeName}</span>
+        <span className="font-semibold text-sm">{t('cpq.charges.pricingDetailsFor', 'Pricing Details — {name}', { name: c.chargeName })}</span>
         <span className="text-muted-foreground">{c.pricingMethod ?? 'flat'}</span>
       </div>
 

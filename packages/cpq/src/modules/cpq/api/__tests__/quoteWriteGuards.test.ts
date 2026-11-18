@@ -7,6 +7,7 @@ const runCpqMutationGuards = jest.fn()
 const runAfterSuccess = jest.fn()
 
 jest.mock('../context', () => ({
+  cpqContextError: jest.requireActual('../context').cpqContextError,
   resolveCpqRouteContext: jest.fn().mockImplementation(async () => ({
     auth: { sub: '44444444-4444-4444-8444-444444444444' }, organizationId: 'org-1', tenantId: 'tenant-1',
     container: { resolve: () => ({ convertQuoteToOrder }) },

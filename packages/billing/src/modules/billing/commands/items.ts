@@ -14,11 +14,21 @@ import type { DataEngine } from '@open-mercato/shared/lib/data/engine'
 import { BillingAccount, BillingItem } from '../data/entities'
 import { billingEntityIds } from '../data/entityIds'
 import { findBySourceRef } from '../lib/idempotency'
+import { getBillingSettings, taxRateColumn } from '../lib/billingSettings'
+import { planPriceChange } from '../lib/itemPriceChange'
+import { assertItemDates } from '../lib/itemDates'
+import { previewCredit } from '../lib/creditPreview'
+import { toCreditReason, type CreditReason, type CreditReasonInput } from '../lib/creditReason'
 import {
   billingItemBulkCreateSchema,
+  billingItemChangePriceSchema,
+  type BillingItemChangePriceInput,
   billingItemCreateSchema,
   billingItemDeleteSchema,
   billingItemUpdateSchema,
+  CHARGE_TIMING_RECURRING_ONLY_MESSAGE,
+  GROSS_TIERED_UNSUPPORTED_MESSAGE,
+  isTieredRate,
   validateRateJson,
   type BillingItemBulkCreateInput,
   type BillingItemCreateInput,
@@ -35,6 +45,30 @@ import {
  * underlying unique index is the correctness gate; this pre-check keeps
  * the happy path single-round-trip and the response body informative.
  */
+
+export const CREDIT_REASON_REQUIRED = 'billing.item.credit_reason_required'
+
+/**
+ * Part 2 (D9): when ending `item` on `newEndDate` credits already-billed days,
+ * a reason is required; returns it (to store on the item) or null when the
+ * change credits nothing (a sent reason is then ignored).
+ */
+function requireCreditReason(
+  item: Pick<BillingItem, 'type' | 'prorate' | 'billStartDate' | 'billedToDate'>,
+  newEndDate: Date | null,
+  input: CreditReasonInput,
+): CreditReason | null {
+  const preview = previewCredit(item, newEndDate)
+  if (!preview.credited) return null
+  const reason = toCreditReason(input)
+  if (!reason) {
+    throw new CrudHttpError(422, {
+      error: 'This change credits days already billed — give a reason to show on the invoice',
+      code: CREDIT_REASON_REQUIRED,
+    })
+  }
+  return reason
+}
 
 const itemIndexer = { entityType: billingEntityIds.item } as const
 const itemEvents = { module: 'billing', entity: 'item', persistent: true } as const
@@ -97,6 +131,13 @@ const createItemCommand: CommandHandler<
     // future-proof against schema drift between the API surface and
     // the persistence layer.
     validateRateJson(parsed.type, parsed.rateJson)
+    assertItemDates(parsed.billStartDate, parsed.billEndDate)
+
+    // Spec B (B-D1): an omitted rate takes the org default, stored on the item.
+    const taxRate =
+      parsed.taxRate !== undefined
+        ? taxRateColumn(parsed.taxRate)
+        : (await getBillingSettings(em, parsed)).defaultTaxRate
 
     const now = new Date()
     const entity = em.create(BillingItem, {
@@ -112,6 +153,11 @@ const createItemCommand: CommandHandler<
       subscriptionId: parsed.subscriptionId ?? null,
       subscriptionItemId: parsed.subscriptionItemId ?? null,
       sourceRef: parsed.sourceRef ?? null,
+      // Spec A defaults: bill in advance, prorate partial periods.
+      chargeTiming: parsed.chargeTiming ?? 'in_advance',
+      prorate: parsed.prorate ?? true,
+      taxRate,
+      priceBasis: parsed.priceBasis ?? 'net',
       // `currency_mismatch` is set by Phase 2 / connectors when the
       // posted value's currency differs from the account's. Stays
       // false on create (operator opts in to flagging).
@@ -164,8 +210,18 @@ const updateItemCommand: CommandHandler<BillingItemUpdateInput, { id: string }> 
       throw new CrudHttpError(404, { error: 'Billing item not found' })
     }
 
+    const previousEnd = record.billEndDate ? new Date(record.billEndDate).getTime() : null
     if (parsed.billStartDate !== undefined) record.billStartDate = parsed.billStartDate
     if (parsed.billEndDate !== undefined) record.billEndDate = parsed.billEndDate
+    assertItemDates(record.billStartDate, record.billEndDate)
+    const nextEnd = record.billEndDate ? new Date(record.billEndDate).getTime() : null
+    if (nextEnd !== previousEnd) {
+      // Part 2 (D9): moving the end date into the billed window credits days —
+      // the customer-facing reason is then required.
+      // Always overwrite: a later change that credits nothing must not leave a
+      // stale reason behind for a future credit line.
+      record.creditReason = requireCreditReason(record, record.billEndDate ?? null, parsed)
+    }
     if (parsed.description !== undefined) record.description = parsed.description
     if (parsed.rateJson !== undefined) {
       // Re-validate against the current (immutable) type before persist.
@@ -178,6 +234,32 @@ const updateItemCommand: CommandHandler<BillingItemUpdateInput, { id: string }> 
       record.subscriptionItemId = parsed.subscriptionItemId
     }
     if (parsed.isActive !== undefined) record.isActive = parsed.isActive
+    if (parsed.taxRate !== undefined) record.taxRate = taxRateColumn(parsed.taxRate)
+    if (parsed.chargeTiming !== undefined || parsed.prorate !== undefined) {
+      // Timing / proration only apply to recurring items (validators can't
+      // check this on update — the item type isn't in the payload).
+      const nonDefault =
+        (parsed.chargeTiming !== undefined && parsed.chargeTiming !== 'in_advance') ||
+        parsed.prorate === false
+      if (record.type !== 'recurring' && nonDefault) {
+        throw new CrudHttpError(400, {
+          error: CHARGE_TIMING_RECURRING_ONLY_MESSAGE,
+          code: 'billing.item.charge_timing_recurring_only',
+        })
+      }
+      if (parsed.chargeTiming !== undefined) record.chargeTiming = parsed.chargeTiming
+      if (parsed.prorate !== undefined) record.prorate = parsed.prorate
+    }
+
+    if (parsed.priceBasis !== undefined) record.priceBasis = parsed.priceBasis
+    // Spec F (P-D4): tiered usage rates are always net — checked on the
+    // resulting state, since either field may change alone.
+    if (record.priceBasis === 'gross' && isTieredRate(record.rateJson)) {
+      throw new CrudHttpError(422, {
+        error: 'Tiered usage rates are always entered net',
+        code: GROSS_TIERED_UNSUPPORTED_MESSAGE,
+      })
+    }
 
     record.updatedAt = new Date()
     await em.flush()
@@ -327,6 +409,11 @@ const bulkCreateItemsCommand: CommandHandler<
     // unique index would otherwise blow up the whole flush).
     const seenInBatch = new Set<string>()
 
+    // Spec B (B-D1): org default rate, read once and only when an entry omits it.
+    const defaultTaxRate = parsed.items.some((entry) => entry.taxRate === undefined)
+      ? (await getBillingSettings(em, parsed)).defaultTaxRate
+      : '0'
+
     for (const entry of parsed.items) {
       const sourceKey = entry.sourceRef
         ? `${entry.billAccountId}::${entry.sourceRef}`
@@ -357,6 +444,7 @@ const bulkCreateItemsCommand: CommandHandler<
       }
 
       validateRateJson(entry.type, entry.rateJson)
+      assertItemDates(entry.billStartDate, entry.billEndDate)
       const item = em.create(BillingItem, {
         organizationId: parsed.organizationId,
         tenantId: parsed.tenantId,
@@ -370,6 +458,10 @@ const bulkCreateItemsCommand: CommandHandler<
         subscriptionId: entry.subscriptionId ?? null,
         subscriptionItemId: entry.subscriptionItemId ?? null,
         sourceRef: entry.sourceRef ?? null,
+        chargeTiming: entry.chargeTiming ?? 'in_advance',
+        prorate: entry.prorate ?? true,
+        taxRate: entry.taxRate !== undefined ? taxRateColumn(entry.taxRate) : defaultTaxRate,
+        priceBasis: entry.priceBasis ?? 'net',
         currencyMismatch: false,
         billedToDate: null,
         isActive: true,
@@ -425,14 +517,105 @@ const bulkCreateItemsCommand: CommandHandler<
   },
 }
 
+// ─── Change price (recurring) ────────────────────────────────────
+//
+// Ends the item the day before `effectiveDate` and creates a copy with the
+// new unit price from `effectiveDate` on — one transaction, so the account
+// never has both items or neither. The copy keeps everything else (account,
+// description, timing, proration, VAT rate, price basis, references, end
+// date). No `source_ref` on the copy: it is the idempotency key of the
+// integration that created the original. Not undoable (like the run
+// commands): reverse it by editing the two items.
+
+const changeItemPriceCommand: CommandHandler<
+  BillingItemChangePriceInput,
+  { previousItemId: string; newItemId: string }
+> = {
+  id: 'billing.items.change_price',
+
+  async execute(rawInput, ctx) {
+    const parsed = billingItemChangePriceSchema.parse(rawInput)
+    ensureTenantScope(ctx, parsed.tenantId)
+    ensureOrganizationScope(ctx, parsed.organizationId)
+
+    const em = getEm(ctx)
+    const { previous, created } = await em.transactional(async (tem) => {
+      const record = await tem.findOne(BillingItem, {
+        id: parsed.id,
+        tenantId: parsed.tenantId,
+        organizationId: parsed.organizationId,
+        deletedAt: null,
+      })
+      if (!record) throw new CrudHttpError(404, { error: 'Billing item not found' })
+      const planned = planPriceChange(record, parsed.effectiveDate)
+      if (!planned.ok) {
+        throw new CrudHttpError(422, { error: 'The price cannot be changed on this date', code: planned.error })
+      }
+      const { plan } = planned
+      const now = new Date()
+      record.creditReason = requireCreditReason(record, plan.oldItemEndDate, parsed)
+      record.billEndDate = plan.oldItemEndDate
+      record.updatedAt = now
+      const copy = tem.create(BillingItem, {
+        organizationId: record.organizationId,
+        tenantId: record.tenantId,
+        billAccountId: record.billAccountId,
+        type: record.type,
+        billStartDate: plan.newItemStartDate,
+        billEndDate: plan.newItemEndDate,
+        description: record.description,
+        rateJson: { ...(record.rateJson ?? {}), unit_price: parsed.unitPrice },
+        uomCode: record.uomCode ?? null,
+        subscriptionId: record.subscriptionId ?? null,
+        subscriptionItemId: record.subscriptionItemId ?? null,
+        sourceRef: null,
+        chargeTiming: record.chargeTiming,
+        prorate: record.prorate,
+        taxRate: record.taxRate,
+        priceBasis: record.priceBasis,
+        currencyMismatch: record.currencyMismatch,
+        billedToDate: null,
+        isActive: true,
+        createdAt: now,
+        updatedAt: now,
+      })
+      tem.persist(copy)
+      await tem.flush()
+      return { previous: record, created: copy }
+    })
+
+    // Side effects after commit.
+    const dataEngine = getDataEngine(ctx)
+    await emitCrudSideEffects({
+      dataEngine,
+      action: 'updated',
+      entity: previous,
+      identifiers: { id: previous.id, tenantId: previous.tenantId, organizationId: previous.organizationId },
+      indexer: itemIndexer,
+      events: itemEvents,
+    })
+    await emitCrudSideEffects({
+      dataEngine,
+      action: 'created',
+      entity: created,
+      identifiers: { id: created.id, tenantId: created.tenantId, organizationId: created.organizationId },
+      indexer: itemIndexer,
+      events: itemEvents,
+    })
+    return { previousItemId: previous.id, newItemId: created.id }
+  },
+}
+
 registerCommand(createItemCommand)
 registerCommand(updateItemCommand)
 registerCommand(deleteItemCommand)
 registerCommand(bulkCreateItemsCommand)
+registerCommand(changeItemPriceCommand)
 
 export {
   createItemCommand,
   updateItemCommand,
   deleteItemCommand,
   bulkCreateItemsCommand,
+  changeItemPriceCommand,
 }

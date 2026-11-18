@@ -131,6 +131,7 @@ export function register(container: AppContainer) {
         cpqCostService: container.resolve('cpqCostService'),
         cpqFxRateResolver: container.resolve('cpqFxRateResolver'),
         sourcingPublisher: sourcingPublisher(),
+        cpqBundleService: container.resolve('cpqBundleService'),
       })
     }).scoped().proxy(),
     cpqInventoryService: asFunction(() => {

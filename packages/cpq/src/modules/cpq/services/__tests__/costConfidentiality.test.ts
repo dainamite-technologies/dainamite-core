@@ -49,7 +49,7 @@ jest.mock('../../api/_helpers/costAccess', () => ({ canViewCosts: (...args: unkn
 jest.mock('../../api/_helpers/quoteMutationGuard', () => ({
   runCpqMutationGuards: jest.fn(async () => ({ ok: true, runAfterSuccess: async () => undefined })),
 }))
-jest.mock('../../api/context', () => ({ resolveCpqRouteContext: jest.fn() }))
+jest.mock('../../api/context', () => ({ cpqContextError: jest.requireActual('../../api/context').cpqContextError, resolveCpqRouteContext: jest.fn() }))
 
 const SCOPE = { organizationId: 'org', tenantId: 'tenant' }
 const COST = '7777.7700'

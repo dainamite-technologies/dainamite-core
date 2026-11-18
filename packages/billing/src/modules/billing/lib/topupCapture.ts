@@ -1,7 +1,7 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { BillingTopup } from '../data/entities'
 import { applyBalanceMovement } from './balanceLedger'
-import { createTopupReceipt, type TopupReceiptDeps } from './topupReceipt'
+import { createTopupReceipt } from './topupReceipt'
 
 /**
  * Idempotent top-up capture (SPEC-002 P2).
@@ -10,7 +10,7 @@ import { createTopupReceipt, type TopupReceiptDeps } from './topupReceipt'
  *   - credit the balance (atomic) + append a `type='topup'` transaction with a
  *     deterministic `source_ref = topup-{paymentId}` (so a re-fired capture can
  *     never double-credit),
- *   - create the posted+paid VAT receipt in core/sales,
+ *   - create the paid VAT receipt as a billing document (`document_type = 'receipt'`),
  *   - transition the BillingTopup → captured, backfilling `transaction_id` +
  *     `receipt_invoice_id`.
  *
@@ -45,7 +45,6 @@ export type CaptureTopupResult = {
 
 export async function captureTopup(
   em: EntityManager,
-  deps: TopupReceiptDeps,
   params: CaptureTopupParams,
 ): Promise<CaptureTopupResult> {
   const { topup, account } = params
@@ -88,7 +87,7 @@ export async function captureTopup(
     }
 
     // 2. Fiscal VAT receipt (posted+paid).
-    const receipt = await createTopupReceipt(tem as EntityManager, deps, {
+    const receipt = await createTopupReceipt(tem as EntityManager, {
       account,
       topupId: topup.id,
       paymentId: topup.paymentId,

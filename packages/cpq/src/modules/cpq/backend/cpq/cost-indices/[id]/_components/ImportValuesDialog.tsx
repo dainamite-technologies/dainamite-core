@@ -100,7 +100,7 @@ export function ImportValuesDialog({ onClose, onImported }: Props) {
             rows={8}
             className="font-mono text-xs"
             value={text}
-            placeholder={'indexCode,effectiveDate,value,note\nDEMO-DC-POWER,2026-11-01,82.40,Monthly settlement'}
+            placeholder={t('cpq.costIndices.import.placeholder', 'indexCode,effectiveDate,value,note\nDEMO-DC-POWER,2026-11-01,82.40,Monthly settlement')}
             onChange={(event) => edit(event.target.value)}
             data-testid="cpq-import-index-values-text"
           />
@@ -163,11 +163,11 @@ export function ImportValuesDialog({ onClose, onImported }: Props) {
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>{t('cpq.costIndices.cancel', 'Cancel')}</Button>
           {preview ? (
-            <Button onClick={() => void runImport()} disabled={busy} title="Ctrl/Cmd+Enter" data-testid="cpq-import-index-values-confirm">
+            <Button onClick={() => void runImport()} disabled={busy} title={t('cpq.common.submitShortcut', 'Ctrl/Cmd+Enter')} data-testid="cpq-import-index-values-confirm">
               {busy ? t('cpq.costIndices.saving', 'Saving…') : t('cpq.costIndices.import.confirm', 'Import')}
             </Button>
           ) : (
-            <Button onClick={() => void runPreview()} disabled={busy || !text.trim()} title="Ctrl/Cmd+Enter" data-testid="cpq-import-index-values-preview-button">
+            <Button onClick={() => void runPreview()} disabled={busy || !text.trim()} title={t('cpq.common.submitShortcut', 'Ctrl/Cmd+Enter')} data-testid="cpq-import-index-values-preview-button">
               {busy ? t('cpq.costIndices.import.checking', 'Checking…') : t('cpq.costIndices.import.preview', 'Preview')}
             </Button>
           )}

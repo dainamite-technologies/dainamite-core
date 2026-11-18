@@ -12,7 +12,7 @@ const ctx = {
   auth: { sub: 'user-1', tenantId: 'tenant' }, tenantId: 'tenant', organizationId: 'org', organizationScope: null, em,
   container: { resolve: (name: string) => name === 'rbacService' ? { userHasAllFeatures } : costService },
 }
-jest.mock('../context', () => ({ resolveCpqRouteContext: jest.fn(async () => ctx) }))
+jest.mock('../context', () => ({ cpqContextError: jest.requireActual('../context').cpqContextError, resolveCpqRouteContext: jest.fn(async () => ctx) }))
 
 import { DELETE, GET, POST, PUT, openApi } from '../product-charges/route'
 import { GET as GET_OFFERINGS } from '../product-offerings/route'

@@ -1,5 +1,103 @@
 # @dainamite/cpq
 
+## 1.1.0
+
+### Minor Changes
+
+- dc9a79d: `POST /api/cpq/orders/:orderId/activate` now runs the framework mutation guards before activating (resource kind `cpq.order`, operation `update`, payload `{ action: 'activate', orderId }`). A blocking guard's status and body are returned as-is (typically 422). After-success callbacks run once the activation commits. The route now exports `openApi`. `POST /api/cpq/orders/:orderId/status` runs the same guards: a transition to `active` carries `{ action: 'activate', orderId, targetStatus }`, so it cannot bypass an activation rule, and other transitions carry `action: 'transition'`. This is a new extension hook (minor). With no guard registered, behaviour is unchanged.
+
+## 1.0.1
+
+### Patch Changes
+
+- ca49e24: CPQ now writes sales and catalog records through the owning module instead of editing them directly.
+
+  - Deleting a CPQ quote (`DELETE /api/cpq/quotes/{quoteId}`) removes the underlying sales quote and its lines with the sales module's `sales.quotes.delete` command. Sales events, the audit log entry (with undo) and search/index cleanup now run. The sales quote is removed the way the sales module removes quotes (not just flagged as deleted); the CPQ quote and its line configurations are still soft-deleted. The response is unchanged.
+  - Creating a product specification without a `productId` (`POST /api/cpq/product-specifications`) creates the catalog product with the catalog module's `catalog.products.create` command, so catalog events, audit log and indexing run. Reusing an existing product by handle or SKU works as before.
+  - Undoing the delete from the audit log restores the whole CPQ quote: the sales quote comes back through the sales undo, and a CPQ command interceptor restores the CPQ configuration and the lines deleted with it. A redo of the delete, or deleting the quote in the sales module, now also soft-deletes the CPQ quote instead of leaving it pointing at a missing sales quote. Deleting a sales quote whose CPQ quote is accepted, rejected or cancelled is refused with 409 everywhere, as the CPQ route already did, so an accepted amend or cancel quote can no longer lose its CPQ configuration before its order is activated. Run `yarn generate` after upgrading.
+  - Errors raised by those commands (for example 403 scope, 409 duplicate) are returned with their own status instead of a generic 500.
+
+- 86c3ed4: - **Date columns everywhere in CPQ are handled as the `YYYY-MM-DD` strings MikroORM returns.** After the quote line fix, the same change covers subscriptions (`startDate`, `currentTermStart`, `currentTermEnd`), assets (`purchaseDate`, `deliveryDate`), order lines, ARC target subscriptions (`newTermStart`, `newTermEnd`) and merge renewals. Writes go through one helper, so renewals, amendments and edits of these dates store a valid date column value. No migration.
+  - **400 instead of 500 without an organization.** Every CPQ route now answers `400 Organization context is required` when the caller has no selected organization (an API key created without one, a superadmin viewing all organizations). Before, the request reached the database with an empty organization id and failed with 500.
+  - **Customer data is decrypted when a quote is created.** `POST /api/cpq/quotes` returned the customer name encrypted, and the quote's customer snapshot and `customer_domain` context were built from encrypted values. The customer is now read through the decryption helper.
+
+## 1.0.0
+
+### Major Changes
+
+- 478c144: First stable release: `1.0.0`. No code or API changes against `@dainamite/billing@0.22.0` and `@dainamite/cpq@0.8.0`.
+
+  From now on the packages follow semver in the 1.x line: new features bump the minor version, fixes bump the patch version, and only breaking changes bump the major version. Upgrade by changing your range to `^1.0.0`.
+
+### Minor Changes
+
+- 9370e52: CPQ now works with the Open Mercato AI assistant, in the in-app AI chat and for MCP clients.
+
+  - **24 AI tools** (`ai-tools.ts`), each a thin wrapper over an existing CPQ REST route, so they use the same permissions, tenant scoping and validation as the API. Read tools: offerings, specifications and their attributes, bundle trees, configurable attributes for an offering, price calculation (`cpq.calculate_price`), offering combination validation, price rules, quotes with lines and totals, subscriptions, assets, a customer's installed base, expiring subscriptions, subscription change log, and orders.
+  - **4 write tools**: create a draft quote, add a configured line, update a line, submit a quote for approval. They run only after the operator confirms the preview card in the AI chat. A direct call, for example from an MCP client, is refused and nothing is written.
+  - **CPQ Quoting Assistant** agent (`cpq.quoting_assistant`, needs `cpq.quotes.view`). It knows the CPQ concepts, always prices through the calculate-price API instead of guessing, and asks before any write. A tenant can lock it to read-only in `/backend/config/ai-assistant/agents`.
+  - **New required peer dependency (breaking)**: `@open-mercato/ai-assistant` `^0.9.0`, and the `ai_assistant` module must be enabled. It ships in the 1.0.0 major. See `MIGRATION.md`.
+
+  No new permissions and no migrations. After upgrading, run `yarn generate` and restart the app. Try it at `/backend/config/ai-assistant/playground`. Details: `manuals/cpq-ai-agent.md`.
+
+### Patch Changes
+
+- d31e4fa: Declare the customer inventory features in `acl.ts`: `cpq.inventory.view` and `cpq.inventory.manage`. Routes and the admin and employee roles already used them, but they were never declared, so they could not be assigned to other roles in the RBAC UI.
+
+  `GET /api/cpq/inventory/subscriptions/expiring` now requires `cpq.inventory.view`. It used to require `cpq.inventory.expiring.view`, a feature that was retired, so no role could call the endpoint.
+
+  For existing tenants, run `yarn mercato auth sync-role-acls --tenant <id>` after the upgrade.
+
+- c49d3f6: API fixes:
+
+  - **Quote lines with a start date no longer fail.** `CpqQuoteLineConfiguration.startDate` / `endDate` are `type: 'date'` columns, which MikroORM reads back as `YYYY-MM-DD` strings. Code called `.toISOString()` on them and assigned `Date` objects, so recalculating or reading a quote with a dated line returned 500, and editing a dated line (term, start or end) failed. Order activation also created the subscription without the quote line's start date. The properties are now typed as strings and all reads go through one helper. No migration.
+
+  - **Updates no longer reset fields you did not send.** The update schemas for specifications, offerings, relationships, attributes, charges, price rules, pricing tables, pricing table entries and wizards filled in create-time defaults. A `PUT` with only `{ id, isActive }`, such as the price rule active toggle in the admin UI, reset `sortOrder` to 0. Other partial updates could reset `offeringType`, `lifecycleStatus`, `designTimeValues` and similar fields. Updates now change only the fields in the request.
+  - **Inventory routes return 404** instead of 500 when a subscription, subscription item or asset does not exist. Subscription and asset status transitions keep their 409 for invalid transitions.
+  - **`PUT /api/cpq/product-offerings` checks V-OFF-7** when `specId` or `offeringType` changes: the offering type must match the specification type, as on create.
+  - **`GET /api/cpq/quotes/attributes`** answers 400 for malformed `configuration` JSON instead of 500.
+  - `POST /api/cpq/offering-components` and `/api/cpq/bundle-slots` no longer return raw internal error messages in 500 responses.
+
+## 0.8.0
+
+### Minor Changes
+
+- a4fb34b: Billing setup on the CPQ order: choose the billing account and set the bill start per line before activation.
+
+  **`@dainamite/cpq`**
+
+  - **New injection spot `cpq.order.detail:tabs`** on the CPQ order detail page. Widgets with `kind: 'tab'` become tabs next to "Line items". With nothing injected the page renders exactly as before. Context: `{ orderId, salesOrderId, cpqStatus, customerId, currencyCode, quoteType }`; `data` is the order API result.
+  - **Richer `cpq.subscription.activated` payload** (additive, all optional): `customerName`, `customerKind`, `invoiceEmail` and `invoiceAddress` from the sales order snapshot (decrypted), plus `items[].orderLineId` and `items[].startDate`. Declared in `events.ts` `payloadSchema`.
+  - **`cpqOrderService.getOrderCustomerFields(orderId, scope)`**: the same customer fields, for add-ons that need them before activation.
+  - **ARC events** (`cpq.subscription.amended` / `renewed`): `addedItems[].orderLineId` and `addedItems[].startDate` (additive), matched from the change log's quote line to the order line built from it.
+
+  **`@dainamite/cpq-billing-connector`**
+
+  - **Billing tab on CPQ orders.** Use an existing billing account (only active accounts of the customer in the order's currency) or create a new one prefilled from the customer, with every field editable. One default bill start for the order ("on activation" by default), changeable per line.
+  - **No more junk accounts.** A new account takes the customer's name, email and billing address instead of `Customer <uuid>`, `billing+<id>@invalid.local` and `TBD`. Placeholders are only a last resort.
+  - **Bill start per line:** line override → CPQ service start → order default → activation date. A new account's first bill date is the earliest bill start.
+  - **Amend / renew orders:** the Billing tab sets the bill start of the **added** lines only (fallback: the effective date for amend, the new term start for renew). They always bill to the subscription's existing account. `renewed` / `amended` lock the setup once applied. Cancel orders show "nothing to bill". Multi-subscription (merge) renewals are not covered: `cpq.subscription.merged` carries no added items.
+  - **Fix:** activation never reuses an inactive account or one in another currency (it used to take the customer's first account). `cpq.subscription.amended` adds items to the subscription's own account.
+  - **API:** `GET` / `PUT /api/cpq_billing_connector/order-setups/:orderId` (undoable command `cpq_billing_connector.order_setup.save`). **ACL:** `cpq_billing_connector.order_setup.view` / `.manage` (admin: both; employee: view).
+  - **Migration** `Migration20261115000000_cpq_billing_connector_order_setups` (the connector's first table). Run `yarn mercato db migrate`, then `yarn generate`.
+  - New peer dependencies: `@open-mercato/ui`, `next`, `react`, `react-dom` (the connector now ships UI).
+
+## 0.7.0
+
+### Minor Changes
+
+- d86651d: CPQ UI in English, Spanish, German and Polish.
+
+  - **Dictionaries.** New `i18n/{en,es,de,pl}.json` (1218 keys). CPQ previously shipped no dictionaries, so every screen rendered English in every locale.
+  - **Every UI string is translatable.** Hard-coded labels in quotes, orders, the quote wizard, specifications, offerings, inventory, price rules, pricing tables, wizard definitions, shared components and the injected widgets now go through `t()`. English text is unchanged.
+  - **Own generic labels.** `cpq.common.*` replaces borrowed `common.*` keys that only some unrelated modules shipped (`common.inactive` existed nowhere).
+  - **Sales tabs translated.** The quote / order tabs on sales documents use i18n keys as `groupLabel`. The customer "Inventory" tab stays English (legacy customer pages render `groupLabel` verbatim).
+  - **Row-action messages are noun-free** (`Delete selected items ({count})?`), because a spliced entity noun can't be grammatical in ES / DE / PL. `useCpqRowActions({ entityName })` is now optional and deprecated.
+  - **API change for direct importers:** `parsePricingTableXlsx` / `commitImportDiff` take a required `t` argument, and `StatusPath`'s `ariaLabel` is optional.
+  - **Guardrails:** tests fail on a missing or orphaned key, a dropped `{placeholder}`, or a new hard-coded UI string.
+
+  No migration. After upgrading run `yarn generate` so the app picks up the dictionaries.
+
 ## 0.6.0
 
 ### Minor Changes

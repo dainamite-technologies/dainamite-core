@@ -1,3 +1,4 @@
+import { toDateColumn } from '../../lib/dateColumns'
 import { randomUUID } from 'node:crypto'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import type { FeatureTogglesService } from '@open-mercato/core/modules/feature_toggles/lib/feature-flag-check'
@@ -498,7 +499,7 @@ export class CpqQuoteCostService {
     const target = line.targetSubscriptionId
       ? await em.findOne(CpqQuoteTargetSubscription, { ...scoped(scope), quoteId: quote.id, subscriptionId: line.targetSubscriptionId })
       : null
-    const newTermEnd = target?.newTermEnd ? (target.newTermEnd instanceof Date ? target.newTermEnd.toISOString() : String(target.newTermEnd)).slice(0, 10) : null
+    const newTermEnd = toDateColumn(target?.newTermEnd)
     if (newTermEnd) {
       const day = (value: string | Date | null | undefined) => (value ? (value instanceof Date ? value.toISOString() : String(value)).slice(0, 10) : null)
       const short = [['validUntil', day(validUntil)], ['supplierTermEnd', day(supplierTermEnd)]].filter(([, date]) => date !== null && (date as string) < newTermEnd).map(([key]) => key)

@@ -1,14 +1,14 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
-import { resolveCpqRouteContext } from '../context'
+import { cpqContextError, resolveCpqRouteContext } from '../context'
 import { CpqPricingTable, CpqPricingTableEntry } from '../../data/entities'
 import { cpqPricingTableCreateSchema, cpqPricingTableUpdateSchema } from '../../data/validators'
 import { PRICING_TABLE_PURPOSES, isCostTable } from '../../data/costs'
 import { assertPurposeChangeAllowed } from '../../services/costs/pricingTablePurpose'
 import { canViewCosts } from '../_helpers/costAccess'
 import { handleArcError } from '../_helpers/handleArcError'
-import { cpqErrorDoc } from '../_helpers/quoteRouteOpenApi'
+import { cpqErrorDoc, cpqDeleteByIdBody, cpqSuccessResponseSchema } from '../_helpers/quoteRouteOpenApi'
 
 export const metadata = {
   GET: { requireAuth: true, requireFeatures: ['cpq.pricing.view'] },
@@ -52,7 +52,8 @@ const listQuery = z.object({
 export async function GET(req: Request) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     const url = new URL(req.url)
     const scope = { organizationId: ctx.organizationId, tenantId: ctx.tenantId, deletedAt: null }
@@ -140,7 +141,8 @@ export async function GET(req: Request) {
 export async function POST(req: Request) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     const body = cpqPricingTableCreateSchema.parse(await req.json())
     const scope = { organizationId: ctx.organizationId, tenantId: ctx.tenantId }
@@ -160,7 +162,8 @@ export async function POST(req: Request) {
 export async function PUT(req: Request) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     const body = cpqPricingTableUpdateSchema.parse(await req.json())
     const { id, ...updates } = body
@@ -186,7 +189,8 @@ export async function PUT(req: Request) {
 export async function DELETE(req: Request) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     const { id } = (await req.json()) as { id?: string }
     if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
@@ -216,37 +220,40 @@ const tableResponseSchema = z.object({
   isActive: z.boolean(),
 }).passthrough()
 const hidden = 'Cost tables (purpose = cost) require cpq.costs.view: filtered from lists, 404 on reads and writes.'
+const internalError = cpqErrorDoc(500, 'Internal error')
 
 export const openApi: OpenApiRouteDoc = {
   tag: 'CPQ Pricing',
+  summary: 'CPQ pricing tables',
   methods: {
     GET: {
-      summary: 'List pricing tables, or read one with its entries (?id=)',
-      description: hidden,
+      summary: 'List CPQ pricing tables, or get one by id with all its entries',
+      description:
+        `A pricing table is a price matrix keyed by dimensions (attribute values) with one or more price columns. With \`id\` returns the table plus its entries; otherwise a paged list without entries. \`search\` matches code or name. ${hidden}`,
       query: listQuery,
-      responses: [{ status: 200, description: 'Paged tables, or one table with `entries` when `id` is given' }],
-      errors: [cpqErrorDoc(404, 'Table not found or hidden')],
+      responses: [{ status: 200, description: 'Pricing table with entries, or paged list of pricing tables' }],
+      errors: [cpqErrorDoc(404, 'Pricing table not found or hidden'), internalError],
     },
     POST: {
-      summary: 'Create a pricing table',
+      summary: 'Create a CPQ pricing table',
       description: hidden,
       requestBody: { schema: cpqPricingTableCreateSchema },
-      responses: [{ status: 201, description: 'Created table', schema: tableResponseSchema }],
-      errors: [cpqErrorDoc(400, 'Validation error'), cpqErrorDoc(403, 'COSTS_VIEW_REQUIRED for purpose = cost')],
+      responses: [{ status: 201, description: 'Created pricing table', schema: tableResponseSchema }],
+      errors: [cpqErrorDoc(400, 'Validation error'), cpqErrorDoc(403, 'COSTS_VIEW_REQUIRED for purpose = cost'), internalError],
     },
     PUT: {
-      summary: 'Update a pricing table',
+      summary: 'Update a CPQ pricing table definition',
       description: `${hidden} \`purpose\` is immutable while a charge or cost element references the table.`,
       requestBody: { schema: cpqPricingTableUpdateSchema },
-      responses: [{ status: 200, description: 'Updated table', schema: tableResponseSchema }],
-      errors: [cpqErrorDoc(400, 'Validation error'), cpqErrorDoc(403, 'COSTS_VIEW_REQUIRED for purpose = cost'), cpqErrorDoc(404, 'Table not found or hidden'), cpqErrorDoc(422, 'PURPOSE_LOCKED')],
+      responses: [{ status: 200, description: 'Updated pricing table', schema: tableResponseSchema }],
+      errors: [cpqErrorDoc(400, 'Validation error or missing id'), cpqErrorDoc(403, 'COSTS_VIEW_REQUIRED for purpose = cost'), cpqErrorDoc(404, 'Pricing table not found or hidden'), cpqErrorDoc(422, 'PURPOSE_LOCKED'), internalError],
     },
     DELETE: {
-      summary: 'Soft-delete a pricing table',
+      summary: 'Soft-delete a CPQ pricing table',
       description: hidden,
-      requestBody: { schema: z.object({ id: z.string().uuid() }) },
-      responses: [{ status: 200, description: 'Deleted', schema: z.object({ success: z.boolean() }) }],
-      errors: [cpqErrorDoc(400, 'Missing id'), cpqErrorDoc(404, 'Table not found or hidden')],
+      requestBody: { schema: cpqDeleteByIdBody },
+      responses: [{ status: 200, description: 'Deleted', schema: cpqSuccessResponseSchema }],
+      errors: [cpqErrorDoc(400, 'Missing id'), cpqErrorDoc(404, 'Pricing table not found or hidden'), internalError],
     },
   },
 }

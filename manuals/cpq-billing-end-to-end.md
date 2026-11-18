@@ -50,10 +50,13 @@ Nowa sprzedaż zakłada konto + pozycje; zmiany ARC (amend/renew/cancel)
 aktualizują pozycje same. Operator tylko **dokańcza dane konta**
 (Część 2) i **uruchamia przebieg rozliczeniowy** (Część 3).
 
-> **Proracja przy amend.** Cykl rozliczeniowy zna **billing**, nie CPQ —
-> więc kwotę proporcjonalną za część cyklu (przy dodaniu pozycji w
-> trakcie cyklu) wylicza **connector** na podstawie cyklu konta. CPQ
-> wysyła tylko *co* i *kiedy* się zmieniło.
+> **Proracja.** Cykl rozliczeniowy zna **billing**, nie CPQ ani connector.
+> Pozycja dodana w trakcie cyklu dostaje w przebiegu **proporcjonalną
+> linię** za niepełny okres, a pozycja zakończona po naliczeniu z góry —
+> **korektę ujemną** za niewykorzystane dni (silnik billingu, Spec A).
+> Connector niczego nie dolicza sam. CPQ wysyła tylko *co* i *kiedy* się
+> zmieniło; polityka „anuluj na koniec okresu, bez zwrotu" to po prostu
+> data efektywna na granicy okresu.
 
 ---
 
@@ -83,7 +86,8 @@ wszystkich pól fakturowych) — uzupełnij je przed pierwszą fakturą.
 2. **„Edit"** → popraw: **Name**, **Invoice email**
    (`billing+<id>@invalid.local`), **Invoice address** (`TBD` / `XX`),
    w razie potrzeby **Bill cycle** i **Next bill date** (connector
-   ustawia ją na „dziś + 1 miesiąc").
+   ustawia ją na **datę aktywacji** — opłaty cykliczne są naliczane
+   z góry, więc pierwszy okres trafia na pierwszą fakturę).
 3. **Save changes**.
 4. Sekcja **„Items"** — pozycje są już utworzone, z `Subscription ID`.
 
@@ -116,10 +120,11 @@ płyną do billingu **same**:
    [`.ai/skills/cpq/arc/SKILL.md`](../.ai/skills/cpq/arc/SKILL.md)).
 2. Zaakceptuj ją → **Convert to Order** → **Activate Order**.
 3. Aktywacja zamówienia ARC emituje zdarzenie. Connector je łapie i:
-   - **Amend** — tworzy pozycje billingowe dla dodanych opłat; dla
-     każdej dodanej opłaty cyklicznej dolicza **pozycję proporcjonalną**
-     (`one_time`) za część bieżącego cyklu; usuniętym pozycjom ustawia
-     `bill end date = data efektywna − 1 dzień`.
+   - **Amend** — tworzy pozycje billingowe dla dodanych opłat (start =
+     data efektywna); usuniętym pozycjom ustawia
+     `bill end date = data efektywna − 1 dzień`. Proporcję za niepełny
+     okres (i korektę za już opłacone z góry dni) liczy **przebieg
+     rozliczeniowy**, nie connector.
    - **Renew** — przedłuża `bill end date` na pozycjach z terminem,
      dodaje pozycje nowego okresu od `newTermStart`.
    - **Cancel** — ustawia `bill end date` na wszystkich pozycjach

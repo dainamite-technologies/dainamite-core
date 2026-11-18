@@ -4,7 +4,7 @@ const ctx = {
   auth: { sub: 'user-1', tenantId: 'tenant' }, tenantId: 'tenant', organizationId: 'org', organizationScope: null, em,
   container: { resolve: () => ({ userHasAllFeatures }) },
 }
-jest.mock('../context', () => ({ resolveCpqRouteContext: jest.fn(async () => ctx) }))
+jest.mock('../context', () => ({ cpqContextError: jest.requireActual('../context').cpqContextError, resolveCpqRouteContext: jest.fn(async () => ctx) }))
 
 import * as tables from '../pricing-tables/route'
 import * as entries from '../pricing-table-entries/route'

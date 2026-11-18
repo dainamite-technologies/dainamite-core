@@ -11,5 +11,5 @@ export const metadata: ModuleInfo = {
     'Customer-specific demo seed bundle for the Puffin Cloud (cloud-services-provider) use case. Implements the XD-275 catalog: VPS, Compute, storage, CDN, Managed DB, Workspace, DDoS, Premium Support, and three use-case bundles.',
   author: 'Dainamite',
   license: 'Proprietary',
-  requires: ['cpq'],
+  requires: ['cpq', 'billing'],
 }

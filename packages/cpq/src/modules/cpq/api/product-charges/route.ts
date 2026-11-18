@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
-import { resolveCpqRouteContext, type CpqRouteContext } from '../context'
+import { cpqContextError, resolveCpqRouteContext, type CpqRouteContext } from '../context'
 import { CpqProductCharge, CpqProductOffering, CpqProductSpecification } from '../../data/entities'
 import { chargePricingShapeIssues, cpqProductChargeCreateSchema, cpqProductChargeUpdateSchema } from '../../data/validators'
 import { normalizeChargePricing } from '../../data/charge-pricing'
@@ -11,7 +11,7 @@ import { QuotingError } from '../../services/cpqQuotingService'
 import { assertPriceTable } from '../../services/costs/pricingTablePurpose'
 import { canViewCosts } from '../_helpers/costAccess'
 import { handleArcError } from '../_helpers/handleArcError'
-import { cpqErrorDoc } from '../_helpers/quoteRouteOpenApi'
+import { cpqErrorDoc, cpqDeleteByIdBody, cpqSuccessResponseSchema } from '../_helpers/quoteRouteOpenApi'
 
 export const metadata = {
   GET: { requireAuth: true, requireFeatures: ['cpq.products.view'] },
@@ -101,7 +101,8 @@ const listQuery = z.object({
 export async function GET(req: Request) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     const url = new URL(req.url)
     const page = Math.max(1, Number(url.searchParams.get('page') ?? '1'))
@@ -138,7 +139,8 @@ export async function GET(req: Request) {
 export async function POST(req: Request) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     const raw: unknown = await req.json()
     const costsView = costsViewGate(ctx)
@@ -191,7 +193,8 @@ export async function POST(req: Request) {
 export async function PUT(req: Request) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     // Authorization precedes every shape check (I-4 / R15): with a 400 first, the
     // merged-charge validation below would answer questions about the STORED
@@ -271,7 +274,8 @@ export async function PUT(req: Request) {
 export async function DELETE(req: Request) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     const { id } = (await req.json()) as { id?: string }
     if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
@@ -312,40 +316,46 @@ const chargeResponseSchema = z.object({
   sortOrder: z.number(),
   isActive: z.boolean(),
 }).passthrough()
+const internalError = cpqErrorDoc(500, 'Internal error')
 const writeErrors = [
   cpqErrorDoc(400, 'Validation error (V-CHG-1)'),
   cpqErrorDoc(403, 'COSTS_VIEW_REQUIRED — creating or editing a cost-plus charge (incl. switching it to another method), and setting markup, need cpq.costs.view; checked before any validation'),
   cpqErrorDoc(404, 'Charge not found'),
   cpqErrorDoc(422, 'COST_PLUS_DISABLED (tenant toggle off), COST_PLUS_NOT_AVAILABLE, NO_PRICE_BASIS_ELEMENT (activating a cost-plus charge without an active price-basis cost element), or WRONG_TABLE_PURPOSE (a price charge referencing a cost table)'),
+  internalError,
 ]
 
 export const openApi: OpenApiRouteDoc = {
   tag: 'CPQ Products',
+  summary: 'CPQ product charges',
   methods: {
     GET: {
-      summary: 'List product charges',
-      description: 'Markup fields are omitted for users without cpq.costs.view.',
+      summary: 'List the charges (price components) of a product or offering',
+      description: 'Ordered by sortOrder. A charge is priced from a fixed price, a pricing table column, or its costs plus markup (cost_plus). Markup fields are omitted for users without cpq.costs.view.',
       query: listQuery,
       responses: [{ status: 200, description: 'Paged charges', schema: z.object({ items: z.array(chargeResponseSchema), total: z.number(), page: z.number(), pageSize: z.number(), totalPages: z.number() }) }],
-      errors: [cpqErrorDoc(401, 'Unauthorized')],
+      errors: [cpqErrorDoc(401, 'Unauthorized'), internalError],
     },
     POST: {
       summary: 'Create a product charge',
+      description:
+        "`productId` is derived from `offeringId` (via the offering's specification) when omitted. A legacy combined `pricingMethod` is normalized into `chargeModel` plus `pricingMethod`.",
       requestBody: { schema: cpqProductChargeCreateSchema },
       responses: [{ status: 201, description: 'Created charge', schema: chargeResponseSchema }],
       errors: writeErrors,
     },
     PUT: {
       summary: 'Update a product charge',
+      description: 'Changing `pricingMethod` or `chargeModel` re-normalizes the charge and clears the fields of the other pricing source (fixedPrice vs pricingTableId and priceColumnKey).',
       requestBody: { schema: cpqProductChargeUpdateSchema },
       responses: [{ status: 200, description: 'Updated charge', schema: chargeResponseSchema }],
       errors: writeErrors,
     },
     DELETE: {
       summary: 'Soft-delete a product charge',
-      requestBody: { schema: z.object({ id: z.string().uuid() }) },
-      responses: [{ status: 200, description: 'Deleted', schema: z.object({ success: z.boolean() }) }],
-      errors: [cpqErrorDoc(400, 'Missing id'), cpqErrorDoc(403, 'COSTS_VIEW_REQUIRED — deleting a cost-plus charge needs cpq.costs.view'), cpqErrorDoc(404, 'Charge not found')],
+      requestBody: { schema: cpqDeleteByIdBody },
+      responses: [{ status: 200, description: 'Deleted', schema: cpqSuccessResponseSchema }],
+      errors: [cpqErrorDoc(400, 'Missing id'), cpqErrorDoc(403, 'COSTS_VIEW_REQUIRED — deleting a cost-plus charge needs cpq.costs.view'), cpqErrorDoc(404, 'Charge not found'), internalError],
     },
   },
 }

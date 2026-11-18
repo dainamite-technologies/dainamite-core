@@ -164,7 +164,9 @@ describe('cpq.subscription.* event payloads (I-9 billing golden)', () => {
         quoteType, ...toggle,
         targets: [{ subscriptionId: 'sub-1', mergeAction: 'standalone', newTermStart: '2027-01-01', newTermEnd: '2028-01-01', newTermMonths: 12 }],
         quoteLines: [quoteLine({ quoteLineId: 'ql-1', action: 'add', mrcTotal: '120', nrcTotal: '30' }), quoteLine({ quoteLineId: 'ql-r', action: 'modify', sourceSubscriptionItemId: 'item-1', configuration: { _arcMirroredFromItemId: 'i', _arcReconfigured: true } })],
-        ...(costed ? { orderLines: [line({ orderLineId: 'ol-1', sourceQuoteLineId: 'ql-1' })], orderLineCosts: [olc('olc-1', 'ol-1')] } : {}),
+        // Conversion always links the order line to its quote line; only the costs differ between the runs.
+        orderLines: [line({ orderLineId: 'ol-1', sourceQuoteLineId: 'ql-1' })],
+        ...(costed ? { orderLineCosts: [olc('olc-1', 'ol-1')] } : {}),
         inventory: { [primitive]: { changeLog: changeLog(), subscription, ...extra } },
       })
       out.push(await arc('amend', 'applyAmendment'))

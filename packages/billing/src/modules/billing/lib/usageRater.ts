@@ -11,7 +11,7 @@
  *   - `amount` — numeric string, rounded 2dp half-up, formatted to 4
  *     decimals to match the `core/sales` numeric(18,4) column shape.
  *   - `breakdown` — per-tier rated quantity / amount, persisted into
- *     `SalesInvoiceLine.metadata.usage_tier_breakdown` so operators
+ *     `billing_invoice_lines.metadata.usage_tier_breakdown` so operators
  *     can see how the line was built without re-running the math.
  */
 

@@ -4,6 +4,7 @@ import type { InjectionWidgetComponentProps } from '@open-mercato/shared/modules
 import { useRouter } from 'next/navigation'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { OrderCostsSummary } from '../../../components/costs/OrderCostsSummary'
+import { useT } from '@open-mercato/shared/lib/i18n/context'
 import {
   formatStatusLabel,
   orderCpqStatusMap,
@@ -29,6 +30,7 @@ function fmt(amount: number | undefined | null, currency: string): string {
 
 export default function OrderCpqTabWidget({ data }: InjectionWidgetComponentProps<any, any>) {
   const router = useRouter()
+  const t = useT()
   const salesOrderId = data?.id as string | undefined
   const [cpqOrders, setCpqOrders] = React.useState<CpqOrderSummary[]>([])
   const [loading, setLoading] = React.useState(true)
@@ -53,7 +55,7 @@ export default function OrderCpqTabWidget({ data }: InjectionWidgetComponentProp
           <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
           <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
         </svg>
-        Loading CPQ orders…
+        {t('cpq.widgets.orderCpqTab.loading', 'Loading CPQ orders…')}
       </div>
     )
   }
@@ -61,7 +63,7 @@ export default function OrderCpqTabWidget({ data }: InjectionWidgetComponentProp
   if (cpqOrders.length === 0) {
     return (
       <div className="py-8 text-center text-sm text-muted-foreground">
-        No CPQ orders linked to this sales order.
+        {t('cpq.widgets.orderCpqTab.empty', 'No CPQ orders linked to this sales order.')}
       </div>
     )
   }
@@ -83,12 +85,12 @@ export default function OrderCpqTabWidget({ data }: InjectionWidgetComponentProp
           <div className="flex items-center gap-4 text-xs">
             {o.pricingSummary && (
               <>
-                <span><span className="text-muted-foreground">NRC </span><span className="font-mono font-medium">{fmt(o.pricingSummary.nrcTotal, o.currencyCode)}</span></span>
-                <span><span className="text-muted-foreground">MRC </span><span className="font-mono font-medium">{fmt(o.pricingSummary.mrcTotal, o.currencyCode)}</span></span>
+                <span><span className="text-muted-foreground">{t('cpq.lines.nrc', 'NRC')} </span><span className="font-mono font-medium">{fmt(o.pricingSummary.nrcTotal, o.currencyCode)}</span></span>
+                <span><span className="text-muted-foreground">{t('cpq.lines.mrc', 'MRC')} </span><span className="font-mono font-medium">{fmt(o.pricingSummary.mrcTotal, o.currencyCode)}</span></span>
               </>
             )}
             <span className="text-muted-foreground">{new Date(o.createdAt).toLocaleDateString()}</span>
-            <span className="text-primary font-medium">Open →</span>
+            <span className="text-primary font-medium">{t('cpq.widgets.orderCpqTab.open', 'Open →')}</span>
           </div>
         </div>
         <OrderCostsSummary orderId={o.id} currency={o.currencyCode} />

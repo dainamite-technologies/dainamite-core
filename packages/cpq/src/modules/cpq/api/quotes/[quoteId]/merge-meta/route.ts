@@ -1,8 +1,10 @@
 import { NextResponse } from 'next/server'
-import { resolveCpqRouteContext } from '../../../context'
+import { cpqContextError, resolveCpqRouteContext } from '../../../context'
 import { cpqMergeMetaSchema } from '../../../../data/validators'
 import { resolveQuotingService } from '../../../resolveQuotingService'
 import { handleArcError } from '../../../_helpers/handleArcError'
+import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
+import { cpqErrorDoc, cpqQuoteIdPathParams } from '../../../_helpers/quoteRouteOpenApi'
 
 /**
  * POST /api/cpq/quotes/[quoteId]/merge-meta
@@ -20,7 +22,8 @@ export async function POST(
 ) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
     const { quoteId } = await params
     const body = cpqMergeMetaSchema.parse(await req.json())
     const scope = { organizationId: ctx.organizationId, tenantId: ctx.tenantId }
@@ -42,37 +45,23 @@ export async function POST(
   }
 }
 
-export const openApi = {
-  '/api/cpq/quotes/{quoteId}/merge-meta': {
-    parameters: [
-      { name: 'quoteId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
-    ],
-    post: {
-      tags: ['CPQ ARC'],
-      summary: 'Stamp the new contract term + optional code/name on a merge-renew quote',
-      requestBody: {
-        required: true,
-        content: {
-          'application/json': {
-            schema: {
-              type: 'object',
-              required: ['newTermStart', 'newTermEnd'],
-              properties: {
-                newTermStart: { type: 'string' },
-                newTermEnd: { type: 'string' },
-                newTermMonths: { type: 'integer', minimum: 1 },
-                newSubCode: { type: 'string' },
-                newSubName: { type: 'string' },
-              },
-            },
-          },
-        },
-      },
-      responses: {
-        '200': { description: 'Merge meta stamped' },
-        '404': { description: 'Quote not found' },
-        '409': { description: 'Quote not renew-type or no longer editable' },
-      },
+export const openApi: OpenApiRouteDoc = {
+  tag: 'CPQ ARC',
+  summary: 'CPQ merge-renew quote meta',
+  pathParams: cpqQuoteIdPathParams,
+  methods: {
+    POST: {
+      summary: 'Set the new contract term and optional code/name on a merge-renew quote',
+      description:
+        'For a `quoteType=renew` quote that merges two or more subscriptions (absorb targets) into one. Required before activation.',
+      requestBody: { schema: cpqMergeMetaSchema },
+      responses: [{ status: 200, description: 'Quote with the merge meta stamped' }],
+      errors: [
+        cpqErrorDoc(400, 'Validation error'),
+        cpqErrorDoc(404, 'Quote not found'),
+        cpqErrorDoc(409, 'Quote is not a renew quote or is no longer editable'),
+        cpqErrorDoc(500, 'Internal error'),
+      ],
     },
   },
 }

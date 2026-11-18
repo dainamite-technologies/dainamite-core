@@ -1,8 +1,10 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { resolveCpqRouteContext } from '../context'
+import { cpqContextError, resolveCpqRouteContext } from '../context'
 import { CpqProductAttribute, CpqProductSpecification } from '../../data/entities'
 import { cpqProductAttributeCreateSchema, cpqProductAttributeUpdateSchema } from '../../data/validators'
+import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
+import { cpqErrorDoc, cpqPaginationQuery, cpqDeleteByIdBody, cpqSuccessResponseSchema, CPQ_CRUD_BY_ID_ERRORS } from '../_helpers/quoteRouteOpenApi'
 
 export const metadata = {
   GET: { requireAuth: true, requireFeatures: ['cpq.products.view'] },
@@ -45,7 +47,8 @@ export function serializeAttribute(item: CpqProductAttribute) {
 export async function GET(req: Request) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     const url = new URL(req.url)
     const page = Math.max(1, Number(url.searchParams.get('page') ?? '1'))
@@ -81,7 +84,8 @@ export async function GET(req: Request) {
 export async function POST(req: Request) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     const body = cpqProductAttributeCreateSchema.parse(await req.json())
     const scope = { organizationId: ctx.organizationId, tenantId: ctx.tenantId }
@@ -112,7 +116,8 @@ export async function POST(req: Request) {
 export async function PUT(req: Request) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     const body = cpqProductAttributeUpdateSchema.parse(await req.json())
     const { id, ...updates } = body
@@ -137,7 +142,8 @@ export async function PUT(req: Request) {
 export async function DELETE(req: Request) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     const { id } = (await req.json()) as { id?: string }
     if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
@@ -154,4 +160,43 @@ export async function DELETE(req: Request) {
     console.error('[cpq/product-attributes.DELETE]', err)
     return NextResponse.json({ error: 'Internal error' }, { status: 500 })
   }
+}
+
+export const openApi: OpenApiRouteDoc = {
+  tag: 'CPQ Products',
+  summary: 'CPQ product attributes',
+  methods: {
+    GET: {
+      summary: 'List configurable attributes of a product or specification',
+      description: 'Ordered by sortOrder. Each attribute has a `resolutionTime` of design_time (fixed per offering) or run_time (chosen when quoting).',
+      query: cpqPaginationQuery.extend({
+        productId: z.string().uuid().optional(),
+        specId: z.string().uuid().optional(),
+      }),
+      responses: [{ status: 200, description: '`{ items, total, page, pageSize, totalPages }`' }],
+      errors: [cpqErrorDoc(500, 'Internal error')],
+    },
+    POST: {
+      summary: 'Create a product attribute',
+      description: '`productId` is derived from `specId` when omitted.',
+      requestBody: { schema: cpqProductAttributeCreateSchema },
+      responses: [{ status: 201, description: 'Created attribute' }],
+      errors: [
+        cpqErrorDoc(400, 'Validation error, or neither productId nor a valid specId given'),
+        cpqErrorDoc(500, 'Internal error'),
+      ],
+    },
+    PUT: {
+      summary: 'Update a product attribute',
+      requestBody: { schema: cpqProductAttributeUpdateSchema },
+      responses: [{ status: 200, description: 'Updated attribute' }],
+      errors: CPQ_CRUD_BY_ID_ERRORS,
+    },
+    DELETE: {
+      summary: 'Soft-delete a product attribute',
+      requestBody: { schema: cpqDeleteByIdBody },
+      responses: [{ status: 200, description: 'Deleted', schema: cpqSuccessResponseSchema }],
+      errors: CPQ_CRUD_BY_ID_ERRORS,
+    },
+  },
 }

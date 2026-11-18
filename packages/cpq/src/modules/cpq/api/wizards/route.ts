@@ -1,8 +1,10 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { resolveCpqRouteContext } from '../context'
+import { cpqContextError, resolveCpqRouteContext } from '../context'
 import { cpqWizardDefinitionCreateSchema, cpqWizardDefinitionUpdateSchema } from '../../data/validators'
 import { DefaultCpqWizardService } from '../../services/cpqWizardService'
+import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
+import { cpqErrorDoc, cpqPaginationQuery, cpqSortDirQuery, cpqDeleteByIdBody, cpqSuccessResponseSchema, CPQ_CRUD_WRITE_ERRORS, CPQ_CRUD_BY_ID_ERRORS } from '../_helpers/quoteRouteOpenApi'
 
 export const metadata = {
   GET: { requireAuth: true, requireFeatures: ['cpq.wizards.view'] },
@@ -18,7 +20,8 @@ function resolveWizardService(ctx: { em: import('@mikro-orm/postgresql').EntityM
 export async function GET(req: Request) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     const url = new URL(req.url)
     const scope = { organizationId: ctx.organizationId, tenantId: ctx.tenantId }
@@ -65,7 +68,8 @@ export async function GET(req: Request) {
 export async function POST(req: Request) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     const body = cpqWizardDefinitionCreateSchema.parse(await req.json())
     const scope = { organizationId: ctx.organizationId, tenantId: ctx.tenantId }
@@ -85,7 +89,8 @@ export async function POST(req: Request) {
 export async function PUT(req: Request) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     const body = cpqWizardDefinitionUpdateSchema.parse(await req.json())
     const { id, ...updates } = body
@@ -108,7 +113,8 @@ export async function PUT(req: Request) {
 export async function DELETE(req: Request) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     const { id } = (await req.json()) as { id?: string }
     if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
@@ -124,4 +130,44 @@ export async function DELETE(req: Request) {
     console.error('[cpq/wizards.DELETE]', err)
     return NextResponse.json({ error: 'Internal error' }, { status: 500 })
   }
+}
+
+export const openApi: OpenApiRouteDoc = {
+  tag: 'CPQ Wizards',
+  summary: 'CPQ wizard definitions',
+  methods: {
+    GET: {
+      summary: 'List CPQ quoting wizard definitions, or get one by id or code',
+      description: 'With `id` or `code` returns a single definition; otherwise a paged list.',
+      query: cpqPaginationQuery.extend({
+        id: z.string().optional(),
+        code: z.string().optional(),
+        surface: z.string().optional(),
+        isActive: z.enum(['true', 'false']).optional(),
+        search: z.string().optional(),
+        sortField: z.enum(['createdAt', 'updatedAt', 'name', 'code', 'surface']).optional(),
+        sortDir: cpqSortDirQuery,
+      }),
+      responses: [{ status: 200, description: 'Wizard definition, or paged list of definitions' }],
+      errors: [cpqErrorDoc(404, 'Wizard definition not found'), cpqErrorDoc(500, 'Internal error')],
+    },
+    POST: {
+      summary: 'Create a CPQ wizard definition',
+      requestBody: { schema: cpqWizardDefinitionCreateSchema },
+      responses: [{ status: 201, description: 'Created wizard definition' }],
+      errors: CPQ_CRUD_WRITE_ERRORS,
+    },
+    PUT: {
+      summary: 'Update a CPQ wizard definition',
+      requestBody: { schema: cpqWizardDefinitionUpdateSchema },
+      responses: [{ status: 200, description: 'Updated wizard definition' }],
+      errors: CPQ_CRUD_BY_ID_ERRORS,
+    },
+    DELETE: {
+      summary: 'Delete a CPQ wizard definition',
+      requestBody: { schema: cpqDeleteByIdBody },
+      responses: [{ status: 200, description: 'Deleted', schema: cpqSuccessResponseSchema }],
+      errors: CPQ_CRUD_BY_ID_ERRORS,
+    },
+  },
 }

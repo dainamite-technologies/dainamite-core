@@ -30,10 +30,15 @@ import { Entity, Index, PrimaryKey, Property, Unique } from '@mikro-orm/decorato
 })
 export class BillingAccount {
   [OptionalProps]?:
+    | 'customerKind'
+    | 'billCycleInterval'
+    | 'billCycleDay'
     | 'taxId'
     | 'lastBillDate'
     | 'billingMode'
     | 'creditLimit'
+    | 'paymentTermsDays'
+    | 'autoSendInvoice'
     | 'isActive'
     | 'createdAt'
     | 'updatedAt'
@@ -54,6 +59,12 @@ export class BillingAccount {
   @Property({ name: 'customer_id', type: 'text' })
   customerId!: string
 
+  // Spec E (B2C): which customers collection `customer_id` points into —
+  // 'company' | 'person'. Drives the lookup + label only; immutable after
+  // create, like `customer_id`.
+  @Property({ name: 'customer_kind', type: 'text', default: 'company' })
+  customerKind: 'company' | 'person' = 'company'
+
   @Property({ type: 'text' })
   name!: string
 
@@ -62,19 +73,27 @@ export class BillingAccount {
   @Property({ name: 'currency_code', type: 'text' })
   currencyCode!: string
 
-  // 'monthly' | 'quarterly' | 'annually' | 'weekly'. Validated at API ingress.
+  // Cycle unit: 'daily' | 'weekly' | 'monthly' | 'annually' (`lib/billCycle.ts`).
+  // Validated at API ingress. One cycle = `bill_cycle_interval` units.
   @Property({ name: 'bill_cycle', type: 'text' })
   billCycle!: string
 
-  // Day-of-month for monthly/quarterly/annually (1–28), or weekday code
-  // ('mon'…'sun') for weekly. Text so both shapes coexist.
-  @Property({ name: 'bill_cycle_anchor', type: 'text' })
-  billCycleAnchor!: string
+  // "Every N units" — 1 = every month, 3 = quarterly, 30 + daily = every 30 days.
+  @Property({ name: 'bill_cycle_interval', type: 'integer', default: 1 })
+  billCycleInterval: number = 1
+
+  // Bill cycle day the cycle is pinned to: '1'…'31' for monthly/annually (a
+  // day past the end of a short month means its last day), 'mon'…'sun' for
+  // weekly, null for daily (the cycle counts from `next_bill_date`). Bill Runs
+  // re-pin every advance to this day (`lib/billPeriod.ts`).
+  @Property({ name: 'bill_cycle_day', type: 'text', nullable: true })
+  billCycleDay?: string | null
 
   @Property({ name: 'invoice_email', type: 'text' })
   invoiceEmail!: string
 
-  // ISO 639-1 (`en`, `pl`, …). Used by mailer / template renderer.
+  // ISO 639-1; allowed values come from `lib/invoiceLanguages.ts` (Zod-validated,
+  // no DB constraint). Used by mailer / template renderer.
   @Property({ name: 'invoice_language', type: 'text' })
   invoiceLanguage!: string
 
@@ -108,6 +127,15 @@ export class BillingAccount {
   // credit. Reported, never enforced by billing (SPEC-002 assumption #11).
   @Property({ name: 'credit_limit', type: 'numeric', columnType: 'numeric(18, 4)', default: '0' })
   creditLimit: string = '0'
+
+  // Spec B — payment terms in days for this account's invoices; null = the
+  // organization default (`billing_settings.default_payment_terms_days`).
+  @Property({ name: 'payment_terms_days', type: 'integer', nullable: true })
+  paymentTermsDays?: number | null
+
+  // Spec B — email each invoice to `invoice_email` automatically at post.
+  @Property({ name: 'auto_send_invoice', type: 'boolean', default: false })
+  autoSendInvoice: boolean = false
 
   @Property({ name: 'is_active', type: 'boolean', default: true })
   isActive: boolean = true
@@ -160,6 +188,11 @@ export class BillingItem {
     | 'sourceRef'
     | 'currencyMismatch'
     | 'billedToDate'
+    | 'creditReason'
+    | 'chargeTiming'
+    | 'prorate'
+    | 'taxRate'
+    | 'priceBasis'
     | 'isActive'
     | 'createdAt'
     | 'updatedAt'
@@ -225,6 +258,35 @@ export class BillingItem {
   // "Why two anti-duplicate guards".
   @Property({ name: 'billed_to_date', type: 'date', columnType: 'date', nullable: true })
   billedToDate?: Date | null
+
+  // Why ending this item credited already-billed days (Part 2, D8): operator
+  // text or a generated code ({ kind, … } — `lib/creditReason.ts`). Copied
+  // into the credit line's metadata at bill time; last end-date change wins.
+  @Property({ name: 'credit_reason', type: 'jsonb', nullable: true })
+  creditReason?: Record<string, unknown> | null
+
+  // Spec A — recurring items only. 'in_advance' (default) bills the coming
+  // period on the bill date; 'in_arrears' bills the period just ended.
+  @Property({ name: 'charge_timing', type: 'text', default: 'in_advance' })
+  chargeTiming: 'in_advance' | 'in_arrears' = 'in_advance'
+
+  // Spec A — recurring items only. Prorate partial periods (item starts /
+  // ends mid-period) by calendar days, and credit unused days when an item
+  // billed in advance ends early. False = skip partial periods.
+  @Property({ name: 'prorate', type: 'boolean', default: true })
+  prorate: boolean = true
+
+  // Spec B (B-D1) — VAT rate in percent, snapshotted onto every invoice line.
+  // Filled from `billing_settings.default_tax_rate` at creation when omitted;
+  // never looked up live, so a default change never re-prices subscriptions.
+  @Property({ name: 'tax_rate', type: 'numeric', columnType: 'numeric(7, 4)', default: '0' })
+  taxRate: string = '0'
+
+  // Spec F (F-D2) — the `rate_json` amounts are stored as typed, on this
+  // basis. Invoice lines are computed from it (`lib/lineAmounts.ts`), so a
+  // typed gross is reproduced exactly. Tiered usage rates are always 'net'.
+  @Property({ name: 'price_basis', type: 'text', default: 'net' })
+  priceBasis: 'net' | 'gross' = 'net'
 
   @Property({ name: 'is_active', type: 'boolean', default: true })
   isActive: boolean = true
@@ -347,7 +409,6 @@ export class BillingRun {
     | 'parentRunId'
     | 'dryRun'
     | 'testMode'
-    | 'catchUp'
     | 'scopedAccountIds'
     | 'startedAt'
     | 'finishedAt'
@@ -381,10 +442,6 @@ export class BillingRun {
   // True → persist drafts flagged as test, but do not advance state.
   @Property({ name: 'test_mode', type: 'boolean', default: false })
   testMode: boolean = false
-
-  // True → loop missed cycles per account in one run (manual only).
-  @Property({ name: 'catch_up', type: 'boolean', default: false })
-  catchUp: boolean = false
 
   // Optional — run processes only these accounts when set. JSONB
   // (Postgres arrays would work too, but jsonb keeps tooling uniform
@@ -445,6 +502,7 @@ export class BillingRunOutcome {
     | 'warnings'
     | 'draftInvoiceId'
     | 'statementId'
+    | 'cycles'
     | 'isActive'
     | 'createdAt'
     | 'updatedAt'
@@ -486,6 +544,13 @@ export class BillingRunOutcome {
   // at period close, so this is the prepaid analogue of `draft_invoice_id`.
   @Property({ name: 'statement_id', type: 'uuid', nullable: true })
   statementId?: string | null
+
+  // Spec A — one entry per bill date the run processed for this account
+  // (catch-up emits several): `[{ bill_date, period_start, period_end,
+  // status, line_count, total_net, invoice_id }]`. `draft_invoice_id` keeps
+  // pointing at the last invoice for backward compatibility.
+  @Property({ type: 'jsonb', nullable: true })
+  cycles?: Array<Record<string, unknown>> | null
 
   @Property({ name: 'is_active', type: 'boolean', default: true })
   isActive: boolean = true
@@ -852,6 +917,7 @@ export class BillingStatement {
   [OptionalProps]?:
     | 'billRunId'
     | 'totalAdjustments'
+    | 'vatSummary'
     | 'createdAt'
     | 'updatedAt'
 
@@ -911,6 +977,11 @@ export class BillingStatement {
   @Property({ name: 'debit_breakdown', type: 'jsonb' })
   debitBreakdown!: Record<string, unknown>
 
+  // Spec F (F5) — `[{ rate, net, tax, gross }]` per VAT rate of the period's
+  // prepaid debits. Empty in `topup` tax-point mode (VAT was on the receipt).
+  @Property({ name: 'vat_summary', type: 'jsonb', nullable: true })
+  vatSummary?: Array<{ rate: string; net: string; tax: string; gross: string }> | null
+
   // 'generated' | 'sent'.
   @Property({ type: 'text' })
   status!: string
@@ -935,3 +1006,598 @@ export type BillRun = BillingRun
 export type BillRunOutcome = BillingRunOutcome
 /** @deprecated Renamed to {@link BillingDraftInvoiceEdit} in 0.20.0. */
 export type DraftInvoiceEdit = BillingDraftInvoiceEdit
+
+// ─── Spec 0 — standalone invoice ledger ─────────────────────────
+//
+// Billing owns its documents end to end: invoices, credit / debit memos and
+// prepaid top-up receipts live here, NOT in core `sales_invoices`. FK
+// columns are plain strings (the package guard forbids ORM relations).
+// Partial unique indexes (dedupe per bill date, unique posted number) are
+// created in the migration — decorators can't express their WHERE clause.
+
+@Entity({ tableName: 'billing_invoices' })
+@Index({
+  name: 'billing_invoices_status_idx',
+  properties: ['tenantId', 'organizationId', 'status'],
+})
+@Index({
+  name: 'billing_invoices_account_idx',
+  properties: ['billAccountId', 'status', 'dueDate'],
+})
+@Index({ name: 'billing_invoices_run_idx', properties: ['billRunId'] })
+@Index({ name: 'billing_invoices_corrects_idx', properties: ['correctsInvoiceId'] })
+@Index({ name: 'billing_invoices_topup_idx', properties: ['topupId'] })
+export class BillingInvoice {
+  [OptionalProps]?:
+    | 'documentType'
+    | 'series'
+    | 'status'
+    | 'testRun'
+    | 'billRunId'
+    | 'billDate'
+    | 'periodStart'
+    | 'periodEnd'
+    | 'issueDate'
+    | 'dueDate'
+    | 'subtotalNet'
+    | 'taxTotal'
+    | 'totalGross'
+    | 'paidTotal'
+    | 'creditedTotal'
+    | 'outstanding'
+    | 'correctsInvoiceId'
+    | 'correctionReason'
+    | 'correctsInvoiceNumber'
+    | 'correctsIssueDate'
+    | 'buyerSnapshot'
+    | 'sellerSnapshot'
+    | 'pdfAttachmentId'
+    | 'topupId'
+    | 'postedAt'
+    | 'metadata'
+    | 'createdAt'
+    | 'updatedAt'
+    | 'deletedAt'
+
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @Property({ name: 'organization_id', type: 'uuid' })
+  organizationId!: string
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  @Property({ name: 'bill_account_id', type: 'uuid' })
+  billAccountId!: string
+
+  // 'invoice' | 'credit_memo' | 'debit_memo' | 'receipt'.
+  @Property({ name: 'document_type', type: 'text', default: 'invoice' })
+  documentType: string = 'invoice'
+
+  // DRAFT-… / TEST-… until posted, then the series number (Spec 0 numbering).
+  @Property({ type: 'text' })
+  number!: string
+
+  // Numbering series the posted number came from; null while draft.
+  @Property({ type: 'text', nullable: true })
+  series?: string | null
+
+  // 'draft' | 'posted' | 'partially_paid' | 'paid' | 'credited'. No 'void'.
+  @Property({ type: 'text', default: 'draft' })
+  status: string = 'draft'
+
+  @Property({ name: 'test_run', type: 'boolean', default: false })
+  testRun: boolean = false
+
+  @Property({ name: 'bill_run_id', type: 'uuid', nullable: true })
+  billRunId?: string | null
+
+  // Spec A: the bill date this invoice is for (dedupe key).
+  @Property({ name: 'bill_date', type: 'date', columnType: 'date', nullable: true })
+  billDate?: Date | null
+
+  // Display period = min/max of the line service periods.
+  @Property({ name: 'period_start', type: 'date', columnType: 'date', nullable: true })
+  periodStart?: Date | null
+
+  @Property({ name: 'period_end', type: 'date', columnType: 'date', nullable: true })
+  periodEnd?: Date | null
+
+  @Property({ name: 'issue_date', type: 'date', columnType: 'date', nullable: true })
+  issueDate?: Date | null
+
+  @Property({ name: 'due_date', type: 'date', columnType: 'date', nullable: true })
+  dueDate?: Date | null
+
+  @Property({ name: 'currency_code', type: 'text' })
+  currencyCode!: string
+
+  @Property({ name: 'subtotal_net', type: 'numeric', columnType: 'numeric(18, 4)', default: '0' })
+  subtotalNet: string = '0'
+
+  @Property({ name: 'tax_total', type: 'numeric', columnType: 'numeric(18, 4)', default: '0' })
+  taxTotal: string = '0'
+
+  @Property({ name: 'total_gross', type: 'numeric', columnType: 'numeric(18, 4)', default: '0' })
+  totalGross: string = '0'
+
+  @Property({ name: 'paid_total', type: 'numeric', columnType: 'numeric(18, 4)', default: '0' })
+  paidTotal: string = '0'
+
+  @Property({ name: 'credited_total', type: 'numeric', columnType: 'numeric(18, 4)', default: '0' })
+  creditedTotal: string = '0'
+
+  @Property({ type: 'numeric', columnType: 'numeric(18, 4)', default: '0' })
+  outstanding: string = '0'
+
+  // Spec D groundwork: the document a credit / debit memo corrects.
+  @Property({ name: 'corrects_invoice_id', type: 'uuid', nullable: true })
+  correctsInvoiceId?: string | null
+
+  @Property({ name: 'correction_reason', type: 'text', nullable: true })
+  correctionReason?: string | null
+
+  // Spec D — snapshot of the corrected document (printed "Corrects invoice X of DATE").
+  @Property({ name: 'corrects_invoice_number', type: 'text', nullable: true })
+  correctsInvoiceNumber?: string | null
+
+  @Property({ name: 'corrects_issue_date', type: 'date', columnType: 'date', nullable: true })
+  correctsIssueDate?: Date | null
+
+  // Frozen at post: who the document was issued to / by.
+  @Property({ name: 'buyer_snapshot', type: 'jsonb', nullable: true })
+  buyerSnapshot?: Record<string, unknown> | null
+
+  @Property({ name: 'seller_snapshot', type: 'jsonb', nullable: true })
+  sellerSnapshot?: Record<string, unknown> | null
+
+  @Property({ name: 'pdf_attachment_id', type: 'uuid', nullable: true })
+  pdfAttachmentId?: string | null
+
+  // Receipts: the BillingTopup this receipt was issued for.
+  @Property({ name: 'topup_id', type: 'uuid', nullable: true })
+  topupId?: string | null
+
+  @Property({ name: 'posted_at', type: Date, nullable: true })
+  postedAt?: Date | null
+
+  // Free-form extras only (delivery log, …) — never a query key.
+  @Property({ type: 'jsonb', nullable: true })
+  metadata?: Record<string, unknown> | null
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+
+  @Property({ name: 'updated_at', type: Date, onUpdate: () => new Date() })
+  updatedAt: Date = new Date()
+
+  @Property({ name: 'deleted_at', type: Date, nullable: true })
+  deletedAt?: Date | null
+}
+
+@Entity({ tableName: 'billing_invoice_lines' })
+@Index({ name: 'billing_invoice_lines_invoice_idx', properties: ['invoiceId', 'lineNumber'] })
+export class BillingInvoiceLine {
+  [OptionalProps]?:
+    | 'billingItemId'
+    | 'taxRate'
+    | 'taxAmount'
+    | 'servicePeriodStart'
+    | 'servicePeriodEnd'
+    | 'correctsLineId'
+    | 'metadata'
+    | 'createdAt'
+    | 'updatedAt'
+    | 'deletedAt'
+
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @Property({ name: 'organization_id', type: 'uuid' })
+  organizationId!: string
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  @Property({ name: 'invoice_id', type: 'uuid' })
+  invoiceId!: string
+
+  @Property({ name: 'line_number', type: 'integer' })
+  lineNumber!: number
+
+  @Property({ name: 'billing_item_id', type: 'uuid', nullable: true })
+  billingItemId?: string | null
+
+  // 'one_time' | 'recurring' | 'usage' | 'manual' | 'receipt'.
+  @Property({ name: 'billing_type', type: 'text' })
+  billingType!: string
+
+  @Property({ type: 'text' })
+  description!: string
+
+  @Property({ type: 'numeric', columnType: 'numeric(18, 4)' })
+  quantity!: string
+
+  @Property({ name: 'unit_price_net', type: 'numeric', columnType: 'numeric(18, 4)' })
+  unitPriceNet!: string
+
+  @Property({ name: 'tax_rate', type: 'numeric', columnType: 'numeric(7, 4)', default: '0' })
+  taxRate: string = '0'
+
+  @Property({ name: 'net_amount', type: 'numeric', columnType: 'numeric(18, 4)' })
+  netAmount!: string
+
+  @Property({ name: 'tax_amount', type: 'numeric', columnType: 'numeric(18, 4)', default: '0' })
+  taxAmount: string = '0'
+
+  @Property({ name: 'gross_amount', type: 'numeric', columnType: 'numeric(18, 4)' })
+  grossAmount!: string
+
+  @Property({ name: 'service_period_start', type: 'date', columnType: 'date', nullable: true })
+  servicePeriodStart?: Date | null
+
+  @Property({ name: 'service_period_end', type: 'date', columnType: 'date', nullable: true })
+  servicePeriodEnd?: Date | null
+
+  // Spec D groundwork: the original line a memo line corrects.
+  @Property({ name: 'corrects_line_id', type: 'uuid', nullable: true })
+  correctsLineId?: string | null
+
+  // Proration / credit / usage tier breakdown / charge timing.
+  @Property({ type: 'jsonb', nullable: true })
+  metadata?: Record<string, unknown> | null
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+
+  @Property({ name: 'updated_at', type: Date, onUpdate: () => new Date() })
+  updatedAt: Date = new Date()
+
+  @Property({ name: 'deleted_at', type: Date, nullable: true })
+  deletedAt?: Date | null
+}
+
+@Entity({ tableName: 'billing_document_sequences' })
+@Unique({
+  name: 'billing_document_sequences_scope_uq',
+  properties: ['tenantId', 'organizationId', 'series', 'scopeKey'],
+})
+export class BillingDocumentSequence {
+  [OptionalProps]?: 'scopeKey' | 'nextValue' | 'createdAt' | 'updatedAt'
+
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @Property({ name: 'organization_id', type: 'uuid' })
+  organizationId!: string
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  // 'invoice' | 'credit_memo' | 'receipt'.
+  @Property({ type: 'text' })
+  series!: string
+
+  // '' (never resets), 'YYYY' (yearly) or 'YYYY-MM' (monthly) — from the mask.
+  @Property({ name: 'scope_key', type: 'text', default: '' })
+  scopeKey: string = ''
+
+  @Property({ name: 'next_value', type: 'bigint', default: 1 })
+  nextValue: number = 1
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+
+  @Property({ name: 'updated_at', type: Date, onUpdate: () => new Date() })
+  updatedAt: Date = new Date()
+}
+
+@Entity({ tableName: 'billing_settings' })
+// Mirrors the partial unique index `billing_settings_org_uq` (… WHERE deleted_at IS NULL)
+// created in Migration20261115000000_billing_invoice_ledger: one settings row per organization.
+@Unique({ name: 'billing_settings_org_uq', properties: ['tenantId', 'organizationId'] })
+export class BillingSettings {
+  [OptionalProps]?:
+    | 'lowBalanceThresholdDefault'
+    | 'nearLimitBufferDefault'
+    | 'statementEnabled'
+    | 'topupTaxRate'
+    | 'prepaidTaxPoint'
+    | 'topupProvider'
+    | 'numberMasks'
+    | 'legalName'
+    | 'sellerAddress'
+    | 'taxId'
+    | 'bankName'
+    | 'iban'
+    | 'bic'
+    | 'invoiceFooter'
+    | 'logoAttachmentId'
+    | 'defaultPaymentTermsDays'
+    | 'defaultTaxRate'
+    | 'createdAt'
+    | 'updatedAt'
+    | 'deletedAt'
+
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @Property({ name: 'organization_id', type: 'uuid' })
+  organizationId!: string
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  // Prepaid defaults (moved from core `configs`, E-D2).
+  @Property({ name: 'low_balance_threshold_default', type: 'numeric', columnType: 'numeric(18, 4)', default: '0' })
+  lowBalanceThresholdDefault: string = '0'
+
+  @Property({ name: 'near_limit_buffer_default', type: 'numeric', columnType: 'numeric(18, 4)', default: '0' })
+  nearLimitBufferDefault: string = '0'
+
+  @Property({ name: 'statement_enabled', type: 'boolean', default: true })
+  statementEnabled: boolean = true
+
+  @Property({ name: 'topup_tax_rate', type: 'numeric', columnType: 'numeric(7, 4)', default: '0' })
+  topupTaxRate: string = '0'
+
+  // Spec F (F-D3) — where prepaid VAT is charged: 'topup' (VAT split on the
+  // top-up receipt; consumption debits carry no VAT) or 'consumption'
+  // (receipts carry no VAT; debits are gross at the item's tax rate).
+  @Property({ name: 'prepaid_tax_point', type: 'text', default: 'topup' })
+  prepaidTaxPoint: 'topup' | 'consumption' = 'topup'
+
+  @Property({ name: 'topup_provider', type: 'text', default: 'stripe' })
+  topupProvider: string = 'stripe'
+
+  // { invoice, credit_memo, receipt } number masks (Spec 0 numbering).
+  @Property({ name: 'number_masks', type: 'jsonb', nullable: true })
+  numberMasks?: Record<string, string> | null
+
+  // Seller / payment / document fields (Spec B). Posting is blocked until
+  // legal_name, seller_address, tax_id and iban are filled.
+  @Property({ name: 'legal_name', type: 'text', nullable: true })
+  legalName?: string | null
+
+  // { line1, line2?, city, postal_code, country }
+  @Property({ name: 'seller_address', type: 'jsonb', nullable: true })
+  sellerAddress?: Record<string, unknown> | null
+
+  @Property({ name: 'tax_id', type: 'text', nullable: true })
+  taxId?: string | null
+
+  @Property({ name: 'bank_name', type: 'text', nullable: true })
+  bankName?: string | null
+
+  @Property({ name: 'iban', type: 'text', nullable: true })
+  iban?: string | null
+
+  @Property({ name: 'bic', type: 'text', nullable: true })
+  bic?: string | null
+
+  @Property({ name: 'invoice_footer', type: 'text', nullable: true })
+  invoiceFooter?: string | null
+
+  // Attachment id (core `attachments`) of the document logo.
+  @Property({ name: 'logo_attachment_id', type: 'uuid', nullable: true })
+  logoAttachmentId?: string | null
+
+  @Property({ name: 'default_payment_terms_days', type: 'integer', default: 14 })
+  defaultPaymentTermsDays: number = 14
+
+  @Property({ name: 'default_tax_rate', type: 'numeric', columnType: 'numeric(7, 4)', default: '23' })
+  defaultTaxRate: string = '23'
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+
+  @Property({ name: 'updated_at', type: Date, onUpdate: () => new Date() })
+  updatedAt: Date = new Date()
+
+  @Property({ name: 'deleted_at', type: Date, nullable: true })
+  deletedAt?: Date | null
+}
+
+// ─── Spec C — payments, allocations, imports ─────────────────────
+//
+// A billing-owned payment register (no core `SalesPayment`). One row per
+// money-in event (bank CSV line, manual entry, gateway capture). Invoice
+// `paid_total` / `outstanding` / status are always RECOMPUTED from the
+// active allocations (`lib/allocation.ts`), never incremented.
+// Partial unique indexes (source_ref, external_ref) are in the migration.
+
+@Entity({ tableName: 'billing_payments' })
+@Index({ name: 'billing_payments_status_idx', properties: ['tenantId', 'organizationId', 'status'] })
+@Index({ name: 'billing_payments_account_idx', properties: ['billAccountId', 'status'] })
+@Index({ name: 'billing_payments_import_idx', properties: ['importId'] })
+export class BillingPayment {
+  [OptionalProps]?:
+    | 'reference'
+    | 'payerName'
+    | 'payerAccount'
+    | 'importId'
+    | 'billAccountId'
+    | 'matchReason'
+    | 'externalRef'
+    | 'topupId'
+    | 'metadata'
+    | 'createdAt'
+    | 'updatedAt'
+    | 'deletedAt'
+
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @Property({ name: 'organization_id', type: 'uuid' })
+  organizationId!: string
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  @Property({ name: 'received_at', type: 'date', columnType: 'date' })
+  receivedAt!: Date
+
+  // Always > 0 (refunds are out of scope).
+  @Property({ type: 'numeric', columnType: 'numeric(18, 4)' })
+  amount!: string
+
+  @Property({ name: 'currency_code', type: 'text' })
+  currencyCode!: string
+
+  @Property({ type: 'text', nullable: true })
+  reference?: string | null
+
+  @Property({ name: 'payer_name', type: 'text', nullable: true })
+  payerName?: string | null
+
+  @Property({ name: 'payer_account', type: 'text', nullable: true })
+  payerAccount?: string | null
+
+  // csv | manual | gateway
+  @Property({ type: 'text' })
+  source!: string
+
+  @Property({ name: 'import_id', type: 'uuid', nullable: true })
+  importId?: string | null
+
+  // Null while unmatched; set by the matcher or "assign account".
+  @Property({ name: 'bill_account_id', type: 'uuid', nullable: true })
+  billAccountId?: string | null
+
+  // unmatched | matched | partially_allocated | allocated | ignored | converted_to_topup
+  @Property({ type: 'text' })
+  status!: string
+
+  @Property({ name: 'unallocated_amount', type: 'numeric', columnType: 'numeric(18, 4)' })
+  unallocatedAmount!: string
+
+  // no_reference | currency_mismatch | invoice_already_paid | prepaid_account | manual
+  @Property({ name: 'match_reason', type: 'text', nullable: true })
+  matchReason?: string | null
+
+  // Duplicate guard — sha256 of the row + occurrence index (unique per org).
+  @Property({ name: 'source_ref', type: 'text' })
+  sourceRef!: string
+
+  // Gateway transaction id (unique per org when set).
+  @Property({ name: 'external_ref', type: 'text', nullable: true })
+  externalRef?: string | null
+
+  // Set by "convert to top-up" (C-D3).
+  @Property({ name: 'topup_id', type: 'uuid', nullable: true })
+  topupId?: string | null
+
+  @Property({ type: 'jsonb', nullable: true })
+  metadata?: Record<string, unknown> | null
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+
+  @Property({ name: 'updated_at', type: Date, onUpdate: () => new Date() })
+  updatedAt: Date = new Date()
+
+  @Property({ name: 'deleted_at', type: Date, nullable: true })
+  deletedAt?: Date | null
+}
+
+// Source-typed allocation (Spec C, generalised for Spec D credit memos):
+// `source_type = 'payment' | 'credit_memo'`, `source_id` → billing_payments
+// or billing_invoices. Un-allocate = soft delete (history kept).
+@Entity({ tableName: 'billing_allocations' })
+// Scope-first like the package's other indexes; every allocation read filters by
+// tenant + organization plus the invoice or the source (Migration20261120000000).
+@Index({ name: 'billing_allocations_source_idx', properties: ['tenantId', 'organizationId', 'sourceType', 'sourceId'] })
+@Index({ name: 'billing_allocations_invoice_idx', properties: ['tenantId', 'organizationId', 'invoiceId'] })
+@Index({ name: 'billing_allocations_account_idx', properties: ['tenantId', 'organizationId', 'billAccountId'] })
+export class BillingAllocation {
+  [OptionalProps]?: 'userId' | 'deallocatedByUserId' | 'createdAt' | 'updatedAt' | 'deletedAt'
+
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @Property({ name: 'organization_id', type: 'uuid' })
+  organizationId!: string
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  @Property({ name: 'source_type', type: 'text' })
+  sourceType!: string
+
+  @Property({ name: 'source_id', type: 'uuid' })
+  sourceId!: string
+
+  @Property({ name: 'invoice_id', type: 'uuid' })
+  invoiceId!: string
+
+  @Property({ name: 'bill_account_id', type: 'uuid' })
+  billAccountId!: string
+
+  @Property({ type: 'numeric', columnType: 'numeric(18, 4)' })
+  amount!: string
+
+  @Property({ name: 'currency_code', type: 'text' })
+  currencyCode!: string
+
+  // auto | credit | user | gateway
+  @Property({ name: 'allocated_by', type: 'text' })
+  allocatedBy!: string
+
+  @Property({ name: 'user_id', type: 'uuid', nullable: true })
+  userId?: string | null
+
+  @Property({ name: 'deallocated_by_user_id', type: 'uuid', nullable: true })
+  deallocatedByUserId?: string | null
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+
+  @Property({ name: 'updated_at', type: Date, onUpdate: () => new Date() })
+  updatedAt: Date = new Date()
+
+  @Property({ name: 'deleted_at', type: Date, nullable: true })
+  deletedAt?: Date | null
+}
+
+// One CSV upload (C-D4): counts per outcome + row errors.
+@Entity({ tableName: 'billing_payment_imports' })
+@Index({ name: 'billing_payment_imports_scope_idx', properties: ['tenantId', 'organizationId', 'createdAt'] })
+export class BillingPaymentImport {
+  [OptionalProps]?: 'userId' | 'counts' | 'errors' | 'createdAt' | 'updatedAt' | 'deletedAt'
+
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @Property({ name: 'organization_id', type: 'uuid' })
+  organizationId!: string
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  @Property({ name: 'file_name', type: 'text' })
+  fileName!: string
+
+  @Property({ name: 'row_count', type: 'integer' })
+  rowCount!: number
+
+  // { allocated, partially_allocated, matched, unmatched, duplicate, rejected }
+  @Property({ type: 'jsonb', nullable: true })
+  counts?: Record<string, number> | null
+
+  // [{ row, message }] — capped at 200 entries
+  @Property({ type: 'jsonb', nullable: true })
+  errors?: Array<{ row: number; message: string }> | null
+
+  @Property({ name: 'user_id', type: 'uuid', nullable: true })
+  userId?: string | null
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+
+  @Property({ name: 'updated_at', type: Date, onUpdate: () => new Date() })
+  updatedAt: Date = new Date()
+
+  @Property({ name: 'deleted_at', type: Date, nullable: true })
+  deletedAt?: Date | null
+}

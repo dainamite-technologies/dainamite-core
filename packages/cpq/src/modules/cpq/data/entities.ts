@@ -256,7 +256,15 @@ export class CpqBundleSlot {
 @Index({ name: 'cpq_off_comp_offering_idx', properties: ['organizationId', 'tenantId', 'offeringId'] })
 @Index({ name: 'cpq_off_comp_slot_idx', properties: ['organizationId', 'tenantId', 'offeringId', 'slotId'] })
 @Index({ name: 'cpq_off_comp_child_idx', properties: ['organizationId', 'tenantId', 'childOfferingId'] })
-@Unique({ name: 'cpq_off_comp_unique', properties: ['organizationId', 'tenantId', 'offeringId', 'childOfferingId'] })
+// V-COMP-5 (one live component per child offering) is enforced on live rows
+// only: removal soft-deletes, so the index must ignore deleted rows or the
+// same child could never be added back (#122).
+@Index({
+  name: 'cpq_off_comp_unique',
+  properties: ['organizationId', 'tenantId', 'offeringId', 'childOfferingId'],
+  expression:
+    'CREATE UNIQUE INDEX "cpq_off_comp_unique" ON "cpq_offering_components" ("organization_id", "tenant_id", "offering_id", "child_offering_id") WHERE "deleted_at" IS NULL',
+})
 export class CpqOfferingComponent {
   [OptionalProps]?: 'isDefault' | 'sortOrder' | 'isActive' | 'createdAt' | 'updatedAt' | 'deletedAt'
 
@@ -818,10 +826,10 @@ export class CpqQuoteConfiguration {
 
   // Merge meta — only meaningful for quoteType='renew' with ≥2 absorb targets.
   @Property({ name: 'arc_merge_new_term_start', type: 'date', nullable: true })
-  arcMergeNewTermStart?: Date | null
+  arcMergeNewTermStart?: string | null
 
   @Property({ name: 'arc_merge_new_term_end', type: 'date', nullable: true })
-  arcMergeNewTermEnd?: Date | null
+  arcMergeNewTermEnd?: string | null
 
   @Property({ name: 'arc_merge_new_term_months', type: 'integer', nullable: true })
   arcMergeNewTermMonths?: number | null
@@ -940,14 +948,16 @@ export class CpqQuoteLineConfiguration {
   @Property({ name: 'parent_line_id', type: 'uuid', nullable: true })
   parentLineId?: string | null
 
+  // MikroORM hydrates `type: 'date'` as a `YYYY-MM-DD` string and rejects a
+  // `Date` on assign, so the property is typed as the string it really holds.
   @Property({ name: 'start_date', type: 'date', nullable: true })
-  startDate?: Date | null
+  startDate?: string | null
 
   @Property({ name: 'term_months', type: 'integer', nullable: true })
   termMonths?: number | null
 
   @Property({ name: 'end_date', type: 'date', nullable: true })
-  endDate?: Date | null
+  endDate?: string | null
 
   @Property({ type: 'jsonb', default: '{}' })
   configuration: Record<string, unknown> = {}
@@ -1058,13 +1068,13 @@ export class CpqInventorySubscription {
   nrcAmount: string = '0'
 
   @Property({ name: 'start_date', type: 'date', nullable: true })
-  startDate?: Date | null
+  startDate?: string | null
 
   @Property({ name: 'current_term_start', type: 'date', nullable: true })
-  currentTermStart?: Date | null
+  currentTermStart?: string | null
 
   @Property({ name: 'current_term_end', type: 'date', nullable: true })
-  currentTermEnd?: Date | null
+  currentTermEnd?: string | null
 
   @Property({ name: 'term_months', type: 'integer', nullable: true })
   termMonths?: number | null
@@ -1270,10 +1280,10 @@ export class CpqInventoryAsset {
   quantity: number = 1
 
   @Property({ name: 'purchase_date', type: 'date', nullable: true })
-  purchaseDate?: Date | null
+  purchaseDate?: string | null
 
   @Property({ name: 'delivery_date', type: 'date', nullable: true })
-  deliveryDate?: Date | null
+  deliveryDate?: string | null
 
   @Property({ type: 'jsonb', default: '{}' })
   configuration: Record<string, unknown> = {}
@@ -1397,13 +1407,13 @@ export class CpqOrderLineConfiguration {
   parentLineId?: string | null
 
   @Property({ name: 'start_date', type: 'date', nullable: true })
-  startDate?: Date | null
+  startDate?: string | null
 
   @Property({ name: 'term_months', type: 'integer', nullable: true })
   termMonths?: number | null
 
   @Property({ name: 'end_date', type: 'date', nullable: true })
-  endDate?: Date | null
+  endDate?: string | null
 
   @Property({ type: 'jsonb', default: '{}' })
   configuration: Record<string, unknown> = {}
@@ -1481,10 +1491,10 @@ export class CpqQuoteTargetSubscription {
 
   // Renew-only, populated only when merge_action='standalone'.
   @Property({ name: 'new_term_start', type: 'date', nullable: true })
-  newTermStart?: Date | null
+  newTermStart?: string | null
 
   @Property({ name: 'new_term_end', type: 'date', nullable: true })
-  newTermEnd?: Date | null
+  newTermEnd?: string | null
 
   @Property({ name: 'new_term_months', type: 'integer', nullable: true })
   newTermMonths?: number | null

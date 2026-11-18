@@ -42,7 +42,8 @@ step, you WILL produce incorrect imports and miss required patterns.
 | Task | Load |
 |---|---|
 | Add/modify an entity, create migration | `.ai/guides/core.md` → Module Files, then `yarn mercato db generate` |
-| Add a REST API endpoint | `.ai/guides/core.md` → API Routes |
+| Add a REST API endpoint | `.ai/guides/core.md` → API Routes, **and** `.ai/skills/mcp-tools/SKILL.md` (the route ships with its MCP / AI tool) |
+| Add or change an AI / MCP tool or agent | `.ai/skills/mcp-tools/SKILL.md` |
 | Add a backend page | `.ai/guides/ui.md` → CrudForm / DataTable |
 | Configure sidebar navigation, page groups, settings pages | `.ai/skills/module-scaffold/references/navigation-patterns.md` |
 | Add event subscribers or emit events | `.ai/guides/events.md` |
@@ -80,6 +81,7 @@ These guides ship automatically when the corresponding module is installed.
 | **Any new page / service / list view / bulk op / report / refactor — START HERE** | `.ai/skills/engineering-principles/SKILL.md` |
 | Debug / fix errors | `.ai/skills/troubleshooter/SKILL.md` |
 | Review code changes | `.ai/skills/code-review/SKILL.md` |
+| Any task: read known pitfalls first; record a new lesson learned | `.ai/lessons.md`, `.ai/skills/lessons/SKILL.md` |
 | Write a spec | `.ai/skills/spec-writing/SKILL.md`, `.ai/specs/SPEC-000-template.md` |
 | Implement a spec (or selected phases) | `.ai/skills/implement-spec/SKILL.md` |
 | Write / run unit tests (services, validators, state machines, seeds) | `.ai/skills/unit-tests/SKILL.md` |
@@ -143,7 +145,7 @@ Register in `src/modules.ts`: `{ id: '<id>', from: '@app' }`
 - `yarn generate` automatically runs a best-effort structural cache purge (`yarn mercato configs cache structural --all-tenants`) after successful generation; if the cache command is unavailable, generation still succeeds
 - Sidebar icons MUST use `lucide-react` components — never inline SVG via `React.createElement`
 - `page.meta.ts` MUST include `pageGroup`, `pageGroupKey`, and `pageOrder` for sidebar grouping
-- Settings pages MUST use `pageContext: 'settings' as const` with `navHidden: true`
+- Settings pages MUST use `pageContext: 'settings' as const` and MUST NOT set `navHidden` when they should be listed in the Settings sidebar. The nav builder (`@open-mercato/ui/backend/utils/nav.ts`) drops `navHidden` routes from **every** sidebar, settings included, and the main sidebar already filters out `pageContext !== 'main'`. Use `navHidden: true` only for settings sub-pages reached from another settings page.
 - All related pages within a module MUST share the same `pageGroupKey`
 - DataTable MUST wire pagination props (`page`, `pageSize`, `totalCount`, `onPageChange`)
 

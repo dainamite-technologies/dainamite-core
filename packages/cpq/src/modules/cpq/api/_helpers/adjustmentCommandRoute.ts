@@ -1,9 +1,9 @@
 import { NextResponse } from 'next/server'
 import type { z } from 'zod'
-import type { CommandBus, CommandRuntimeContext } from '@open-mercato/shared/lib/commands'
 import { serializeOperationMetadata } from '@open-mercato/shared/lib/commands/operationMetadata'
 import type { CpqRouteContext } from '../context'
 import { runCpqMutationGuards } from './quoteMutationGuard'
+import { buildCpqCommandContext, resolveCommandBus } from './commandContext'
 import type { AdjustmentWriteResult } from '../../services/priceAdjustments/adjustmentService'
 
 export async function adjustmentCommandRoute<T extends object>(
@@ -23,11 +23,8 @@ export async function adjustmentCommandRoute<T extends object>(
   const input = operation === 'create' ? { quoteId, adjustment: effective }
     : operation === 'update' ? { quoteId, adjustmentId, patch: effective }
       : { quoteId, adjustmentId, ...effective }
-  const commandCtx: CommandRuntimeContext = {
-    container: ctx.container, auth: ctx.auth, organizationScope: ctx.organizationScope,
-    selectedOrganizationId: ctx.organizationId, organizationIds: [ctx.organizationId], request: req,
-  }
-  const bus = ctx.container.resolve<CommandBus>('commandBus')
+  const commandCtx = buildCpqCommandContext(ctx, req)
+  const bus = resolveCommandBus(ctx)
   const commandId = `cpq.quote_price_adjustment.${operation}`
   const { result, logEntry } = await bus.execute<typeof input, AdjustmentWriteResult>(commandId, { input, ctx: commandCtx })
   if (!result) throw new Error('Adjustment command did not return a result')

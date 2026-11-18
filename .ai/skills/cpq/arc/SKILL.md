@@ -176,7 +176,7 @@ cpq.arc.amend.manage          # gate quote_type='amend' creation/edit
 cpq.arc.renew.manage          # gate quote_type='renew' (incl. merge) creation/edit
 cpq.arc.cancel.manage         # gate quote_type='cancel' creation/edit
 cpq.arc.changelog.view        # read CpqSubscriptionChangeLog per sub
-cpq.inventory.expiring.view   # access the Expiring Subscriptions list
+cpq.inventory.view            # Expiring Subscriptions filter + expiring API (cpq.inventory.expiring.view is retired)
 ```
 
 ARC quote approval (status transitions through the lifecycle) reuses

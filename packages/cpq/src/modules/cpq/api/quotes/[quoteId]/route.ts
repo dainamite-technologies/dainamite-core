@@ -1,13 +1,19 @@
 import { NextResponse } from 'next/server'
-import { resolveCpqRouteContext } from '../../context'
+import { cpqContextError, resolveCpqRouteContext } from '../../context'
 import { cpqUpdateQuoteSchema } from '../../../data/validators'
 import { isQuotingError } from '../../../services/cpqQuotingService'
+import { TERMINAL_STATUSES } from '../../../services/types'
 import { resolveQuotingService } from '../../resolveQuotingService'
-import { z } from 'zod'
-import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
+import { CpqQuoteConfiguration } from '../../../data/entities'
+import { SalesQuote } from '@open-mercato/core/modules/sales/data/entities'
 import { resolveAuditActor } from '../../../lib/auditActor'
+import { softDeleteCpqQuote } from '../../../commands/interceptors'
+import { createSourcingPublisher } from '../../../services/costs/sourcingPublisher'
 import { handleArcError } from '../../_helpers/handleArcError'
 import { CPQ_QUOTE_RESOURCE_KIND, runCpqMutationGuards } from '../../_helpers/quoteMutationGuard'
+import { buildCpqCommandContext, commandErrorResponse, resolveCommandBus } from '../../_helpers/commandContext'
+import { z } from 'zod'
+import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { cpqErrorDoc, cpqQuoteIdPathParams } from '../../_helpers/quoteRouteOpenApi'
 
 export const metadata = {
@@ -19,7 +25,8 @@ export const metadata = {
 export async function GET(req: Request, { params }: { params: Promise<{ quoteId: string }> }) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     const { quoteId } = await params
     const scope = { organizationId: ctx.organizationId, tenantId: ctx.tenantId }
@@ -42,7 +49,8 @@ export async function PATCH(
 ) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     const { quoteId } = await params
     const body = cpqUpdateQuoteSchema.parse(await req.json())
@@ -66,7 +74,8 @@ export async function PATCH(
 export async function DELETE(req: Request, { params }: { params: Promise<{ quoteId: string }> }) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     const { quoteId } = await params
     const scope = { organizationId: ctx.organizationId, tenantId: ctx.tenantId }
@@ -79,13 +88,49 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ quote
     })
     if (!guard.ok) return guard.response
 
-    // The service owns the write: aggregate lock, terminal-status refusal, soft-delete and the cancellation of the
-    // quote's open supplier cost requests, in one transaction.
-    const service = resolveQuotingService(ctx)
-    const result = await service.deleteQuote(quoteId, scope, resolveAuditActor(ctx.auth))
+    const em = ctx.em
+    let cpqConfig = await em.findOne(CpqQuoteConfiguration, {
+      id: quoteId, organizationId: scope.organizationId, tenantId: scope.tenantId, deletedAt: null,
+    })
+    if (!cpqConfig) {
+      cpqConfig = await em.findOne(CpqQuoteConfiguration, {
+        quoteId, organizationId: scope.organizationId, tenantId: scope.tenantId, deletedAt: null,
+      })
+    }
+    if (!cpqConfig) return NextResponse.json({ error: 'Quote not found' }, { status: 404 })
+
+    const terminalStatuses: readonly string[] = TERMINAL_STATUSES
+    if (terminalStatuses.includes(cpqConfig.cpqStatus)) {
+      return NextResponse.json({ error: `Cannot delete a quote in '${cpqConfig.cpqStatus}' status` }, { status: 409 })
+    }
+
+    const salesQuote = await em.findOne(SalesQuote, {
+      id: cpqConfig.quoteId, organizationId: scope.organizationId, tenantId: scope.tenantId,
+    })
+
+    // The sales quote and its lines belong to the sales module, so they are
+    // removed through its `sales.quotes.delete` command (sales events, audit
+    // log, undo, search/index side effects). That command runs on its own
+    // forked EM and transaction, so it cannot share one with the CPQ rows.
+    // Order: sales command first, CPQ soft-delete second. If the command
+    // fails, nothing has changed. The command's CPQ interceptor
+    // (`afterExecute`) soft-deletes the CPQ configuration and lines and
+    // cancels the quote's open supplier cost requests; `softDeleteCpqQuote`
+    // below is idempotent and finishes that cleanup when the sales quote was
+    // already gone (a retried DELETE after a failed CPQ flush).
+    if (salesQuote) {
+      await resolveCommandBus(ctx).execute('sales.quotes.delete', {
+        input: { body: { id: salesQuote.id } },
+        ctx: buildCpqCommandContext(ctx, req),
+      })
+    }
+    await softDeleteCpqQuote(em, cpqConfig.quoteId, scope.tenantId, resolveAuditActor(ctx.auth), createSourcingPublisher({ em }))
+
     await guard.runAfterSuccess()
-    return NextResponse.json(result)
+    return NextResponse.json({ ok: true })
   } catch (err) {
+    const commandError = commandErrorResponse(err)
+    if (commandError) return commandError
     return handleArcError(err, 'cpq/quotes/[quoteId].DELETE')
   }
 }
@@ -96,25 +141,33 @@ export const openApi: OpenApiRouteDoc = {
   pathParams: cpqQuoteIdPathParams,
   methods: {
     GET: {
-      summary: 'Get a CPQ quote',
-      responses: [{ status: 200, description: 'The quote with its lines and pricing' }],
-      errors: [cpqErrorDoc(401, 'Unauthorized'), cpqErrorDoc(404, 'Quote not found')],
+      summary: 'Get a CPQ quote with its lines and totals',
+      responses: [{ status: 200, description: 'Quote with lines, charges and totals' }],
+      errors: [cpqErrorDoc(401, 'Unauthorized'), cpqErrorDoc(404, 'Quote not found'), cpqErrorDoc(500, 'Internal error')],
     },
     PATCH: {
-      summary: 'Set the ARC quote type (one-way: new to amend / renew / cancel)',
+      summary: 'Change the quote type of a CPQ quote (ARC)',
+      description:
+        'Only `quoteType` is updatable. The transition is one-way: `new` to `amend`, `renew` or `cancel`; any later change returns 409.',
       requestBody: { schema: cpqUpdateQuoteSchema },
-      responses: [{ status: 200, description: 'The updated quote' }],
-      errors: [cpqErrorDoc(400, 'Validation error or nothing to update'), cpqErrorDoc(404, 'Quote not found'), cpqErrorDoc(409, 'Quote type cannot change')],
+      responses: [{ status: 200, description: 'Quote with its new type' }],
+      errors: [
+        cpqErrorDoc(400, 'Validation error, nothing to update, or transition back to `new`'),
+        cpqErrorDoc(404, 'Quote not found'),
+        cpqErrorDoc(409, 'Quote type is immutable'),
+        cpqErrorDoc(500, 'Internal error'),
+      ],
     },
     DELETE: {
-      summary: 'Delete a CPQ quote',
+      summary: 'Soft-delete a CPQ quote',
       description:
-        'Soft-deletes the quote, its lines and its sales quote under the quote aggregate lock. Open supplier cost requests are cancelled (`quote_closed`) in the same transaction. Registered mutation guards (resource kind `cpq.quote`, operation `delete`) run first.',
+        'Soft-deletes the CPQ quote and its line configurations, and deletes the underlying sales quote and its lines through the sales module command `sales.quotes.delete` (sales events, audit log and undo apply). Open supplier cost requests of the quote are cancelled (`quote_closed`). `quoteId` may be the CPQ configuration id or the sales quote id. Quotes in a terminal status (accepted, rejected, cancelled) cannot be deleted. Registered mutation guards (resource kind `cpq.quote`, operation `delete`) run first.',
       responses: [{ status: 200, description: '`{ ok: true }`', schema: z.object({ ok: z.literal(true) }) }],
       errors: [
         cpqErrorDoc(404, 'Quote not found'),
-        cpqErrorDoc(409, 'The quote is accepted, rejected or cancelled and cannot be deleted'),
+        cpqErrorDoc(409, 'Quote is in a terminal status'),
         cpqErrorDoc(422, 'Blocked by a mutation guard'),
+        cpqErrorDoc(500, 'Internal error'),
       ],
     },
   },

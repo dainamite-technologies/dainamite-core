@@ -121,7 +121,7 @@ export function ReconfirmCostDialog({ orderId, cost, lineName, currency, onClose
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>{t('cpq.quoteCosts.dialog.cancel', 'Cancel')}</Button>
-          <Button onClick={() => void save()} disabled={saving} title="Ctrl/Cmd+Enter">
+          <Button onClick={() => void save()} disabled={saving} title={t('cpq.common.submitShortcut', 'Ctrl/Cmd+Enter')}>
             {saving ? t('cpq.quoteCosts.dialog.saving', 'Saving…') : t('cpq.orderCosts.reconfirm.confirm', 'Re-confirm')}
           </Button>
         </DialogFooter>

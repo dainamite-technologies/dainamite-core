@@ -1,8 +1,10 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { resolveCpqRouteContext } from '../context'
+import { cpqContextError, resolveCpqRouteContext } from '../context'
 import { CpqProductRelationship } from '../../data/entities'
 import { cpqProductRelationshipCreateSchema, cpqProductRelationshipUpdateSchema } from '../../data/validators'
+import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
+import { cpqErrorDoc, cpqPaginationQuery, cpqDeleteByIdBody, cpqSuccessResponseSchema, CPQ_CRUD_WRITE_ERRORS, CPQ_CRUD_BY_ID_ERRORS } from '../_helpers/quoteRouteOpenApi'
 
 export const metadata = {
   GET: { requireAuth: true, requireFeatures: ['cpq.specifications.view'] },
@@ -14,7 +16,8 @@ export const metadata = {
 export async function GET(req: Request) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     const url = new URL(req.url)
     const page = Math.max(1, Number(url.searchParams.get('page') ?? '1'))
@@ -63,7 +66,8 @@ export async function GET(req: Request) {
 export async function POST(req: Request) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     const body = cpqProductRelationshipCreateSchema.parse(await req.json())
     const scope = { organizationId: ctx.organizationId, tenantId: ctx.tenantId }
@@ -99,7 +103,8 @@ export async function POST(req: Request) {
 export async function PUT(req: Request) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     const body = cpqProductRelationshipUpdateSchema.parse(await req.json())
     const { id, ...updates } = body
@@ -136,7 +141,8 @@ export async function PUT(req: Request) {
 export async function DELETE(req: Request) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     const { id } = (await req.json()) as { id?: string }
     if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
@@ -153,4 +159,40 @@ export async function DELETE(req: Request) {
     console.error('[cpq/product-relationships.DELETE]', err)
     return NextResponse.json({ error: 'Internal error' }, { status: 500 })
   }
+}
+
+export const openApi: OpenApiRouteDoc = {
+  tag: 'CPQ Products',
+  summary: 'CPQ product relationships',
+  methods: {
+    GET: {
+      summary: 'List relationships between product specifications',
+      description: 'Relationships (requires, excludes, parent_child) drive quote line validation and allowed child products.',
+      query: cpqPaginationQuery.extend({
+        sourceSpecId: z.string().uuid().optional(),
+        targetSpecId: z.string().uuid().optional(),
+        relationshipType: z.string().optional(),
+      }),
+      responses: [{ status: 200, description: '`{ items, total, page, pageSize, totalPages }`' }],
+      errors: [cpqErrorDoc(500, 'Internal error')],
+    },
+    POST: {
+      summary: 'Create a relationship between two product specifications',
+      requestBody: { schema: cpqProductRelationshipCreateSchema },
+      responses: [{ status: 201, description: 'Created relationship' }],
+      errors: CPQ_CRUD_WRITE_ERRORS,
+    },
+    PUT: {
+      summary: 'Update a product specification relationship',
+      requestBody: { schema: cpqProductRelationshipUpdateSchema },
+      responses: [{ status: 200, description: 'Updated relationship' }],
+      errors: CPQ_CRUD_BY_ID_ERRORS,
+    },
+    DELETE: {
+      summary: 'Soft-delete a product specification relationship',
+      requestBody: { schema: cpqDeleteByIdBody },
+      responses: [{ status: 200, description: 'Deleted', schema: cpqSuccessResponseSchema }],
+      errors: CPQ_CRUD_BY_ID_ERRORS,
+    },
+  },
 }

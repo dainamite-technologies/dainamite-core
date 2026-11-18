@@ -7,6 +7,7 @@ import { flash } from '@open-mercato/ui/backend/FlashMessages'
 import { apiCallOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
 import { normalizeCrudServerError } from '@open-mercato/ui/backend/utils/serverErrors'
 import { AccountForm, type AccountFormValues } from '../../../../components/AccountForm'
+import { billCyclePayload } from '../../../../lib/billCyclePayload'
 
 /**
  * `/backend/billing/accounts/create` — create a Billing Account.
@@ -27,10 +28,10 @@ export default function CreateBillingAccountPage() {
       try {
         const payload: Record<string, unknown> = {
           customerId: values.customerId.trim(),
+          customerKind: values.customerKind,
           name: values.name.trim(),
           currencyCode: values.currencyCode.trim().toUpperCase(),
-          billCycle: values.billCycle,
-          billCycleAnchor: values.billCycleAnchor.trim(),
+          ...billCyclePayload(values),
           invoiceEmail: values.invoiceEmail.trim(),
           invoiceLanguage: values.invoiceLanguage.trim().toLowerCase(),
           invoiceAddress: {
@@ -42,12 +43,16 @@ export default function CreateBillingAccountPage() {
             postal_code: values.invoiceAddress.postal_code.trim(),
             country: values.invoiceAddress.country.trim().toUpperCase(),
           },
-          nextBillDate: values.nextBillDate,
           billingMode: values.billingMode,
         }
         if (values.taxId.trim()) payload.taxId = values.taxId.trim()
         const creditLimit = Number.parseFloat(values.creditLimit)
         if (Number.isFinite(creditLimit) && creditLimit >= 0) payload.creditLimit = creditLimit
+        const termsDays = Number.parseInt(values.paymentTermsDays, 10)
+        if (values.paymentTermsDays.trim() && Number.isInteger(termsDays) && termsDays >= 0) {
+          payload.paymentTermsDays = termsDays
+        }
+        payload.autoSendInvoice = values.autoSendInvoice
         if (values.billingMode === 'prepaid' && values.lowBalanceThreshold.trim()) {
           const threshold = Number.parseFloat(values.lowBalanceThreshold)
           if (Number.isFinite(threshold) && threshold >= 0) payload.lowBalanceThreshold = threshold

@@ -1,7 +1,10 @@
 import { NextResponse } from 'next/server'
-import { resolveCpqRouteContext } from '../../context'
+import { cpqContextError, resolveCpqRouteContext } from '../../context'
 import { DefaultCpqProductService } from '../../../services/cpqProductService'
 import { CpqProductOffering } from '../../../data/entities'
+import { z } from 'zod'
+import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
+import { cpqErrorDoc } from '../../_helpers/quoteRouteOpenApi'
 
 export const metadata = {
   GET: { requireAuth: true, requireFeatures: ['cpq.quotes.view'] },
@@ -10,7 +13,8 @@ export const metadata = {
 export async function GET(req: Request) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     const url = new URL(req.url)
     const offeringId = url.searchParams.get('offeringId')
@@ -22,7 +26,14 @@ export async function GET(req: Request) {
     }
 
     const scope = { organizationId: ctx.organizationId, tenantId: ctx.tenantId }
-    const currentConfig = configParam ? JSON.parse(configParam) : {}
+    let currentConfig: Record<string, unknown> = {}
+    if (configParam) {
+      try {
+        currentConfig = JSON.parse(configParam) as Record<string, unknown>
+      } catch {
+        return NextResponse.json({ error: 'Invalid configuration JSON' }, { status: 400 })
+      }
+    }
 
     // Use ctx.em directly to avoid DI scope issues
     const productService = new DefaultCpqProductService(ctx.em)
@@ -58,4 +69,30 @@ export async function GET(req: Request) {
     console.error('[cpq/quotes/attributes.GET]', err)
     return NextResponse.json({ error: 'Internal error' }, { status: 500 })
   }
+}
+
+export const openApi: OpenApiRouteDoc = {
+  tag: 'CPQ Quotes',
+  summary: 'CPQ quote attributes',
+  methods: {
+    GET: {
+      summary: 'List run-time attributes to configure for an offering',
+      description:
+        "Returns the offering specification's run-time attributes with constraints applied against the current configuration. Requests with only `productId` (legacy) return an empty list.",
+      query: z.object({
+        offeringId: z.string().uuid().optional(),
+        productId: z.string().uuid().optional(),
+        configuration: z
+          .string()
+          .optional()
+          .describe('JSON-encoded object of the attribute values selected so far'),
+      }),
+      responses: [{ status: 200, description: '`{ attributes }`' }],
+      errors: [
+        cpqErrorDoc(400, 'Either offeringId or productId is required'),
+        cpqErrorDoc(404, 'Offering not found'),
+        cpqErrorDoc(500, 'Internal error'),
+      ],
+    },
+  },
 }

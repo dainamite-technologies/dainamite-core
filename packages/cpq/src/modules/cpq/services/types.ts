@@ -54,6 +54,9 @@ export type CpqStatus = (typeof CPQ_STATUSES)[number]
 
 export const TERMINAL_STATUSES: CpqStatus[] = ['accepted', 'rejected', 'cancelled']
 
+/** Statuses from which an AI-initiated "submit for approval" is offered. */
+export const SUBMIT_FOR_APPROVAL_FROM_STATUSES: readonly CpqStatus[] = ['new', 'incomplete', 'ready']
+
 // Per product decision: the CPQ status path is operator-driven and can
 // jump between any pair of statuses. Self-transitions are excluded
 // because they're no-ops. ARC-specific guards (`validateArcQuote`,
@@ -89,13 +92,22 @@ export interface QuoteItemInput {
    * the quote's single attached target when omitted. Required when the ARC
    * quote has multiple non-merge targets (operator must pick). */
   targetSubscriptionId?: string | null
+  /** #123: also add the bundle's default components as child lines. */
+  expandBundleDefaults?: boolean
 }
 
 export interface ValidationError {
   lineId?: string
   adjustmentId?: string
-  type?: 'attribute' | 'relationship'
+  /**
+   * `charge` — V-LINE-1 (offering has charges but none applies).
+   * `bundle_slot` — V-QBUN-* (bundle slot cardinality / membership).
+   */
+  type?: 'attribute' | 'relationship' | 'charge' | 'bundle_slot'
   attribute?: string
+  /** Bundle slot errors: the slot group and slot name the error is about. */
+  slotGroup?: string
+  slotName?: string
   relationshipType?: string
   sourceSpec?: string
   targetSpec?: string
@@ -266,6 +278,8 @@ export const INVENTORY_SUBSCRIPTION_STATUSES = [
   'superseded',
 ] as const
 export type InventorySubscriptionStatus = (typeof INVENTORY_SUBSCRIPTION_STATUSES)[number]
+
+export const INVENTORY_BILLING_CYCLES = ['monthly', 'quarterly', 'annually'] as const
 
 export const INVENTORY_SUBSCRIPTION_TRANSITIONS: Record<InventorySubscriptionStatus, InventorySubscriptionStatus[]> = {
   pending: ['active', 'terminated'],

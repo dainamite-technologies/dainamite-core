@@ -1,10 +1,12 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { resolveCpqRouteContext } from '../context'
+import { cpqContextError, resolveCpqRouteContext } from '../context'
 import { CpqProductOffering, CpqProductCharge, CpqProductSpecification, CpqOfferingComponent, CpqBundleSlot } from '../../data/entities'
 import { cpqProductOfferingCreateSchema, cpqProductOfferingUpdateSchema } from '../../data/validators'
 import { anyChargeHasMarkup, chargeMarkupFields } from '../../lib/chargeView'
 import { canViewCosts } from '../_helpers/costAccess'
+import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
+import { cpqErrorDoc, cpqPaginationQuery, cpqSortDirQuery, cpqDeleteByIdBody, cpqSuccessResponseSchema, CPQ_CRUD_BY_ID_ERRORS } from '../_helpers/quoteRouteOpenApi'
 
 export const metadata = {
   GET: { requireAuth: true, requireFeatures: ['cpq.offerings.view'] },
@@ -16,7 +18,8 @@ export const metadata = {
 export async function GET(req: Request) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     const url = new URL(req.url)
     const scope = { organizationId: ctx.organizationId, tenantId: ctx.tenantId, deletedAt: null }
@@ -220,7 +223,8 @@ export async function GET(req: Request) {
 export async function POST(req: Request) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     const body = cpqProductOfferingCreateSchema.parse(await req.json())
     const scope = { organizationId: ctx.organizationId, tenantId: ctx.tenantId }
@@ -233,8 +237,9 @@ export async function POST(req: Request) {
     })
     if (!spec) return NextResponse.json({ error: 'Specification not found' }, { status: 400 })
 
-    // V-OFF-7: offeringType must match spec's specType
-    const offeringType = body.offeringType ?? 'simple'
+    // V-OFF-7: offeringType must match spec's specType. When the caller omits
+    // it, the offering takes the specification's type.
+    const offeringType = body.offeringType ?? (spec.specType === 'bundle' ? 'bundle' : 'simple')
     if (offeringType !== spec.specType) {
       return NextResponse.json(
         { error: `V-OFF-7: offeringType '${offeringType}' must match specification's specType '${spec.specType}'` },
@@ -242,7 +247,7 @@ export async function POST(req: Request) {
       )
     }
 
-    const entity = ctx.em.create(CpqProductOffering, { ...body, ...scope })
+    const entity = ctx.em.create(CpqProductOffering, { ...body, offeringType, ...scope })
     await ctx.em.flush()
 
     return NextResponse.json(
@@ -277,7 +282,8 @@ export async function POST(req: Request) {
 export async function PUT(req: Request) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     const body = cpqProductOfferingUpdateSchema.parse(await req.json())
     const { id, ...updates } = body
@@ -285,6 +291,29 @@ export async function PUT(req: Request) {
 
     const entity = await ctx.em.findOne(CpqProductOffering, { id, ...scope })
     if (!entity) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+
+    // V-OFF-7 on update: when the spec or the offering type changes, the
+    // resulting offeringType must still match the specification's specType.
+    // The detail page always resends both fields, so only a value that differs
+    // from the stored one counts as a change; legacy rows stay editable.
+    const specChanged = updates.specId !== undefined && updates.specId !== entity.specId
+    const typeChanged = updates.offeringType !== undefined && updates.offeringType !== entity.offeringType
+    if (specChanged || typeChanged) {
+      const spec = await ctx.em.findOne(CpqProductSpecification, {
+        id: updates.specId ?? entity.specId,
+        organizationId: ctx.organizationId,
+        tenantId: ctx.tenantId,
+        deletedAt: null,
+      })
+      if (!spec) return NextResponse.json({ error: 'Specification not found' }, { status: 400 })
+      const offeringType = updates.offeringType ?? entity.offeringType ?? 'simple'
+      if (offeringType !== spec.specType) {
+        return NextResponse.json(
+          { error: `V-OFF-7: offeringType '${offeringType}' must match specification's specType '${spec.specType}'` },
+          { status: 400 },
+        )
+      }
+    }
 
     ctx.em.assign(entity, updates)
     await ctx.em.flush()
@@ -318,7 +347,8 @@ export async function PUT(req: Request) {
 export async function DELETE(req: Request) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     const { id } = (await req.json()) as { id?: string }
     if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
@@ -335,4 +365,51 @@ export async function DELETE(req: Request) {
     console.error('[cpq/product-offerings.DELETE]', err)
     return NextResponse.json({ error: 'Internal error' }, { status: 500 })
   }
+}
+
+export const openApi: OpenApiRouteDoc = {
+  tag: 'CPQ Products',
+  summary: 'CPQ product offerings',
+  methods: {
+    GET: {
+      summary: 'List sellable CPQ product offerings, or get one by id with its specification and charges',
+      description:
+        'With `id` returns the offering plus its specification, charges and (for bundles) components with slots and child offerings. Otherwise a paged list with charges per offering; `search` matches code, name or description.',
+      query: cpqPaginationQuery.extend({
+        id: z.string().uuid().optional(),
+        specId: z.string().uuid().optional(),
+        lifecycleStatus: z.enum(['draft', 'active', 'deprecated']).optional(),
+        code: z.string().optional(),
+        offeringType: z.enum(['simple', 'bundle']).optional(),
+        isActive: z.enum(['true', 'false']).optional(),
+        search: z.string().optional(),
+        sortField: z.enum(['createdAt', 'updatedAt', 'code', 'name', 'lifecycleStatus', 'offeringType']).optional(),
+        sortDir: cpqSortDirQuery,
+      }),
+      responses: [{ status: 200, description: 'Offering detail, or paged list of offerings' }],
+      errors: [cpqErrorDoc(404, 'Offering not found'), cpqErrorDoc(500, 'Internal error')],
+    },
+    POST: {
+      summary: 'Create a CPQ product offering for a specification',
+      description: "`offeringType` is optional: when omitted it is taken from the specification's `specType`. When sent, it must match `specType` (V-OFF-7).",
+      requestBody: { schema: cpqProductOfferingCreateSchema },
+      responses: [{ status: 201, description: 'Created offering' }],
+      errors: [
+        cpqErrorDoc(400, 'Validation error, specification not found, or offeringType does not match specType'),
+        cpqErrorDoc(500, 'Internal error'),
+      ],
+    },
+    PUT: {
+      summary: 'Update a CPQ product offering',
+      requestBody: { schema: cpqProductOfferingUpdateSchema },
+      responses: [{ status: 200, description: 'Updated offering' }],
+      errors: CPQ_CRUD_BY_ID_ERRORS,
+    },
+    DELETE: {
+      summary: 'Soft-delete a CPQ product offering',
+      requestBody: { schema: cpqDeleteByIdBody },
+      responses: [{ status: 200, description: 'Deleted', schema: cpqSuccessResponseSchema }],
+      errors: CPQ_CRUD_BY_ID_ERRORS,
+    },
+  },
 }

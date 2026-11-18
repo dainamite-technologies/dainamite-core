@@ -3,10 +3,14 @@ import * as React from 'react'
 import { useRouter } from 'next/navigation'
 import { Play } from 'lucide-react'
 import type { LegacyColumnDef as ColumnDef } from '@tanstack/react-table/legacy'
-import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { useLocale, useT } from '@open-mercato/shared/lib/i18n/context'
+import { formatBillingDateTime, formatBillingDay } from '../../../lib/displayDate'
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
-import { DataTable } from '@open-mercato/ui/backend/DataTable'
+import { BillingDataTable as DataTable } from '../../../components/BillingDataTable'
+import { RowActions } from '@open-mercato/ui/backend/RowActions'
+import { BillingSettingsLink } from '../../../components/BillingSettingsLink'
+import { billRunMode, useTestRunCleanup } from '../../../components/TestRunActions'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { Input } from '@open-mercato/ui/primitives/input'
@@ -54,7 +58,6 @@ type BillRunRow = {
   parent_run_id: string | null
   dry_run: boolean
   test_mode: boolean
-  catch_up: boolean
   as_of_date: string
   started_at: string | null
   finished_at: string | null
@@ -75,18 +78,6 @@ type ListResponse = {
   items: BillRunRow[]
   total: number
   totalPages: number
-}
-
-function formatDate(value: string | null | undefined): string {
-  if (!value) return '—'
-  const parsed = new Date(value)
-  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString()
-}
-
-function formatDateOnly(value: string | null | undefined): string {
-  if (!value) return '—'
-  const parsed = new Date(value)
-  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleDateString()
 }
 
 function statusVariant(
@@ -113,6 +104,7 @@ function modeBadge(row: BillRunRow): { label: string; variant: 'default' | 'warn
 
 export default function BillRunsListPage() {
   const t = useT()
+  const locale = useLocale()
   const router = useRouter()
   const [rows, setRows] = React.useState<BillRunRow[]>([])
   const [page, setPage] = React.useState(1)
@@ -122,6 +114,7 @@ export default function BillRunsListPage() {
   const [totalPages, setTotalPages] = React.useState(1)
   const [loading, setLoading] = React.useState(true)
   const [search, setSearch] = React.useState('')
+  const cleanup = useTestRunCleanup()
 
   // Trigger dialog — controls the New-run modal and its submit state.
   const [triggerOpen, setTriggerOpen] = React.useState(false)
@@ -143,6 +136,16 @@ export default function BillRunsListPage() {
             label: t('billing.runs.status.partial_failure', 'Partial failure'),
           },
           { value: 'failed', label: t('billing.runs.status.failed', 'Failed') },
+        ],
+      },
+      {
+        id: 'mode',
+        label: t('billing.runs.filters.mode', 'Mode'),
+        type: 'select',
+        options: [
+          { value: 'real', label: t('billing.runs.mode.real', 'Real') },
+          { value: 'test', label: t('billing.runs.mode.test', 'Test') },
+          { value: 'dry', label: t('billing.runs.mode.dry_run', 'Dry-run') },
         ],
       },
       {
@@ -174,6 +177,9 @@ export default function BillRunsListPage() {
       if (typeof filters.triggeredBy === 'string' && filters.triggeredBy) {
         params.set('triggeredBy', filters.triggeredBy)
       }
+      if (typeof filters.mode === 'string' && filters.mode) {
+        params.set('mode', filters.mode)
+      }
       const result = await readApiResultOrThrow<ListResponse>(
         `/api/billing/runs?${params.toString()}`,
       )
@@ -183,7 +189,7 @@ export default function BillRunsListPage() {
     } finally {
       setLoading(false)
     }
-  }, [filters.status, filters.triggeredBy, page, pageSize, search])
+  }, [filters.mode, filters.status, filters.triggeredBy, page, pageSize, search])
 
   React.useEffect(() => {
     void loadRows()
@@ -265,7 +271,7 @@ export default function BillRunsListPage() {
       {
         accessorKey: 'as_of_date',
         header: t('billing.runs.columns.as_of_date', 'As-of date'),
-        cell: ({ row }) => formatDateOnly(row.original.as_of_date),
+        cell: ({ row }) => formatBillingDay(row.original.as_of_date, locale),
       },
       {
         accessorKey: 'triggered_by',
@@ -293,15 +299,15 @@ export default function BillRunsListPage() {
       {
         accessorKey: 'started_at',
         header: t('billing.runs.columns.started_at', 'Started'),
-        cell: ({ row }) => formatDate(row.original.started_at),
+        cell: ({ row }) => formatBillingDateTime(row.original.started_at, locale),
       },
       {
         accessorKey: 'finished_at',
         header: t('billing.runs.columns.finished_at', 'Finished'),
-        cell: ({ row }) => formatDate(row.original.finished_at),
+        cell: ({ row }) => formatBillingDateTime(row.original.finished_at, locale),
       },
     ],
-    [t],
+    [t, locale],
   )
 
   return (
@@ -310,10 +316,13 @@ export default function BillRunsListPage() {
         <DataTable
           title={t('billing.runs.title', 'Bill Runs')}
           actions={
-            <Button onClick={() => setTriggerOpen(true)}>
-              <Play size={16} />
-              {t('billing.runs.trigger.action', 'New run')}
-            </Button>
+            <div className="flex items-center gap-2">
+              <BillingSettingsLink />
+              <Button onClick={() => setTriggerOpen(true)}>
+                <Play size={16} />
+                {t('billing.runs.trigger.action', 'New run')}
+              </Button>
+            </div>
           }
           refreshButton={{
             label: t('billing.common.refresh', 'Refresh'),
@@ -325,6 +334,37 @@ export default function BillRunsListPage() {
           columns={columns}
           data={rows}
           onRowClick={(row) => router.push(`/backend/billing/runs/${row.id}`)}
+          rowActions={(row) => {
+            const mode = billRunMode(row)
+            return (
+              <RowActions
+                items={[
+                  {
+                    id: 'open',
+                    label: t('billing.runs.actions.open', 'Open'),
+                    href: `/backend/billing/runs/${row.id}`,
+                  },
+                  ...(mode !== 'real' && row.status !== 'running'
+                    ? [
+                        {
+                          id: 'delete',
+                          label: t('billing.runs.delete.action', 'Delete run'),
+                          destructive: true,
+                          onSelect: async () => {
+                            const removed = await cleanup.remove({
+                              runId: row.id,
+                              mode,
+                              draftsCount: row.summary?.drafts_created,
+                            })
+                            if (removed !== null) void loadRows()
+                          },
+                        },
+                      ]
+                    : []),
+                ]}
+              />
+            )
+          }}
           isLoading={loading}
           pagination={{
             page,
@@ -391,7 +431,7 @@ export default function BillRunsListPage() {
                 <span className="text-xs text-muted-foreground">
                   {t(
                     'billing.runs.trigger.dialog.as_of_date.help',
-                    'Accounts whose next bill date is on or before this date will be billed.',
+                    'Bills every due cycle up to this date — one draft per bill date. Test and dry-run simulate them without changing accounts.',
                   )}
                 </span>
               </label>
@@ -420,6 +460,7 @@ export default function BillRunsListPage() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+        {cleanup.ConfirmDialogElement}
       </PageBody>
     </Page>
   )

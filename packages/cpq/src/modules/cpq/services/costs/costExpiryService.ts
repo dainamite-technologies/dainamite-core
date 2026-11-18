@@ -13,6 +13,9 @@ import { COST_CLOSED_STATUSES } from './costLock'
 import { liveQuoteConfigurationIds } from './costRequestQueue'
 import { findQuoteOrder } from './quoteOrderLookup'
 
+/** Body of the warning once the cost is already past its validity (the type's own body says "expires in N days"). */
+const EXPIRED_COST_BODY = { bodyKey: 'cpq.notifications.costExpiring.bodyExpired' } as const
+
 /**
  * Supplier cost expiry warnings (index-costs spec, Q2 / Q3 / Q5 / Q14 / Q15). One scan per organization:
  *
@@ -231,7 +234,7 @@ export class CpqCostExpiryService {
     }
     await notifyCostManagers({ tenantId: ctx.scope.tenantId }, ctx.scope.organizationId, {
       typeDef,
-      bodyKey: warning.expired ? 'cpq.notifications.costExpiring.bodyExpired' : typeDef.bodyKey,
+      bodyKey: warning.expired ? EXPIRED_COST_BODY.bodyKey : typeDef.bodyKey,
       titleVariables: { quoteNumber: names.quoteNumber },
       bodyVariables: { costName: line.name, validUntil: warning.validUntil },
       linkHref: `/backend/cpq/quotes/${encodeURIComponent(warning.quoteId)}#costs`,

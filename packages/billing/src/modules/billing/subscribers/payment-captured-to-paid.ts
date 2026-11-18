@@ -1,34 +1,24 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
-import { SalesInvoice } from '@open-mercato/core/modules/sales/data/entities'
-import { resolveInvoiceStatusEntryId } from '../lib/invoiceStatus'
+import { BillingInvoice, BillingPayment } from '../data/entities'
+import { withAccountLock } from '../lib/accountLock'
+import { allocate, applyAccountCredit, emptyEffects, mergeEffects, toCents, type AllocationEffects } from '../lib/allocation'
+import { emitAllocationEffects } from '../lib/allocationEvents'
+import { emitBillingEvent } from '../events'
 
 /**
- * Subscriber: payment captured → billing invoice paid.
+ * Subscriber: gateway payment captured → billing payment + allocation
+ * (Spec C, P-D9 — the single code path to "paid").
  *
- * Spec wishlist was `payments.payment.completed` carrying `invoice_id`.
- * The actual upstream event is `payment_gateways.payment.captured` and
- * its payload carries `paymentId` — set by whoever created the payment
- * session. Billing flows that drive their own payment sessions can
- * pass `paymentId = invoice.id`; the subscriber matches on that.
+ * The payment session is created with `paymentId = invoice.id`, so the
+ * captured event identifies the billing invoice. Instead of flipping the
+ * invoice status, the capture becomes a `BillingPayment` (`source =
+ * gateway`, `external_ref = transactionId ?? paymentId`) allocated to that
+ * invoice through the allocation service; any remainder is account credit.
  *
- * Behaviour:
- *   1. Try to find a `core/sales` invoice with `id = payload.paymentId`
- *      scoped to the same tenant/organization.
- *   2. If found AND its `status == 'posted'`, flip it to `'paid'`
- *      (resolves the `paid` `DictionaryEntry`, updates `status` +
- *      `status_entry_id`). Drafts and already-paid / voided invoices
- *      are left untouched.
- *   3. If `paymentId` does not point at a billing-known invoice (e.g.
- *      the payment was for a `sales.order`), the subscriber is a
- *      no-op — every other module's own subscriber owns its slice.
- *
- * Cross-tenant safety: we always re-scope by `tenantId` +
- * `organizationId` from the event payload. A malformed payload (e.g.
- * missing scope fields) short-circuits without touching the DB.
- *
- * Idempotency: re-firing the same captured event finds the invoice
- * already paid and skips silently.
+ * Idempotent: a re-delivered event finds the payment by `external_ref` and
+ * does nothing. Payments for anything that is not an open billing
+ * receivable are ignored (other modules own them).
  */
 
 export const metadata = {
@@ -37,53 +27,85 @@ export const metadata = {
   id: 'billing-payment-captured-to-paid',
 }
 
-type CapturedPayload = {
+export type CapturedPayload = {
   paymentId?: string
   transactionId?: string
   organizationId?: string
   tenantId?: string
   providerKey?: string
+  amount?: number | string
+  currencyCode?: string
+}
+
+export async function recordGatewayCapture(
+  em: EntityManager,
+  payload: CapturedPayload,
+): Promise<'recorded' | 'duplicate' | 'skipped'> {
+  if (!payload?.paymentId || !payload.tenantId || !payload.organizationId) return 'skipped'
+  const scope = { tenantId: payload.tenantId, organizationId: payload.organizationId }
+  const invoice = await em.findOne(BillingInvoice, { id: payload.paymentId, ...scope, deletedAt: null } as never)
+  if (!invoice || invoice.testRun || !['invoice', 'debit_memo'].includes(invoice.documentType)) return 'skipped'
+  const externalRef = payload.transactionId ?? payload.paymentId
+  const existing = await em.findOne(BillingPayment, { ...scope, externalRef } as never)
+  if (existing) return 'duplicate'
+  if (!['posted', 'partially_paid'].includes(invoice.status)) return 'skipped'
+
+  const captured = toCents(payload.amount ?? invoice.outstanding)
+  if (captured <= 0) return 'skipped'
+  const amount = (captured / 100).toFixed(4)
+  const now = new Date()
+  const payment = em.create(BillingPayment, {
+    ...scope,
+    receivedAt: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())),
+    amount,
+    currencyCode: (payload.currencyCode ?? invoice.currencyCode).toUpperCase(),
+    reference: invoice.number,
+    source: 'gateway',
+    billAccountId: invoice.billAccountId,
+    status: 'matched',
+    unallocatedAmount: amount,
+    sourceRef: `gateway:${externalRef}`,
+    externalRef,
+    metadata: { provider_key: payload.providerKey ?? null },
+    createdAt: now,
+    updatedAt: now,
+  })
+  em.persist(payment)
+  await em.flush()
+
+  const effects: AllocationEffects = await withAccountLock(
+    em,
+    { tenantId: scope.tenantId, billAccountId: invoice.billAccountId },
+    async (tem) => {
+      const all = emptyEffects()
+      const take = Math.min(captured, toCents(invoice.outstanding))
+      if (take > 0 && payment.currencyCode === invoice.currencyCode) {
+        mergeEffects(
+          all,
+          await allocate(tem, scope, {
+            source: { type: 'payment', id: payment.id },
+            invoiceId: invoice.id,
+            amountCents: take,
+            by: 'gateway',
+          }),
+        )
+      }
+      mergeEffects(
+        all,
+        await applyAccountCredit(tem, scope, { id: invoice.billAccountId, currencyCode: payment.currencyCode }, {
+          onlySources: [{ type: 'payment', id: payment.id }],
+        }),
+      )
+      return all
+    },
+  )
+  await emitBillingEvent('billing.payment.created', { ...scope, paymentId: payment.id, source: 'gateway' })
+  await emitAllocationEffects(scope, effects)
+  return 'recorded'
 }
 
 export default async function handle(payload: CapturedPayload): Promise<void> {
-  if (!payload?.paymentId || !payload.tenantId || !payload.organizationId) {
-    return
-  }
-
   const container = await createRequestContainer()
   const em = (container.resolve('em') as EntityManager).fork()
-
-  const invoice = await em.findOne(SalesInvoice, {
-    id: payload.paymentId,
-    tenantId: payload.tenantId,
-    organizationId: payload.organizationId,
-    deletedAt: null,
-  })
-  if (!invoice) {
-    // The captured payment isn't for a billing invoice — silent
-    // no-op. Other subscribers (sales, checkout) handle their slice.
-    return
-  }
-  if (invoice.status === 'paid') {
-    // Already paid — idempotent re-firing.
-    return
-  }
-  if (invoice.status !== 'posted') {
-    // A captured payment for a draft / void invoice is suspicious but
-    // not actionable here. Future iteration: log to audit_logs.
-    return
-  }
-
-  const paidStatusEntryId = await resolveInvoiceStatusEntryId(
-    em,
-    payload.tenantId,
-    payload.organizationId,
-    'paid',
-  )
-  invoice.status = 'paid'
-  invoice.statusEntryId = paidStatusEntryId
-  invoice.paidTotalAmount = invoice.grandTotalGrossAmount
-  invoice.outstandingAmount = '0'
-  invoice.updatedAt = new Date()
-  await em.flush()
+  await recordGatewayCapture(em, payload)
 }

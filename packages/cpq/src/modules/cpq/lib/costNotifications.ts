@@ -111,10 +111,16 @@ export async function notifyCostUser(
 type AnsweredEvent = { valueStatus?: string | null; errorCode?: string | null; lineReady?: boolean | null }
 
 /** Body key of the `answered` notification: exchange rate missing, then any other not-ready line, then budgetary, else confirmed. */
+const ANSWERED_BODY = {
+  confirmedKey: 'cpq.notifications.costRequest.answered.body.confirmed',
+  estimatedKey: 'cpq.notifications.costRequest.answered.body.estimated',
+  rateMissingKey: 'cpq.notifications.costRequest.answered.body.rateMissing',
+  notReadyKey: 'cpq.notifications.costRequest.answered.body.notReady',
+} as const
+
 export function answeredBodyKey(event: AnsweredEvent): string {
-  const prefix = 'cpq.notifications.costRequest.answered.body'
-  if (event.errorCode === 'CURRENCY_NO_RATE') return `${prefix}.rateMissing`
-  if (event.lineReady === false) return `${prefix}.notReady`
-  if (event.valueStatus === 'estimated') return `${prefix}.estimated`
-  return `${prefix}.confirmed`
+  if (event.errorCode === 'CURRENCY_NO_RATE') return ANSWERED_BODY.rateMissingKey
+  if (event.lineReady === false) return ANSWERED_BODY.notReadyKey
+  if (event.valueStatus === 'estimated') return ANSWERED_BODY.estimatedKey
+  return ANSWERED_BODY.confirmedKey
 }

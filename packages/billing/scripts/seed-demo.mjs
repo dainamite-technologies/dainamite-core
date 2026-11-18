@@ -3,7 +3,7 @@
  *
  * Populates the billing module with a small, realistic data set so the
  * admin UI has something to click through:
- *   - 5 billing accounts (PLN / EUR, monthly / quarterly / annually)
+ *   - 5 billing accounts (PLN / EUR, monthly / every 3 months / annually)
  *   - 10 billing items (recurring / one-time / usage)
  *   - 3 usage records on the metered Acme Telecom item
  *   - 1 Bill Run -> 3 draft invoices (ready to review + post)
@@ -66,7 +66,7 @@ const ACCOUNTS = [
     name: 'Acme Telecom Sp. z o.o.',
     currencyCode: 'PLN',
     billCycle: 'monthly',
-    billCycleAnchor: '1',
+    billCycleDay: '1',
     invoiceEmail: 'faktury@acme-telecom.example',
     invoiceLanguage: 'pl',
     nextBillDate: '2026-05-01',
@@ -83,7 +83,7 @@ const ACCOUNTS = [
     name: 'Globex Networks Sp. z o.o.',
     currencyCode: 'PLN',
     billCycle: 'monthly',
-    billCycleAnchor: '15',
+    billCycleDay: '15',
     invoiceEmail: 'rozliczenia@globex-networks.example',
     invoiceLanguage: 'pl',
     nextBillDate: '2026-05-15',
@@ -91,15 +91,17 @@ const ACCOUNTS = [
     taxId: '9876543210',
     items: [
       { type: 'recurring', description: 'Abonament flotowy — 50 kart SIM', rateJson: { unit_price: 2499.0 } },
-      { type: 'recurring', description: 'Pakiet roamingowy', rateJson: { unit_price: 149.0 } },
+      // Billed in arrears from the previous cycle (Spec A demo).
+      { type: 'recurring', description: 'Pakiet roamingowy', rateJson: { unit_price: 149.0 }, chargeTiming: 'in_arrears', billStartDate: '2026-04-15' },
     ],
   },
   {
     customerId: 'cust-initech-003',
     name: 'Initech Cloud GmbH',
     currencyCode: 'EUR',
-    billCycle: 'quarterly',
-    billCycleAnchor: '1',
+    billCycle: 'monthly',
+    billCycleInterval: 3,
+    billCycleDay: '1',
     invoiceEmail: 'billing@initech-cloud.example',
     invoiceLanguage: 'en',
     nextBillDate: '2026-07-01',
@@ -115,7 +117,7 @@ const ACCOUNTS = [
     name: 'Contoso Analytics Ltd.',
     currencyCode: 'EUR',
     billCycle: 'annually',
-    billCycleAnchor: '1',
+    billCycleDay: '1',
     invoiceEmail: 'ap@contoso-analytics.example',
     invoiceLanguage: 'en',
     nextBillDate: '2026-06-01',
@@ -130,7 +132,7 @@ const ACCOUNTS = [
     name: 'Northwind Studio s.c.',
     currencyCode: 'PLN',
     billCycle: 'monthly',
-    billCycleAnchor: '1',
+    billCycleDay: '1',
     invoiceEmail: 'biuro@northwind-studio.example',
     invoiceLanguage: 'pl',
     nextBillDate: '2026-05-01',
@@ -156,7 +158,10 @@ async function main() {
     const itemPayload = items.map((it) => ({
       billAccountId: accountId,
       type: it.type,
-      billStartDate: '2026-04-01',
+      // Spec A: recurring items are billed in advance, so they start on the
+      // account's bill date (the first run bills the coming period).
+      billStartDate: it.billStartDate ?? acc.nextBillDate,
+      ...(it.chargeTiming ? { chargeTiming: it.chargeTiming } : {}),
       description: it.description,
       rateJson: it.rateJson,
       ...(it.uomCode ? { uomCode: it.uomCode } : {}),

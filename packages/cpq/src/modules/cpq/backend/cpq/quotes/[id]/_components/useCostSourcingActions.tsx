@@ -55,10 +55,10 @@ export function useCostSourcingActions({ quoteId, cpqStatus, convertedOrderId, c
   }, [t, refresh])
 
   /** POST to a cost sub-route; flashes the failure, refreshes on success. */
-  const post = React.useCallback(async (cost: FullQuoteCost, action: string, body: Record<string, unknown>, successKey: string, successFallback: string) => {
+  const post = React.useCallback(async (cost: FullQuoteCost, action: string, body: Record<string, unknown>, successMessage: string) => {
     const call = await apiCall<unknown>(`/api/cpq/quotes/${quoteId}/costs/${cost.id}/${action}`, json(body))
     if (!call.ok) { flashFailure(classifySourcingError(call.status, call.result)); return }
-    flash(t(successKey, successFallback), 'success')
+    flash(successMessage, 'success')
     await refresh()
   }, [quoteId, flashFailure, refresh, t])
 
@@ -72,7 +72,7 @@ export function useCostSourcingActions({ quoteId, cpqStatus, convertedOrderId, c
     permissions,
     closed,
     handlers: {
-      request: (cost) => void post(cost, 'request', { expectedRevision: revision }, 'cpq.costRequests.flash.requested', 'Cost requested'),
+      request: (cost) => void post(cost, 'request', { expectedRevision: revision }, t('cpq.costRequests.flash.requested', 'Cost requested')),
       cancel: (cost) => {
         void (async () => {
           if (!cost.costRequestId) return
@@ -83,7 +83,7 @@ export function useCostSourcingActions({ quoteId, cpqStatus, convertedOrderId, c
             variant: 'destructive',
           })
           if (!ok) return
-          await post(cost, 'cancel-request', { costRequestId: cost.costRequestId, expectedRevision: revision }, 'cpq.costRequests.flash.cancelled', 'Cost request cancelled')
+          await post(cost, 'cancel-request', { costRequestId: cost.costRequestId, expectedRevision: revision }, t('cpq.costRequests.flash.cancelled', 'Cost request cancelled'))
         })()
       },
       answer: (cost, line) => { const target = targetOf(cost, line); if (target) setDialog({ kind: 'answer', target }) },
@@ -101,7 +101,7 @@ export function useCostSourcingActions({ quoteId, cpqStatus, convertedOrderId, c
             confirmText: t('cpq.costRequests.applyConfirm.confirm', 'Reopen and apply supplier answer'),
           })
           if (!ok) return
-          await post(cost, 'apply-answer', { expectedRevision: revision }, 'cpq.costRequests.flash.applied', 'Supplier answer applied')
+          await post(cost, 'apply-answer', { expectedRevision: revision }, t('cpq.costRequests.flash.applied', 'Supplier answer applied'))
         })()
       },
     },

@@ -2,10 +2,10 @@ import { z } from 'zod'
 import { makeCrudRoute } from '@open-mercato/shared/lib/crud/factory'
 import { withScopedPayload } from '@open-mercato/shared/lib/api/scoped'
 import { resolveTranslations } from '@open-mercato/shared/lib/i18n/server'
-import { SalesInvoice } from '@open-mercato/core/modules/sales/data/entities'
 import { billingEntityIds } from '../../../data/entityIds'
 import { billingInvoicePostSchema } from '../../../data/validators'
 import { createBillingCrudOpenApi } from '../../openapi'
+import { BillingInvoice } from '../../../data/entities'
 
 /**
  * `POST /api/billing/invoices/post`
@@ -13,13 +13,14 @@ import { createBillingCrudOpenApi } from '../../openapi'
  * Operator action: flip a billing-drafted invoice from `draft` →
  * `posted`. The command refuses non-draft inputs (409 with
  * `billing.invoice.not_draft`) and test-mode invoices (409 with
- * `billing.invoice.test_run`). The invoice number is NOT re-assigned
- * (it was set at draft create — see Phase 2 deviation note in the
- * spec).
+ * `billing.invoice.test_run`). The series number is claimed at post
+ * (Spec 0 numbering masks) — drafts carry a temporary `DRAFT-…` number.
+ * 409 `billing.invoice.number_conflict` when the mask repeats an issued
+ * number.
  *
  * Implemented as a create-only `makeCrudRoute` so it inherits the same
  * RBAC + OpenAPI plumbing as the rest of the billing surface. The
- * `entity` is `SalesInvoice` only because the factory requires one;
+ * `entity` is `BillingInvoice` only because the factory requires one;
  * the GET half is never exposed on this URL.
  */
 
@@ -41,7 +42,7 @@ const rawBodySchema = z.object({}).passthrough()
 const crud = makeCrudRoute({
   metadata: routeMetadata,
   orm: {
-    entity: SalesInvoice,
+    entity: BillingInvoice,
     idField: 'id',
     orgField: 'organizationId',
     tenantField: 'tenantId',

@@ -4,6 +4,8 @@ import {
   mapSubscriptionItemsToBillingItems,
   type CpqSubscriptionItem,
 } from '../lib/chargeMapper'
+import { arcItemBillStart, loadArcBillStartSetup, markArcSetupApplied } from '../lib/arcBillStart'
+import type { BillStartSetup } from '../lib/orderSetupResolution'
 
 /**
  * Subscriber: `cpq.subscription.renewed` → extend term + add items.
@@ -15,9 +17,10 @@ import {
  *     subscription) — connector clears or extends it to the new
  *     term's end (`newTermEnd` from the payload).
  *
- * New items added at renewal (e.g. upsell at renewal time) are
- * created with `bill_start_date = newTermStart`, same shape as
- * activation.
+ * New items added at renewal (e.g. upsell at renewal time) are created
+ * on the subscription's own account, same shape as activation. Bill start
+ * per added line (order billing setup, D7): line override → CPQ service
+ * start → the order's default bill start → `newTermStart`.
  *
  * The connector does NOT post a proration line for renewals — by
  * definition renewal happens at the cycle boundary (or it's an early
@@ -31,7 +34,7 @@ export const metadata = {
   id: 'cpq-billing-connector:subscription-renewed',
 }
 
-type RenewedPayload = {
+export type RenewedPayload = {
   tenantId: string
   organizationId: string
   subscriptionId: string
@@ -39,6 +42,31 @@ type RenewedPayload = {
   newTermStart: string
   newTermEnd?: string | null
   addedItems?: CpqSubscriptionItem[]
+  /** CPQ order id — the key of the order billing setup. */
+  sourceOrderId?: string
+}
+
+/** Billing Item payloads for the items added at renewal. */
+export function buildRenewedItemPayloads(
+  billAccountId: string,
+  payload: RenewedPayload,
+  setup: BillStartSetup | null = null,
+) {
+  return mapSubscriptionItemsToBillingItems({
+    subscriptionId: payload.subscriptionId,
+    items: payload.addedItems ?? [],
+    billStartDate: payload.newTermStart,
+    billStartDateFor: (item) => arcItemBillStart(item, setup, payload.newTermStart),
+  }).map((item) => ({
+    billAccountId,
+    type: item.type,
+    billStartDate: item.billStartDate,
+    description: item.description,
+    rateJson: item.rateJson,
+    subscriptionId: item.subscriptionId,
+    subscriptionItemId: item.subscriptionItemId,
+    sourceRef: item.sourceRef,
+  }))
 }
 
 export default async function handle(payload: RenewedPayload): Promise<void> {
@@ -71,22 +99,17 @@ export default async function handle(payload: RenewedPayload): Promise<void> {
     null
   if (!accountId) return
 
-  const newPayloads = mapSubscriptionItemsToBillingItems({
-    subscriptionId: payload.subscriptionId,
-    items: payload.addedItems ?? [],
-    billStartDate: payload.newTermStart,
+  const added = payload.addedItems ?? []
+  if (added.length === 0) return
+  const setup = await loadArcBillStartSetup(container, scope, payload.sourceOrderId)
+  const newPayloads = buildRenewedItemPayloads(accountId, payload, setup)
+  if (newPayloads.length === 0) return
+  await billingApi.bulkCreateItems(scope, newPayloads)
+  const account = await billingApi.findAccountById(scope, accountId)
+  await markArcSetupApplied(container, scope, {
+    sourceOrderId: payload.sourceOrderId,
+    customerId: payload.customerId,
+    currencyCode: account?.currencyCode ?? '',
+    billingAccountId: accountId,
   })
-  await billingApi.bulkCreateItems(
-    scope,
-    newPayloads.map((item) => ({
-      billAccountId: accountId,
-      type: item.type,
-      billStartDate: item.billStartDate,
-      description: item.description,
-      rateJson: item.rateJson,
-      subscriptionId: item.subscriptionId,
-      subscriptionItemId: item.subscriptionItemId,
-      sourceRef: item.sourceRef,
-    })),
-  )
 }

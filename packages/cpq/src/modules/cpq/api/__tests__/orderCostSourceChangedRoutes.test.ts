@@ -1,7 +1,7 @@
 const activateOrder = jest.fn(), transitionOrderStatus = jest.fn()
 const ctx = { auth: { sub: 'user', tenantId: 'tenant' }, tenantId: 'tenant', organizationId: 'org',
   container: { resolve: (name: string) => ({ cpqOrderService: { activateOrder, transitionOrderStatus } } as Record<string, unknown>)[name] } }
-jest.mock('../context', () => ({ resolveCpqRouteContext: jest.fn(async () => ctx) }))
+jest.mock('../context', () => ({ cpqContextError: jest.requireActual('../context').cpqContextError, resolveCpqRouteContext: jest.fn(async () => ctx) }))
 import { POST as activate, openApi } from '../orders/[orderId]/activate/route'
 import { POST as transition } from '../orders/[orderId]/status/route'
 import { OrderError } from '../../services/cpqOrderService'

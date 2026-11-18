@@ -1,3 +1,4 @@
+import { toDateColumn } from '../lib/dateColumns'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import {
   CpqInventorySubscription,
@@ -471,7 +472,7 @@ export class DefaultCpqInventoryService {
       currencyCode: input.currencyCode ?? await getBaseCurrencyCode(this.em, scope),
       mrcAmount: '0',
       nrcAmount: '0',
-      startDate: input.startDate ? new Date(input.startDate) : null,
+      startDate: toDateColumn(input.startDate),
       termMonths: input.termMonths ?? null,
       autoRenew: input.autoRenew ?? true,
       sourceQuoteId: input.sourceQuoteId ?? null,
@@ -549,8 +550,8 @@ export class DefaultCpqInventoryService {
           currencyCode: assetInput.currencyCode ?? input.currencyCode ?? await getBaseCurrencyCode(this.em, scope),
           purchasePrice: String(assetInput.purchasePrice ?? 0),
           quantity: assetInput.quantity ?? 1,
-          purchaseDate: assetInput.purchaseDate ? new Date(assetInput.purchaseDate) : null,
-          deliveryDate: assetInput.deliveryDate ? new Date(assetInput.deliveryDate) : null,
+          purchaseDate: toDateColumn(assetInput.purchaseDate),
+          deliveryDate: toDateColumn(assetInput.deliveryDate),
           configuration: assetInput.configuration ?? {},
           charges: assetInput.charges ?? null,
           sourceQuoteId: assetInput.sourceQuoteId ?? input.sourceQuoteId ?? null,
@@ -630,7 +631,7 @@ export class DefaultCpqInventoryService {
     if (updates.billingCycle !== undefined) sub.billingCycle = updates.billingCycle
     if (updates.autoRenew !== undefined) sub.autoRenew = updates.autoRenew
     if (updates.termMonths !== undefined) sub.termMonths = updates.termMonths
-    if (updates.currentTermEnd !== undefined) sub.currentTermEnd = updates.currentTermEnd ? new Date(updates.currentTermEnd) : null
+    if (updates.currentTermEnd !== undefined) sub.currentTermEnd = toDateColumn(updates.currentTermEnd)
     if (updates.metadata !== undefined) sub.metadata = updates.metadata
 
     await this.em.flush()
@@ -927,8 +928,8 @@ export class DefaultCpqInventoryService {
       currencyCode: input.currencyCode ?? await getBaseCurrencyCode(this.em, scope),
       purchasePrice: String(input.purchasePrice ?? 0),
       quantity: input.quantity ?? 1,
-      purchaseDate: input.purchaseDate ? new Date(input.purchaseDate) : null,
-      deliveryDate: input.deliveryDate ? new Date(input.deliveryDate) : null,
+      purchaseDate: toDateColumn(input.purchaseDate),
+      deliveryDate: toDateColumn(input.deliveryDate),
       configuration: input.configuration ?? {},
       charges: input.charges ?? null,
       sourceQuoteId: input.sourceQuoteId ?? null,
@@ -954,7 +955,7 @@ export class DefaultCpqInventoryService {
     if (updates.name !== undefined) asset.name = updates.name
     if (updates.description !== undefined) asset.description = updates.description
     if (updates.assetType !== undefined) asset.assetType = updates.assetType
-    if (updates.deliveryDate !== undefined) asset.deliveryDate = updates.deliveryDate ? new Date(updates.deliveryDate) : null
+    if (updates.deliveryDate !== undefined) asset.deliveryDate = toDateColumn(updates.deliveryDate)
     if (updates.metadata !== undefined) asset.metadata = updates.metadata
 
     await this.em.flush()
@@ -1233,8 +1234,8 @@ export class DefaultCpqInventoryService {
 
     const newStart = toDate(input.term.newTermStart)
     const newEnd = toDate(input.term.newTermEnd)
-    sub.currentTermStart = newStart
-    sub.currentTermEnd = newEnd
+    sub.currentTermStart = toDateColumn(newStart)
+    sub.currentTermEnd = toDateColumn(newEnd)
     if (input.term.newTermMonths != null) sub.termMonths = input.term.newTermMonths
 
     const effectiveAt = new Date()
@@ -1379,8 +1380,8 @@ export class DefaultCpqInventoryService {
       currencyCode,
       mrcAmount: '0',
       nrcAmount: '0',
-      currentTermStart: newTermStart,
-      currentTermEnd: newTermEnd,
+      currentTermStart: toDateColumn(newTermStart),
+      currentTermEnd: toDateColumn(newTermEnd),
       termMonths: input.term.newTermMonths ?? null,
       autoRenew: true,
       activatedAt: new Date(),

@@ -74,7 +74,7 @@ export default function PricingTableDetailPage(props: { params?: { id?: string }
   const load = React.useCallback(async () => {
     if (isNew) return
     if (!id || !UUID_RE.test(id)) {
-      setError('Invalid pricing table ID')
+      setError(t('cpq.pricing.detail.errors.invalidId', 'Invalid pricing table ID'))
       setLoading(false)
       return
     }
@@ -82,7 +82,7 @@ export default function PricingTableDetailPage(props: { params?: { id?: string }
     try {
       const res = await fetch(`/api/cpq/pricing-tables?id=${encodeURIComponent(id)}`)
       if (!res.ok) {
-        setError('Pricing table not found')
+        setError(t('cpq.pricing.detail.errors.notFound', 'Pricing table not found'))
         return
       }
       const data = await res.json()
@@ -101,11 +101,11 @@ export default function PricingTableDetailPage(props: { params?: { id?: string }
       setEntries(data.entries ?? [])
     } catch (err) {
       console.error('Failed to load pricing table', err)
-      setError('Failed to load')
+      setError(t('cpq.pricing.detail.errors.loadFailed', 'Failed to load'))
     } finally {
       setLoading(false)
     }
-  }, [id, isNew])
+  }, [id, isNew, t])
 
   React.useEffect(() => {
     void load()
@@ -132,22 +132,46 @@ export default function PricingTableDetailPage(props: { params?: { id?: string }
   // Mirror V-PT-1 from validators.ts so the user gets feedback before the
   // server rejects the payload.
   const configValidationError = React.useMemo(() => {
-    if (!draft.code.trim()) return 'Code is required'
-    if (!draft.name.trim()) return 'Name is required'
-    if (draft.currencyCodeList.length === 0) return 'At least one currency is required'
-    const checkList = (items: Array<{ key: string; label: string }>, label: string): string | null => {
+    if (!draft.code.trim()) return t('cpq.pricing.validation.codeRequired', 'Code is required')
+    if (!draft.name.trim()) return t('cpq.pricing.validation.nameRequired', 'Name is required')
+    if (draft.currencyCodeList.length === 0) {
+      return t('cpq.pricing.validation.currencyRequired', 'At least one currency is required')
+    }
+    type ListMessages = {
+      keyRequired: (index: number) => string
+      labelRequired: (index: number) => string
+      duplicateKey: (key: string) => string
+    }
+    const checkList = (items: Array<{ key: string; label: string }>, messages: ListMessages): string | null => {
       const seen = new Set<string>()
       for (let i = 0; i < items.length; i++) {
         const item = items[i]
-        if (!item.key.trim()) return `${label} #${i + 1}: key is required`
-        if (!item.label.trim()) return `${label} #${i + 1}: label is required`
-        if (seen.has(item.key)) return `${label}: duplicate key "${item.key}"`
+        if (!item.key.trim()) return messages.keyRequired(i + 1)
+        if (!item.label.trim()) return messages.labelRequired(i + 1)
+        if (seen.has(item.key)) return messages.duplicateKey(item.key)
         seen.add(item.key)
       }
       return null
     }
-    return checkList(draft.dimensions, 'Dimension') ?? checkList(draft.priceColumns, 'Price Column')
-  }, [draft])
+    return (
+      checkList(draft.dimensions, {
+        keyRequired: (index) =>
+          t('cpq.pricing.validation.dimensionKeyRequired', 'Dimension #{index}: key is required', { index }),
+        labelRequired: (index) =>
+          t('cpq.pricing.validation.dimensionLabelRequired', 'Dimension #{index}: label is required', { index }),
+        duplicateKey: (key) =>
+          t('cpq.pricing.validation.dimensionDuplicateKey', 'Dimension: duplicate key "{key}"', { key }),
+      }) ??
+      checkList(draft.priceColumns, {
+        keyRequired: (index) =>
+          t('cpq.pricing.validation.priceColumnKeyRequired', 'Price Column #{index}: key is required', { index }),
+        labelRequired: (index) =>
+          t('cpq.pricing.validation.priceColumnLabelRequired', 'Price Column #{index}: label is required', { index }),
+        duplicateKey: (key) =>
+          t('cpq.pricing.validation.priceColumnDuplicateKey', 'Price Column: duplicate key "{key}"', { key }),
+      })
+    )
+  }, [draft, t])
 
   const saveConfig = async () => {
     if (configValidationError) {
@@ -179,7 +203,12 @@ export default function PricingTableDetailPage(props: { params?: { id?: string }
           setError(t('cpq.pricing.errors.PURPOSE_LOCKED', costErrorMessage('PURPOSE_LOCKED')))
           return
         }
-        setError(costErrorMessage(body.error, `Failed to ${isNew ? 'create' : 'save'} pricing table`))
+        setError(costErrorMessage(
+          body.error,
+          isNew
+            ? t('cpq.pricing.detail.errors.createFailed', 'Failed to create pricing table')
+            : t('cpq.pricing.detail.errors.saveFailed', 'Failed to save pricing table'),
+        ))
         return
       }
       const saved = await res.json()
@@ -191,7 +220,7 @@ export default function PricingTableDetailPage(props: { params?: { id?: string }
       }
     } catch (err) {
       console.error('Failed to save', err)
-      setError('Failed to save')
+      setError(t('cpq.pricing.detail.errors.saveFailedGeneric', 'Failed to save'))
     } finally {
       setSaving(false)
     }
@@ -209,6 +238,7 @@ export default function PricingTableDetailPage(props: { params?: { id?: string }
         currencyCodeList: table.currencyCodeList,
       },
       entries,
+      t,
     )
     if (!r.ok) {
       setError(r.error)
@@ -222,7 +252,7 @@ export default function PricingTableDetailPage(props: { params?: { id?: string }
     setImportApplying(true)
     setError(null)
     try {
-      const r = await commitImportDiff(table.id, importDiff)
+      const r = await commitImportDiff(table.id, importDiff, t)
       if (!r.ok) {
         setError(r.error)
         return
@@ -251,17 +281,17 @@ export default function PricingTableDetailPage(props: { params?: { id?: string }
         router.push('/backend/cpq/pricing')
       } else {
         const body = await res.json().catch(() => ({}))
-        setError(body.error ?? 'Failed to delete')
+        setError(body.error ?? t('cpq.pricing.detail.errors.deleteFailed', 'Failed to delete'))
       }
     } catch {
-      setError('Failed to delete')
+      setError(t('cpq.pricing.detail.errors.deleteFailed', 'Failed to delete'))
     }
   }
 
   // ─── Render ────────────────────────────────────────────────
 
   if (loading) {
-    return <div className="text-sm text-muted-foreground">{t('common.loading', 'Loading...')}</div>
+    return <div className="text-sm text-muted-foreground">{t('cpq.common.loading', 'Loading...')}</div>
   }
 
   if (error && !isNew && !table.id) {
@@ -271,7 +301,7 @@ export default function PricingTableDetailPage(props: { params?: { id?: string }
           onClick={() => router.push('/backend/cpq/pricing')}
           className="text-sm text-muted-foreground hover:text-foreground"
         >
-          ← {t('common.back', 'Back')}
+          ← {t('cpq.common.back', 'Back')}
         </button>
         <Alert variant="destructive">{error}</Alert>
       </div>
@@ -290,14 +320,14 @@ export default function PricingTableDetailPage(props: { params?: { id?: string }
             onClick={() => router.push('/backend/cpq/pricing')}
             className="text-sm text-muted-foreground hover:text-foreground"
           >
-            ← {t('common.back', 'Back')}
+            ← {t('cpq.common.back', 'Back')}
           </button>
           <h1 className="text-2xl font-bold">
             {isNew ? t('cpq.pricing.new', 'New Pricing Table') : table.name}
           </h1>
           {!isNew && (
             <Tag variant={table.isActive ? 'success' : 'neutral'} dot>
-              {table.isActive ? t('common.active', 'Active') : t('common.inactive', 'Inactive')}
+              {table.isActive ? t('cpq.common.active', 'Active') : t('cpq.common.inactive', 'Inactive')}
             </Tag>
           )}
         </div>
@@ -334,9 +364,9 @@ export default function PricingTableDetailPage(props: { params?: { id?: string }
                 e.target.value = ''
               }}
             />
-            <Button type="button" onClick={startEdit}>{t('common.edit', 'Edit')}</Button>
+            <Button type="button" onClick={startEdit}>{t('cpq.common.edit', 'Edit')}</Button>
             <Button type="button" variant="destructive" onClick={deleteTable}>
-              {t('common.delete', 'Delete')}
+              {t('cpq.common.delete', 'Delete')}
             </Button>
           </div>
         )}
@@ -356,26 +386,26 @@ export default function PricingTableDetailPage(props: { params?: { id?: string }
 
       {/* Configuration section */}
       <div className="rounded-lg border bg-card p-6 space-y-4">
-        <h2 className="text-lg font-semibold">Configuration</h2>
+        <h2 className="text-lg font-semibold">{t('cpq.pricing.detail.configuration', 'Configuration')}</h2>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <ConfigField label="Code" required>
+          <ConfigField label={t('cpq.pricing.code', 'Code')} required>
             {editing ? (
               <Input
                 value={view.code}
                 onChange={(e) => setDraft({ ...draft, code: e.target.value })}
-                placeholder="e.g. cloud-connect-pricing"
+                placeholder={t('cpq.pricing.detail.codePlaceholder', 'e.g. cloud-connect-pricing')}
               />
             ) : (
               <span className="font-mono text-sm">{view.code}</span>
             )}
           </ConfigField>
-          <ConfigField label="Name" required>
+          <ConfigField label={t('cpq.pricing.name', 'Name')} required>
             {editing ? (
               <Input
                 value={view.name}
                 onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-                placeholder="Cloud Connect Pricing"
+                placeholder={t('cpq.pricing.detail.namePlaceholder', 'Cloud Connect Pricing')}
               />
             ) : (
               <span className="font-medium text-sm">{view.name}</span>
@@ -404,7 +434,7 @@ export default function PricingTableDetailPage(props: { params?: { id?: string }
               </Tag>
             )}
           </ConfigField>
-          <ConfigField label="Currencies (comma-separated)" required>
+          <ConfigField label={t('cpq.pricing.detail.currenciesCommaSeparated', 'Currencies (comma-separated)')} required>
             {editing ? (
               <Input
                 value={view.currencyCodeList.join(', ')}
@@ -417,13 +447,13 @@ export default function PricingTableDetailPage(props: { params?: { id?: string }
                       .filter(Boolean),
                   })
                 }
-                placeholder="USD, EUR"
+                placeholder={t('cpq.pricing.detail.currenciesPlaceholder', 'USD, EUR')}
               />
             ) : (
               <span className="text-sm">{view.currencyCodeList.join(', ') || '—'}</span>
             )}
           </ConfigField>
-          <ConfigField label="Active">
+          <ConfigField label={t('cpq.common.active', 'Active')}>
             {editing ? (
               <label className="flex items-center gap-2 text-sm">
                 <input
@@ -432,25 +462,33 @@ export default function PricingTableDetailPage(props: { params?: { id?: string }
                   onChange={(e) => setDraft({ ...draft, isActive: e.target.checked })}
                   className="rounded border"
                 />
-                {view.isActive ? 'Yes' : 'No'}
+                {view.isActive ? t('cpq.common.yes', 'Yes') : t('cpq.common.no', 'No')}
               </label>
             ) : (
-              <span className="text-sm">{view.isActive ? 'Yes' : 'No'}</span>
+              <span className="text-sm">{view.isActive ? t('cpq.common.yes', 'Yes') : t('cpq.common.no', 'No')}</span>
             )}
           </ConfigField>
         </div>
 
         <KeyLabelListEditor
-          title="Dimensions"
-          description="Lookup keys for matching entries (e.g. region, tier). Leave empty if you use tier ranges only."
+          title={t('cpq.pricing.detail.dimensions.title', 'Dimensions')}
+          description={t(
+            'cpq.pricing.detail.dimensions.description',
+            'Lookup keys for matching entries (e.g. region, tier). Leave empty if you use tier ranges only.',
+          )}
+          addLabel={t('cpq.pricing.detail.dimensions.add', '+ Add Dimension')}
           items={view.dimensions}
           editing={editing}
           onChange={(dimensions) => setDraft({ ...draft, dimensions })}
         />
 
         <KeyLabelListEditor
-          title="Price Columns"
-          description="Each price column becomes a numeric field on every entry. Charges reference one column by its key."
+          title={t('cpq.pricing.priceColumns', 'Price Columns')}
+          description={t(
+            'cpq.pricing.detail.priceColumns.description',
+            'Each price column becomes a numeric field on every entry. Charges reference one column by its key.',
+          )}
+          addLabel={t('cpq.pricing.detail.priceColumns.add', '+ Add Price Column')}
           items={view.priceColumns}
           editing={editing}
           onChange={(priceColumns) => setDraft({ ...draft, priceColumns })}
@@ -467,10 +505,14 @@ export default function PricingTableDetailPage(props: { params?: { id?: string }
                 onClick={saveConfig}
                 disabled={saving || configValidationError !== null}
               >
-                {saving ? 'Saving...' : (isNew ? 'Create Pricing Table' : 'Save')}
+                {saving
+                  ? t('cpq.common.saving', 'Saving...')
+                  : isNew
+                    ? t('cpq.pricing.detail.create', 'Create Pricing Table')
+                    : t('cpq.common.save', 'Save')}
               </Button>
               <Button type="button" variant="outline" onClick={cancelEdit} disabled={saving}>
-                Cancel
+                {t('cpq.common.cancel', 'Cancel')}
               </Button>
             </div>
           </>
@@ -523,16 +565,20 @@ function ConfigField({
 function KeyLabelListEditor({
   title,
   description,
+  addLabel,
   items,
   editing,
   onChange,
 }: {
   title: string
   description: string
+  /** Translated "+ Add …" button text, supplied by the caller. */
+  addLabel: string
   items: Array<{ key: string; label: string }>
   editing: boolean
   onChange: (next: Array<{ key: string; label: string }>) => void
 }) {
+  const t = useT()
   return (
     <div className="space-y-2">
       <div>
@@ -550,12 +596,14 @@ function KeyLabelListEditor({
             <thead>
               <tr className="border-b bg-muted/30 text-xs">
                 <th className="px-3 py-2 text-left font-medium">
-                  Key {editing && <span className="text-destructive">*</span>}
+                  {t('cpq.pricing.detail.keyLabelList.key', 'Key')}{' '}
+                  {editing && <span className="text-destructive">*</span>}
                 </th>
                 <th className="px-3 py-2 text-left font-medium">
-                  Label {editing && <span className="text-destructive">*</span>}
+                  {t('cpq.pricing.detail.keyLabelList.label', 'Label')}{' '}
+                  {editing && <span className="text-destructive">*</span>}
                 </th>
-                {editing && <th className="px-3 py-2 w-8" aria-label="Actions" />}
+                {editing && <th className="px-3 py-2 w-8" aria-label={t('cpq.pricing.detail.keyLabelList.actions', 'Actions')} />}
               </tr>
             </thead>
             <tbody>
@@ -570,7 +618,7 @@ function KeyLabelListEditor({
                           next[idx] = { ...item, key: e.target.value }
                           onChange(next)
                         }}
-                        placeholder="e.g. region"
+                        placeholder={t('cpq.pricing.detail.keyLabelList.keyPlaceholder', 'e.g. region')}
                         className="h-8"
                       />
                     ) : (
@@ -586,7 +634,7 @@ function KeyLabelListEditor({
                           next[idx] = { ...item, label: e.target.value }
                           onChange(next)
                         }}
-                        placeholder="Region"
+                        placeholder={t('cpq.pricing.detail.keyLabelList.labelPlaceholder', 'Region')}
                         className="h-8"
                       />
                     ) : (
@@ -599,7 +647,7 @@ function KeyLabelListEditor({
                         type="button"
                         onClick={() => onChange(items.filter((_, i) => i !== idx))}
                         className="text-destructive hover:bg-destructive/10 rounded p-1"
-                        aria-label="Remove"
+                        aria-label={t('cpq.pricing.detail.keyLabelList.remove', 'Remove')}
                       >
                         <Trash2 className="h-4 w-4" />
                       </button>
@@ -619,7 +667,7 @@ function KeyLabelListEditor({
           size="sm"
           onClick={() => onChange([...items, { key: '', label: '' }])}
         >
-          + Add {title.slice(0, -1)}
+          {addLabel}
         </Button>
       )}
     </div>

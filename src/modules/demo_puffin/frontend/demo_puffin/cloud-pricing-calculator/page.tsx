@@ -1,6 +1,6 @@
 import * as React from 'react'
 import type { Metadata } from 'next'
-import { Inter_Tight, JetBrains_Mono } from 'next/font/google'
+import localFont from 'next/font/local'
 import { readPuffinPublicConfig } from '../../../lib/public-calculator/env'
 import { getCachedCatalog, getStaleCatalogIfAny } from '../../../lib/public-calculator/catalog-cache'
 import { CalculatorShell } from './components/CalculatorShell'
@@ -8,16 +8,23 @@ import { OpsBanner } from './components/layout/OpsBanner'
 import type { PublicConfig } from './types'
 import './styles.css'
 
-const interTight = Inter_Tight({
-  subsets: ['latin'],
-  weight: ['400', '500', '600', '700'],
+// Self-hosted (variable woff2, latin subset, from Fontsource; SIL OFL 1.1 —
+// see assets/fonts/OFL.txt) instead of `next/font/google`, which downloads
+// the fonts from Google at build time. That made `next build` depend on the
+// network and failed CI's Turbopack build ("next/font/google queries have
+// exactly one entry") on the Inter Tight stylesheet.
+const interTight = localFont({
+  src: './assets/fonts/InterTight-latin-wght.woff2',
+  weight: '100 900',
+  style: 'normal',
   variable: '--font-pf-ui',
   display: 'swap',
 })
 
-const jetBrainsMono = JetBrains_Mono({
-  subsets: ['latin'],
-  weight: ['400', '500', '600'],
+const jetBrainsMono = localFont({
+  src: './assets/fonts/JetBrainsMono-latin-wght.woff2',
+  weight: '100 800',
+  style: 'normal',
   variable: '--font-pf-mono',
   display: 'swap',
 })

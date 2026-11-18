@@ -23,6 +23,7 @@ import {
 } from '../data/validators'
 import { ensureBalanceRow } from '../lib/balanceLedger'
 import { formatMoney } from '../lib/money'
+import { accountCycleSpec, resolveCreateCycle, resolveCycleUpdate } from '../lib/accountCycle'
 
 /**
  * BillingAccount writes — create / update / soft-delete.
@@ -62,23 +63,37 @@ const createAccountCommand: CommandHandler<BillingAccountCreateInput, { id: stri
     const em = getEm(ctx)
     const now = new Date()
     const billingMode = parsed.billingMode ?? 'postpaid'
+    const { spec, nextBillDate } = resolveCreateCycle(
+      {
+        cycle: parsed.billCycle,
+        interval: parsed.billCycleInterval,
+        day: parsed.billCycleDay,
+        nextBillDate: parsed.nextBillDate ?? null,
+      },
+      now,
+    )
     const entity = em.create(BillingAccount, {
       organizationId: parsed.organizationId,
       tenantId: parsed.tenantId,
       customerId: parsed.customerId,
+      customerKind: parsed.customerKind,
       name: parsed.name,
       currencyCode: parsed.currencyCode,
-      billCycle: parsed.billCycle,
-      billCycleAnchor: parsed.billCycleAnchor,
+      billCycle: spec.cycle,
+      billCycleInterval: spec.interval,
+      billCycleDay: spec.day,
       invoiceEmail: parsed.invoiceEmail,
       invoiceLanguage: parsed.invoiceLanguage,
       taxId: parsed.taxId ?? null,
       invoiceAddress: parsed.invoiceAddress as Record<string, unknown>,
-      nextBillDate: parsed.nextBillDate,
+      nextBillDate,
       lastBillDate: parsed.lastBillDate ?? null,
       billingMode,
       creditLimit:
         parsed.creditLimit !== undefined ? formatMoney(parsed.creditLimit) : '0',
+      // Spec B: null = organization default terms.
+      paymentTermsDays: parsed.paymentTermsDays ?? null,
+      autoSendInvoice: parsed.autoSendInvoice ?? false,
       isActive: parsed.isActive ?? true,
       createdAt: now,
       updatedAt: now,
@@ -140,19 +155,38 @@ const updateAccountCommand: CommandHandler<BillingAccountUpdateInput, { id: stri
     }
 
     if (parsed.name !== undefined) record.name = parsed.name
-    if (parsed.billCycle !== undefined) record.billCycle = parsed.billCycle
-    if (parsed.billCycleAnchor !== undefined) record.billCycleAnchor = parsed.billCycleAnchor
+    const cycleUpdate = resolveCycleUpdate(
+      { ...accountCycleSpec(record), lastBillDate: record.lastBillDate ?? null },
+      {
+        cycle: parsed.billCycle,
+        interval: parsed.billCycleInterval,
+        day: parsed.billCycleDay,
+        nextBillDate: parsed.nextBillDate ?? null,
+      },
+      new Date(),
+    )
+    if (!cycleUpdate.ok) {
+      throw new CrudHttpError(400, {
+        error: cycleUpdate.issue.message,
+        code: 'billing.account.invalid_bill_cycle',
+      })
+    }
+    record.billCycle = cycleUpdate.spec.cycle
+    record.billCycleInterval = cycleUpdate.spec.interval
+    record.billCycleDay = cycleUpdate.spec.day
+    if (cycleUpdate.nextBillDate) record.nextBillDate = cycleUpdate.nextBillDate
     if (parsed.invoiceEmail !== undefined) record.invoiceEmail = parsed.invoiceEmail
     if (parsed.invoiceLanguage !== undefined) record.invoiceLanguage = parsed.invoiceLanguage
     if (parsed.taxId !== undefined) record.taxId = parsed.taxId
     if (parsed.invoiceAddress !== undefined) {
       record.invoiceAddress = parsed.invoiceAddress as Record<string, unknown>
     }
-    if (parsed.nextBillDate !== undefined) record.nextBillDate = parsed.nextBillDate
     if (parsed.lastBillDate !== undefined) record.lastBillDate = parsed.lastBillDate
     if (parsed.isActive !== undefined) record.isActive = parsed.isActive
     // SPEC-002: credit_limit is editable in both modes (billing_mode is not).
     if (parsed.creditLimit !== undefined) record.creditLimit = formatMoney(parsed.creditLimit)
+    if (parsed.paymentTermsDays !== undefined) record.paymentTermsDays = parsed.paymentTermsDays
+    if (parsed.autoSendInvoice !== undefined) record.autoSendInvoice = parsed.autoSendInvoice
 
     record.updatedAt = new Date()
 

@@ -1,4 +1,4 @@
-import type { BillCycle } from '../data/validators'
+import { pinnedDayOfMonth, pinnedWeekday, toCycleSpec, type CycleInput, type CycleSpec } from './billCycle'
 
 /**
  * Calendar-aware bill-period arithmetic.
@@ -20,6 +20,16 @@ import type { BillCycle } from '../data/validators'
  *   monthly  next=2024-03-01 → period=2024-02-01..2024-02-29 (leap)
  *   quarterly next=2026-07-01 → period=2026-04-01..2026-06-30
  *   weekly   next=2026-05-04 (Mon) → period=2026-04-27..2026-05-03
+ *
+ * Cycles are "every N units on the bill cycle day" (`lib/billCycle.ts`).
+ * Every helper takes a `CycleInput` — a full `CycleSpec`, or a bare unit as
+ * shorthand for "every 1, not pinned" (the pre-cycle-day behaviour).
+ *
+ * Pinning: a monthly / annually spec with a day re-pins every shifted date to
+ * that day (clamped to short months), so a 31st bills 31 Jan → 28 Feb → 31 Mar
+ * instead of drifting to the 28th. A bill date that is OFF the cycle day (an
+ * explicit first bill date, or a day change) advances to the next occurrence
+ * of the day — one short alignment period — and stays pinned from then on.
  */
 
 export type BillPeriod = {
@@ -39,13 +49,13 @@ function cloneAtMidnight(date: Date | string | number): Date {
   return result
 }
 
-function subtractDays(date: Date, days: number): Date {
+function subtractDays(date: Date | string | number, days: number): Date {
   const result = cloneAtMidnight(date)
   result.setUTCDate(result.getUTCDate() - days)
   return result
 }
 
-function addDays(date: Date, days: number): Date {
+function addDays(date: Date | string | number, days: number): Date {
   const result = cloneAtMidnight(date)
   result.setUTCDate(result.getUTCDate() + days)
   return result
@@ -84,55 +94,151 @@ function shiftYears(date: Date, deltaYears: number): Date {
   return result
 }
 
-function subtractCycle(date: Date, cycle: BillCycle): Date {
-  switch (cycle) {
-    case 'weekly': {
-      const result = cloneAtMidnight(date)
-      result.setUTCDate(result.getUTCDate() - 7)
-      return result
-    }
-    case 'monthly':
-      return shiftMonths(date, -1)
-    case 'quarterly':
-      return shiftMonths(date, -3)
-    case 'annually':
-      return shiftYears(date, -1)
-  }
+function pinDay(date: Date, spec: CycleSpec): Date {
+  const day = pinnedDayOfMonth(spec)
+  if (day === null) return date
+  const result = cloneAtMidnight(date)
+  const lastDay = lastDayOfMonthUTC(result.getUTCFullYear(), result.getUTCMonth())
+  result.setUTCDate(Math.min(day, lastDay))
+  return result
 }
 
-function addCycle(date: Date, cycle: BillCycle): Date {
-  switch (cycle) {
-    case 'weekly': {
-      const result = cloneAtMidnight(date)
-      result.setUTCDate(result.getUTCDate() + 7)
-      return result
-    }
+/** Rough cycle length in days — only used to seed index searches. */
+export function approxCycleDays(input: CycleInput): number {
+  const spec = toCycleSpec(input)
+  const unitDays = { daily: 1, weekly: 7, monthly: 30.44, annually: 365.25 }[spec.cycle]
+  return unitDays * spec.interval
+}
+
+/**
+ * True when `date` falls on the spec's bill cycle day. Unpinned specs (and
+ * daily cycles) accept every date.
+ */
+export function onCycleDay(date: Date | string | number, input: CycleInput): boolean {
+  const spec = toCycleSpec(input)
+  const d = cloneAtMidnight(date)
+  const weekday = pinnedWeekday(spec)
+  if (weekday !== null) return d.getUTCDay() === weekday
+  const day = pinnedDayOfMonth(spec)
+  if (day === null) return true
+  return d.getUTCDate() === Math.min(day, lastDayOfMonthUTC(d.getUTCFullYear(), d.getUTCMonth()))
+}
+
+/** First date on the cycle day that is on or after `date` (`date` itself when unpinned). */
+export function nextCycleDay(date: Date | string | number, input: CycleInput): Date {
+  const spec = toCycleSpec(input)
+  const d = cloneAtMidnight(date)
+  const weekday = pinnedWeekday(spec)
+  if (weekday !== null) return addDays(d, (weekday - d.getUTCDay() + 7) % 7)
+  if (pinnedDayOfMonth(spec) === null) return d
+  const candidate = pinDay(d, spec)
+  if (candidate.getTime() >= d.getTime()) return candidate
+  const nextMonth = cloneAtMidnight(d)
+  nextMonth.setUTCDate(1)
+  nextMonth.setUTCMonth(nextMonth.getUTCMonth() + 1)
+  return pinDay(nextMonth, spec)
+}
+
+/** Last date on the cycle day that is on or before `date` (`date` itself when unpinned). */
+export function previousCycleDay(date: Date | string | number, input: CycleInput): Date {
+  const spec = toCycleSpec(input)
+  const d = cloneAtMidnight(date)
+  const weekday = pinnedWeekday(spec)
+  if (weekday !== null) return addDays(d, -((d.getUTCDay() - weekday + 7) % 7))
+  if (pinnedDayOfMonth(spec) === null) return d
+  const candidate = pinDay(d, spec)
+  if (candidate.getTime() <= d.getTime()) return candidate
+  const prevMonth = cloneAtMidnight(d)
+  prevMonth.setUTCDate(1)
+  prevMonth.setUTCMonth(prevMonth.getUTCMonth() - 1)
+  return pinDay(prevMonth, spec)
+}
+
+/**
+ * The cycle boundary `k` cycles away from `anchor` (k may be negative),
+ * computed directly from the anchor — never by chaining single steps — so
+ * month-end clamping does not drift. Pinned monthly / annually specs re-pin
+ * the result to the cycle day.
+ */
+export function shiftCycles(anchor: Date | string | number, input: CycleInput, k: number): Date {
+  const spec = toCycleSpec(input)
+  const base = cloneAtMidnight(anchor)
+  const n = k * spec.interval
+  switch (spec.cycle) {
+    case 'daily':
+      return addDays(base, n)
+    case 'weekly':
+      return addDays(base, 7 * n)
     case 'monthly':
-      return shiftMonths(date, 1)
-    case 'quarterly':
-      return shiftMonths(date, 3)
+      return pinDay(shiftMonths(base, n), spec)
     case 'annually':
-      return shiftYears(date, 1)
+      return pinDay(shiftYears(base, n), spec)
   }
 }
 
 /**
- * Compute the bill period for the cycle that `nextBillDate` marks the
- * START of the *next* one. So `periodEnd = nextBillDate - 1 day` and
- * `periodStart = nextBillDate - cycle`.
+ * The cycle-grid anchor for a bill date: the bill date itself when it is on
+ * the cycle day, otherwise the cycle day before it (the grid the account is
+ * aligning to). Recurring proration slices along this grid.
  */
-export function deriveBillPeriod(nextBillDate: Date, cycle: BillCycle): BillPeriod {
-  const periodEnd = subtractDays(nextBillDate, 1)
-  const periodStart = subtractCycle(nextBillDate, cycle)
+export function gridAnchorFor(billDate: Date | string | number, input: CycleInput): Date {
+  return onCycleDay(billDate, input) ? cloneAtMidnight(billDate) : previousCycleDay(billDate, input)
+}
+
+/**
+ * Compute the bill period that `nextBillDate` closes:
+ * `periodEnd = nextBillDate - 1 day`. `periodStart` is the day after the
+ * previously billed period when known (`lastBillDate + 1` — what makes a short
+ * alignment period bill exactly its days), else one cycle back.
+ */
+export function deriveBillPeriod(
+  nextBillDate: Date | string | number,
+  input: CycleInput,
+  lastBillDate?: Date | string | null,
+): BillPeriod {
+  const periodEnd = subtractDays(cloneAtMidnight(nextBillDate), 1)
+  if (lastBillDate) {
+    const start = addDays(lastBillDate, 1)
+    if (start.getTime() <= periodEnd.getTime()) return { periodStart: start, periodEnd }
+  }
+  const periodStart = onCycleDay(nextBillDate, input)
+    ? shiftCycles(nextBillDate, input, -1)
+    : previousCycleDay(periodEnd, input)
   return { periodStart, periodEnd }
 }
 
 /**
- * Advance `nextBillDate` by one cycle. Used by the engine after a
- * successful real-mode account run.
+ * First-cycle rule (#138): a bill period never starts before the account's
+ * billing start (`billingStart` — the earliest item `bill_start_date`).
+ *
+ * - `billingStart` null, or on / before `periodStart` → the period unchanged.
+ * - `billingStart` inside the period → the period clamped to start there.
+ * - `billingStart` after `periodEnd` (the period lies entirely before the
+ *   account existed — typically the first bill date IS the start date) →
+ *   `null`: there is nothing to close, only the in-advance charges at D.
+ *
+ * Only meaningful on the first cycle (no `last_bill_date`); later periods
+ * start at `last_bill_date + 1`, which is already after the start.
  */
-export function advanceNextBillDate(currentNextBillDate: Date, cycle: BillCycle): Date {
-  return addCycle(currentNextBillDate, cycle)
+export function clampPeriodToBillingStart(
+  period: BillPeriod,
+  billingStart: Date | string | null | undefined,
+): BillPeriod | null {
+  if (!billingStart) return period
+  const start = cloneAtMidnight(billingStart)
+  if (start.getTime() <= period.periodStart.getTime()) return period
+  if (start.getTime() > period.periodEnd.getTime()) return null
+  return { periodStart: start, periodEnd: period.periodEnd }
+}
+
+/**
+ * Advance `nextBillDate` by one cycle. Used by the engines after a
+ * successful real-mode account run. On the cycle day: one full cycle,
+ * re-pinned. Off the cycle day: the next occurrence of the day (alignment).
+ */
+export function advanceNextBillDate(currentNextBillDate: Date | string | number, input: CycleInput): Date {
+  if (onCycleDay(currentNextBillDate, input)) return shiftCycles(currentNextBillDate, input, 1)
+  return nextCycleDay(addDays(currentNextBillDate, 1), input)
 }
 
 /**
@@ -145,22 +251,19 @@ export function advanceNextBillDate(currentNextBillDate: Date, cycle: BillCycle)
  */
 export function cycleContaining(
   anchor: Date | string | number,
-  cycle: BillCycle,
+  input: CycleInput,
   target: Date | string | number,
 ): BillPeriod {
+  const grid = gridAnchorFor(anchor, input)
   const targetMs = cloneAtMidnight(target).getTime()
-  let start = cloneAtMidnight(anchor)
+  let index = Math.floor((targetMs - grid.getTime()) / 86_400_000 / approxCycleDays(input))
   let guard = 0
-  // Walk forward while the cycle starting at `start` ends before target.
-  while (addCycle(start, cycle).getTime() <= targetMs && guard++ < 600) {
-    start = addCycle(start, cycle)
+  while (shiftCycles(grid, input, index).getTime() > targetMs && guard++ < 1000) index--
+  while (shiftCycles(grid, input, index + 1).getTime() <= targetMs && guard++ < 2000) index++
+  return {
+    periodStart: shiftCycles(grid, input, index),
+    periodEnd: subtractDays(shiftCycles(grid, input, index + 1), 1),
   }
-  guard = 0
-  // Walk backward while `start` itself is after target.
-  while (start.getTime() > targetMs && guard++ < 600) {
-    start = subtractCycle(start, cycle)
-  }
-  return { periodStart: start, periodEnd: subtractDays(addCycle(start, cycle), 1) }
 }
 
 /**

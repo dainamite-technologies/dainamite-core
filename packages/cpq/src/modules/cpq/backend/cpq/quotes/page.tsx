@@ -70,8 +70,8 @@ type CustomerPickerProps = {
   error: string | null
 }
 
-function getCustomerLabel(c: Customer) {
-  return c.display_name || c.displayName || c.name || c.companyName || 'Unnamed'
+function getCustomerLabel(c: Customer, unnamedLabel: string) {
+  return c.display_name || c.displayName || c.name || c.companyName || unnamedLabel
 }
 
 function getCustomerEmail(c: Customer) {
@@ -79,6 +79,8 @@ function getCustomerEmail(c: Customer) {
 }
 
 function CustomerPickerModal({ open, onClose, onSelect, creating, error }: CustomerPickerProps) {
+  const t = useT()
+  const unnamedLabel = t('cpq.quotes.customerPicker.unnamed', 'Unnamed')
   const [customers, setCustomers] = React.useState<Customer[]>([])
   const [customersLoading, setCustomersLoading] = React.useState(false)
   const [search, setSearch] = React.useState('')
@@ -110,7 +112,7 @@ function CustomerPickerModal({ open, onClose, onSelect, creating, error }: Custo
     if (!search.trim()) return true
     const q = search.toLowerCase()
     return (
-      getCustomerLabel(c).toLowerCase().includes(q) ||
+      getCustomerLabel(c, unnamedLabel).toLowerCase().includes(q) ||
       getCustomerEmail(c).toLowerCase().includes(q) ||
       c.id.toLowerCase().includes(q)
     )
@@ -126,14 +128,16 @@ function CustomerPickerModal({ open, onClose, onSelect, creating, error }: Custo
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b px-4 py-3">
-          <h3 className="text-sm font-medium">Select Customer for New Quote</h3>
+          <h3 className="text-sm font-medium">
+            {t('cpq.quotes.customerPicker.title', 'Select Customer for New Quote')}
+          </h3>
           <button
             type="button"
             onClick={onClose}
             disabled={creating}
             className="text-muted-foreground hover:text-foreground text-lg font-bold leading-none cursor-pointer disabled:cursor-not-allowed"
           >
-            &times;
+            {'\u00d7'}
           </button>
         </div>
         <div className="p-4 space-y-3">
@@ -141,7 +145,7 @@ function CustomerPickerModal({ open, onClose, onSelect, creating, error }: Custo
           <div className="relative">
             <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
-              placeholder="Search customers…"
+              placeholder={t('cpq.quotes.customerPicker.searchPlaceholder', 'Search customers…')}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               autoFocus
@@ -151,11 +155,13 @@ function CustomerPickerModal({ open, onClose, onSelect, creating, error }: Custo
           <div className="max-h-72 overflow-y-auto space-y-1">
             {customersLoading ? (
               <div className="py-8 text-center text-sm text-muted-foreground">
-                Loading customers…
+                {t('cpq.quotes.customerPicker.loading', 'Loading customers…')}
               </div>
             ) : filtered.length === 0 ? (
               <div className="py-8 text-center text-sm text-muted-foreground">
-                {search ? 'No customers match your search.' : 'No customers found.'}
+                {search
+                  ? t('cpq.quotes.customerPicker.noMatch', 'No customers match your search.')
+                  : t('cpq.quotes.customerPicker.empty', 'No customers found.')}
               </div>
             ) : (
               filtered.map((c) => (
@@ -166,7 +172,7 @@ function CustomerPickerModal({ open, onClose, onSelect, creating, error }: Custo
                   disabled={creating}
                   className="w-full rounded-md border px-3 py-2.5 text-left hover:border-primary hover:bg-primary/5 transition-colors disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
                 >
-                  <p className="text-sm font-medium">{getCustomerLabel(c)}</p>
+                  <p className="text-sm font-medium">{getCustomerLabel(c, unnamedLabel)}</p>
                   {getCustomerEmail(c) && (
                     <p className="text-xs text-muted-foreground mt-0.5">{getCustomerEmail(c)}</p>
                   )}
@@ -200,17 +206,17 @@ export default function CpqQuotesListPage() {
 
   const statusOptions = React.useMemo(
     () => [
-      { value: 'new', label: 'New' },
-      { value: 'incomplete', label: 'Incomplete' },
-      { value: 'ready', label: 'Ready' },
-      { value: 'in_approval', label: 'In Approval' },
-      { value: 'approved', label: 'Approved' },
-      { value: 'with_customer', label: 'With Customer' },
-      { value: 'accepted', label: 'Accepted' },
-      { value: 'rejected', label: 'Rejected' },
-      { value: 'cancelled', label: 'Cancelled' },
+      { value: 'new', label: t('cpq.quotes.status.new', 'New') },
+      { value: 'incomplete', label: t('cpq.quotes.status.incomplete', 'Incomplete') },
+      { value: 'ready', label: t('cpq.quotes.status.ready', 'Ready') },
+      { value: 'in_approval', label: t('cpq.quotes.status.in_approval', 'In Approval') },
+      { value: 'approved', label: t('cpq.quotes.status.approved', 'Approved') },
+      { value: 'with_customer', label: t('cpq.quotes.status.with_customer', 'With Customer') },
+      { value: 'accepted', label: t('cpq.quotes.status.accepted', 'Accepted') },
+      { value: 'rejected', label: t('cpq.quotes.status.rejected', 'Rejected') },
+      { value: 'cancelled', label: t('cpq.quotes.status.cancelled', 'Cancelled') },
     ],
-    [],
+    [t],
   )
 
   const filters = React.useMemo<FilterDef[]>(
@@ -245,7 +251,9 @@ export default function CpqQuotesListPage() {
           setShowCustomerPicker(false)
           router.push(`/backend/cpq/quotes/${body.id}`)
         } else {
-          setCreateError(body.error ?? `Failed to create quote (${res.status})`)
+          setCreateError(
+            body.error ?? t('cpq.quotes.create.error', 'Failed to create quote ({status})', { status: res.status }),
+          )
         }
       } catch (err) {
         setCreateError((err as Error).message)
@@ -253,7 +261,7 @@ export default function CpqQuotesListPage() {
         setCreating(false)
       }
     },
-    [router],
+    [router, t],
   )
 
   const columns = React.useMemo<ColumnDef<QuoteConfig>[]>(

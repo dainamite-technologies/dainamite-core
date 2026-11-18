@@ -1,10 +1,13 @@
 import { NextResponse } from 'next/server'
+import { handleArcError } from '../../_helpers/handleArcError'
 import { z } from 'zod'
-import { resolveCpqRouteContext } from '../../context'
+import { cpqContextError, resolveCpqRouteContext } from '../../context'
 import {
   cpqInventorySubscriptionItemCreateSchema,
   cpqInventorySubscriptionItemUpdateSchema,
 } from '../../../data/validators'
+import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
+import { cpqErrorDoc, cpqDeleteByIdBody, cpqSuccessResponseSchema } from '../../_helpers/quoteRouteOpenApi'
 
 export const metadata = {
   GET: { requireAuth: true, requireFeatures: ['cpq.inventory.view'] },
@@ -16,7 +19,8 @@ export const metadata = {
 export async function GET(req: Request) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     const url = new URL(req.url)
     const scope = { organizationId: ctx.organizationId, tenantId: ctx.tenantId }
@@ -40,15 +44,15 @@ export async function GET(req: Request) {
     const result = await service.listSubscriptionItems(filters, scope)
     return NextResponse.json(result)
   } catch (err) {
-    console.error('[cpq/inventory/subscription-items.GET]', err)
-    return NextResponse.json({ error: 'Internal error' }, { status: 500 })
+    return handleArcError(err, 'cpq/inventory/subscription-items.GET')
   }
 }
 
 export async function POST(req: Request) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     const body = cpqInventorySubscriptionItemCreateSchema.parse(await req.json())
     const { subscriptionId, ...input } = body
@@ -58,18 +62,15 @@ export async function POST(req: Request) {
     const result = await service.addSubscriptionItem(subscriptionId, input, scope)
     return NextResponse.json(result, { status: 201 })
   } catch (err) {
-    if (err instanceof z.ZodError) {
-      return NextResponse.json({ error: 'Validation error', details: err.issues }, { status: 400 })
-    }
-    console.error('[cpq/inventory/subscription-items.POST]', err)
-    return NextResponse.json({ error: 'Internal error' }, { status: 500 })
+    return handleArcError(err, 'cpq/inventory/subscription-items.POST')
   }
 }
 
 export async function PUT(req: Request) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     const body = cpqInventorySubscriptionItemUpdateSchema.parse(await req.json())
     const { id, ...updates } = body
@@ -79,18 +80,15 @@ export async function PUT(req: Request) {
     const result = await service.updateSubscriptionItem(id, updates, scope)
     return NextResponse.json(result)
   } catch (err) {
-    if (err instanceof z.ZodError) {
-      return NextResponse.json({ error: 'Validation error', details: err.issues }, { status: 400 })
-    }
-    console.error('[cpq/inventory/subscription-items.PUT]', err)
-    return NextResponse.json({ error: 'Internal error' }, { status: 500 })
+    return handleArcError(err, 'cpq/inventory/subscription-items.PUT')
   }
 }
 
 export async function DELETE(req: Request) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     const { id } = (await req.json()) as { id?: string }
     if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
@@ -101,7 +99,54 @@ export async function DELETE(req: Request) {
     await service.deleteSubscriptionItem(id, scope)
     return NextResponse.json({ success: true })
   } catch (err) {
-    console.error('[cpq/inventory/subscription-items.DELETE]', err)
-    return NextResponse.json({ error: 'Internal error' }, { status: 500 })
+    return handleArcError(err, 'cpq/inventory/subscription-items.DELETE')
   }
+}
+
+export const openApi: OpenApiRouteDoc = {
+  tag: 'CPQ Inventory',
+  summary: 'CPQ inventory subscription items',
+  methods: {
+    GET: {
+      summary: 'List the items of a subscription, or the children of a parent item',
+      description: 'At least one of `subscriptionId` or `parentItemId` is required.',
+      query: z.object({
+        subscriptionId: z.string().uuid().optional(),
+        parentItemId: z.string().uuid().optional(),
+        status: z.string().optional(),
+      }),
+      responses: [{ status: 200, description: 'Subscription items' }],
+      errors: [
+        cpqErrorDoc(400, 'At least one of subscriptionId or parentItemId is required'),
+        cpqErrorDoc(500, 'Internal error'),
+      ],
+    },
+    POST: {
+      summary: 'Add an item to a subscription in CPQ inventory',
+      requestBody: { schema: cpqInventorySubscriptionItemCreateSchema },
+      responses: [{ status: 201, description: 'Created subscription item' }],
+      errors: [
+        cpqErrorDoc(400, 'Validation error'),
+        cpqErrorDoc(404, 'Subscription or parent item not found'), cpqErrorDoc(500, 'Internal error'),
+      ],
+    },
+    PUT: {
+      summary: 'Update a subscription item in CPQ inventory',
+      requestBody: { schema: cpqInventorySubscriptionItemUpdateSchema },
+      responses: [{ status: 200, description: 'Updated subscription item' }],
+      errors: [
+        cpqErrorDoc(400, 'Validation error'),
+        cpqErrorDoc(404, 'Item not found'), cpqErrorDoc(500, 'Internal error'),
+      ],
+    },
+    DELETE: {
+      summary: 'Delete a subscription item from CPQ inventory',
+      requestBody: { schema: cpqDeleteByIdBody },
+      responses: [{ status: 200, description: 'Deleted', schema: cpqSuccessResponseSchema }],
+      errors: [
+        cpqErrorDoc(400, 'Missing id'),
+        cpqErrorDoc(404, 'Item not found'), cpqErrorDoc(500, 'Internal error'),
+      ],
+    },
+  },
 }

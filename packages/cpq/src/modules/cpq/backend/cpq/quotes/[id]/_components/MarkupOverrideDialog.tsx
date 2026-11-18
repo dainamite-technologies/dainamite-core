@@ -140,7 +140,7 @@ export function MarkupOverrideDialog({ quoteLineId, lineName, revision, charges,
           errorCode={errorCode} onClear={(chargeCode) => void clear(chargeCode)} onReload={onReload} />
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>{t('cpq.quoteCosts.dialog.cancel', 'Cancel')}</Button>
-          <Button onClick={() => void save()} disabled={saving} title="Ctrl/Cmd+Enter">
+          <Button onClick={() => void save()} disabled={saving} title={t('cpq.common.submitShortcut', 'Ctrl/Cmd+Enter')}>
             {saving ? t('cpq.quoteCosts.dialog.saving', 'Saving…') : t('cpq.quoteCosts.dialog.save', 'Save')}
           </Button>
         </DialogFooter>

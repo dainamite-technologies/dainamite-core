@@ -114,12 +114,12 @@ export default function SpecificationsListPage() {
             {row.original.name}
             {row.original.specType === 'bundle' && (
               <Tag variant="brand" className="ml-2 px-2 text-[10px]">
-                bundle
+                {t('cpq.specifications.list.tag.bundle', 'bundle')}
               </Tag>
             )}
             {row.original.isAssetizable && (
               <Tag variant="warning" className="ml-1 px-2 text-[10px]">
-                asset
+                {t('cpq.specifications.list.tag.asset', 'asset')}
               </Tag>
             )}
           </span>

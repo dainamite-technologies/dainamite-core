@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { resolveCpqRouteContext } from '../context'
+import { cpqContextError, resolveCpqRouteContext } from '../context'
 import { cpqConvertQuoteToOrderSchema } from '../../data/validators'
 import { isOrderError } from '../../services/cpqOrderService'
 import type { DefaultCpqOrderService } from '../../services/cpqOrderService'
@@ -16,7 +16,8 @@ export const metadata = {
 export async function POST(req: Request) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     const body = cpqConvertQuoteToOrderSchema.parse(await req.json())
     const scope = { organizationId: ctx.organizationId, tenantId: ctx.tenantId }
@@ -43,7 +44,8 @@ export async function POST(req: Request) {
 export async function GET(req: Request) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     const scope = { organizationId: ctx.organizationId, tenantId: ctx.tenantId }
     const url = new URL(req.url)
@@ -104,7 +106,7 @@ export const openApi: OpenApiRouteDoc = {
         cpqErrorDoc(400, 'Validation error'),
         cpqErrorDoc(404, 'Quote not found'),
         cpqErrorDoc(409, 'Quote cannot be converted in its status or is already converted, or COST_SOURCE_CHANGED (the subscription item costs of an ARC cost-managed line changed since the quote mirrored them; body `lines: [{ quoteLineId, subscriptionItemId, costKeys }]`, nothing was written)'),
-        cpqErrorDoc(422, 'Quote has no lines, has invalid stored adjustments, or COSTS_NOT_CONFIRMED (a price-basis cost is not confirmed or has expired, or a cost-plus charge has no price; body `lines: [{ quoteLineId, costKeys, chargeCodes }]` names the blocking cost keys and the unpriced cost-plus charge codes per line, either list may be empty; ARC cancel lines never block), or blocked by a mutation guard'),
+        cpqErrorDoc(422, 'Quote has no lines, has invalid stored adjustments, has an incomplete bundle (`BUNDLE_INCOMPLETE`, with the V-QBUN `errors`), or COSTS_NOT_CONFIRMED (a price-basis cost is not confirmed or has expired, or a cost-plus charge has no price; body `lines: [{ quoteLineId, costKeys, chargeCodes }]` names the blocking cost keys and the unpriced cost-plus charge codes per line, either list may be empty; ARC cancel lines never block), or blocked by a mutation guard'),
       ],
     },
     GET: {

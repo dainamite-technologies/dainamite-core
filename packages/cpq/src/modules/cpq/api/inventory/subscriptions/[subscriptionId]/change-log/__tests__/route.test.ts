@@ -2,7 +2,7 @@ type Row = Record<string, any>
 const enabled = jest.fn(), viewCosts = jest.fn(), listChangeLog = jest.fn()
 const ctx = { auth: { sub: 'user' }, tenantId: 'tenant', organizationId: 'org', organizationScope: null,
   container: { resolve: (name: string) => ({ cpqCostService: { enabled }, cpqInventoryService: { listChangeLog } } as Record<string, unknown>)[name] } }
-jest.mock('../../../../../context', () => ({ resolveCpqRouteContext: jest.fn(async () => ctx) }))
+jest.mock('../../../../../context', () => ({ cpqContextError: jest.requireActual('../../../../../context').cpqContextError, resolveCpqRouteContext: jest.fn(async () => ctx) }))
 jest.mock('../../../../../_helpers/costAccess', () => ({ canViewCosts: (...args: unknown[]) => viewCosts(...args) }))
 import { GET, metadata } from '../route'
 

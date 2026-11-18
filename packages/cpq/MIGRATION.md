@@ -650,6 +650,101 @@ charges are unchanged. `CostPlusErrorCode` includes `CURRENCY_NO_RATE`;
 `lookupTablePrice` takes an optional `options` argument (`requireColumn`), whose
 default keeps price-table behaviour unchanged.
 
+### 2026-11-17 - Bundle setup, default components, slot validation (#122-#125)
+
+**Migration.** `Migration20261117120000_cpq_offering_components_partial_unique`
+replaces the `cpq_off_comp_unique` constraint with a partial unique index
+(`WHERE deleted_at IS NULL`), so a removed bundle component can be added back.
+Rollback **permanently deletes** older soft-deleted copies (keeping the live
+row, else the newest) before restoring the full constraint.
+Written by hand in the generator's style (no database was available to run
+`yarn mercato db generate`); the module snapshot was updated to match.
+
+**API (additive).** `POST /product-offerings`: `offeringType` optional, defaults
+to the spec's `specType`. `POST /quotes/{id}/items`: `expandBundleDefaults`.
+`ValidationError.type` gains `'charge'` (V-LINE-1) and `'bundle_slot'`
+(V-QBUN-1..3, with `slotGroup` / `slotName`). `BundleTreeNode` gains `isActive`.
+`offering-components` / `bundle-slots` POST: 404 / 409 instead of 500.
+
+**Behaviour changes.** `POST /orders` returns 422 `BUNDLE_INCOMPLETE` while a
+quote has stored bundle-slot errors. Like the adjustment check, conversion
+reads the quote's stored (reviewed) validation and does not re-price: a quote
+last recalculated before this release is not retro-blocked until its next
+write. Slot rules do not run on Cancel quotes, never flag children mirrored
+from the subscription, and skip a mirrored bundle whose children the quote
+leaves untouched; cardinality counts lines, not quantity. Default component
+lines inherit the bundle line's term and dates, and per attribute the bundle
+line's value for the same code or the attribute's `defaultValue`. A valid line
+whose offering defines no charges is configured; one whose charges exist but
+none applies is incomplete with V-LINE-1. Lines without an offering keep the
+previous rule (no charges = incomplete). Lines are now decided by one rule in `lib/lineCompleteness.ts`,
+run by `recalculateInternal`; `DefaultCpqQuotingService` takes an optional
+`cpqBundleService` dependency.
+
+### 2026-11-16 - Date column props are strings; 400 without organization
+
+**Entity typings (consumers reading these props).** Every `type: 'date'`
+property is now typed `string | null` (`YYYY-MM-DD`), matching what MikroORM 7
+already returned at runtime: `CpqQuoteLineConfiguration.startDate` / `endDate`,
+`CpqOrderLineConfiguration.startDate` / `endDate`,
+`CpqInventorySubscription.startDate` / `currentTermStart` / `currentTermEnd`,
+`CpqInventoryAsset.purchaseDate` / `deliveryDate`,
+`CpqQuoteTargetSubscription.newTermStart` / `newTermEnd`,
+`CpqQuoteConfiguration.arcMergeNewTermStart` / `arcMergeNewTermEnd`. Code that
+called `Date` methods on them was already failing at runtime; wrap reads in
+`new Date(value)` and write `YYYY-MM-DD` strings. No migration.
+
+**Routes without an organization** answer `400`
+(`cpq.errors.organizationRequired`) instead of `500`. Use `cpqContextError(ctx)`
+from `api/context.ts` after `resolveCpqRouteContext` in custom CPQ routes.
+
+### 2026-11-16 - Cross-module writes through sales / catalog commands
+
+No route contract change. Data retention changes for installers:
+
+- `DELETE /api/cpq/quotes/{quoteId}` removes the sales quote with
+  `sales.quotes.delete`. In Open Mercato 0.9 that command deletes the quote
+  graph (lines, adjustments, addresses, notes, tags) instead of setting
+  `deleted_at`. Reports or joins that relied on soft-deleted `sales_quotes`
+  rows no longer find them. CPQ rows (`CpqQuoteConfiguration`,
+  `CpqQuoteLineConfiguration`) are still soft-deleted.
+- Undoing that delete from the audit log restores the sales quote, and the
+  CPQ interceptor `cpq.restore-quote-configuration-after-sales-undo`
+  (`commands/interceptors.ts`, `afterUndo` on `sales.quotes.delete`) restores
+  the CPQ configuration and the lines deleted with it. Lines removed earlier
+  on their own stay deleted. Its `afterExecute` soft-deletes the live CPQ
+  configuration whenever `sales.quotes.delete` runs elsewhere (redo from the
+  audit log, a delete in the sales module), and its `beforeExecute` refuses
+  (409) to delete a sales quote whose CPQ quote is accepted, rejected or
+  cancelled, the same rule as the CPQ route. Run `yarn generate` after
+  upgrading so the interceptor is registered.
+- `POST /api/cpq/product-specifications` creates the catalog product with
+  `catalog.products.create`, so catalog validation limits apply (title 255,
+  description 4000, handle 150 characters) and return 400.
+- Errors from those commands (403, 404, 409) keep their status instead of 500.
+
+### 2026-11-16 - AI tools and agent; `@open-mercato/ai-assistant` peer; update schemas
+
+**New required peer (breaking for consumers).** `@open-mercato/ai-assistant`
+`^0.9.0`. The package now ships `ai-tools.ts` and `ai-agents.ts`; the
+framework generator imports every enabled module's `ai-tools.ts` statically,
+and the CPQ tools build on `defineApiBackedAiTool` at load time. An app that
+enables `@dainamite/cpq` must also install and enable the AI assistant
+(`{ id: 'ai_assistant', from: '@open-mercato/ai-assistant' }` in
+`src/modules.ts`). Ships in the same major as the 1.0.0 release. After
+upgrading, run `yarn generate`.
+
+**AI surface.** 20 read tools and 4 write tools (`cpq.create_quote`,
+`cpq.add_quote_line`, `cpq.update_quote_line`,
+`cpq.submit_quote_for_approval`) over the existing routes, plus the
+`cpq.quoting_assistant` agent (`mutationPolicy: 'confirm-required'`). Writes
+run only after the operator confirms the preview card; over MCP they are
+refused. See `manuals/cpq-ai-agent.md`.
+
+**OpenAPI.** Every route exports a typed `OpenApiRouteDoc`. Seven routes
+moved from the path-keyed object form (which the generator ignored) to
+`methods`, so the generated spec now carries their params and bodies.
+
 ### 2026-11-10 — Manual price adjustments and price waterfall (price adjustments, Phase 1)
 
 Spec: `.ai/specs/2026-11-10-cpq-manual-price-adjustments.md`. Manual:
@@ -829,7 +924,8 @@ All five include a `proration` payload + ChangeLog id, persistent +
 - `cpq.arc.renew.manage`
 - `cpq.arc.cancel.manage`
 - `cpq.arc.changelog.view`
-- `cpq.inventory.expiring.view`
+- `cpq.inventory.expiring.view` (retired since: the expiring filter and
+  `GET /api/cpq/inventory/subscriptions/expiring` use `cpq.inventory.view`)
 
 **Service surface additions** (no new top-level services — methods on existing):
 - `cpqInventoryService.applyAmendment / applyRenewal / applyMergeRenewal /

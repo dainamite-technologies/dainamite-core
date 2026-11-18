@@ -1,8 +1,10 @@
 import { NextResponse } from 'next/server'
-import { resolveCpqRouteContext } from '../../../context'
+import { cpqContextError, resolveCpqRouteContext } from '../../../context'
 import { cpqCancelMetaSchema } from '../../../../data/validators'
 import { resolveQuotingService } from '../../../resolveQuotingService'
 import { handleArcError } from '../../../_helpers/handleArcError'
+import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
+import { cpqErrorDoc, cpqQuoteIdPathParams } from '../../../_helpers/quoteRouteOpenApi'
 
 /**
  * POST /api/cpq/quotes/[quoteId]/cancel-meta
@@ -20,7 +22,8 @@ export async function POST(
 ) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
     const { quoteId } = await params
     const body = cpqCancelMetaSchema.parse(await req.json())
     const scope = { organizationId: ctx.organizationId, tenantId: ctx.tenantId }
@@ -41,37 +44,22 @@ export async function POST(
   }
 }
 
-export const openApi = {
-  '/api/cpq/quotes/{quoteId}/cancel-meta': {
-    parameters: [
-      { name: 'quoteId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
-    ],
-    post: {
-      tags: ['CPQ ARC'],
-      summary: 'Stamp ETF + reason on a cancel quote',
-      requestBody: {
-        required: true,
-        content: {
-          'application/json': {
-            schema: {
-              type: 'object',
-              required: ['reasonCode'],
-              properties: {
-                reasonCode: { type: 'string' },
-                reasonText: { type: 'string' },
-                etfAmount: { type: 'string' },
-                etfCurrency: { type: 'string', maxLength: 3 },
-              },
-            },
-          },
-        },
-      },
-      responses: {
-        '200': { description: 'Cancel meta stamped' },
-        '400': { description: 'Validation error' },
-        '404': { description: 'Quote not found' },
-        '409': { description: 'Quote not cancel-type or no longer editable' },
-      },
+export const openApi: OpenApiRouteDoc = {
+  tag: 'CPQ ARC',
+  summary: 'CPQ cancel quote meta',
+  pathParams: cpqQuoteIdPathParams,
+  methods: {
+    POST: {
+      summary: 'Set cancellation reason and early termination fee (ETF) on a cancel quote',
+      description: 'Required on a `quoteType=cancel` quote before it can move through the approval lifecycle.',
+      requestBody: { schema: cpqCancelMetaSchema },
+      responses: [{ status: 200, description: 'Quote with the cancel meta stamped' }],
+      errors: [
+        cpqErrorDoc(400, 'Validation error'),
+        cpqErrorDoc(404, 'Quote not found'),
+        cpqErrorDoc(409, 'Quote is not a cancel quote or is no longer editable'),
+        cpqErrorDoc(500, 'Internal error'),
+      ],
     },
   },
 }

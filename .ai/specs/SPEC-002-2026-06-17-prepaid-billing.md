@@ -535,6 +535,30 @@ as_of_date`):
    outcome, used instead of `draft_invoice_id` for prepaid accounts).
 8. Emit `billing.statement.generated`; reuse the mailer to send it.
 
+**First-cycle rule (#138).** A statement period never starts before the
+account's billing start — the earliest `bill_start_date` of its items. On the
+first cycle (no `last_bill_date`) the derived `[D − cycle, D − 1]` is clamped
+to start there (`clampPeriodToBillingStart`). When the whole period lies before
+the start — the usual case, where the first bill date **is** the start date —
+there is nothing to close: the cycle takes its charges at D (in-advance fees)
+and writes **no statement**; `last_bill_date` becomes `D − 1`, so the first
+statement covers `[D, D′ − 1]`. Its opening is the ledger before its window
+with period-close charges counted by `metadata.bill_date < D′` (not by
+`created_at`, which is the run's execution time), so the earlier charge is in
+the opening and the chain still equals the ledger. The anti-duplicate lookup
+matches an existing statement by `(bill_account_id, period_end)`, so a
+pre-start statement written before this rule still closes its bill date and is
+never duplicated by a re-run. Postpaid is unaffected: an invoice's display
+period is the min / max of its lines' service periods (`displayPeriod`), which
+already start at the item start.
+
+**Statement presentation.** Lists and the detail show the signed
+**Adjustments** term (manual adjustments + reversals), so every row adds up:
+`closing = opening + top-ups + adjustments − usage − charges`. Charges are
+labelled **"Charges (taken on bill date)"**: they are taken at D, the day after
+the period end, so an in-advance charge covers the *next* period — its service
+period is shown per line on the detail.
+
 **No new fiscal document at period close.** Recurring fees draw down
 already-taxed (at top-up) balance exactly like usage, so the statement stays
 non-fiscal. (Separately VAT-invoicing recurring on a prepaid account would be
@@ -794,3 +818,4 @@ keeps the full validation gate green, and updates `packages/billing/MIGRATION.md
 | 2026-06-17 | Initial draft. Decisions locked: engine in `@dainamite/billing`; monetary append-only transaction log; usage never rejected (report, don't block); VAT at top-up + consumption statement; top-ups registered as first-class `BillingTopup`. Demo deferred to a separate spec. |
 | 2026-06-17 | Recurring/one-time charges brought **in scope** for prepaid: the periodic Bill Run still runs for prepaid accounts and debits those charges from the balance, rolling them into the statement (`total_recurring`); non-fiscal drawdown, reusing the postpaid item selector + `billed_to_date` guard + deterministic `source_ref`. Renamed the balance-movement entity `BillingLedgerEntry` → **`BillingAccountTransaction`** (consistent with `BillingAccount*`; `entry_type` → `type`; `/api/billing/ledger` → `/api/billing/transactions`). |
 | 2026-06-17 | Added **credit limit** (both modes, `credit_limit` on `BillingAccount`, default 0): report-only `creditStatus` (`within_limit`/`near_limit`/`over_limit`) + `billing.credit.over_limit` event + `GET …/credit-status`. Prepaid `credit_used = max(0,−balance)` (overdraft allowance, separate from `balanceStatus`); postpaid `credit_used = Σ posted-unpaid invoice outstanding`. Billing never blocks — enforcement is the consumer's (e.g. a CPQ order guard). |
+| 2026-11-18 | #138: first-cycle rule — a statement period never starts before the billing start (clamped, or no statement when the period lies entirely before it); first-statement opening counts earlier charges by `bill_date`; statement anti-duplicate keys on `period_end`. Lists show the Adjustments term; charges labelled "taken on bill date". |

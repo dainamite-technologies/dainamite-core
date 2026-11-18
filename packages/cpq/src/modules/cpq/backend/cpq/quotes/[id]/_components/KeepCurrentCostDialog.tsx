@@ -120,7 +120,7 @@ export function KeepCurrentCostDialog({ cost, lineName, newTermEnd, revision, on
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>{t('cpq.quoteCosts.dialog.cancel', 'Cancel')}</Button>
-          <Button onClick={() => void save()} disabled={saving} title="Ctrl/Cmd+Enter">
+          <Button onClick={() => void save()} disabled={saving} title={t('cpq.common.submitShortcut', 'Ctrl/Cmd+Enter')}>
             {saving ? t('cpq.quoteCosts.dialog.saving', 'Saving…') : t('cpq.arc.keepCurrent.confirm', 'Keep current cost')}
           </Button>
         </DialogFooter>

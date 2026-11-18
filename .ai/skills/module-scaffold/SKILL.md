@@ -627,7 +627,7 @@ yarn dev               # Start dev server
 - [ ] `page.meta.ts` includes `pageGroup` + `pageGroupKey` for sidebar grouping
 - [ ] `page.meta.ts` includes `pageOrder` for sort position
 - [ ] All related pages share the same `pageGroupKey`
-- [ ] Settings pages (if any) have `pageContext: 'settings' as const` and `navHidden: true`
+- [ ] Settings pages (if any) have `pageContext: 'settings' as const` and no `navHidden` (it hides them from the Settings sidebar)
 - [ ] ACL features declared and wired in `setup.ts`
 - [ ] Module registered in `src/modules.ts` with `from: '@app'`
 - [ ] `yarn generate` run after creating files

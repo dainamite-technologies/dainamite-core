@@ -64,7 +64,7 @@ export function DeclineCostDialog({ target, onClose, onDone, onFailure }: Sourci
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>{t('cpq.costRequests.cancel', 'Cancel')}</Button>
-          <Button variant="destructive" onClick={() => void submit()} disabled={saving} title="Ctrl/Cmd+Enter" data-testid="cpq-decline-submit">
+          <Button variant="destructive" onClick={() => void submit()} disabled={saving} title={t('cpq.common.submitShortcut', 'Ctrl/Cmd+Enter')} data-testid="cpq-decline-submit">
             {saving ? t('cpq.costRequests.saving', 'Saving…') : t('cpq.costRequests.decline.submit', 'Decline')}
           </Button>
         </DialogFooter>

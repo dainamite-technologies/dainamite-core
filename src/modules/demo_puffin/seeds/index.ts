@@ -8,6 +8,7 @@ import { seedPuffinProducts } from './seeders/products'
 import { seedPuffinSpecsLinkage } from './seeders/specs-linkage'
 import { seedPuffinWizards } from './seeders/wizards'
 import { seedPuffinExamplesImpl } from './seeders/examples'
+import { seedPuffinBillingSettings } from './billing'
 
 export async function seedPuffinDefaults(ctx: CpqUseCaseSeedContext): Promise<void> {
   const { em } = ctx
@@ -21,6 +22,8 @@ export async function seedPuffinDefaults(ctx: CpqUseCaseSeedContext): Promise<vo
   await seedPuffinPriceRules(em, scope)
   await seedPuffinBundles(em, scope)
   await seedPuffinWizards(em, scope)
+  // Billing seller details, so the demo tenant can post invoices out of the box.
+  await seedPuffinBillingSettings(em, scope)
 }
 
 export async function seedPuffinExamples(ctx: CpqUseCaseSeedContext): Promise<void> {

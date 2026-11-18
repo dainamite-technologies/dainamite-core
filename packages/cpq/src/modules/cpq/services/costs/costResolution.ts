@@ -496,7 +496,7 @@ async function planQuoteCosts(params: CostResolutionParams & { save?: boolean })
   const newTermEndByTarget = new Map<string, Date | null>()
   if (managedRenew.length > 0) {
     const targets = await em.find(CpqQuoteTargetSubscription, { ...scoped(scope), quoteId: quote.id })
-    for (const target of targets ?? []) newTermEndByTarget.set(target.subscriptionId, target.newTermEnd ?? null)
+    for (const target of targets ?? []) newTermEndByTarget.set(target.subscriptionId, target.newTermEnd ? new Date(target.newTermEnd) : null)
   }
 
   // Renew (Q12): the carried index lines re-read the value in force at the recalculation date, on the index of their OWN snapshot

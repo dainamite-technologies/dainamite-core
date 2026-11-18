@@ -4,13 +4,15 @@ import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Plus } from 'lucide-react'
 import type { LegacyColumnDef as ColumnDef } from '@tanstack/react-table/legacy'
-import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { useLocale, useT } from '@open-mercato/shared/lib/i18n/context'
+import { formatBillingDay } from '../../../lib/displayDate'
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
-import { DataTable } from '@open-mercato/ui/backend/DataTable'
+import { BillingDataTable as DataTable } from '../../../components/BillingDataTable'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
+import { itemDetailHref } from '../../../lib/navigation'
 
 /**
  * Billing Items admin list.
@@ -34,6 +36,7 @@ type BillingItemRow = {
   uom_code: string | null
   subscription_id: string | null
   source_ref: string | null
+  charge_timing: 'in_advance' | 'in_arrears'
   is_active: boolean
   created_at: string
 }
@@ -42,12 +45,6 @@ type ListResponse = {
   items: BillingItemRow[]
   total: number
   totalPages: number
-}
-
-function formatDate(value: string | null | undefined): string {
-  if (!value) return '—'
-  const parsed = new Date(value)
-  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleDateString()
 }
 
 function typeVariant(
@@ -67,6 +64,7 @@ function typeVariant(
 
 export default function BillingItemsListPage() {
   const t = useT()
+  const locale = useLocale()
   const router = useRouter()
   const searchParams = useSearchParams()
   // Deep-link from the account detail page: `?billAccountId=<id>` pre-
@@ -187,6 +185,20 @@ export default function BillingItemsListPage() {
         ),
       },
       {
+        accessorKey: 'charge_timing',
+        header: t('billing.items.columns.timing', 'Timing'),
+        cell: ({ row }) =>
+          row.original.type === 'recurring' ? (
+            <span className="text-sm">
+              {row.original.charge_timing === 'in_arrears'
+                ? t('billing.items.charge_timing.in_arrears', 'In arrears')
+                : t('billing.items.charge_timing.in_advance', 'In advance')}
+            </span>
+          ) : (
+            <span className="text-muted-foreground">—</span>
+          ),
+      },
+      {
         accessorKey: 'bill_account_id',
         header: t('billing.items.columns.account', 'Account'),
         cell: ({ row }) => (
@@ -202,12 +214,12 @@ export default function BillingItemsListPage() {
       {
         accessorKey: 'bill_start_date',
         header: t('billing.items.columns.start', 'Start'),
-        cell: ({ row }) => formatDate(row.original.bill_start_date),
+        cell: ({ row }) => formatBillingDay(row.original.bill_start_date, locale),
       },
       {
         accessorKey: 'bill_end_date',
         header: t('billing.items.columns.end', 'End'),
-        cell: ({ row }) => formatDate(row.original.bill_end_date),
+        cell: ({ row }) => formatBillingDay(row.original.bill_end_date, locale),
       },
       {
         accessorKey: 'uom_code',
@@ -225,7 +237,7 @@ export default function BillingItemsListPage() {
           ),
       },
     ],
-    [t],
+    [t, locale],
   )
 
   return (
@@ -250,7 +262,7 @@ export default function BillingItemsListPage() {
           perspective={{ tableId: 'billing-items' }}
           columns={columns}
           data={rows}
-          onRowClick={(row) => router.push(`/backend/billing/items/${row.id}`)}
+          onRowClick={(row) => router.push(itemDetailHref(row.id, { fromItemsList: true }))}
           isLoading={loading}
           pagination={{
             page,

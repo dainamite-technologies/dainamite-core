@@ -1,9 +1,10 @@
 "use client"
 import * as React from 'react'
 import Link from 'next/link'
-import { Pencil } from 'lucide-react'
-import { useParams, useRouter } from 'next/navigation'
-import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { Pencil, Repeat } from 'lucide-react'
+import { useParams, useRouter, useSearchParams } from 'next/navigation'
+import { useLocale, useT } from '@open-mercato/shared/lib/i18n/context'
+import { formatBillingDay } from '../../../../lib/displayDate'
 import { Page, PageBody, PageHeader } from '@open-mercato/ui/backend/Page'
 import { FormHeader } from '@open-mercato/ui/backend/forms'
 import { Button } from '@open-mercato/ui/primitives/button'
@@ -22,6 +23,8 @@ import {
   type ItemFormValues,
 } from '../../../../components/ItemForm'
 import { DetailCard, DetailField } from '../../../../components/DetailFields'
+import { resolveItemReturnTarget } from '../../../../lib/navigation'
+import { ChangeItemPriceDialog } from '../../../../components/ChangeItemPriceDialog'
 
 /**
  * `/backend/billing/items/[id]` — Billing Item detail.
@@ -42,6 +45,8 @@ type BillingItemRow = {
   id: string
   bill_account_id: string
   bill_account_name: string | null
+  bill_account_currency?: string | null
+  bill_account_mode?: 'postpaid' | 'prepaid' | null
   type: 'one_time' | 'recurring' | 'usage'
   bill_start_date: string
   bill_end_date: string | null
@@ -53,18 +58,16 @@ type BillingItemRow = {
   source_ref: string | null
   currency_mismatch: boolean
   billed_to_date: string | null
+  charge_timing: 'in_advance' | 'in_arrears'
+  prorate: boolean
+  tax_rate: string | number | null
+  price_basis?: 'net' | 'gross'
   is_active: boolean
   created_at: string
   updated_at: string
 }
 
 type ListResponse = { items: BillingItemRow[] }
-
-function formatDate(value: string | null | undefined): string {
-  if (!value) return '—'
-  const parsed = new Date(value)
-  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleDateString()
-}
 
 function formatRate(row: BillingItemRow): string {
   const rate = (row.rate_json ?? {}) as Record<string, unknown>
@@ -97,6 +100,10 @@ function toFormValues(row: BillingItemRow): Partial<ItemFormValues> {
     subscriptionId: row.subscription_id ?? '',
     subscriptionItemId: row.subscription_item_id ?? '',
     isActive: row.is_active,
+    chargeTiming: row.charge_timing ?? 'in_advance',
+    prorate: row.prorate ?? true,
+    taxRate: row.tax_rate != null ? String(Number(row.tax_rate)) : '',
+    priceBasis: row.price_basis === 'gross' ? 'gross' : 'net',
   }
   if (row.type === 'one_time' && typeof rate.amount === 'number') {
     out.oneTimeAmount = String(rate.amount)
@@ -118,6 +125,7 @@ function toFormValues(row: BillingItemRow): Partial<ItemFormValues> {
 
 function ItemView({ row }: { row: BillingItemRow }) {
   const t = useT()
+  const locale = useLocale()
   return (
     <DetailCard>
       <DetailField label={t('billing.items.detail.field.account', 'Account')}>
@@ -132,13 +140,23 @@ function ItemView({ row }: { row: BillingItemRow }) {
         <Tag variant="info">{row.type}</Tag>
       </DetailField>
       <DetailField label={t('billing.items.columns.start', 'Start')}>
-        {formatDate(row.bill_start_date)}
+        {formatBillingDay(row.bill_start_date, locale)}
       </DetailField>
       <DetailField label={t('billing.items.columns.end', 'End')}>
-        {formatDate(row.bill_end_date)}
+        {formatBillingDay(row.bill_end_date, locale)}
       </DetailField>
       <DetailField label={t('billing.items.form.rate.title', 'Rate')}>
-        {formatRate(row)}
+        <span className="inline-flex items-center gap-2">
+          <span className="tabular-nums">
+            {formatRate(row)}
+            {row.bill_account_currency && formatRate(row) !== '—' ? ` ${row.bill_account_currency}` : ''}
+          </span>
+          <Tag variant="neutral">
+            {row.price_basis === 'gross'
+              ? t('billing.items.price_basis.gross', 'Gross')
+              : t('billing.items.price_basis.net', 'Net')}
+          </Tag>
+        </span>
       </DetailField>
       <DetailField label={t('billing.items.columns.uom', 'UoM')}>
         {row.uom_code || '—'}
@@ -158,8 +176,25 @@ function ItemView({ row }: { row: BillingItemRow }) {
           '—'
         )}
       </DetailField>
+      <DetailField label={t('billing.items.form.tax_rate', 'VAT rate (%)')}>
+        {row.tax_rate != null ? `${Number(row.tax_rate)} %` : '—'}
+      </DetailField>
+      {row.type === 'recurring' ? (
+        <>
+          <DetailField label={t('billing.items.form.charge_timing', 'Charge timing')}>
+            <Tag variant="neutral">
+              {row.charge_timing === 'in_arrears'
+                ? t('billing.items.charge_timing.in_arrears', 'In arrears')
+                : t('billing.items.charge_timing.in_advance', 'In advance')}
+            </Tag>
+          </DetailField>
+          <DetailField label={t('billing.items.form.prorate', 'Prorate partial periods')}>
+            {row.prorate === false ? t('billing.common.no', 'No') : t('billing.common.yes', 'Yes')}
+          </DetailField>
+        </>
+      ) : null}
       <DetailField label={t('billing.items.detail.field.billed_to', 'Billed through')}>
-        {row.billed_to_date ? formatDate(row.billed_to_date) : '—'}
+        {formatBillingDay(row.billed_to_date, locale)}
       </DetailField>
       {row.currency_mismatch ? (
         <DetailField
@@ -185,10 +220,15 @@ function ItemView({ row }: { row: BillingItemRow }) {
 export default function BillingItemDetailPage(props: { params?: { id?: string } }) {
   const t = useT()
   const router = useRouter()
+  const [changePriceOpen, setChangePriceOpen] = React.useState(false)
   // OM serves backend pages through a catch-all route — the dynamic
   // `[id]` segment arrives as a page prop; `useParams()` is the fallback.
   const urlParams = useParams<{ id: string }>()
   const itemId = (props.params?.id ?? urlParams?.id ?? '') as string
+  // Spec E (D23): back / after-delete return to the owning account, unless
+  // the item was opened from the global Items list (`?from=items`).
+  const searchParams = useSearchParams()
+  const from = searchParams?.get('from') ?? null
 
   const [row, setRow] = React.useState<BillingItemRow | null>(null)
   const [loading, setLoading] = React.useState(true)
@@ -244,6 +284,11 @@ export default function BillingItemDetailPage(props: { params?: { id?: string } 
         payload.uomCode = assembled.uomCode ?? null
         payload.subscriptionId = assembled.subscriptionId ?? null
         payload.subscriptionItemId = assembled.subscriptionItemId ?? null
+        if (assembled.chargeTiming !== undefined) payload.chargeTiming = assembled.chargeTiming
+        if (assembled.prorate !== undefined) payload.prorate = assembled.prorate
+        if (assembled.taxRate !== undefined) payload.taxRate = assembled.taxRate
+        if (assembled.priceBasis !== undefined) payload.priceBasis = assembled.priceBasis
+        if (assembled.creditReason) payload.creditReason = assembled.creditReason
 
         await apiCallOrThrow('/api/billing/items', {
           method: 'PUT',
@@ -283,13 +328,13 @@ export default function BillingItemDetailPage(props: { params?: { id?: string } 
         body: JSON.stringify({ id: row.id }),
       })
       flash(t('billing.items.detail.delete.success', 'Item deleted'), 'success')
-      router.push('/backend/billing/items')
+      router.push(resolveItemReturnTarget({ from, billAccountId: row.bill_account_id }))
     } catch (err) {
       const { message } = normalizeCrudServerError(err)
       flash(message || t('billing.items.detail.delete.error', 'Delete failed'), 'error')
       setDeleting(false)
     }
-  }, [confirm, router, row, t])
+  }, [confirm, from, router, row, t])
 
   if (error) {
     return (
@@ -316,7 +361,7 @@ export default function BillingItemDetailPage(props: { params?: { id?: string } 
     <Page>
       <FormHeader
         mode="detail"
-        backHref="/backend/billing/items"
+        backHref={resolveItemReturnTarget({ from, billAccountId: row.bill_account_id })}
         entityTypeLabel={t('billing.items.detail.title', 'Billing Item')}
         title={row.description}
         statusBadge={
@@ -328,6 +373,12 @@ export default function BillingItemDetailPage(props: { params?: { id?: string } 
         }
         actionsContent={
           <>
+            {!editing && row.type === 'recurring' && row.is_active ? (
+              <Button type="button" variant="outline" onClick={() => setChangePriceOpen(true)}>
+                <Repeat size={16} />
+                {t('billing.items.change_price.action', 'Change price')}
+              </Button>
+            ) : null}
             {!editing ? (
               <Button type="button" onClick={() => setEditing(true)}>
                 <Pencil size={16} />
@@ -352,6 +403,9 @@ export default function BillingItemDetailPage(props: { params?: { id?: string } 
           <ItemForm
             mode="edit"
             initial={toFormValues(row)}
+            accountCurrency={row.bill_account_currency ?? undefined}
+            accountBillingMode={row.bill_account_mode ?? undefined}
+            billedToDate={row.billed_to_date}
             submitting={saving}
             onSubmit={handleSubmit}
             onCancel={() => setEditing(false)}
@@ -359,6 +413,21 @@ export default function BillingItemDetailPage(props: { params?: { id?: string } 
         ) : (
           <ItemView row={row} />
         )}
+        {row.type === 'recurring' ? (
+          <ChangeItemPriceDialog
+            open={changePriceOpen}
+            onOpenChange={setChangePriceOpen}
+            itemId={row.id}
+            currentPrice={typeof row.rate_json?.unit_price === 'number' ? row.rate_json.unit_price : null}
+            currencyCode={row.bill_account_currency}
+            priceBasis={row.price_basis === 'gross' ? 'gross' : 'net'}
+            billStartDate={row.bill_start_date}
+            billEndDate={row.bill_end_date}
+            billedToDate={row.billed_to_date}
+            prorate={row.prorate !== false}
+            onChanged={(newItemId) => router.push(`/backend/billing/items/${encodeURIComponent(newItemId)}`)}
+          />
+        ) : null}
         {ConfirmDialogElement}
       </PageBody>
     </Page>

@@ -1,9 +1,11 @@
+import { dateColumnToIso } from '../lib/dateColumns'
 import { storedAdjustmentFailure } from './priceAdjustments/storedAdjustmentFailure'
 import { loadConversionBlockers } from './costs/conversionGuard'
 import { copyQuoteCostsToOrder } from './costs/orderCostCopy'
 import { costSeedFromOrderLineCost, type CostSeed, type InventoryCostChange } from './costs/inventoryCostSync'
 import { assertCarriedCostsFresh, carriedCostLines, type CarriedSourceLine, type StaleCarriedCostLine } from './costs/itemCostState'
 import { lockSourceQuote, lockSubscriptions } from './costs/sourceQuoteLock'
+import { storedBundleSlotErrors } from './storedBundleSlotErrors'
 import { withQuotePricingWrite } from './priceAdjustments/quotePricingWrite'
 import { LockMode } from '@mikro-orm/core'
 import type { EntityManager } from '@mikro-orm/postgresql'
@@ -42,6 +44,8 @@ import { isArcTerminationLine } from './arcLineRemoval'
 import type { CpqCostService } from './costs/costService'
 import { cancelOpenRequests } from './costs/costRequestCancel'
 import type { SourcingSignal, SourcingSignalPublisher } from './costs/sourcingSignals'
+import { buildActivatedEventCustomerFields, type ActivatedEventCustomerFields } from '../lib/activatedEventCustomer'
+import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import { summarizeOrderPricing, type OrderWaterfallSummary } from './orderPricingSummary'
 
 // ─── Types ──────────────────────────────────────────────────────
@@ -202,6 +206,15 @@ export class DefaultCpqOrderService {
 
     const invalidAdjustment = storedAdjustmentFailure(cpqConfig, quoteLines)
     if (invalidAdjustment) throw new OrderError(422, 'ADJUSTMENT_INVALID', invalidAdjustment)
+
+    // #124: an incomplete bundle must not become an order (and later a
+    // subscription missing required components).
+    const bundleErrors = storedBundleSlotErrors(cpqConfig)
+    if (bundleErrors.length > 0) {
+      throw new OrderError(422, 'BUNDLE_INCOMPLETE', {
+        errors: bundleErrors.map(({ lineId, slotGroup, slotName, message }) => ({ lineId, slotGroup, slotName, message })),
+      })
+    }
 
     // R7: price-basis costs still estimated / unpriced / past their validity, or a cost-plus charge stored
     // without a price, mean the price is indicative: no order yet (whatever the toggle).
@@ -440,7 +453,19 @@ export class DefaultCpqOrderService {
         const inventory = await this.createInventoryFromOrder(tx, orderConfig, orderLines, scope)
         if (inventory) {
           inventoryCostChanges.push(...inventory.inventoryCostChanges)
-          postCommitEvents.push(() => emitActivatedEvent(orderConfig, inventory, scope))
+          postCommitEvents.push(async () =>
+            emitActivatedEvent(
+              orderConfig,
+              // Customer fields are best-effort defaults: a failed snapshot
+              // read must not suppress the event itself.
+              await this.getOrderCustomerFields(orderConfig.id, scope).catch((err) => {
+                console.warn('[cpq.orders] customer fields for activated event unavailable', err)
+                return {}
+              }),
+              inventory,
+              scope,
+            ),
+          )
         }
       } else {
         const arc = await this.applyArcOrder(tx, orderConfig, sourceQuote!, orderLines, scope)
@@ -588,12 +613,13 @@ export class DefaultCpqOrderService {
     const costChanges: InventoryCostChange[] = []
 
     const events: Array<() => Promise<void>> = []
-    const eventBaseEnvelope = {
+    const eventBaseEnvelope: ArcEventEnvelope = {
       organizationId: scope.organizationId,
       tenantId: scope.tenantId,
       sourceQuoteId: sourceQuote.id,
       sourceOrderId: orderConfig.id,
-    } as const
+      lineRefs: buildArcLineRefs(orderLines),
+    }
 
     if (quoteType === 'amend') {
       for (const target of targets) {
@@ -822,7 +848,7 @@ export class DefaultCpqOrderService {
         name: subscriptionName,
         billingCycle: 'monthly',
         currencyCode: orderConfig.currencyCode,
-        startDate: lineWithDates?.startDate?.toISOString?.() ?? undefined,
+        startDate: dateColumnToIso(lineWithDates?.startDate) ?? undefined,
         termMonths: lineWithTerm?.termMonths ?? undefined,
         sourceQuoteId: orderConfig.sourceQuoteId ?? undefined,
         sourceOrderId: orderConfig.id,
@@ -874,6 +900,8 @@ export class DefaultCpqOrderService {
       .slice(0, allSubItems.length)
       .map((line, i) => ({
         subscriptionItemId: allSubItems[i].id,
+        orderLineId: line.orderLineId,
+        startDate: iso10(line.startDate),
         productName: this.getLineName(line),
         mrcTotal: Number(line.mrcTotal),
         nrcTotal: Number(line.nrcTotal),
@@ -883,6 +911,33 @@ export class DefaultCpqOrderService {
       // connector create a needless shell account.
       .filter((it) => it.mrcTotal > 0 || it.nrcTotal > 0)
     return { subscriptionId: subscription.id, items: eventItems, inventoryCostChanges: created.inventoryCostChanges }
+  }
+
+  /**
+   * Customer name / kind / email / billing address of a CPQ order, read from
+   * its sales order's snapshots. Feeds the `cpq.subscription.activated`
+   * payload and lets add-ons (e.g. a billing connector) show the same values
+   * before activation. Uses a forked EM with decryption: the snapshots may be
+   * encrypted at rest, and decrypting a managed entity must never leak into a
+   * flush. Returns `{}` when the order or its sales order is missing.
+   */
+  async getOrderCustomerFields(orderId: string, scope: TenantScope): Promise<ActivatedEventCustomerFields> {
+    const em = this.em.fork()
+    const orderConfig = await em.findOne(CpqOrderConfiguration, {
+      id: orderId,
+      organizationId: scope.organizationId,
+      tenantId: scope.tenantId,
+      deletedAt: null,
+    })
+    if (!orderConfig) return {}
+    const salesOrder = await findOneWithDecryption(
+      em,
+      SalesOrder,
+      { id: orderConfig.orderId, organizationId: scope.organizationId, tenantId: scope.tenantId },
+      undefined,
+      scope,
+    )
+    return buildActivatedEventCustomerFields(salesOrder)
   }
 
   // ─── Get / List ─────────────────────────────────────────────
@@ -1128,9 +1183,9 @@ export class DefaultCpqOrderService {
         parentLineId: lc.parentLineId ?? null,
         quantity: lc.quantity,
         configuration: stripQuoteOnlyArcMarkers(lc.configuration) ?? {},
-        startDate: lc.startDate?.toISOString() ?? null,
+        startDate: dateColumnToIso(lc.startDate) ?? null,
         termMonths: lc.termMonths ?? null,
-        endDate: lc.endDate?.toISOString() ?? null,
+        endDate: dateColumnToIso(lc.endDate) ?? null,
         nrcTotal: Number(lc.nrcTotal),
         mrcTotal: Number(lc.mrcTotal),
         charges: (lc.charges ?? []) as Array<Record<string, unknown>>,
@@ -1314,6 +1369,27 @@ interface ArcEventEnvelope {
   tenantId: string
   sourceQuoteId: string
   sourceOrderId: string
+  /** Sales quote line id → the order line built from it (see `buildArcLineRefs`). */
+  lineRefs?: Map<string, ArcLineRef>
+}
+
+/** The order line behind an ARC change: its id (what the order API calls `lineId`) and service start. */
+type ArcLineRef = { orderLineId: string; startDate: string | null }
+
+/**
+ * Index order lines by the quote line they were converted from. ARC changes
+ * are applied from quote lines (the change log carries `quoteLineId`), while
+ * the order page and add-ons address order lines — this map joins the two.
+ */
+export function buildArcLineRefs(
+  orderLines: Array<Pick<CpqOrderLineConfiguration, 'orderLineId' | 'sourceQuoteLineId' | 'startDate'>>,
+): Map<string, ArcLineRef> {
+  const refs = new Map<string, ArcLineRef>()
+  for (const line of orderLines) {
+    if (!line.sourceQuoteLineId) continue
+    refs.set(line.sourceQuoteLineId, { orderLineId: line.orderLineId, startDate: iso10(line.startDate) })
+  }
+  return refs
 }
 
 // ─── Subscription-activated event (new-sale billing onboarding) ──
@@ -1324,6 +1400,10 @@ type ActivatedInventory = {
   inventoryCostChanges: InventoryCostChange[]
   items: Array<{
     subscriptionItemId: string
+    /** Sales order line id (`CpqOrderLineConfiguration.orderLineId`) — the line id the order API exposes. */
+    orderLineId: string
+    /** The line's service start (`YYYY-MM-DD`), or null when the quote set none. */
+    startDate: string | null
     productName: string
     /** Line totals — CPQ pricing has already applied line quantity. */
     mrcTotal: number
@@ -1342,11 +1422,14 @@ type ActivatedInventory = {
  */
 async function emitActivatedEvent(
   orderConfig: CpqOrderConfiguration,
+  customerFields: ActivatedEventCustomerFields,
   inventory: ActivatedInventory,
   scope: TenantScope,
 ): Promise<void> {
   const items = inventory.items.map((it) => ({
     subscriptionItemId: it.subscriptionItemId,
+    orderLineId: it.orderLineId,
+    ...(it.startDate ? { startDate: it.startDate } : {}),
     productName: it.productName,
     // `mrcTotal` / `nrcTotal` are line totals — CPQ pricing already
     // applied the line quantity. Quantity is therefore 1 here so
@@ -1372,6 +1455,10 @@ async function emitActivatedEvent(
     activationDate: new Date().toISOString().slice(0, 10),
     sourceQuoteId: orderConfig.sourceQuoteId ?? null,
     sourceOrderId: orderConfig.id,
+    // Customer defaults from the sales order snapshot (name, kind, email,
+    // billing address). Omitted fields mean "unknown" — subscribers apply
+    // their own fallbacks.
+    ...customerFields,
     items,
   } as never)
 }
@@ -1410,6 +1497,10 @@ function iso10(value: Date | string | null | undefined): string | null {
 
 type ArcChargeItem = {
   subscriptionItemId: string
+  /** Order line behind the added item (when the order line could be matched). */
+  orderLineId?: string
+  /** The line's service start, `YYYY-MM-DD`, when the quote set one. */
+  startDate?: string
   productName: string
   quantity: number
   charges: Array<Record<string, unknown>>
@@ -1421,7 +1512,10 @@ type ArcChargeItem = {
  * already applied quantity) → emit `quantity: 1` with the totals as the
  * charge rate, exactly as `emitActivatedEvent`.
  */
-function buildArcAddedItems(changeLog: ApplyArcResult['changeLog']): ArcChargeItem[] {
+export function buildArcAddedItems(
+  changeLog: ApplyArcResult['changeLog'],
+  lineRefs?: Map<string, ArcLineRef>,
+): ArcChargeItem[] {
   const after = changeLog.afterSnapshot as
     | { items?: Array<{ id?: string; name?: string }> }
     | null
@@ -1431,6 +1525,7 @@ function buildArcAddedItems(changeLog: ApplyArcResult['changeLog']): ArcChargeIt
   const summary = (changeLog.lineChanges ?? []) as Array<{
     action?: string
     itemId?: string
+    quoteLineId?: string | null
     mrcAmount?: unknown
     nrcAmount?: unknown
   }>
@@ -1439,8 +1534,11 @@ function buildArcAddedItems(changeLog: ApplyArcResult['changeLog']): ArcChargeIt
     if (change.action !== 'add' || typeof change.itemId !== 'string') continue
     const mrc = Number(change.mrcAmount)
     const nrc = Number(change.nrcAmount)
+    const ref = change.quoteLineId ? lineRefs?.get(change.quoteLineId) : undefined
     out.push({
       subscriptionItemId: change.itemId,
+      ...(ref ? { orderLineId: ref.orderLineId } : {}),
+      ...(ref?.startDate ? { startDate: ref.startDate } : {}),
       productName: nameById.get(change.itemId) || 'Configured item',
       quantity: 1,
       charges: [
@@ -1480,7 +1578,7 @@ async function emitAmendedEvent(
     // the effective date. The billing connector computes the mid-cycle
     // proration from this date + the account's billing cycle.
     effectiveDate: iso10(result.changeLog.effectiveAt),
-    addedItems: buildArcAddedItems(result.changeLog),
+    addedItems: buildArcAddedItems(result.changeLog, envelope.lineRefs),
     removedSubscriptionItemIds: buildArcRemovedItemIds(result.changeLog),
     sourceQuoteId: envelope.sourceQuoteId,
     sourceOrderId: envelope.sourceOrderId,
@@ -1499,7 +1597,7 @@ async function emitRenewedEvent(
     customerId: result.subscription.customerId,
     newTermStart: iso10(result.subscription.currentTermStart),
     newTermEnd: iso10(result.subscription.currentTermEnd),
-    addedItems: buildArcAddedItems(result.changeLog),
+    addedItems: buildArcAddedItems(result.changeLog, envelope.lineRefs),
     sourceQuoteId: envelope.sourceQuoteId,
     sourceOrderId: envelope.sourceOrderId,
     timestamp: new Date().toISOString(),

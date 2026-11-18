@@ -60,6 +60,18 @@ conventions win for repo-local code (e.g. CPQ uses Next.js-style
 `api/<method>/<path>.ts`). The divergences are documented per-skill —
 when you spot a conflict, surface it rather than picking sides silently.
 
+## Lessons learned: read first, write as you go
+
+[`.ai/lessons.md`](.ai/lessons.md) holds verified, non-obvious lessons from
+this repo (framework behaviour, pitfalls, root causes, environment traps).
+
+- **Before coding**, read the sections of `.ai/lessons.md` that match the task.
+- **When you learn something non-obvious and verified** that the code and
+  docs do not already say (or the user corrects you), add or update a lesson
+  in the same PR. Rules and format:
+  [`.ai/skills/lessons/SKILL.md`](.ai/skills/lessons/SKILL.md).
+- Fix or delete a lesson that turns out to be wrong.
+
 ## Engineering bar — applies to ALL contributors
 
 Every change in this repo is reviewed at a senior-engineer / architect bar.
@@ -71,7 +83,10 @@ The four non-negotiables (full version with rationale lives in
    documented invariant. No half-finished work.
 2. **API-first** — every new feature starts with the REST contract
    (`openApi` export). UI is a consumer of the API. Breaking changes are
-   versioned and changelogged.
+   versioned and changelogged. **Every new or changed route ships with its
+   MCP / AI tool in the same PR** (typed `openApi`, API-backed tool in
+   `<module>/ai-tools/`, agent allowlist, tests): see
+   [`.ai/skills/mcp-tools/SKILL.md`](.ai/skills/mcp-tools/SKILL.md).
 3. **Every entity has a detail page** — if it's listed in admin UI,
    `backend/<module>/<entity>/page.tsx` (list) AND
    `backend/<module>/<entity>/[id]/page.tsx` (detail) ship together.

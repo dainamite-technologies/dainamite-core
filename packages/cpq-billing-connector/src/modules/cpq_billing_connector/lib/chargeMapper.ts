@@ -29,6 +29,10 @@ export type CpqCharge = {
 
 export type CpqSubscriptionItem = {
   subscriptionItemId: string
+  /** Sales order line id behind the item (`cpq.subscription.activated` only). */
+  orderLineId?: string
+  /** The line's service start, `YYYY-MM-DD` (`cpq.subscription.activated` only). */
+  startDate?: string
   productName: string
   quantity: number
   charges: CpqCharge[]
@@ -103,15 +107,18 @@ export function mapSubscriptionItemsToBillingItems(params: {
   subscriptionId: string
   items: CpqSubscriptionItem[]
   billStartDate: string
+  /** Per-item bill start (every charge of the item); falls back to `billStartDate`. */
+  billStartDateFor?: (item: CpqSubscriptionItem) => string
 }): BillingItemPayload[] {
   const out: BillingItemPayload[] = []
   for (const item of params.items) {
+    const billStartDate = params.billStartDateFor?.(item) ?? params.billStartDate
     for (const charge of item.charges) {
       const mapped = mapChargeToBillingItem({
         subscriptionId: params.subscriptionId,
         subscriptionItem: item,
         charge,
-        billStartDate: params.billStartDate,
+        billStartDate,
       })
       if (mapped) out.push(mapped)
     }

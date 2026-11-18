@@ -2,10 +2,11 @@
 import * as React from 'react'
 import { useRouter } from 'next/navigation'
 import type { LegacyColumnDef as ColumnDef } from '@tanstack/react-table/legacy'
-import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { useLocale, useT } from '@open-mercato/shared/lib/i18n/context'
+import { formatBillingDateTime } from '../../../lib/displayDate'
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
-import { DataTable } from '@open-mercato/ui/backend/DataTable'
+import { BillingDataTable as DataTable } from '../../../components/BillingDataTable'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
 import { fetchAccountNames } from '../../../components/accountNames'
@@ -29,12 +30,6 @@ type TopupRow = {
 
 type ListResponse = { items: TopupRow[]; total: number; totalPages: number }
 
-function formatDate(value: string | null | undefined): string {
-  if (!value) return '—'
-  const d = new Date(value)
-  return Number.isNaN(d.getTime()) ? value : d.toLocaleString()
-}
-
 export function statusVariant(status: string): 'success' | 'info' | 'error' | 'default' {
   if (status === 'captured') return 'success'
   if (status === 'pending') return 'info'
@@ -44,6 +39,7 @@ export function statusVariant(status: string): 'success' | 'info' | 'error' | 'd
 
 export default function BillingTopupsListPage() {
   const t = useT()
+  const locale = useLocale()
   const router = useRouter()
   const [rows, setRows] = React.useState<TopupRow[]>([])
   const [page, setPage] = React.useState(1)
@@ -111,7 +107,7 @@ export default function BillingTopupsListPage() {
       {
         accessorKey: 'created_at',
         header: t('billing.topups.columns.created', 'Created'),
-        cell: ({ row }) => formatDate(row.original.created_at),
+        cell: ({ row }) => formatBillingDateTime(row.original.created_at, locale),
       },
       {
         accessorKey: 'amount',
@@ -149,7 +145,7 @@ export default function BillingTopupsListPage() {
         },
       },
     ],
-    [t, accountNames],
+    [t, accountNames, locale],
   )
 
   return (

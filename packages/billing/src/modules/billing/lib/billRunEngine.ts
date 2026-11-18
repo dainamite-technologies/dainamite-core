@@ -1,29 +1,39 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
 import type { AwilixContainer } from 'awilix'
+import { UniqueConstraintViolationException } from '@mikro-orm/core'
 import {
   BillingAccount,
   BillingAccountUsage,
+  BillingInvoice,
   BillingItem,
   BillingRun,
   BillingRunOutcome,
 } from '../data/entities'
-import { advanceNextBillDate, deriveBillPeriod, isCycleDue } from './billPeriod'
 import {
-  selectItemsForPeriod,
-  type SelectableItem,
-} from './itemSelector'
+  addDays,
+  advanceNextBillDate,
+  cloneAtMidnight,
+  deriveBillPeriod,
+  isCycleDue,
+  shiftCycles,
+  type BillPeriod,
+} from './billPeriod'
+import { shouldIncludeItem, type SelectableItem } from './itemSelector'
 import {
   buildInvoiceLinesFromItems,
+  buildRecurringLineDescriptors,
+  displayPeriod,
   writeDraftInvoice,
   type InvoiceLineDescriptor,
   type WriteMode,
 } from './invoiceWriter'
+import { computeRecurringLines, type RecurringSkip } from './servicePeriods'
 import { withTenantLock } from './tenantLock'
 import { processUsageForAccount } from './usageRunner'
+import { accountCycleSpec } from './accountCycle'
 import { processPrepaidAccount } from './prepaidPeriodClose'
 import type { DomainEvent } from './balanceEvents'
 import { emitBillingEvent, type BillingEventId } from '../events'
-import type { BillCycle } from '../data/validators'
 
 /**
  * Bill Run engine — orchestrates one execution of the billing cycle for
@@ -39,23 +49,24 @@ import type { BillCycle } from '../data/validators'
  *     nested `em.transactional(...)` (PG SAVEPOINT). A per-account failure
  *     rolls back only that account's work, leaving siblings unaffected.
  *
- * Run modes:
- *   - `real` (default) — persist drafts, advance `next_bill_date`, mark
- *     items `billed_to_date`. Production path.
- *   - `test` — persist drafts flagged with `metadata.test_run=true`, but
- *     do NOT advance state. Repeatable.
- *   - `dry`  — compute everything; persist nothing. Preview only.
+ * Cycles (Spec A): every run — manual or scheduled, any mode — bills ALL
+ * due bill dates up to `asOfDate`, one draft per bill date (never
+ * combined), capped at `CATCH_UP_HARD_CAP` per account. The account's
+ * `next_bill_date` and each recurring item's `billed_to_date` watermark are
+ * advanced in memory cycle by cycle; only `real` persists them:
+ *   - `real` — persist drafts, advance `next_bill_date` / watermarks, mark
+ *     usage rated. Production path.
+ *   - `test` — persist drafts flagged `metadata.test_run=true` for every
+ *     cycle, but do NOT advance state. Repeatable.
+ *   - `dry`  — compute every cycle; persist nothing. Preview only.
  *
- * Catch-up:
- *   - Manual triggers may set `catchUp=true`. The engine then loops cycles
- *     per account until `next_bill_date > as_of_date`, emitting one draft
- *     per missed cycle (never combined).
- *   - Scheduled triggers always process exactly ONE cycle per account per
- *     run, regardless of how far behind the account is.
+ * Recurring items are priced by `servicePeriods.computeRecurringLines`
+ * (in advance / in arrears, proration, credits). `one_time` items use the
+ * selector; usage is always billed in arrears for `[D − cycle, D − 1]`.
  *
- * Anti-duplicate guards (both run in every mode except `dry`):
- *   1. Open-draft check on `core/sales` invoice (per period boundary).
- *   2. `billed_to_date` per BillingItem.
+ * Anti-duplicate guards (every mode except `dry`):
+ *   1. Open draft for the same `(account, bill_date, test_run)`.
+ *   2. `billed_to_date` per BillingItem (the watermark).
  */
 
 export type RunMode = WriteMode
@@ -68,7 +79,6 @@ export type RunBillRunParams = {
   mode: RunMode
   scopedAccountIds?: string[]
   parentRunId?: string | null
-  catchUp?: boolean
 }
 
 export type RunBillRunResult = {
@@ -81,9 +91,38 @@ type RunOutput = RunBillRunResult & {
   pendingEvents: DomainEvent[]
 }
 
+type SkippedItemWarning = {
+  item_id: string
+  reason: string
+  service_period_start: string | null
+  service_period_end: string | null
+}
+
 type AccountWarnings = {
   currency_mismatch_items?: string[]
   unmatched_usage_uoms?: string[]
+  /** Spec A: bill dates whose draft has a negative total (credits > charges). */
+  negative_total_bill_dates?: string[]
+  /** Spec A: the account hit CATCH_UP_HARD_CAP; later cycles wait for the next run. */
+  catch_up_cap_reached?: boolean
+  /** Spec A: diagnostic — partial periods not prorated, no-credit ends, caps. */
+  skipped_items?: SkippedItemWarning[]
+}
+
+/** `charged` is the prepaid analogue of `invoiced` (Spec F, P-D6). */
+export type CycleStatus = 'invoiced' | 'charged' | 'previewed' | 'empty' | 'skipped_existing'
+
+export type CycleRecord = {
+  bill_date: string
+  period_start: string | null
+  period_end: string | null
+  status: CycleStatus
+  line_count: number
+  total_net: string
+  invoice_id: string | null
+  /** Prepaid only: what left the balance, and the statement for the period. */
+  total_debit?: string
+  statement_id?: string | null
 }
 
 type AccountProcessSuccess = {
@@ -99,6 +138,8 @@ type AccountProcessSuccess = {
   statementEvents?: DomainEvent[]
   cyclesEmitted: number
   usageRecordsRated: number
+  /** Spec A: per-bill-date breakdown (postpaid). */
+  cycles?: CycleRecord[]
 }
 
 type AccountProcessFailed = {
@@ -108,8 +149,10 @@ type AccountProcessFailed = {
 
 type AccountProcessResult = AccountProcessSuccess | AccountProcessFailed
 
-const SCHEDULED_CYCLE_LIMIT = 1
-const CATCH_UP_HARD_CAP = 60 // safety net so a misconfigured account can't loop forever
+export const CATCH_UP_HARD_CAP = 60 // safety net so a misconfigured account can't loop forever
+const SKIPPED_ITEMS_WARNING_CAP = 200
+/** Skip reasons that are normal state, not worth surfacing on the outcome. */
+const QUIET_SKIP_REASONS = new Set(['item-inactive', 'item-soft-deleted'])
 
 export async function runBillRun(
   em: EntityManager,
@@ -143,7 +186,6 @@ async function executeRunWithinLock(
     parentRunId: params.parentRunId ?? null,
     dryRun: params.mode === 'dry',
     testMode: params.mode === 'test',
-    catchUp: Boolean(params.catchUp),
     scopedAccountIds: params.scopedAccountIds ?? null,
     asOfDate: params.asOfDate,
     startedAt: now,
@@ -179,6 +221,7 @@ async function executeRunWithinLock(
           : (processResult.warnings as Record<string, unknown> | null),
       draftInvoiceId: processResult.status === 'failed' ? null : processResult.draftInvoiceId,
       statementId: processResult.status === 'failed' ? null : (processResult.statementId ?? null),
+      cycles: processResult.status === 'failed' ? null : (processResult.cycles ?? null),
       isActive: true,
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -253,7 +296,6 @@ async function processAccount(
       asOfDate: params.asOfDate,
       mode: params.mode,
       triggeredBy: params.triggeredBy,
-      catchUp: params.catchUp,
     })
     if (result.status === 'failed') {
       return { status: 'failed', errorMessage: result.errorMessage }
@@ -265,111 +307,240 @@ async function processAccount(
       statementId: result.statementId,
       statementEvents: result.statementEvents,
       cyclesEmitted: result.cyclesEmitted,
+      cycles: result.cycles,
       usageRecordsRated: 0,
     }
   }
 
-  const maxCycles =
-    params.triggeredBy === 'schedule' || !params.catchUp
-      ? SCHEDULED_CYCLE_LIMIT
-      : CATCH_UP_HARD_CAP
+  return processPostpaidAccount(em, container, billRun, account, params)
+}
 
-  let cyclesEmitted = 0
+function isoDate(date: Date): string {
+  return cloneAtMidnight(date).toISOString().slice(0, 10)
+}
+
+function toSkipWarning(skip: RecurringSkip): SkippedItemWarning {
+  return {
+    item_id: skip.billingItemId,
+    reason: skip.reason,
+    service_period_start: skip.servicePeriodStart ? isoDate(skip.servicePeriodStart) : null,
+    service_period_end: skip.servicePeriodEnd ? isoDate(skip.servicePeriodEnd) : null,
+  }
+}
+
+/**
+ * Postpaid cycle loop (Spec A). Items are loaded once; the bill date and
+ * the per-item watermarks advance in memory so test / dry can simulate every
+ * due cycle exactly like real does — only persistence differs by mode.
+ */
+async function processPostpaidAccount(
+  em: EntityManager,
+  container: AwilixContainer,
+  billRun: BillingRun,
+  account: BillingAccount,
+  params: RunBillRunParams,
+): Promise<AccountProcessResult> {
+  const cycle = accountCycleSpec(account)
+  const testRun = params.mode === 'test'
+  const items = (await em.find(BillingItem, {
+    tenantId: account.tenantId,
+    organizationId: account.organizationId,
+    billAccountId: account.id,
+    deletedAt: null,
+  } as never)) as BillingItem[]
+  const recurringItems = items.filter((it) => it.type === 'recurring')
+  const oneTimeItems = items.filter((it) => it.type === 'one_time')
+  const usageItems = items.filter((it) => it.type === 'usage')
+
+  // In-memory cycle state — persisted per cycle only in real mode.
+  const watermarks = new Map<string, Date | null>(
+    recurringItems.map((it) => [it.id, it.billedToDate ? cloneAtMidnight(it.billedToDate) : null]),
+  )
+  const billedOneTimes = new Set<string>(oneTimeItems.filter((it) => it.billedToDate).map((it) => it.id))
+  let billDate = cloneAtMidnight(account.nextBillDate)
+  // End of the last billed period — starts the next arrears period, so a
+  // short alignment period (bill cycle day change) bills exactly its days.
+  let lastBilled: Date | null = account.lastBillDate ? cloneAtMidnight(account.lastBillDate) : null
+  // Usage already counted by an earlier cycle of THIS run (test / dry never
+  // mark records, so later simulated cycles must not re-count them).
+  let usageCountedThrough: Date | null = null
+
+  const cycles: CycleRecord[] = []
+  const warnings: AccountWarnings = {}
+  const skippedItems: SkippedItemWarning[] = []
   let lastDraftInvoiceId: string | null = null
-  let totalUsageRatedThisAccount = 0
-  const aggregatedWarnings: AccountWarnings = {}
+  let usageRecordsRated = 0
 
-  while (cyclesEmitted < maxCycles && isCycleDue(account.nextBillDate, params.asOfDate)) {
-    const period = deriveBillPeriod(account.nextBillDate, account.billCycle as BillCycle)
+  const pushSkips = (skips: readonly RecurringSkip[]) => {
+    for (const skip of skips) {
+      if (QUIET_SKIP_REASONS.has(skip.reason)) continue
+      if (skippedItems.length < SKIPPED_ITEMS_WARNING_CAP) skippedItems.push(toSkipWarning(skip))
+    }
+  }
+  const addWarning = (key: 'currency_mismatch_items' | 'unmatched_usage_uoms' | 'negative_total_bill_dates', values: string[]) => {
+    if (values.length === 0) return
+    warnings[key] = Array.from(new Set([...(warnings[key] ?? []), ...values]))
+  }
 
-    // Open-draft anti-duplicate — only applies when we'd actually persist.
-    if (params.mode !== 'dry') {
-      const existing = await findExistingDraftForPeriod(em, account, period)
-      if (existing) {
-        return {
-          status: 'skipped_existing_draft',
-          warnings: null,
-          draftInvoiceId: existing,
-          cyclesEmitted,
-          usageRecordsRated: totalUsageRatedThisAccount,
-        }
+  while (isCycleDue(billDate, params.asOfDate)) {
+    if (cycles.length >= CATCH_UP_HARD_CAP) {
+      warnings.catch_up_cap_reached = true
+      break
+    }
+    const nextBillDate = advanceNextBillDate(billDate, cycle)
+    const arrearsPeriod: BillPeriod = deriveBillPeriod(billDate, cycle, lastBilled)
+
+    // ── Recurring: service periods against the in-memory watermarks ──
+    const lines: InvoiceLineDescriptor[] = []
+    const watermarkUpdates = new Map<string, Date | null>()
+    const chargedItems: BillingItem[] = []
+    for (const item of recurringItems) {
+      const unitPrice = (item.rateJson as { unit_price?: number } | null)?.unit_price
+      if (typeof unitPrice !== 'number') continue
+      const computed = computeRecurringLines(
+        {
+          id: item.id,
+          chargeTiming: item.chargeTiming ?? 'in_advance',
+          prorate: item.prorate ?? true,
+          billStartDate: item.billStartDate,
+          billEndDate: item.billEndDate ?? null,
+          billedToDate: watermarks.get(item.id) ?? null,
+          unitPrice,
+          isActive: item.isActive,
+          deletedAt: item.deletedAt ?? null,
+        },
+        { billDate, cycle },
+      )
+      pushSkips(computed.skipped)
+      if (computed.newBilledToDate?.getTime() !== watermarks.get(item.id)?.getTime()) {
+        watermarkUpdates.set(item.id, computed.newBilledToDate)
+      }
+      if (computed.lines.length > 0) {
+        lines.push(...buildRecurringLineDescriptors(item, computed.lines))
+        chargedItems.push(item)
       }
     }
 
-    const items = await em.find(BillingItem, {
-      tenantId: account.tenantId,
-      organizationId: account.organizationId,
-      billAccountId: account.id,
-      deletedAt: null,
-    } as never)
-
-    const usageItems = (items as BillingItem[]).filter((it) => it.type === 'usage')
-
-    // Non-usage path: one_time + recurring filtered by the selector.
-    const { included } = selectItemsForPeriod(items as SelectableItem[], period)
-    const billableItems = included as unknown as BillingItem[]
-
-    const currencyMismatchIds = billableItems
-      .filter((it) => it.currencyMismatch)
-      .map((it) => it.id)
-    if (currencyMismatchIds.length > 0) {
-      aggregatedWarnings.currency_mismatch_items = [
-        ...(aggregatedWarnings.currency_mismatch_items ?? []),
-        ...currencyMismatchIds,
-      ]
+    // ── One-time: first bill date whose [D − cycle, D + cycle − 1] window overlaps ──
+    const oneTimeWindow: BillPeriod = {
+      periodStart: shiftCycles(billDate, cycle, -1),
+      periodEnd: addDays(nextBillDate, -1),
     }
-    const itemLines = buildInvoiceLinesFromItems(billableItems)
+    const oneTimesThisCycle = oneTimeItems.filter(
+      (it) => !billedOneTimes.has(it.id) && shouldIncludeItem(it as SelectableItem, oneTimeWindow).include,
+    )
+    lines.push(...buildInvoiceLinesFromItems(oneTimesThisCycle))
+    chargedItems.push(...oneTimesThisCycle)
 
-    // Usage path: aggregate matching usage records per uom_code, rate,
-    // emit one line per matched usage item, warn about unmatched UoMs.
-    const usageResult = await processUsageForAccount(em, account, period, usageItems)
-    if (usageResult.unmatchedUoms.length > 0) {
-      aggregatedWarnings.unmatched_usage_uoms = [
-        ...(aggregatedWarnings.unmatched_usage_uoms ?? []),
-        ...usageResult.unmatchedUoms,
-      ]
-    }
-
-    const allLines: InvoiceLineDescriptor[] = [...itemLines, ...usageResult.lines]
-    if (allLines.length === 0) {
-      // Nothing to bill this cycle — still advance so the account moves
-      // forward in real mode. In test / dry, no advance, so we'd loop
-      // forever; break out.
-      if (params.mode !== 'real') break
-      account.nextBillDate = advanceNextBillDate(
-        account.nextBillDate,
-        account.billCycle as BillCycle,
-      )
-      account.lastBillDate = period.periodEnd
-      account.updatedAt = new Date()
-      cyclesEmitted += 1
-      continue
-    }
-
-    const written = await writeDraftInvoice(em, container, {
-      mode: params.mode,
-      account,
-      period,
-      billRunId: billRun.id,
-      lines: allLines,
+    // ── Usage: always in arrears ──
+    const usageResult = await processUsageForAccount(em, account, arrearsPeriod, usageItems, {
+      after: usageCountedThrough,
     })
-    lastDraftInvoiceId = written.invoiceId
+    addWarning('unmatched_usage_uoms', usageResult.unmatchedUoms)
+    lines.push(
+      ...usageResult.lines.map((line) => ({
+        ...line,
+        servicePeriodStart: arrearsPeriod.periodStart,
+        servicePeriodEnd: arrearsPeriod.periodEnd,
+      })),
+    )
+    addWarning(
+      'currency_mismatch_items',
+      chargedItems.filter((it) => it.currencyMismatch).map((it) => it.id),
+    )
+
+    const period = displayPeriod(lines, arrearsPeriod)
+    const record: CycleRecord = {
+      bill_date: isoDate(billDate),
+      period_start: lines.length ? isoDate(period.periodStart) : null,
+      period_end: lines.length ? isoDate(period.periodEnd) : null,
+      status: 'empty',
+      line_count: lines.length,
+      total_net: '0.0000',
+      invoice_id: null,
+    }
+
+    // ── Dedupe: an open draft already exists for this bill date ──
+    const existing =
+      params.mode === 'dry' ? null : await findExistingDraftForBillDate(em, account, billDate, testRun)
+    if (existing && params.mode === 'real') {
+      // Real state is inconsistent (draft written, account not advanced) —
+      // stop here without advancing, as before Spec A.
+      cycles.push({ ...record, status: 'skipped_existing', invoice_id: existing })
+      return {
+        status: 'skipped_existing_draft',
+        warnings: finalizeWarnings(warnings, skippedItems),
+        draftInvoiceId: existing,
+        cyclesEmitted: cycles.filter((c) => c.status === 'invoiced').length,
+        usageRecordsRated,
+        cycles,
+      }
+    }
+
+    if (existing) {
+      cycles.push({ ...record, status: 'skipped_existing', invoice_id: existing })
+    } else if (lines.length > 0) {
+      const written = await writeDraftOnce(em, {
+        mode: params.mode,
+        account,
+        billDate,
+        period,
+        billRunId: billRun.id,
+        lines,
+      })
+      if (written === 'conflict') {
+        // Unique (account, bill_date, test_run) backstop fired: a concurrent
+        // writer got there first. Same semantics as the dedupe check above.
+        cycles.push({ ...record, status: 'skipped_existing' })
+        if (params.mode === 'real') {
+          return {
+            status: 'skipped_existing_draft',
+            warnings: finalizeWarnings(warnings, skippedItems),
+            draftInvoiceId: lastDraftInvoiceId,
+            cyclesEmitted: cycles.filter((c) => c.status === 'invoiced').length,
+            usageRecordsRated,
+            cycles,
+          }
+        }
+        billDate = nextBillDate
+        lastBilled = arrearsPeriod.periodEnd
+        for (const [itemId, date] of watermarkUpdates) watermarks.set(itemId, date)
+        for (const it of oneTimesThisCycle) billedOneTimes.add(it.id)
+        usageCountedThrough = arrearsPeriod.periodEnd
+        continue
+      }
+      if (written.invoiceId) lastDraftInvoiceId = written.invoiceId
+      if (Number.parseFloat(written.totalNet) < 0) addWarning('negative_total_bill_dates', [record.bill_date])
+      cycles.push({
+        ...record,
+        status: params.mode === 'dry' ? 'previewed' : 'invoiced',
+        total_net: written.totalNet,
+        invoice_id: written.invoiceId,
+      })
+    } else {
+      cycles.push(record)
+    }
+
+    // ── Advance state: in memory always, persisted in real mode ──
+    for (const [itemId, date] of watermarkUpdates) watermarks.set(itemId, date)
+    for (const it of oneTimesThisCycle) billedOneTimes.add(it.id)
+    usageCountedThrough = arrearsPeriod.periodEnd
 
     if (params.mode === 'real') {
       const now = new Date()
-      for (const item of billableItems) {
-        item.billedToDate = period.periodEnd
+      for (const item of recurringItems) {
+        if (!watermarkUpdates.has(item.id)) continue
+        item.billedToDate = watermarkUpdates.get(item.id) ?? null
         item.updatedAt = now
       }
-      // Mark consumed usage records — single bulk update so we don't
-      // round-trip per record on accounts with thousands of usage rows.
+      for (const item of oneTimesThisCycle) {
+        item.billedToDate = oneTimeWindow.periodEnd
+        item.updatedAt = now
+      }
       if (usageResult.matchedUoms.length > 0) {
-        // Predicate-based bulk update: marks every still-unrated record
-        // for the matched uoms in the account's period with a single
-        // SQL UPDATE — no id list ever leaves Postgres. Stays
-        // memory-bounded even for telco accounts with millions of
-        // usage records per cycle (spec Performance Considerations
-        // "Shape B").
+        // Predicate-based bulk update: marks every still-unrated record for
+        // the matched uoms up to the period end with a single SQL UPDATE —
+        // no id list ever leaves Postgres (spec Performance "Shape B").
         await em.nativeUpdate(
           BillingAccountUsage,
           {
@@ -378,63 +549,96 @@ async function processAccount(
             billAccountId: account.id,
             uomCode: { $in: usageResult.matchedUoms },
             ratedInBillRunId: null,
-            periodEnd: { $lte: period.periodEnd },
+            periodEnd: { $lte: arrearsPeriod.periodEnd },
             deletedAt: null,
           } as never,
           { ratedInBillRunId: billRun.id, updatedAt: now } as never,
         )
+        usageRecordsRated += usageResult.ratedCount
       }
-      totalUsageRatedThisAccount += usageResult.ratedCount
-      account.nextBillDate = advanceNextBillDate(
-        account.nextBillDate,
-        account.billCycle as BillCycle,
-      )
-      account.lastBillDate = period.periodEnd
+      account.nextBillDate = nextBillDate
+      account.lastBillDate = arrearsPeriod.periodEnd
       account.updatedAt = now
       await em.flush()
-    } else {
-      // Test / dry: do not advance state. One iteration only.
-      break
     }
 
-    cyclesEmitted += 1
+    billDate = nextBillDate
+    lastBilled = arrearsPeriod.periodEnd
   }
 
-  const hasCurrencyWarnings =
-    (aggregatedWarnings.currency_mismatch_items ?? []).length > 0
-  const hasUnmatchedUsage =
-    (aggregatedWarnings.unmatched_usage_uoms ?? []).length > 0
-  const hasWarnings = hasCurrencyWarnings || hasUnmatchedUsage
+  const finalWarnings = finalizeWarnings(warnings, skippedItems)
   return {
-    status: hasWarnings ? 'success_with_warnings' : 'success',
-    warnings: hasWarnings ? aggregatedWarnings : null,
+    status: hasRealWarnings(warnings) ? 'success_with_warnings' : 'success',
+    warnings: finalWarnings,
     draftInvoiceId: lastDraftInvoiceId,
-    cyclesEmitted,
-    usageRecordsRated: totalUsageRatedThisAccount,
+    cyclesEmitted: cycles.filter((c) => c.status === 'invoiced').length,
+    usageRecordsRated,
+    cycles,
   }
 }
 
-async function findExistingDraftForPeriod(
+function finalizeWarnings(
+  warnings: AccountWarnings,
+  skippedItems: SkippedItemWarning[],
+): AccountWarnings | null {
+  const merged: AccountWarnings = { ...warnings, ...(skippedItems.length ? { skipped_items: skippedItems } : {}) }
+  return Object.keys(merged).length > 0 ? merged : null
+}
+
+/** Skipped items are diagnostics; they don't downgrade the outcome status. */
+function hasRealWarnings(warnings: AccountWarnings): boolean {
+  return Boolean(
+    warnings.currency_mismatch_items?.length ||
+      warnings.unmatched_usage_uoms?.length ||
+      warnings.negative_total_bill_dates?.length ||
+      warnings.catch_up_cap_reached,
+  )
+}
+
+/**
+ * Existing invoice for `(account, bill_date, test_run)` in ANY status — a
+ * posted invoice for the same bill date also blocks re-billing (e.g. after
+ * an operator moved `next_bill_date` back). Test drafts never block real
+ * drafts and vice versa. The partial unique index
+ * `billing_invoices_bill_date_uq` is the backstop (see `writeDraftOnce`).
+ */
+async function findExistingDraftForBillDate(
   em: EntityManager,
   account: BillingAccount,
-  period: { periodStart: Date; periodEnd: Date },
+  billDate: Date,
+  testRun: boolean,
 ): Promise<string | null> {
-  const periodStartISO = period.periodStart.toISOString().slice(0, 10)
-  const periodEndISO = period.periodEnd.toISOString().slice(0, 10)
-  const rows = (await em.execute(
-    `SELECT id FROM sales_invoices
-     WHERE tenant_id = ?
-       AND organization_id = ?
-       AND deleted_at IS NULL
-       AND status = 'draft'
-       AND metadata->>'bill_account_id' = ?
-       AND metadata->>'bill_period_start' = ?
-       AND metadata->>'bill_period_end' = ?
-     LIMIT 1`,
-    [account.tenantId, account.organizationId, account.id, periodStartISO, periodEndISO],
-  )) as unknown as Array<{ id: string }> | undefined
-  if (!rows || rows.length === 0) return null
-  return rows[0].id ?? null
+  const existing = await em.findOne(
+    BillingInvoice,
+    {
+      tenantId: account.tenantId,
+      organizationId: account.organizationId,
+      billAccountId: account.id,
+      billDate,
+      testRun,
+      documentType: 'invoice',
+      deletedAt: null,
+    } as never,
+  )
+  return existing?.id ?? null
+}
+
+/**
+ * Writes the draft inside its own savepoint so a unique-index conflict
+ * (concurrent writer for the same bill date) doesn't abort the account's
+ * transaction — it is reported as 'conflict' and handled like a dedupe hit.
+ */
+async function writeDraftOnce(
+  em: EntityManager,
+  params: Parameters<typeof writeDraftInvoice>[1],
+): Promise<Awaited<ReturnType<typeof writeDraftInvoice>> | 'conflict'> {
+  if (params.mode === 'dry') return writeDraftInvoice(em, params)
+  try {
+    return await em.transactional((tem) => writeDraftInvoice(tem as EntityManager, params))
+  } catch (err) {
+    if (err instanceof UniqueConstraintViolationException) return 'conflict'
+    throw err
+  }
 }
 
 function computeFinalRunStatus(
@@ -455,11 +659,12 @@ function buildRunSummary(
   totalAccounts: number,
   usageRecordsRated: number,
 ): Record<string, unknown> {
+  const allCycles = outcomes.flatMap((o) => (Array.isArray(o.cycles) ? (o.cycles as CycleRecord[]) : []))
   return {
     accounts_processed: totalAccounts,
-    drafts_created: outcomes.filter(
-      (o) => o.draftInvoiceId !== null && o.status !== 'skipped_existing_draft',
-    ).length,
+    // Spec A: one draft per invoiced cycle (catch-up writes several per account).
+    drafts_created: allCycles.filter((c) => c.status === 'invoiced' && c.invoice_id).length,
+    cycles_processed: allCycles.length,
     drafts_skipped_existing: outcomes.filter((o) => o.status === 'skipped_existing_draft')
       .length,
     // SPEC-002 prepaid period close.

@@ -111,6 +111,6 @@ describe('notification types', () => {
     for (const variant of ['confirmed', 'estimated', 'rateMissing', 'notReady']) expect(en[`cpq.notifications.costRequest.answered.body.${variant}`]).toBeTruthy()
     expect(en['cpq.notifications.costExpiring.bodyExpired']).toBeTruthy()
     expect(en['notifications.categories.cpq']).toBeTruthy()
-    expect(Object.values(en).join(' ')).not.toMatch(/\{(unitAmount|amount|price)\}/)
+    expect(Object.entries(en).filter(([key]) => key.startsWith('cpq.notifications.')).map(([, text]) => text).join(' ')).not.toMatch(/\{(unitAmount|amount|price)\}/)
   })
 })

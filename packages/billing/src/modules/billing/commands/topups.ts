@@ -9,7 +9,7 @@ import {
 import { emitCrudSideEffects } from '@open-mercato/shared/lib/commands/helpers'
 import { CrudHttpError } from '@open-mercato/shared/lib/crud/errors'
 import type { DataEngine } from '@open-mercato/shared/lib/data/engine'
-import type { PaymentGatewayService } from '@open-mercato/core/modules/payment_gateways/lib/gateway-service'
+import { resolvePaymentGateway } from '../lib/paymentGateway'
 import { BillingAccount, BillingTopup } from '../data/entities'
 import { billingEntityIds } from '../data/entityIds'
 import {
@@ -98,7 +98,17 @@ const createTopupCommand: CommandHandler<BillingTopupCreateInput, CreateTopupRes
       }
     }
 
-    const providerKey = parsed.providerKey ?? (await getTopupProvider(em))
+    // E-D1: the gateway is optional. Check before persisting anything so an
+    // install without `payment_gateways` never leaves a dangling pending top-up.
+    const gateway = resolvePaymentGateway(ctx.container as never)
+    if (!gateway) {
+      throw new CrudHttpError(501, {
+        error: 'Online top-ups need the payment gateways module, which is not installed',
+        code: 'billing.topup.gateway_unavailable',
+      })
+    }
+
+    const providerKey = parsed.providerKey ?? (await getTopupProvider(em, { tenantId: parsed.tenantId, organizationId: parsed.organizationId }))
     const paymentId = randomUUID()
     const now = new Date()
     const topup = em.create(BillingTopup, {
@@ -124,7 +134,6 @@ const createTopupCommand: CommandHandler<BillingTopupCreateInput, CreateTopupRes
     // Open the gateway session. captureMethod 'automatic' so a successful
     // checkout fires `payment.captured` directly (our capture subscriber
     // credits the balance + issues the receipt).
-    const gateway = ctx.container.resolve('paymentGatewayService') as PaymentGatewayService
     const { transaction, session } = await gateway.createPaymentSession({
       providerKey,
       paymentId,

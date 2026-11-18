@@ -2,17 +2,19 @@
 import * as React from 'react'
 import { useRouter } from 'next/navigation'
 import type { LegacyColumnDef as ColumnDef } from '@tanstack/react-table/legacy'
-import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { useLocale, useT } from '@open-mercato/shared/lib/i18n/context'
+import { formatBillingDay } from '../../../lib/displayDate'
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
-import { DataTable } from '@open-mercato/ui/backend/DataTable'
+import { BillingDataTable as DataTable } from '../../../components/BillingDataTable'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
 import { fetchAccountNames } from '../../../components/accountNames'
 
 /**
  * Consumption statements admin list (SPEC-002 P3). Non-fiscal period summaries
- * for prepaid accounts — opening / top-ups / usage / recurring / closing.
+ * for prepaid accounts — opening / top-ups / usage / adjustments / charges /
+ * closing, so every row adds up (#138).
  */
 
 type StatementRow = {
@@ -25,17 +27,13 @@ type StatementRow = {
   total_topups: string
   total_usage: string
   total_recurring: string
+  /** Signed: manual adjustments + reversals in the window. */
+  total_adjustments: string
   closing_balance: string
   status: string
 }
 
 type ListResponse = { items: StatementRow[]; total: number; totalPages: number }
-
-function formatDate(value: string | null | undefined): string {
-  if (!value) return '—'
-  const d = new Date(value)
-  return Number.isNaN(d.getTime()) ? value : d.toLocaleDateString()
-}
 
 export function statementStatusVariant(status: string): 'success' | 'info' {
   return status === 'sent' ? 'success' : 'info'
@@ -43,6 +41,7 @@ export function statementStatusVariant(status: string): 'success' | 'info' {
 
 export default function BillingStatementsListPage() {
   const t = useT()
+  const locale = useLocale()
   const router = useRouter()
   const [rows, setRows] = React.useState<StatementRow[]>([])
   const [page, setPage] = React.useState(1)
@@ -106,7 +105,7 @@ export default function BillingStatementsListPage() {
         accessorKey: 'period_end',
         header: t('billing.statements.columns.period', 'Period'),
         cell: ({ row }) =>
-          `${formatDate(row.original.period_start)} – ${formatDate(row.original.period_end)}`,
+          `${formatBillingDay(row.original.period_start, locale)} – ${formatBillingDay(row.original.period_end, locale)}`,
       },
       {
         accessorKey: 'bill_account_id',
@@ -136,8 +135,14 @@ export default function BillingStatementsListPage() {
         cell: ({ row }) => <span className="font-mono tabular-nums">{row.original.total_usage}</span>,
       },
       {
+        accessorKey: 'total_adjustments',
+        header: t('billing.statements.columns.adjustments', 'Adjustments'),
+        cell: ({ row }) => <span className="font-mono tabular-nums">{row.original.total_adjustments}</span>,
+      },
+      {
+        // Charges are taken AT the bill date — in-advance ones cover the next period (#138).
         accessorKey: 'total_recurring',
-        header: t('billing.statements.columns.recurring', 'Recurring'),
+        header: t('billing.statements.columns.charges_on_bill_date', 'Charges (taken on bill date)'),
         cell: ({ row }) => <span className="font-mono tabular-nums">{row.original.total_recurring}</span>,
       },
       {
@@ -159,7 +164,7 @@ export default function BillingStatementsListPage() {
         ),
       },
     ],
-    [t, accountNames],
+    [t, accountNames, locale],
   )
 
   return (

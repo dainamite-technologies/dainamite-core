@@ -54,17 +54,27 @@ cache'owane).
 
 ### 1b. Tworzenie konta
 1. Kliknij **New account** (prawy górny róg).
-2. W polu *Customer* zacznij wpisywać nazwę klienta (np. `Acme`) — pod
-   spodem pojawi się lista pasujących firm pobrana z modułu Customers.
-   Wybierz właściwego klienta strzałkami / kliknięciem (Enter zatwierdza).
-3. *Name* uzupełni się automatycznie nazwą wybranego klienta. Zostaw tak
-   albo nadpisz, jeśli jeden klient ma kilka kont billingowych
-   (np. „Acme — produkcja" / „Acme — testy").
-4. Wypełnij pozostałe pola: *Currency* (np. `PLN`), *Bill cycle*,
-   *Cycle anchor* (`1`), *Invoice email*, adres faktury (*Line 1* + *City*
-   + *Postal code* + *Country*) oraz *Next bill date*.
-5. Kliknij **Create account** (albo wciśnij `Ctrl/Cmd + Enter`).
-6. Wracasz na listę — nowe konto jest na niej widoczne.
+2. W przełączniku *Customer type* wybierz **Company** (firma, B2B) albo
+   **Person** (osoba prywatna, B2C). Od tego zależy, w której liście
+   modułu Customers szukamy klienta.
+3. W polu *Company* / *Person* zacznij wpisywać nazwę klienta (np. `Acme`
+   albo `Kowalski`) — pod spodem pojawi się lista pasujących klientów.
+   Wybierz właściwego strzałkami / kliknięciem (Enter zatwierdza).
+4. Puste pola uzupełnią się z karty klienta: *Name* (nazwa klienta),
+   *Invoice email* (główny e-mail) i adres faktury (adres główny klienta).
+   Pola, które już wpisałeś, **nie są nadpisywane**. Zmiana klienta albo
+   typu cofa tylko te uzupełnienia, których nie edytowałeś.
+5. *Name* zostaw albo nadpisz, jeśli jeden klient ma kilka kont
+   billingowych (np. „Acme — produkcja" / „Acme — testy").
+6. *Invoice language* wybierz z listy (**English** / **Polski**) — to
+   języki, w których potrafi drukować szablon faktury.
+7. Uzupełnij resztę: *Currency* (np. `PLN`), *Bill cycle*, *Cycle anchor*
+   (`1`), brakujące pola adresu oraz *Next bill date*. *Tax ID* jest
+   opcjonalne (osoby prywatne zwykle go nie mają).
+8. Kliknij **Create account** (albo `Ctrl/Cmd + Enter`; `Esc` anuluje).
+9. Wracasz na listę — nowe konto jest widoczne, w kolumnie *Customer*
+   nazwa klienta z ikoną budynku (firma) albo sylwetki (osoba). Filtr **Customer type**
+   zawęża listę do firm albo osób.
 
 ### 1c. Szczegóły, edycja, usuwanie
 1. Kliknij wiersz konta **Acme Telecom** (albo link **Open** po prawej).
@@ -75,8 +85,13 @@ cache'owane).
 4. Kliknij **View items** — przejdziesz do listy pozycji odfiltrowanej
    do tego konta.
 5. Wróć (strzałka ← w nagłówku) i kliknij **Add item** — otworzy się
-   formularz nowej pozycji z już wybranym kontem.
-6. Wróć i kliknij **Soft delete** → potwierdź w oknie dialogowym →
+   formularz nowej pozycji z już wybranym kontem. Po **Create item**
+   (albo **Cancel**) wracasz **na stronę tego konta**, nie na listę pozycji.
+6. Na stronie konta kliknij pozycję w tabeli *Items* — strzałka ← w
+   nagłówku pozycji, a także usunięcie pozycji, prowadzą z powrotem
+   **do konta**. W polu *Customer* nazwa klienta jest linkiem do jego
+   karty w module Customers.
+7. Wróć i kliknij **Soft delete** → potwierdź w oknie dialogowym →
    konto znika z listy (jego pozycje zostają w bazie do audytu).
 
 ## 2. Pozycje rozliczeniowe (Billing Items)
@@ -93,15 +108,29 @@ cache'owane).
 2. Wybierz **Billing Account** z listy.
 3. Wybierz **Type** — od tego zależą kolejne pola:
    - **One-time charge** → pole *Amount*.
-   - **Recurring (per cycle)** → pole *Unit price per cycle*.
+   - **Recurring (per cycle)** → pole *Unit price per cycle*, a także
+     *Charge timing* (**In advance** — w dniu rozliczenia naliczany jest
+     nadchodzący okres, domyślnie; **In arrears** — okres, który właśnie
+     minął) i przełącznik *Prorate partial periods* (domyślnie włączony:
+     niepełny okres przy starcie / końcu pozycji liczony proporcjonalnie
+     do dni; przy zakończeniu po naliczeniu z góry — korekta ujemna).
    - **Usage (metered)** → pole *UoM code* (np. `gb`, `api_request`)
      oraz *Rate model*: `Simple flat rate` (jedna stawka) lub
      `Tiered` (JSON progowy — volume / graduated / flat).
-4. Wpisz *Description* i *Bill start date*.
-5. Kliknij **Create item**.
+4. Obok pól ceny widać **walutę konta** (tylko do odczytu). Przełącznik
+   **Net | Gross** nad sekcją *Rate* decyduje, czy wpisujesz cenę netto czy
+   brutto; pod polem widać drugą stronę ceny (np. „Gross 60.27 PLN · VAT
+   23 %"). Przełączenie przelicza wpisaną kwotę, więc cena się nie zmienia.
+   Stawki progowe (*Tiered*) są zawsze netto. Na kontach prepaid z VAT
+   naliczanym przy doładowaniu (sekcja 10d) stawka VAT i przełącznik są
+   wyszarzone.
+5. Wpisz *Description* i *Bill start date*.
+6. Kliknij **Create item**.
 
 ### 2c. Szczegóły pozycji
-1. Kliknij wiersz pozycji (lub **Open**) → strona szczegółów.
+1. Kliknij wiersz pozycji (lub **Open**) → strona szczegółów. Pozycja
+   otwarta **z tej listy** wraca strzałką ← na listę pozycji; otwarta
+   **ze strony konta** — wraca do konta.
 2. W nagłówku opis pozycji i tagi (typ, ewentualnie „Currency
    mismatch" albo „Billed through…").
 3. Zmień stawkę lub opis i kliknij **Save changes**.
@@ -114,9 +143,18 @@ przebieg rozliczeniowy) — zwykłe faktury sprzedaży się tu nie pokazują.
 ### 3a. Przeglądanie listy
 1. Kliknij **Billing → Billing Invoices** — zobaczysz **3 faktury
    robocze** (status `draft`).
-2. Kolumny: *Number*, *Status*, *Period*, *Total*, *Outstanding*,
-   *Issued*.
-3. Kliknij **Filters** → *Status* = `draft`.
+2. Kolumny: *Number*, *Status*, *Account*, *Period*, *Total*, *Outstanding*,
+   *Issued*, *Due*, *Days overdue*. Faktury robocze mają numer tymczasowy `DRAFT-…`; prawdziwy
+   numer (np. `INV/2026/11/0001`) nadawany jest dopiero przy
+   zaksięgowaniu, więc usunięta wersja robocza nie zostawia dziury w
+   numeracji.
+3. Kliknij **Filters** → *Status* = `draft`. Filtr *Document type* pozwala
+   pokazać faktury albo paragony doładowań (prepaid). Filtr *Overdue* →
+   *Only overdue* pokazuje faktury po terminie (zaksięgowane, z
+   niezapłaconą kwotą, termin płatności minął) — z czerwoną liczbą dni.
+4. Menu wiersza (`⋯`) → **Download PDF** (dla roboczych **Preview PDF**).
+5. Faktury billingowe **nie pojawiają się** w module Sales — billing ma
+   własne dokumenty.
 
 ### 3b. Szczegóły i edycja pozycji faktury
 1. Kliknij wiersz faktury → strona szczegółów.
@@ -124,16 +162,74 @@ przebieg rozliczeniowy) — zwykłe faktury sprzedaży się tu nie pokazują.
    powiązany przebieg i konto.
 3. Pod nagłówkiem kafelki kwot — *Subtotal net*, *Grand total*,
    *Paid*, *Outstanding*.
-4. Sekcja **Lines** — pozycje faktury.
-5. Kliknij **Add line** → wpisz opis, ilość i cenę → zatwierdź. Sumy
-   przeliczają się automatycznie.
+4. Sekcja **Lines** — pozycje faktury z kolumnami *VAT %*, *VAT* i *Gross*.
+   Stawka pochodzi z pozycji rozliczeniowej (Billing Item).
+5. Kliknij **Add line** → wpisz opis, ilość, cenę i opcjonalnie stawkę VAT
+   (puste = domyślna stawka organizacji) → zatwierdź. Sumy netto, VAT i
+   brutto przeliczają się automatycznie.
 6. Najedź na pozycję w tabeli i kliknij ikonę ołówka (edycja) albo
    kosza (usunięcie). Każda zmiana trafia do dziennika audytu.
 
 ### 3c. Zaksięgowanie faktury
 1. Na stronie szczegółów faktury roboczej kliknij **Post invoice**.
+   Jeśli dane sprzedawcy nie są uzupełnione (zob. 3e), pojawi się błąd
+   „Fill in the seller details…" — numer nie zostanie zużyty.
 2. Status zmienia się z `draft` na `posted` i pojawia się komunikat
-   potwierdzający.
+   potwierdzający. Faktura dostaje numer, datę wystawienia i **termin
+   płatności** = data wystawienia + termin z konta (albo domyślny z
+   ustawień). Pole *Draft number* pokazuje dawny numer `DRAFT-…`.
+
+### 3d. Ustawienia rozliczeń (numeracja, prepaid)
+1. Otwórz **Settings → Billing** — pozycja jest w menu ustawień w grupie
+   *Module Configs* (`/backend/config/billing`); skrót **Billing settings**
+   jest też w nagłówku list *Invoices* i *Bill Runs*.
+2. *Document numbering* — maska numeru dla faktur, faktur korygujących i
+   paragonów. Tokeny: `{YYYY}` `{YY}` `{MM}` `{DD}` oraz jeden licznik:
+   `{SEQUENCE_NUM}` (nigdy się nie zeruje), `{SEQUENCE_NUM_YEAR}` (co rok),
+   `{SEQUENCE_NUM_MONTH}` (co miesiąc); `:4` dopełnia zerami. Pod polem
+   widać podgląd następnego numeru albo błąd (np. licznik miesięczny bez
+   `{MM}`).
+3. *Prepaid defaults* — próg niskiego salda, bufor limitu, **kiedy naliczać
+   VAT** (*At top-up* / *At billing*, sekcja 10d), VAT na paragonach
+   doładowań (tylko przy *At top-up*), dostawca płatności, generowanie
+   zestawień.
+4. **Save** (albo `Ctrl/Cmd + Enter`; `Esc` cofa zmiany).
+
+### 3e. Dane sprzedawcy, płatności i logo (Spec B)
+1. W **Settings → Billing** u góry widać żółty komunikat *Invoices cannot
+   be posted yet*, dopóki brakuje nazwy, adresu, NIP-u lub IBAN-u.
+2. Sekcja *Seller*: nazwa prawna, adres, NIP.
+3. Sekcja *Payment and invoicing*: bank, **IBAN** (sprawdzana suma
+   kontrolna — wpisz np. `PL61 1090 1014 0000 0712 1981 2874`; zmiana
+   ostatniej cyfry da błąd), BIC, domyślny termin płatności (dni),
+   **domyślna stawka VAT** (dla nowych pozycji), stopka faktury, logo
+   (PNG/JPEG).
+4. **Save** → komunikat znika. Dane demo (`seed`) wypełniają te pola
+   automatycznie.
+
+### 3f. VAT i terminy płatności
+1. **Billing Items → Create** — pole *VAT rate (%)* jest wstępnie
+   wypełnione stawką domyślną. Ustaw 23 dla jednej pozycji i 0 dla drugiej.
+2. Na koncie rozliczeniowym (**Edit**) ustaw *Payment terms (days)* (puste =
+   domyślny) i opcjonalnie *Email invoices automatically*.
+3. Uruchom przebieg (sekcja 4) → faktura robocza ma VAT per pozycja.
+4. Na stronie konta sekcja **Invoices**: kafelki *Open receivables*,
+   *Overdue*, *Unapplied credit* oraz tabela faktur konta (kliknięcie
+   wiersza → faktura, przycisk wstecz wraca na konto).
+
+### 3g. PDF i wysyłka e-mail
+1. Na fakturze roboczej kliknij **Preview PDF** — PDF z ukośnym napisem
+   *DRAFT*, w języku konta (*Invoice language*: en / es / de / pl, znaki diakrytyczne).
+2. Zaksięguj fakturę → **Download PDF** pobiera PDF zamrożony przy
+   księgowaniu (zmiana ustawień sprzedawcy go już nie zmienia).
+3. Kliknij **Send** → potwierdź adres → komunikat *Invoice sent* (albo
+   *Sending failed* z powodem, np. brak skonfigurowanego dostawcy e-mail).
+   Sekcja **Email deliveries** pokazuje każdą próbę; przycisk zmienia się
+   na **Resend**.
+4. Konto z adresem `…@invalid.local` (utworzone przez konektor CPQ) — wysyłka
+   kończy się błędem 422: popraw adres na koncie i wyślij ponownie.
+5. Konto z *Email invoices automatically* — faktura wysyła się sama po
+   zaksięgowaniu (wpis *Automatic* w historii).
 
 ## 4. Przebiegi rozliczeniowe (Bill Runs)
 
@@ -160,14 +256,25 @@ należnych pozycji faktury robocze.
      „co by się zafakturowało".
    - **Test** — tworzy faktury oznaczone do późniejszego usunięcia
      (przydatne na środowisku QA/demo).
-3. **As-of date** — domyślnie dzisiaj. Konta z `next_bill_date` ≤ tej
-   daty zostaną wybrane.
+3. **As-of date** — domyślnie dzisiaj. Przebieg rozlicza **wszystkie
+   zaległe cykle** do tej daty — **jedna faktura na każdą datę
+   rozliczenia**. Konto z `next_bill_date` = 14.11 i datą 1.02 następnego
+   roku dostaje 3 faktury (14.11–13.12, 14.12–13.01, 14.01–13.02).
+   Tryby **Test** i **Dry-run** symulują te same cykle, nie zmieniając
+   konta (Test zapisuje 3 faktury testowe, Dry-run tylko podgląd).
+   Jeśli chcesz rozliczyć mniej — wybierz wcześniejszą datę.
 4. **Run now** (albo `Ctrl/Cmd + Enter`) — po sukcesie przeskakujesz na
    stronę szczegółów nowo utworzonego przebiegu.
+5. Na stronie szczegółów, pod *Per-account outcomes*, tabela **Cycles**
+   pokazuje każdą datę rozliczenia osobno: okres usługi, status
+   (*Invoiced* / *Preview* / *Nothing to bill* / *Skipped — draft
+   exists*), liczbę pozycji, sumę netto i link do faktury. Tabela
+   **Skipped items** wyjaśnia, czemu jakaś pozycja nie została naliczona
+   (np. niepełny okres przy wyłączonej proporcji).
 
 Harmonogram cron uruchamia analogiczny przebieg co noc w trybie
-`real`. Przycisk **New run** to ten sam endpoint, tylko z trigger
-`manual`.
+`real` — też rozlicza wszystkie zaległe cykle. Przycisk **New run** to
+ten sam endpoint, tylko z trigger `manual`.
 
 ## 5. Szybki scenariusz end-to-end (~5 minut)
 
@@ -404,9 +511,16 @@ prepaid nie dotyka kont postpaid.
    otwiera szczegół: Amount, Provider, Payment ID, Gateway transaction,
    Balance transaction, **VAT receipt**, ID + **View account**.
 2. **Billing → Statements** — zestawienia okresowe; kolumny **Period /
-   Opening / Top-ups / Usage / Recurring / Closing / Status**. Szczegół
-   pokazuje rozbicie Opening → Top-ups / Usage / Recurring / Adjustments →
-   **Closing** oraz tabelę „Period-close charges".
+   Opening / Top-ups / Usage / Adjustments / Charges (taken on bill date) /
+   Closing / Status**. W każdym wierszu: Opening + Top-ups + Adjustments −
+   Usage − Charges = Closing. Szczegół pokazuje to samo rozbicie oraz tabelę
+   „Period-close charges" z okresem usługi każdej opłaty i podpowiedzią, że
+   opłaty pobierane są w dniu rozliczenia (dzień po końcu okresu) — opłata
+   z góry dotyczy więc następnego okresu.
+   ✅ Pierwsze zestawienie nigdy nie zaczyna się przed startem konta (najwcześniejszą
+   datą startu pozycji). Gdy pierwsza data rozliczenia = data startu, pierwszy
+   przebieg pobiera tylko opłatę z góry, bez zestawienia; pierwsze zestawienie
+   obejmuje okres od daty startu.
 
 > Top-upy i zestawienia powstają w pełnym cyklu (przechwycenie płatności /
 > zamknięcie okresu przez Bill Run). Bez bramki / przebiegu listy bywają
@@ -466,6 +580,148 @@ historii, 1 doładowanie Pending, limit kredytu 1000.
 
 ---
 
+## 8. Płatności (Spec C)
+
+Billing ma własny rejestr płatności: wyciąg z banku (CSV) jest dopasowywany do
+faktur po **numerze faktury w tytule przelewu**.
+
+### 8a. Przygotowanie
+1. Uzupełnij dane sprzedawcy (3e), uruchom przebieg i **zaksięguj** kilka faktur
+   (najlepiej dwie dla jednego konta).
+2. W terminalu: `yarn mercato billing payments-sample` — powstaje plik
+   `payments-sample.csv` z wierszami dla każdego przypadku (pełna kwota, połowa,
+   nadpłata, dwie faktury w jednym tytule, brak tytułu, doładowanie prepaid,
+   inna waluta, duplikat).
+
+### 8b. Import wyciągu
+1. **Billing → Payments → Upload CSV** → wybierz plik → **Upload**
+   (`Ctrl/Cmd + Enter`).
+2. Okno podsumowania: *Allocated*, *Partially allocated*, *Matched (credit)*,
+   *Unmatched*, *Duplicates*, *Rejected rows* (z numerem wiersza i powodem).
+3. Lista płatności: status, nierozliczona kwota, konto, tytuł. Filtr *Status*.
+4. Wgraj ten sam plik ponownie → wszystkie wiersze to *Duplicates*.
+
+### 8c. Faktury po imporcie
+1. Faktura opłacona w całości → status `paid`; w połowie → `partially_paid`
+   (pole *Outstanding* maleje).
+2. Nadpłata trafia jako **nadpłata (credit)** na najstarszą otwartą fakturę
+   konta; na koncie kafelek *Unapplied credit* pokazuje resztę.
+3. Szczegóły faktury → sekcja **Payments** z płatnościami, które ją rozliczyły.
+
+### 8d. Ręczna obsługa płatności
+1. Płatność *Unmatched* (np. bez tytułu) → **Assign to account** → wybierz konto →
+   kwota rozlicza najstarsze otwarte faktury.
+2. Płatność *Matched* z nierozliczoną kwotą → **Allocate** → wpisz kwoty przy
+   fakturach → **Allocate**.
+3. W tabeli *Allocations* menu wiersza → **Un-allocate** (faktura znów nieopłacona).
+4. **Ignore** / **Restore** — dla opłat bankowych i błędnych przelewów.
+5. Płatność dla konta prepaid (*Prepaid account — convert to a top-up*) →
+   **Convert to top-up** → saldo konta prepaid rośnie, powstaje paragon.
+6. **Record payment** (lista lub konto) — ręczne wprowadzenie wpłaty.
+
+## 9. Korekty: faktury korygujące i noty obciążeniowe (Spec D)
+
+Zaksięgowanej faktury nie da się edytować ani anulować — poprawia się ją
+dokumentem korygującym z odwołaniem do oryginału.
+
+### 9a. Faktura korygująca (credit memo)
+1. Otwórz zaksięgowaną fakturę → **Create credit memo**.
+2. W oknie zaznacz pozycje, popraw ilość / cenę netto (stawka VAT zostaje z
+   oryginału) albo kliknij **Full credit**; wpisz **przyczynę** (drukowana na
+   dokumencie). Na dole widać kwotę korekty.
+3. **Create draft** (`Ctrl/Cmd + Enter`) → otwiera się projekt `DRAFT-…` z odznaką
+   *Credit memo*, polem *Corrects* (link do oryginału) i *Reason*. Projekt można
+   edytować albo usunąć (**Delete draft**).
+4. **Post invoice** → numer z serii `CN/…`, PDF „Faktura korygująca” z
+   „Koryguje … z dnia …”, przyczyną i blokiem *Rozliczenie*.
+5. Oryginał: kwota *Outstanding* maleje o korektę (status `partially_paid`, a przy
+   korekcie do zera `credited`); sekcja **Corrections** i **Payments** pokazują
+   korektę.
+6. Korekta opłaconej faktury → kwota trafia jako nadpłata na konto (kafelek
+   *Unapplied credit*) i rozlicza najstarszą otwartą fakturę.
+7. Próba skorygowania więcej, niż zostało → komunikat „The credit is more than…”.
+
+### 9b. Nota obciążeniowa (debit memo)
+1. Na zaksięgowanej fakturze → **Create debit memo** → przyczyna → projekt.
+2. **Add line** (np. zapomniana opłata) → **Post invoice** → numer z serii faktur,
+   termin płatności, kwota do zapłaty.
+3. Nota jest opłacana jak faktura: przelew z jej numerem w tytule zostanie
+   dopasowany przy imporcie CSV (sekcja 8; `payments-sample` dodaje taki wiersz).
+
+### 9c. Lista faktur
+Filtr *Document type* ma *Credit memo* i *Debit memo*; kolumna *Type*; sumy
+faktur korygujących są pokazywane ze znakiem minus.
+
+## 10. Uwagi operatora — runda 1 (Spec F)
+
+> Wymaga migracji `Migration20261119000000_billing_operator_feedback`
+> (`yarn mercato db migrate`) i odświeżenia uprawnień
+> (`yarn mercato auth sync-role-acls` — nowe `billing.run.delete`).
+
+### 10a. Usuwanie przebiegów testowych
+1. **Bill Runs** → uruchom przebieg w trybie **Test**.
+2. Na stronie przebiegu: **Wipe test invoices** usuwa faktury testowe
+   (przebieg zostaje), **Delete run** usuwa przebieg razem z wynikami i
+   fakturami testowymi (okno potwierdzenia podaje liczbę faktur).
+3. Na liście przebiegów to samo jest w menu wiersza (**Delete run**) dla
+   przebiegów *Test* i *Dry-run*. Filtr **Mode** zawęża listę; domyślnie
+   pokazane są wszystkie.
+4. Przebiegów *Real* nie da się usunąć (brak akcji; API zwraca 422).
+5. Faktura testowa nie ma już przycisku *Wipe* — znacznik **Test run**
+   prowadzi do jej przebiegu.
+
+### 10b. Konto jako przestrzeń robocza
+1. Otwórz konto — u góry kafelki: *Balance due*, *Overdue*, *Unapplied
+   credit* (postpaid) albo *Balance* ze statusem i *Credit limit* (prepaid),
+   oraz *Next bill* i ostatnia faktura / zestawienie.
+2. Zakładki: *Overview*, *Items*, *Usage*, *Invoices*, *Payments*
+   (postpaid) lub *Balance & top-ups* i *Statements* (prepaid), *Bill runs*.
+   Adres zawiera `?tab=…`, więc link otwiera właściwą zakładkę; powrót z
+   pozycji / faktury wraca na zakładkę, z której przyszedłeś.
+3. Obok *Active* w nagłówku jest drugi znacznik: **Postpaid** / **Prepaid**.
+4. Zakładka *Items*: stawka z walutą i podstawą (Net / Gross), okres
+   pozycji, *Billed through* i status rozliczenia względem dzisiejszej daty —
+   *Starts …*, *Not billed yet*, *Billed through …* (opłacona z góry),
+   *Due since …* (następny przebieg ją naliczy), *Billed*, *Fully billed*.
+5. **Run billing** w nagłówku: tryb (domyślnie *Test*) i data → **Run
+   billing**; okno się zamyka, komunikat podaje liczbę dat z opłatami, a
+   strona przechodzi na zakładkę *Bill runs*. Tam każdy przebieg ma kolumny
+   *Mode* (Real / Test / Dry-run) i *As-of date*; menu wiersza przebiegu
+   testowego ma *Wipe test invoices* i *Delete run*.
+6. Lista kont: kolumny **Balance due** i **Overdue** (na czerwono) oraz
+   filtr **Has overdue**.
+
+### 10c. Prepaid — z góry / z dołu, wiele cykli naraz
+1. Konto prepaid z *Next bill date* `2026-11-14`, pozycje: jednorazowa 99 i
+   abonament 49 (*In advance*), obie od `2026-11-14`.
+2. **Run billing** → *Real*, data `2026-12-14` → dwa cykle *Charged to
+   balance*: 14.11 (99 + 49 za 14.11–13.12) i 14.12 (49 za 14.12–13.01);
+   *Next bill* = `2027-01-14`. Transakcje pokazują okres usługi.
+3. Ta sama konfiguracja z *In arrears*: 14.11 pobiera tylko 99, 14.12 —
+   49 za 14.11–13.12.
+4. Pozycja zaczynająca się w środku okresu jest liczona proporcjonalnie
+   (np. 20.11–13.12 = 24/30 × 49 = 39,20); z wyłączonym *Prorate* — pominięta
+   i widoczna w tabeli *Skipped items* przebiegu.
+5. *Test* i *Dry-run* pokazują wszystkie należne cykle (*Preview*), nie
+   zmieniając salda ani konta.
+6. Zestawienie dla daty rozliczenia D obejmuje ruchy od dnia po
+   poprzedniej dacie rozliczenia **do D włącznie** — opłaty pobierane w dniu
+   D i doładowanie wykonane tego samego dnia trafiają do jednego zestawienia.
+   Przykład: rozliczenie 15.11, doładowanie 300 tego dnia, opłaty z 15.11 →
+   pierwsze zestawienie: otwarcie 0, doładowania 300, zamknięcie dodatnie;
+   kolejne zaczyna się od tego salda (nie od wartości ujemnej).
+
+### 10d. Prepaid — kiedy naliczany jest VAT
+**At top-up** (domyślnie): paragon doładowania 123 przy VAT 23 % pokazuje
+100 + 23; saldo rośnie o 123; abonament 49 pobiera 49 (VAT pozycji nie
+ma zastosowania — pole jest wyszarzone z notką).
+
+**At billing**: paragon doładowania 100 bez VAT; saldo +100; abonament
+10 netto przy 23 % pobiera **12,30**; zestawienie pokazuje kolumny Net / VAT i
+tabelę *VAT summary*. Zmiana ustawienia dotyczy tylko nowych doładowań i
+opłat (ostrzeżenie na stronie ustawień). *At billing* wymaga akceptacji
+księgowego — zestawienie nie jest dokumentem fiskalnym.
+
 ## Reset danych testowych *(operacja techniczna — opcjonalna)*
 
 Jeśli chcesz wyczyścić billing i wgrać dane od nowa, w terminalu:
@@ -473,8 +729,7 @@ Jeśli chcesz wyczyścić billing i wgrać dane od nowa, w terminalu:
 ```bash
 # 1. wyczyść tabele billingu
 docker exec dainamite-core-postgres-1 psql -U postgres -d open-mercato -c "
-DELETE FROM sales_invoice_lines WHERE invoice_id IN (SELECT id FROM sales_invoices WHERE jsonb_exists(metadata,'bill_run_id'));
-DELETE FROM sales_invoices WHERE jsonb_exists(metadata,'bill_run_id');
+DELETE FROM billing_invoice_lines; DELETE FROM billing_invoices; DELETE FROM billing_document_sequences;
 DELETE FROM billing_run_outcomes; DELETE FROM billing_runs;
 DELETE FROM billing_account_usage; DELETE FROM billing_items; DELETE FROM billing_accounts;"
 

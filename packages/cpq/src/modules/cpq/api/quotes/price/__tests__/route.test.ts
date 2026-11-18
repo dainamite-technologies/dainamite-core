@@ -3,8 +3,9 @@ const enabled = jest.fn()
 const previewCatalogCosts = jest.fn()
 const em = { fork: () => ({}) }
 jest.mock('../../../../services/costs/costResolution', () => ({ previewCatalogCosts: (...args: unknown[]) => previewCatalogCosts(...args) }))
-jest.mock('../../../context', () => ({ resolveCpqRouteContext: async () => ({ auth: { sub: 'user' }, tenantId: 'tenant', organizationId: 'org', em,
-  container: { resolve: (name: string) => (name === 'cpqCostService' ? { enabled } : { resolveProductCharges }) } }) }))
+jest.mock('../../../context', () => ({
+  cpqContextError: jest.requireActual('../../../context').cpqContextError, resolveCpqRouteContext: async () => ({ auth: { sub: 'user' }, tenantId: 'tenant', organizationId: 'org', em,
+    container: { resolve: (name: string) => (name === 'cpqCostService' ? { enabled } : { resolveProductCharges }) } }) }))
 import { POST, openApi } from '../route'
 const offeringId = '11111111-1111-4111-8111-111111111111'
 const charge = { chargeCode: 'fee', chargeName: 'Fee', chargeType: 'mrc', pricingMethod: 'flat', quantity: 1,

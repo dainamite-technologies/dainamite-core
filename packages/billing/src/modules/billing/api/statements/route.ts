@@ -35,6 +35,10 @@ const billingStatementListItemSchema = z.object({
   total_adjustments: z.string(),
   closing_balance: z.string(),
   debit_breakdown: z.record(z.string(), z.unknown()).nullable(),
+  /** Spec F: per-rate VAT of the period's prepaid debits (empty when VAT is charged at top-up). */
+  vat_summary: z
+    .array(z.object({ rate: z.string(), net: z.string(), tax: z.string(), gross: z.string() }))
+    .nullable(),
   status: z.string(),
   organization_id: z.string().uuid(),
   tenant_id: z.string().uuid(),
@@ -67,6 +71,7 @@ const crud = makeCrudRoute({
       'total_adjustments',
       'closing_balance',
       'debit_breakdown',
+      'vat_summary',
       'status',
       'organization_id',
       'tenant_id',

@@ -118,7 +118,7 @@ export function CostElementDialog({ open, charge, element, onClose, onSaved }: P
         <div className="grid grid-cols-2 gap-3 text-sm">
           <label className="space-y-1">
             <span className="text-xs font-medium">{t('cpq.costElements.code', 'Code')}</span>
-            <Input value={form.code} disabled={mode === 'edit'} autoFocus={mode === 'create'} onChange={(e) => set({ code: e.target.value })} placeholder="e.g. transport" />
+            <Input value={form.code} disabled={mode === 'edit'} autoFocus={mode === 'create'} onChange={(e) => set({ code: e.target.value })} placeholder={t('cpq.costElements.codePlaceholder', 'e.g. transport')} />
           </label>
           <label className="space-y-1">
             <span className="text-xs font-medium">{t('cpq.costElements.name', 'Name')}</span>
@@ -199,7 +199,7 @@ export function CostElementDialog({ open, charge, element, onClose, onSaved }: P
               </label>
               <label className="space-y-1">
                 <span className="text-xs font-medium">{t('cpq.costElements.fallbackTableCurrency', 'Fallback table currency')}</span>
-                <Input value={form.currencyCode} maxLength={3} placeholder="USD" data-testid="cpq-cost-element-fallback-currency" onChange={(e) => set({ currencyCode: e.target.value.toUpperCase() })} />
+                <Input value={form.currencyCode} maxLength={3} placeholder={t('cpq.costElements.currencyPlaceholder', 'USD')} data-testid="cpq-cost-element-fallback-currency" onChange={(e) => set({ currencyCode: e.target.value.toUpperCase() })} />
                 <span className="block text-xs text-muted-foreground">
                   {t('cpq.costElements.fallbackTableCurrencyHint', 'Used when the cost table has no entry in the quote currency; the price is then converted at the dated rate.')}
                 </span>
@@ -283,7 +283,7 @@ export function CostElementDialog({ open, charge, element, onClose, onSaved }: P
 
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>{t('common.cancel', 'Cancel')}</Button>
-          <Button onClick={() => void save()} disabled={saving} title="Ctrl/Cmd+Enter">
+          <Button onClick={() => void save()} disabled={saving} title={t('cpq.common.submitShortcut', 'Ctrl/Cmd+Enter')}>
             {saving ? t('common.saving', 'Saving…') : t('common.save', 'Save')}
           </Button>
         </DialogFooter>

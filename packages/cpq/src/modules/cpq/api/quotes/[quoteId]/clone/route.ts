@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { resolveCpqRouteContext } from '../../../context'
+import { cpqContextError, resolveCpqRouteContext } from '../../../context'
 import { isQuotingError } from '../../../../services/cpqQuotingService'
 import { resolveQuotingService } from '../../../resolveQuotingService'
 import { resolveAuditActor } from '../../../../lib/auditActor'
@@ -19,7 +19,7 @@ export const openApi: OpenApiRouteDoc = {
       summary: 'Clone a CPQ quote into a new draft version',
       description: 'Copies the quote and its lines; supplier cost requests and answers are reset on the copy (costs are re-resolved from the catalog).',
       responses: [{ status: 201, description: 'The cloned quote' }],
-      errors: [cpqErrorDoc(401, 'Unauthorized'), cpqErrorDoc(404, 'Quote not found'), cpqErrorDoc(409, 'Quote cannot be cloned in its current status')],
+      errors: [cpqErrorDoc(401, 'Unauthorized'), cpqErrorDoc(404, 'Quote not found'), cpqErrorDoc(409, 'Quote cannot be cloned in its current status'), cpqErrorDoc(500, 'Internal error')],
     },
   },
 }
@@ -27,7 +27,8 @@ export const openApi: OpenApiRouteDoc = {
 export async function POST(req: Request, { params }: { params: Promise<{ quoteId: string }> }) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     const { quoteId } = await params
     const scope = { organizationId: ctx.organizationId, tenantId: ctx.tenantId }

@@ -1,6 +1,6 @@
 {
   "name": "@dainamite/billing",
-  "version": "0.20.0",
+  "version": "1.1.0",
   "description": "Dainamite Billing — lightweight recurring-billing engine for Open Mercato (Bill Runs, one-time / recurring / usage items, draft invoices in core/sales with human approval).",
   "type": "module",
   "main": "./dist/modules/billing/index.js",
@@ -121,6 +121,7 @@
     "@mikro-orm/core": "^7.1.14",
     "@mikro-orm/decorators": "^7.1.14",
     "@mikro-orm/postgresql": "^7.1.14",
+    "@open-mercato/ai-assistant": "^0.9.0",
     "@open-mercato/core": "^0.9.0",
     "@open-mercato/events": "^0.9.0",
     "@open-mercato/queue": "^0.9.0",
@@ -145,5 +146,9 @@
   "license": "MIT",
   "engines": {
     "node": ">=24.0.0"
+  },
+  "dependencies": {
+    "@pdf-lib/fontkit": "^1.1.1",
+    "pdf-lib": "^1.17.1"
   }
 }

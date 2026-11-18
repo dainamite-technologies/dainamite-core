@@ -2,6 +2,24 @@ import { z } from 'zod'
 import { normalizeChargePricing } from './charge-pricing'
 import { PRICING_TABLE_PURPOSES } from './costs'
 
+/**
+ * Update schemas must not inject defaults. `.partial()` keeps `.default()`
+ * wrappers, so a PUT that sends `{ id, isActive }` got every defaulted field
+ * (sortOrder, offeringType, lifecycleStatus, ...) filled in and the route
+ * silently overwrote the stored values. This strips the top-level defaults
+ * before making every field optional. `.extend` keeps the object's
+ * unknown-key policy.
+ */
+export function partialWithoutDefaults<Shape extends z.ZodRawShape>(
+  schema: z.ZodObject<Shape>,
+): ReturnType<z.ZodObject<Shape>['partial']> {
+  const overrides: Record<string, z.ZodType> = {}
+  for (const [key, field] of Object.entries(schema.shape)) {
+    if (field instanceof z.ZodDefault) overrides[key] = field.unwrap() as z.ZodType
+  }
+  return schema.extend(overrides).partial() as unknown as ReturnType<z.ZodObject<Shape>['partial']>
+}
+
 // ─── Product Specification ───────────────────────────────────────
 
 export const cpqProductSpecificationCreateSchema = z.object({
@@ -24,7 +42,7 @@ export const cpqProductSpecificationCreateSchema = z.object({
   isActive: z.boolean().optional().default(true),
 })
 
-export const cpqProductSpecificationUpdateSchema = cpqProductSpecificationCreateSchema.partial().extend({
+export const cpqProductSpecificationUpdateSchema = partialWithoutDefaults(cpqProductSpecificationCreateSchema).extend({
   id: z.string().uuid(),
 })
 
@@ -36,7 +54,9 @@ export const cpqProductOfferingCreateSchema = z.object({
   code: z.string().min(1),
   name: z.string().min(1),
   description: z.string().nullish(),
-  offeringType: z.enum(['simple', 'bundle']).optional().default('simple'),
+  // No default: when omitted, the create route derives it from the
+  // specification's `specType` (V-OFF-7 — the two must match).
+  offeringType: z.enum(['simple', 'bundle']).optional(),
   designTimeValues: z.record(z.string(), z.unknown()).optional().default({}),
   // `retired` was merged into `deprecated` — see migration
   // `<timestamp>-merge-offering-retired-into-deprecated.ts`. Aligned with
@@ -48,7 +68,7 @@ export const cpqProductOfferingCreateSchema = z.object({
   isActive: z.boolean().optional().default(true),
 })
 
-export const cpqProductOfferingUpdateSchema = cpqProductOfferingCreateSchema.partial().extend({
+export const cpqProductOfferingUpdateSchema = partialWithoutDefaults(cpqProductOfferingCreateSchema).extend({
   id: z.string().uuid(),
 })
 
@@ -110,7 +130,7 @@ export const cpqProductRelationshipCreateSchema = z.object({
   isActive: z.boolean().optional().default(true),
 })
 
-export const cpqProductRelationshipUpdateSchema = cpqProductRelationshipCreateSchema.partial().extend({
+export const cpqProductRelationshipUpdateSchema = partialWithoutDefaults(cpqProductRelationshipCreateSchema).extend({
   id: z.string().uuid(),
 })
 
@@ -135,7 +155,7 @@ export const cpqProductAttributeCreateSchema = z.object({
   isActive: z.boolean().optional().default(true),
 })
 
-export const cpqProductAttributeUpdateSchema = cpqProductAttributeCreateSchema.partial().extend({
+export const cpqProductAttributeUpdateSchema = partialWithoutDefaults(cpqProductAttributeCreateSchema).extend({
   id: z.string().uuid(),
 })
 
@@ -311,7 +331,7 @@ export function chargePricingShapeIssues(charge: ChargePricingShapeInput): z.Zod
   return result.success ? [] : result.error.issues
 }
 
-export const cpqProductChargeUpdateSchema = cpqProductChargeBase.partial().extend({
+export const cpqProductChargeUpdateSchema = partialWithoutDefaults(cpqProductChargeBase).extend({
   id: z.string().uuid(),
 }).superRefine((data, ctx) => {
   // Enforce shape whenever either pricing axis is being changed — a
@@ -338,7 +358,7 @@ export const cpqPriceRuleCreateSchema = z.object({
   isActive: z.boolean().optional().default(true),
 })
 
-export const cpqPriceRuleUpdateSchema = cpqPriceRuleCreateSchema.partial().extend({
+export const cpqPriceRuleUpdateSchema = partialWithoutDefaults(cpqPriceRuleCreateSchema).extend({
   id: z.string().uuid(),
 })
 
@@ -378,7 +398,7 @@ export const cpqPricingTableCreateSchema = z.object({
   isActive: z.boolean().optional().default(true),
 })
 
-export const cpqPricingTableUpdateSchema = cpqPricingTableCreateSchema.partial().extend({
+export const cpqPricingTableUpdateSchema = partialWithoutDefaults(cpqPricingTableCreateSchema).extend({
   id: z.string().uuid(),
 })
 
@@ -393,7 +413,7 @@ export const cpqPricingTableEntryCreateSchema = z.object({
   isActive: z.boolean().optional().default(true),
 })
 
-export const cpqPricingTableEntryUpdateSchema = cpqPricingTableEntryCreateSchema.partial().extend({
+export const cpqPricingTableEntryUpdateSchema = partialWithoutDefaults(cpqPricingTableEntryCreateSchema).extend({
   id: z.string().uuid(),
 })
 
@@ -468,6 +488,10 @@ export const cpqAddQuoteItemSchema = z.object({
   targetSubscriptionId: z.string().uuid().nullish(),
   // ARC (XD-250): existing item being changed by cancel/modify lines.
   sourceSubscriptionItemId: z.string().uuid().nullish(),
+  // #123: when the offering is a bundle, also add its default components
+  // (recursively, capped at each slot group's cardinalityMax). Opt-in so
+  // callers that post the children themselves get exactly what they send.
+  expandBundleDefaults: z.boolean().optional(),
 })
 
 export const cpqUpdateQuoteItemSchema = z.object({
@@ -624,7 +648,7 @@ export const cpqWizardDefinitionCreateSchema = z.object({
   metadata: z.record(z.string(), z.unknown()).nullish(),
 })
 
-export const cpqWizardDefinitionUpdateSchema = cpqWizardDefinitionCreateSchema.partial().extend({
+export const cpqWizardDefinitionUpdateSchema = partialWithoutDefaults(cpqWizardDefinitionCreateSchema).extend({
   id: z.string().uuid(),
 })
 // ─── Inventory Subscription ──────────────────────────────────────

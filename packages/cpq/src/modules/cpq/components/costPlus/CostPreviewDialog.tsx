@@ -165,7 +165,7 @@ export function CostPreviewDialog({ open, offeringId, attributes, chargeCode, on
 
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>{t('common.close', 'Close')}</Button>
-          <Button onClick={() => void run()} disabled={running} title="Ctrl/Cmd+Enter">
+          <Button onClick={() => void run()} disabled={running} title={t('cpq.common.submitShortcut', 'Ctrl/Cmd+Enter')}>
             {running ? t('cpq.costPreview.running', 'Calculating…') : t('cpq.costPreview.run', 'Preview cost')}
           </Button>
         </DialogFooter>

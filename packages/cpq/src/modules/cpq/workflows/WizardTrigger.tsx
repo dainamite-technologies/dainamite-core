@@ -2,15 +2,16 @@
 
 import React, { useCallback, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { useT, type TranslateFn } from '@open-mercato/shared/lib/i18n/context'
 import type { WizardDefinitionResult } from './types'
 
 // ─── API helper ─────────────────────────────────────────────────
 
-async function apiJson<T>(url: string): Promise<T> {
+async function apiJson<T>(t: TranslateFn, url: string): Promise<T> {
   const res = await fetch(url)
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
-    throw new Error(body.error ?? `API error ${res.status}`)
+    throw new Error(body.error ?? t('cpq.wizard.trigger.apiError', 'API error {status}', { status: res.status }))
   }
   return res.json() as Promise<T>
 }
@@ -43,13 +44,16 @@ export function WizardTrigger({
   offeringCode,
   params: wizardParams = {},
   surface = 'backend',
-  label = 'Start Wizard',
+  label,
   variant = 'button',
   className,
   basePath,
   onStart,
 }: WizardTriggerProps) {
   const router = useRouter()
+  const t = useT()
+  const buttonLabel = label ?? t('cpq.wizard.trigger.start', 'Start Wizard')
+  const startingLabel = t('cpq.wizard.trigger.starting', 'Starting...')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -63,18 +67,20 @@ export function WizardTrigger({
 
       if (wizardCode) {
         definition = await apiJson<WizardDefinitionResult>(
+          t,
           `/api/cpq/wizards?code=${encodeURIComponent(wizardCode)}`,
         )
       } else {
         const resolveParams = new URLSearchParams({ surface })
         if (offeringCode) resolveParams.set('offeringCode', offeringCode)
         definition = await apiJson<WizardDefinitionResult>(
+          t,
           `/api/cpq/wizards/resolve?${resolveParams}`,
         )
       }
 
       if (!definition) {
-        setError('No matching wizard found')
+        setError(t('cpq.wizard.trigger.notFound', 'No matching wizard found'))
         return
       }
 
@@ -90,11 +96,11 @@ export function WizardTrigger({
         router.push(`${path}/${definition.code}${qs ? `?${qs}` : ''}`)
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to start wizard')
+      setError(err instanceof Error ? err.message : t('cpq.wizard.trigger.failed', 'Failed to start wizard'))
     } finally {
       setLoading(false)
     }
-  }, [wizardCode, offeringCode, wizardParams, surface, basePath, onStart, router])
+  }, [wizardCode, offeringCode, wizardParams, surface, basePath, onStart, router, t])
 
   if (variant === 'link') {
     return (
@@ -106,7 +112,7 @@ export function WizardTrigger({
           handleClick()
         }}
       >
-        {loading ? 'Starting...' : label}
+        {loading ? startingLabel : buttonLabel}
         {error && <span className="ml-2 text-xs text-destructive">{error}</span>}
       </a>
     )
@@ -121,7 +127,7 @@ export function WizardTrigger({
         tabIndex={0}
         onKeyDown={(e) => { if (e.key === 'Enter') handleClick() }}
       >
-        <p className="font-semibold text-sm">{label}</p>
+        <p className="font-semibold text-sm">{buttonLabel}</p>
         {error && <p className="mt-1 text-xs text-destructive">{error}</p>}
       </div>
     )
@@ -135,7 +141,7 @@ export function WizardTrigger({
       onClick={handleClick}
       disabled={loading}
     >
-      {loading ? 'Starting...' : label}
+      {loading ? startingLabel : buttonLabel}
       {error && <span className="ml-2 text-xs text-destructive/70">{error}</span>}
     </button>
   )

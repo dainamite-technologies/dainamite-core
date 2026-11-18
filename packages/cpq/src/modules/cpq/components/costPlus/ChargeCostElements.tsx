@@ -81,7 +81,7 @@ export function ChargeCostElements({ charge, offeringId, attributes, onChanged }
         </Tag>
       ),
     },
-    { id: 'costType', header: t('cpq.costElements.costType', 'Type'), cell: ({ row }) => row.original.costType.toUpperCase() },
+    { id: 'costType', header: t('cpq.costElements.costTypeColumn', 'Type'), cell: ({ row }) => row.original.costType.toUpperCase() },
     {
       id: 'source',
       header: t('cpq.costElements.source', 'Source'),

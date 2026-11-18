@@ -41,8 +41,8 @@ export function ArcLineDiff({ line, currency, costs }: { line: ArcDiffLine; curr
   const isCancel = line.action === 'cancel'
   const rows: Array<{ label: string; before: number; after: number; asCurrency: boolean; key?: string }> = [
     { label: t('cpq.arc.diff.quantity', 'Quantity'), before: src.quantity, after: isCancel ? 0 : line.quantity, asCurrency: false },
-    { label: 'MRC', before: src.mrcAmount, after: isCancel ? 0 : line.mrcTotal, asCurrency: true },
-    { label: 'NRC', before: src.nrcAmount, after: isCancel ? 0 : line.nrcTotal, asCurrency: true },
+    { label: t('cpq.arc.diff.mrc', 'MRC'), before: src.mrcAmount, after: isCancel ? 0 : line.mrcTotal, asCurrency: true },
+    { label: t('cpq.arc.diff.nrc', 'NRC'), before: src.nrcAmount, after: isCancel ? 0 : line.nrcTotal, asCurrency: true },
   ]
   // Cost and margin rows only with `costs` (the server sends them to `cpq.costs.view` holders only).
   const costRows = arcDiffCostRows(costs, { beforeMrc: src.mrcAmount, afterMrc: isCancel ? 0 : line.mrcTotal })

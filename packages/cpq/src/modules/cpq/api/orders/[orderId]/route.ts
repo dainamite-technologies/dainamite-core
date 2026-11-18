@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { cpqErrorDoc } from '../../_helpers/quoteRouteOpenApi'
-import { resolveCpqRouteContext } from '../../context'
+import { cpqContextError, resolveCpqRouteContext } from '../../context'
 import { isOrderError } from '../../../services/cpqOrderService'
 import type { DefaultCpqOrderService } from '../../../services/cpqOrderService'
 
@@ -13,7 +13,8 @@ export const metadata = {
 export async function GET(req: Request, { params }: { params: Promise<{ orderId: string }> }) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     const { orderId } = await params
     const scope = { organizationId: ctx.organizationId, tenantId: ctx.tenantId }

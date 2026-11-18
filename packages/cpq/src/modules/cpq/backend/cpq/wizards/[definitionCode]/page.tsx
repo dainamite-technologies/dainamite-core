@@ -2,6 +2,7 @@
 import * as React from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Alert } from '@open-mercato/ui/primitives/alert'
+import { useT, type TranslateFn } from '@open-mercato/shared/lib/i18n/context'
 import { WizardRunner } from '../../../../workflows/WizardRunner'
 import { registerBuiltInStepTypes } from '../../../../workflows/steps'
 import type { WizardDefinitionResult } from '../../../../workflows/types'
@@ -9,9 +10,9 @@ import type { WizardDefinitionResult } from '../../../../workflows/types'
 // Register built-in step types once on module load
 registerBuiltInStepTypes()
 
-async function apiJson<T>(url: string): Promise<T> {
+async function apiJson<T>(url: string, t: TranslateFn): Promise<T> {
   const res = await fetch(url)
-  if (!res.ok) throw new Error(`API error ${res.status}`)
+  if (!res.ok) throw new Error(t('cpq.wizards.runner.errors.api', 'API error {status}', { status: res.status }))
   return res.json() as Promise<T>
 }
 
@@ -30,6 +31,7 @@ function ParamsForm({
   schema: ParamsSchema
   onStart: (params: Record<string, string>) => void
 }) {
+  const t = useT()
   const properties = schema.properties ?? {}
   const requiredFields = schema.required ?? []
   const fieldNames = Object.keys(properties)
@@ -45,8 +47,8 @@ function ParamsForm({
   return (
     <div className="space-y-4">
       <div className="rounded-lg border bg-muted/30 p-4 space-y-1">
-        <h4 className="text-sm font-medium">This wizard requires input parameters</h4>
-        <p className="text-xs text-muted-foreground">Fill in the required fields before starting.</p>
+        <h4 className="text-sm font-medium">{t('cpq.wizards.runner.params.title', 'This wizard requires input parameters')}</h4>
+        <p className="text-xs text-muted-foreground">{t('cpq.wizards.runner.params.hint', 'Fill in the required fields before starting.')}</p>
       </div>
 
       <div className="space-y-3">
@@ -67,7 +69,7 @@ function ParamsForm({
                 className="w-full rounded-md border px-3 py-2 text-sm font-mono"
               />
               {prop?.format && (
-                <p className="text-xs text-muted-foreground mt-0.5">Format: {prop.format}</p>
+                <p className="text-xs text-muted-foreground mt-0.5">{t('cpq.wizards.runner.params.format', 'Format: {format}', { format: prop.format })}</p>
               )}
             </div>
           )
@@ -80,7 +82,7 @@ function ParamsForm({
         disabled={!isValid}
         className="inline-flex items-center justify-center rounded-md bg-primary px-5 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
       >
-        Preview Wizard
+        {t('cpq.wizards.runner.params.start', 'Preview Wizard')}
       </button>
     </div>
   )
@@ -89,6 +91,7 @@ function ParamsForm({
 // ─── Main page ──────────────────────────────────────────────────
 
 export default function CpqWizardRunnerPage({ params }: { params: Record<string, string | string[]> }) {
+  const t = useT()
   const router = useRouter()
   const searchParams = useSearchParams()
   const definitionCode = params.definitionCode as string
@@ -114,7 +117,7 @@ export default function CpqWizardRunnerPage({ params }: { params: Record<string,
   React.useEffect(() => {
     async function load() {
       if (!definitionCode || definitionCode === 'undefined') {
-        setError('Invalid wizard definition code')
+        setError(t('cpq.wizards.runner.errors.invalidCode', 'Invalid wizard definition code'))
         setLoading(false)
         return
       }
@@ -123,6 +126,7 @@ export default function CpqWizardRunnerPage({ params }: { params: Record<string,
       try {
         const def = await apiJson<WizardDefinitionResult>(
           `/api/cpq/wizards?code=${encodeURIComponent(definitionCode)}`,
+          t,
         )
         setDefinition(def)
 
@@ -133,13 +137,13 @@ export default function CpqWizardRunnerPage({ params }: { params: Record<string,
           setStarted(true)
         }
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to load wizard')
+        setError(err instanceof Error ? err.message : t('cpq.wizards.runner.errors.load', 'Failed to load wizard'))
       } finally {
         setLoading(false)
       }
     }
     load()
-  }, [definitionCode, queryParams])
+  }, [definitionCode, queryParams, t])
 
   const handleComplete = React.useCallback((stepData: Record<string, Record<string, unknown>>) => {
     // Check for orderId first (e.g. purchasing wizard creates an order)
@@ -164,7 +168,7 @@ export default function CpqWizardRunnerPage({ params }: { params: Record<string,
   }, [])
 
   if (loading) {
-    return <div className="text-sm text-muted-foreground">Loading wizard...</div>
+    return <div className="text-sm text-muted-foreground">{t('cpq.wizards.runner.loading', 'Loading wizard...')}</div>
   }
 
   if (error) {
@@ -176,7 +180,7 @@ export default function CpqWizardRunnerPage({ params }: { params: Record<string,
           onClick={() => router.push('/backend/cpq/wizards')}
           className="inline-flex items-center justify-center rounded-md border px-4 py-2 text-sm font-medium hover:bg-muted"
         >
-          Back to Wizards
+          {t('cpq.wizards.runner.backToList', 'Back to Wizards')}
         </button>
       </div>
     )
@@ -185,7 +189,7 @@ export default function CpqWizardRunnerPage({ params }: { params: Record<string,
   if (!definition) {
     return (
       <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
-        Wizard not found.
+        {t('cpq.wizards.runner.notFound', 'Wizard not found.')}
       </div>
     )
   }
@@ -202,7 +206,7 @@ export default function CpqWizardRunnerPage({ params }: { params: Record<string,
           onClick={() => router.push('/backend/cpq/wizards')}
           className="text-sm text-muted-foreground hover:text-foreground"
         >
-          &larr; All Wizards
+          ← {t('cpq.wizards.runner.allWizards', 'All Wizards')}
         </button>
       </div>
 

@@ -228,8 +228,8 @@ export function PriceAdjustmentDialog<Q extends PreviewQuote>(props: PriceAdjust
             )}
             {draftKey && !previewing && (!previewCharge || previewCharge.unitPrice === null) && previewLine && (
               <span>
-                {t('cpq.priceAdjustments.dialog.previewLine', 'Line totals')}: MRC <span className="font-mono font-medium">{money(previewLine.mrcTotal, currency)}</span>
-                {' · '}NRC <span className="font-mono font-medium">{money(previewLine.nrcTotal, currency)}</span>
+                {t('cpq.priceAdjustments.dialog.previewLine', 'Line totals')}: {t('cpq.lines.mrc', 'MRC')} <span className="font-mono font-medium">{money(previewLine.mrcTotal, currency)}</span>
+                {' · '}{t('cpq.lines.nrc', 'NRC')} <span className="font-mono font-medium">{money(previewLine.nrcTotal, currency)}</span>
               </span>
             )}
           </div>
@@ -250,7 +250,7 @@ export function PriceAdjustmentDialog<Q extends PreviewQuote>(props: PriceAdjust
 
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>{t('cpq.priceAdjustments.dialog.cancel', 'Cancel')}</Button>
-          <Button onClick={() => void save()} disabled={!canSave} title="Ctrl/Cmd+Enter">
+          <Button onClick={() => void save()} disabled={!canSave} title={t('cpq.priceAdjustments.dialog.saveShortcut', 'Ctrl/Cmd+Enter')}>
             {saving ? t('cpq.priceAdjustments.dialog.saving', 'Saving…') : t('cpq.priceAdjustments.dialog.save', 'Save')}
           </Button>
         </DialogFooter>

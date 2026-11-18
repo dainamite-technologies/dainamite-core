@@ -33,6 +33,9 @@ const billingItemListItemSchema = z.object({
   id: z.string().uuid(),
   bill_account_id: z.string().uuid(),
   bill_account_name: z.string().nullable(),
+  /** Spec F (F2): the owning account's currency and mode, for the form. */
+  bill_account_currency: z.string().nullable(),
+  bill_account_mode: z.enum(['postpaid', 'prepaid']).nullable(),
   type: z.string(),
   bill_start_date: z.string(),
   bill_end_date: z.string().nullable(),
@@ -44,6 +47,12 @@ const billingItemListItemSchema = z.object({
   source_ref: z.string().nullable(),
   currency_mismatch: z.boolean(),
   billed_to_date: z.string().nullable(),
+  /** Part 2: why ending the item credited billed days (`{ kind: 'text' | 'code', … }`). */
+  credit_reason: z.record(z.string(), z.unknown()).nullable().optional(),
+  charge_timing: z.enum(['in_advance', 'in_arrears']),
+  prorate: z.boolean(),
+  tax_rate: z.union([z.string(), z.number()]),
+  price_basis: z.enum(['net', 'gross']),
   is_active: z.boolean(),
   organization_id: z.string().uuid(),
   tenant_id: z.string().uuid(),
@@ -87,6 +96,11 @@ const crud = makeCrudRoute({
       'source_ref',
       'currency_mismatch',
       'billed_to_date',
+      'credit_reason',
+      'charge_timing',
+      'prorate',
+      'tax_rate',
+      'price_basis',
       'is_active',
       'organization_id',
       'tenant_id',
@@ -196,7 +210,7 @@ const crud = makeCrudRoute({
   },
   hooks: {
     // Items reference their account by FK id only; the list + detail UI
-    // wants the human-readable account name. One bounded query
+    // wants the account name, currency and mode. One bounded query
     // (≤ pageSize ids) resolves it after the page is fetched.
     afterList: async (payload: unknown, ctx: unknown) => {
       const items = ((payload as { items?: unknown[] } | null)?.items ?? []) as Array<
@@ -212,11 +226,12 @@ const crud = makeCrudRoute({
       if (accountIds.length === 0) return
       const em = (ctx as { container: AwilixContainer }).container.resolve<EntityManager>('em')
       const accounts = await em.find(BillingAccount, { id: { $in: accountIds } })
-      const nameById = new Map(
-        accounts.map((a) => [String(a.id), a.name] as [string, unknown]),
-      )
+      const byId = new Map(accounts.map((a) => [String(a.id), a] as const))
       for (const row of items) {
-        row.bill_account_name = nameById.get(String(row.bill_account_id)) ?? null
+        const account = byId.get(String(row.bill_account_id))
+        row.bill_account_name = account?.name ?? null
+        row.bill_account_currency = account?.currencyCode ?? null
+        row.bill_account_mode = account?.billingMode ?? null
       }
     },
   },
@@ -238,14 +253,24 @@ export const openApi = createBillingCrudOpenApi({
       'Creates a billing item. Idempotent via `sourceRef`: re-POSTing the same ' +
       '`(tenantId, billAccountId, sourceRef)` returns the existing row with ' +
       '`deduplicated: true` instead of creating a duplicate. The unique index ' +
-      'on `(tenant_id, bill_account_id, source_ref)` is the correctness gate.',
+      'on `(tenant_id, bill_account_id, source_ref)` is the correctness gate. ' +
+      'Recurring items accept `chargeTiming` (`in_advance` default | `in_arrears`) and ' +
+      '`prorate` (default true); other types reject non-default values (400). ' +
+      'An end date more than one day before the start date returns 422 `billing.item.end_before_start` ' +
+      '(`end = start − 1` means cancelled before start; the item never bills).',
   },
   update: {
     schema: billingItemUpdateSchema,
     responseSchema: defaultOkResponseSchema,
     description:
       'Updates a billing item. `type` and `sourceRef` are immutable — to change ' +
-      'either, soft-delete the item and create a new one.',
+      'either, soft-delete the item and create a new one. `chargeTiming` / `prorate` ' +
+      'may change at any time on recurring items — billing resumes from `billed_to_date`, ' +
+      'so no day is billed twice. Moving `billEndDate` before `billed_to_date` on a prorated recurring item credits ' +
+      'the billed days: the request must then carry a customer-facing reason — `creditReason` (operator text, ≤ 500 chars) ' +
+      'or `creditReasonCode` + `creditReasonParams` (generated, rendered in the invoice language) — else 422 ' +
+      '`billing.item.credit_reason_required`. A reason sent when nothing is credited is ignored. ' +
+      '422 `billing.item.end_before_start` when the end date is more than one day before the start.',
   },
   del: {
     schema: z.object({ id: z.string().uuid() }),

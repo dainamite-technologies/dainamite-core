@@ -1,12 +1,12 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
-import { resolveCpqRouteContext, type CpqRouteContext } from '../context'
+import { cpqContextError, resolveCpqRouteContext, type CpqRouteContext } from '../context'
 import { CpqPricingTable, CpqPricingTableEntry } from '../../data/entities'
 import { cpqPricingTableEntryCreateSchema, cpqPricingTableEntryUpdateSchema } from '../../data/validators'
 import { canViewCosts } from '../_helpers/costAccess'
 import { handleArcError } from '../_helpers/handleArcError'
-import { cpqErrorDoc } from '../_helpers/quoteRouteOpenApi'
+import { cpqErrorDoc, cpqPaginationQuery, cpqDeleteByIdBody, cpqSuccessResponseSchema } from '../_helpers/quoteRouteOpenApi'
 
 export const metadata = {
   GET: { requireAuth: true, requireFeatures: ['cpq.pricing.view'] },
@@ -51,7 +51,8 @@ function serializeEntry(e: CpqPricingTableEntry) {
 export async function GET(req: Request) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     const url = new URL(req.url)
     const pricingTableId = url.searchParams.get('pricingTableId')
@@ -89,7 +90,8 @@ export async function GET(req: Request) {
 export async function POST(req: Request) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     const scope = { organizationId: ctx.organizationId, tenantId: ctx.tenantId }
     const rawBody = await req.json()
@@ -129,7 +131,8 @@ export async function POST(req: Request) {
 export async function PUT(req: Request) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     const body = cpqPricingTableEntryUpdateSchema.parse(await req.json())
     const { id, ...rawUpdates } = body
@@ -155,7 +158,8 @@ export async function PUT(req: Request) {
 export async function DELETE(req: Request) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
 
     const { id } = (await req.json()) as { id?: string }
     if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
@@ -187,41 +191,39 @@ const entrySchema = z.object({
 }).passthrough()
 const hidden = 'Entries of a cost table (purpose = cost) require cpq.costs.view; without it every method answers 404.'
 const hiddenError = cpqErrorDoc(404, 'Entry or table not found, or a hidden cost table')
+const internalError = cpqErrorDoc(500, 'Internal error')
 
 export const openApi: OpenApiRouteDoc = {
   tag: 'CPQ Pricing',
+  summary: 'CPQ pricing table entries',
   methods: {
     GET: {
-      summary: 'List the entries of a pricing table',
+      summary: 'List the price rows of a pricing table',
       description: hidden,
-      query: z.object({
-        pricingTableId: z.string().uuid(),
-        page: z.coerce.number().int().min(1).optional(),
-        pageSize: z.coerce.number().int().min(1).max(100).optional(),
-      }),
+      query: cpqPaginationQuery.extend({ pricingTableId: z.string().uuid() }),
       responses: [{ status: 200, description: 'Paged entries', schema: z.object({ items: z.array(entrySchema), total: z.number(), page: z.number(), pageSize: z.number(), totalPages: z.number() }) }],
-      errors: [cpqErrorDoc(400, 'pricingTableId missing or invalid'), hiddenError],
+      errors: [cpqErrorDoc(400, 'pricingTableId is required and must be a valid UUID'), hiddenError, internalError],
     },
     POST: {
-      summary: 'Create one entry, or several from an array body',
-      description: hidden,
+      summary: 'Create one pricing table entry, or several in bulk',
+      description: `Accepts a single entry object (returns the entry) or an array of entries (returns \`{ items }\`). ${hidden}`,
       requestBody: { schema: z.union([cpqPricingTableEntryCreateSchema, z.array(cpqPricingTableEntryCreateSchema)]) },
-      responses: [{ status: 201, description: 'Created entry, or `{ items }` for an array body' }],
-      errors: [cpqErrorDoc(400, 'Validation error'), hiddenError],
+      responses: [{ status: 201, description: 'Created entry, or `{ items }` for a bulk create' }],
+      errors: [cpqErrorDoc(400, 'Validation error'), hiddenError, internalError],
     },
     PUT: {
       summary: 'Update a pricing table entry',
       description: hidden,
       requestBody: { schema: cpqPricingTableEntryUpdateSchema },
       responses: [{ status: 200, description: 'Updated entry', schema: entrySchema }],
-      errors: [cpqErrorDoc(400, 'Validation error'), hiddenError],
+      errors: [cpqErrorDoc(400, 'Validation error or missing id'), hiddenError, internalError],
     },
     DELETE: {
       summary: 'Soft-delete a pricing table entry',
       description: hidden,
-      requestBody: { schema: z.object({ id: z.string().uuid() }) },
-      responses: [{ status: 200, description: 'Deleted', schema: z.object({ success: z.boolean() }) }],
-      errors: [cpqErrorDoc(400, 'Missing id'), hiddenError],
+      requestBody: { schema: cpqDeleteByIdBody },
+      responses: [{ status: 200, description: 'Deleted', schema: cpqSuccessResponseSchema }],
+      errors: [cpqErrorDoc(400, 'Missing id'), hiddenError, internalError],
     },
   },
 }

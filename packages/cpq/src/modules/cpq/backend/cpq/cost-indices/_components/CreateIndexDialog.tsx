@@ -79,7 +79,7 @@ export function CreateIndexDialog({ onClose, onCreated }: Props) {
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>{t('cpq.costIndices.cancel', 'Cancel')}</Button>
-          <Button onClick={() => void submit()} disabled={saving} title="Ctrl/Cmd+Enter" data-testid="cpq-create-index-submit">
+          <Button onClick={() => void submit()} disabled={saving} title={t('cpq.common.submitShortcut', 'Ctrl/Cmd+Enter')} data-testid="cpq-create-index-submit">
             {saving ? t('cpq.costIndices.saving', 'Saving…') : t('cpq.costIndices.create.submit', 'Create')}
           </Button>
         </DialogFooter>

@@ -1,6 +1,7 @@
 'use client'
 
 import React, { useState, useEffect, useCallback } from 'react'
+import { useT } from '@open-mercato/shared/lib/i18n/context'
 import type { WizardStepProps } from '../types'
 import { NumberInput } from '../../components/NumberInput'
 
@@ -43,6 +44,7 @@ function ConfigPanel({
   onChange: (code: string, value: unknown) => void
   onRemove: () => void
 }) {
+  const t = useT()
   const [attributes, setAttributes] = useState<ConstrainedAttribute[]>([])
   const [loading, setLoading] = useState(true)
   const [configVersion, setConfigVersion] = useState(0)
@@ -89,7 +91,7 @@ function ConfigPanel({
     if (attr.attributeType === 'select' || attr.attributeType === 'enum') {
       return (
         <select value={String(value)} onChange={(e) => handleChange(attr.code, e.target.value)} className="w-full rounded-md border px-3 py-2 text-sm">
-          <option value="">Select...</option>
+          <option value="">{t('cpq.wizard.selectPlaceholder', 'Select...')}</option>
           {attr.options?.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
         </select>
       )
@@ -117,12 +119,12 @@ function ConfigPanel({
     <div className="rounded-lg border p-4 space-y-3">
       <div className="flex items-center justify-between border-b pb-2">
         <h4 className="text-sm font-medium">{offering.name}</h4>
-        <button type="button" onClick={onRemove} className="text-xs text-muted-foreground hover:text-foreground">Remove</button>
+        <button type="button" onClick={onRemove} className="text-xs text-muted-foreground hover:text-foreground">{t('cpq.wizard.remove', 'Remove')}</button>
       </div>
       {loading ? (
-        <div className="text-sm text-muted-foreground">Loading attributes...</div>
+        <div className="text-sm text-muted-foreground">{t('cpq.wizard.loadingAttributes', 'Loading attributes...')}</div>
       ) : attributes.length === 0 ? (
-        <div className="text-sm text-muted-foreground">No configurable attributes.</div>
+        <div className="text-sm text-muted-foreground">{t('cpq.wizard.steps.offeringSelect.noAttributes', 'No configurable attributes.')}</div>
       ) : (
         <div className="space-y-3">
           {attributes.map((attr) => (
@@ -150,6 +152,7 @@ function BandwidthIndicator({
   portCapacityMb: number
   items: SelectedItem[]
 }) {
+  const t = useT()
   const totalBandwidth = items.reduce((sum, item) => {
     const bw = Number(item.configuration.bandwidth_mb) || 0
     return sum + bw
@@ -161,9 +164,9 @@ function BandwidthIndicator({
   return (
     <div className="rounded-lg border p-3 space-y-2">
       <div className="flex items-center justify-between text-xs">
-        <span className="font-medium">Bandwidth Utilization</span>
+        <span className="font-medium">{t('cpq.wizard.steps.offeringSelect.bandwidth.title', 'Bandwidth Utilization')}</span>
         <span className={overCapacity ? 'text-destructive font-medium' : 'text-muted-foreground'}>
-          {totalBandwidth} / {portCapacityMb} MB
+          {t('cpq.wizard.steps.offeringSelect.bandwidth.usage', '{used} / {capacity} MB', { used: totalBandwidth, capacity: portCapacityMb })}
         </span>
       </div>
       <div className="h-2 rounded-full bg-muted overflow-hidden">
@@ -174,7 +177,7 @@ function BandwidthIndicator({
       </div>
       {overCapacity && (
         <p className="text-xs text-destructive">
-          Total bandwidth exceeds port capacity by {totalBandwidth - portCapacityMb} MB
+          {t('cpq.wizard.steps.offeringSelect.bandwidth.exceeded', 'Total bandwidth exceeds port capacity by {excess} MB', { excess: totalBandwidth - portCapacityMb })}
         </p>
       )}
     </div>
@@ -186,6 +189,7 @@ function BandwidthIndicator({
 const PORT_SIZE_MB: Record<string, number> = { '1G': 1000, '10G': 10000, '100G': 100000 }
 
 export function OfferingSelectStep({ config, onComplete, onBack, stepData, currentStepId, completedSteps, quoteId, customerId }: WizardStepProps) {
+  const t = useT()
   const [offerings, setOfferings] = useState<Offering[]>([])
   const [selectedItems, setSelectedItems] = useState<SelectedItem[]>([])
   const [loading, setLoading] = useState(true)
@@ -306,7 +310,8 @@ export function OfferingSelectStep({ config, onComplete, onBack, stepData, curre
               const res = await fetch(`/api/cpq/quotes/${activeQuoteId}/items`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ offeringId: item.offering.id, configuration: item.configuration }),
+                // #123: bundles arrive with their default components (ignored for simple offerings).
+                body: JSON.stringify({ offeringId: item.offering.id, configuration: item.configuration, expandBundleDefaults: true }),
               })
               if (res.ok) {
                 const data = await res.json()
@@ -336,7 +341,7 @@ export function OfferingSelectStep({ config, onComplete, onBack, stepData, curre
   }, [selectedItems, enableConfiguration, quoteId, resolvedCustomerId, onComplete])
 
   if (loading) {
-    return <div className="text-sm text-muted-foreground">Loading offerings...</div>
+    return <div className="text-sm text-muted-foreground">{t('cpq.wizard.steps.offeringSelect.loading', 'Loading offerings...')}</div>
   }
 
   // Offerings not yet added
@@ -368,18 +373,18 @@ export function OfferingSelectStep({ config, onComplete, onBack, stepData, curre
             >
               <div className="flex items-center justify-between">
                 <h4 className="text-sm font-medium">{o.name}</h4>
-                {isAdded && <span className="text-xs text-primary font-medium">Added</span>}
+                {isAdded && <span className="text-xs text-primary font-medium">{t('cpq.wizard.steps.offeringSelect.added', 'Added')}</span>}
               </div>
               <p className="text-xs text-muted-foreground mt-1">{o.description || o.code}</p>
               {!isAdded && (
-                <span className="text-xs text-primary mt-2 inline-block">+ Add</span>
+                <span className="text-xs text-primary mt-2 inline-block">{t('cpq.wizard.steps.offeringSelect.add', '+ Add')}</span>
               )}
             </div>
           )
         })}
         {offerings.length === 0 && (
           <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
-            No offerings available.
+            {t('cpq.wizard.steps.offeringSelect.empty', 'No offerings available.')}
           </div>
         )}
       </div>
@@ -392,7 +397,7 @@ export function OfferingSelectStep({ config, onComplete, onBack, stepData, curre
       {/* Configuration panels for selected items */}
       {enableConfiguration && selectedItems.length > 0 && (
         <div className="space-y-3">
-          <h4 className="text-sm font-medium">Selected Services ({selectedItems.length})</h4>
+          <h4 className="text-sm font-medium">{t('cpq.wizard.steps.offeringSelect.selectedServices', 'Selected Services ({count})', { count: selectedItems.length })}</h4>
           {selectedItems.map((item, index) => (
             <ConfigPanel
               key={`${item.offering.id}-${index}`}
@@ -408,11 +413,11 @@ export function OfferingSelectStep({ config, onComplete, onBack, stepData, curre
       {/* No configuration — just show selected list */}
       {!enableConfiguration && selectedItems.length > 0 && (
         <div className="space-y-2">
-          <h4 className="text-sm font-medium">Selected ({selectedItems.length})</h4>
+          <h4 className="text-sm font-medium">{t('cpq.wizard.steps.offeringSelect.selected', 'Selected ({count})', { count: selectedItems.length })}</h4>
           {selectedItems.map((item, index) => (
             <div key={`${item.offering.id}-${index}`} className="flex items-center justify-between rounded-md border p-3">
               <span className="text-sm font-medium">{item.offering.name}</span>
-              <button type="button" onClick={() => removeItem(index)} className="text-xs text-muted-foreground hover:text-foreground">Remove</button>
+              <button type="button" onClick={() => removeItem(index)} className="text-xs text-muted-foreground hover:text-foreground">{t('cpq.wizard.remove', 'Remove')}</button>
             </div>
           ))}
         </div>
@@ -421,7 +426,7 @@ export function OfferingSelectStep({ config, onComplete, onBack, stepData, curre
       <div className="flex gap-2 justify-end pt-2">
         {completedSteps.length > 0 && (
           <button type="button" onClick={onBack} className="inline-flex items-center justify-center rounded-md border px-4 py-2 text-sm font-medium hover:bg-muted">
-            Back
+            {t('cpq.common.back', 'Back')}
           </button>
         )}
         <button
@@ -430,7 +435,7 @@ export function OfferingSelectStep({ config, onComplete, onBack, stepData, curre
           disabled={selectedItems.length === 0 || saving}
           className="inline-flex items-center justify-center rounded-md bg-primary px-5 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          {saving ? 'Saving...' : 'Next'}
+          {saving ? t('cpq.common.saving', 'Saving...') : t('cpq.wizard.next', 'Next')}
         </button>
       </div>
     </div>

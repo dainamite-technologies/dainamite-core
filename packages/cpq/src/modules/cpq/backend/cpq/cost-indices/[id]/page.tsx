@@ -267,7 +267,7 @@ export default function CpqCostIndexDetailPage(props: { params?: { id?: string }
               </IndexField>
               <div className="flex justify-end gap-2">
                 <Button variant="outline" onClick={() => setEditing(false)}>{t('cpq.costIndices.cancel', 'Cancel')}</Button>
-                <Button onClick={saveEdit} disabled={saving} title="Ctrl/Cmd+Enter" data-testid="cpq-cost-index-save">{saving ? t('cpq.costIndices.saving', 'Saving…') : t('cpq.costIndices.actions.save', 'Save')}</Button>
+                <Button onClick={saveEdit} disabled={saving} title={t('cpq.common.submitShortcut', 'Ctrl/Cmd+Enter')} data-testid="cpq-cost-index-save">{saving ? t('cpq.costIndices.saving', 'Saving…') : t('cpq.costIndices.actions.save', 'Save')}</Button>
               </div>
             </div>
           ) : (

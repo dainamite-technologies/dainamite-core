@@ -2,9 +2,17 @@ import { z } from 'zod'
 import { makeCrudRoute } from '@open-mercato/shared/lib/crud/factory'
 import { withScopedPayload } from '@open-mercato/shared/lib/api/scoped'
 import { resolveTranslations } from '@open-mercato/shared/lib/i18n/server'
+import type { EntityManager } from '@mikro-orm/postgresql'
+import type { AwilixContainer } from 'awilix'
 import { BillingAccount } from '../../data/entities'
+import { fetchAccountFinancials, fetchOverdueAccountIds, financialsOrZero } from '../../lib/accountFinancials'
+
+/** A uuid no row has — narrows an `$in` filter to nothing. */
+const NO_MATCH_ID = '00000000-0000-4000-8000-000000000000'
 import { billingEntityIds } from '../../data/entityIds'
+import { DEFAULT_INVOICE_LANGUAGE, INVOICE_LANGUAGE_CODES } from '../../lib/invoiceLanguages'
 import {
+  BILL_CYCLES,
   billingAccountCreateSchema,
   billingAccountListQuerySchema,
   billingAccountUpdateSchema,
@@ -33,10 +41,12 @@ export const metadata = routeMetadata
 const billingAccountListItemSchema = z.object({
   id: z.string().uuid(),
   customer_id: z.string(),
+  customer_kind: z.enum(['company', 'person']),
   name: z.string(),
   currency_code: z.string(),
-  bill_cycle: z.string(),
-  bill_cycle_anchor: z.string(),
+  bill_cycle: z.enum(BILL_CYCLES),
+  bill_cycle_interval: z.number().int(),
+  bill_cycle_day: z.string().nullable(),
   invoice_email: z.string(),
   invoice_language: z.string(),
   tax_id: z.string().nullable(),
@@ -45,6 +55,11 @@ const billingAccountListItemSchema = z.object({
   last_bill_date: z.string().nullable(),
   billing_mode: z.string(),
   credit_limit: z.string(),
+  payment_terms_days: z.number().int().nullable(),
+  auto_send_invoice: z.boolean(),
+  /** Spec F (F8): Σ outstanding of open receivables and its overdue subset (batched per page). */
+  balance_due: z.string(),
+  overdue_amount: z.string(),
   is_active: z.boolean(),
   organization_id: z.string().uuid(),
   tenant_id: z.string().uuid(),
@@ -71,10 +86,12 @@ const crud = makeCrudRoute({
     fields: [
       'id',
       'customer_id',
+      'customer_kind',
       'name',
       'currency_code',
       'bill_cycle',
-      'bill_cycle_anchor',
+      'bill_cycle_interval',
+      'bill_cycle_day',
       'invoice_email',
       'invoice_language',
       'tax_id',
@@ -83,6 +100,8 @@ const crud = makeCrudRoute({
       'last_bill_date',
       'billing_mode',
       'credit_limit',
+      'payment_terms_days',
+      'auto_send_invoice',
       'is_active',
       'organization_id',
       'tenant_id',
@@ -95,15 +114,27 @@ const crud = makeCrudRoute({
       updatedAt: 'updated_at',
       nextBillDate: 'next_bill_date',
     },
-    buildFilters: async (query) => {
+    buildFilters: async (query, ctx) => {
       const filters: Record<string, unknown> = {}
+      // Spec F (F8): accounts with an overdue receivable — one indexed
+      // DISTINCT over billing_invoices, intersected with any `id` filter.
+      if (query.hasOverdue === true && ctx.auth?.tenantId) {
+        const organizationIds = ctx.organizationIds ?? (ctx.selectedOrganizationId ? [ctx.selectedOrganizationId] : [])
+        const em = ctx.container.resolve<EntityManager>('em')
+        const overdueIds = await fetchOverdueAccountIds(em, { tenantId: ctx.auth.tenantId, organizationIds })
+        filters.id = { $in: overdueIds.length > 0 ? overdueIds : [NO_MATCH_ID] }
+      }
       // `?id=<uuid>` narrows the list to one row — the detail page
       // reads a single account through this filter.
       if (typeof query.id === 'string' && query.id) {
-        filters.id = { $eq: query.id }
+        const current = filters.id as { $in?: string[] } | undefined
+        filters.id = current?.$in ? { $in: current.$in.includes(query.id) ? [query.id] : [NO_MATCH_ID] } : { $eq: query.id }
       }
       if (typeof query.customerId === 'string' && query.customerId) {
         filters.customer_id = { $eq: query.customerId }
+      }
+      if (typeof query.customerKind === 'string' && query.customerKind) {
+        filters.customer_kind = { $eq: query.customerKind }
       }
       if (typeof query.currencyCode === 'string' && query.currencyCode) {
         filters.currency_code = { $eq: query.currencyCode.toUpperCase() }
@@ -122,6 +153,30 @@ const crud = makeCrudRoute({
         filters.name = { $ilike: pattern }
       }
       return filters
+    },
+  },
+  hooks: {
+    // Spec F (F8): balance due / overdue per row — one GROUP BY for the page.
+    afterList: async (payload: unknown, ctx: unknown) => {
+      const items = ((payload as { items?: unknown[] } | null)?.items ?? []) as Array<Record<string, unknown>>
+      if (items.length === 0) return
+      const first = items[0]
+      const tenantId = typeof first.tenant_id === 'string' ? first.tenant_id : null
+      const organizationId = typeof first.organization_id === 'string' ? first.organization_id : null
+      const ids = items.map((row) => row.id).filter((id): id is string => typeof id === 'string')
+      const financials =
+        tenantId && organizationId
+          ? await fetchAccountFinancials(
+              (ctx as { container: AwilixContainer }).container.resolve<EntityManager>('em'),
+              { tenantId, organizationId },
+              ids,
+            )
+          : new Map()
+      for (const row of items) {
+        const values = financialsOrZero(financials, String(row.id))
+        row.balance_due = values.balance_due
+        row.overdue_amount = values.overdue_amount
+      }
     },
   },
   actions: {
@@ -182,6 +237,12 @@ const { POST, PUT, DELETE } = crud
 export { POST, PUT, DELETE }
 export const GET = crud.GET
 
+const BILL_CYCLE_DESCRIPTION =
+  'Bill cycle = every `billCycleInterval` (default 1) `billCycle` units (`daily` | `weekly` | `monthly` | `annually`, default `monthly`), ' +
+  'pinned to `billCycleDay`: `1`–`31` for monthly / annually (a day past the end of a short month means its last day), ' +
+  '`mon`–`sun` for weekly, omitted / null for daily. Omitted day → the day `nextBillDate` falls on, else `1` / `mon`. ' +
+  'Omitted `nextBillDate` → the first bill cycle day on or after today (daily: today); an explicit date off the cycle day bills one short alignment period first.'
+
 export const openApi = createBillingCrudOpenApi({
   resourceName: 'BillingAccount',
   pluralName: 'BillingAccounts',
@@ -190,12 +251,19 @@ export const openApi = createBillingCrudOpenApi({
   create: {
     schema: billingAccountCreateSchema,
     responseSchema: defaultCreateResponseSchema,
-    description: 'Creates a new billing account for a customer.',
+    description:
+      'Creates a new billing account for a customer — a company or a person (`customerKind`, default `company`). ' +
+      `\`invoiceLanguage\` must be a language supported by the invoice template (${INVOICE_LANGUAGE_CODES.map((c) => `\`${c}\``).join(', ')}; default \`${DEFAULT_INVOICE_LANGUAGE}\`). ` +
+      BILL_CYCLE_DESCRIPTION,
   },
   update: {
     schema: billingAccountUpdateSchema,
     responseSchema: defaultOkResponseSchema,
-    description: 'Updates a billing account. `currencyCode` and `customerId` are immutable.',
+    description:
+      'Updates a billing account. `currencyCode`, `customerId` and `customerKind` are immutable. ' +
+      'Changing `billCycle`, `billCycleInterval` or `billCycleDay` without an explicit `nextBillDate` moves the next bill date to ' +
+      'the next occurrence of the new bill cycle day; that Bill Run bills one short alignment period (in-advance charges prorated). ' +
+      'An invalid cycle combination returns 400 `billing.account.invalid_bill_cycle`.',
   },
   del: {
     schema: z.object({ id: z.string().uuid() }),

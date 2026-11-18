@@ -521,7 +521,7 @@ describe('change-log snapshot shapes per change type (characterization)', () => 
     const after = result.changeLog.afterSnapshot as Record<string, unknown>
     expect(result.changeLog.changeType).toBe('renew')
     expect(before).toMatchObject({ currentTermStart: '2026-01-01T00:00:00.000Z', currentTermEnd: '2027-01-01T00:00:00.000Z', mrcAmount: '100' })
-    expect(after).toMatchObject({ currentTermStart: '2027-01-01T00:00:00.000Z', currentTermEnd: '2028-01-01T00:00:00.000Z', mrcAmount: '60' })
+    expect(after).toMatchObject({ currentTermStart: '2027-01-01', currentTermEnd: '2028-01-01', mrcAmount: '60' })
     expect(keysOf(after)).toEqual([...SUB_KEYS].sort())
     expect(result.changeLog.termChange).toEqual({
       oldTermStart: '2026-01-01T00:00:00.000Z', newTermStart: '2027-01-01T00:00:00.000Z',

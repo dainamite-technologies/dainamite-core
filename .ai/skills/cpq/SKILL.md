@@ -170,6 +170,9 @@ descriptions. On top of that, every CPQ change ships with:
 - [ ] Status enums extended in `services/types.ts`, never inline
 - [ ] Manuals (`manuals/xd-*.md`) updated if behavior changed
 - [ ] `packages/cpq/MIGRATION.md` updated if a public contract changed
+- [ ] New or changed routes ship with their MCP / AI tool (typed `openApi`,
+      tool in `ai-tools/`, `cpq.quoting_assistant` allowlist, tests); see
+      [`../mcp-tools/SKILL.md`](../mcp-tools/SKILL.md)
 
 ## When to load which sub-skill
 
@@ -259,7 +262,7 @@ cpq.wizards.{view,manage}
 cpq.orders.{view,manage}
 cpq.arc.{amend,renew,cancel}.manage
 cpq.arc.changelog.view
-cpq.inventory.expiring.view
+cpq.inventory.{view,manage}
 ```
 
 When evaluating raw granted features in runtime code, use `hasFeature` /

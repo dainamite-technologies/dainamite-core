@@ -40,7 +40,6 @@ const billRunListItemSchema = z.object({
   parent_run_id: z.string().uuid().nullable(),
   dry_run: z.boolean(),
   test_mode: z.boolean(),
-  catch_up: z.boolean(),
   scoped_account_ids: z.array(z.string().uuid()).nullable(),
   as_of_date: z.string(),
   started_at: z.string().nullable(),
@@ -79,7 +78,6 @@ const crud = makeCrudRoute({
       'parent_run_id',
       'dry_run',
       'test_mode',
-      'catch_up',
       'scoped_account_ids',
       'as_of_date',
       'started_at',
@@ -111,6 +109,14 @@ const crud = makeCrudRoute({
       if (typeof query.status === 'string') filters.status = { $eq: query.status }
       if (typeof query.triggeredBy === 'string') filters.triggered_by = { $eq: query.triggeredBy }
       if (typeof query.parentRunId === 'string') filters.parent_run_id = { $eq: query.parentRunId }
+      if (query.mode === 'real') {
+        filters.dry_run = { $eq: false }
+        filters.test_mode = { $eq: false }
+      } else if (query.mode === 'test') {
+        filters.test_mode = { $eq: true }
+      } else if (query.mode === 'dry') {
+        filters.dry_run = { $eq: true }
+      }
       if (query.asOfDateFrom instanceof Date) {
         filters.as_of_date = Object.assign(
           (filters.as_of_date as Record<string, unknown>) ?? {},
@@ -161,10 +167,12 @@ export const openApi = createBillingCrudOpenApi({
     schema: billingRunTriggerSchema,
     responseSchema: triggerResponseSchema,
     description:
-      'Triggers a Bill Run. `mode=real` (default) persists drafts and ' +
-      'advances state; `mode=test` persists test-flagged drafts without ' +
-      'advancing state; `mode=dry` computes everything in memory and ' +
-      'persists nothing. Returns HTTP 409 (`billing.run.lock_busy`) when ' +
-      'another run is in flight for the same tenant.',
+      'Triggers a Bill Run. Every run bills **all due cycles** up to `asOfDate` — one ' +
+      'draft invoice per bill date (no catch-up flag; a legacy `catchUp` field is ignored). ' +
+      '`mode=real` (default) persists drafts and advances state; `mode=test` persists ' +
+      'test-flagged drafts for every cycle without advancing state; `mode=dry` simulates ' +
+      'every cycle in memory and persists nothing. Per-cycle results are on each outcome\'s ' +
+      '`cycles`. Returns HTTP 409 (`billing.run.lock_busy`) when another run is in flight ' +
+      'for the same tenant.',
   },
 })

@@ -406,6 +406,22 @@ describe('DefaultCpqBundleService.addComponent — validation rules', () => {
     ).rejects.toThrow('V-COMP-5')
   })
 
+  it('V-COMP-5 ignores removed (soft-deleted) components so a child can be added again (#122)', async () => {
+    const { em, service } = makeService()
+    em.findOne.mockResolvedValueOnce({ id: 'o', offeringType: 'bundle', specId: 'spec-1' })
+    em.findOne.mockResolvedValueOnce({ id: 's', specId: 'spec-1', targetSpecId: 'target-spec' })
+    em.findOne.mockResolvedValueOnce({ id: 'c', specId: 'target-spec', offeringType: 'simple' })
+    em.findOne.mockResolvedValueOnce(null) // only a soft-deleted row exists: the live-row check misses
+    em.find.mockResolvedValue([])
+
+    await service.addComponent({ offeringId: 'o', slotId: 's', childOfferingId: 'c' }, SCOPE)
+
+    const duplicateCheck = em.findOne.mock.calls[3][1]
+    expect(duplicateCheck).toMatchObject({ offeringId: 'o', childOfferingId: 'c', deletedAt: null })
+    expect(em.create).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ childOfferingId: 'c' }))
+    expect(em.flush).toHaveBeenCalled()
+  })
+
   it('throws when child offering does not exist', async () => {
     const { em, service } = makeService()
     em.findOne.mockResolvedValueOnce({ id: 'o', offeringType: 'bundle', specId: 'spec-1' })

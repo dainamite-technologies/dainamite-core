@@ -1,62 +1,62 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
-import type { AwilixContainer } from 'awilix'
-import {
-  SalesInvoice,
-  SalesInvoiceLine,
-} from '@open-mercato/core/modules/sales/data/entities'
-import type { SalesDocumentNumberGenerator } from '@open-mercato/core/modules/sales/services/salesDocumentNumberGenerator'
+import { BillingInvoice, BillingInvoiceLine } from '../data/entities'
 import type { BillingAccount, BillingItem } from '../data/entities'
 import type { BillPeriod } from './billPeriod'
-import {
-  __resetInvoiceStatusCacheForTests,
-  resolveInvoiceStatusEntryId,
-} from './invoiceStatus'
+import type { RecurringLine } from './servicePeriods'
+import { draftNumber, testNumber } from './numbering'
+import { sumTotals } from './vat'
+import { lineVat, priceBasisOf, unitPriceNetOf, type PriceBasis } from './lineAmounts'
+import { parseCreditReason } from './creditReason'
 
 /**
- * Writes a `core/sales` draft invoice for a billing account's bill period.
+ * Writes a billing-owned draft invoice (`billing_invoices` +
+ * `billing_invoice_lines`) for one bill date of an account — Spec 0: billing
+ * no longer records anything in core `sales`.
  *
- * Two notable deviations from the spec, documented in CHANGELOG / spec:
- *
- *   1. `SalesInvoice.invoice_number` is `NOT NULL` in the upstream
- *      schema, but the spec says "sequence number assigned at Post."
- *      Real-mode invoices get a real number via
- *      `salesDocumentNumberGenerator.generate({ kind: 'invoice' })` at
- *      *draft create time* — the spec's intent (gap-free numbering via
- *      atomic SQL upsert) is preserved; the timing differs because the
- *      upstream column is `NOT NULL`. "Post" then just transitions
- *      status `draft → posted`.
- *
- *   2. Test-mode invoices use a `TEST-<uuid>` placeholder number (not
- *      the real sequence) so test runs do not burn production numbers
- *      and can be repeated idempotently.
- *
- * VAT is NOT computed here — `core/sales`'s tax service owns the
- * per-line `tax_rate` / `tax_amount` calculation, and runs on POST.
- * Drafts therefore carry zeroes in the tax columns; the totals reflect
- * net amounts only.
+ *   - Real drafts get a temporary `DRAFT-…` number; the series number is
+ *     claimed only at post (gap-free numbering — no number is burnt by a
+ *     deleted draft).
+ *   - Test drafts get `TEST-…` and `test_run = true`; they are never posted.
+ *   - Spec B (B-D2): every line carries its item's VAT rate; tax is rounded
+ *     per line (half-up, 2 dp) and totals are sums of the rounded lines.
+ *   - Spec F (F-D2): line amounts are on the item's `price_basis`; net / tax
+ *     / gross come from `lineVat`, so a typed gross is reproduced exactly.
  */
 
 export type WriteMode = 'real' | 'test' | 'dry'
 
 export type InvoiceLineDescriptor = {
-  /** Maps to billing_item_id on the resulting SalesInvoiceLine.metadata. */
+  /** Maps to `billing_invoice_lines.billing_item_id`. */
   billingItemId: string
   /** From the spec's `metadata.billing_type` for traceability. */
   billingType: 'one_time' | 'recurring' | 'usage'
   description: string
-  /** Net unit price (numeric string for SalesInvoiceLine.unit_price_net). */
-  unitPriceNet: string
+  /** Unit price on `priceBasis` (numeric string). The writer derives `unit_price_net`. */
+  unitPrice: string
   /** Quantity (string for the numeric(18,4) column). */
   quantity: string
-  /** Total net (string). */
-  totalNetAmount: string
+  /** Extended line amount on `priceBasis` (unit × quantity × proration). */
+  lineAmount: string
+  /** Spec F: the basis `unitPrice` / `lineAmount` are on (the item's `price_basis`). */
+  priceBasis: PriceBasis
+  /** Spec B: VAT rate in percent (numeric string), from the item. */
+  taxRate: string
   /** Optional per-line metadata extension — e.g. usage tier breakdown. */
   metadataExtra?: Record<string, unknown>
+  /**
+   * Spec A: inclusive service period the line covers (recurring + usage).
+   * Written to line metadata and used for the invoice's display period.
+   */
+  servicePeriodStart?: Date
+  servicePeriodEnd?: Date
 }
 
 export type WriteInvoiceParams = {
   mode: WriteMode
   account: BillingAccount
+  /** Spec A: the bill date this invoice is for — the dedupe key. */
+  billDate: Date
+  /** Display period: min/max of the line service periods (see `displayPeriod`). */
   period: BillPeriod
   billRunId: string
   lines: InvoiceLineDescriptor[]
@@ -66,148 +66,105 @@ export type WrittenInvoice = {
   invoiceId: string | null
   invoiceNumber: string | null
   totalNet: string
+  totalGross: string
 }
 
-const DRAFT_INVOICE_STATUS_VALUE = 'draft'
+/** @deprecated kept for test-suite compatibility; the writer has no cache any more. */
+export function __resetInvoiceWriterCacheForTests(): void {}
 
-/**
- * Test hook — clears the shared resolver's status cache so the engine
- * test suite stays deterministic across mocked-EM environments.
- */
-export function __resetInvoiceWriterCacheForTests(): void {
-  __resetInvoiceStatusCacheForTests()
-}
-
-function generateTestInvoiceNumber(): string {
-  // Match the pattern operators search by: `TEST-` prefix + random
-  // suffix so the test wipe-out endpoint can filter via `LIKE 'TEST-%'`
-  // (defensive — primary filter is `metadata.test_run=true`).
-  const random = Math.floor(Math.random() * 1e9)
-    .toString(16)
-    .padStart(8, '0')
-  return `TEST-${Date.now().toString(16)}-${random}`
-}
-
-/**
- * 2dp half-up rounding that survives binary floating-point edge cases
- * (e.g. `1.005 * 100 === 100.49999...` would otherwise round DOWN to
- * `1.00` under naive `Math.round`). The `+ EPSILON` nudge pushes
- * representations like 100.4999...8 up to the true half-up boundary.
- * Matches the spec's "2 decimal places, half-up" rounding policy.
- */
+/** 2dp half-up rounding (survives 1.005-style binary edges). */
 function roundHalfUp2dp(value: number): number {
-  return Math.round((value + Number.EPSILON) * 100) / 100
+  const sign = value < 0 ? -1 : 1
+  return (sign * Math.round((Math.abs(value) + Number.EPSILON) * 100)) / 100
 }
 
 function format4dp(value: number): string {
   return roundHalfUp2dp(value).toFixed(4)
 }
 
-function sumNetTotal(lines: InvoiceLineDescriptor[]): string {
-  let total = 0
-  for (const line of lines) {
-    total += Number.parseFloat(line.totalNetAmount)
-  }
-  return format4dp(total)
+/** VAT rate of an item as a numeric string; items predating Spec B read as 0. */
+export function itemTaxRate(item: Pick<BillingItem, 'taxRate'>): string {
+  const rate = Number.parseFloat(String(item.taxRate ?? '0'))
+  return Number.isFinite(rate) && rate >= 0 ? String(rate) : '0'
+}
+
+function isoDate(date: Date): string {
+  return new Date(date).toISOString().slice(0, 10)
 }
 
 export async function writeDraftInvoice(
   em: EntityManager,
-  container: AwilixContainer,
   params: WriteInvoiceParams,
 ): Promise<WrittenInvoice> {
-  const totalNet = sumNetTotal(params.lines)
+  const amounts = params.lines.map((line) =>
+    lineVat({ amount: line.lineAmount, priceBasis: line.priceBasis, taxRate: line.taxRate }),
+  )
+  const totals = sumTotals(amounts)
 
   if (params.mode === 'dry') {
     // Compute totals; persist nothing.
-    return { invoiceId: null, invoiceNumber: null, totalNet }
+    return { invoiceId: null, invoiceNumber: null, totalNet: totals.subtotalNet, totalGross: totals.totalGross }
   }
 
   const { account, period, billRunId, lines, mode } = params
-
-  let invoiceNumber: string
-  if (mode === 'test') {
-    invoiceNumber = generateTestInvoiceNumber()
-  } else {
-    const numberGenerator = container.resolve(
-      'salesDocumentNumberGenerator',
-    ) as SalesDocumentNumberGenerator
-    const generated = await numberGenerator.generate({
-      organizationId: account.organizationId,
-      tenantId: account.tenantId,
-      kind: 'invoice',
-    })
-    invoiceNumber = generated.number
-  }
-
-  const statusEntryId = await resolveInvoiceStatusEntryId(
-    em,
-    account.tenantId,
-    account.organizationId,
-    'draft',
-  )
-
+  const invoiceNumber = mode === 'test' ? testNumber() : draftNumber()
   const now = new Date()
-  const invoice = em.create(SalesInvoice, {
+
+  const invoice = em.create(BillingInvoice, {
     organizationId: account.organizationId,
     tenantId: account.tenantId,
-    invoiceNumber,
-    statusEntryId,
-    status: DRAFT_INVOICE_STATUS_VALUE,
-    issueDate: now,
+    billAccountId: account.id,
+    documentType: 'invoice',
+    number: invoiceNumber,
+    series: null,
+    status: 'draft',
+    testRun: mode === 'test',
+    billRunId,
+    billDate: params.billDate,
+    periodStart: period.periodStart,
+    periodEnd: period.periodEnd,
     currencyCode: account.currencyCode,
-    subtotalNetAmount: totalNet,
-    subtotalGrossAmount: totalNet, // gross == net for drafts (tax computed on post)
-    discountTotalAmount: '0',
-    taxTotalAmount: '0',
-    grandTotalNetAmount: totalNet,
-    grandTotalGrossAmount: totalNet,
-    paidTotalAmount: '0',
-    outstandingAmount: totalNet,
-    metadata: {
-      bill_run_id: billRunId,
-      bill_account_id: account.id,
-      bill_period_start: period.periodStart.toISOString().slice(0, 10),
-      bill_period_end: period.periodEnd.toISOString().slice(0, 10),
-      test_run: mode === 'test' ? true : undefined,
-    },
+    subtotalNet: totals.subtotalNet,
+    taxTotal: totals.taxTotal,
+    totalGross: totals.totalGross,
+    paidTotal: '0',
+    creditedTotal: '0',
+    outstanding: totals.totalGross,
     createdAt: now,
     updatedAt: now,
   })
   em.persist(invoice)
+  await em.flush() // need the invoice id for the lines
 
-  let lineNumber = 1
-  for (const line of lines) {
-    const invoiceLine = em.create(SalesInvoiceLine, {
-      invoice,
-      organizationId: account.organizationId,
-      tenantId: account.tenantId,
-      lineNumber: lineNumber++,
-      kind: 'product',
-      description: line.description,
-      quantity: line.quantity,
-      normalizedQuantity: line.quantity,
-      currencyCode: account.currencyCode,
-      unitPriceNet: line.unitPriceNet,
-      unitPriceGross: line.unitPriceNet, // gross == net until tax computed on post
-      discountAmount: '0',
-      discountPercent: '0',
-      taxRate: '0',
-      taxAmount: '0',
-      totalNetAmount: line.totalNetAmount,
-      totalGrossAmount: line.totalNetAmount,
-      metadata: {
-        billing_item_id: line.billingItemId,
-        billing_type: line.billingType,
-        ...(line.metadataExtra ?? {}),
-      },
-    })
-    em.persist(invoiceLine)
-  }
-
+  lines.forEach((line, index) => {
+    const amount = amounts[index]
+    em.persist(
+      em.create(BillingInvoiceLine, {
+        organizationId: account.organizationId,
+        tenantId: account.tenantId,
+        invoiceId: invoice.id,
+        lineNumber: index + 1,
+        billingItemId: line.billingItemId,
+        billingType: line.billingType,
+        description: line.description,
+        quantity: line.quantity,
+        unitPriceNet:
+          line.priceBasis === 'gross' ? unitPriceNetOf(line.unitPrice, 'gross', line.taxRate) : line.unitPrice,
+        taxRate: line.taxRate,
+        netAmount: format4dp(amount.net),
+        taxAmount: format4dp(amount.tax),
+        grossAmount: format4dp(amount.gross),
+        servicePeriodStart: line.servicePeriodStart ?? null,
+        servicePeriodEnd: line.servicePeriodEnd ?? null,
+        metadata: line.metadataExtra ?? null,
+        createdAt: now,
+        updatedAt: now,
+      }),
+    )
+  })
   await em.flush()
 
-  return { invoiceId: invoice.id, invoiceNumber, totalNet }
+  return { invoiceId: invoice.id, invoiceNumber, totalNet: totals.subtotalNet, totalGross: totals.totalGross }
 }
 
 /**
@@ -238,9 +195,11 @@ export function buildInvoiceLinesFromItems(
         billingItemId: item.id,
         billingType: 'one_time',
         description: item.description,
-        unitPriceNet: amount,
+        unitPrice: amount,
         quantity: '1',
-        totalNetAmount: amount,
+        lineAmount: amount,
+        priceBasis: priceBasisOf(item.priceBasis),
+        taxRate: itemTaxRate(item),
       })
     } else if (item.type === 'recurring') {
       const rate = item.rateJson as { unit_price?: number } | null
@@ -250,11 +209,72 @@ export function buildInvoiceLinesFromItems(
         billingItemId: item.id,
         billingType: 'recurring',
         description: item.description,
-        unitPriceNet: unitPrice,
+        unitPrice,
         quantity: '1',
-        totalNetAmount: unitPrice,
+        lineAmount: unitPrice,
+        priceBasis: priceBasisOf(item.priceBasis),
+        taxRate: itemTaxRate(item),
       })
     }
   }
   return lines
+}
+
+/**
+ * Display period of an invoice: min start / max end over the lines' service
+ * periods, falling back to `fallback` (the arrears window) when no line
+ * carries one (e.g. a one_time-only invoice).
+ */
+export function displayPeriod(lines: readonly InvoiceLineDescriptor[], fallback: BillPeriod): BillPeriod {
+  let start: Date | null = null
+  let end: Date | null = null
+  for (const line of lines) {
+    if (line.servicePeriodStart && (!start || line.servicePeriodStart < start)) start = line.servicePeriodStart
+    if (line.servicePeriodEnd && (!end || line.servicePeriodEnd > end)) end = line.servicePeriodEnd
+  }
+  return { periodStart: start ?? fallback.periodStart, periodEnd: end ?? fallback.periodEnd }
+}
+
+/**
+ * Spec A: invoice lines for computed recurring service periods (charges and
+ * credits). Full-period charges keep the bare item description; partial
+ * periods and credits append the covered dates so the line is
+ * self-explanatory on any document (language-neutral — the PDF renders
+ * localized labels later).
+ */
+export function buildRecurringLineDescriptors(
+  item: Pick<BillingItem, 'id' | 'description' | 'chargeTiming' | 'taxRate' | 'priceBasis'> &
+    Partial<Pick<BillingItem, 'creditReason'>>,
+  lines: readonly RecurringLine[],
+): InvoiceLineDescriptor[] {
+  // Part 2 (D8): the customer-facing reason travels with the credit lines,
+  // frozen into line metadata at bill time.
+  const creditReason = parseCreditReason(item.creditReason ?? null)
+  return lines.map((line) => {
+    const amount = format4dp(line.amount)
+    const dated = line.proration !== null || line.kind === 'credit'
+    return {
+      billingItemId: item.id,
+      billingType: 'recurring' as const,
+      description: dated
+        ? `${item.description} · ${isoDate(line.servicePeriodStart)} – ${isoDate(line.servicePeriodEnd)}`
+        : item.description,
+      unitPrice: amount,
+      quantity: '1',
+      lineAmount: amount,
+      // Proration and credit lines inherit the item's rate (Spec B) and basis (Spec F).
+      priceBasis: priceBasisOf(item.priceBasis),
+      taxRate: itemTaxRate(item),
+      servicePeriodStart: line.servicePeriodStart,
+      servicePeriodEnd: line.servicePeriodEnd,
+      metadataExtra: {
+        charge_timing: item.chargeTiming,
+        ...(line.proration
+          ? { proration: { active_days: line.proration.activeDays, period_days: line.proration.periodDays } }
+          : {}),
+        ...(line.kind === 'credit' ? { credit_for: item.id } : {}),
+        ...(line.kind === 'credit' && creditReason ? { credit_reason: creditReason } : {}),
+      },
+    }
+  })
 }

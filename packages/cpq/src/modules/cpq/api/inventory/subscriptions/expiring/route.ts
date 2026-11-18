@@ -1,8 +1,10 @@
 import { NextResponse } from 'next/server'
-import { resolveCpqRouteContext } from '../../../context'
+import { cpqContextError, resolveCpqRouteContext } from '../../../context'
 import { cpqExpiringSubscriptionsQuerySchema } from '../../../../data/validators'
 import type { DefaultCpqInventoryService } from '../../../../services/cpqInventoryService'
 import { handleArcError } from '../../../_helpers/handleArcError'
+import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
+import { cpqErrorDoc } from '../../../_helpers/quoteRouteOpenApi'
 
 /**
  * GET /api/cpq/inventory/subscriptions/expiring
@@ -11,13 +13,14 @@ import { handleArcError } from '../../../_helpers/handleArcError'
  * `withinDays` days. Drives the operator's renewal triage view.
  */
 export const metadata = {
-  GET: { requireAuth: true, requireFeatures: ['cpq.inventory.expiring.view'] },
+  GET: { requireAuth: true, requireFeatures: ['cpq.inventory.view'] },
 }
 
 export async function GET(req: Request) {
   try {
     const ctx = await resolveCpqRouteContext(req)
-    if (!ctx.auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const contextError = cpqContextError(ctx)
+    if (contextError) return contextError
     const url = new URL(req.url)
     const query = cpqExpiringSubscriptionsQuerySchema.parse({
       withinDays: url.searchParams.get('withinDays') ?? undefined,
@@ -36,31 +39,16 @@ export async function GET(req: Request) {
   }
 }
 
-export const openApi = {
-  '/api/cpq/inventory/subscriptions/expiring': {
-    parameters: [
-      {
-        name: 'withinDays',
-        in: 'query',
-        schema: { type: 'integer', minimum: 1, maximum: 365, default: 30 },
-      },
-      { name: 'customerId', in: 'query', schema: { type: 'string', format: 'uuid' } },
-      {
-        name: 'billingCycle',
-        in: 'query',
-        schema: { type: 'string', enum: ['monthly', 'quarterly', 'annually'] },
-      },
-      { name: 'status', in: 'query', schema: { type: 'string', default: 'active' } },
-      { name: 'page', in: 'query', schema: { type: 'integer', minimum: 1, default: 1 } },
-      { name: 'pageSize', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100 } },
-    ],
-    get: {
-      tags: ['CPQ ARC'],
-      summary: 'List subscriptions expiring within N days',
-      responses: {
-        '200': { description: 'Paginated subscriptions' },
-        '401': { description: 'Unauthorized' },
-      },
+export const openApi: OpenApiRouteDoc = {
+  tag: 'CPQ ARC',
+  summary: 'CPQ expiring subscriptions',
+  methods: {
+    GET: {
+      summary: 'List subscriptions whose current term ends within N days',
+      description: 'Drives renewal triage. Defaults: `withinDays=30`, `status=active`.',
+      query: cpqExpiringSubscriptionsQuerySchema,
+      responses: [{ status: 200, description: 'Paginated subscriptions' }],
+      errors: [cpqErrorDoc(400, 'Validation error'), cpqErrorDoc(500, 'Internal error')],
     },
   },
 }

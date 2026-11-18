@@ -84,9 +84,9 @@ const adjustTransactionCommand: CommandHandler<BillingTransactionAdjustInput, Ad
     })
     const threshold = resolveLowBalanceThreshold(
       balanceRow?.lowBalanceThreshold ?? null,
-      await getLowBalanceThresholdDefault(em),
+      await getLowBalanceThresholdDefault(em, { tenantId: account.tenantId, organizationId: account.organizationId }),
     )
-    const nearLimitBuffer = await getNearLimitBufferDefault(em)
+    const nearLimitBuffer = await getNearLimitBufferDefault(em, { tenantId: account.tenantId, organizationId: account.organizationId })
     const userId = (ctx.auth?.sub as string | undefined) ?? null
 
     const outcome = await em.transactional(async (tem) =>

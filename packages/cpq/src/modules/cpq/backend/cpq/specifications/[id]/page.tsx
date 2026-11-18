@@ -300,7 +300,7 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
         // Load spec detail with nested data
         const res = await fetch(`/api/cpq/product-specifications?id=${encodeURIComponent(specId)}`)
         if (!res.ok) {
-          if (!cancelled) setError('Failed to load specification')
+          if (!cancelled) setError(t('cpq.specifications.detail.error.load', 'Failed to load specification'))
           return
         }
 
@@ -325,7 +325,7 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
         }
       } catch (err) {
         console.error('Failed to load', err)
-        if (!cancelled) setError('Failed to load')
+        if (!cancelled) setError(t('cpq.specifications.detail.error.loadGeneric', 'Failed to load'))
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -354,7 +354,7 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
 
       if (!res.ok) {
         const d = await res.json()
-        setError(d.error ?? 'Failed to save')
+        setError(d.error ?? t('cpq.specifications.detail.error.save', 'Failed to save'))
         return
       }
 
@@ -379,7 +379,7 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
         setGeneralMode('view')
       }
     } catch {
-      setError('Failed to save')
+      setError(t('cpq.specifications.detail.error.save', 'Failed to save'))
     } finally {
       setSaving(false)
     }
@@ -397,10 +397,10 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
         router.push('/backend/cpq/specifications')
       } else {
         const d = await res.json()
-        setError(d.error ?? 'Failed to delete')
+        setError(d.error ?? t('cpq.specifications.detail.error.delete', 'Failed to delete'))
       }
     } catch {
-      setError('Failed to delete')
+      setError(t('cpq.specifications.detail.error.delete', 'Failed to delete'))
     }
   }
 
@@ -438,7 +438,7 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
       })
       if (!res.ok) {
         const d = await res.json()
-        setError(d.error ?? 'Failed to save attribute')
+        setError(d.error ?? t('cpq.specifications.attributes.error.save', 'Failed to save attribute'))
         return
       }
       const saved = await res.json()
@@ -449,14 +449,14 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
       }
       setEditingAttr(null)
     } catch {
-      setError('Failed to save attribute')
+      setError(t('cpq.specifications.attributes.error.save', 'Failed to save attribute'))
     } finally {
       setSaving(false)
     }
   }
 
   const deleteAttribute = async (attrId: string) => {
-    if (!confirm('Delete this attribute?')) return
+    if (!confirm(t('cpq.specifications.attributes.confirmDelete', 'Delete this attribute?'))) return
     try {
       const res = await fetch('/api/cpq/product-attributes', {
         method: 'DELETE',
@@ -465,7 +465,7 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
       })
       if (res.ok) setAttributes((prev) => prev.filter((a) => a.id !== attrId))
     } catch {
-      setError('Failed to delete attribute')
+      setError(t('cpq.specifications.attributes.error.delete', 'Failed to delete attribute'))
     }
   }
 
@@ -490,8 +490,11 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
     setError(null)
     try {
       const isEdit = !!editingOffering.id
+      // The offering type always follows this specification's type (V-OFF-7).
+      // On create the server derives it, so the client never sends one.
+      const { offeringType: _derivedType, ...offeringWithoutType } = editingOffering
       const payload = {
-        ...editingOffering,
+        ...(isEdit ? editingOffering : offeringWithoutType),
         designTimeValues: editingDtValues,
         specId,
       }
@@ -502,7 +505,7 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
       })
       if (!res.ok) {
         const d = await res.json()
-        setError(d.error ?? 'Failed to save offering')
+        setError(d.error ?? t('cpq.specifications.offerings.error.save', 'Failed to save offering'))
         return
       }
       const saved = await res.json()
@@ -513,14 +516,14 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
       }
       setEditingOffering(null)
     } catch {
-      setError('Failed to save offering')
+      setError(t('cpq.specifications.offerings.error.save', 'Failed to save offering'))
     } finally {
       setSaving(false)
     }
   }
 
   const deleteOffering = async (offeringId: string) => {
-    if (!confirm('Delete this offering?')) return
+    if (!confirm(t('cpq.specifications.offerings.confirmDelete', 'Delete this offering?'))) return
     try {
       const res = await fetch('/api/cpq/product-offerings', {
         method: 'DELETE',
@@ -529,12 +532,12 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
       })
       if (res.ok) setOfferings((prev) => prev.filter((o) => o.id !== offeringId))
     } catch {
-      setError('Failed to delete offering')
+      setError(t('cpq.specifications.offerings.error.delete', 'Failed to delete offering'))
     }
   }
 
   const startEditOffering = (offering?: Offering) => {
-    const editing = offering ? { ...offering } : { ...EMPTY_OFFERING }
+    const editing = offering ? { ...offering } : { ...EMPTY_OFFERING, offeringType: form.specType === 'bundle' ? 'bundle' : 'simple' }
     setEditingOffering(editing)
     setEditingDtValues(editing.designTimeValues ? { ...editing.designTimeValues } : {})
   }
@@ -623,21 +626,21 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
         })
         if (!res.ok) {
           const d = await res.json()
-          setError(d.error ?? `Failed to save charge for ${offering.name}`)
+          setError(d.error ?? t('cpq.specifications.charges.error.saveFor', 'Failed to save charge for {name}', { name: offering.name }))
           break
         }
       }
       setChargeFormOpen(false)
       await loadAllOfferingCharges()
     } catch {
-      setError('Failed to save charges')
+      setError(t('cpq.specifications.charges.error.saveAll', 'Failed to save charges'))
     } finally {
       setSaving(false)
     }
   }
 
   const deleteCharge = async (offeringId: string, chargeId: string) => {
-    if (!confirm('Delete this charge?')) return
+    if (!confirm(t('cpq.specifications.charges.confirmDelete', 'Delete this charge?'))) return
     try {
       const res = await fetch('/api/cpq/product-charges', {
         method: 'DELETE',
@@ -651,7 +654,7 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
         }))
       }
     } catch {
-      setError('Failed to delete charge')
+      setError(t('cpq.specifications.charges.error.delete', 'Failed to delete charge'))
     }
   }
 
@@ -682,7 +685,7 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
       })
       if (!res.ok) {
         const d = await res.json()
-        setError(d.error ?? 'Failed to save relationship')
+        setError(d.error ?? t('cpq.specifications.relationships.error.save', 'Failed to save relationship'))
         return
       }
       const saved = await res.json()
@@ -693,14 +696,14 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
       }
       setEditingRel(null)
     } catch {
-      setError('Failed to save relationship')
+      setError(t('cpq.specifications.relationships.error.save', 'Failed to save relationship'))
     } finally {
       setSaving(false)
     }
   }
 
   const deleteRelationship = async (relId: string) => {
-    if (!confirm('Delete this relationship?')) return
+    if (!confirm(t('cpq.specifications.relationships.confirmDelete', 'Delete this relationship?'))) return
     try {
       const res = await fetch('/api/cpq/product-relationships', {
         method: 'DELETE',
@@ -709,7 +712,7 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
       })
       if (res.ok) setRelationships((prev) => prev.filter((r) => r.id !== relId))
     } catch {
-      setError('Failed to delete relationship')
+      setError(t('cpq.specifications.relationships.error.delete', 'Failed to delete relationship'))
     }
   }
 
@@ -726,7 +729,7 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
   // ─── Render ─────────────────────────────────────────────────
 
   if (loading) {
-    return <div className="text-sm text-muted-foreground">{t('common.loading', 'Loading...')}</div>
+    return <div className="text-sm text-muted-foreground">{t('cpq.common.loading', 'Loading...')}</div>
   }
 
   const designTimeAttrs = attributes.filter((a) => a.resolutionTime === 'design_time')
@@ -740,7 +743,7 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
             onClick={() => router.push('/backend/cpq/specifications')}
             className="text-sm text-muted-foreground hover:text-foreground"
           >
-            ← {t('common.back', 'Back')}
+            ← {t('cpq.common.back', 'Back')}
           </button>
           <h1 className="text-2xl font-bold">
             {isNew ? t('cpq.specifications.new', 'New Specification') : form.name}
@@ -764,11 +767,11 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                   setGeneralMode('edit')
                 }}
               >
-                {t('common.edit', 'Edit')}
+                {t('cpq.common.edit', 'Edit')}
               </Button>
             )}
             <Button type="button" variant="destructive" onClick={deleteSpec}>
-              {t('common.delete', 'Delete')}
+              {t('cpq.common.delete', 'Delete')}
             </Button>
           </div>
         )}
@@ -795,11 +798,11 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                 tab === t_ ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'
               }`}
             >
-              {t_ === 'general' && 'General'}
-              {t_ === 'attributes' && `Attributes (${attributes.length})`}
-              {t_ === 'offerings' && `Offerings (${offerings.length})`}
-              {t_ === 'relationships' && `Relationships (${relationships.length})`}
-              {t_ === 'slots' && `Bundle Slots (${bundleSlots.length})`}
+              {t_ === 'general' && t('cpq.specifications.detail.tabs.general', 'General')}
+              {t_ === 'attributes' && t('cpq.specifications.detail.tabs.attributes', 'Attributes ({count})', { count: attributes.length })}
+              {t_ === 'offerings' && t('cpq.specifications.detail.tabs.offerings', 'Offerings ({count})', { count: offerings.length })}
+              {t_ === 'relationships' && t('cpq.specifications.detail.tabs.relationships', 'Relationships ({count})', { count: relationships.length })}
+              {t_ === 'slots' && t('cpq.specifications.detail.tabs.slots', 'Bundle Slots ({count})', { count: bundleSlots.length })}
             </button>
           ))}
         </div>
@@ -824,7 +827,7 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                   type="text"
                   value={form.code}
                   onChange={(e) => setForm({ ...form, code: e.target.value })}
-                  placeholder="e.g. gix-access-port"
+                  placeholder={t('cpq.specifications.detail.codePlaceholder', 'e.g. gix-access-port')}
                   className="w-full rounded-md border px-3 py-2 text-sm"
                 />
               )}
@@ -856,9 +859,9 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                   onChange={(e) => setForm({ ...form, lifecycleStatus: e.target.value })}
                   className="w-full rounded-md border px-3 py-2 text-sm"
                 >
-                  <option value="draft">Draft</option>
-                  <option value="active">Active</option>
-                  <option value="deprecated">Deprecated</option>
+                  <option value="draft">{t('cpq.specifications.lifecycle.draft', 'Draft')}</option>
+                  <option value="active">{t('cpq.specifications.lifecycle.active', 'Active')}</option>
+                  <option value="deprecated">{t('cpq.specifications.lifecycle.deprecated', 'Deprecated')}</option>
                 </select>
               )}
             </div>
@@ -867,7 +870,7 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
               <div className="flex items-center h-[38px]">
                 {isViewing ? (
                   <Tag variant={form.isActive ? 'success' : 'neutral'} dot>
-                    {form.isActive ? t('common.yes', 'Yes') : t('common.no', 'No')}
+                    {form.isActive ? t('cpq.common.yes', 'Yes') : t('cpq.common.no', 'No')}
                   </Tag>
                 ) : (
                   <input
@@ -880,9 +883,9 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
               </div>
             </div>
             <div>
-              <label className="block text-sm font-medium mb-1">Spec Type</label>
+              <label className="block text-sm font-medium mb-1">{t('cpq.specifications.detail.specType', 'Spec Type')}</label>
               {isViewing ? (
-                <p className="text-sm py-2">{form.specType === 'bundle' ? 'Bundle' : 'Simple'}</p>
+                <p className="text-sm py-2">{form.specType === 'bundle' ? t('cpq.specifications.type.bundle', 'Bundle') : t('cpq.specifications.type.simple', 'Simple')}</p>
               ) : (
                 <>
                   <select
@@ -891,21 +894,21 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                     disabled={specTypeLocked}
                     className="w-full rounded-md border px-3 py-2 text-sm disabled:opacity-50"
                   >
-                    <option value="simple">Simple</option>
-                    <option value="bundle">Bundle</option>
+                    <option value="simple">{t('cpq.specifications.type.simple', 'Simple')}</option>
+                    <option value="bundle">{t('cpq.specifications.type.bundle', 'Bundle')}</option>
                   </select>
                   {specTypeLocked && (
-                    <p className="text-xs text-muted-foreground mt-1">Cannot change after offerings or slots exist</p>
+                    <p className="text-xs text-muted-foreground mt-1">{t('cpq.specifications.detail.specTypeLocked', 'Cannot change after offerings or slots exist')}</p>
                   )}
                 </>
               )}
             </div>
             <div>
-              <label className="block text-sm font-medium mb-1">Is Assetizable?</label>
+              <label className="block text-sm font-medium mb-1">{t('cpq.specifications.detail.isAssetizable', 'Is Assetizable?')}</label>
               <div className="flex items-center h-[38px]">
                 {isViewing ? (
                   <Tag variant={form.isAssetizable ? 'warning' : 'neutral'} dot>
-                    {form.isAssetizable ? t('common.yes', 'Yes') : t('common.no', 'No')}
+                    {form.isAssetizable ? t('cpq.common.yes', 'Yes') : t('cpq.common.no', 'No')}
                   </Tag>
                 ) : (
                   <>
@@ -915,7 +918,7 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                       onChange={(e) => setForm({ ...form, isAssetizable: e.target.checked })}
                       className="rounded border"
                     />
-                    <span className="ml-2 text-xs text-muted-foreground">Creates asset records during fulfilment</span>
+                    <span className="ml-2 text-xs text-muted-foreground">{t('cpq.specifications.detail.isAssetizableHelp', 'Creates asset records during fulfilment')}</span>
                   </>
                 )}
               </div>
@@ -935,7 +938,7 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
             )}
           </div>
           {!isNew && (
-            <span className="text-xs text-muted-foreground">Version {form.version}</span>
+            <span className="text-xs text-muted-foreground">{t('cpq.specifications.detail.versionLabel', 'Version {version}', { version: form.version })}</span>
           )}
           {/* In view mode the Edit button lives in the page header next to
               Delete (OM standard). Here we only render the Save/Cancel
@@ -947,7 +950,7 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                 onClick={saveSpec}
                 disabled={saving || !form.code || !form.name}
               >
-                {saving ? t('common.saving', 'Saving...') : t('common.save', 'Save')}
+                {saving ? t('cpq.common.saving', 'Saving...') : t('cpq.common.save', 'Save')}
               </Button>
               <Button
                 type="button"
@@ -963,7 +966,7 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                   setGeneralMode('view')
                 }}
               >
-                {t('common.cancel', 'Cancel')}
+                {t('cpq.common.cancel', 'Cancel')}
               </Button>
             </div>
           )}
@@ -986,40 +989,40 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
           {editingAttr && (
             <div className="rounded-lg border bg-card p-4 space-y-3">
               <h3 className="font-medium text-sm">
-                {editingAttr.id ? 'Edit Attribute' : 'New Attribute'}
+                {editingAttr.id ? t('cpq.specifications.attributes.form.editTitle', 'Edit Attribute') : t('cpq.specifications.attributes.form.newTitle', 'New Attribute')}
               </h3>
               <div className="grid grid-cols-3 gap-3">
                 <div>
-                  <label className="block text-xs font-medium mb-1">Code</label>
+                  <label className="block text-xs font-medium mb-1">{t('cpq.specifications.attributes.fields.code', 'Code')}</label>
                   <input type="text" value={editingAttr.code} onChange={(e) => setEditingAttr({ ...editingAttr, code: e.target.value })} className="w-full rounded-md border px-2 py-1.5 text-sm" />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium mb-1">Name</label>
+                  <label className="block text-xs font-medium mb-1">{t('cpq.specifications.attributes.fields.name', 'Name')}</label>
                   <input type="text" value={editingAttr.name} onChange={(e) => setEditingAttr({ ...editingAttr, name: e.target.value })} className="w-full rounded-md border px-2 py-1.5 text-sm" />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium mb-1">Type</label>
+                  <label className="block text-xs font-medium mb-1">{t('cpq.specifications.attributes.fields.type', 'Type')}</label>
                   {/* Reset the default when the type changes — a default kept from a
                       different type (e.g. a numeric default on a now-boolean attr)
                       would be invalid and confusing. */}
                   <select value={editingAttr.attributeType} onChange={(e) => setEditingAttr({ ...editingAttr, attributeType: e.target.value, defaultValue: null })} className="w-full rounded-md border px-2 py-1.5 text-sm">
-                    <option value="text">Text</option>
-                    <option value="number">Number</option>
-                    <option value="boolean">Boolean</option>
-                    <option value="select">Select</option>
-                    <option value="multi-select">Multi-Select</option>
-                    <option value="reference">Reference</option>
+                    <option value="text">{t('cpq.specifications.attributeType.text', 'Text')}</option>
+                    <option value="number">{t('cpq.specifications.attributeType.number', 'Number')}</option>
+                    <option value="boolean">{t('cpq.specifications.attributeType.boolean', 'Boolean')}</option>
+                    <option value="select">{t('cpq.specifications.attributeType.select', 'Select')}</option>
+                    <option value="multi-select">{t('cpq.specifications.attributeType.multiSelect', 'Multi-Select')}</option>
+                    <option value="reference">{t('cpq.specifications.attributeType.reference', 'Reference')}</option>
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-medium mb-1">Resolution Time</label>
+                  <label className="block text-xs font-medium mb-1">{t('cpq.specifications.attributes.fields.resolutionTime', 'Resolution Time')}</label>
                   <select value={editingAttr.resolutionTime} onChange={(e) => setEditingAttr({ ...editingAttr, resolutionTime: e.target.value })} className="w-full rounded-md border px-2 py-1.5 text-sm">
-                    <option value="run_time">Run-time (quoting)</option>
-                    <option value="design_time">Design-time (offering)</option>
+                    <option value="run_time">{t('cpq.specifications.resolutionTime.runTime', 'Run-time (quoting)')}</option>
+                    <option value="design_time">{t('cpq.specifications.resolutionTime.designTime', 'Design-time (offering)')}</option>
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-medium mb-1">Sort Order</label>
+                  <label className="block text-xs font-medium mb-1">{t('cpq.specifications.attributes.fields.sortOrder', 'Sort Order')}</label>
                   <NumberInput
                     integer
                     value={editingAttr.sortOrder}
@@ -1027,7 +1030,7 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium mb-1">Help Text</label>
+                  <label className="block text-xs font-medium mb-1">{t('cpq.specifications.attributes.fields.helpText', 'Help Text')}</label>
                   <input type="text" value={editingAttr.helpText ?? ''} onChange={(e) => setEditingAttr({ ...editingAttr, helpText: e.target.value || null })} className="w-full rounded-md border px-2 py-1.5 text-sm" />
                 </div>
                 {/* Reference attributes resolve to an FK UUID at run-time, so a
@@ -1102,25 +1105,25 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                 {editingAttr.attributeType === 'reference' && (
                   <>
                     <div>
-                      <label className="block text-xs font-medium mb-1">Reference Entity</label>
-                      <input type="text" value={editingAttr.referenceEntity ?? ''} onChange={(e) => setEditingAttr({ ...editingAttr, referenceEntity: e.target.value || null })} placeholder="e.g. CatalogProduct" className="w-full rounded-md border px-2 py-1.5 text-sm" />
+                      <label className="block text-xs font-medium mb-1">{t('cpq.specifications.attributes.fields.referenceEntity', 'Reference Entity')}</label>
+                      <input type="text" value={editingAttr.referenceEntity ?? ''} onChange={(e) => setEditingAttr({ ...editingAttr, referenceEntity: e.target.value || null })} placeholder={t('cpq.specifications.attributes.fields.referenceEntityPlaceholder', 'e.g. CatalogProduct')} className="w-full rounded-md border px-2 py-1.5 text-sm" />
                     </div>
                   </>
                 )}
                 {(editingAttr.attributeType === 'select' || editingAttr.attributeType === 'multi-select') && (
                   <div className="col-span-3 space-y-2">
                     <div className="flex items-center justify-between">
-                      <label className="block text-xs font-medium">Options</label>
+                      <label className="block text-xs font-medium">{t('cpq.specifications.attributes.fields.options', 'Options')}</label>
                       <button
                         type="button"
                         onClick={() => setEditingOptions([...editingOptions, { value: '', label: '' }])}
                         className="text-xs text-primary hover:underline"
                       >
-                        + Add option
+                        {t('cpq.specifications.attributes.addOption', '+ Add option')}
                       </button>
                     </div>
                     {editingOptions.length === 0 ? (
-                      <div className="text-xs text-muted-foreground py-2">No options defined. Click &quot;Add option&quot; to start.</div>
+                      <div className="text-xs text-muted-foreground py-2">{t('cpq.specifications.attributes.noOptions', 'No options defined. Click "Add option" to start.')}</div>
                     ) : (
                       <div className="space-y-1.5">
                         {editingOptions.map((opt, idx) => (
@@ -1133,7 +1136,7 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                                 next[idx] = { ...next[idx], value: e.target.value }
                                 setEditingOptions(next)
                               }}
-                              placeholder="Value (e.g. aws)"
+                              placeholder={t('cpq.specifications.attributes.optionValuePlaceholder', 'Value (e.g. aws)')}
                               className="flex-1 rounded-md border px-2 py-1.5 text-sm"
                             />
                             <input
@@ -1144,14 +1147,14 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                                 next[idx] = { ...next[idx], label: e.target.value }
                                 setEditingOptions(next)
                               }}
-                              placeholder="Label (e.g. Amazon Web Services)"
+                              placeholder={t('cpq.specifications.attributes.optionLabelPlaceholder', 'Label (e.g. Amazon Web Services)')}
                               className="flex-1 rounded-md border px-2 py-1.5 text-sm"
                             />
                             <button
                               type="button"
                               onClick={() => setEditingOptions(editingOptions.filter((_, i) => i !== idx))}
                               className="text-destructive hover:text-destructive/80 text-sm px-1"
-                              title="Remove"
+                              title={t('cpq.specifications.attributes.removeOption', 'Remove')}
                             >
                               ×
                             </button>
@@ -1169,7 +1172,7 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                       onChange={(e) => setDependsOnEnabled(e.target.checked)}
                       className="rounded border"
                     />
-                    Depends on another attribute
+                    {t('cpq.specifications.attributes.dependsOn.enable', 'Depends on another attribute')}
                   </label>
                   {dependsOnEnabled && (() => {
                     const parentAttr = attributes.find((a) => a.code === dependsOnAttrCode)
@@ -1177,7 +1180,7 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                       <div className="space-y-3">
                         <div className="grid grid-cols-2 gap-3">
                           <div>
-                            <label className="block text-xs font-medium mb-1">Parent Attribute Code</label>
+                            <label className="block text-xs font-medium mb-1">{t('cpq.specifications.attributes.dependsOn.parentAttribute', 'Parent Attribute Code')}</label>
                             <select
                               value={dependsOnAttrCode}
                               onChange={(e) => {
@@ -1190,14 +1193,14 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                               }}
                               className="w-full rounded-md border px-2 py-1.5 text-sm"
                             >
-                              <option value="">Select attribute...</option>
+                              <option value="">{t('cpq.specifications.attributes.dependsOn.selectAttribute', 'Select attribute...')}</option>
                               {attributes.filter((a) => editingAttr && a.code !== editingAttr.code).map((a) => (
                                 <option key={a.code} value={a.code}>{a.name} ({a.code})</option>
                               ))}
                             </select>
                           </div>
                           <div>
-                            <label className="block text-xs font-medium mb-1">Effect</label>
+                            <label className="block text-xs font-medium mb-1">{t('cpq.specifications.attributes.dependsOn.effect', 'Effect')}</label>
                             <select
                               value={dependsOnEffect}
                               onChange={(e) => {
@@ -1209,14 +1212,14 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                               }}
                               className="w-full rounded-md border px-2 py-1.5 text-sm"
                             >
-                              <option value="filter_options">Filter options</option>
-                              <option value="set_value">Set value</option>
-                              <option value="toggle_required">Toggle required</option>
+                              <option value="filter_options">{t('cpq.specifications.attributes.dependsOn.effects.filterOptions', 'Filter options')}</option>
+                              <option value="set_value">{t('cpq.specifications.attributes.dependsOn.effects.setValue', 'Set value')}</option>
+                              <option value="toggle_required">{t('cpq.specifications.attributes.dependsOn.effects.toggleRequired', 'Toggle required')}</option>
                             </select>
                           </div>
                         </div>
                         <div>
-                          <label className="block text-xs font-medium mb-2">Rules</label>
+                          <label className="block text-xs font-medium mb-2">{t('cpq.specifications.attributes.dependsOn.rules', 'Rules')}</label>
                           <DependsOnRulesEditor
                             effect={dependsOnEffect}
                             rules={dependsOnRules}
@@ -1232,39 +1235,39 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                 <div className="flex items-end gap-4">
                   <label className="flex items-center gap-1.5 text-sm">
                     <input type="checkbox" checked={editingAttr.isRequired} onChange={(e) => setEditingAttr({ ...editingAttr, isRequired: e.target.checked })} className="rounded border" />
-                    Required
+                    {t('cpq.specifications.attributes.fields.isRequired', 'Required')}
                   </label>
                   <label className="flex items-center gap-1.5 text-sm">
                     <input type="checkbox" checked={editingAttr.isActive} onChange={(e) => setEditingAttr({ ...editingAttr, isActive: e.target.checked })} className="rounded border" />
-                    Active
+                    {t('cpq.common.active', 'Active')}
                   </label>
                 </div>
               </div>
               <div className="flex gap-2">
                 <button onClick={saveAttribute} disabled={saving} className="inline-flex items-center rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50">
-                  {saving ? 'Saving...' : 'Save'}
+                  {saving ? t('cpq.common.saving', 'Saving...') : t('cpq.common.save', 'Save')}
                 </button>
-                <button onClick={() => setEditingAttr(null)} className="inline-flex items-center rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-muted">Cancel</button>
+                <button onClick={() => setEditingAttr(null)} className="inline-flex items-center rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-muted">{t('cpq.common.cancel', 'Cancel')}</button>
               </div>
             </div>
           )}
 
           {attributes.length === 0 ? (
             <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
-              No attributes defined. Add design-time and run-time attributes for this specification.
+              {t('cpq.specifications.attributes.empty', 'No attributes defined. Add design-time and run-time attributes for this specification.')}
             </div>
           ) : (
             <div className="rounded-lg border">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b bg-muted/50">
-                    <th className="px-4 py-3 text-left font-medium">Code</th>
-                    <th className="px-4 py-3 text-left font-medium">Name</th>
-                    <th className="px-4 py-3 text-left font-medium">Type</th>
-                    <th className="px-4 py-3 text-left font-medium">Resolution</th>
-                    <th className="px-4 py-3 text-left font-medium">Options</th>
-                    <th className="px-4 py-3 text-left font-medium">Required</th>
-                    <th className="px-4 py-3 text-right font-medium">Actions</th>
+                    <th className="px-4 py-3 text-left font-medium">{t('cpq.specifications.attributes.columns.code', 'Code')}</th>
+                    <th className="px-4 py-3 text-left font-medium">{t('cpq.specifications.attributes.columns.name', 'Name')}</th>
+                    <th className="px-4 py-3 text-left font-medium">{t('cpq.specifications.attributes.columns.type', 'Type')}</th>
+                    <th className="px-4 py-3 text-left font-medium">{t('cpq.specifications.attributes.columns.resolution', 'Resolution')}</th>
+                    <th className="px-4 py-3 text-left font-medium">{t('cpq.specifications.attributes.columns.options', 'Options')}</th>
+                    <th className="px-4 py-3 text-left font-medium">{t('cpq.specifications.attributes.columns.required', 'Required')}</th>
+                    <th className="px-4 py-3 text-right font-medium">{t('cpq.specifications.attributes.columns.actions', 'Actions')}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1275,14 +1278,14 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                       <td className="px-4 py-3">{attr.attributeType}</td>
                       <td className="px-4 py-3">
                         <Tag variant={attr.resolutionTime === 'design_time' ? 'info' : 'neutral'} className="px-2 text-xs">
-                          {attr.resolutionTime === 'design_time' ? 'design' : 'run'}
+                          {attr.resolutionTime === 'design_time' ? t('cpq.specifications.attributes.resolutionShort.design', 'design') : t('cpq.specifications.attributes.resolutionShort.run', 'run')}
                         </Tag>
                       </td>
-                      <td className="px-4 py-3 text-muted-foreground">{attr.options ? `${attr.options.length} options` : '—'}</td>
-                      <td className="px-4 py-3">{attr.isRequired ? 'Yes' : 'No'}</td>
+                      <td className="px-4 py-3 text-muted-foreground">{attr.options ? t('cpq.specifications.attributes.optionsCount', '{count} options', { count: attr.options.length }) : '—'}</td>
+                      <td className="px-4 py-3">{attr.isRequired ? t('cpq.common.yes', 'Yes') : t('cpq.common.no', 'No')}</td>
                       <td className="px-4 py-3 text-right">
-                        <button onClick={() => startEditAttr(attr)} className="text-xs text-primary hover:underline mr-2">Edit</button>
-                        <button onClick={() => deleteAttribute(attr.id)} className="text-xs text-destructive hover:underline">Delete</button>
+                        <button onClick={() => startEditAttr(attr)} className="text-xs text-primary hover:underline mr-2">{t('cpq.common.edit', 'Edit')}</button>
+                        <button onClick={() => deleteAttribute(attr.id)} className="text-xs text-destructive hover:underline">{t('cpq.common.delete', 'Delete')}</button>
                       </td>
                     </tr>
                   ))}
@@ -1308,39 +1311,39 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
           {editingOffering && (
             <div className="rounded-lg border bg-card p-4 space-y-3">
               <h3 className="font-medium text-sm">
-                {editingOffering.id ? 'Edit Offering' : 'New Offering'}
+                {editingOffering.id ? t('cpq.specifications.offerings.form.editTitle', 'Edit Offering') : t('cpq.specifications.offerings.form.newTitle', 'New Offering')}
               </h3>
               <div className="grid grid-cols-4 gap-3">
                 <div>
-                  <label className="block text-xs font-medium mb-1">Code</label>
-                  <input type="text" value={editingOffering.code} onChange={(e) => setEditingOffering({ ...editingOffering, code: e.target.value })} placeholder="e.g. gix-cloud-connect-aws" className="w-full rounded-md border px-2 py-1.5 text-sm" />
+                  <label className="block text-xs font-medium mb-1">{t('cpq.specifications.offerings.fields.code', 'Code')}</label>
+                  <input type="text" value={editingOffering.code} onChange={(e) => setEditingOffering({ ...editingOffering, code: e.target.value })} placeholder={t('cpq.specifications.offerings.fields.codePlaceholder', 'e.g. gix-cloud-connect-aws')} className="w-full rounded-md border px-2 py-1.5 text-sm" />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium mb-1">Name</label>
+                  <label className="block text-xs font-medium mb-1">{t('cpq.specifications.offerings.fields.name', 'Name')}</label>
                   <input type="text" value={editingOffering.name} onChange={(e) => setEditingOffering({ ...editingOffering, name: e.target.value })} className="w-full rounded-md border px-2 py-1.5 text-sm" />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium mb-1">Lifecycle Status</label>
+                  <label className="block text-xs font-medium mb-1">{t('cpq.specifications.offerings.fields.lifecycleStatus', 'Lifecycle Status')}</label>
                   <select value={editingOffering.lifecycleStatus} onChange={(e) => setEditingOffering({ ...editingOffering, lifecycleStatus: e.target.value })} className="w-full rounded-md border px-2 py-1.5 text-sm">
-                    <option value="draft">Draft</option>
-                    <option value="active">Active</option>
-                    <option value="deprecated">Deprecated</option>
+                    <option value="draft">{t('cpq.offerings.lifecycle.draft', 'Draft')}</option>
+                    <option value="active">{t('cpq.offerings.lifecycle.active', 'Active')}</option>
+                    <option value="deprecated">{t('cpq.offerings.lifecycle.deprecated', 'Deprecated')}</option>
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-medium mb-1">Is Active?</label>
+                  <label className="block text-xs font-medium mb-1">{t('cpq.specifications.offerings.fields.isActive', 'Is Active?')}</label>
                   <div className="flex items-center h-[30px]">
                     <input type="checkbox" checked={editingOffering.isActive} onChange={(e) => setEditingOffering({ ...editingOffering, isActive: e.target.checked })} className="rounded border" />
                   </div>
                 </div>
               </div>
               <div>
-                <label className="block text-xs font-medium mb-1">Description</label>
+                <label className="block text-xs font-medium mb-1">{t('cpq.specifications.offerings.fields.description', 'Description')}</label>
                 <input type="text" value={editingOffering.description ?? ''} onChange={(e) => setEditingOffering({ ...editingOffering, description: e.target.value || null })} className="w-full rounded-md border px-2 py-1.5 text-sm" />
               </div>
               {designTimeAttrs.length > 0 ? (
                 <div className="space-y-3">
-                  <label className="block text-xs font-medium">Design-Time Values</label>
+                  <label className="block text-xs font-medium">{t('cpq.specifications.offerings.fields.designTimeValues', 'Design-Time Values')}</label>
                   <div className="grid grid-cols-2 gap-3">
                     {designTimeAttrs.map((attr) => (
                       <div key={attr.code}>
@@ -1354,7 +1357,7 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                             onChange={(e) => setEditingDtValues({ ...editingDtValues, [attr.code]: e.target.value || null })}
                             className="w-full rounded-md border px-2 py-1.5 text-sm"
                           >
-                            <option value="">Select {attr.name}...</option>
+                            <option value="">{t('cpq.specifications.offerings.fields.selectAttribute', 'Select {name}...', { name: attr.name })}</option>
                             {attr.options.map((opt) => (
                               <option key={opt.value} value={opt.value}>{opt.label}</option>
                             ))}
@@ -1392,32 +1395,32 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                 </div>
               ) : (
                 <div className="text-xs text-muted-foreground py-1">
-                  No design-time attributes defined on this specification. All attributes are run-time.
+                  {t('cpq.specifications.offerings.noDesignTimeAttributes', 'No design-time attributes defined on this specification. All attributes are run-time.')}
                 </div>
               )}
               <div className="flex gap-2">
                 <button onClick={saveOffering} disabled={saving} className="inline-flex items-center rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50">
-                  {saving ? 'Saving...' : 'Save'}
+                  {saving ? t('cpq.common.saving', 'Saving...') : t('cpq.common.save', 'Save')}
                 </button>
-                <button onClick={() => setEditingOffering(null)} className="inline-flex items-center rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-muted">Cancel</button>
+                <button onClick={() => setEditingOffering(null)} className="inline-flex items-center rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-muted">{t('cpq.common.cancel', 'Cancel')}</button>
               </div>
             </div>
           )}
 
           {offerings.length === 0 ? (
             <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
-              No offerings created. An offering is a sellable instance of this specification with fixed design-time values and attached charges.
+              {t('cpq.specifications.offerings.empty', 'No offerings created. An offering is a sellable instance of this specification with fixed design-time values and attached charges.')}
             </div>
           ) : (
             <div className="rounded-lg border">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b bg-muted/50">
-                    <th className="px-3 py-3 text-left font-medium">Code</th>
-                    <th className="px-3 py-3 text-left font-medium">Name</th>
-                    <th className="px-3 py-3 text-left font-medium">Status</th>
-                    <th className="px-3 py-3 text-left font-medium">Design-Time Values</th>
-                    <th className="px-3 py-3 text-right font-medium">Actions</th>
+                    <th className="px-3 py-3 text-left font-medium">{t('cpq.specifications.offerings.columns.code', 'Code')}</th>
+                    <th className="px-3 py-3 text-left font-medium">{t('cpq.specifications.offerings.columns.name', 'Name')}</th>
+                    <th className="px-3 py-3 text-left font-medium">{t('cpq.specifications.offerings.columns.status', 'Status')}</th>
+                    <th className="px-3 py-3 text-left font-medium">{t('cpq.specifications.offerings.columns.designTimeValues', 'Design-Time Values')}</th>
+                    <th className="px-3 py-3 text-right font-medium">{t('cpq.specifications.offerings.columns.actions', 'Actions')}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1440,8 +1443,8 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                           : '—'}
                       </td>
                       <td className="px-3 py-3 text-right">
-                        <button onClick={(e) => { e.stopPropagation(); startEditOffering(o) }} className="text-xs text-primary hover:underline mr-2">Edit</button>
-                        <button onClick={(e) => { e.stopPropagation(); deleteOffering(o.id) }} className="text-xs text-destructive hover:underline">Delete</button>
+                        <button onClick={(e) => { e.stopPropagation(); startEditOffering(o) }} className="text-xs text-primary hover:underline mr-2">{t('cpq.common.edit', 'Edit')}</button>
+                        <button onClick={(e) => { e.stopPropagation(); deleteOffering(o.id) }} className="text-xs text-destructive hover:underline">{t('cpq.common.delete', 'Delete')}</button>
                       </td>
                     </tr>
                   ))}
@@ -1467,21 +1470,21 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
           {editingRel && (
             <div className="rounded-lg border bg-card p-4 space-y-3">
               <h3 className="font-medium text-sm">
-                {editingRel.id ? 'Edit Relationship' : 'New Relationship'}
+                {editingRel.id ? t('cpq.specifications.relationships.form.editTitle', 'Edit Relationship') : t('cpq.specifications.relationships.form.newTitle', 'New Relationship')}
               </h3>
               <div className="grid grid-cols-3 gap-3">
                 <div>
-                  <label className="block text-xs font-medium mb-1">Type</label>
+                  <label className="block text-xs font-medium mb-1">{t('cpq.specifications.relationships.fields.type', 'Type')}</label>
                   <select value={editingRel.relationshipType} onChange={(e) => setEditingRel({ ...editingRel, relationshipType: e.target.value })} className="w-full rounded-md border px-2 py-1.5 text-sm">
-                    <option value="parent_child">Parent / Child</option>
-                    <option value="requires">Requires</option>
-                    <option value="excludes">Excludes</option>
+                    <option value="parent_child">{t('cpq.specifications.relationships.type.parentChild', 'Parent / Child')}</option>
+                    <option value="requires">{t('cpq.specifications.relationships.type.requires', 'Requires')}</option>
+                    <option value="excludes">{t('cpq.specifications.relationships.type.excludes', 'Excludes')}</option>
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-medium mb-1">Target Specification</label>
+                  <label className="block text-xs font-medium mb-1">{t('cpq.specifications.relationships.fields.targetSpecification', 'Target Specification')}</label>
                   <select value={editingRel.targetSpecId} onChange={(e) => setEditingRel({ ...editingRel, targetSpecId: e.target.value })} className="w-full rounded-md border px-2 py-1.5 text-sm">
-                    <option value="">Select...</option>
+                    <option value="">{t('cpq.specifications.relationships.fields.selectTarget', 'Select...')}</option>
                     {allSpecs.filter((s) => s.id !== specId).map((s) => (
                       <option key={s.id} value={s.id}>{s.name} ({s.code})</option>
                     ))}
@@ -1489,7 +1492,7 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                 </div>
                 <div className="grid grid-cols-2 gap-2">
                   <div>
-                    <label className="block text-xs font-medium mb-1">Min</label>
+                    <label className="block text-xs font-medium mb-1">{t('cpq.specifications.relationships.fields.min', 'Min')}</label>
                     <NumberInput
                       integer
                       min={0}
@@ -1498,7 +1501,7 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-medium mb-1">Max</label>
+                    <label className="block text-xs font-medium mb-1">{t('cpq.specifications.relationships.fields.max', 'Max')}</label>
                     <NumberInput
                       integer
                       min={0}
@@ -1510,33 +1513,33 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                 </div>
               </div>
               <div>
-                <label className="block text-xs font-medium mb-1">Condition (JSON)</label>
-                <textarea value={conditionJson} onChange={(e) => setConditionJson(e.target.value)} rows={3} className="w-full rounded-md border px-2 py-1.5 text-sm font-mono" placeholder='null or {"attribute":"direction","operator":"in","value":["inbound"]}' />
+                <label className="block text-xs font-medium mb-1">{t('cpq.specifications.relationships.fields.condition', 'Condition (JSON)')}</label>
+                <textarea value={conditionJson} onChange={(e) => setConditionJson(e.target.value)} rows={3} className="w-full rounded-md border px-2 py-1.5 text-sm font-mono" placeholder={t('cpq.specifications.relationships.fields.conditionPlaceholder', 'null or {"attribute":"direction","operator":"in","value":["inbound"]}')} />
               </div>
               <div className="flex gap-2">
                 <button onClick={saveRelationship} disabled={saving} className="inline-flex items-center rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50">
-                  {saving ? 'Saving...' : 'Save'}
+                  {saving ? t('cpq.common.saving', 'Saving...') : t('cpq.common.save', 'Save')}
                 </button>
-                <button onClick={() => setEditingRel(null)} className="inline-flex items-center rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-muted">Cancel</button>
+                <button onClick={() => setEditingRel(null)} className="inline-flex items-center rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-muted">{t('cpq.common.cancel', 'Cancel')}</button>
               </div>
             </div>
           )}
 
           {relationships.length === 0 ? (
             <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
-              No relationships defined. Declare parent/child, requires, or excludes relationships with other specifications.
+              {t('cpq.specifications.relationships.empty', 'No relationships defined. Declare parent/child, requires, or excludes relationships with other specifications.')}
             </div>
           ) : (
             <div className="rounded-lg border">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b bg-muted/50">
-                    <th className="px-4 py-3 text-left font-medium">Type</th>
-                    <th className="px-4 py-3 text-left font-medium">Source</th>
-                    <th className="px-4 py-3 text-left font-medium">Target</th>
-                    <th className="px-4 py-3 text-left font-medium">Cardinality</th>
-                    <th className="px-4 py-3 text-left font-medium">Condition</th>
-                    <th className="px-4 py-3 text-right font-medium">Actions</th>
+                    <th className="px-4 py-3 text-left font-medium">{t('cpq.specifications.relationships.columns.type', 'Type')}</th>
+                    <th className="px-4 py-3 text-left font-medium">{t('cpq.specifications.relationships.columns.source', 'Source')}</th>
+                    <th className="px-4 py-3 text-left font-medium">{t('cpq.specifications.relationships.columns.target', 'Target')}</th>
+                    <th className="px-4 py-3 text-left font-medium">{t('cpq.specifications.relationships.columns.cardinality', 'Cardinality')}</th>
+                    <th className="px-4 py-3 text-left font-medium">{t('cpq.specifications.relationships.columns.condition', 'Condition')}</th>
+                    <th className="px-4 py-3 text-right font-medium">{t('cpq.specifications.relationships.columns.actions', 'Actions')}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1558,8 +1561,8 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                       <td className="px-4 py-3 text-muted-foreground">{rel.cardinalityMin}..{rel.cardinalityMax ?? '∞'}</td>
                       <td className="px-4 py-3 text-muted-foreground text-xs">{rel.condition ? JSON.stringify(rel.condition) : '—'}</td>
                       <td className="px-4 py-3 text-right">
-                        <button onClick={() => startEditRel(rel)} className="text-xs text-primary hover:underline mr-2">Edit</button>
-                        <button onClick={() => deleteRelationship(rel.id)} className="text-xs text-destructive hover:underline">Delete</button>
+                        <button onClick={() => startEditRel(rel)} className="text-xs text-primary hover:underline mr-2">{t('cpq.common.edit', 'Edit')}</button>
+                        <button onClick={() => deleteRelationship(rel.id)} className="text-xs text-destructive hover:underline">{t('cpq.common.delete', 'Delete')}</button>
                       </td>
                     </tr>
                   ))}
@@ -1578,49 +1581,49 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
               onClick={() => setEditingSlot({ ...EMPTY_SLOT })}
               className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
             >
-              + Add Slot
+              {t('cpq.specifications.slots.add', '+ Add Slot')}
             </button>
           </div>
 
           {editingSlot && (
             <div className="rounded-lg border bg-card p-6 space-y-4">
-              <h3 className="text-sm font-semibold">{editingSlot.id ? 'Edit Bundle Slot' : 'New Bundle Slot'}</h3>
+              <h3 className="text-sm font-semibold">{editingSlot.id ? t('cpq.specifications.slots.form.editTitle', 'Edit Bundle Slot') : t('cpq.specifications.slots.form.newTitle', 'New Bundle Slot')}</h3>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium mb-1">Name</label>
+                  <label className="block text-sm font-medium mb-1">{t('cpq.specifications.slots.fields.name', 'Name')}</label>
                   <input
                     type="text"
                     value={editingSlot.name}
                     onChange={(e) => setEditingSlot({ ...editingSlot, name: e.target.value })}
-                    placeholder="e.g. Internet Component"
+                    placeholder={t('cpq.specifications.slots.fields.namePlaceholder', 'e.g. Internet Component')}
                     className="w-full rounded-md border px-3 py-2 text-sm"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium mb-1">Component Group</label>
+                  <label className="block text-sm font-medium mb-1">{t('cpq.specifications.slots.fields.componentGroup', 'Component Group')}</label>
                   <input
                     type="text"
                     value={editingSlot.componentGroup}
                     onChange={(e) => setEditingSlot({ ...editingSlot, componentGroup: e.target.value })}
-                    placeholder="e.g. internet, tv, phone"
+                    placeholder={t('cpq.specifications.slots.fields.componentGroupPlaceholder', 'e.g. internet, tv, phone')}
                     className="w-full rounded-md border px-3 py-2 text-sm"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium mb-1">Target Specification</label>
+                  <label className="block text-sm font-medium mb-1">{t('cpq.specifications.slots.fields.targetSpecification', 'Target Specification')}</label>
                   <select
                     value={editingSlot.targetSpecId}
                     onChange={(e) => setEditingSlot({ ...editingSlot, targetSpecId: e.target.value })}
                     className="w-full rounded-md border px-3 py-2 text-sm"
                   >
-                    <option value="">— Select specification —</option>
+                    <option value="">{t('cpq.specifications.slots.fields.selectSpecification', '— Select specification —')}</option>
                     {allSpecs.filter((s) => s.id !== specId).map((s) => (
                       <option key={s.id} value={s.id}>{s.name} ({s.code})</option>
                     ))}
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium mb-1">Sort Order</label>
+                  <label className="block text-sm font-medium mb-1">{t('cpq.specifications.slots.fields.sortOrder', 'Sort Order')}</label>
                   <NumberInput
                     integer
                     value={editingSlot.sortOrder}
@@ -1628,7 +1631,7 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium mb-1">Cardinality Min</label>
+                  <label className="block text-sm font-medium mb-1">{t('cpq.specifications.slots.fields.cardinalityMin', 'Cardinality Min')}</label>
                   <NumberInput
                     integer
                     min={0}
@@ -1637,18 +1640,18 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium mb-1">Cardinality Max</label>
+                  <label className="block text-sm font-medium mb-1">{t('cpq.specifications.slots.fields.cardinalityMax', 'Cardinality Max')}</label>
                   <NumberInput
                     integer
                     min={0}
-                    placeholder="∞ (unlimited)"
+                    placeholder={t('cpq.specifications.slots.fields.cardinalityMaxPlaceholder', '∞ (unlimited)')}
                     value={editingSlot.cardinalityMax}
                     onChange={(n) => setEditingSlot({ ...editingSlot, cardinalityMax: n })}
                   />
                 </div>
               </div>
               <div>
-                <label className="block text-sm font-medium mb-1">Description</label>
+                <label className="block text-sm font-medium mb-1">{t('cpq.specifications.slots.fields.description', 'Description')}</label>
                 <textarea
                   value={editingSlot.description ?? ''}
                   onChange={(e) => setEditingSlot({ ...editingSlot, description: e.target.value })}
@@ -1673,7 +1676,7 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                       })
                       if (!res.ok) {
                         const d = await res.json()
-                        setError(d.error ?? 'Failed to save slot')
+                        setError(d.error ?? t('cpq.specifications.slots.error.save', 'Failed to save slot'))
                         return
                       }
                       setEditingSlot(null)
@@ -1683,7 +1686,7 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                         setBundleSlots(d.items ?? [])
                       }
                     } catch {
-                      setError('Failed to save slot')
+                      setError(t('cpq.specifications.slots.error.save', 'Failed to save slot'))
                     } finally {
                       setSaving(false)
                     }
@@ -1691,13 +1694,13 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                   disabled={saving || !editingSlot.name || !editingSlot.componentGroup || !editingSlot.targetSpecId}
                   className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
                 >
-                  {saving ? 'Saving...' : (editingSlot.id ? 'Update' : 'Create')}
+                  {saving ? t('cpq.common.saving', 'Saving...') : (editingSlot.id ? t('cpq.specifications.slots.form.update', 'Update') : t('cpq.specifications.slots.form.create', 'Create'))}
                 </button>
                 <button
                   onClick={() => setEditingSlot(null)}
                   className="inline-flex items-center justify-center rounded-md border px-4 py-2 text-sm font-medium hover:bg-muted"
                 >
-                  Cancel
+                  {t('cpq.common.cancel', 'Cancel')}
                 </button>
               </div>
             </div>
@@ -1705,19 +1708,19 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
 
           {bundleSlots.length === 0 && !editingSlot ? (
             <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
-              No bundle slots defined yet. Add slots to define what component specifications can fill this bundle.
+              {t('cpq.specifications.slots.empty', 'No bundle slots defined yet. Add slots to define what component specifications can fill this bundle.')}
             </div>
           ) : bundleSlots.length > 0 && (
             <div className="rounded-lg border overflow-hidden">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b bg-muted/50">
-                    <th className="px-4 py-3 text-left font-medium">Name</th>
-                    <th className="px-4 py-3 text-left font-medium">Group</th>
-                    <th className="px-4 py-3 text-left font-medium">Target Spec</th>
-                    <th className="px-4 py-3 text-left font-medium">Cardinality</th>
-                    <th className="px-4 py-3 text-left font-medium">Order</th>
-                    <th className="px-4 py-3 text-right font-medium">Actions</th>
+                    <th className="px-4 py-3 text-left font-medium">{t('cpq.specifications.slots.columns.name', 'Name')}</th>
+                    <th className="px-4 py-3 text-left font-medium">{t('cpq.specifications.slots.columns.group', 'Group')}</th>
+                    <th className="px-4 py-3 text-left font-medium">{t('cpq.specifications.slots.columns.targetSpec', 'Target Spec')}</th>
+                    <th className="px-4 py-3 text-left font-medium">{t('cpq.specifications.slots.columns.cardinality', 'Cardinality')}</th>
+                    <th className="px-4 py-3 text-left font-medium">{t('cpq.specifications.slots.columns.order', 'Order')}</th>
+                    <th className="px-4 py-3 text-right font-medium">{t('cpq.specifications.slots.columns.actions', 'Actions')}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1732,11 +1735,11 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                           <span>
                             {slot.targetSpec.name}
                             {slot.targetSpec.specType === 'bundle' && (
-                              <Tag variant="brand" className="ml-1 px-1.5 text-[10px]">bundle</Tag>
+                              <Tag variant="brand" className="ml-1 px-1.5 text-[10px]">{t('cpq.specifications.slots.tag.bundle', 'bundle')}</Tag>
                             )}
                           </span>
                         ) : (
-                          <span className="text-muted-foreground">Unknown</span>
+                          <span className="text-muted-foreground">{t('cpq.specifications.slots.unknown', 'Unknown')}</span>
                         )}
                       </td>
                       <td className="px-4 py-3 text-muted-foreground">{slot.cardinalityMin}..{slot.cardinalityMax ?? '∞'}</td>
@@ -1755,11 +1758,11 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                           })}
                           className="text-xs text-primary hover:underline mr-2"
                         >
-                          Edit
+                          {t('cpq.common.edit', 'Edit')}
                         </button>
                         <button
                           onClick={async () => {
-                            if (!confirm('Delete this bundle slot?')) return
+                            if (!confirm(t('cpq.specifications.slots.confirmDelete', 'Delete this bundle slot?'))) return
                             try {
                               const res = await fetch('/api/cpq/bundle-slots', {
                                 method: 'DELETE',
@@ -1770,15 +1773,15 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                                 setBundleSlots((prev) => prev.filter((s) => s.id !== slot.id))
                               } else {
                                 const d = await res.json()
-                                setError(d.error ?? 'Failed to delete slot')
+                                setError(d.error ?? t('cpq.specifications.slots.error.delete', 'Failed to delete slot'))
                               }
                             } catch {
-                              setError('Failed to delete slot')
+                              setError(t('cpq.specifications.slots.error.delete', 'Failed to delete slot'))
                             }
                           }}
                           className="text-xs text-destructive hover:underline"
                         >
-                          Delete
+                          {t('cpq.common.delete', 'Delete')}
                         </button>
                       </td>
                     </tr>

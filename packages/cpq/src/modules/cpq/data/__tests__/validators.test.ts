@@ -140,6 +140,13 @@ describe('cpqProductOfferingCreateSchema', () => {
     if (!result.success) return
     expect(result.data.designTimeValues).toEqual({})
   })
+
+  it('leaves offeringType undefined when omitted so the route can derive it from the spec', () => {
+    const result = cpqProductOfferingCreateSchema.safeParse({ specId: VALID_UUID, code: 'O', name: 'O' })
+    expect(result.success).toBe(true)
+    if (!result.success) return
+    expect(result.data.offeringType).toBeUndefined()
+  })
 })
 
 describe('cpqBundleSlotCreateSchema', () => {

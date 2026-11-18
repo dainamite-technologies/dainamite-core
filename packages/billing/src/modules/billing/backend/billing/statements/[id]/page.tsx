@@ -3,7 +3,8 @@ import * as React from 'react'
 import Link from 'next/link'
 import { useParams } from 'next/navigation'
 import type { LegacyColumnDef as ColumnDef } from '@tanstack/react-table/legacy'
-import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { useLocale, useT } from '@open-mercato/shared/lib/i18n/context'
+import { formatBillingDay } from '../../../../lib/displayDate'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
 import { FormHeader } from '@open-mercato/ui/backend/forms'
 import { Tag } from '@open-mercato/ui/primitives/tag'
@@ -50,14 +51,9 @@ type StatementRow = {
   status: string
 }
 
-function formatDate(value: string | null | undefined): string {
-  if (!value) return '—'
-  const d = new Date(value)
-  return Number.isNaN(d.getTime()) ? value : d.toLocaleDateString()
-}
-
 export default function BillingStatementDetailPage(props: { params?: { id?: string } }) {
   const t = useT()
+  const locale = useLocale()
   const urlParams = useParams<{ id: string }>()
   const statementId = (props.params?.id ?? urlParams?.id ?? '') as string
 
@@ -201,7 +197,7 @@ export default function BillingStatementDetailPage(props: { params?: { id?: stri
         mode="detail"
         backHref="/backend/billing/statements"
         entityTypeLabel={t('billing.statements.detail.title', 'Statement')}
-        title={`${formatDate(row.period_start)} – ${formatDate(row.period_end)}`}
+        title={`${formatBillingDay(row.period_start, locale)} – ${formatBillingDay(row.period_end, locale)}`}
         statusBadge={
           <Tag variant={statementStatusVariant(row.status)}>
             {t(`billing.statements.status.${row.status}`, row.status)}

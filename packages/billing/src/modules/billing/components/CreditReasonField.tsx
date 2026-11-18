@@ -1,12 +1,12 @@
 "use client"
 
 import * as React from 'react'
-import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { useLocale, useT } from '@open-mercato/shared/lib/i18n/context'
+import { formatBillingDay } from '../lib/displayDate'
 import { Alert, AlertDescription } from '@open-mercato/ui/primitives/alert'
 import { Textarea } from '@open-mercato/ui/primitives/textarea'
 import { billedBeyond, previewCredit, type CreditPreviewItem } from '../lib/creditPreview'
 import { CREDIT_REASON_TEXT_MAX } from '../lib/creditReason'
-import { formatDateOnly } from '../lib/dateOnly'
 
 /** True when ending `item` on `newEndDate` needs a customer-facing reason (Part 2, D9). */
 export function isCreditReasonRequired(item: CreditPreviewItem, newEndDate: string | null): boolean {
@@ -31,6 +31,7 @@ export function CreditReasonField({
   onChange: (value: string) => void
 }) {
   const t = useT()
+  const locale = useLocale()
   if (item.type !== 'recurring') return null
   const preview = previewCredit(item, newEndDate)
   const keepsBilledDays = !preview.credited && billedBeyond(item, newEndDate)
@@ -38,7 +39,7 @@ export function CreditReasonField({
     <div className="flex flex-col gap-2 text-sm">
       <span className="text-xs text-muted-foreground">
         {item.billedToDate
-          ? t('billing.items.credit.billed_through', 'Billed through {date}', { date: formatDateOnly(item.billedToDate) })
+          ? t('billing.items.credit.billed_through', 'Billed through {date}', { date: formatBillingDay(item.billedToDate, locale) })
           : t('billing.items.credit.not_billed', 'Not billed yet')}
       </span>
       {preview.credited ? (
@@ -49,9 +50,9 @@ export function CreditReasonField({
                 'billing.items.credit.warning',
                 'This item is billed through {billedTo}. The next invoice credits {from} – {to} ({days} days) — give the customer a reason.',
                 {
-                  billedTo: formatDateOnly(preview.to),
-                  from: formatDateOnly(preview.from),
-                  to: formatDateOnly(preview.to),
+                  billedTo: formatBillingDay(preview.to, locale),
+                  from: formatBillingDay(preview.from, locale),
+                  to: formatBillingDay(preview.to, locale),
                   days: preview.days,
                 },
               )}

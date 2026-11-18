@@ -3,7 +3,8 @@ import * as React from 'react'
 import Link from 'next/link'
 import { useParams, useSearchParams } from 'next/navigation'
 import type { LegacyColumnDef as ColumnDef } from '@tanstack/react-table/legacy'
-import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { useLocale, useT } from '@open-mercato/shared/lib/i18n/context'
+import { formatBillingDateTime } from '../../../../lib/displayDate'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
 import { FormHeader } from '@open-mercato/ui/backend/forms'
 import { BillingDataTable as DataTable } from '../../../../components/BillingDataTable'
@@ -134,6 +135,7 @@ function AccountActionDialog({
 
 export default function PaymentDetailPage(props: { params?: { id?: string } }) {
   const t = useT()
+  const locale = useLocale()
   const labels = usePaymentLabels()
   // OM serves backend pages through a catch-all route — the dynamic `[id]`
   // segment arrives as a page prop; `useParams()` is only the fallback.
@@ -216,10 +218,10 @@ export default function PaymentDetailPage(props: { params?: { id?: string } }) {
       {
         accessorKey: 'created_at',
         header: t('billing.payments.allocations.at', 'When'),
-        cell: ({ row }) => new Date(row.original.created_at).toLocaleString(),
+        cell: ({ row }) => formatBillingDateTime(row.original.created_at, locale),
       },
     ],
-    [t],
+    [t, locale],
   )
 
   if (notFound) {

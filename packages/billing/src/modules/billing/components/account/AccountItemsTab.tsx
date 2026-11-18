@@ -2,7 +2,7 @@
 import * as React from 'react'
 import { useRouter } from 'next/navigation'
 import type { LegacyColumnDef as ColumnDef } from '@tanstack/react-table/legacy'
-import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { useLocale, useT } from '@open-mercato/shared/lib/i18n/context'
 import { BillingDataTable as DataTable } from '../BillingDataTable'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
@@ -48,6 +48,7 @@ function stateVariant(state: ItemBillingState): 'success' | 'warning' | 'neutral
  */
 export function AccountItemsTab({ accountId, currencyCode }: { accountId: string; currencyCode?: string }) {
   const t = useT()
+  const locale = useLocale()
   const router = useRouter()
   const [rows, setRows] = React.useState<AccountItemRow[]>([])
   const [page, setPage] = React.useState(1)
@@ -102,7 +103,7 @@ export function AccountItemsTab({ accountId, currencyCode }: { accountId: string
 
   const stateLabel = React.useCallback(
     (state: ItemBillingState) => {
-      const date = state.date ? formatDate(state.date) : ''
+      const date = state.date ? formatDate(state.date, locale) : ''
       switch (state.status) {
         case 'inactive':
           return t('billing.common.inactive', 'Inactive')
@@ -124,7 +125,7 @@ export function AccountItemsTab({ accountId, currencyCode }: { accountId: string
           return t('billing.accounts.items.state.fully_billed', 'Fully billed')
       }
     },
-    [t],
+    [t, locale],
   )
 
   const columns = React.useMemo<ColumnDef<AccountItemRow>[]>(
@@ -148,15 +149,15 @@ export function AccountItemsTab({ accountId, currencyCode }: { accountId: string
         accessorKey: 'bill_start_date',
         header: t('billing.accounts.items.term', 'Term'),
         cell: ({ row }) =>
-          `${formatDate(row.original.bill_start_date)} – ${
-            row.original.bill_end_date ? formatDate(row.original.bill_end_date) : t('billing.accounts.items.open_ended', 'open-ended')
+          `${formatDate(row.original.bill_start_date, locale)} – ${
+            row.original.bill_end_date ? formatDate(row.original.bill_end_date, locale) : t('billing.accounts.items.open_ended', 'open-ended')
           }`,
       },
       {
         accessorKey: 'billed_to_date',
         header: t('billing.accounts.items.billed_through', 'Billed through'),
         cell: ({ row }) =>
-          row.original.type === 'recurring' && row.original.billed_to_date ? formatDate(row.original.billed_to_date) : '—',
+          row.original.type === 'recurring' && row.original.billed_to_date ? formatDate(row.original.billed_to_date, locale) : '—',
       },
       {
         id: 'billing_state',
@@ -167,7 +168,7 @@ export function AccountItemsTab({ accountId, currencyCode }: { accountId: string
         },
       },
     ],
-    [rateLabel, stateLabel, t, today, typeLabel],
+    [rateLabel, stateLabel, t, today, typeLabel, locale],
   )
 
   return (

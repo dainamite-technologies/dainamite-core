@@ -2,7 +2,8 @@
 import * as React from 'react'
 import { useRouter } from 'next/navigation'
 import type { LegacyColumnDef as ColumnDef } from '@tanstack/react-table/legacy'
-import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { useLocale, useT } from '@open-mercato/shared/lib/i18n/context'
+import { formatBillingDateTime } from '../../../lib/displayDate'
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
 import { BillingDataTable as DataTable } from '../../../components/BillingDataTable'
@@ -32,12 +33,6 @@ type TransactionRow = {
 
 type ListResponse = { items: TransactionRow[]; total: number; totalPages: number }
 
-function formatDate(value: string | null | undefined): string {
-  if (!value) return '—'
-  const d = new Date(value)
-  return Number.isNaN(d.getTime()) ? value : d.toLocaleString()
-}
-
 export function txnVariant(type: string): 'success' | 'info' | 'error' | 'neutral' | 'default' {
   if (type === 'topup' || type === 'adjustment') return 'success'
   if (type === 'usage') return 'info'
@@ -47,6 +42,7 @@ export function txnVariant(type: string): 'success' | 'info' | 'error' | 'neutra
 
 export default function BillingTransactionsListPage() {
   const t = useT()
+  const locale = useLocale()
   const router = useRouter()
   const [rows, setRows] = React.useState<TransactionRow[]>([])
   const [page, setPage] = React.useState(1)
@@ -113,7 +109,7 @@ export default function BillingTransactionsListPage() {
       {
         accessorKey: 'created_at',
         header: t('billing.transactions.columns.when', 'When'),
-        cell: ({ row }) => formatDate(row.original.created_at),
+        cell: ({ row }) => formatBillingDateTime(row.original.created_at, locale),
       },
       {
         accessorKey: 'type',
@@ -160,7 +156,7 @@ export default function BillingTransactionsListPage() {
         },
       },
     ],
-    [t, accountNames],
+    [t, accountNames, locale],
   )
 
   return (

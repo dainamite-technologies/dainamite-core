@@ -13,7 +13,7 @@
  */
 
 import { invoiceIntlLocale } from '../invoiceLanguages'
-import { lineServicePeriod } from '../linePeriod'
+import { lineServicePeriod, localizeDescriptionPeriod } from '../linePeriod'
 import { creditReasonText, type CreditReason } from '../creditReason'
 
 export type DocumentTranslate =(key: string, fallback: string) => string
@@ -217,7 +217,7 @@ export function buildInvoiceDocumentModel(params: {
     const servicePeriod = lineServicePeriod(line)
     const described = servicePeriod
       ? `${line.description} (${date(servicePeriod.start)} – ${date(servicePeriod.end)})`
-      : line.description
+      : localizeDescriptionPeriod(line.description, (day) => date(day))
     const description = line.creditReason
       ? `${described}\n${t('billing.pdf.credit_reason', 'Reason')}: ${creditReasonText(line.creditReason, t, (day) => date(day))}`
       : described

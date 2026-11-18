@@ -1,7 +1,8 @@
 "use client"
 
 import * as React from 'react'
-import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { useLocale, useT } from '@open-mercato/shared/lib/i18n/context'
+import { formatBillingDay } from '../../lib/displayDate'
 import { Input } from '@open-mercato/ui/primitives/input'
 import { Switch } from '@open-mercato/ui/primitives/switch'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@open-mercato/ui/primitives/select'
@@ -16,7 +17,7 @@ import {
 import { nextCycleDay } from '../../lib/billPeriod'
 import { resolveCycleUpdate } from '../../lib/accountCycle'
 import { parseCycleInterval, type BillCycleFormValues } from '../../lib/billCyclePayload'
-import { formatDateOnly, localTodayIso, toUtcMidnight } from '../../lib/dateOnly'
+import { localTodayIso, toUtcMidnight } from '../../lib/dateOnly'
 import { useBillCycleSummary } from './useBillCycleSummary'
 
 const MONTH_DAYS = Array.from({ length: 31 }, (_, index) => String(index + 1))
@@ -38,6 +39,7 @@ export type BillCycleFieldsProps = {
  */
 export function BillCycleFields({ mode, values, onChange, stored }: BillCycleFieldsProps) {
   const t = useT()
+  const locale = useLocale()
   const summarize = useBillCycleSummary()
   const interval = parseCycleInterval(values.billCycleInterval)
   const spec: CycleSpec = {
@@ -137,7 +139,7 @@ export function BillCycleFields({ mode, values, onChange, stored }: BillCycleFie
       <span className="text-xs text-muted-foreground">
         {interval ? summarize(spec) : t('billing.accounts.form.cycle.invalid_interval', 'Enter a whole number of units')}
         {previewNextBill
-          ? ` · ${t('billing.accounts.form.cycle.next_bill', 'Next bill: {date}', { date: formatDateOnly(previewNextBill) })}`
+          ? ` · ${t('billing.accounts.form.cycle.next_bill', 'Next bill: {date}', { date: formatBillingDay(previewNextBill, locale) })}`
           : null}
       </span>
       {mode === 'edit' && stored && !values.nextBillDateOverride && previewNextBill && previewNextBill !== stored.nextBillDate ? (

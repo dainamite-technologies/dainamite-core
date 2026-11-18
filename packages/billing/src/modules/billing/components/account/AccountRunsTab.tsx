@@ -2,7 +2,8 @@
 import * as React from 'react'
 import Link from 'next/link'
 import type { LegacyColumnDef as ColumnDef } from '@tanstack/react-table/legacy'
-import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { useLocale, useT } from '@open-mercato/shared/lib/i18n/context'
+import { formatBillingDateTime } from '../../lib/displayDate'
 import { BillingDataTable as DataTable } from '../BillingDataTable'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
@@ -49,6 +50,7 @@ function statusVariant(status: string): 'success' | 'warning' | 'error' | 'neutr
 
 export function AccountRunsTab({ accountId, refreshKey = 0 }: { accountId: string; refreshKey?: number }) {
   const t = useT()
+  const locale = useLocale()
   const [rows, setRows] = React.useState<OutcomeRow[]>([])
   const [page, setPage] = React.useState(1)
   const [total, setTotal] = React.useState(0)
@@ -90,7 +92,7 @@ export function AccountRunsTab({ accountId, refreshKey = 0 }: { accountId: strin
         header: t('billing.accounts.runs.columns.when', 'Run at'),
         cell: ({ row }) => (
           <Link href={`/backend/billing/runs/${row.original.bill_run_id}`} className="text-primary hover:underline">
-            {new Date(row.original.created_at).toLocaleString()}
+            {formatBillingDateTime(row.original.created_at, locale)}
           </Link>
         ),
       },
@@ -150,7 +152,7 @@ export function AccountRunsTab({ accountId, refreshKey = 0 }: { accountId: strin
         },
       },
     ],
-    [t],
+    [t, locale],
   )
 
   return (

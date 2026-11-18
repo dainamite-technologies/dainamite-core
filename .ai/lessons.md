@@ -14,6 +14,9 @@ Entry format (newest first within a section):
 
 ## Open Mercato framework
 
+- **`DataTable` ignores a column's `cell` when its id / `accessorKey` ends in `_at`.** (2026-11-18, #129)
+  It renders the value with `formatDisplayDateTime` in the app locale (`useLocale()`). Format every other date with `formatDisplayDate` / `formatDisplayDateTime` and the same locale (billing: `lib/displayDate.ts`), never `toLocaleString()`, or one screen mixes formats.
+
 - **The MCP HTTP server runs tools without the approval gate.** (2026-11-16, #110)
   `ai_assistant` `lib/http-server.ts` calls a tool right after the feature check. Every write tool must refuse unless `ctx.approvedPendingActionId` is set; only the pending-action executor sets it.
 - **Agent mutation-policy overrides can only restrict.** (2026-11-16, #110)

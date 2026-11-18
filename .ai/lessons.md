@@ -55,6 +55,11 @@ Entry format (newest first within a section):
 - **Read-modify-write AI tools must resend fields the route would clear and drop fields the server derives.** (2026-11-16, #110)
   `update_quote_line` resends `usageEstimates` and drops a stored `endDate` when the term or start changes.
 
+## Billing
+
+- **Prepaid statements bucket the ledger by `created_at`, but period-close charges are stamped at run time.** (2026-11-18, #138)
+  A catch-up or future-dated run creates charges long after (or before) their bill date. Attribute charges by `metadata.bill_date`, never by `created_at`, when computing a balance at a bill date (`sumLedgerBefore` in `prepaidPeriodClose.ts`).
+
 ## Packaging and release
 
 - **In 0.x a minor bump of a peer leaves caret ranges, so changesets bumps every dependent major.** (2026-11-16, #106)

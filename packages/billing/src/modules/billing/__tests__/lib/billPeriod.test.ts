@@ -1,5 +1,6 @@
 import {
   advanceNextBillDate,
+  clampPeriodToBillingStart,
   cloneAtMidnight,
   cycleContaining,
   deriveBillPeriod,
@@ -208,5 +209,35 @@ describe('bill cycle day — pinned cycles', () => {
   it('shiftCycles from a clamped anchor lands back on the pinned day', () => {
     expect(iso(shiftCycles(date('2026-02-28'), monthlyOn('31'), 1))).toBe('2026-03-31')
     expect(iso(shiftCycles(date('2026-02-28'), monthlyOn('31'), -1))).toBe('2026-01-31')
+  })
+})
+
+describe('clampPeriodToBillingStart — first-cycle rule (#138)', () => {
+  const cycleDay10 = { cycle: 'monthly' as const, interval: 1, day: '10' }
+
+  it('returns null when the derived first period lies entirely before the billing start', () => {
+    // First bill date = start date: deriveBillPeriod reaches one full cycle back.
+    const derived = deriveBillPeriod(date('2026-11-10'), cycleDay10)
+    expect([iso(derived.periodStart), iso(derived.periodEnd)]).toEqual(['2026-10-10', '2026-11-09'])
+    expect(clampPeriodToBillingStart(derived, date('2026-11-10'))).toBeNull()
+    // MikroORM date columns hydrate as strings.
+    expect(clampPeriodToBillingStart(derived, '2026-11-10')).toBeNull()
+  })
+
+  it('clamps the start when the billing start falls inside the period', () => {
+    const derived = deriveBillPeriod(date('2026-11-10'), cycleDay10)
+    const clamped = clampPeriodToBillingStart(derived, '2026-10-20')!
+    expect([iso(clamped.periodStart), iso(clamped.periodEnd)]).toEqual(['2026-10-20', '2026-11-09'])
+    // Start on the last day still leaves a one-day period.
+    const lastDay = clampPeriodToBillingStart(derived, '2026-11-09')!
+    expect([iso(lastDay.periodStart), iso(lastDay.periodEnd)]).toEqual(['2026-11-09', '2026-11-09'])
+  })
+
+  it('leaves the period unchanged when the billing start is on / before it, or unknown', () => {
+    const derived = deriveBillPeriod(date('2026-11-10'), cycleDay10)
+    expect(clampPeriodToBillingStart(derived, '2026-10-10')).toBe(derived)
+    expect(clampPeriodToBillingStart(derived, '2026-01-01')).toBe(derived)
+    expect(clampPeriodToBillingStart(derived, null)).toBe(derived)
+    expect(clampPeriodToBillingStart(derived, undefined)).toBe(derived)
   })
 })

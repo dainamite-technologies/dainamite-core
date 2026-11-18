@@ -208,6 +208,30 @@ export function deriveBillPeriod(
 }
 
 /**
+ * First-cycle rule (#138): a bill period never starts before the account's
+ * billing start (`billingStart` — the earliest item `bill_start_date`).
+ *
+ * - `billingStart` null, or on / before `periodStart` → the period unchanged.
+ * - `billingStart` inside the period → the period clamped to start there.
+ * - `billingStart` after `periodEnd` (the period lies entirely before the
+ *   account existed — typically the first bill date IS the start date) →
+ *   `null`: there is nothing to close, only the in-advance charges at D.
+ *
+ * Only meaningful on the first cycle (no `last_bill_date`); later periods
+ * start at `last_bill_date + 1`, which is already after the start.
+ */
+export function clampPeriodToBillingStart(
+  period: BillPeriod,
+  billingStart: Date | string | null | undefined,
+): BillPeriod | null {
+  if (!billingStart) return period
+  const start = cloneAtMidnight(billingStart)
+  if (start.getTime() <= period.periodStart.getTime()) return period
+  if (start.getTime() > period.periodEnd.getTime()) return null
+  return { periodStart: start, periodEnd: period.periodEnd }
+}
+
+/**
  * Advance `nextBillDate` by one cycle. Used by the engines after a
  * successful real-mode account run. On the cycle day: one full cycle,
  * re-pinned. Off the cycle day: the next occurrence of the day (alignment).

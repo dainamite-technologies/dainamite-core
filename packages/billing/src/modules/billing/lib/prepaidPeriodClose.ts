@@ -10,6 +10,7 @@ import {
 import {
   addDays,
   advanceNextBillDate,
+  clampPeriodToBillingStart,
   deriveBillPeriod,
   isCycleDue,
   shiftCycles,
@@ -57,6 +58,13 @@ import { toIsoDate, toUtcMidnight } from './dateOnly'
  *      (opening, top-ups, usage, charges taken at D, closing, per-line
  *      breakdown, VAT summary).
  *
+ * First cycle (#138): the period never starts before the account's billing
+ * start (earliest item `bill_start_date`) — it is clamped to it. When the
+ * whole period lies before the start (the first bill date IS the start date)
+ * there is no period to close: the cycle takes its in-advance charges and
+ * writes NO statement; the first statement then covers `[D, D' − 1]` and
+ * opens with the balance after those charges.
+ *
  * Metered usage was rated + debited in real time during the period — it is
  * NOT re-rated here; the statement only summarises it.
  *
@@ -78,8 +86,9 @@ export type PrepaidCycleStatus = 'charged' | 'previewed' | 'empty' | 'skipped_ex
 /** Same shape as the postpaid `CycleRecord` (Spec F, P-D6) plus prepaid fields. */
 export type PrepaidCycleRecord = {
   bill_date: string
-  period_start: string
-  period_end: string
+  /** Null for an opening cycle (period entirely before the billing start — no statement). */
+  period_start: string | null
+  period_end: string | null
   status: PrepaidCycleStatus
   line_count: number
   total_net: string
@@ -203,6 +212,7 @@ export async function processPrepaidAccount(
   } as never)) as BillingItem[]
   const recurringItems = items.filter((it) => it.type === 'recurring')
   const oneTimeItems = items.filter((it) => it.type === 'one_time')
+  const billingStart = earliestBillStart(items)
 
   // In-memory cycle state — persisted per cycle only in real mode.
   const watermarks = new Map<string, Date | null>(
@@ -235,7 +245,12 @@ export async function processPrepaidAccount(
       break
     }
     const nextBillDate = advanceNextBillDate(billDate, cycle)
-    const period = deriveBillPeriod(billDate, cycle, lastBilled)
+    const derived = deriveBillPeriod(billDate, cycle, lastBilled)
+    // First cycle only: never close a period from before the account existed.
+    // Null → opening cycle (charges at D, no statement).
+    const period = lastBilled ? derived : clampPeriodToBillingStart(derived, billingStart)
+    // What this cycle closed through — the next period starts the day after.
+    const closedThrough = period ? period.periodEnd : addDays(billDate, -1)
 
     // ── Recurring: service periods against the in-memory watermarks ──
     const charges: ChargeLine[] = []
@@ -297,16 +312,16 @@ export async function processPrepaidAccount(
         item.updatedAt = now
       }
       for (const item of oneTimesThisCycle) {
-        item.billedToDate = period.periodEnd
+        item.billedToDate = closedThrough
         item.updatedAt = now
       }
       account.nextBillDate = nextBillDate
-      account.lastBillDate = period.periodEnd
+      account.lastBillDate = closedThrough
       account.updatedAt = now
       await em.flush()
     }
     billDate = nextBillDate
-    lastBilled = period.periodEnd
+    lastBilled = closedThrough
   }
 
   const finalWarnings: PrepaidAccountWarnings = {
@@ -323,9 +338,21 @@ export async function processPrepaidAccount(
   }
 }
 
+/** Earliest `bill_start_date` over the account's items — its billing start (null without items). */
+function earliestBillStart(items: readonly BillingItem[]): Date | null {
+  let earliest: Date | null = null
+  for (const item of items) {
+    if (!item.billStartDate) continue
+    const start = toUtcMidnight(item.billStartDate)
+    if (!earliest || start.getTime() < earliest.getTime()) earliest = start
+  }
+  return earliest
+}
+
 type ClosePeriodInput = {
   billDate: Date
-  period: BillPeriod
+  /** Null for an opening cycle: charges only, no statement. */
+  period: BillPeriod | null
   charges: ChargeLine[]
   previousClosing: string | null
 }
@@ -361,17 +388,19 @@ async function closePrepaidPeriod(
   ctx: CycleContext,
 ): Promise<ClosePeriodResult> {
   const { period, charges } = input
-  const periodStartIso = toIsoDate(period.periodStart)
-  const periodEndIso = toIsoDate(period.periodEnd)
+  const periodStartIso = period ? toIsoDate(period.periodStart) : null
+  const periodEndIso = period ? toIsoDate(period.periodEnd) : null
 
   // Statement anti-duplicate (real only — test / dry never write statements).
+  // Matched on the period END, which identifies the bill date: a statement
+  // written before the first-cycle rule (#138) for the same bill date with an
+  // earlier, pre-start `period_start` still counts as "this period is closed".
   // Date-only parameters go as ISO strings (P-D5).
   const existingStatement =
-    ctx.mode === 'real'
+    ctx.mode === 'real' && periodEndIso
       ? await em.findOne(BillingStatement, {
           tenantId: account.tenantId,
           billAccountId: account.id,
-          periodStart: periodStartIso,
           periodEnd: periodEndIso,
         } as never)
       : null
@@ -382,17 +411,27 @@ async function closePrepaidPeriod(
   // (a top-up made on the bill date) belongs to the same statement as the
   // charges — never an opening balance that pretends the account was short.
   // Consecutive windows stay contiguous: [D_prev + 1, D + 1).
-  const windowStart = addDays(period.periodStart, 1)
+  //
+  // Opening cycle (no period): everything up to and including D folds into
+  // the opening, so the chain continues from the balance after D's charges.
   const windowEnd = addDays(input.billDate, 1) // exclusive upper bound
-  const openingBalance = await resolveOpeningBalance(em, account, windowStart, period, input.previousClosing)
-  const totalTopups = await sumByTypeInWindow(em, account, 'topup', windowStart, windowEnd)
-  const totalUsage = absMoney(await sumByTypeInWindow(em, account, 'usage', windowStart, windowEnd))
-  // Manual adjustments / reversals in the window — SIGNED. A first-class term
-  // so the statement stays self-consistent and the chain never drifts.
-  const totalAdjustments = addMoney(
-    await sumByTypeInWindow(em, account, 'adjustment', windowStart, windowEnd),
-    await sumByTypeInWindow(em, account, 'reversal', windowStart, windowEnd),
-  )
+  const windowStart = period ? addDays(period.periodStart, 1) : windowEnd
+  const openingBalance = period
+    ? await resolveOpeningBalance(em, account, windowStart, input.billDate, period, input.previousClosing)
+    : (input.previousClosing ?? (await sumLedgerBefore(em, account, windowStart, input.billDate)))
+  let totalTopups = '0.0000'
+  let totalUsage = '0.0000'
+  let totalAdjustments = '0.0000'
+  if (period) {
+    totalTopups = await sumByTypeInWindow(em, account, 'topup', windowStart, windowEnd)
+    totalUsage = absMoney(await sumByTypeInWindow(em, account, 'usage', windowStart, windowEnd))
+    // Manual adjustments / reversals in the window — SIGNED. A first-class term
+    // so the statement stays self-consistent and the chain never drifts.
+    totalAdjustments = addMoney(
+      await sumByTypeInWindow(em, account, 'adjustment', windowStart, windowEnd),
+      await sumByTypeInWindow(em, account, 'reversal', windowStart, windowEnd),
+    )
+  }
 
   let totalRecurring = '0.0000'
   let totalNet = '0.0000'
@@ -482,7 +521,7 @@ async function closePrepaidPeriod(
       : []
 
   let createdStatementId: string | null = null
-  if (ctx.mode === 'real' && ctx.statementEnabled && !existingStatement) {
+  if (ctx.mode === 'real' && ctx.statementEnabled && period && !existingStatement) {
     const now = new Date()
     const statement = em.create(BillingStatement, {
       organizationId: account.organizationId,
@@ -566,12 +605,14 @@ async function closePrepaidPeriod(
  * period's charges and break the chain. Resolution order:
  *   1. previous cycle's closing (catch-up, in this run),
  *   2. the prior persisted statement's closing (month-over-month),
- *   3. the ledger balance before the first-ever statement window.
+ *   3. the ledger balance before the first-ever statement window
+ *      (`sumLedgerBefore` — charges of earlier, statement-less cycles count).
  */
 async function resolveOpeningBalance(
   em: EntityManager,
   account: BillingAccount,
   windowStart: Date,
+  billDate: Date,
   period: BillPeriod,
   previousClosing: string | null,
 ): Promise<string> {
@@ -587,19 +628,38 @@ async function resolveOpeningBalance(
     { orderBy: { periodEnd: 'DESC' } },
   )
   if (prior) return fromUnits(toUnits(prior.closingBalance))
-  // First-ever statement: the ledger balance just before its window (only
-  // top-ups / usage exist before the first close, so created_at is safe).
-  return sumAmountsBefore(em, account, windowStart)
+  // First-ever statement: the ledger balance just before its window.
+  return sumLedgerBefore(em, account, windowStart, billDate)
 }
 
-/** Balance at `before` = SUM(amount) of transactions created strictly before it. */
-async function sumAmountsBefore(em: EntityManager, account: BillingAccount, before: Date): Promise<string> {
+/**
+ * Ledger balance before a statement window, for the first-ever statement.
+ * Real-time movements (top-ups, usage, adjustments) count by `created_at <
+ * before`. Period-close charges count by the bill date they were taken at
+ * (`metadata.bill_date < billDate`), not by `created_at`: a charge is stamped
+ * when the run executes, which for a catch-up / future-dated run is unrelated
+ * to its bill date. That keeps the charges of an earlier statement-less cycle
+ * (an opening cycle, #138) in the opening, and this bill date's own charges
+ * (already present on a re-run) out of it. Charges without a `bill_date`
+ * (older rows) fall back to `created_at`.
+ */
+async function sumLedgerBefore(
+  em: EntityManager,
+  account: BillingAccount,
+  before: Date,
+  billDate: Date,
+): Promise<string> {
   const rows = (await em.execute(
     `SELECT COALESCE(SUM(amount), 0) AS total
        FROM billing_account_transactions
       WHERE tenant_id = ? AND organization_id = ? AND bill_account_id = ?
-        AND deleted_at IS NULL AND created_at < ?`,
-    [account.tenantId, account.organizationId, account.id, before],
+        AND deleted_at IS NULL
+        AND CASE
+              WHEN type IN ('recurring', 'one_time') AND metadata->>'bill_date' IS NOT NULL
+                THEN metadata->>'bill_date' < ?
+              ELSE created_at < ?
+            END`,
+    [account.tenantId, account.organizationId, account.id, toIsoDate(billDate), before],
   )) as unknown as Array<{ total: string }>
   return fromUnits(toUnits(rows?.[0]?.total ?? 0))
 }

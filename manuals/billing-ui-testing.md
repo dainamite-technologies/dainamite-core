@@ -511,9 +511,16 @@ prepaid nie dotyka kont postpaid.
    otwiera szczegół: Amount, Provider, Payment ID, Gateway transaction,
    Balance transaction, **VAT receipt**, ID + **View account**.
 2. **Billing → Statements** — zestawienia okresowe; kolumny **Period /
-   Opening / Top-ups / Usage / Recurring / Closing / Status**. Szczegół
-   pokazuje rozbicie Opening → Top-ups / Usage / Recurring / Adjustments →
-   **Closing** oraz tabelę „Period-close charges".
+   Opening / Top-ups / Usage / Adjustments / Charges (taken on bill date) /
+   Closing / Status**. W każdym wierszu: Opening + Top-ups + Adjustments −
+   Usage − Charges = Closing. Szczegół pokazuje to samo rozbicie oraz tabelę
+   „Period-close charges" z okresem usługi każdej opłaty i podpowiedzią, że
+   opłaty pobierane są w dniu rozliczenia (dzień po końcu okresu) — opłata
+   z góry dotyczy więc następnego okresu.
+   ✅ Pierwsze zestawienie nigdy nie zaczyna się przed startem konta (najwcześniejszą
+   datą startu pozycji). Gdy pierwsza data rozliczenia = data startu, pierwszy
+   przebieg pobiera tylko opłatę z góry, bez zestawienia; pierwsze zestawienie
+   obejmuje okres od daty startu.
 
 > Top-upy i zestawienia powstają w pełnym cyklu (przechwycenie płatności /
 > zamknięcie okresu przez Bill Run). Bez bramki / przebiegu listy bywają

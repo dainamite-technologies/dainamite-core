@@ -1,14 +1,14 @@
 "use client"
 
 import * as React from 'react'
-import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { useLocale, useT } from '@open-mercato/shared/lib/i18n/context'
+import { formatBillingDay } from '../../lib/displayDate'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import {
   accountBillingState,
   accountBillingTone,
   type AccountBillingInput,
 } from '../../lib/accountBillingState'
-import { formatDateOnly } from '../../lib/dateOnly'
 
 /**
  * Billing-state pill for an account ("Billed through 14/11/2026",
@@ -17,8 +17,9 @@ import { formatDateOnly } from '../../lib/dateOnly'
  */
 export function AccountBillingPill({ account, today }: { account: AccountBillingInput; today: string }) {
   const t = useT()
+  const locale = useLocale()
   const state = accountBillingState(account, today)
-  const date = formatDateOnly(state.date)
+  const date = formatBillingDay(state.date, locale)
   const label = (() => {
     switch (state.status) {
       case 'inactive':

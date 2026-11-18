@@ -4,7 +4,9 @@ import Link from 'next/link'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import type { LegacyColumnDef as ColumnDef } from '@tanstack/react-table/legacy'
 import { FileDown, Mail, Pencil, Plus, Trash2 } from 'lucide-react'
-import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { useLocale, useT } from '@open-mercato/shared/lib/i18n/context'
+import { formatBillingDateTime, formatBillingDay } from '../../../../lib/displayDate'
+import { localizeDescriptionPeriod } from '../../../../lib/linePeriod'
 import { Page, PageBody, PageHeader } from '@open-mercato/ui/backend/Page'
 import { FormHeader } from '@open-mercato/ui/backend/forms'
 import { BillingDataTable as DataTable } from '../../../../components/BillingDataTable'
@@ -163,6 +165,7 @@ function formatMoney(value: string, currency: string): string {
 
 export default function BillingInvoiceDetailPage(props: { params?: { id?: string } }) {
   const t = useT()
+  const locale = useLocale()
   // OM serves backend pages through a catch-all route — the dynamic
   // `[id]` segment arrives as a page prop; `useParams()` is the fallback.
   const urlParams = useParams<{ id: string }>()
@@ -285,10 +288,10 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
       {
         accessorKey: 'created_at',
         header: t('billing.payments.allocations.at', 'When'),
-        cell: ({ row }) => new Date(row.original.created_at).toLocaleDateString(),
+        cell: ({ row }) => formatBillingDateTime(row.original.created_at, locale),
       },
     ],
-    [t],
+    [t, locale],
   )
   const searchParams = useSearchParams()
   const backHref = resolveInvoiceReturnTarget({
@@ -513,7 +516,7 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
       {
         accessorKey: 'at',
         header: t('billing.invoices.deliveries.columns.at', 'When'),
-        cell: ({ row }) => new Date(row.original.at).toLocaleString(),
+        cell: ({ row }) => formatBillingDateTime(row.original.at, locale),
       },
       { accessorKey: 'to', header: t('billing.invoices.deliveries.columns.to', 'Recipient') },
       {
@@ -541,7 +544,7 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
         meta: { truncate: true, maxWidth: '280px' },
       },
     ],
-    [t],
+    [t, locale],
   )
 
   const lineColumns = React.useMemo<ColumnDef<InvoiceLine>[]>(
@@ -558,7 +561,7 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
           const operatorAdded = row.original.metadata?.operator_added === true
           return (
             <div className="flex flex-col gap-1">
-              <span>{row.original.description ?? '—'}</span>
+              <span>{row.original.description ? localizeDescriptionPeriod(row.original.description, (day) => formatBillingDay(day, locale)) : '—'}</span>
               <InvoiceLineExtras
                 description={row.original.description}
                 servicePeriodStart={row.original.service_period_start}
@@ -639,7 +642,7 @@ export default function BillingInvoiceDetailPage(props: { params?: { id?: string
         },
       },
     ],
-    [canEditLines, handleRemoveLine, t],
+    [canEditLines, handleRemoveLine, t, locale],
   )
 
   const dialogInitial = React.useMemo<Partial<LineFormValues> | undefined>(() => {

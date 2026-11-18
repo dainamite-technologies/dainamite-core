@@ -2,7 +2,7 @@
 import * as React from 'react'
 import Link from 'next/link'
 import type { LegacyColumnDef as ColumnDef } from '@tanstack/react-table/legacy'
-import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { useLocale, useT } from '@open-mercato/shared/lib/i18n/context'
 import { BillingDataTable as DataTable } from '../BillingDataTable'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
@@ -24,6 +24,7 @@ type AccountUsageRow = {
 /** The account's usage records (workspace Usage tab). */
 export function AccountUsageTab({ accountId }: { accountId: string }) {
   const t = useT()
+  const locale = useLocale()
   const [rows, setRows] = React.useState<AccountUsageRow[]>([])
   const [page, setPage] = React.useState(1)
   const [total, setTotal] = React.useState(0)
@@ -74,7 +75,7 @@ export function AccountUsageTab({ accountId }: { accountId: string }) {
         accessorKey: 'period_start',
         header: t('billing.usage.columns.period', 'Period'),
         cell: ({ row }) =>
-          `${formatDate(row.original.period_start)} – ${formatDate(row.original.period_end)}`,
+          `${formatDate(row.original.period_start, locale)} – ${formatDate(row.original.period_end, locale)}`,
       },
       {
         accessorKey: 'line_description',
@@ -100,7 +101,7 @@ export function AccountUsageTab({ accountId }: { accountId: string }) {
           ),
       },
     ],
-    [t],
+    [t, locale],
   )
 
   return (

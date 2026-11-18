@@ -1,6 +1,6 @@
 "use client"
 import * as React from 'react'
-import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { useLocale, useT } from '@open-mercato/shared/lib/i18n/context'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { DetailCard, DetailField } from '../DetailFields'
 import { CustomerLabel } from '../CustomerLabel'
@@ -13,6 +13,7 @@ import { accountCycleSpec, rowCycle } from '../../lib/accountCycle'
 /** Read-only account fields (workspace Overview tab). */
 export function AccountView({ row }: { row: AccountRow }) {
   const t = useT()
+  const locale = useLocale()
   const summarizeCycle = useBillCycleSummary()
   const customerKind = row.customer_kind ?? 'company'
   const [customerName, setCustomerName] = React.useState<string | null>(null)
@@ -78,10 +79,10 @@ export function AccountView({ row }: { row: AccountRow }) {
         {summarizeCycle(accountCycleSpec(rowCycle(row)))}
       </DetailField>
       <DetailField label={t('billing.accounts.columns.next_bill', 'Next bill')}>
-        {formatDate(row.next_bill_date)}
+        {formatDate(row.next_bill_date, locale)}
       </DetailField>
       <DetailField label={t('billing.accounts.columns.last_bill', 'Last bill')}>
-        {formatDate(row.last_bill_date)}
+        {formatDate(row.last_bill_date, locale)}
       </DetailField>
       <DetailField label={t('billing.accounts.form.invoice_email', 'Invoice email')}>
         {row.invoice_email}

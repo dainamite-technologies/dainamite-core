@@ -3,7 +3,8 @@ import * as React from 'react'
 import { useRouter } from 'next/navigation'
 import { Play } from 'lucide-react'
 import type { LegacyColumnDef as ColumnDef } from '@tanstack/react-table/legacy'
-import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { useLocale, useT } from '@open-mercato/shared/lib/i18n/context'
+import { formatBillingDateTime, formatBillingDay } from '../../../lib/displayDate'
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
 import { BillingDataTable as DataTable } from '../../../components/BillingDataTable'
@@ -79,18 +80,6 @@ type ListResponse = {
   totalPages: number
 }
 
-function formatDate(value: string | null | undefined): string {
-  if (!value) return '—'
-  const parsed = new Date(value)
-  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString()
-}
-
-function formatDateOnly(value: string | null | undefined): string {
-  if (!value) return '—'
-  const parsed = new Date(value)
-  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleDateString()
-}
-
 function statusVariant(
   status: BillRunRow['status'],
 ): 'default' | 'success' | 'warning' | 'error' {
@@ -115,6 +104,7 @@ function modeBadge(row: BillRunRow): { label: string; variant: 'default' | 'warn
 
 export default function BillRunsListPage() {
   const t = useT()
+  const locale = useLocale()
   const router = useRouter()
   const [rows, setRows] = React.useState<BillRunRow[]>([])
   const [page, setPage] = React.useState(1)
@@ -281,7 +271,7 @@ export default function BillRunsListPage() {
       {
         accessorKey: 'as_of_date',
         header: t('billing.runs.columns.as_of_date', 'As-of date'),
-        cell: ({ row }) => formatDateOnly(row.original.as_of_date),
+        cell: ({ row }) => formatBillingDay(row.original.as_of_date, locale),
       },
       {
         accessorKey: 'triggered_by',
@@ -309,15 +299,15 @@ export default function BillRunsListPage() {
       {
         accessorKey: 'started_at',
         header: t('billing.runs.columns.started_at', 'Started'),
-        cell: ({ row }) => formatDate(row.original.started_at),
+        cell: ({ row }) => formatBillingDateTime(row.original.started_at, locale),
       },
       {
         accessorKey: 'finished_at',
         header: t('billing.runs.columns.finished_at', 'Finished'),
-        cell: ({ row }) => formatDate(row.original.finished_at),
+        cell: ({ row }) => formatBillingDateTime(row.original.finished_at, locale),
       },
     ],
-    [t],
+    [t, locale],
   )
 
   return (

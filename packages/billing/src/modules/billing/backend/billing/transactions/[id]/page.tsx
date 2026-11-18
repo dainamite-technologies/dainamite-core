@@ -2,7 +2,9 @@
 import * as React from 'react'
 import Link from 'next/link'
 import { useParams } from 'next/navigation'
-import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { useLocale, useT } from '@open-mercato/shared/lib/i18n/context'
+import { formatBillingDateTime, formatBillingDay } from '../../../../lib/displayDate'
+import { localizeDescriptionPeriod } from '../../../../lib/linePeriod'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
 import { FormHeader } from '@open-mercato/ui/backend/forms'
 import { Tag } from '@open-mercato/ui/primitives/tag'
@@ -29,12 +31,6 @@ type TransactionRow = {
   created_at: string
 }
 
-function formatDate(value: string | null | undefined): string {
-  if (!value) return '—'
-  const d = new Date(value)
-  return Number.isNaN(d.getTime()) ? value : d.toLocaleString()
-}
-
 // A monospace value that links somewhere when present, else an em dash.
 function RefField({ id, href }: { id: string | null; href?: string }) {
   if (!id) return <>—</>
@@ -50,6 +46,7 @@ function RefField({ id, href }: { id: string | null; href?: string }) {
 
 export default function BillingTransactionDetailPage(props: { params?: { id?: string } }) {
   const t = useT()
+  const locale = useLocale()
   const urlParams = useParams<{ id: string }>()
   const transactionId = (props.params?.id ?? urlParams?.id ?? '') as string
 
@@ -137,10 +134,10 @@ export default function BillingTransactionDetailPage(props: { params?: { id?: st
             </Tag>
           </DetailField>
           <DetailField label={t('billing.transactions.columns.when', 'When')}>
-            {formatDate(row.created_at)}
+            {formatBillingDateTime(row.created_at, locale)}
           </DetailField>
           <DetailField label={t('billing.transactions.columns.description', 'Description')} fullWidth>
-            {row.description || '—'}
+            {row.description ? localizeDescriptionPeriod(row.description, (day) => formatBillingDay(day, locale)) : '—'}
           </DetailField>
           <DetailField label={t('billing.transactions.detail.source_ref', 'Source ref')}>
             <span className="font-mono text-xs">{row.source_ref || '—'}</span>

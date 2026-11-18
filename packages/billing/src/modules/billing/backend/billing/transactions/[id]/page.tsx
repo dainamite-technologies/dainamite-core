@@ -10,6 +10,7 @@ import { Button } from '@open-mercato/ui/primitives/button'
 import { LoadingMessage, ErrorMessage } from '@open-mercato/ui/backend/detail'
 import { readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
 import { DetailCard, DetailField } from '../../../../components/DetailFields'
+import { TransactionDescription } from '../../../../components/TransactionDescription'
 import { txnVariant } from '../page'
 
 type TransactionRow = {
@@ -25,6 +26,7 @@ type TransactionRow = {
   statement_id: string | null
   description: string
   source_ref: string | null
+  metadata: Record<string, unknown> | null
   user_id: string | null
   created_at: string
 }
@@ -140,7 +142,11 @@ export default function BillingTransactionDetailPage(props: { params?: { id?: st
             {formatDate(row.created_at)}
           </DetailField>
           <DetailField label={t('billing.transactions.columns.description', 'Description')} fullWidth>
-            {row.description || '—'}
+            {row.description ? (
+              <TransactionDescription description={row.description} metadata={row.metadata} />
+            ) : (
+              '—'
+            )}
           </DetailField>
           <DetailField label={t('billing.transactions.detail.source_ref', 'Source ref')}>
             <span className="font-mono text-xs">{row.source_ref || '—'}</span>

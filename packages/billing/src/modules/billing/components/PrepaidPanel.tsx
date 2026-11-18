@@ -6,6 +6,7 @@ import type { LegacyColumnDef as ColumnDef } from '@tanstack/react-table/legacy'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { BillingDataTable as DataTable } from './BillingDataTable'
 import { Tag } from '@open-mercato/ui/primitives/tag'
+import { TransactionDescription } from './TransactionDescription'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { flash } from '@open-mercato/ui/backend/FlashMessages'
 import { apiCall, apiCallOrThrow, readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
@@ -39,6 +40,7 @@ type TransactionRow = {
   amount: string
   balance_after: string
   description: string
+  metadata: Record<string, unknown> | null
   created_at: string
 }
 
@@ -229,7 +231,9 @@ export function PrepaidPanel({
       {
         accessorKey: 'description',
         header: t('billing.transactions.columns.description', 'Description'),
-        cell: ({ row }) => <span className="text-sm">{row.original.description}</span>,
+        cell: ({ row }) => (
+          <TransactionDescription description={row.original.description} metadata={row.original.metadata} />
+        ),
       },
       {
         accessorKey: 'amount',

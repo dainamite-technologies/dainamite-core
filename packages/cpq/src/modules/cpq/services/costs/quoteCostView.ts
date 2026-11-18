@@ -7,6 +7,7 @@ import {
 } from '../../data/entities'
 import { isArcTerminationLine } from '../arcLineRemoval'
 import { isArcMirrorLine } from '../arcPriceFreeze'
+import type { CarriedPrevious } from './arcCostRead'
 import type { ResolvedCharge, TenantScope } from '../types'
 import { computeQuoteMargin, priceBasisCostFlags, type MarginCost, type MarginLine, type MarginMarkup, type PriceBasisFlags, type QuoteMargin } from './quoteMargin'
 
@@ -72,7 +73,19 @@ export async function loadQuoteMarginState(em: EntityManager, quote: CpqQuoteCon
  * What a user WITHOUT `cpq.costs.view` may see of a cost line: identity, status
  * and expiry. No amount, currency, supplier, validity date, note or markup.
  */
-export function redactedCostView(row: CpqQuoteLineCost) {
+export type CostViewContext = {
+  /** Open requests opened before this instant are overdue (`overdueCutoff`); absent = overdue is not computed. */
+  overdueCutoff?: Date | null
+  /** Q14 eligibility of the cost line's quote line; absent = not computed (the UI then assumes eligible). */
+  requestEligible?: boolean
+  /** The quote's currency: names the `to` of a missing pair and the target of `convertedInstanceAmount`. */
+  quoteCurrencyCode?: string
+  /** The carried-from item cost's values (carried lines only; `cpq.costs.view` only, see `loadCarriedPrevious`). */
+  previous?: CarriedPrevious
+}
+
+export function redactedCostView(row: CpqQuoteLineCost, context: CostViewContext = {}) {
+  const requestedAt = row.requestedAt ? new Date(row.requestedAt) : null
   return {
     id: row.id,
     costKey: row.costKey,
@@ -80,14 +93,30 @@ export function redactedCostView(row: CpqQuoteLineCost) {
     role: row.role,
     valueStatus: row.valueStatus,
     expired: isCostExpired(row),
+    // ARC flags (booleans only, no values): a cost carried from the subscription, and one that needs renegotiation on a Renew.
+    carried: row.origin === 'carried',
+    renegotiationDue: row.renegotiationDue === true,
     ...(row.errorCode ? { error: row.errorCode } : {}),
+    // Sourcing status projection (feature spec §API Contracts): ids and statuses only, never an amount, supplier or note.
+    sourcingStatus: row.sourcingStatus ?? 'not_requested',
+    requestSeq: row.requestSeq ?? null,
+    requestedAt: requestedAt ? requestedAt.toISOString() : null,
+    hasAnswerPending: row.proposedAmount !== null && row.proposedAmount !== undefined,
+    overdue: row.sourcingStatus === 'requested' && requestedAt !== null && context.overdueCutoff != null && requestedAt < context.overdueCutoff,
+    ...(context.requestEligible !== undefined ? { requestEligible: context.requestEligible } : {}),
   }
 }
 
+/** Per-instance amount in the quote currency, 4 dp (`null` without a snapshot: a quote-currency or unconverted cost). */
+export function convertedInstanceAmount(instanceAmount: string | number | null | undefined, fxRate: string | number | null | undefined): string | null {
+  if (instanceAmount === null || instanceAmount === undefined || fxRate === null || fxRate === undefined || fxRate === '') return null
+  return String(Math.round((Number(instanceAmount) * Number(fxRate) + Number.EPSILON) * 10_000) / 10_000)
+}
+
 /** The full cost line, for holders of `cpq.costs.view`. */
-export function fullCostView(row: CpqQuoteLineCost) {
+export function fullCostView(row: CpqQuoteLineCost, context: CostViewContext = {}) {
   return {
-    ...redactedCostView(row),
+    ...redactedCostView(row, context),
     quoteLineId: row.quoteLineId,
     chargeCode: row.chargeCode,
     origin: row.origin,
@@ -99,7 +128,25 @@ export function fullCostView(row: CpqQuoteLineCost) {
     unitAmount: row.unitAmount,
     instanceAmount: row.instanceAmount,
     currencyCode: row.currencyCode,
+    // FX snapshot (cost data: only here, never in the redacted view). `convertedInstanceAmount` is in the quote currency.
+    quoteCurrencyCode: context.quoteCurrencyCode ?? null,
+    fxRate: row.fxRate ?? null,
+    fxRateDate: row.fxRateDate ?? null,
+    fxRateSource: row.fxRateSource ?? null,
+    fxRateDerivation: row.fxRateDerivation ?? null,
+    convertedInstanceAmount: convertedInstanceAmount(row.instanceAmount, row.fxRate),
+    // Index snapshot (cost data: only here): the value, date and revision the unit amount was computed from (R4).
+    indexSnapshot: row.indexSnapshot ?? null,
+    ...(row.errorCode === 'CURRENCY_NO_RATE' && row.currencyCode && context.quoteCurrencyCode
+      ? { errorDetail: { code: row.errorCode, from: row.currencyCode, to: context.quoteCurrencyCode, date: today() } } : {}),
     sourcingStatus: row.sourcingStatus,
+    costRequestId: row.costRequestId ?? null,
+    requestSeq: row.requestSeq ?? null,
+    answeredAt: row.answeredAt ? new Date(row.answeredAt).toISOString() : null,
+    declineReason: row.declineReason ?? null,
+    proposedAnswer: row.proposedAnswer ?? null,
+    requestSupplierId: row.requestSupplierId ?? null,
+    requestSupplierName: row.requestSupplierName ?? null,
     supplierId: row.supplierId,
     supplierName: row.supplierName,
     supplierQuoteRef: row.supplierQuoteRef,
@@ -107,6 +154,7 @@ export function fullCostView(row: CpqQuoteLineCost) {
     supplierTermEnd: row.supplierTermEnd,
     supplierMinTermMonths: row.supplierMinTermMonths,
     note: row.note,
+    ...(context.previous ? { previous: context.previous } : {}),
   }
 }
 export type FullCostView = ReturnType<typeof fullCostView>

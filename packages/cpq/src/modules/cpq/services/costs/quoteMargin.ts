@@ -39,9 +39,10 @@ export type MarginCost = {
   role: string
   costType: 'nrc' | 'mrc' | string
   valueStatus: 'none' | 'estimated' | 'confirmed' | string
-  /** Per-instance amount (cost model applied), numeric string or number. */
+  /** Per-instance amount (cost model applied) in the cost's own currency, numeric string or number. */
   instanceAmount: string | number | null
   currencyCode?: string | null
+  /** FX snapshot into the quote currency (null / absent for a cost in the quote currency). */
   fxRate?: string | number | null
   /** ISO date `YYYY-MM-DD`. */
   validUntil?: string | null
@@ -111,7 +112,21 @@ function finalize(acc: Acc): MarginFigures {
   }
 }
 
-const isKnown = (cost: MarginCost) => cost.valueStatus !== 'none' && cost.instanceAmount !== null && cost.instanceAmount !== undefined
+const hasFxRate = (fxRate: string | number | null | undefined) => fxRate !== null && fxRate !== undefined && fxRate !== ''
+const isKnown = (cost: Pick<MarginCost, 'valueStatus' | 'instanceAmount'>) => cost.valueStatus !== 'none' && cost.instanceAmount !== null && cost.instanceAmount !== undefined
+
+/**
+ * Cost total of ONE cost line in the document currency: the per-instance amount (cost model applied) x line
+ * quantity x `fx_rate` when the cost is foreign (a cost in the document currency carries no rate), multiplied at
+ * full precision and rounded once: the exact figure `computeQuoteMargin` accumulates. `null` for an unknown cost
+ * (status `none`, which includes a foreign cost with no rate, or no amount): it contributes 0 to the margin and
+ * leaves its charge uncovered. Order line costs and inventory costs store this as `total_amount`, so an order
+ * shows the margin its quote showed.
+ */
+export function costLineTotal(cost: Pick<MarginCost, 'valueStatus' | 'instanceAmount' | 'fxRate'>, quantity: number): number | null {
+  if (!isKnown(cost)) return null
+  return R(Number(cost.instanceAmount) * (hasFxRate(cost.fxRate) ? Number(cost.fxRate) : 1) * quantity)
+}
 
 /** Flags of the PRICE-BASIS cost lines only ("indicative" semantics: what the price, not the margin, rests on). */
 export type PriceBasisFlags = { hasPendingCosts: boolean; hasEstimatedCosts: boolean }
@@ -136,7 +151,8 @@ function costAcc(costs: MarginCost[], line: MarginLine, today: string): Acc {
     if (!isKnown(cost)) { acc.pending = true; continue }
     if (cost.valueStatus === 'estimated') acc.estimated = true
     if (cost.validUntil && cost.validUntil < today) acc.expired = true
-    const total = Number(cost.instanceAmount) * line.quantity
+    // Converted at the stored FX snapshot, full precision (FX spec R2); a cost in the quote currency carries no rate.
+    const total = (hasFxRate(cost.fxRate) ? Number(cost.instanceAmount) * Number(cost.fxRate) : Number(cost.instanceAmount)) * line.quantity
     if (cost.costType === 'nrc') {
       acc.nrcCost += total
       if (line.includeInDeal !== false) acc.contractCost += total

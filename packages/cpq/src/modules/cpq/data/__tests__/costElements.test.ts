@@ -1,5 +1,6 @@
 import {
   costElementContextError,
+  costElementIndexError,
   costElementShapeError,
   cpqChargeCostElementCreateSchema,
   cpqChargeCostElementUpdateSchema,
@@ -10,6 +11,7 @@ const chargeId = '11111111-1111-4111-8111-111111111111'
 const tableId = '22222222-2222-4222-8222-222222222222'
 const fixed: CostElementShape = { role: 'margin_only', costType: 'nrc', source: 'fixed', costModel: 'flat', amount: 100, currencyCode: 'EUR' }
 const table: CostElementShape = { role: 'price_basis', costType: 'mrc', source: 'table', costModel: 'flat', costTableId: tableId, costColumnKey: 'mrc' }
+const indexElement: CostElementShape = { role: 'price_basis', costType: 'mrc', source: 'index', costModel: 'flat', costIndexId: tableId, indexFactor: 0.5, indexOffset: 2 }
 const onRequest: CostElementShape = { role: 'price_basis', costType: 'mrc', source: 'on_request', costModel: 'flat' }
 
 describe('cpqChargeCostElementCreateSchema', () => {
@@ -30,7 +32,18 @@ describe('cpqChargeCostElementCreateSchema', () => {
   })
 
   it('rejects unknown fields', () => {
-    expect(cpqChargeCostElementCreateSchema.safeParse({ ...valid, costIndexId: tableId }).success).toBe(false)
+    expect(cpqChargeCostElementCreateSchema.safeParse({ ...valid, bogus: 1 }).success).toBe(false)
+  })
+
+  it('parses an index element (factor, offset optional) and bounds factor > 0, offset >= 0', () => {
+    const index = { productChargeId: chargeId, code: 'power', name: 'Power', ...indexElement }
+    expect(cpqChargeCostElementCreateSchema.safeParse(index).success).toBe(true)
+    expect(cpqChargeCostElementCreateSchema.safeParse({ ...index, indexFactor: undefined, indexOffset: undefined }).success).toBe(true)
+    for (const [field, value] of [['indexFactor', 0], ['indexFactor', -1], ['indexFactor', 0.0000001], ['indexOffset', -0.0001], ['indexOffset', 0.00001], ['costIndexId', 'nope']] as const) {
+      const result = cpqChargeCostElementCreateSchema.safeParse({ ...index, [field]: value })
+      expect(result.success).toBe(false)
+      if (!result.success) expect(result.error.issues[0].path[0]).toBe(field)
+    }
   })
 })
 
@@ -52,12 +65,25 @@ describe('costElementShapeError (§1.4.4 field rules)', () => {
     ['on_request with estimate', { ...onRequest, estimateAmount: 300, currencyCode: 'EUR' }],
     ['a tiered table lookup', { ...table, costModel: 'tiered' }],
     ['a per_unit fixed amount', { ...fixed, costModel: 'per_unit' }],
+    ['an index element', indexElement],
+    ['a per_unit index element', { ...indexElement, costModel: 'per_unit' }],
+    ['an index element with the default factor and offset', { ...indexElement, indexFactor: undefined, indexOffset: null }],
   ])('accepts %s', (_label, element) => {
     expect(costElementShapeError(element as CostElementShape)).toBeNull()
   })
 
   it.each([
-    ['index source (later feature)', { ...fixed, source: 'index' }, 'SOURCE_NOT_AVAILABLE'],
+    ['an index element without an index', { ...indexElement, costIndexId: null }, 'INDEX_REQUIRED'],
+    ['a tiered index element', { ...indexElement, costModel: 'tiered' }, 'MODEL_REQUIRES_TABLE'],
+    ['a volume index element', { ...indexElement, costModel: 'volume' }, 'MODEL_REQUIRES_TABLE'],
+    ['an index element with an amount', { ...indexElement, amount: 5 }, 'FIELD_NOT_ALLOWED'],
+    ['an index element with a currency', { ...indexElement, currencyCode: 'EUR' }, 'FIELD_NOT_ALLOWED'],
+    ['an index element with a table', { ...indexElement, costTableId: tableId }, 'FIELD_NOT_ALLOWED'],
+    ['an index element with an estimate', { ...indexElement, estimateAmount: 5 }, 'FIELD_NOT_ALLOWED'],
+    ['a fixed element with an index id', { ...fixed, costIndexId: tableId }, 'INDEX_FIELDS_NOT_ALLOWED'],
+    ['a table element with a factor', { ...table, indexFactor: 1 }, 'INDEX_FIELDS_NOT_ALLOWED'],
+    ['an on_request element with an offset', { ...onRequest, indexOffset: 0 }, 'INDEX_FIELDS_NOT_ALLOWED'],
+    ['an unknown source', { ...fixed, source: 'catalog' }, 'SOURCE_NOT_AVAILABLE'],
     ['tiered without table', { ...fixed, costModel: 'tiered' }, 'MODEL_REQUIRES_TABLE'],
     ['volume on request', { ...onRequest, costModel: 'volume' }, 'MODEL_REQUIRES_TABLE'],
     ['fixed without amount', { ...fixed, amount: null }, 'AMOUNT_REQUIRED'],
@@ -71,6 +97,14 @@ describe('costElementShapeError (§1.4.4 field rules)', () => {
     ['on_request estimate without currency', { ...onRequest, estimateAmount: 300 }, 'CURRENCY_REQUIRED'],
   ])('rejects %s with %s', (_label, element, code) => {
     expect(costElementShapeError(element as CostElementShape)).toBe(code)
+  })
+
+  it('costElementIndexError: a missing / deleted index is INDEX_REQUIRED, an inactive one INDEX_INACTIVE, other sources are ignored', () => {
+    expect(costElementIndexError({ source: 'index' }, { isActive: true })).toBeNull()
+    expect(costElementIndexError({ source: 'index' }, null)).toBe('INDEX_REQUIRED')
+    expect(costElementIndexError({ source: 'index' }, { isActive: true, deletedAt: new Date() })).toBe('INDEX_REQUIRED')
+    expect(costElementIndexError({ source: 'index' }, { isActive: false })).toBe('INDEX_INACTIVE')
+    expect(costElementIndexError({ source: 'fixed' }, null)).toBeNull()
   })
 
   it('treats a zero amount as present', () => {

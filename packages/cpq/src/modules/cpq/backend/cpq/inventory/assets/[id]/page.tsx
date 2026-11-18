@@ -11,6 +11,7 @@ import {
   type AssetStatus,
 } from '../../../../../components/statusMaps'
 import { StatusPath } from '../../../../../components/StatusPath'
+import { AssetCostsPanel } from '../../../../../components/costs/AssetCostsPanel'
 
 type AssetDetail = {
   id: string
@@ -372,6 +373,9 @@ export default function AssetDetailPage(props: { params?: { id?: string } }) {
           </table>
         </div>
       )}
+
+      {/* Costs (cost-plus): status chips for everyone, amounts and asset margin for `cpq.costs.view` holders; nothing while the toggle is off. */}
+      <AssetCostsPanel assetId={asset.id} subscriptionId={asset.subscriptionId} currency={currency} />
 
       {/* Metadata */}
       {asset.metadata && Object.keys(asset.metadata).length > 0 && (

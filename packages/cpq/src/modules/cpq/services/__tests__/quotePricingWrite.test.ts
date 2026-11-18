@@ -136,3 +136,72 @@ describe('createMarginTracker skip rules', () => {
     expect(em.findOne).not.toHaveBeenCalled()
   })
 })
+
+describe('withQuotePricingWrite options object', () => {
+  it('short-circuit returns its result, commits nothing, keeps the revision and skips execute and afterCommit', async () => {
+    const { quote, transaction, em } = setup()
+    const execute = jest.fn()
+    const afterCommit = jest.fn()
+    const result = await withQuotePricingWrite(em, 'quote', scope, execute, error, {
+      shortCircuit: async (_tx, locked) => { expect(locked).toBe(quote); return 'noop' },
+      afterCommit,
+    })
+    expect(result).toBe('noop')
+    expect(execute).not.toHaveBeenCalled()
+    expect(afterCommit).not.toHaveBeenCalled()
+    expect(transaction.flush).not.toHaveBeenCalled()
+    expect(quote.pricingRevision).toBe(4)
+  })
+
+  it('a short-circuit returning undefined falls through to the normal write', async () => {
+    const { quote, em } = setup()
+    const result = await withQuotePricingWrite(em, 'quote', scope, async () => 'saved', error, { shortCircuit: () => undefined })
+    expect(result).toBe('saved')
+    expect(quote.pricingRevision).toBe(5)
+  })
+
+  it('a short-circuit refusal throws before the revision bump', async () => {
+    const { quote, transaction, em } = setup()
+    await expect(withQuotePricingWrite(em, 'quote', scope, jest.fn(), error, {
+      shortCircuit: () => { throw error(409, 'REFUSED') },
+    })).rejects.toMatchObject({ status: 409, message: 'REFUSED' })
+    expect(quote.pricingRevision).toBe(4)
+    expect(transaction.flush).not.toHaveBeenCalled()
+  })
+
+  it('honours expectedRevision and validate from the options object', async () => {
+    const { em } = setup()
+    await expect(withQuotePricingWrite(em, 'quote', scope, jest.fn(), error, { expectedRevision: 3 })).rejects.toMatchObject({ status: 409 })
+    await expect(withQuotePricingWrite(em, 'quote', scope, jest.fn(), error, { validate: () => { throw error(422, 'INVALID') } })).rejects.toMatchObject({ status: 422 })
+  })
+
+  it('runs afterCommit only after the transaction resolved, with the result and the quote', async () => {
+    const { quote, isolated, em } = setup()
+    const order: string[] = []
+    isolated.transactional.mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) => {
+      const value = await fn({ findOne: jest.fn().mockResolvedValue(quote), flush: jest.fn() })
+      order.push('commit')
+      return value
+    })
+    const afterCommit = jest.fn(async () => { order.push('afterCommit') })
+    await withQuotePricingWrite(em, 'quote', scope, async () => { order.push('execute'); return 'saved' }, error, { afterCommit })
+    expect(order).toEqual(['execute', 'commit', 'afterCommit'])
+    expect(afterCommit).toHaveBeenCalledWith('saved', quote)
+  })
+
+  it('does not run afterCommit when the write fails', async () => {
+    const { em } = setup()
+    const afterCommit = jest.fn()
+    await expect(withQuotePricingWrite(em, 'quote', scope, async () => { throw new Error('boom') }, error, { afterCommit })).rejects.toThrow('boom')
+    expect(afterCommit).not.toHaveBeenCalled()
+  })
+
+  it('swallows and logs an afterCommit error', async () => {
+    const { em } = setup()
+    const log = jest.spyOn(console, 'error').mockImplementation(() => undefined)
+    const result = await withQuotePricingWrite(em, 'quote', scope, async () => 'saved', error, { afterCommit: () => { throw new Error('flush failed') } })
+    expect(result).toBe('saved')
+    expect(log).toHaveBeenCalled()
+    log.mockRestore()
+  })
+})

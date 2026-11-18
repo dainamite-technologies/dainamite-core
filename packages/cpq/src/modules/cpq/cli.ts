@@ -4,6 +4,9 @@ import type { EntityManager } from '@mikro-orm/postgresql'
 import { seedCpqDemo } from './lib/seeds/demo'
 import { seedPriceAdjustmentDefaults } from './lib/priceAdjustmentDefaults'
 import { seedCostPlusDefaults } from './lib/costPlusDefaults'
+import { scrubChangeLogCosts } from './lib/scrubChangeLogCosts'
+import { registerCostExpirySchedule } from './lib/costExpirySchedule'
+import type { CpqCostExpiryService } from './services/costs/costExpiryService'
 
 /**
  * `mercato cpq seed [--reset] [--tenant <id>] [--org <id>]`
@@ -133,14 +136,107 @@ const seedPriceAdjustments: ModuleCli = {
  */
 const seedCostPlus: ModuleCli = {
   command: 'seed-cost-plus',
-  async run() {
+  async run(rest) {
+    const args = parseArgs(rest)
     const container = await createRequestContainer()
     const em = container.resolve<EntityManager>('em')
     try {
       await seedCostPlusDefaults(em.fork())
       console.log('[cpq seed-cost-plus] cpq.cost_plus toggle registered (existing values kept) ✓')
+      // Supplier cost expiry schedule (index-costs spec): an upsert per organization that never touches `isEnabled`.
+      const scopes = await resolveAllScopes(em, args)
+      for (const scope of scopes) {
+        const registered = await registerCostExpirySchedule(container, scope)
+        if (!registered) {
+          console.log('[cpq seed-cost-plus] scheduler module not registered: no cost expiry schedule (run-cost-expiry still works)')
+          break
+        }
+        console.log(`[cpq seed-cost-plus] cost expiry schedule tenant=${scope.tenantId} org=${scope.organizationId} ✓`)
+      }
     } catch (error) {
       console.error('[cpq seed-cost-plus] failed', error)
+      process.exitCode = 1
+    }
+  },
+}
+
+const DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/
+
+/**
+ * `mercato cpq run-cost-expiry [--org <id>] [--tenant <id>] [--dry-run] [--today YYYY-MM-DD]`
+ *
+ * Runs the supplier cost expiry scan now (operations, tests): the same service the daily `cpq-cost-expiry` worker runs.
+ * `--dry-run` counts what would be warned and writes / emits nothing. `--today` overrides the UTC date of the run and is
+ * accepted only with `--dry-run` or when `NODE_ENV !== 'production'`, so a back- or forward-dated run can never write
+ * ledger rows or send warnings in production.
+ */
+const runCostExpiry: ModuleCli = {
+  command: 'run-cost-expiry',
+  async run(rest) {
+    const args = parseArgs(rest)
+    const dryRun = Boolean(args['dry-run'])
+    const todayArg = args.today
+    if (todayArg !== undefined && (typeof todayArg !== 'string' || !DAY_PATTERN.test(todayArg) || Number.isNaN(Date.parse(`${todayArg}T00:00:00Z`)))) {
+      console.error('[cpq run-cost-expiry] --today must be a calendar date YYYY-MM-DD')
+      process.exitCode = 1
+      return
+    }
+    if (todayArg !== undefined && !dryRun && process.env.NODE_ENV === 'production') {
+      console.error('[cpq run-cost-expiry] --today is refused in production unless --dry-run is set')
+      process.exitCode = 1
+      return
+    }
+    const today = typeof todayArg === 'string' ? todayArg : new Date().toISOString().slice(0, 10)
+    const container = await createRequestContainer()
+    const em = container.resolve<EntityManager>('em')
+    const scopes = await resolveAllScopes(em, args)
+    if (scopes.length === 0) {
+      console.error('[cpq run-cost-expiry] No matching organization found.')
+      return
+    }
+    const service = container.resolve<CpqCostExpiryService>('cpqCostExpiryService')
+    let failed = 0
+    for (const scope of scopes) {
+      try {
+        const result = await service.run({ scope, today, dryRun })
+        console.log(
+          `[cpq run-cost-expiry] tenant=${scope.tenantId} org=${scope.organizationId} today=${today}${dryRun ? ' (dry run, nothing written)' : ''}: ` +
+            (result.disabled ? 'cost-plus toggle is off, skipped' : `${dryRun ? 'would warn' : 'warned'} ${result.inserted}, re-emitted ${result.reEmitted}`),
+        )
+      } catch (error) {
+        failed++
+        console.error(`[cpq run-cost-expiry] tenant=${scope.tenantId} org=${scope.organizationId} failed`, error)
+      }
+    }
+    if (failed) process.exitCode = 1
+  },
+}
+
+/**
+ * `mercato cpq scrub-change-log-costs [--tenant <id>] [--dry-run]`
+ *
+ * Rollback aid for the cost carry-through: removes every `items[].costs` and
+ * `assets[].costs` key from the `before_snapshot` / `after_snapshot` of
+ * `cpq_subscription_change_logs` (all tenants, or one with `--tenant`).
+ * Idempotent; `--dry-run` only counts. The cost history it removes is gone for
+ * good. Rollback order: scrub, then code, then down-migration (MIGRATION.md).
+ */
+const scrubChangeLogCostsCommand: ModuleCli = {
+  command: 'scrub-change-log-costs',
+  async run(rest) {
+    const args = parseArgs(rest)
+    const dryRun = Boolean(args['dry-run'])
+    const tenantId = typeof args.tenant === 'string' ? args.tenant : undefined
+    const container = await createRequestContainer()
+    const em = container.resolve<EntityManager>('em')
+    try {
+      const res = await scrubChangeLogCosts(em.fork(), { tenantId, dryRun })
+      console.log(
+        `[cpq scrub-change-log-costs] ${tenantId ? `tenant=${tenantId}` : 'all tenants'}${dryRun ? ' (dry run, nothing written)' : ''}: ` +
+          `scanned ${res.scanned} change-log rows, ${dryRun ? 'would scrub' : 'scrubbed'} ${res.affected}`,
+      )
+    } catch (error) {
+      console.error('[cpq scrub-change-log-costs] failed', error)
       process.exitCode = 1
     }
   },
@@ -158,4 +254,4 @@ async function resolveAllScopes(
   return orgs.map((org) => ({ organizationId: org.id, tenantId: org.tenant.id }))
 }
 
-export default [seed, seedPriceAdjustments, seedCostPlus]
+export default [seed, seedPriceAdjustments, seedCostPlus, runCostExpiry, scrubChangeLogCostsCommand]

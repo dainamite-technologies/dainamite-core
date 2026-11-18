@@ -33,7 +33,10 @@ it('detaching an ARC target removes its lines and their adjustments under the pr
     cpqValidationService: { validateOfferingConfiguration: async () => ({ errors: [] }), validateRelationships: async () => [] } as never,
     cpqProductService: {} as never, salesDocumentNumberGenerator: {} as never })
 
+  const recalculate = jest.spyOn(service, 'recalculateLockedQuote')
   await expect(service.detachTargetSubscription(quoteId, target.id, scope)).resolves.toEqual({ ok: true })
+  // R1a / R1b signals of the detach's recalculation share the write's sink, so they are published after commit.
+  expect((recalculate.mock.calls[0] as unknown[])[5]).toEqual({ signals: expect.any(Array) })
   expect(em.transactional).toHaveBeenCalledTimes(1)
   expect(quote.pricingRevision).toBe(5)
   expect(target.deletedAt).toBeInstanceOf(Date)

@@ -7,6 +7,7 @@ import { resolveQuotingService } from '../../../resolveQuotingService'
 import { CPQ_QUOTE_RESOURCE_KIND, runCpqMutationGuards } from '../../../_helpers/quoteMutationGuard'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { cpqErrorDoc, cpqQuoteIdPathParams } from '../../../_helpers/quoteRouteOpenApi'
+import { resolveAuditActor } from '../../../../lib/auditActor'
 
 // Recalculation re-resolves and (with `save: true`) persists prices, so it
 // needs the same feature as any other quote write. The quote page always
@@ -36,7 +37,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ quoteId
     if (guard && !guard.ok) return guard.response
 
     const service = resolveQuotingService(ctx)
-    const result = await service.recalculate(quoteId, body, scope)
+    const result = await service.recalculate(quoteId, body, scope, resolveAuditActor(ctx.auth))
     if (guard) await guard.runAfterSuccess()
     return NextResponse.json(result)
   } catch (err) {

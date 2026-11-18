@@ -5,11 +5,17 @@ import { withAtomicFlush } from '@open-mercato/shared/lib/commands/flush'
 import { SalesQuoteLine } from '@open-mercato/core/modules/sales/data/entities'
 import { CpqQuoteLineConfiguration, CpqQuoteLineCost, CpqQuoteMarkupOverride, CpqQuotePriceAdjustment } from '../../data/entities'
 import type { TenantScope } from '../types'
+import { cancelRowRequests, type CancelOpenRequestsOptions } from '../costs/costRequestCancel'
 
-/** Sourcing-request state belongs to the original quote: a clone starts from `not_requested`. */
+/**
+ * Sourcing-request state belongs to the original quote (R16): a clone starts from `not_requested` with no request id,
+ * history, proposal or idempotency key. Open requests and unapplied proposals are NOT copied; the supplier answers that
+ * were applied (value, supplier data, quote ref, validity) are, as ordinary cost fields.
+ */
 const SOURCING_RESET = {
   sourcingStatus: 'not_requested', costRequestId: null, requestSeq: null, requestedAt: null, requestedByUserId: null,
-  answeredAt: null, answeredByUserId: null, declineReason: null, proposedAmount: null,
+  answeredAt: null, answeredByUserId: null, declineReason: null, proposedAmount: null, proposedAnswer: null,
+  requestHistory: [], requestSupplierId: null, requestSupplierName: null, lastAnswerHash: null, cancelReason: null,
 } as const
 
 /**
@@ -32,7 +38,7 @@ async function cloneQuoteCosts(em: EntityManager, sourceId: string, target: { id
         carriedFromItemCostId: row.carriedFromItemCostId, carriedFromHash: row.carriedFromHash,
         name: row.name, role: row.role, costType: row.costType, source: row.source, costModel: row.costModel,
         valueStatus: row.valueStatus, valueOrigin: row.valueOrigin, unitAmount: row.unitAmount, instanceAmount: row.instanceAmount,
-        currencyCode: row.currencyCode, fxRate: row.fxRate, fxRateDate: row.fxRateDate, driverHash: row.driverHash,
+        currencyCode: row.currencyCode, fxRate: row.fxRate, fxRateDate: row.fxRateDate, fxRateSource: row.fxRateSource, fxRateDerivation: row.fxRateDerivation, driverHash: row.driverHash,
         indexSnapshot: row.indexSnapshot, supplierId: row.supplierId, supplierName: row.supplierName,
         supplierQuoteRef: row.supplierQuoteRef, validUntil: row.validUntil, supplierTermEnd: row.supplierTermEnd,
         supplierMinTermMonths: row.supplierMinTermMonths, note: row.note, errorCode: row.errorCode, ...SOURCING_RESET,
@@ -98,8 +104,14 @@ export async function loadLineCostRows(em: EntityManager, quoteConfigurationId: 
   return out
 }
 
-/** Delete the complete bundle subtree and its adjustments before recalculation reads it. */
-export async function removeQuoteLineTree(em: EntityManager, quoteConfigurationId: string, root: CpqQuoteLineConfiguration, scope: TenantScope): Promise<void> {
+/**
+ * Delete the complete bundle subtree and its adjustments before recalculation reads it. Open cost requests of the
+ * removed lines are cancelled (`line_removed`) in the same flush; their signals go to `sourcing.signals`.
+ */
+export async function removeQuoteLineTree(
+  em: EntityManager, quoteConfigurationId: string, root: CpqQuoteLineConfiguration, scope: TenantScope,
+  sourcing: Pick<CancelOpenRequestsOptions, 'actorUserId' | 'signals'> = {},
+): Promise<void> {
   const children = new Map<string, CpqQuoteLineConfiguration[]>()
   let after: string | undefined
   for (;;) {
@@ -141,6 +153,7 @@ export async function removeQuoteLineTree(em: EntityManager, quoteConfigurationI
     for (const line of selected) line.deletedAt = now
     for (const line of sales) line.deletedAt = now
     for (const adjustment of adjustments) { adjustment.deletedAt = now; adjustment.isActive = false }
+    cancelRowRequests(costRows as never, 'line_removed', sourcing)
     for (const row of costRows) row.deletedAt = now
   }])
 }

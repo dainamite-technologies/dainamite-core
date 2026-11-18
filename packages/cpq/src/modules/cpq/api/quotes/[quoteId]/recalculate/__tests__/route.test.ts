@@ -12,7 +12,7 @@ const runAfterSuccess = jest.fn()
 
 jest.mock('../../../../context', () => ({
   resolveCpqRouteContext: jest.fn().mockResolvedValue({
-    auth: { sub: 'user-1', tenantId: 't-1' },
+    auth: { sub: '44444444-4444-4444-8444-444444444444', tenantId: 't-1' },
     organizationId: 'org-1',
     tenantId: 't-1',
   }),
@@ -70,6 +70,8 @@ describe('POST /api/cpq/quotes/{quoteId}/recalculate', () => {
       'cpq-1',
       expect.objectContaining({ save: true }),
       { organizationId: 'org-1', tenantId: 't-1' },
+      // The acting user is threaded into the saved recalculation (auto-opened cost requests record it, Q5).
+      '44444444-4444-4444-8444-444444444444',
     )
     expect(runAfterSuccess).toHaveBeenCalledTimes(1)
   })

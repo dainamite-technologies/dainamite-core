@@ -1,0 +1,203 @@
+{
+  "activated": [
+    {
+      "event": "cpq.subscription.activated",
+      "payload": {
+        "subscriptionId": "sub-1",
+        "customerId": "cust-1",
+        "organizationId": "00000000-0000-0000-0000-000000000002",
+        "tenantId": "00000000-0000-0000-0000-000000000001",
+        "currencyCode": "USD",
+        "timestamp": "<timestamp>",
+        "activationDate": "<today>",
+        "sourceQuoteId": "quote-1",
+        "sourceOrderId": "oc-1",
+        "items": [
+          {
+            "subscriptionItemId": "item-1",
+            "productName": "Hosting",
+            "quantity": 1,
+            "charges": [
+              {
+                "type": "recurring",
+                "unitPrice": 100,
+                "description": "Recurring charge"
+              },
+              {
+                "type": "one_time",
+                "amount": 10,
+                "description": "One-time charge"
+              }
+            ]
+          },
+          {
+            "subscriptionItemId": "item-3",
+            "productName": "Setup",
+            "quantity": 1,
+            "charges": [
+              {
+                "type": "one_time",
+                "amount": 25,
+                "description": "One-time charge"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "amended": [
+    {
+      "event": "cpq.subscription.amended",
+      "payload": {
+        "tenantId": "00000000-0000-0000-0000-000000000001",
+        "organizationId": "00000000-0000-0000-0000-000000000002",
+        "subscriptionId": "sub-1",
+        "customerId": "cust-1",
+        "effectiveDate": "2026-06-01",
+        "addedItems": [
+          {
+            "subscriptionItemId": "item-new",
+            "productName": "Added item",
+            "quantity": 1,
+            "charges": [
+              {
+                "type": "recurring",
+                "unitPrice": 120,
+                "description": "Recurring charge"
+              },
+              {
+                "type": "one_time",
+                "amount": 30,
+                "description": "One-time charge"
+              }
+            ]
+          },
+          {
+            "subscriptionItemId": "item-new-2",
+            "productName": "Configured item",
+            "quantity": 1,
+            "charges": [
+              {
+                "type": "one_time",
+                "amount": 15,
+                "description": "One-time charge"
+              }
+            ]
+          }
+        ],
+        "removedSubscriptionItemIds": [
+          "item-gone"
+        ],
+        "sourceQuoteId": "quote-1",
+        "sourceOrderId": "oc-1",
+        "timestamp": "<timestamp>"
+      }
+    }
+  ],
+  "renewed": [
+    {
+      "event": "cpq.subscription.renewed",
+      "payload": {
+        "tenantId": "00000000-0000-0000-0000-000000000001",
+        "organizationId": "00000000-0000-0000-0000-000000000002",
+        "subscriptionId": "sub-1",
+        "customerId": "cust-1",
+        "newTermStart": "2027-01-01",
+        "newTermEnd": "2028-01-01",
+        "addedItems": [
+          {
+            "subscriptionItemId": "item-new",
+            "productName": "Added item",
+            "quantity": 1,
+            "charges": [
+              {
+                "type": "recurring",
+                "unitPrice": 120,
+                "description": "Recurring charge"
+              },
+              {
+                "type": "one_time",
+                "amount": 30,
+                "description": "One-time charge"
+              }
+            ]
+          },
+          {
+            "subscriptionItemId": "item-new-2",
+            "productName": "Configured item",
+            "quantity": 1,
+            "charges": [
+              {
+                "type": "one_time",
+                "amount": 15,
+                "description": "One-time charge"
+              }
+            ]
+          }
+        ],
+        "sourceQuoteId": "quote-1",
+        "sourceOrderId": "oc-1",
+        "timestamp": "<timestamp>"
+      }
+    }
+  ],
+  "cancelled": [
+    {
+      "event": "cpq.subscription.cancelled",
+      "payload": {
+        "tenantId": "00000000-0000-0000-0000-000000000001",
+        "organizationId": "00000000-0000-0000-0000-000000000002",
+        "subscriptionId": "sub-1",
+        "customerId": "cust-1",
+        "effectiveDate": "2026-06-01",
+        "sourceQuoteId": "quote-1",
+        "sourceOrderId": "oc-1",
+        "timestamp": "<timestamp>"
+      }
+    }
+  ],
+  "merged": [
+    {
+      "event": "cpq.subscription.merged",
+      "payload": {
+        "tenantId": "00000000-0000-0000-0000-000000000001",
+        "organizationId": "00000000-0000-0000-0000-000000000002",
+        "mergedSubscriptionId": "sub-m",
+        "sourceSubscriptionIds": [
+          "sub-a",
+          "sub-b"
+        ],
+        "sourceQuoteId": "quote-1",
+        "sourceOrderId": "oc-1",
+        "timestamp": "<timestamp>"
+      }
+    }
+  ],
+  "superseded": [
+    {
+      "event": "cpq.subscription.superseded",
+      "payload": {
+        "tenantId": "00000000-0000-0000-0000-000000000001",
+        "organizationId": "00000000-0000-0000-0000-000000000002",
+        "subscriptionId": "sub-a",
+        "effectiveDate": "2027-01-01",
+        "sourceQuoteId": "quote-1",
+        "sourceOrderId": "oc-1",
+        "timestamp": "<timestamp>"
+      }
+    },
+    {
+      "event": "cpq.subscription.superseded",
+      "payload": {
+        "tenantId": "00000000-0000-0000-0000-000000000001",
+        "organizationId": "00000000-0000-0000-0000-000000000002",
+        "subscriptionId": "sub-b",
+        "effectiveDate": "2027-01-01",
+        "sourceQuoteId": "quote-1",
+        "sourceOrderId": "oc-1",
+        "timestamp": "<timestamp>"
+      }
+    }
+  ]
+}

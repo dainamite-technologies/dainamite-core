@@ -9,6 +9,8 @@ import { Input } from '@open-mercato/ui/primitives/input'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@open-mercato/ui/primitives/dialog'
 import { formatMoney } from '../../lib/formatMoney'
 import { costErrorMessage } from '../../lib/costPlusView'
+import { formatConverted, fxTooltip, missingRateMessage, type FxFields } from '../../lib/fxView'
+import { FxNote } from '../FxNote'
 
 export type PreviewAttribute = {
   code: string
@@ -17,7 +19,7 @@ export type PreviewAttribute = {
   options: Array<{ value: string; label: string }> | null
 }
 
-type PreviewCost = { costKey: string; name: string; role: string; source: string; valueStatus: string; unitAmount: string | null; instanceAmount: string | null; currencyCode: string | null; error?: string }
+type PreviewCost = FxFields & { costKey: string; name: string; role: string; source: string; valueStatus: string; unitAmount: string | null; instanceAmount: string | null; currencyCode: string | null; error?: string }
 type PreviewCharge = { chargeCode: string; pricingMethod: string; costs: PreviewCost[]; costTotal: string; markupRule: string | null; markupValue: string | null; listTotalPrice: number | null; error?: string }
 type PreviewResult = { currencyCode: string; charges: PreviewCharge[] }
 
@@ -45,6 +47,13 @@ type Props = {
   /** Highlighted in the result. */
   chargeCode?: string
   onClose: () => void
+}
+
+function PreviewConverted({ cost, currency }: { cost: PreviewCost; currency: string }) {
+  const t = useT()
+  const line = formatConverted(cost, currency, t)
+  // A preview is never "frozen": it computes the rate in memory and stores nothing.
+  return line ? <FxNote text={line.text} tooltip={fxTooltip(cost, {}, t)} testId="cpq-cost-preview-converted" /> : null
 }
 
 /** Sample-configuration form for `POST /api/cpq/cost-preview`: costs, markup and list price per charge. Persists nothing. */
@@ -132,9 +141,17 @@ export function CostPreviewDialog({ open, offeringId, attributes, chargeCode, on
                 </div>
                 {charge.error && <p className="text-destructive">{t(`cpq.costElements.errors.${charge.error}`, costErrorMessage(charge.error))}</p>}
                 {charge.costs.map((cost) => (
-                  <div key={cost.costKey} className="flex justify-between text-muted-foreground">
-                    <span>{cost.name} · {t(`cpq.costElements.roles.${cost.role}`, cost.role)} · {cost.valueStatus}{cost.error ? ` (${cost.error})` : ''}</span>
-                    <span className="font-mono">{money(cost.instanceAmount, cost.currencyCode)}</span>
+                  <div key={cost.costKey} className="text-muted-foreground">
+                    <div className="flex justify-between">
+                      <span>
+                        {cost.name} · {t(`cpq.costElements.roles.${cost.role}`, cost.role)} · {cost.valueStatus}
+                        {cost.error ? ` (${cost.errorDetail ? missingRateMessage(cost.errorDetail, t) : cost.error})` : ''}
+                      </span>
+                      <span className="font-mono">{money(cost.instanceAmount, cost.currencyCode)}</span>
+                    </div>
+                    <div className="text-right">
+                      <PreviewConverted cost={cost} currency={result.currencyCode} />
+                    </div>
                   </div>
                 ))}
                 <div className="mt-1 flex justify-between">

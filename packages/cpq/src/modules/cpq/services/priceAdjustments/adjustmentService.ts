@@ -16,6 +16,7 @@ import { TERMINAL_STATUSES, type CpqStatus, type QuoteResult, type TenantScope }
 import { withQuotePricingWrite } from './quotePricingWrite'
 import type { CpqCostService } from '../costs/costService'
 import { createMarginTracker } from '../costs/quoteMarginTracker'
+import type { SourcingSignal, SourcingSignalPublisher } from '../costs/sourcingSignals'
 
 
 
@@ -25,6 +26,8 @@ type Dependencies = {
   featureTogglesService: Pick<FeatureTogglesService, 'getBoolConfig'>
   /** Cost-plus toggle for the margin signal; absent = no margin tracking on adjustment writes. */
   costService?: Pick<CpqCostService, 'enabled'>
+  /** Publishes the sourcing signals of a committed adjustment write (cost requests cancelled / opened by its recalculation). */
+  sourcingPublisher?: SourcingSignalPublisher
 }
 
 export function adjustmentInput(row: CpqQuotePriceAdjustment): PriceAdjustmentInput {
@@ -114,7 +117,7 @@ export class CpqAdjustmentService {
   async create(quoteId: string, input: PriceAdjustmentInput, actor: string, scope: TenantScope): Promise<AdjustmentWriteResult> {
     const parsed = cpqPriceAdjustmentInputSchema.parse(input)
     await this.requireEnabled(scope)
-    return this.write(quoteId, scope, parsed.expectedRevision, async (em, quote) => {
+    return this.write(quoteId, scope, parsed.expectedRevision, async (em, quote, signals) => {
       await this.assertMutable(em, quote, scope)
       await this.requireReason(em, parsed.reasonCode, scope)
       await this.requireTarget(em, quote, parsed.quoteLineId, scope)
@@ -122,14 +125,14 @@ export class CpqAdjustmentService {
       await this.rejectOverlap(em, quote, { id, ...parsed }, scope)
       const row = em.create(CpqQuotePriceAdjustment, { ...scope, id, quoteConfigurationId: quote.id,
         quoteId: quote.quoteId, ...this.values(parsed), createdByUserId: actor })
-      return this.save(em, quote, row, null, scope, true)
+      return this.save(em, quote, row, null, scope, true, signals)
     })
   }
 
   async update(quoteId: string, id: string, patch: PriceAdjustmentPatch, actor: string, scope: TenantScope): Promise<AdjustmentWriteResult> {
     const parsed = cpqPriceAdjustmentPatchSchema.parse(patch)
     await this.requireEnabled(scope)
-    return this.write(quoteId, scope, parsed.expectedRevision, async (em, quote) => {
+    return this.write(quoteId, scope, parsed.expectedRevision, async (em, quote, signals) => {
       await this.assertMutable(em, quote, scope)
       const row = await this.loadRow(em, quote.id, id, scope)
       const before = adjustmentSnapshot(row)
@@ -138,27 +141,27 @@ export class CpqAdjustmentService {
       if (merged.reasonCode !== row.reasonCode) await this.requireReason(em, merged.reasonCode, scope)
       await this.rejectOverlap(em, quote, { id: row.id, ...merged }, scope)
       em.assign(row, { ...this.values(merged), updatedByUserId: actor, updatedAt: new Date() })
-      return this.save(em, quote, row, before, scope, true)
+      return this.save(em, quote, row, before, scope, true, signals)
     })
   }
 
   async remove(quoteId: string, id: string, actor: string, scope: TenantScope, expectedRevision?: number): Promise<AdjustmentWriteResult> {
     await this.requireEnabled(scope)
-    return this.write(quoteId, scope, expectedRevision, async (em, quote) => {
+    return this.write(quoteId, scope, expectedRevision, async (em, quote, signals) => {
       const row = await this.loadRow(em, quote.id, id, scope)
       const preview = await this.deps.quotingService.recalculateLockedQuote(em, quote, scope, false)
       const invalid = preview.adjustmentErrors?.some((error) => error.adjustmentId === id) ?? false
       await this.assertMutable(em, quote, scope, invalid)
       const before = adjustmentSnapshot(row)
       row.deletedAt = new Date(); row.isActive = false; row.updatedByUserId = actor; row.updatedAt = new Date()
-      return this.save(em, quote, row, before, scope, false)
+      return this.save(em, quote, row, before, scope, false, signals)
     })
   }
 
   /** Restores an audited previous row under the same quote lock; never reopens a locked quote. */
   async undo(quoteId: string, id: string, before: AdjustmentSnapshot | null, after: AdjustmentSnapshot, actor: string, scope: TenantScope): Promise<void> {
     await this.requireEnabled(scope)
-    await this.write(quoteId, scope, undefined, async (em, quote) => {
+    await this.write(quoteId, scope, undefined, async (em, quote, signals) => {
       await this.assertMutable(em, quote, scope)
       for (const snapshot of [before, after]) {
         if (snapshot && (snapshot.tenantId !== scope.tenantId || snapshot.organizationId !== scope.organizationId || snapshot.quoteConfigurationId !== quote.id || snapshot.id !== id)) {
@@ -174,7 +177,7 @@ export class CpqAdjustmentService {
       if (before && restored) em.assign(row, { ...this.values(restored),
         deletedAt: before.deletedAt ? new Date(before.deletedAt) : null, isActive: before.isActive, updatedByUserId: actor, updatedAt: new Date() })
       else { row.deletedAt = new Date(); row.isActive = false; row.updatedByUserId = actor; row.updatedAt = new Date() }
-      await this.save(em, quote, row, beforeUndo, scope, false)
+      await this.save(em, quote, row, beforeUndo, scope, false, signals)
     })
   }
 
@@ -189,16 +192,22 @@ export class CpqAdjustmentService {
       currencyCode: input.currencyCode ?? null, reasonCode: input.reasonCode, reasonNote: input.reasonNote ?? null }
   }
 
-  private write<T>(quoteId: string, scope: TenantScope, revision: number | undefined, execute: (em: EntityManager, quote: CpqQuoteConfiguration) => Promise<T>) {
-    return withQuotePricingWrite(this.deps.em, quoteId, scope, execute, (status, message) => new QuotingError(status, message), revision, undefined, { pricingCause: 'adjustment' },
-      this.deps.costService ? createMarginTracker({ scope, isEnabled: (tenantId) => this.deps.costService!.enabled(tenantId) }) : undefined)
+  private write<T>(quoteId: string, scope: TenantScope, revision: number | undefined, execute: (em: EntityManager, quote: CpqQuoteConfiguration, signals: SourcingSignal[]) => Promise<T>) {
+    // The saved recalculation of an adjustment write can cancel / open cost requests (R1a / R1b); published after commit.
+    const signals: SourcingSignal[] = []
+    const publisher = this.deps.sourcingPublisher
+    return withQuotePricingWrite(this.deps.em, quoteId, scope, (em, quote) => execute(em, quote, signals), (status, message) => new QuotingError(status, message), {
+      expectedRevision: revision, events: { pricingCause: 'adjustment' },
+      marginTracker: this.deps.costService ? createMarginTracker({ scope, isEnabled: (tenantId) => this.deps.costService!.enabled(tenantId) }) : undefined,
+      afterCommit: publisher ? async (_result, quote) => { if (signals.length > 0) await publisher(signals, quote) } : undefined,
+    })
   }
 
-  private async save(em: EntityManager, quote: CpqQuoteConfiguration, row: CpqQuotePriceAdjustment, before: AdjustmentSnapshot | null, scope: TenantScope, rejectInvalid: boolean): Promise<AdjustmentWriteResult> {
+  private async save(em: EntityManager, quote: CpqQuoteConfiguration, row: CpqQuotePriceAdjustment, before: AdjustmentSnapshot | null, scope: TenantScope, rejectInvalid: boolean, signals: SourcingSignal[] = []): Promise<AdjustmentWriteResult> {
     let priced: QuoteResult | undefined
     await withAtomicFlush(em, [
       () => { em.persist(row) },
-      async () => { priced = await this.deps.quotingService.recalculateLockedQuote(em, quote, scope) },
+      async () => { priced = await this.deps.quotingService.recalculateLockedQuote(em, quote, scope, true, undefined, { signals }) },
     ])
     if (!priced) throw new Error('Adjustment recalculation did not return a quote')
     const invalid = priced.adjustmentErrors?.find((error) => error.adjustmentId === row.id)

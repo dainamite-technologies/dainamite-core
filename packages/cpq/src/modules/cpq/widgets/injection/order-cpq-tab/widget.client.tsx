@@ -3,6 +3,7 @@ import * as React from 'react'
 import type { InjectionWidgetComponentProps } from '@open-mercato/shared/modules/widgets/injection'
 import { useRouter } from 'next/navigation'
 import { Tag } from '@open-mercato/ui/primitives/tag'
+import { OrderCostsSummary } from '../../../components/costs/OrderCostsSummary'
 import {
   formatStatusLabel,
   orderCpqStatusMap,
@@ -68,10 +69,10 @@ export default function OrderCpqTabWidget({ data }: InjectionWidgetComponentProp
   return (
     <div className="space-y-2">
       {cpqOrders.map((o) => (
+        <div key={o.id} className="rounded-lg border">
         <div
-          key={o.id}
           onClick={() => router.push(`/backend/cpq/orders/${o.id}`)}
-          className="flex items-center justify-between rounded-lg border p-3 hover:bg-muted/30 cursor-pointer transition-colors"
+          className="flex items-center justify-between rounded-lg p-3 hover:bg-muted/30 cursor-pointer transition-colors"
         >
           <div className="flex items-center gap-3">
             <Tag variant={orderCpqStatusMap[o.cpqStatus as OrderCpqStatus] ?? 'neutral'} dot>
@@ -89,6 +90,8 @@ export default function OrderCpqTabWidget({ data }: InjectionWidgetComponentProp
             <span className="text-muted-foreground">{new Date(o.createdAt).toLocaleDateString()}</span>
             <span className="text-primary font-medium">Open →</span>
           </div>
+        </div>
+        <OrderCostsSummary orderId={o.id} currency={o.currencyCode} />
         </div>
       ))}
     </div>

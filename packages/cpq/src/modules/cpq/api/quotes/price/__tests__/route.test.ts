@@ -80,6 +80,13 @@ describe('cost-plus charges', () => {
     expect(result.primaryCharges[1]).not.toHaveProperty('priceOnRequest')
     expect(result.totals.mrcTotal).toBe(90)
   })
+  it('flags priceOnRequest for a USD price-basis cost on a EUR quote (CURRENCY_NO_RATE: no rate available)', async () => {
+    resolveProductCharges.mockResolvedValue([costPlusCharge({ currencyCode: 'EUR', unitPrice: null, totalPrice: null, fallbackPrice: 99 })])
+    previewCatalogCosts.mockResolvedValue([basis('none', { instanceAmount: null, unitAmount: null, currencyCode: null, errorCode: 'CURRENCY_NO_RATE' })])
+    const result = await (await POST(request({ primaryItem: body.primaryItem, childItems: [], currencyCode: 'EUR' }))).json()
+    expect(result.primaryCharges[0]).toMatchObject({ priceOnRequest: true, unitPrice: null, totalPrice: null })
+    expect(result.totals.mrcTotal).toBe(0)
+  })
   it('flags priceOnRequest when the toggle is off and resolves no costs', async () => {
     enabled.mockResolvedValue(false)
     resolveProductCharges.mockResolvedValue([unpriced])
@@ -91,10 +98,52 @@ describe('cost-plus charges', () => {
   })
   it('never leaks cost, supplier or markup keys or values anywhere in the response', async () => {
     resolveProductCharges.mockResolvedValue([costPlusCharge(), unpriced])
-    previewCatalogCosts.mockResolvedValue([basis('estimated', { supplierName: 'Acme', unitAmount: '100' })])
+    previewCatalogCosts.mockResolvedValue([basis('estimated', {
+      supplierName: 'Acme', unitAmount: '100', currencyCode: 'USD', fxRate: '0.77777777', fxRateDate: '2026-11-11', fxRateSource: 'SentinelFX', fxRateDerivation: 'direct',
+    })])
     const text = await (await POST(request({ ...body, includeWaterfall: true }))).text()
-    for (const key of keys(JSON.parse(text))) expect(key).not.toMatch(/cost|supplier|markup|instanceAmount|unitAmount/i)
-    expect(text).not.toMatch(/Secret supplier|Acme/)
+    for (const key of keys(JSON.parse(text))) expect(key).not.toMatch(/cost|supplier|markup|instanceAmount|unitAmount|fx|rate|derivation/i)
+    expect(text).not.toMatch(/Secret supplier|Acme|0\.77777777|SentinelFX/)
+  })
+  // Index costs step 10 (spec "Index-costed charges in the calculate-price API"): priced from the value in force today,
+  // priceOnRequest when no value / no rate, and never an index value, factor, offset, snapshot or cost in the response.
+  describe('index-costed charges', () => {
+    const indexBasis = (over: Record<string, unknown> = {}) => basis('confirmed', {
+      source: 'index', unitAmount: '43.2', currencyCode: 'USD', indexSnapshot: { indexId: 'idx-secret', currencyCode: 'USD', effectiveDate: '2026-11-10', revision: 2, value: '82.4', factor: '0.5', offset: '2', asOfDate: '2026-11-12' },
+      ...over,
+    })
+    const single = { primaryItem: body.primaryItem, childItems: [], currencyCode: 'USD' }
+    it('prices the charge from the index cost without indicative and exposes no index field', async () => {
+      resolveProductCharges.mockResolvedValue([costPlusCharge()]); previewCatalogCosts.mockResolvedValue([indexBasis()])
+      const text = await (await POST(request({ ...single, includeWaterfall: true }))).text()
+      const result = JSON.parse(text)
+      expect(result.primaryCharges[0]).toMatchObject({ pricingMethod: 'cost_plus', unitPrice: 120, totalPrice: 120 })
+      expect(result.primaryCharges[0]).not.toHaveProperty('indicative')
+      expect(result.primaryCharges[0]).not.toHaveProperty('priceOnRequest')
+      for (const key of keys(result)) expect(key).not.toMatch(/index|snapshot|factor|offset|revision|effective|asOf/i)
+      expect(text).not.toMatch(/idx-secret|82\.4|43\.2/)
+      // the engine receives only the plain cost-plus inputs, never the snapshot
+      const context = resolveProductCharges.mock.calls[0][0].costPlus
+      expect(JSON.stringify(context)).not.toMatch(/idx-secret|indexSnapshot/)
+    })
+    it('resolves the index at today: the route passes no as-of date to the preview (default = today, UTC)', async () => {
+      resolveProductCharges.mockResolvedValue([costPlusCharge()]); previewCatalogCosts.mockResolvedValue([indexBasis()])
+      await POST(request(single))
+      expect(previewCatalogCosts.mock.calls[0][0].asOfDate).toBeUndefined()
+      expect(previewCatalogCosts.mock.calls[0][0]).not.toHaveProperty('persist')
+    })
+    it('flags priceOnRequest when no value is in force (INDEX_NO_VALUE), dropping the fallback price', async () => {
+      resolveProductCharges.mockResolvedValue([unpriced]); previewCatalogCosts.mockResolvedValue([indexBasis({ valueStatus: 'none', instanceAmount: null, unitAmount: null, errorCode: 'INDEX_NO_VALUE', indexSnapshot: null })])
+      const result = await (await POST(request(single))).json()
+      expect(result.primaryCharges[0]).toMatchObject({ priceOnRequest: true, unitPrice: null, totalPrice: null })
+      expect(result.primaryCharges[0]).not.toHaveProperty('fallbackPrice')
+      expect(result.totals.mrcTotal).toBe(0)
+    })
+    it('flags priceOnRequest when the index currency has no rate (CURRENCY_NO_RATE), never converting 1:1', async () => {
+      resolveProductCharges.mockResolvedValue([unpriced]); previewCatalogCosts.mockResolvedValue([indexBasis({ valueStatus: 'none', instanceAmount: null, errorCode: 'CURRENCY_NO_RATE' })])
+      const result = await (await POST(request(single))).json()
+      expect(result.primaryCharges[0]).toMatchObject({ priceOnRequest: true, unitPrice: null })
+    })
   })
   it('keeps priced usage charges and drops price-on-request usage from the totals', async () => {
     resolveProductCharges.mockResolvedValue([costPlusCharge({ chargeType: 'usage', unitPrice: null, totalPrice: null }), { ...charge, chargeCode: 'u', chargeType: 'usage', totalPrice: null }])

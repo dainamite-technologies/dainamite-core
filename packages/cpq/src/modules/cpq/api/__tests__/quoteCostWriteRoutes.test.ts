@@ -78,6 +78,26 @@ it('PATCH / DELETE build the command inputs, with the revision from the query on
   expect(execute.mock.calls[1][1].input).toEqual({ quoteId, costId, expectedRevision: 3 })
 })
 
+it('PATCH keepCurrent (ARC costs step 15): the body reaches the command as is, and the keep errors keep their status and details', async () => {
+  const keep = { keepCurrent: true, validUntil: '2028-12-31', supplierTermEnd: null, note: 'Carrier confirmed rolling term' }
+  const response = await PATCH(request('PATCH', keep), params)
+  expect(response.status).toBe(200)
+  expect(execute).toHaveBeenCalledWith('cpq.quote_line_cost.update', expect.objectContaining({ input: { quoteId, costId, patch: keep } }))
+  for (const message of ['RENEGOTIATION_DATES_SHORT', 'VALIDITY_EVIDENCE_REQUIRED', 'NOT_RENEGOTIATION_DUE']) {
+    execute.mockRejectedValue(new QuotingError(422, message, undefined, { newTermEnd: '2028-12-31' }))
+    const refused = await PATCH(request('PATCH', keep), params)
+    expect(refused.status).toBe(422)
+    expect(await refused.json()).toMatchObject({ error: message })
+  }
+})
+
+it('PATCH rejects keepCurrent: false and a non-boolean flag', async () => {
+  execute.mockClear()
+  expect((await PATCH(request('PATCH', { keepCurrent: false }), params)).status).toBe(400)
+  expect((await PATCH(request('PATCH', { keepCurrent: 'yes' }), params)).status).toBe(400)
+  expect(execute).not.toHaveBeenCalled()
+})
+
 it('rejects malformed bodies and identifiers', async () => {
   expect((await POST(request('POST', {}), params)).status).toBe(400)
   expect((await POST(request('POST', { ...body, source: 'table' }), params)).status).toBe(400)

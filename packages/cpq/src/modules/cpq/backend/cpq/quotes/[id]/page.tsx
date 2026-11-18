@@ -6,7 +6,8 @@ import ArcQuoteConfigurator, {
   type AttachedTarget,
 } from './_components/ArcQuoteConfigurator'
 import { StatusPath } from '../../../../components/StatusPath'
-import { ArrowRight, ExternalLink, Plus, RotateCcw } from 'lucide-react'
+import { ArrowRight, ExternalLink, Plus, RefreshCw, RotateCcw } from 'lucide-react'
+import { IconButton } from '@open-mercato/ui/primitives/icon-button'
 import { Alert, AlertTitle, AlertDescription } from '@open-mercato/ui/primitives/alert'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { Tag } from '@open-mercato/ui/primitives/tag'
@@ -18,6 +19,21 @@ import { PricingSummaryCard } from '../../../../components/PricingSummaryCard'
 import { ArcLineDiff, LineActionBadge } from '../../../../components/ArcLineDiff'
 import { ADJUST_PRICE_FEATURE } from '../../../../lib/priceAdjustmentView'
 import { arcRecurringDelta } from '../../../../lib/quoteSummaryView'
+import { shouldShowRenewCostBanner } from '../../../../lib/arcRenewBanner'
+import {
+  ARC_LINE_NOTICE_FALLBACKS,
+  COST_ONLY_AMEND_FALLBACK,
+  arcCostsOfLine,
+  arcLineNotice,
+  costLineEntry,
+  costSourceChangedView,
+  isCostOnlyAmend,
+  parseCostSourceChanged,
+  type CostSourceChangedEntry,
+} from '../../../../lib/arcCostView'
+import { ExposurePanel } from '../../../../components/costs/ExposurePanel'
+import { CostSourceChangedBanner } from '../../../../components/costs/CostSourceChangedBanner'
+import { ArcCostActionsProvider, useArcCostActionsUi, useArcCostActions } from './_components/arcCostActions'
 import { usePriceAdjustments } from './_components/usePriceAdjustments'
 import { PriceAdjustmentsPanel } from './_components/PriceAdjustmentsPanel'
 import { ArcLineRemovalProvider, useArcLineRemoval, useArcLineRemovalUi } from './_components/arcLineRemoval'
@@ -31,6 +47,7 @@ import { MarginCard } from './_components/MarginCard'
 import { StaleRevisionBanner } from './_components/StaleRevisionBanner'
 import { CostHeaderActions, CostRowActions } from './_components/CostActionButtons'
 import { useCostActions } from './_components/useCostActions'
+import { useCostSourcingActions } from './_components/useCostSourcingActions'
 import { hasAnyCosts, isCostLocked, isQuoteIndicative, statusFailure, type RedactedQuoteCost } from '../../../../lib/quoteCostView'
 import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import { COSTS_MANAGE_FEATURE, COSTS_VIEW_FEATURE } from '../../../../data/costs'
@@ -312,7 +329,7 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
 
   const t = useT()
   const [cpqQuote, setCpqQuote] = React.useState<QuoteResult | null>(null)
-  const grantedFeatures = useGrantedFeatures([QUOTE_MANAGE_FEATURE, ADJUST_PRICE_FEATURE, COSTS_VIEW_FEATURE, COSTS_MANAGE_FEATURE])
+  const grantedFeatures = useGrantedFeatures([QUOTE_MANAGE_FEATURE, ADJUST_PRICE_FEATURE, COSTS_VIEW_FEATURE, COSTS_MANAGE_FEATURE, 'cpq.arc.amend.manage', 'cpq.arc.renew.manage'])
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState<string | null>(null)
   const [submitting, setSubmitting] = React.useState(false)
@@ -337,6 +354,9 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
   const [converting, setConverting] = React.useState(false)
   const [transitioning, setTransitioning] = React.useState(false)
   const [staleStatus, setStaleStatus] = React.useState(false)
+  // 409 COST_SOURCE_CHANGED at conversion: lines whose subscription costs changed since they were mirrored.
+  const [costSourceChanged, setCostSourceChanged] = React.useState<CostSourceChangedEntry[] | null>(null)
+  const [refreshingLineId, setRefreshingLineId] = React.useState<string | null>(null)
   const [deleting, setDeleting] = React.useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = React.useState(false)
   const [pricingDetail, setPricingDetail] = React.useState<{ lineIdx: number; chargeIdx: number } | null>(null)
@@ -403,6 +423,31 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
     reloadCosts: quoteCosts.reload,
     reloadQuote,
   })
+  const sourcingActionsUi = useCostSourcingActions({
+    quoteId: isNew ? null : cpqQuote?.id ?? null,
+    cpqStatus: cpqQuote?.cpqStatus ?? 'new',
+    convertedOrderId: cpqQuote?.convertedOrderId,
+    currency: cpqQuote?.currencyCode ?? 'EUR',
+    data: quoteCosts.data,
+    granted: grantedFeatures,
+    reloadCosts: quoteCosts.reload,
+    reloadQuote,
+  })
+  const arcCostActions = useArcCostActions({
+    quoteId: isNew ? null : cpqQuote?.id ?? null,
+    quoteType: arcQuoteType,
+    cpqStatus: cpqQuote?.cpqStatus ?? 'new',
+    convertedOrderId: cpqQuote?.convertedOrderId,
+    granted: grantedFeatures,
+    canManageCosts,
+    data: quoteCosts.data,
+    newTermEndFor: (lineId) => {
+      const target = cpqQuote?.lines.find((line) => line.lineId === lineId)?.targetSubscriptionId
+      return arcTargets.find((candidate) => candidate.subscriptionId === target)?.newTermEnd ?? null
+    },
+    reloadCosts: quoteCosts.reload,
+    reloadQuote,
+  })
   const costsUi: QuoteCostsUi | null = cpqQuote && quoteCosts.state === 'ready'
     ? {
       quoteId: cpqQuote.id,
@@ -415,6 +460,7 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
       reload: quoteCosts.reload,
       chargesFor,
       actions: costActions.actions,
+      sourcing: sourcingActionsUi.sourcing,
     }
     : null
   const indicative = costsUi?.data ? isQuoteIndicative(costsUi.data.lines) : false
@@ -556,12 +602,16 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
     if (!cpqQuote) return
     try {
       setConverting(true); setError(null)
-      const result = await apiJson<{ id: string }>('/api/cpq/orders', {
+      setCostSourceChanged(null)
+      const call = await apiCall<{ id: string; error?: string }>('/api/cpq/orders', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ quoteId: cpqQuote.id }),
       })
-      router.push(`/backend/cpq/orders/${result.id}`)
+      if (call.ok && call.result) { router.push(`/backend/cpq/orders/${call.result.id}`); return }
+      const changed = parseCostSourceChanged(call.status, call.result)
+      if (changed) { setCostSourceChanged(changed); return }
+      throw new Error(call.result?.error ?? `Request failed (${call.status})`)
     } catch (err) { setError((err as Error).message) }
     finally { setConverting(false) }
   }
@@ -701,9 +751,12 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
     <PriceAdjustmentProvider value={priceAdjustments.ui}>
     <ArcLineRemovalProvider value={lineRemoval.ui}>
     <QuoteCostsProvider value={costsUi}>
+    <ArcCostActionsProvider value={arcCostActions.ui}>
     <div className="space-y-6">
       {priceAdjustments.elements}
       {costActions.elements}
+      {arcCostActions.elements}
+      {sourcingActionsUi.elements}
       {lineRemoval.ConfirmDialogElement}
       {arcDrawerOpen && (
         <ArcQuoteConfigurator
@@ -852,6 +905,30 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
         <StaleRevisionBanner onReload={() => { setStaleStatus(false); void reloadQuote(); void quoteCosts.reload() }} />
       )}
 
+      {costSourceChanged && (
+        <CostSourceChangedBanner
+          view={costSourceChangedView(costSourceChanged, new Map(cpqQuote.lines.map((line) => [line.lineId, line.offeringName] as const)), 'quote')}
+          busyLineId={refreshingLineId}
+          onRefresh={(lineId) => {
+            const line = cpqQuote.lines.find((candidate) => candidate.lineId === lineId)
+            if (!line) return
+            setRefreshingLineId(lineId)
+            void arcCostActions.ui.refresh({ lineId, lineName: line.offeringName }).then((done) => {
+              setRefreshingLineId(null)
+              if (done) setCostSourceChanged((current) => (current ?? []).filter((entry) => entry.quoteLineId !== lineId))
+            })
+          }}
+        />
+      )}
+      {isCostOnlyAmend(arcQuoteType, cpqQuote.lines, costsUi?.data) && (
+        <Alert status="information" style="lighter" data-testid="cpq-cost-only-amend">
+          <AlertDescription>{t('cpq.arc.costOnlyAmend', COST_ONLY_AMEND_FALLBACK)}</AlertDescription>
+        </Alert>
+      )}
+      {arcQuoteType === 'cancel' && costsUi?.canView && (
+        <ExposurePanel exposure={costsUi.data?.exposure} today={new Date().toISOString().slice(0, 10)} />
+      )}
+
       {arcQuoteType !== 'new' && arcTargets.length > 0 && (
         <div className="rounded-md border border-brand-violet/30 bg-brand-violet/10 px-4 py-3 text-sm text-brand-violet">
           <div className="flex items-center justify-between">
@@ -979,6 +1056,22 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
             </Alert>
           )}
 
+          {/* Renew lines of cost-plus items keep their contracted price (feature spec Q4). Shown to every
+              user; carries no amounts. */}
+          {shouldShowRenewCostBanner(arcQuoteType, cpqQuote.lines) && (
+            <Alert status="information" style="lighter">
+              <AlertTitle>
+                {t('cpq.quotes.arc.costsNotCarriedTitle', 'Costs are not carried to change quotes yet')}
+              </AlertTitle>
+              <AlertDescription>
+                {t(
+                  'cpq.quotes.arc.costsNotCarriedDescription',
+                  'This line keeps its contracted price. Changing its configuration re-prices it from today\'s costs.',
+                )}
+              </AlertDescription>
+            </Alert>
+          )}
+
           {/* Quote Lines */}
           <QuoteLineTree
             lines={cpqQuote.lines}
@@ -1085,6 +1178,7 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
         />
       )}
     </div>
+    </ArcCostActionsProvider>
     </QuoteCostsProvider>
     </ArcLineRemovalProvider>
     </PriceAdjustmentProvider>
@@ -1346,6 +1440,9 @@ function QuoteLineRow({ line, lineIdx, currency, isExpanded, pricingDetail, isBu
   const t = useT()
   const adjustmentUi = usePriceAdjustmentUi()
   const costsUi = useQuoteCostsUi()
+  const arcUi = useArcCostActionsUi()
+  const lineEntry = costLineEntry(costsUi?.data, line.lineId)
+  const notice = arcLineNotice(arcUi?.quoteType, line)
   const lineCosts = costsUi?.costsFor(line.lineId) ?? []
   const removalUi = useArcLineRemovalUi()
   const isRemoved = removalUi?.isRemoved(line) ?? false
@@ -1446,6 +1543,17 @@ function QuoteLineRow({ line, lineIdx, currency, isExpanded, pricingDetail, isBu
         ) : (
         <div className="flex items-center gap-1 shrink-0">
           <DiscountLineAction line={line} />
+          {arcUi?.refreshVisible(line, false) && (
+            <IconButton
+              variant="ghost" size="sm"
+              aria-label={t('cpq.arc.refresh.action', 'Refresh from subscription')}
+              title={t('cpq.arc.refresh.action', 'Refresh from subscription')}
+              onClick={() => void arcUi.refresh({ lineId: line.lineId, lineName: line.offeringName })}
+              data-testid="cpq-line-refresh"
+            >
+              <RefreshCw className="h-4 w-4" />
+            </IconButton>
+          )}
           {onAddComponent && (
             <button onClick={onAddComponent} className="rounded p-1.5 text-muted-foreground hover:text-primary hover:bg-primary/5 transition-colors" title="Add Component">
               <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor">
@@ -1467,6 +1575,11 @@ function QuoteLineRow({ line, lineIdx, currency, isExpanded, pricingDetail, isBu
         )}
       </div>
 
+      {notice && (
+        <p className="border-t bg-muted/10 px-12 py-1.5 text-xs text-muted-foreground" data-testid={`cpq-line-notice-${notice}`}>
+          {t(`cpq.arc.lineNotice.${notice}`, ARC_LINE_NOTICE_FALLBACKS[notice])}
+        </p>
+      )}
       {/* Charge breakdown (non-bundle or any expanded line) */}
       {isExpanded && !isBundle && line.charges.length > 0 && (
         <ChargeBreakdown line={line} lineIdx={lineIdx} currency={currency} pricingDetail={pricingDetail} onTogglePricingDetail={onTogglePricingDetail} costs={lineCosts} {...chargeActions} />
@@ -1485,14 +1598,21 @@ function QuoteLineRow({ line, lineIdx, currency, isExpanded, pricingDetail, isBu
           locked={costsUi.locked}
           status={costsUi.cpqStatus}
           canManage={costsUi.canManage}
+          frozen={lineEntry?.frozen === true}
+          dropped={lineEntry?.droppedItemCosts}
           headerActions={<CostHeaderActions line={{ lineId: line.lineId, lineName: line.offeringName }} />}
-          renderRowActions={costsUi.actions ? (cost) => <CostRowActions cost={cost} line={{ lineId: line.lineId, lineName: line.offeringName }} /> : undefined}
+          renderRowActions={costsUi.actions || costsUi.sourcing ? (cost) => <CostRowActions cost={cost} line={{ lineId: line.lineId, lineName: line.offeringName }} /> : undefined}
         />
+      )}
+      {isExpanded && costsUi?.canView && arcUi?.quoteType !== 'cancel' && lineEntry?.exposure && (
+        <div className="border-t bg-muted/10 px-12 py-2">
+          <ExposurePanel exposure={lineEntry.exposure} today={new Date().toISOString().slice(0, 10)} compact />
+        </div>
       )}
       {/* XD-250 ARC: before/after preview, below the charges, when line mirrors a sub item */}
       {isExpanded && line.arcSource && (
         <div className="border-t bg-muted/10 px-12 py-2">
-          <ArcLineDiff line={line} currency={currency} />
+          <ArcLineDiff line={line} currency={currency} costs={arcCostsOfLine(costsUi?.data, line.lineId)} />
         </div>
       )}
       {/* Fallback: line has no per-charge breakdown and no ARC diff (truly empty) */}
@@ -1529,7 +1649,7 @@ function LineSummaryFallback({ line, currency }: { line: QuoteLine; currency: st
 function ChargeBreakdown({ line, lineIdx, pricingDetail, onTogglePricingDetail, costs, ...tableProps }: {
   line: QuoteLine; lineIdx: number; currency: string
   /** Cost lines of this quote line (status badges for every user). */
-  costs?: ReadonlyArray<Pick<RedactedQuoteCost, 'valueStatus' | 'expired'>>
+  costs?: ReadonlyArray<Pick<RedactedQuoteCost, 'valueStatus' | 'expired' | 'carried' | 'renegotiationDue'>>
   pricingDetail: { lineIdx: number; chargeIdx: number } | null
   onTogglePricingDetail: (lineIdx: number, chargeIdx: number) => void
   reasonLabels?: Record<string, string>

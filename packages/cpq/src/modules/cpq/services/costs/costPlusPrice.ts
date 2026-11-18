@@ -3,7 +3,8 @@ import type { CostValueStatus } from '../../data/costs'
 /**
  * Cost-plus list price (App Spec §1.4.7 R2). Pure: no EM, no I/O.
  *
- *   C = Σ per-instance amount of the charge's price-basis cost lines with a known value
+ *   C = Σ per-instance amount × fx_rate of the charge's price-basis cost lines with a known value
+ *       (fx_rate = quote-currency units per cost-currency unit; absent for a cost in the quote currency)
  *   markup_percent        → C × (1 + m / 100)        (m = 25 means 25 %)
  *   target_margin_percent → C ÷ (1 − m / 100)        (m < 100)
  *   markup_absolute       → C + a                    (once per instance; a is in the charge currency, so a
@@ -21,8 +22,10 @@ export type CostPlusErrorCode = 'COST_PENDING' | 'NO_PRICE_BASIS_COST' | 'MARKUP
 export type CostPlusCostInput = {
   role: string
   valueStatus: CostValueStatus | string
-  /** Per-instance amount in the quote currency (numeric string or number). */
+  /** Per-instance amount in the cost line's own currency (numeric string or number). */
   instanceAmount: string | number | null
+  /** FX snapshot into the quote currency; multiplied at full precision, so the list total is still rounded once. */
+  fxRate?: string | number | null
 }
 
 export type CostPlusPriceInput = {
@@ -58,6 +61,12 @@ export const roundTo = (value: number, digits: number): number => {
   return Math.round((value + Number.EPSILON * Math.sign(value)) * factor) / factor
 }
 
+/** A cost's per-instance amount in the quote currency, full precision (no rounding before the single list-total rounding). */
+const convertedAmount = (cost: Pick<CostPlusCostInput, 'instanceAmount' | 'fxRate'>): number => {
+  const amount = Number(cost.instanceAmount)
+  return cost.fxRate === null || cost.fxRate === undefined || cost.fxRate === '' ? amount : amount * Number(cost.fxRate)
+}
+
 /** Σ of the known price-basis costs (full precision), or the error that leaves the charge unpriced. */
 export function sumPriceBasisCosts(costs: CostPlusCostInput[]): { ok: true; total: number } | { ok: false; error: CostPlusErrorCode } {
   const basis = costs.filter((cost) => cost.role === 'price_basis')
@@ -65,7 +74,7 @@ export function sumPriceBasisCosts(costs: CostPlusCostInput[]): { ok: true; tota
   if (basis.some((cost) => cost.valueStatus === 'none' || cost.instanceAmount === null || cost.instanceAmount === undefined)) {
     return { ok: false, error: 'COST_PENDING' }
   }
-  return { ok: true, total: basis.reduce((sum, cost) => sum + Number(cost.instanceAmount), 0) }
+  return { ok: true, total: basis.reduce((sum, cost) => sum + convertedAmount(cost), 0) }
 }
 
 export function applyMarkup(cost: number, rule: string, value: number): number | null {

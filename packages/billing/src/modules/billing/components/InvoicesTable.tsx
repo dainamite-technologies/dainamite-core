@@ -244,7 +244,7 @@ export function InvoicesTable({ title, billAccountId, tableId, pageSize = 25, ac
           if (!start || !end) return '—'
           return (
             <span className="whitespace-nowrap tabular-nums">
-              {formatDate(start)} → {formatDate(end)}
+              {formatBillingDay(start, locale)} → {formatBillingDay(end, locale)}
             </span>
           )
         },

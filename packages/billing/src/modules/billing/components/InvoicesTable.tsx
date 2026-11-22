@@ -241,13 +241,14 @@ export function InvoicesTable({ title, billAccountId, tableId, pageSize = 25, ac
       {
         id: 'period',
         header: t('billing.invoices.columns.period', 'Period'),
+        // The range has a fixed length, so size the column to it instead of the 150px truncate default.
+        meta: { truncate: false },
         cell: ({ row }) => {
-          const start = row.original.period_start?.slice(0, 10)
-          const end = row.original.period_end?.slice(0, 10)
+          const { period_start: start, period_end: end } = row.original
           if (!start || !end) return '—'
           return (
-            <span className="text-xs">
-              {start} → {end}
+            <span className="whitespace-nowrap tabular-nums">
+              {formatDate(start)} → {formatDate(end)}
             </span>
           )
         },

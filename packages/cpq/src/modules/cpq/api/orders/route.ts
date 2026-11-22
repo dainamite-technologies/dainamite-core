@@ -106,7 +106,7 @@ export const openApi: OpenApiRouteDoc = {
         cpqErrorDoc(400, 'Validation error'),
         cpqErrorDoc(404, 'Quote not found'),
         cpqErrorDoc(409, 'Quote cannot be converted in its status or is already converted'),
-        cpqErrorDoc(422, 'Quote has no lines or has invalid stored adjustments, or blocked by a mutation guard'),
+        cpqErrorDoc(422, 'Quote has no lines, has invalid stored adjustments, has an incomplete bundle (`BUNDLE_INCOMPLETE`, with the V-QBUN `errors`), or blocked by a mutation guard'),
       ],
     },
     GET: {

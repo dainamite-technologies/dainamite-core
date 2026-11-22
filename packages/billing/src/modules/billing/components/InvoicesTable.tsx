@@ -2,7 +2,8 @@
 import * as React from 'react'
 import { useRouter } from 'next/navigation'
 import type { LegacyColumnDef as ColumnDef } from '@tanstack/react-table/legacy'
-import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { useLocale, useT } from '@open-mercato/shared/lib/i18n/context'
+import { formatBillingDay } from '../lib/displayDate'
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
 import { BillingDataTable as DataTable } from './BillingDataTable'
 import { RowActions } from '@open-mercato/ui/backend/RowActions'
@@ -65,12 +66,6 @@ export type InvoicesTableProps = {
   actions?: React.ReactNode
 }
 
-function formatDate(value: string | null | undefined): string {
-  if (!value) return '—'
-  const parsed = new Date(value)
-  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleDateString()
-}
-
 export function formatMoney(value: string, currency: string): string {
   const n = Number.parseFloat(value)
   if (!Number.isFinite(n)) return value
@@ -97,6 +92,7 @@ export function invoiceStatusVariant(status: BillingInvoiceRow['status']): 'defa
 
 export function InvoicesTable({ title, billAccountId, tableId, pageSize = 25, actions }: InvoicesTableProps) {
   const t = useT()
+  const locale = useLocale()
   const router = useRouter()
   const [rows, setRows] = React.useState<BillingInvoiceRow[]>([])
   const [page, setPage] = React.useState(1)
@@ -271,12 +267,12 @@ export function InvoicesTable({ title, billAccountId, tableId, pageSize = 25, ac
       {
         accessorKey: 'issue_date',
         header: t('billing.invoices.columns.issued', 'Issued'),
-        cell: ({ row }) => formatDate(row.original.issue_date),
+        cell: ({ row }) => formatBillingDay(row.original.issue_date, locale),
       },
       {
         accessorKey: 'due_date',
         header: t('billing.invoices.columns.due', 'Due'),
-        cell: ({ row }) => formatDate(row.original.due_date),
+        cell: ({ row }) => formatBillingDay(row.original.due_date, locale),
       },
       {
         accessorKey: 'days_overdue',
@@ -290,7 +286,7 @@ export function InvoicesTable({ title, billAccountId, tableId, pageSize = 25, ac
       },
     )
     return cols
-  }, [billAccountId, statusLabel, t])
+  }, [billAccountId, statusLabel, t, locale])
 
   return (
     <DataTable

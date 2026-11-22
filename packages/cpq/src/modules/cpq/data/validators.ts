@@ -53,7 +53,9 @@ export const cpqProductOfferingCreateSchema = z.object({
   code: z.string().min(1),
   name: z.string().min(1),
   description: z.string().nullish(),
-  offeringType: z.enum(['simple', 'bundle']).optional().default('simple'),
+  // No default: when omitted, the create route derives it from the
+  // specification's `specType` (V-OFF-7 — the two must match).
+  offeringType: z.enum(['simple', 'bundle']).optional(),
   designTimeValues: z.record(z.string(), z.unknown()).optional().default({}),
   // `retired` was merged into `deprecated` — see migration
   // `<timestamp>-merge-offering-retired-into-deprecated.ts`. Aligned with
@@ -424,6 +426,10 @@ export const cpqAddQuoteItemSchema = z.object({
   targetSubscriptionId: z.string().uuid().nullish(),
   // ARC (XD-250): existing item being changed by cancel/modify lines.
   sourceSubscriptionItemId: z.string().uuid().nullish(),
+  // #123: when the offering is a bundle, also add its default components
+  // (recursively, capped at each slot group's cardinalityMax). Opt-in so
+  // callers that post the children themselves get exactly what they send.
+  expandBundleDefaults: z.boolean().optional(),
 })
 
 export const cpqUpdateQuoteItemSchema = z.object({

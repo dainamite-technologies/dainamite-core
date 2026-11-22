@@ -2,7 +2,8 @@
 import * as React from 'react'
 import Link from 'next/link'
 import { useParams } from 'next/navigation'
-import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { useLocale, useT } from '@open-mercato/shared/lib/i18n/context'
+import { formatBillingDateTime } from '../../../../lib/displayDate'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
 import { FormHeader } from '@open-mercato/ui/backend/forms'
 import { Tag } from '@open-mercato/ui/primitives/tag'
@@ -28,14 +29,9 @@ type TopupRow = {
   updated_at: string
 }
 
-function formatDate(value: string | null | undefined): string {
-  if (!value) return '—'
-  const d = new Date(value)
-  return Number.isNaN(d.getTime()) ? value : d.toLocaleString()
-}
-
 export default function BillingTopupDetailPage(props: { params?: { id?: string } }) {
   const t = useT()
+  const locale = useLocale()
   const urlParams = useParams<{ id: string }>()
   const topupId = (props.params?.id ?? urlParams?.id ?? '') as string
 
@@ -115,10 +111,10 @@ export default function BillingTopupDetailPage(props: { params?: { id?: string }
             {row.provider_key}
           </DetailField>
           <DetailField label={t('billing.topups.columns.created', 'Created')}>
-            {formatDate(row.created_at)}
+            {formatBillingDateTime(row.created_at, locale)}
           </DetailField>
           <DetailField label={t('billing.topups.detail.updated', 'Updated')}>
-            {formatDate(row.updated_at)}
+            {formatBillingDateTime(row.updated_at, locale)}
           </DetailField>
           <DetailField label={t('billing.topups.detail.payment_id', 'Payment ID')}>
             <span className="font-mono text-xs">{row.payment_id}</span>

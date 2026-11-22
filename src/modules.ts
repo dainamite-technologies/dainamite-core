@@ -76,6 +76,10 @@ export const enabledModules: ModuleEntry[] = [
   // pages or APIs, just seed code scoped to its own tenant.
   { id: 'demo_gix', from: '@app' },
   { id: 'demo_puffin', from: '@app' },
+  // ACME (primary tenant) example data — CPQ catalog, quotes, order and
+  // subscription, then billing accounts, runs, invoices, payments, prepaid
+  // statements. Skips the demo use-case tenants.
+  { id: 'demo_acme', from: '@app' },
   // Orchestrator MUST be registered after every demo_<x> module so the registry
   // is fully populated by the time its seedExamples hook fires.
   { id: 'demo_tenants', from: '@app' },

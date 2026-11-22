@@ -768,6 +768,7 @@
   "cpq.quotes.bundle.alreadyAdded": "Ya añadido",
   "cpq.quotes.bundle.loadingStructure": "Cargando estructura del paquete…",
   "cpq.quotes.bundle.slotFull": "La posición está completa",
+  "cpq.quotes.bundle.slotIncomplete": "incompleto",
   "cpq.quotes.bundle.slotMin": "(mín. {min})",
   "cpq.quotes.bundle.slotOptional": "opcional",
   "cpq.quotes.bundle.slotRequired": "obligatorio",

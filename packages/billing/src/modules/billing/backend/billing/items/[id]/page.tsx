@@ -3,7 +3,8 @@ import * as React from 'react'
 import Link from 'next/link'
 import { Pencil, Repeat } from 'lucide-react'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
-import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { useLocale, useT } from '@open-mercato/shared/lib/i18n/context'
+import { formatBillingDay } from '../../../../lib/displayDate'
 import { Page, PageBody, PageHeader } from '@open-mercato/ui/backend/Page'
 import { FormHeader } from '@open-mercato/ui/backend/forms'
 import { Button } from '@open-mercato/ui/primitives/button'
@@ -68,12 +69,6 @@ type BillingItemRow = {
 
 type ListResponse = { items: BillingItemRow[] }
 
-function formatDate(value: string | null | undefined): string {
-  if (!value) return '—'
-  const parsed = new Date(value)
-  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleDateString()
-}
-
 function formatRate(row: BillingItemRow): string {
   const rate = (row.rate_json ?? {}) as Record<string, unknown>
   if (row.type === 'one_time' && typeof rate.amount === 'number') {
@@ -130,6 +125,7 @@ function toFormValues(row: BillingItemRow): Partial<ItemFormValues> {
 
 function ItemView({ row }: { row: BillingItemRow }) {
   const t = useT()
+  const locale = useLocale()
   return (
     <DetailCard>
       <DetailField label={t('billing.items.detail.field.account', 'Account')}>
@@ -144,10 +140,10 @@ function ItemView({ row }: { row: BillingItemRow }) {
         <Tag variant="info">{row.type}</Tag>
       </DetailField>
       <DetailField label={t('billing.items.columns.start', 'Start')}>
-        {formatDate(row.bill_start_date)}
+        {formatBillingDay(row.bill_start_date, locale)}
       </DetailField>
       <DetailField label={t('billing.items.columns.end', 'End')}>
-        {formatDate(row.bill_end_date)}
+        {formatBillingDay(row.bill_end_date, locale)}
       </DetailField>
       <DetailField label={t('billing.items.form.rate.title', 'Rate')}>
         <span className="inline-flex items-center gap-2">
@@ -198,7 +194,7 @@ function ItemView({ row }: { row: BillingItemRow }) {
         </>
       ) : null}
       <DetailField label={t('billing.items.detail.field.billed_to', 'Billed through')}>
-        {row.billed_to_date ? formatDate(row.billed_to_date) : '—'}
+        {formatBillingDay(row.billed_to_date, locale)}
       </DetailField>
       {row.currency_mismatch ? (
         <DetailField

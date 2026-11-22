@@ -9,7 +9,7 @@ import { ensureSellerSettings } from './sellerSettings'
  * Spec: .ai/specs/2026-11-14-billing-standalone-invoice-ledger.md
  *
  *   1. A real Bill Run for a fresh account writes a draft numbered `DRAFT-…`.
- *   2. Posting assigns the series number (default mask `INV/{YYYY}/{MM}/{SEQUENCE_NUM_MONTH:4}`),
+ *   2. Posting assigns the series number (`INV/{YYYY}/{MM}/<seq>`, width per the tenant's mask),
  *      status `posted`, outstanding = gross; a second post → 409.
  *   3. The document lives in billing only — core sales never lists it.
  *
@@ -83,7 +83,8 @@ test.describe('TC-BILL-006: billing-owned invoice ledger', () => {
     expect(post.ok(), `POST post status was ${post.status()}`).toBeTruthy()
     const posted = (await post.json()) as { invoiceNumber: string; status: string }
     expect(posted.status).toBe('posted')
-    expect(posted.invoiceNumber).toMatch(/^INV\/\d{4}\/\d{2}\/\d{4}$/)
+    // Sequence width comes from the tenant's mask (default :4; the ACME demo seed uses :6).
+    expect(posted.invoiceNumber).toMatch(/^INV\/\d{4}\/\d{2}\/\d{4,}$/)
 
     const [after] = await listInvoices(request, token, accountId)
     expect(after).toMatchObject({ id: draft.id, status: 'posted', number: posted.invoiceNumber })

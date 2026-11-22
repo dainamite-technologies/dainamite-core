@@ -24,6 +24,10 @@ export function toIsoDate(value: Date | string | number): string {
 /**
  * Locale-formatted date-only value for display. Formats in UTC so a
  * `YYYY-MM-DD` day never shifts by one in time zones west of UTC.
+ *
+ * @deprecated Use `formatBillingDay` from `./displayDate` with the app locale
+ * (`useLocale()`): it matches the DataTable date style and honours
+ * `NEXT_PUBLIC_OM_DATE_FORMAT` (#129). Kept for package consumers.
  */
 export function formatDateOnly(value: Date | string | null | undefined, locale?: string): string {
   if (!value) return '—'

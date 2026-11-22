@@ -24,6 +24,8 @@
 import { z } from 'zod'
 import { CPQ_STATUSES, SUBMIT_FOR_APPROVAL_FROM_STATUSES, type CpqStatus } from '../services/types'
 import type { McpToolContext } from '@open-mercato/ai-assistant/modules/ai_assistant/lib/types'
+import type { BundleTreeNode } from '../services/cpqBundleService'
+import { selectDefaultComponents } from '../lib/bundleDefaults'
 import {
   compactQuery,
   configurationField,
@@ -34,6 +36,7 @@ import {
   quoteRecordVersion,
   toUsageEstimateInputs,
   responseRecord,
+  runAsTool,
   seg,
   sortDirField,
   toPagedOutput,
@@ -180,22 +183,49 @@ export const addQuoteLineInput = z
     configuration: configurationField,
     ...lineTermFields,
     parentLineId: z.string().uuid().optional().describe('Existing line id this line is nested under (bundle child or add-on).'),
+    expandBundleDefaults: z
+      .boolean()
+      .optional()
+      .describe('For a bundle offering: also add its default components as child lines (nested bundles included). Set true when adding a bundle unless you will add its components yourself.'),
   })
   .strict()
 type AddQuoteLineInput = z.infer<typeof addQuoteLineInput>
+
+/** Lines the server will add for a bundle's defaults (recursive), or null when the tree cannot be read. */
+async function countDefaultComponentLines(tool: CpqAiToolDefinition, ctx: McpToolContext, offeringId: string): Promise<number | null> {
+  try {
+    const response = await runAsTool<{ tree?: BundleTreeNode | null }>(tool, ctx, {
+      method: 'GET',
+      path: '/cpq/bundle-tree',
+      query: { offeringId },
+    })
+    const tree = response.success ? response.data?.tree : null
+    if (!tree) return null
+    const count = (node: BundleTreeNode): number =>
+      selectDefaultComponents(node).reduce((sum, child) => sum + 1 + (child.offeringType === 'bundle' ? count(child) : 0), 0)
+    return tree.offeringType === 'bundle' ? count(tree) : 0
+  } catch {
+    return null
+  }
+}
 
 async function previewAddLine(tool: CpqAiToolDefinition, rawInput: unknown, ctx: McpToolContext) {
   const input = addQuoteLineInput.parse(rawInput)
   const quote = await loadQuoteSnapshot(tool, ctx, input.quoteId)
   if (!quote) return null
   const lineCount = quote.lines?.length ?? 0
+  // The approval card must not understate the change: bundle defaults add lines too.
+  const defaultLines = input.expandBundleDefaults
+    ? await countDefaultComponentLines(tool, ctx, input.offeringId)
+    : 0
   return {
     recordId: quote.id,
     entityType: QUOTE_ENTITY,
     recordVersion: quoteRecordVersion(quote),
     before: { lineCount, newLine: null },
     after: {
-      lineCount: lineCount + 1,
+      lineCount: lineCount + 1 + (defaultLines ?? 0),
+      ...(input.expandBundleDefaults ? { defaultComponentLines: defaultLines ?? 'unknown' } : {}),
       newLine: {
         offeringId: input.offeringId,
         quantity: input.quantity ?? 1,
@@ -206,7 +236,7 @@ async function previewAddLine(tool: CpqAiToolDefinition, rawInput: unknown, ctx:
         ...(input.parentLineId ? { parentLineId: input.parentLineId } : {}),
       },
     },
-    display: { fieldLabels: { lineCount: 'Lines on quote', newLine: 'New line' } },
+    display: { fieldLabels: { lineCount: 'Lines on quote', newLine: 'New line', defaultComponentLines: 'Default component lines' } },
   }
 }
 
@@ -215,9 +245,10 @@ addQuoteLineTool = defineCpqApiTool<AddQuoteLineInput, Record<string, unknown>, 
   name: 'cpq.add_quote_line',
   displayName: 'Add CPQ quote line',
   description:
-    'Add a configured offering as a new line on a CPQ quote. The server prices the line and recalculates the quote. Goes through the operator approval card before anything is saved. Returns { quote } after the change.',
+    'Add a configured offering as a new line on a CPQ quote. The server prices the line and recalculates the quote. For a bundle, pass expandBundleDefaults: true to also add its default components; a bundle whose required slots are empty stays incomplete (V-QBUN-1). Goes through the operator approval card before anything is saved. Returns { quote } after the change.',
   inputSchema: addQuoteLineInput,
-  requiredFeatures: ['cpq.quotes.manage', 'cpq.quotes.view'],
+  // cpq.offerings.view: the preview reads the bundle tree to count default lines.
+  requiredFeatures: ['cpq.quotes.manage', 'cpq.quotes.view', 'cpq.offerings.view'],
   isMutation: true,
   loadBeforeRecord: (rawInput, ctx) => previewAddLine(addQuoteLineTool, rawInput, ctx),
   toOperation: (input) => {
@@ -231,6 +262,7 @@ addQuoteLineTool = defineCpqApiTool<AddQuoteLineInput, Record<string, unknown>, 
     if (input.termMonths !== undefined) body.termMonths = input.termMonths
     if (input.endDate) body.endDate = input.endDate
     if (input.parentLineId) body.parentLineId = input.parentLineId
+    if (input.expandBundleDefaults) body.expandBundleDefaults = true
     return { method: 'POST', path: `/cpq/quotes/${seg(input.quoteId)}/items`, body }
   },
   mapResponse: (response) => ({ quote: responseRecord(response) }),

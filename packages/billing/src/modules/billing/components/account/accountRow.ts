@@ -1,5 +1,6 @@
 import type { BillCycle } from '../../lib/billCycle'
 import type { AccountFormValues } from '../AccountForm'
+import { formatBillingDay } from '../../lib/displayDate'
 
 /**
  * Billing Account row as returned by `GET /api/billing/accounts` (snake_case
@@ -35,10 +36,9 @@ export type AccountRow = {
   updated_at: string
 }
 
-export function formatDate(value: string | null | undefined): string {
-  if (!value) return '—'
-  const parsed = new Date(value)
-  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleDateString()
+/** A calendar-day column for display; pass the app locale from `useLocale()` (#129). */
+export function formatDate(value: string | null | undefined, locale?: string | null): string {
+  return formatBillingDay(value, locale)
 }
 
 export function toFormValues(row: AccountRow): AccountFormValues {

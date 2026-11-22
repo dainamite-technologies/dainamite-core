@@ -141,6 +141,35 @@ export async function seedGixExamples(
       },
       scope,
     )
+    // The bundle's required slots (access port, internet peering) are filled
+    // with configured components, so the quote is complete (V-QBUN-1) and
+    // priced. Added explicitly rather than with expandBundleDefaults because
+    // the defaults need attribute values the seed knows.
+    const bundleLineId = quoteB1.lines.find((line) => line.offeringId === offerings.bundle!.id)?.lineId
+    if (bundleLineId) {
+      quoteB1 = await quoting.addQuoteItem(
+        quoteB1.id,
+        {
+          offeringId: offerings.accessPort.id,
+          configuration: { port_size: '10G', data_centre: 'equinix-am1' },
+          quantity: 1,
+          termMonths: 36,
+          parentLineId: bundleLineId,
+        },
+        scope,
+      )
+      quoteB1 = await quoting.addQuoteItem(
+        quoteB1.id,
+        {
+          offeringId: offerings.internetPeering.id,
+          configuration: { bandwidth_mb: 500 },
+          quantity: 1,
+          termMonths: 36,
+          parentLineId: bundleLineId,
+        },
+        scope,
+      )
+    }
     quoteB1 = await quoting.recalculate(quoteB1.id, { save: true }, scope)
     quoteB1 = await safeTransition(quoting, quoteB1, 'ready', scope)
     log(`Quote B1 (ready): ${quoteB1.quoteNumber} — Connectivity Bundle 36mo`)

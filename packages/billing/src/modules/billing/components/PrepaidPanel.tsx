@@ -3,9 +3,11 @@ import * as React from 'react'
 import { useRouter } from 'next/navigation'
 import { Plus, SlidersHorizontal } from 'lucide-react'
 import type { LegacyColumnDef as ColumnDef } from '@tanstack/react-table/legacy'
-import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { useLocale, useT } from '@open-mercato/shared/lib/i18n/context'
+import { formatBillingDateTime } from '../lib/displayDate'
 import { BillingDataTable as DataTable } from './BillingDataTable'
 import { Tag } from '@open-mercato/ui/primitives/tag'
+import { TransactionDescription } from './TransactionDescription'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { flash } from '@open-mercato/ui/backend/FlashMessages'
 import { apiCall, apiCallOrThrow, readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
@@ -39,6 +41,7 @@ type TransactionRow = {
   amount: string
   balance_after: string
   description: string
+  metadata: Record<string, unknown> | null
   created_at: string
 }
 
@@ -60,12 +63,6 @@ function txnVariant(type: string): 'success' | 'info' | 'neutral' {
   return 'neutral'
 }
 
-function formatDateTime(value: string | null | undefined): string {
-  if (!value) return '—'
-  const d = new Date(value)
-  return Number.isNaN(d.getTime()) ? value : d.toLocaleString()
-}
-
 export function PrepaidPanel({
   accountId,
   currencyCode,
@@ -74,6 +71,7 @@ export function PrepaidPanel({
   currencyCode: string
 }) {
   const t = useT()
+  const locale = useLocale()
   const router = useRouter()
   const [balance, setBalance] = React.useState<BalanceSnapshot | null>(null)
   const [credit, setCredit] = React.useState<CreditSnapshot | null>(null)
@@ -215,7 +213,7 @@ export function PrepaidPanel({
       {
         accessorKey: 'created_at',
         header: t('billing.transactions.columns.when', 'When'),
-        cell: ({ row }) => formatDateTime(row.original.created_at),
+        cell: ({ row }) => formatBillingDateTime(row.original.created_at, locale),
       },
       {
         accessorKey: 'type',
@@ -229,7 +227,9 @@ export function PrepaidPanel({
       {
         accessorKey: 'description',
         header: t('billing.transactions.columns.description', 'Description'),
-        cell: ({ row }) => <span className="text-sm">{row.original.description}</span>,
+        cell: ({ row }) => (
+          <TransactionDescription description={row.original.description} metadata={row.original.metadata} />
+        ),
       },
       {
         accessorKey: 'amount',
@@ -246,7 +246,7 @@ export function PrepaidPanel({
         ),
       },
     ],
-    [t],
+    [t, locale],
   )
 
   return (
@@ -290,7 +290,7 @@ export function PrepaidPanel({
         ) : null}
         <Stat
           label={t('billing.prepaid.panel.last_movement', 'Last movement')}
-          value={formatDateTime(balance?.lastMovementAt)}
+          value={formatBillingDateTime(balance?.lastMovementAt, locale)}
         />
       </StatCard>
 

@@ -166,6 +166,37 @@ the `@dainamite/cpq` package, per
 
 ## Schema / API changelog (track breaking changes here)
 
+### 2026-11-17 - Bundle setup, default components, slot validation (#122-#125)
+
+**Migration.** `Migration20261117120000_cpq_offering_components_partial_unique`
+replaces the `cpq_off_comp_unique` constraint with a partial unique index
+(`WHERE deleted_at IS NULL`), so a removed bundle component can be added back.
+Rollback **permanently deletes** older soft-deleted copies (keeping the live
+row, else the newest) before restoring the full constraint.
+Written by hand in the generator's style (no database was available to run
+`yarn mercato db generate`); the module snapshot was updated to match.
+
+**API (additive).** `POST /product-offerings`: `offeringType` optional, defaults
+to the spec's `specType`. `POST /quotes/{id}/items`: `expandBundleDefaults`.
+`ValidationError.type` gains `'charge'` (V-LINE-1) and `'bundle_slot'`
+(V-QBUN-1..3, with `slotGroup` / `slotName`). `BundleTreeNode` gains `isActive`.
+`offering-components` / `bundle-slots` POST: 404 / 409 instead of 500.
+
+**Behaviour changes.** `POST /orders` returns 422 `BUNDLE_INCOMPLETE` while a
+quote has stored bundle-slot errors. Like the adjustment check, conversion
+reads the quote's stored (reviewed) validation and does not re-price: a quote
+last recalculated before this release is not retro-blocked until its next
+write. Slot rules do not run on Cancel quotes, never flag children mirrored
+from the subscription, and skip a mirrored bundle whose children the quote
+leaves untouched; cardinality counts lines, not quantity. Default component
+lines inherit the bundle line's term and dates, and per attribute the bundle
+line's value for the same code or the attribute's `defaultValue`. A valid line
+whose offering defines no charges is configured; one whose charges exist but
+none applies is incomplete with V-LINE-1. Lines without an offering keep the
+previous rule (no charges = incomplete). Lines are now decided by one rule in `lib/lineCompleteness.ts`,
+run by `recalculateInternal`; `DefaultCpqQuotingService` takes an optional
+`cpqBundleService` dependency.
+
 ### 2026-11-16 - Date column props are strings; 400 without organization
 
 **Entity typings (consumers reading these props).** Every `type: 'date'`

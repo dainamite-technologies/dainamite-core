@@ -4,7 +4,8 @@ import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Plus } from 'lucide-react'
 import type { LegacyColumnDef as ColumnDef } from '@tanstack/react-table/legacy'
-import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { useLocale, useT } from '@open-mercato/shared/lib/i18n/context'
+import { formatBillingDay } from '../../../lib/displayDate'
 import type { FilterDef, FilterValues } from '@open-mercato/ui/backend/FilterBar'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
 import { BillingDataTable as DataTable } from '../../../components/BillingDataTable'
@@ -46,12 +47,6 @@ type ListResponse = {
   totalPages: number
 }
 
-function formatDate(value: string | null | undefined): string {
-  if (!value) return '—'
-  const parsed = new Date(value)
-  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleDateString()
-}
-
 function typeVariant(
   type: BillingItemRow['type'],
 ): 'default' | 'success' | 'warning' | 'info' {
@@ -69,6 +64,7 @@ function typeVariant(
 
 export default function BillingItemsListPage() {
   const t = useT()
+  const locale = useLocale()
   const router = useRouter()
   const searchParams = useSearchParams()
   // Deep-link from the account detail page: `?billAccountId=<id>` pre-
@@ -218,12 +214,12 @@ export default function BillingItemsListPage() {
       {
         accessorKey: 'bill_start_date',
         header: t('billing.items.columns.start', 'Start'),
-        cell: ({ row }) => formatDate(row.original.bill_start_date),
+        cell: ({ row }) => formatBillingDay(row.original.bill_start_date, locale),
       },
       {
         accessorKey: 'bill_end_date',
         header: t('billing.items.columns.end', 'End'),
-        cell: ({ row }) => formatDate(row.original.bill_end_date),
+        cell: ({ row }) => formatBillingDay(row.original.bill_end_date, locale),
       },
       {
         accessorKey: 'uom_code',
@@ -241,7 +237,7 @@ export default function BillingItemsListPage() {
           ),
       },
     ],
-    [t],
+    [t, locale],
   )
 
   return (

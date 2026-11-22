@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { cpqContextError, resolveCpqRouteContext } from '../context'
 import { cpqBundleSlotCreateSchema, cpqBundleSlotUpdateSchema } from '../../data/validators'
 import type { DefaultCpqBundleService } from '../../services/cpqBundleService'
+import { bundleErrorResponse } from '../_helpers/bundleErrors'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { cpqErrorDoc, cpqDeleteByIdBody, cpqSuccessResponseSchema } from '../_helpers/quoteRouteOpenApi'
 
@@ -57,9 +58,8 @@ export async function POST(req: Request) {
     if (err instanceof z.ZodError) {
       return NextResponse.json({ error: 'Validation error', details: err.issues }, { status: 400 })
     }
-    if (err instanceof Error && err.message.startsWith('V-')) {
-      return NextResponse.json({ error: err.message }, { status: 400 })
-    }
+    const mapped = bundleErrorResponse(err)
+    if (mapped) return mapped
     console.error('[cpq/bundle-slots.POST]', err)
     return NextResponse.json({ error: 'Internal error' }, { status: 500 })
   }
@@ -138,6 +138,7 @@ export const openApi: OpenApiRouteDoc = {
       responses: [{ status: 201, description: 'Created slot' }],
       errors: [
         cpqErrorDoc(400, 'Validation error or bundle rule violation (`V-*` code)'),
+        cpqErrorDoc(404, 'Specification not found'),
         cpqErrorDoc(500, 'Internal error'),
       ],
     },

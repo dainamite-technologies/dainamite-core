@@ -14,6 +14,9 @@ Entry format (newest first within a section):
 
 ## Open Mercato framework
 
+- **`DataTable` ignores a column's `cell` when its id / `accessorKey` ends in `_at`.** (2026-11-18, #129)
+  It renders the value with `formatDisplayDateTime` in the app locale (`useLocale()`). Format every other date with `formatDisplayDate` / `formatDisplayDateTime` and the same locale (billing: `lib/displayDate.ts`), never `toLocaleString()`, or one screen mixes formats.
+
 - **The MCP HTTP server runs tools without the approval gate.** (2026-11-16, #110)
   `ai_assistant` `lib/http-server.ts` calls a tool right after the feature check. Every write tool must refuse unless `ctx.approvedPendingActionId` is set; only the pending-action executor sets it.
 - **Agent mutation-policy overrides can only restrict.** (2026-11-16, #110)
@@ -38,12 +41,28 @@ Entry format (newest first within a section):
 
 ## CPQ
 
+- **A unique constraint on a soft-deleted table blocks re-creating a removed row.** (2026-11-17, #122)
+  The service check filters `deletedAt: null` and passes, then the full constraint fails the insert (500). Use a partial unique index (`@Index({ expression: '… WHERE "deleted_at" IS NULL' })`) and update the module snapshot to the `expression` form.
+- **A quote line's `isConfigured` is decided only by `recalculateInternal`.** (2026-11-17, #125)
+  Add and update both end in a saved recalculation that overwrites the value, so logic placed in those paths has no effect. Change `lib/lineCompleteness.ts`.
+- **`.default()` on a create schema hides "the caller omitted it".** (2026-11-17, #122)
+  `offeringType: z.enum(...).default('simple')` made every bundle create from the UI fail V-OFF-7. Leave a field without a default when the server should derive it.
+- **During `mercato init`, persistent subscribers (e.g. the CPQ → billing connector) do not run inline.** (2026-11-18, `src/modules/demo_acme/seeds/cpq.ts`)
+  Single-delivery queues them for the worker, so a seed that activates an order gets no billing account yet. Capture the payload with `registerGlobalEventTap` (`@open-mercato/events/bus`) and call the idempotent handler inline.
+- **`demo_tenants` replays every module's `seedExamples` into each demo tenant (GIX, Puffin).** (2026-11-18, `src/modules/demo_acme/setup.ts`)
+  A seed meant only for the primary ACME tenant must skip itself there; `demo_acme` skips organizations whose name matches a registered use case's `tenant.organizationName`.
+
 - **Every CPQ route needs an organization context.** (2026-11-16, #116)
   `cpqContextError(ctx)` answers 401 / 400. Route test mocks of `../context` must keep the real one: `cpqContextError: jest.requireActual('../context').cpqContextError`.
 - **A terminal CPQ quote (accepted / rejected / cancelled) may already back an order.** (2026-11-16, #115)
   Never soft-delete its configuration: order activation would treat an amend / cancel as a new sale and create a duplicate subscription.
 - **Read-modify-write AI tools must resend fields the route would clear and drop fields the server derives.** (2026-11-16, #110)
   `update_quote_line` resends `usageEstimates` and drops a stored `endDate` when the term or start changes.
+
+## Billing
+
+- **Prepaid statements bucket the ledger by `created_at`, but period-close charges are stamped at run time.** (2026-11-18, #138)
+  A catch-up or future-dated run creates charges long after (or before) their bill date. Attribute charges by `metadata.bill_date`, never by `created_at`, when computing a balance at a bill date (`sumLedgerBefore` in `prepaidPeriodClose.ts`).
 
 ## Packaging and release
 
@@ -60,6 +79,8 @@ Entry format (newest first within a section):
   For smoke tests run a separate container (e.g. `:5433`) and pass `DATABASE_URL` to `yarn initialize` / `yarn dev`; the shell env wins over `.env`.
 - **The shell's Anthropic base URL points at the local Caveman gateway (`127.0.0.1:8787`).** (2026-11-16)
   The app appends `/messages`, the gateway rejects it and agents return an empty response. Run `ANTHROPIC_BASE_URL=https://api.anthropic.com/v1 yarn dev`.
+- **A smoke-test DB still shares the file queue (`QUEUE_BASE_DIR=./.mercato/queue`) with a running `yarn dev`.** (2026-11-18)
+  Jobs queued by `yarn initialize` on a throwaway DB can be drained by the dev worker against the dev DB. Stop `yarn dev` or set a separate `QUEUE_BASE_DIR` for the test run.
 - **MCP API keys from `mcp:ensure-api-key` have no organization.** (2026-11-16, #116)
   CPQ answers 400 to them. Keys for external MCP clients are created in the UI with an organization.
 - **`main` requires resolved conversations.** (2026-11-16)

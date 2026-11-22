@@ -2296,17 +2296,13 @@
           "unique": false
         },
         {
-          "columnNames": [
-            "organization_id",
-            "tenant_id",
-            "offering_id",
-            "child_offering_id"
-          ],
-          "composite": true,
-          "constraint": true,
+          "columnNames": [],
+          "composite": false,
+          "constraint": false,
           "keyName": "cpq_off_comp_unique",
           "primary": false,
-          "unique": true
+          "unique": false,
+          "expression": "CREATE UNIQUE INDEX \"cpq_off_comp_unique\" ON \"cpq_offering_components\" (\"organization_id\", \"tenant_id\", \"offering_id\", \"child_offering_id\") WHERE \"deleted_at\" IS NULL"
         },
         {
           "columnNames": [

@@ -22,6 +22,8 @@ type StatementRow = {
   total_topups: string
   total_usage: string
   total_recurring: string
+  /** Signed: manual adjustments + reversals in the window. */
+  total_adjustments: string
   closing_balance: string
 }
 
@@ -92,8 +94,14 @@ export function AccountStatementsTab({ accountId, refreshKey = 0 }: { accountId:
         cell: ({ row }) => formatMoney(row.original.total_usage, row.original.currency_code),
       },
       {
+        accessorKey: 'total_adjustments',
+        header: t('billing.statements.columns.adjustments', 'Adjustments'),
+        cell: ({ row }) => formatMoney(row.original.total_adjustments, row.original.currency_code),
+      },
+      {
+        // Charges are taken AT the bill date — in-advance ones cover the next period (#138).
         accessorKey: 'total_recurring',
-        header: t('billing.statements.columns.charges', 'Charges'),
+        header: t('billing.statements.columns.charges_on_bill_date', 'Charges (taken on bill date)'),
         cell: ({ row }) => formatMoney(row.original.total_recurring, row.original.currency_code),
       },
       {

@@ -1,5 +1,7 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
 import {
+  CpqBundleSlot,
+  CpqOfferingComponent,
   CpqProductAttribute,
   CpqProductOffering,
   CpqProductSpecification,
@@ -179,6 +181,149 @@ export class DefaultCpqValidationService {
       }
     }
 
+    return errors
+  }
+
+  /**
+   * Quote-time bundle rules (XD-223 V-QBUN-1..4, #124). For every bundle line
+   * on the quote, its child lines are matched to the bundle's live components
+   * and counted per slot group:
+   *
+   * - V-QBUN-1 (on the bundle line) — a slot group has fewer than `cardinalityMin`
+   * - V-QBUN-2 (on the bundle line) — a slot group has more than `cardinalityMax`
+   * - V-QBUN-3 (on the child line)  — the child is not a component of the bundle
+   *   and no `parent_child` relationship from the bundle's spec allows it
+   * - V-QBUN-4 — nested bundles are bundle lines too, so they are checked the same way
+   *
+   * Child lines marked for removal by ARC are not counted, and mirrored
+   * children are never flagged by V-QBUN-3. A bundle mirrored from a live
+   * subscription is grandfathered: it is only checked when this quote changes
+   * its children (a child is added or cancelled), so renewing a subscription
+   * sold before default expansion existed is not blocked. The caller skips
+   * Cancel quotes entirely (everything on them is being terminated).
+   *
+   * Cardinality counts component *lines*, as XD-223 defines it; a line's
+   * quantity does not count as several components.
+   *
+   * Child → slot mapping uses the component row (V-COMP-5 makes the child
+   * offering unique per bundle), so quote lines need no slot column.
+   */
+  async validateBundleSlots(params: {
+    lines: Array<{
+      lineId: string
+      offeringId: string | null
+      specId: string | null
+      parentLineId: string | null
+      action: string
+      isArcCancelled: boolean
+      isArcMirrored: boolean
+    }>
+    scope: TenantScope
+  }): Promise<ValidationError[]> {
+    const { lines, scope } = params
+    const offeringIds = [...new Set(lines.map((l) => l.offeringId).filter((id): id is string => !!id))]
+    if (offeringIds.length === 0) return []
+
+    const bundles = await this.em.find(CpqProductOffering, {
+      id: { $in: offeringIds },
+      offeringType: 'bundle',
+      ...scope,
+      deletedAt: null,
+    })
+    if (bundles.length === 0) return []
+    const bundleById = new Map(bundles.map((b) => [b.id, b]))
+    const bundleSpecIds = [...new Set(bundles.map((b) => b.specId))]
+
+    const [slots, components, relationships] = await Promise.all([
+      this.em.find(CpqBundleSlot, { specId: { $in: bundleSpecIds }, ...scope, deletedAt: null, isActive: true }),
+      this.em.find(CpqOfferingComponent, { offeringId: { $in: bundles.map((b) => b.id) }, ...scope, deletedAt: null, isActive: true }),
+      this.em.find(CpqProductRelationship, {
+        sourceSpecId: { $in: bundleSpecIds },
+        relationshipType: 'parent_child',
+        ...scope,
+        deletedAt: null,
+        isActive: true,
+      }),
+    ])
+
+    const errors: ValidationError[] = []
+    for (const bundleLine of lines) {
+      const bundle = bundleLine.offeringId ? bundleById.get(bundleLine.offeringId) : undefined
+      if (!bundle || bundleLine.isArcCancelled) continue
+
+      const bundleSlots = slots.filter((slot) => slot.specId === bundle.specId)
+      const slotById = new Map(bundleSlots.map((slot) => [slot.id, slot]))
+      const slotIdByChildOffering = new Map(
+        components
+          .filter((c) => c.offeringId === bundle.id && slotById.has(c.slotId))
+          .map((c) => [c.childOfferingId, c.slotId]),
+      )
+      const addOnSpecIds = new Set(
+        relationships.filter((r) => r.sourceSpecId === bundle.specId).map((r) => r.targetSpecId),
+      )
+
+      const allChildren = lines.filter((l) => l.parentLineId === bundleLine.lineId)
+      // A bundle mirrored from a live subscription whose children this quote
+      // leaves untouched is what was sold: it is not re-checked.
+      const grandfathered = bundleLine.isArcMirrored && allChildren.every((child) => child.action === 'modify')
+      if (grandfathered) continue
+
+      const countByGroup = new Map<string, number>()
+      // A mirrored child that maps to no live component was sold under an
+      // older catalog shape: the slot it filled can no longer be known, so
+      // minimums are not enforced for this bundle (maximums still are).
+      let hasLegacyChild = false
+      for (const child of allChildren) {
+        if (child.isArcCancelled) continue
+        const slotId = child.offeringId ? slotIdByChildOffering.get(child.offeringId) : undefined
+        const slot = slotId ? slotById.get(slotId) : undefined
+        if (slot) {
+          countByGroup.set(slot.componentGroup, (countByGroup.get(slot.componentGroup) ?? 0) + 1)
+          continue
+        }
+        // Add-ons allowed by a parent_child relationship, and items mirrored
+        // from the subscription (sold under an older catalog), are not flagged.
+        if (child.specId && addOnSpecIds.has(child.specId)) continue
+        if (child.isArcMirrored) {
+          hasLegacyChild = true
+          continue
+        }
+        errors.push({
+          lineId: child.lineId,
+          type: 'bundle_slot',
+          message: `V-QBUN-3: This item is not a component of bundle ${bundle.name}`,
+        })
+      }
+
+      const groups = new Map<string, { min: number; max: number | null; names: string[] }>()
+      for (const slot of bundleSlots) {
+        const group = groups.get(slot.componentGroup)
+        if (group) group.names.push(slot.name)
+        else groups.set(slot.componentGroup, { min: slot.cardinalityMin, max: slot.cardinalityMax ?? null, names: [slot.name] })
+      }
+      for (const [componentGroup, group] of groups) {
+        const count = countByGroup.get(componentGroup) ?? 0
+        const slotName = group.names.join(' / ')
+        if (!hasLegacyChild && group.min > 0 && count < group.min) {
+          errors.push({
+            lineId: bundleLine.lineId,
+            type: 'bundle_slot',
+            slotGroup: componentGroup,
+            slotName,
+            message: `V-QBUN-1: ${slotName} requires at least ${group.min} component(s) (${count} selected)`,
+          })
+        }
+        if (group.max != null && count > group.max) {
+          errors.push({
+            lineId: bundleLine.lineId,
+            type: 'bundle_slot',
+            slotGroup: componentGroup,
+            slotName,
+            message: `V-QBUN-2: ${slotName} allows at most ${group.max} component(s) (${count} selected)`,
+          })
+        }
+      }
+    }
     return errors
   }
 

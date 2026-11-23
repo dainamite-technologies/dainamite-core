@@ -6,8 +6,18 @@ import { isQuotingError } from '../../services/cpqQuotingService'
 import { resolveQuotingService } from '../resolveQuotingService'
 import { CpqQuoteConfiguration } from '../../data/entities'
 import { SalesQuote } from '@open-mercato/core/modules/sales/data/entities'
+import { buildIlikeTerm } from '@open-mercato/shared/lib/db/buildIlikeTerm'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { cpqErrorDoc, cpqPaginationQuery, cpqSortDirQuery } from '../_helpers/quoteRouteOpenApi'
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * Upper bound on sales quotes a quote-number search expands to. A search
+ * string that matches more quotes than this is too broad to be useful; the
+ * newest matches win.
+ */
+const QUOTE_NUMBER_SEARCH_LIMIT = 1000
 
 export const metadata = {
   POST: { requireAuth: true, requireFeatures: ['cpq.quotes.manage'] },
@@ -52,13 +62,32 @@ export async function GET(req: Request) {
     const customerId = url.searchParams.get('customerId')
     if (customerId) filters.customerId = customerId
 
-    // Free-text search across quoteId, customerId (case-insensitive)
+    // Search by quote number (case-insensitive substring, e.g. "00003" or
+    // "QUOTE-20261123-00003") or by an exact id (quote configuration id,
+    // sales quote id or customer id). The id columns are uuid, so a substring
+    // `$ilike` on them is a Postgres error (500); quote numbers live on the
+    // sales quote, so they are matched there first.
     const search = url.searchParams.get('search')?.trim()
     if (search) {
-      filters.$or = [
-        { quoteId: { $ilike: `%${search}%` } },
-        { customerId: { $ilike: `%${search}%` } },
-      ]
+      const searchFilters: Record<string, unknown>[] = []
+      if (UUID_PATTERN.test(search)) {
+        searchFilters.push({ id: search }, { quoteId: search }, { customerId: search })
+      }
+      const numberMatches = await ctx.em.find(
+        SalesQuote,
+        {
+          organizationId: ctx.organizationId,
+          tenantId: ctx.tenantId,
+          deletedAt: null,
+          quoteNumber: { $ilike: buildIlikeTerm(search) },
+        },
+        { fields: ['id'], orderBy: { createdAt: 'desc' }, limit: QUOTE_NUMBER_SEARCH_LIMIT },
+      )
+      if (numberMatches.length > 0) searchFilters.push({ quoteId: { $in: numberMatches.map((q) => q.id) } })
+      if (searchFilters.length === 0) {
+        return NextResponse.json({ items: [], total: 0, page, pageSize, totalPages: 0 })
+      }
+      filters.$or = searchFilters
     }
 
     const ALLOWED_SORT_FIELDS = ['createdAt', 'updatedAt', 'cpqStatus', 'version', 'currencyCode'] as const
@@ -135,7 +164,7 @@ export const openApi: OpenApiRouteDoc = {
     },
     GET: {
       summary: 'List CPQ quotes',
-      description: 'Paged list of CPQ quote configurations, each enriched with the sales `quoteNumber`. `search` matches quoteId or customerId.',
+      description: 'Paged list of CPQ quote configurations, each enriched with the sales `quoteNumber`. `search` matches the quote number (case-insensitive substring) or an exact quote, sales quote or customer id.',
       query: cpqPaginationQuery.extend({
         cpqStatus: z.string().optional(),
         currencyCode: z.string().optional(),

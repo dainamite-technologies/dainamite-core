@@ -6,6 +6,7 @@ import aiAgentsDefault, {
   CPQ_CATALOG_ASSISTANT_ID,
   CPQ_CATALOG_READ_TOOLS,
   CPQ_CATALOG_WRITE_TOOLS,
+  CPQ_CUSTOMER_TOOLS,
   CPQ_GENERAL_TOOLS,
   CPQ_QUOTING_ASSISTANT_ID,
   CPQ_READ_TOOLS,
@@ -15,6 +16,7 @@ import aiAgentsDefault, {
   cpqQuotingAssistant,
 } from '../../ai-agents'
 import { aiTools } from '../../ai-tools'
+import { aiTools as customersAiTools } from '@open-mercato/core/modules/customers/ai-tools'
 import features from '../../acl'
 import setup from '../../setup'
 
@@ -61,6 +63,22 @@ describe('cpq.quoting_assistant', () => {
     }
     const flagged = aiTools.filter((tool) => tool.isMutation === true).map((tool) => tool.name).sort()
     expect([...CPQ_WRITE_TOOLS, ...CPQ_CATALOG_WRITE_TOOLS].sort()).toEqual(flagged)
+  })
+
+  it('can look up customers and deals, read-only, for cpq.create_quote', () => {
+    const customersByName = new Map(customersAiTools.map((tool) => [tool.name, tool]))
+    for (const name of CPQ_CUSTOMER_TOOLS) {
+      expect(cpqQuotingAssistant.allowedTools).toContain(name)
+      const tool = customersByName.get(name)
+      expect({ name, registered: Boolean(tool), isMutation: tool?.isMutation === true }).toEqual({
+        name,
+        registered: true,
+        isMutation: false,
+      })
+    }
+    const customerWrites = customersAiTools.filter((tool) => tool.isMutation === true).map((tool) => tool.name)
+    for (const name of customerWrites) expect(cpqQuotingAssistant.allowedTools).not.toContain(name)
+    expect(cpqQuotingAssistant.systemPrompt).toContain('customers.list_companies')
   })
 
   it('keeps the general-purpose framework packs on the allowlist', () => {

@@ -57,7 +57,7 @@ export const listQuotesInput = z.object({
   customerId: z.string().uuid().optional().describe('Customer entity id (UUID) from the customers module.'),
   cpqStatus: z.enum(CPQ_STATUSES).optional().describe('CPQ quote status filter.'),
   currencyCode: z.string().trim().min(3).max(3).optional().describe('ISO 4217 currency filter.'),
-  search: z.string().trim().optional().describe('Free-text match on the quote id or customer id.'),
+  search: z.string().trim().optional().describe('Quote number, full or partial (for example "QUOTE-20261123-00003" or "00003"), or an exact quote id or customer id (UUID).'),
   sortField: z.enum(['createdAt', 'updatedAt', 'cpqStatus', 'version', 'currencyCode']).optional().describe('Sort column (default createdAt).'),
   sortDir: sortDirField,
   page: pageField,

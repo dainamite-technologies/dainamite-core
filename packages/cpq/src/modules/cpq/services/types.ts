@@ -296,6 +296,9 @@ export type InventorySubscriptionItemStatus = (typeof INVENTORY_SUBSCRIPTION_ITE
 export const INVENTORY_ASSET_STATUSES = ['pending', 'delivered', 'active', 'returned', 'cancelled'] as const
 export type InventoryAssetStatus = (typeof INVENTORY_ASSET_STATUSES)[number]
 
+/** #126: statuses of a device still on its subscription (mirrored on ARC quotes, restorable). */
+export const LIVE_ASSET_STATUSES: InventoryAssetStatus[] = ['pending', 'delivered', 'active']
+
 export const INVENTORY_ASSET_TRANSITIONS: Record<InventoryAssetStatus, InventoryAssetStatus[]> = {
   pending: ['delivered', 'active', 'cancelled'],
   delivered: ['active', 'returned'],

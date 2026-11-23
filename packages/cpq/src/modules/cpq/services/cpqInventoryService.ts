@@ -1772,7 +1772,13 @@ export class DefaultCpqInventoryService {
           deletedAt: null,
           status: { $nin: ['returned', 'cancelled'] },
         })
-        for (const asset of assets) asset.status = retiredAssetStatus(asset.status)
+        for (const asset of assets) {
+          asset.status = retiredAssetStatus(asset.status)
+          // Recorded like a device line's own return, so billing stops the
+          // device too (its line may be processed after this one and then
+          // sees nothing left to change).
+          summary.push({ action: 'retire_asset', assetId: asset.id, quoteLineId: null, status: asset.status })
+        }
 
         summary.push({
           action: 'cancel',

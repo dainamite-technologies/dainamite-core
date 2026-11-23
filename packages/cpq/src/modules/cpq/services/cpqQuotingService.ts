@@ -51,7 +51,9 @@ import {
   ALLOWED_TRANSITIONS,
   TERMINAL_STATUSES,
   ARC_QUOTE_TYPES,
+  LIVE_ASSET_STATUSES,
   getBaseCurrencyCode,
+  type InventoryAssetStatus,
 } from './types'
 import {
   ARC_PRICE_FROZEN_KEY,
@@ -737,7 +739,7 @@ export class DefaultCpqQuotingService {
     const assetById = new Map(assets.map((asset) => [asset.id, asset]))
     const assetRestores = assetLines.map((line) => {
       const asset = assetById.get(assetIdOf(line) as string)
-      if (!asset || !['pending', 'delivered', 'active'].includes(asset.status)) {
+      if (!asset || !LIVE_ASSET_STATUSES.includes(asset.status as InventoryAssetStatus)) {
         throw new QuotingError(409, 'The device is no longer on the subscription and cannot be restored')
       }
       return { line, asset }
@@ -2959,7 +2961,7 @@ async function mirrorTargetSubscriptionItems(
         organizationId: scope.organizationId,
         tenantId: scope.tenantId,
         deletedAt: null,
-        status: { $in: ['pending', 'delivered', 'active'] },
+        status: { $in: LIVE_ASSET_STATUSES },
       })
   if (items.length === 0 && assets.length === 0) return
 

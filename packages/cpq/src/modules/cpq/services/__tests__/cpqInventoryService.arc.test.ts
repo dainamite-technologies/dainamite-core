@@ -451,3 +451,37 @@ describe('applyAmendment with devices (assets, #126)', () => {
     )
   })
 })
+
+describe('applyAmendment: device returned by its item cancel (#126 review)', () => {
+  it('records retire_asset once, even when the device line is processed after its item', async () => {
+    const { em, service } = makeService()
+    const bundle = fakeItem({ id: 'item-bundle', mrcAmount: '0' })
+    const device = { id: 'asset-ont', subscriptionId: 'sub-1', subscriptionItemId: 'item-bundle', name: 'ONT', status: 'active', quantity: 1 }
+
+    em.findOne.mockResolvedValueOnce(null) // no prior change log
+    em.findOne.mockResolvedValueOnce(fakeSub())
+    em.find.mockResolvedValueOnce([bundle]) // snapshot before: items
+    em.find.mockResolvedValueOnce([device]) // snapshot before: assets
+    em.findOne.mockResolvedValueOnce(bundle) // the cancelled item
+    em.find.mockResolvedValueOnce([device]) // devices of the cancelled item (cascade)
+    em.findOne.mockResolvedValueOnce(device) // the device line's own asset
+
+    const result = await service.applyAmendment(
+      {
+        subscriptionId: 'sub-1',
+        sourceQuoteId: 'q',
+        sourceOrderId: 'o',
+        performedByUserId: null,
+        lineChanges: [
+          { action: 'cancel', sourceSubscriptionItemId: bundle.id, quoteLineId: 'ql-bundle' },
+          { action: 'cancel', sourceAssetId: device.id, quoteLineId: 'ql-ont' },
+        ],
+      },
+      SCOPE,
+    )
+
+    expect(device.status).toBe('returned')
+    const retired = (result.changeLog.lineChanges as Array<Record<string, unknown>>).filter((c) => c.action === 'retire_asset')
+    expect(retired).toEqual([{ action: 'retire_asset', assetId: 'asset-ont', quoteLineId: null, status: 'returned' }])
+  })
+})

@@ -176,7 +176,8 @@ the `@dainamite/cpq` package, per
 mutations flagged destructive and gated by the approval card. New agent
 `cpq.catalog_assistant` (requires `cpq.offerings.manage`) is the only one that
 allowlists them; `cpq.quoting_assistant` is unchanged. Run `yarn generate` to
-register them.
+register them. `cpq.create_offering` sends `isSellable` (#133); until #133 is
+released the offerings route ignores that field.
 
 ### 2026-11-17 - Bundle setup, default components, slot validation (#122-#125)
 

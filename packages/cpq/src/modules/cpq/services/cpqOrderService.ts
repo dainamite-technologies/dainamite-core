@@ -1462,7 +1462,14 @@ async function findNonSellableTopLevelLines(
   quoteLines: CpqQuoteLineConfiguration[],
   scope: TenantScope,
 ): Promise<Array<{ lineId: string; offeringId: string; offeringCode: string }>> {
-  const candidates = quoteLines.filter((line) => line.offeringId && violatesSellability({ isSellable: false }, line))
+  // A parent that is not on the quote counts as no parent.
+  const lineIds = new Set(quoteLines.map((line) => line.quoteLineId))
+  const asChecked = (line: CpqQuoteLineConfiguration) => ({
+    parentLineId: line.parentLineId && lineIds.has(line.parentLineId) ? line.parentLineId : null,
+    sourceSubscriptionItemId: line.sourceSubscriptionItemId,
+    configuration: line.configuration as Record<string, unknown> | null,
+  })
+  const candidates = quoteLines.filter((line) => line.offeringId && violatesSellability({ isSellable: false }, asChecked(line)))
   if (candidates.length === 0) return []
   const offeringIds = [...new Set(candidates.map((line) => line.offeringId as string))]
   const offerings = await em.find(CpqProductOffering, {
@@ -1473,7 +1480,7 @@ async function findNonSellableTopLevelLines(
   const byId = new Map(offerings.map((offering) => [offering.id, offering]))
   return candidates.flatMap((line) => {
     const offering = byId.get(line.offeringId as string)
-    if (!offering || !violatesSellability(offering, line)) return []
+    if (!offering || !violatesSellability(offering, asChecked(line))) return []
     return [{ lineId: line.quoteLineId, offeringId: offering.id, offeringCode: offering.code }]
   })
 }

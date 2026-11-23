@@ -48,7 +48,7 @@ export const openApi: OpenApiRouteDoc = {
     POST: {
       summary: 'Add a configured line to a CPQ quote',
       description:
-        'Prices the line and recalculates the quote. Mutation guards run first (resource kind `cpq.quote_line`, create). `_arc*` configuration keys are server-owned and ignored. An offering with `isSellable: false` is component-only: adding it without `parentLineId` returns 422 `V-QLINE-1` (`code`, `offeringId` in the body).',
+        'Prices the line and recalculates the quote. Mutation guards run first (resource kind `cpq.quote_line`, create). `_arc*` configuration keys are server-owned and ignored. An offering with `isSellable: false` is component-only: adding it without `parentLineId` returns 422 `V-QLINE-1` (`code`, `offeringId` in the body). A `parentLineId` that is not a line of this quote returns 404.',
       requestBody: { schema: cpqAddQuoteItemSchema },
       responses: [{ status: 201, description: 'Quote after the line was added' }],
       errors: [

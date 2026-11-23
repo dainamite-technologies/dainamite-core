@@ -222,7 +222,7 @@ export class DefaultCpqQuotingService {
       throw new QuotingError(409, `Cannot modify quote in '${cpqConfig.cpqStatus}' status`)
     }
 
-    if (item.parentLineId && cpqConfig.quoteType && cpqConfig.quoteType !== 'new') {
+    if (item.parentLineId) {
       const parent = await em.findOne(CpqQuoteLineConfiguration, {
         quoteLineId: item.parentLineId,
         quoteConfigurationId: cpqConfig.id,
@@ -230,7 +230,10 @@ export class DefaultCpqQuotingService {
         tenantId: scope.tenantId,
         deletedAt: null,
       })
-      if (parent && isArcCancelledLine(parent, cpqConfig.quoteType)) {
+      // #133: a child line needs a real parent on this quote, otherwise it is a
+      // top-level line in disguise (and could sell a component-only offering).
+      if (!parent) throw new QuotingError(404, 'Parent line not found on this quote')
+      if (cpqConfig.quoteType && cpqConfig.quoteType !== 'new' && isArcCancelledLine(parent, cpqConfig.quoteType)) {
         throw new QuotingError(409, 'Cannot add a component to a subscription item marked for removal')
       }
     }

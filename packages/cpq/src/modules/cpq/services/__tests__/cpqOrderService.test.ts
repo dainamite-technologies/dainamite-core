@@ -699,15 +699,25 @@ describe('conversion of a quote with a component-only offering (#133)', () => {
     expect(em.create).not.toHaveBeenCalled()
   })
 
+  const bundleLine = line({ quoteLineId: 'B1', offeringId: 'bundle' })
+
   it.each([
-    ['a child line under a bundle', { parentLineId: 'B1' }],
-    ['an ARC line mirrored from a subscription item', { sourceSubscriptionItemId: 'item-1', action: 'modify' }],
-    ['a cancel line', { action: 'cancel' }],
-  ])('does not refuse %s', async (_label, overrides) => {
-    const { service } = arrange([line(overrides)])
+    ['a child line under a bundle line of the quote', [bundleLine, line({ parentLineId: 'B1' })]],
+    ['a line bound to a subscription item', [line({ sourceSubscriptionItemId: 'item-1', action: 'modify' })]],
+    ['a server-made ARC mirror line', [line({ action: 'cancel', configuration: { _arcMirroredFromItemId: 'item-1' } })]],
+  ])('does not refuse %s', async (_label, lines) => {
+    const { service } = arrange(lines)
     // The mocks are minimal, so conversion may fail later; it must not fail on sellability.
     const outcome = await service.convertQuoteToOrder('quote', SCOPE).catch((err: unknown) => err)
     expect((outcome as { message?: string } | undefined)?.message).not.toBe('V-QLINE-1')
+  })
+
+  it.each([
+    ['a child line whose parent is not on the quote', line({ parentLineId: 'missing' })],
+    ['a line that only claims a non-add action', line({ action: 'cancel' })],
+  ])('refuses %s', async (_label, candidate) => {
+    const { service } = arrange([candidate])
+    await expect(service.convertQuoteToOrder('quote', SCOPE)).rejects.toMatchObject({ status: 422, message: 'V-QLINE-1' })
   })
 })
 

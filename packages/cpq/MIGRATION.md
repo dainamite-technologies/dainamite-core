@@ -187,8 +187,11 @@ update and responses (pre-fill only, never enforced). `BundleTreeNode` gains
 **Behaviour changes.** `POST /quotes/{id}/items` returns 422 with
 `code: 'V-QLINE-1'` for a top-level line (no `parentLineId`, action `add`)
 whose offering has `isSellable: false`. `POST /orders` re-checks it and returns
-422 `V-QLINE-1` with `errors`; lines mirrored from a subscription item or with
-an action other than `add` are never blocked. Bundle default expansion now also
+422 `V-QLINE-1` with `errors`. Only server-set facts exempt a line: a
+`sourceSubscriptionItemId` or an `_arcMirrored*` marker; a caller's `action`
+does not. `POST /quotes/{id}/items` with a `parentLineId` that is not a line of
+the quote now returns 404 on every quote type (it was checked on ARC quotes
+only), and conversion treats such an orphan as a top-level line. Bundle default expansion now also
 requires the child offering's `lifecycleStatus` to be `active` (before: only
 `isActive`). The quote "Add Offering" picker, the wizard offering step and the
 Puffin public calculator hide component-only offerings; the bundle component

@@ -2,10 +2,13 @@
  * Module-root AI agent contribution for the CPQ module.
  *
  * The generator walks every module root for a top-level `ai-agents.ts` and
- * registers the `aiAgents` / default export. This file ships one agent,
+ * registers the `aiAgents` / default export. This file ships two agents:
  * `cpq.quoting_assistant`, which explores the CPQ catalog, prices
  * configurations through the calculate-price API, reads quotes, customer
- * inventory and orders, and drafts quotes through the approval card.
+ * inventory and orders, and drafts quotes through the approval card; and
+ * `cpq.catalog_assistant` (#128), which sets up offerings and bundle
+ * components for catalog admins. Catalog writes are kept off the quoting
+ * assistant so a sales chat can't change the catalog.
  *
  * Write policy. Like the core catalog and customers agents, the agent is
  * write-capable (`readOnly: false`, `mutationPolicy: 'confirm-required'`):
@@ -26,6 +29,7 @@
 import type { AiAgentDefinition } from '@open-mercato/ai-assistant/modules/ai_assistant/lib/ai-agent-definition'
 
 export const CPQ_QUOTING_ASSISTANT_ID = 'cpq.quoting_assistant'
+export const CPQ_CATALOG_ASSISTANT_ID = 'cpq.catalog_assistant'
 const MODULE_ID = 'cpq'
 
 export const CPQ_READ_TOOLS: readonly string[] = [
@@ -61,6 +65,23 @@ export const CPQ_WRITE_TOOLS: readonly string[] = [
   'cpq.add_quote_line',
   'cpq.update_quote_line',
   'cpq.submit_quote_for_approval',
+]
+
+/** #128: catalog writes, allowlisted only on `cpq.catalog_assistant`. */
+export const CPQ_CATALOG_WRITE_TOOLS: readonly string[] = [
+  'cpq.create_offering',
+  'cpq.add_bundle_component',
+  'cpq.remove_bundle_component',
+]
+
+/** Catalog reads the catalog assistant needs (a subset of CPQ_READ_TOOLS). */
+export const CPQ_CATALOG_READ_TOOLS: readonly string[] = [
+  'cpq.list_offerings',
+  'cpq.get_offering',
+  'cpq.get_bundle_tree',
+  'cpq.list_specifications',
+  'cpq.get_specification',
+  'cpq.get_configurable_attributes',
 ]
 
 /** General-purpose packs shipped by the framework (search, attachments, meta). */
@@ -193,6 +214,68 @@ export const cpqQuotingAssistant: AiAgentDefinition = {
   ],
 }
 
-export const aiAgents: AiAgentDefinition[] = [cpqQuotingAssistant]
+const CATALOG_ROLE = [
+  'ROLE',
+  'You are the CPQ Catalog Assistant inside Open Mercato (Dainamite CPQ).',
+  'You help catalog admins set up offerings and bundles: create offerings on existing specifications and',
+  'add or remove the components of bundle offerings, using only the tenant-scoped CPQ tools you are given.',
+].join('\n')
+
+const CATALOG_CONCEPTS = [
+  'CPQ CATALOG CONCEPTS',
+  '- Specification: the technical definition of a product (attributes, relationships and, for bundles,',
+  '  slots). A bundle slot targets one specification and has a component group with min and max cardinality.',
+  '- Offering: what is sold, built on a specification. Its type (simple or bundle) follows the specification.',
+  '  Only offerings with lifecycle status active can be quoted.',
+  '- isSellable false means component-only: the offering can only be quoted inside a bundle. When omitted on',
+  '  create, it follows the specification default (defaultOfferingSellable).',
+  '- Component: a child offering placed in a slot of a bundle offering. isDefault components are added',
+  '  automatically when the bundle is added to a quote. The child must be built on the slot target spec.',
+].join('\n')
+
+const CATALOG_RULES = [
+  'RULES',
+  '- Read before you write: use cpq.get_specification, cpq.get_bundle_tree and cpq.get_offering to find',
+  '  specification, slot, offering and component ids. Never invent ids.',
+  '- You can propose these writes: cpq.create_offering, cpq.add_bundle_component and',
+  '  cpq.remove_bundle_component. You cannot create specifications, slots, charges or price rules; send the',
+  '  operator to /backend/cpq/specifications/<id> or /backend/cpq/offerings/<id> for those.',
+  '- Ask the operator before every write and restate what will change. Every write becomes an approval card;',
+  '  do NOT claim it is saved until the result confirms it. If the operator rejects it, do not retry it.',
+  '- If the server refuses a write with a V-* code, quote the message and explain what to change.',
+  '- Removing a component does not change quotes already priced; say so when asked.',
+].join('\n')
+
+const CATALOG_SYSTEM_PROMPT = [CATALOG_ROLE, CATALOG_CONCEPTS, CATALOG_RULES, RESPONSE_STYLE].join('\n\n')
+
+export const cpqCatalogAssistant: AiAgentDefinition = {
+  id: CPQ_CATALOG_ASSISTANT_ID,
+  moduleId: MODULE_ID,
+  label: 'CPQ Catalog Assistant',
+  description:
+    'Assistant for CPQ catalog admins: creates offerings on existing specifications and adds or removes bundle components. Every write goes through the approval card.',
+  systemPrompt: CATALOG_SYSTEM_PROMPT,
+  allowedTools: [...CPQ_CATALOG_READ_TOOLS, ...CPQ_CATALOG_WRITE_TOOLS, ...CPQ_GENERAL_TOOLS],
+  executionMode: 'chat',
+  acceptedMediaTypes: ['image', 'pdf', 'file'],
+  // Only catalog admins see the agent; every tool also checks its own features.
+  requiredFeatures: ['cpq.offerings.manage'],
+  taskPlan: { enabled: true },
+  readOnly: false,
+  mutationPolicy: 'confirm-required',
+  keywords: ['cpq', 'catalog', 'offering', 'bundle', 'component', 'slot', 'specification'],
+  domain: 'cpq',
+  dataCapabilities: {
+    entities: ['cpq:cpq_product_specification', 'cpq:cpq_product_offering'],
+    operations: ['read', 'search'],
+  },
+  suggestions: [
+    { label: 'Review a bundle', prompt: 'Show the slots and components of a bundle offering and flag empty required slots.' },
+    { label: 'Create an offering', prompt: 'Help me create a new offering on an existing specification.' },
+    { label: 'Add a bundle component', prompt: 'Add an existing offering as a component of a bundle slot.' },
+  ],
+}
+
+export const aiAgents: AiAgentDefinition[] = [cpqQuotingAssistant, cpqCatalogAssistant]
 
 export default aiAgents

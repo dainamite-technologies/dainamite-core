@@ -25,8 +25,12 @@ type ControllerQuote = {
   convertedOrderId: string | null
   pricingRevision?: number
   adjustmentErrors?: Array<{ adjustmentId: string; code: string }>
-  lines: Array<AdjustableLine & { mrcTotal: number; nrcTotal: number; charges: AdjustableCharge[] }>
+  lines: Array<AdjustableLine & { mrcTotal: number; nrcTotal: number; charges: Array<MaybeUnpricedCharge> }>
 }
+
+/** A resolved charge; `unitPrice` is null for an unpriced cost-plus charge, which cannot be adjusted. */
+type MaybeUnpricedCharge = Omit<AdjustableCharge, 'unitPrice'> & { unitPrice: number | null }
+const isPriced = (charge: MaybeUnpricedCharge | undefined): charge is AdjustableCharge => charge !== undefined && charge.unitPrice !== null
 
 type ListResponse = {
   items: StoredAdjustment[]
@@ -124,7 +128,8 @@ export function usePriceAdjustments<Q extends ControllerQuote>({ quote, quoteTyp
       const item = list?.items.find((entry) => entry.id === adjustmentId)
       const line = quote?.lines.find((entry) => entry.lineId === item?.quoteLineId)
       if (!item || !line) return
-      const charge = item.chargeCode ? line.charges.find((entry) => entry.chargeCode === item.chargeCode) : undefined
+      const found = item.chargeCode ? line.charges.find((entry) => entry.chargeCode === item.chargeCode) : undefined
+      const charge = isPriced(found) ? found : undefined
       setDialog({
         target: item.level === 'charge' && item.chargeCode
           ? { level: 'charge', quoteLineId: item.quoteLineId, chargeCode: item.chargeCode }

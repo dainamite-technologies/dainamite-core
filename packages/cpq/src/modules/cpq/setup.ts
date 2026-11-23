@@ -1,4 +1,6 @@
 import { seedPriceAdjustmentDefaults } from './lib/priceAdjustmentDefaults'
+import { seedCostPlusDefaults } from './lib/costPlusDefaults'
+import { registerCostExpirySchedule } from './lib/costExpirySchedule'
 import type { ModuleSetupConfig } from '@open-mercato/shared/modules/setup'
 
 /**
@@ -10,7 +12,8 @@ import type { ModuleSetupConfig } from '@open-mercato/shared/modules/setup'
  *
  * What still lives here:
  *   - `defaultRoleFeatures` — required for any tenant that has cpq enabled
- *   - structural defaults (price adjustment reasons and rollout toggle)
+ *   - structural defaults (price adjustment reasons and rollout toggle,
+ *     the cost-plus toggle — default off)
  *
  * What used to live here and moved out:
  *   - GIX product/pricing/charge/rule/bundle/wizard seed → `src/modules/demo_gix/`
@@ -18,8 +21,18 @@ import type { ModuleSetupConfig } from '@open-mercato/shared/modules/setup'
  *   - GIX wizard definition → `src/modules/demo_gix/seeds/wizards.ts`
  */
 export const setup: ModuleSetupConfig = {
-  async seedDefaults({ em, tenantId, organizationId }) {
+  async seedDefaults({ em, tenantId, organizationId, container }) {
     if (tenantId && organizationId) await seedPriceAdjustmentDefaults(em, { tenantId, organizationId })
+    await seedCostPlusDefaults(em)
+    // Daily supplier cost expiry schedule: optional (skipped without the scheduler module) and never re-enabled once an
+    // admin disabled it. A scheduler failure must not abort tenant setup; `seed-cost-plus` retries it.
+    if (tenantId && organizationId) {
+      try {
+        await registerCostExpirySchedule(container, { tenantId, organizationId })
+      } catch (error) {
+        console.warn('[cpq setup] cost expiry schedule not registered (run "mercato cpq seed-cost-plus" to retry)', error)
+      }
+    }
   },
   defaultRoleFeatures: {
     admin: [
@@ -45,6 +58,9 @@ export const setup: ModuleSetupConfig = {
       'cpq.arc.renew.manage',
       'cpq.arc.cancel.manage',
       'cpq.arc.changelog.view',
+      // Cost-plus: admins see and edit costs, markup and margin.
+      'cpq.costs.view',
+      'cpq.costs.manage',
     ],
     employee: [
       'cpq.quotes.view',
@@ -62,6 +78,8 @@ export const setup: ModuleSetupConfig = {
       'cpq.arc.renew.manage',
       'cpq.arc.cancel.manage',
       'cpq.arc.changelog.view',
+      // Cost-plus: reps see cost details and margin read-only (App Spec Q-D1).
+      'cpq.costs.view',
     ],
   },
 }

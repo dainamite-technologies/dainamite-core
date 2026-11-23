@@ -43,7 +43,9 @@ describe('cpq i18n dictionaries', () => {
   })
 
   it('en.json has no orphaned keys', () => {
-    const orphans = enKeys.filter((k) => !usedKeys.has(k) && ![...prefixes].some((p) => k.startsWith(p)))
+    // `notifications.categories.<category>` is read by the notifications module (preference matrix), not by CPQ code.
+    const frameworkKeys = new Set(['notifications.categories.cpq'])
+    const orphans = enKeys.filter((k) => !usedKeys.has(k) && !frameworkKeys.has(k) && ![...prefixes].some((p) => k.startsWith(p)))
     expect(orphans).toEqual([])
   })
 

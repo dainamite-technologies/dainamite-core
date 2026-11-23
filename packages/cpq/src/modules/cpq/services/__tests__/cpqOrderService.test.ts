@@ -1,6 +1,12 @@
-import { CpqOrderLineConfiguration } from '../../data/entities'
+import { LockMode } from '@mikro-orm/core'
+import {
+  CpqInventoryCost, CpqInventorySubscriptionItem, CpqOrderConfiguration, CpqOrderLineConfiguration, CpqOrderLineCost, CpqQuoteLineConfiguration, CpqQuoteLineCost,
+} from '../../data/entities'
+import { itemCostSetHash, itemCostStateHash, type ItemCostStateRow } from '../costs/itemCostState'
 import { DefaultCpqOrderService, OrderError } from '../cpqOrderService'
+import * as eventsModule from '../../events'
 import type { TenantScope } from '../types'
+import { ACTIVATION_SCOPE, createActivationHarness } from './_helpers/activationHarness'
 
 interface MockEm {
   fork: jest.MockedFunction<() => MockEm>
@@ -19,6 +25,7 @@ interface MockEm {
 
 interface MockInventoryService {
   createSubscription: jest.MockedFunction<(input: unknown, scope: unknown) => Promise<unknown>>
+  createSubscriptionWithCosts: jest.MockedFunction<(input: unknown, scope: unknown) => Promise<unknown>>
   createAsset: jest.MockedFunction<(input: unknown, scope: unknown) => Promise<unknown>>
 }
 
@@ -51,6 +58,7 @@ function createService(): {
   const em = createMockEm()
   const inventoryService: MockInventoryService = {
     createSubscription: jest.fn(),
+    createSubscriptionWithCosts: jest.fn(),
     createAsset: jest.fn(),
   }
   const numberGenerator: MockNumberGenerator = {
@@ -360,7 +368,7 @@ describe('DefaultCpqOrderService.activateOrder — guard rails', () => {
 
     const result = await service.activateOrder('oc1', SCOPE)
 
-    expect(inventoryService.createSubscription).not.toHaveBeenCalled()
+    expect(inventoryService.createSubscriptionWithCosts).not.toHaveBeenCalled()
     expect(inventoryService.createAsset).not.toHaveBeenCalled()
     expect(result.cpqStatus).toBe('active')
   })
@@ -632,6 +640,1274 @@ describe('conversion stored-adjustment baseline', () => {
     const orderLine = em.create.mock.calls.find(([entity]) => entity === CpqOrderLineConfiguration)?.[1]
     expect(orderLine?.configuration).not.toHaveProperty('_arcPriceFrozen')
     expect(orderLine?.configuration).not.toHaveProperty('_arcRepriced')
+  })
+})
+
+describe('conversion output shape (characterization before cost-plus guard)', () => {
+  it('pins the created sales order, order configuration and order line payloads', async () => {
+    const { em, service } = createService()
+    const charges = [{ chargeCode: 'fee', chargeType: 'mrc', pricingMethod: 'flat', quantity: 1, unitPrice: 80, totalPrice: 80,
+      listUnitPrice: 120, listTotalPrice: 120, standardUnitPrice: 100, standardTotalPrice: 100, currencyCode: 'USD', adjustmentErrors: [] }]
+    em.findOne.mockResolvedValueOnce({ id: 'quote', quoteId: 'sales', cpqStatus: 'accepted', currencyCode: 'USD', customerId: 'customer',
+      pricingSummary: { nrcTotal: 10, mrcTotal: 80 } }).mockResolvedValueOnce(null)
+    em.find.mockResolvedValueOnce([{ quoteLineId: 'line', quantity: 2, action: 'add', nrcTotal: '10', mrcTotal: '80', charges,
+      configuration: { a: 1 }, offeringId: null, productId: 'prod', specId: null, startDate: null, endDate: null, termMonths: 12 }]).mockResolvedValueOnce([])
+    em.create.mockImplementation((_entity, values: Record<string, unknown>) => ({ createdAt: new Date(), ...values }))
+    await service.convertQuoteToOrder('quote', SCOPE)
+    const created = (entityName: string) => em.create.mock.calls.find(([entity]) => (entity as { name: string }).name === entityName)?.[1]
+    expect(created('SalesOrder')).toMatchObject({
+      orderNumber: 'ORD-0001', customerEntityId: 'customer', currencyCode: 'USD', status: 'draft',
+      subtotalNetAmount: '90', grandTotalNetAmount: '90', grandTotalGrossAmount: '90', lineItemCount: 1,
+      discountTotalAmount: '0', taxTotalAmount: '0', metadata: { sourceQuoteId: 'quote' },
+    })
+    expect(created('CpqOrderConfiguration')).toMatchObject({
+      sourceQuoteId: 'quote', customerId: 'customer', cpqStatus: 'draft', currencyCode: 'USD',
+      pricingSummary: { nrcTotal: 10, mrcTotal: 80, currencyCode: 'USD' },
+    })
+    expect(created('SalesOrderLine')).toMatchObject({
+      lineNumber: 1, kind: 'product', quantity: '2', unitPriceNet: '45', totalNetAmount: '90',
+      configuration: { offeringId: null, action: 'add', nrcTotal: 10, mrcTotal: 80, parentLineId: null },
+    })
+    expect(created('CpqOrderLineConfiguration')).toMatchObject({
+      action: 'add', quantity: 2, charges, nrcTotal: '10', mrcTotal: '80', sourceQuoteLineId: 'line', termMonths: 12,
+      configuration: { a: 1, offeringName: expect.any(String) },
+    })
+  })
+
+  it('checks status, then existing order, then lines, then stored adjustments (guard order)', async () => {
+    const { em, service } = createService()
+    em.findOne.mockResolvedValueOnce({ id: 'quote', cpqStatus: 'ready', currencyCode: 'USD', pricingSummary: {} })
+      .mockResolvedValueOnce({ orderId: 'existing' })
+    await expect(service.convertQuoteToOrder('quote', SCOPE)).rejects.toMatchObject({ status: 409, message: 'Quote has already been converted to order existing' })
+    expect(em.find).not.toHaveBeenCalled()
+  })
+})
+
+
+describe('conversion cost guard (COSTS_NOT_CONFIRMED)', () => {
+  const charges = [{ chargeCode: 'fee', chargeType: 'mrc', pricingMethod: 'cost_plus', quantity: 1, unitPrice: 80, totalPrice: 80,
+    listUnitPrice: 80, listTotalPrice: 80, standardUnitPrice: 80, standardTotalPrice: 80, currencyCode: 'USD', adjustmentErrors: [] }]
+  const lines = () => [{ quoteLineId: 'line', quantity: 1, action: 'add', nrcTotal: '0', mrcTotal: '80', charges, configuration: {}, offeringId: null }]
+  const cost = (over: Record<string, unknown>) => ({ quoteLineId: 'line', costKey: 'tail', role: 'price_basis', valueStatus: 'confirmed', validUntil: null, ...over })
+
+  async function convert(costs: Array<Record<string, unknown>>) {
+    const { em, service } = createService()
+    em.findOne.mockResolvedValueOnce({ id: 'quote', quoteId: 'sales', cpqStatus: 'accepted', currencyCode: 'USD', customerId: 'customer', pricingSummary: { nrcTotal: 0, mrcTotal: 80 } })
+      .mockResolvedValueOnce(null)
+    em.find.mockResolvedValueOnce(lines() as never).mockResolvedValueOnce(costs as never)
+    em.create.mockImplementation((_entity, values: Record<string, unknown>) => ({ createdAt: new Date(), ...values }))
+    return { em, run: () => service.convertQuoteToOrder('quote', SCOPE) }
+  }
+
+  it('refuses an estimated price-basis cost and names the line and key, creating nothing', async () => {
+    const { em, run } = await convert([cost({ valueStatus: 'estimated' }), cost({ costKey: 'ok' })])
+    await expect(run()).rejects.toMatchObject({ status: 422, message: 'COSTS_NOT_CONFIRMED', details: { lines: [{ quoteLineId: 'line', costKeys: ['tail'] }] } })
+    expect(em.create).not.toHaveBeenCalled()
+  })
+
+  it('refuses a pending supplier proposal with 422 COST_ANSWER_PENDING naming line and key, before COSTS_NOT_CONFIRMED, creating nothing', async () => {
+    const { em, run } = await convert([cost({ proposedAmount: '310.0000' }), cost({ costKey: 'other', valueStatus: 'estimated' })])
+    await expect(run()).rejects.toMatchObject({ status: 422, message: 'COST_ANSWER_PENDING', details: { lines: [{ quoteLineId: 'line', costKeys: ['tail'] }] } })
+    expect(em.create).not.toHaveBeenCalled()
+    const converts = await convert([cost({ proposedAmount: null }), cost({ costKey: 'overhead', role: 'margin_only', valueStatus: 'estimated', proposedAmount: '1.0000' })])
+    await converts.run()
+    expect(converts.em.create).toHaveBeenCalledWith(CpqOrderLineConfiguration, expect.anything())
+  })
+
+  it('refuses an unpriced (none) price-basis cost and an expired confirmed one', async () => {
+    const none = await convert([cost({ valueStatus: 'none' })])
+    await expect(none.run()).rejects.toMatchObject({ message: 'COSTS_NOT_CONFIRMED' })
+    const expired = await convert([cost({ validUntil: '2000-01-01' })])
+    await expect(expired.run()).rejects.toMatchObject({ message: 'COSTS_NOT_CONFIRMED', details: { lines: [{ quoteLineId: 'line', costKeys: ['tail'] }] } })
+  })
+
+  it('converts when every price-basis cost is confirmed and valid, margin-only costs never block', async () => {
+    const { em, run } = await convert([cost({ validUntil: '2999-01-01' }), cost({ costKey: 'overhead', role: 'margin_only', valueStatus: 'estimated' })])
+    await run()
+    expect(em.create).toHaveBeenCalledWith(CpqOrderLineConfiguration, expect.anything())
+  })
+
+  async function convertArc(quoteType: string, quoteLines: Array<Record<string, unknown>>, costs: Array<Record<string, unknown>>) {
+    const { em, service } = createService()
+    em.findOne.mockResolvedValueOnce({ id: 'quote', quoteId: 'sales', cpqStatus: 'accepted', quoteType, currencyCode: 'USD', customerId: 'customer', pricingSummary: { nrcTotal: 0, mrcTotal: 80 } })
+      .mockResolvedValueOnce(null)
+    em.find.mockResolvedValueOnce(quoteLines as never).mockResolvedValueOnce(costs as never)
+    em.create.mockImplementation((_entity, values: Record<string, unknown>) => ({ createdAt: new Date(), ...values }))
+    return { em, run: () => service.convertQuoteToOrder('quote', SCOPE) }
+  }
+  const mirror = (over: Record<string, unknown> = {}) => ({ ...lines()[0], action: 'modify', offeringId: 'off', configuration: { _arcMirroredFromItemId: 'item-1' }, ...over })
+
+  it('a Renew mirror line binds: its estimated price-basis cost blocks, once confirmed the quote converts', async () => {
+    const estimated = await convertArc('renew', [mirror()], [cost({ valueStatus: 'estimated' })])
+    await expect(estimated.run()).rejects.toMatchObject({ status: 422, message: 'COSTS_NOT_CONFIRMED', details: { lines: [{ quoteLineId: 'line', costKeys: ['tail'] }] } })
+    const confirmed = await convertArc('renew', [mirror()], [cost({ valueStatus: 'confirmed' })])
+    await confirmed.run()
+    expect(confirmed.em.create).toHaveBeenCalledWith(CpqOrderLineConfiguration, expect.anything())
+  })
+
+  it.each([
+    ['an item removed on Renew', 'renew'],
+    ['an item removed on Amend', 'amend'],
+    ['a Cancel-quote line', 'cancel'],
+  ])('ignores the costs of %s (an ARC cancel line sells nothing)', async (_label, quoteType) => {
+    const kept = mirror({ quoteLineId: 'kept' })
+    const removed = mirror({ action: 'cancel', charges: [], mrcTotal: '0' })
+    const { em, run } = await convertArc(quoteType, quoteType === 'cancel' ? [removed] : [kept, removed],
+      [cost({ valueStatus: 'estimated' }), cost({ quoteLineId: 'kept' })])
+    await run()
+    expect(em.create).toHaveBeenCalledWith(CpqOrderLineConfiguration, expect.anything())
+  })
+
+  // R7 never relies on cost rows existing: a cost-plus charge stored without a price blocks by itself.
+  const unpriced = { ...charges[0], unitPrice: null, totalPrice: null, listUnitPrice: null, listTotalPrice: null, standardUnitPrice: null, standardTotalPrice: null }
+  it.each([
+    ['the toggle is off (stored unpriced as COST_PLUS_DISABLED, no cost lines)', [] as Array<Record<string, unknown>>],
+    ['no price-basis element is applicable (NO_PRICE_BASIS_COST)', [cost({ costKey: 'noc', role: 'margin_only', valueStatus: 'confirmed' })]],
+    ['the line was added to a cost-locked quote (never got cost lines)', [] as Array<Record<string, unknown>>],
+  ])('refuses an unpriced cost-plus charge when %s', async (_label, costs) => {
+    const { em, service } = createService()
+    em.findOne.mockResolvedValueOnce({ id: 'quote', quoteId: 'sales', cpqStatus: 'accepted', currencyCode: 'USD', customerId: 'customer', pricingSummary: { nrcTotal: 0, mrcTotal: 0 } })
+      .mockResolvedValueOnce(null)
+    em.find.mockResolvedValueOnce([{ ...lines()[0], mrcTotal: '0', charges: [unpriced, { ...charges[0], chargeCode: 'setup', pricingMethod: 'flat' }] }] as never)
+      .mockResolvedValueOnce(costs as never)
+    await expect(service.convertQuoteToOrder('quote', SCOPE)).rejects.toMatchObject({
+      status: 422, message: 'COSTS_NOT_CONFIRMED', details: { lines: [{ quoteLineId: 'line', costKeys: [], chargeCodes: ['fee'] }] },
+    })
+    expect(em.create).not.toHaveBeenCalled()
+  })
+
+  it('merges unconfirmed cost keys and unpriced charge codes per line, sorted by line', async () => {
+    const { em, service } = createService()
+    em.findOne.mockResolvedValueOnce({ id: 'quote', quoteId: 'sales', cpqStatus: 'accepted', currencyCode: 'USD', customerId: 'customer', pricingSummary: { nrcTotal: 0, mrcTotal: 80 } })
+      .mockResolvedValueOnce(null)
+    em.find.mockResolvedValueOnce([
+      { ...lines()[0], quoteLineId: 'line-b', charges: [unpriced] },
+      { ...lines()[0], quoteLineId: 'line-a' },
+    ] as never).mockResolvedValueOnce([cost({ quoteLineId: 'line-b', valueStatus: 'estimated' }), cost({ quoteLineId: 'line-a', costKey: 'xc', valueStatus: 'none' })] as never)
+    await expect(service.convertQuoteToOrder('quote', SCOPE)).rejects.toMatchObject({
+      details: { lines: [{ quoteLineId: 'line-a', costKeys: ['xc'], chargeCodes: [] }, { quoteLineId: 'line-b', costKeys: ['tail'], chargeCodes: ['fee'] }] },
+    })
+  })
+
+  it('an unpriced cost-plus charge on an ARC cancel line does not block', async () => {
+    const { em, run } = await convertArc('renew', [mirror({ quoteLineId: 'kept' }), mirror({ action: 'cancel', charges: [unpriced] })], [cost({ quoteLineId: 'kept' })])
+    await run()
+    expect(em.create).toHaveBeenCalledWith(CpqOrderLineConfiguration, expect.anything())
+  })
+
+  it('only reads price-basis lines of the quote (margin-only rows are filtered out in the query)', async () => {
+    const { em, run } = await convert([])
+    await run()
+    expect(em.find).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ quoteConfigurationId: 'quote', role: 'price_basis' }))
+  })
+})
+
+
+describe('conversion output for a costed quote (characterization: cost lines never alter order lines)', () => {
+  const charges = [{ chargeCode: 'fee', chargeType: 'mrc', pricingMethod: 'cost_plus', quantity: 1, unitPrice: 80, totalPrice: 80,
+    listUnitPrice: 80, listTotalPrice: 80, standardUnitPrice: 80, standardTotalPrice: 80, currencyCode: 'USD', adjustmentErrors: [] }]
+  const quoteLine = () => ({ quoteLineId: 'line', quantity: 2, action: 'add', nrcTotal: '10', mrcTotal: '80', charges, configuration: { a: 1 },
+    offeringId: null, productId: 'prod', specId: null, startDate: null, endDate: null, termMonths: 12 })
+  const cost = (over: Record<string, unknown>) => ({ quoteLineId: 'line', costKey: 'tail', role: 'price_basis', valueStatus: 'confirmed',
+    validUntil: '2999-01-01', unitAmount: '50', instanceAmount: '100', ...over })
+
+  async function convertWith(costs: Array<Record<string, unknown>>) {
+    const { em, service } = createService()
+    em.findOne.mockResolvedValueOnce({ id: 'quote', quoteId: 'sales', cpqStatus: 'accepted', currencyCode: 'USD', customerId: 'customer',
+      pricingSummary: { nrcTotal: 10, mrcTotal: 80 } }).mockResolvedValueOnce(null)
+    em.find.mockResolvedValueOnce([quoteLine()] as never).mockResolvedValueOnce(costs as never)
+    em.create.mockImplementation((_entity, values: Record<string, unknown>) => ({ createdAt: new Date('2026-01-01T00:00:00.000Z'), ...values }))
+    await service.convertQuoteToOrder('quote', SCOPE)
+    // generated ids and timestamps differ per run; normalize them away
+    const normalize = (value: unknown) => JSON.parse(JSON.stringify(value)
+      .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, '<uuid>')
+      .replace(/\d{4}-\d\d-\d\dT[\d:.]+Z/g, '<ts>')) as Array<Record<string, unknown>>
+    const strip = (entity: { name: string }) => normalize(em.create.mock.calls
+      .filter(([created]) => (created as { name: string }).name === entity.name)
+      .map(([, values]) => values))
+    return {
+      em,
+      salesOrderLines: strip({ name: 'SalesOrderLine' }),
+      orderLineConfigs: strip(CpqOrderLineConfiguration),
+      createdEntityNames: em.create.mock.calls.map(([created]) => (created as { name: string }).name),
+    }
+  }
+
+  it('creates the same order and order lines with or without cost lines on the quote, and writes no cost entity', async () => {
+    const plain = await convertWith([])
+    const costed = await convertWith([cost({}), cost({ costKey: 'overhead', role: 'margin_only', valueStatus: 'estimated', validUntil: null })])
+    expect(costed.salesOrderLines).toEqual(plain.salesOrderLines)
+    expect(costed.orderLineConfigs).toEqual(plain.orderLineConfigs)
+    expect(costed.createdEntityNames).toEqual(plain.createdEntityNames)
+    expect(costed.createdEntityNames.filter((name) => /Cost/.test(name))).toEqual([])
+    // the order line carries prices and charges only; no cost keys leak into it
+    expect(JSON.stringify(costed.orderLineConfigs)).not.toMatch(/instanceAmount|unitAmount|costKey|margin/i)
+  })
+})
+
+describe('activateOrder transaction boundary', () => {
+  const line = (over: Record<string, unknown>) => ({ orderConfigurationId: 'oc-1', quantity: 1, configuration: {}, charges: [], parentLineId: null,
+    startDate: null, termMonths: null, offeringId: null, productId: null, specId: null, sourceQuoteLineId: null, nrcTotal: '0', mrcTotal: '0', ...over })
+  const newSaleFixture = {
+    quoteType: 'new' as const,
+    orderLines: [
+      line({ orderLineId: 'ol-1', mrcTotal: '100', nrcTotal: '10', configuration: { offeringName: 'Hosting' } }),
+      line({ orderLineId: 'ol-2', specId: 'spec-asset', nrcTotal: '500', parentLineId: 'ol-1', configuration: { offeringName: 'Server' } }),
+    ],
+    specs: [{ id: 'spec-asset', isAssetizable: true }],
+    subscriptionItems: [{ id: 'item-1' }],
+  }
+
+  // MODIFIED by step 5: new-sale assets are created INSIDE createSubscription (before its `created`
+  // snapshot), so the old separate `createAsset` call and its flush are gone from the transaction.
+  it('new sale: forks the request EM and runs createSubscription (assets inside), the parent-link flush and the status flush in ONE transaction, bound to the tx EM', async () => {
+    const h = createActivationHarness(newSaleFixture)
+
+    const result = await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+
+    expect(h.trace).toEqual([
+      'tx:begin',
+      'inventory.withEntityManager(tx)',
+      'createSubscription',
+      'flush[order=draft]',
+      'flush[order=active]',
+      'tx:commit',
+    ])
+    expect(h.em.fork).toHaveBeenCalledWith({ clear: true, useContext: false })
+    expect(h.txEm.transactional).toHaveBeenCalledTimes(1)
+    expect(h.inventory.createSubscriptionWithCosts).toHaveBeenCalledWith(
+      expect.objectContaining({
+        assets: [expect.objectContaining({ parentItemIndex: 0, purchasePrice: 500, name: 'Server' })],
+      }), ACTIVATION_SCOPE,
+    )
+    expect(h.salesOrder.status).toBe('active')
+    expect(result.cpqStatus).toBe('active')
+    expect(h.store.committed).toEqual(['subscription', 'item', 'itemCost', 'assetAndCosts', 'changeLog', 'order:active'])
+    // the request EM was never read or written
+    expect(h.em.find).not.toHaveBeenCalled()
+    expect(h.em.flush).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['amend', 'applyAmendment', { mergeAction: 'standalone' }],
+    ['cancel', 'applyCancel', { mergeAction: 'standalone' }],
+    ['renew', 'applyRenewal', { mergeAction: 'standalone', newTermStart: '2027-01-01', newTermEnd: '2028-01-01', newTermMonths: 12 }],
+  ] as const)('%s: the inventory primitive (bound to the tx EM) and the final flush run inside one transaction', async (quoteType, primitive, targetExtra) => {
+    const changeLog = { effectiveAt: new Date('2026-06-01T00:00:00.000Z'), afterSnapshot: { items: [] }, lineChanges: [] }
+    const result = { changeLog, subscription: { id: 'sub-1', customerId: 'cust-1', currentTermStart: new Date('2027-01-01'), currentTermEnd: new Date('2028-01-01') } }
+    const h = createActivationHarness({
+      quoteType,
+      targets: [{ subscriptionId: 'sub-1', ...targetExtra }],
+      quoteLines: [],
+      inventory: { [primitive]: result },
+    })
+
+    await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+
+    expect(h.trace).toEqual(['tx:begin', 'inventory.withEntityManager(tx)', primitive, 'flush[order=active]', 'tx:commit'])
+    expect(h.em.fork).toHaveBeenCalled()
+  })
+
+  it('merge renew: applyMergeRenewal then the final flush, inside one transaction', async () => {
+    const h = createActivationHarness({
+      quoteType: 'renew',
+      quoteOver: { arcMergeNewTermStart: '2027-01-01', arcMergeNewTermEnd: '2028-01-01', arcMergeNewTermMonths: 12 },
+      targets: [{ subscriptionId: 'sub-a', mergeAction: 'absorb' }, { subscriptionId: 'sub-b', mergeAction: 'absorb' }],
+      inventory: { applyMergeRenewal: { mergedSubscription: { id: 'sub-m', currentTermStart: new Date('2027-01-01') }, mergeResultChangeLog: {}, sourceChangeLogs: [] } },
+    })
+    await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+    expect(h.trace).toEqual(['tx:begin', 'inventory.withEntityManager(tx)', 'applyMergeRenewal', 'flush[order=active]', 'tx:commit'])
+  })
+
+  it.each([
+    ['createSubscription throws after the subscription, items, assets, costs and change log were flushed', { failInventory: 'createSubscription' as const }],
+    ['the final order-status flush throws', { failFinalFlush: true }],
+  ])('rolls everything back when %s', async (_label, failure) => {
+    const h = createActivationHarness({ ...newSaleFixture, ...failure })
+    const emitSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    await expect(h.service.activateOrder('oc-1', ACTIVATION_SCOPE)).rejects.toThrow()
+
+    expect(h.trace).toContain('tx:rollback')
+    expect(h.trace).not.toContain('tx:commit')
+    // no subscription, item, asset, item cost, change-log row or order status change persisted
+    expect(h.store.committed).toEqual([])
+    expect(h.store.committedOrderStatus).toBe('draft')
+    // the request EM was never touched: no pending change sets, nothing managed
+    expect(h.em.find).not.toHaveBeenCalled()
+    expect(h.em.findOne).not.toHaveBeenCalled()
+    expect(h.em.persist).not.toHaveBeenCalled()
+    expect(h.em.flush).not.toHaveBeenCalled()
+    expect(h.em.getUnitOfWork().getChangeSets()).toEqual([])
+    expect(h.em.getUnitOfWork().getIdentityMap().size).toBe(0)
+    emitSpy.mockRestore()
+  })
+
+  it('emits no event on rollback and one activated event after commit', async () => {
+    const failed = createActivationHarness({ ...newSaleFixture, failInventory: 'createSubscription' as const })
+    const emitSpy = jest.spyOn(eventsModule, 'emitCpqEvent').mockResolvedValue(undefined as never)
+    await expect(failed.service.activateOrder('oc-1', ACTIVATION_SCOPE)).rejects.toThrow()
+    expect(emitSpy).not.toHaveBeenCalled()
+
+    const ok = createActivationHarness(newSaleFixture)
+    await ok.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+    expect(emitSpy).toHaveBeenCalledTimes(1)
+    expect(emitSpy.mock.calls[0][0]).toBe('cpq.subscription.activated')
+    emitSpy.mockRestore()
+  })
+
+  it('a retry after a rolled-back activation creates exactly one subscription', async () => {
+    const h = createActivationHarness({ ...newSaleFixture, failInventory: 'createSubscription' as const })
+    jest.spyOn(eventsModule, 'emitCpqEvent').mockResolvedValue(undefined as never)
+    await expect(h.service.activateOrder('oc-1', ACTIVATION_SCOPE)).rejects.toThrow()
+    expect(h.store.committed).toEqual([])
+
+    // the transient failure is gone: the retry activates once
+    h.inventory.createSubscriptionWithCosts.mockImplementation(async () => {
+      h.store.pending.push('subscription')
+      return { subscription: { id: 'sub-1' }, assets: [], inventoryCostChanges: [], inventoryCostLinks: [] }
+    })
+    await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+
+    expect(h.store.committed.filter((row) => row === 'subscription')).toHaveLength(1)
+    expect(h.store.committedOrderStatus).toBe('active')
+    jest.restoreAllMocks()
+  })
+
+  it('loads the order configuration with a pessimistic write lock on the tx EM (serializes concurrent activations)', async () => {
+    const h = createActivationHarness(newSaleFixture)
+    await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+    const orderCalls = (h.txEm.findOne.mock.calls as unknown as Array<[unknown, unknown, { lockMode?: number; refresh?: boolean } | undefined]>)
+      .filter(([entity]) => entity === CpqOrderConfiguration)
+    expect(orderCalls[0][2]).toMatchObject({ lockMode: LockMode.PESSIMISTIC_WRITE, refresh: true })
+    expect(h.em.findOne).not.toHaveBeenCalled()
+  })
+
+  it('a second activation that finds the order already active inside its transaction gets 409 and writes nothing', async () => {
+    const h = createActivationHarness(newSaleFixture)
+    // the first caller committed while this one waited on the lock: the re-read sees the committed status
+    h.orderConfig.cpqStatus = 'active'
+    await expect(h.service.activateOrder('oc-1', ACTIVATION_SCOPE)).rejects.toMatchObject({ status: 409, message: expect.stringMatching(/Cannot activate order/) })
+    expect(h.inventory.createSubscriptionWithCosts).not.toHaveBeenCalled()
+    expect(h.txEm.flush).not.toHaveBeenCalled()
+    expect(h.store.committed).toEqual([])
+  })
+
+  it('refuses to run inside an existing transaction (the isolated fork could not see its rows)', async () => {
+    const h = createActivationHarness(newSaleFixture)
+    h.em.isInTransaction.mockReturnValue(true)
+    await expect(h.service.activateOrder('oc-1', ACTIVATION_SCOPE)).rejects.toThrow(/existing transaction/)
+    expect(h.em.fork).not.toHaveBeenCalled()
+  })
+})
+
+describe('conversion copies quote costs to order line costs (MODIFIED by step 4)', () => {
+  const charges = [{ chargeCode: 'fee', chargeType: 'mrc', pricingMethod: 'cost_plus', quantity: 1, unitPrice: 80, totalPrice: 80,
+    listUnitPrice: 80, listTotalPrice: 80, standardUnitPrice: 80, standardTotalPrice: 80, currencyCode: 'USD', adjustmentErrors: [] }]
+  const quoteLine = (id: string, over: Record<string, unknown> = {}) => ({ quoteLineId: id, quantity: 2, action: 'add', nrcTotal: '10', mrcTotal: '80', charges,
+    configuration: {}, offeringId: null, productId: 'prod', specId: null, startDate: null, endDate: null, termMonths: 12, ...over })
+  const quoteCost = (over: Record<string, unknown>) => ({ id: 'qc-1', quoteLineId: 'line', costKey: 'tail', chargeCode: 'fee', origin: 'catalog', name: 'Tail', role: 'price_basis',
+    costType: 'mrc', source: 'table', costModel: 'flat', valueStatus: 'confirmed', validUntil: '2999-01-01', unitAmount: '50', instanceAmount: '135', supplierName: 'Carrier X', ...over })
+
+  async function convert(lines: Array<Record<string, unknown>>, costs: Array<Record<string, unknown>>) {
+    const { em, service } = createService()
+    em.findOne.mockResolvedValueOnce({ id: 'quote', quoteId: 'sales', cpqStatus: 'accepted', currencyCode: 'USD', customerId: 'customer', pricingSummary: { nrcTotal: 10, mrcTotal: 80 } })
+      .mockResolvedValueOnce(null)
+    // finds in order: quote lines, guard (price-basis costs), open cost requests (cancelled on close), copy (all quote costs)
+    em.find.mockResolvedValueOnce(lines as never).mockResolvedValueOnce(costs.filter((row) => row.role === 'price_basis') as never)
+      .mockResolvedValueOnce(costs.filter((row) => row.sourcingStatus === 'requested') as never).mockResolvedValueOnce(costs as never)
+    em.create.mockImplementation((_entity, values: Record<string, unknown>) => ({ createdAt: new Date(), ...values }))
+    return { em, run: () => service.convertQuoteToOrder('quote', SCOPE) }
+  }
+  const costCreates = (em: ReturnType<typeof createService>['em']) => em.create.mock.calls.filter(([entity]) => entity === CpqOrderLineCost).map(([, values]) => values)
+
+  it('copies every cost line to an order line cost on the mapped order line, keeping keys and values and total_amount = instance x quantity', async () => {
+    const { em, run } = await convert([quoteLine('line')], [
+      quoteCost({}), quoteCost({ id: 'qc-2', costKey: 'install', role: 'margin_only', costType: 'nrc', instanceAmount: '1500', valueStatus: 'estimated', validUntil: null }),
+    ])
+    await run()
+    const orderLineId = (em.create.mock.calls.find(([entity]) => entity === CpqOrderLineConfiguration)?.[1] as { orderLineId: string }).orderLineId
+    const copies = costCreates(em)
+    expect(copies).toHaveLength(2)
+    // the copy reads the quote's costs ordered by cost key
+    expect(copies[0]).toMatchObject({ orderLineId, sourceQuoteLineCostId: 'qc-2', costKey: 'install', totalAmount: '3000', valueStatus: 'estimated' })
+    expect(copies[1]).toMatchObject({ orderLineId, sourceQuoteLineCostId: 'qc-1', costKey: 'tail', instanceAmount: '135', totalAmount: '270', supplierName: 'Carrier X', valueStatus: 'confirmed' })
+    const config = em.create.mock.calls.find(([entity]) => (entity as { name: string }).name === 'CpqOrderConfiguration')?.[1] as { id: string }
+    expect(copies.every((copy) => (copy as { orderConfigurationId: string }).orderConfigurationId === config.id)).toBe(true)
+    // costs are persisted before the flush that commits the order lines (same transaction)
+    expect(em.persist.mock.calls.filter(([row]) => (row as { sourceQuoteLineCostId?: string }).sourceQuoteLineCostId)).toHaveLength(2)
+  })
+
+  it('a foreign cost is copied verbatim with total_amount in the document currency, and no FX rate lookup happens', async () => {
+    const { em, service } = createService()
+    const resolver = { resolve: jest.fn(), resolveForQuote: jest.fn(), getRate: jest.fn() }
+    ;(service as unknown as { fxRateResolver: unknown }).fxRateResolver = resolver
+    const cost = quoteCost({ currencyCode: 'USD', unitAmount: '50', instanceAmount: '135', fxRate: '0.9', fxRateDate: '2026-11-10', fxRateSource: 'ECB', fxRateDerivation: 'inverse' })
+    em.findOne.mockResolvedValueOnce({ id: 'quote', quoteId: 'sales', cpqStatus: 'accepted', currencyCode: 'EUR', customerId: 'customer', pricingSummary: { nrcTotal: 10, mrcTotal: 80 } }).mockResolvedValueOnce(null)
+    em.find.mockResolvedValueOnce([quoteLine('line')] as never).mockResolvedValueOnce([cost] as never).mockResolvedValueOnce([] as never).mockResolvedValueOnce([cost] as never)
+    em.create.mockImplementation((_entity, values: Record<string, unknown>) => ({ createdAt: new Date(), ...values }))
+    await service.convertQuoteToOrder('quote', SCOPE)
+    // quantity 2: 135 x 2 x 0.9 = 243 in the order currency; amounts and currency stay in the cost currency
+    expect(costCreates(em)[0]).toMatchObject({ currencyCode: 'USD', unitAmount: '50', instanceAmount: '135', totalAmount: '243', fxRate: '0.9', fxRateDate: '2026-11-10', fxRateSource: 'ECB', fxRateDerivation: 'inverse' })
+    expect(resolver.resolve).not.toHaveBeenCalled()
+    expect(resolver.resolveForQuote).not.toHaveBeenCalled()
+    expect(resolver.getRate).not.toHaveBeenCalled()
+  })
+
+  it('skips cost lines of a quote line that has no order line (deleted line)', async () => {
+    const { em, run } = await convert([quoteLine('line')], [quoteCost({}), quoteCost({ id: 'qc-x', quoteLineId: 'deleted-line' })])
+    await run()
+    expect(costCreates(em).map((row) => (row as { sourceQuoteLineCostId: string }).sourceQuoteLineCostId)).toEqual(['qc-1'])
+  })
+
+  it('leaves the order and order line payloads identical to a conversion without costs', async () => {
+    const plain = await convert([quoteLine('line')], [])
+    await plain.run()
+    const costed = await convert([quoteLine('line')], [quoteCost({})])
+    await costed.run()
+    const strip = (em: ReturnType<typeof createService>['em']) => JSON.stringify(em.create.mock.calls.filter(([entity]) => entity !== CpqOrderLineCost).map(([, v]) => v))
+      .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, '<uuid>').replace(/\d{4}-\d\d-\d\dT[\d:.]+Z/g, '<ts>')
+    expect(strip(costed.em)).toBe(strip(plain.em))
+  })
+
+  it('a guard failure writes nothing: no order, order line or order line cost is created', async () => {
+    const { em, run } = await convert([quoteLine('line')], [quoteCost({ valueStatus: 'estimated' })])
+    await expect(run()).rejects.toMatchObject({ status: 422, message: 'COSTS_NOT_CONFIRMED' })
+    expect(em.create).not.toHaveBeenCalled()
+    expect(em.persist).not.toHaveBeenCalled()
+  })
+
+  it('a copy failure aborts the conversion transaction before the order lines are committed', async () => {
+    const { em, run } = await convert([quoteLine('line')], [quoteCost({})])
+    em.create.mockImplementation((entity, values: Record<string, unknown>) => {
+      if (entity === CpqOrderLineCost) throw new Error('copy failed')
+      return { createdAt: new Date(), ...values }
+    })
+    await expect(run()).rejects.toThrow('copy failed')
+    // only the pricing-revision phase flushed; the order lines were never flushed, so the transaction rolls back
+    expect(em.flush).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('activateOrder writes inventory costs from the order line costs (step 5)', () => {
+  const line = (over: Record<string, unknown>) => ({ orderConfigurationId: 'oc-1', quantity: 1, configuration: {}, charges: [], parentLineId: null,
+    startDate: null, termMonths: null, offeringId: null, productId: null, specId: null, sourceQuoteLineId: null, nrcTotal: '0', mrcTotal: '0', ...over })
+  const olc = (id: string, orderLineId: string, costKey: string, over: Record<string, unknown> = {}) => ({ id, orderLineId, orderConfigurationId: 'oc-1', costKey, chargeCode: 'mrc',
+    origin: 'catalog', costElementId: null, name: costKey, role: 'price_basis', costType: 'mrc', source: 'table', costModel: 'flat', valueStatus: 'confirmed', valueOrigin: 'catalog',
+    unitAmount: '270', instanceAmount: '270', totalAmount: '270', currencyCode: 'EUR', fxRate: null, fxRateDate: null, indexSnapshot: null, supplierId: null,
+    supplierName: null, supplierQuoteRef: null, validUntil: null, supplierTermEnd: null, supplierMinTermMonths: null, note: null, inventoryCostId: null, ...over })
+  const fixture = () => ({
+    quoteType: 'new' as const,
+    orderLines: [
+      line({ orderLineId: 'ol-1', mrcTotal: '400', nrcTotal: '10', configuration: { offeringName: 'Hosting' } }),
+      line({ orderLineId: 'ol-2', specId: 'spec-asset', nrcTotal: '5000', parentLineId: 'ol-1', configuration: { offeringName: 'Server' } }),
+      line({ orderLineId: 'ol-3', mrcTotal: '50', configuration: { offeringName: 'Support' } }),
+    ],
+    specs: [{ id: 'spec-asset', isAssetizable: true }],
+    subscriptionItems: [{ id: 'item-1' }, { id: 'item-2' }],
+    orderLineCosts: [
+      olc('olc-1', 'ol-1', 'tail'), olc('olc-2', 'ol-1', 'install', { costType: 'nrc', totalAmount: '1500' }),
+      olc('olc-3', 'ol-2', 'hardware', { costType: 'nrc' }), olc('olc-4', 'ol-2', 'licence', { totalAmount: '40' }),
+    ],
+  })
+  const sentInput = (h: ReturnType<typeof createActivationHarness>) => h.inventory.createSubscriptionWithCosts.mock.calls[0][0] as {
+    items: Array<{ name: string; costs: Array<{ orderLineCostId: string; costKey: string }> }>
+    assets: Array<{ name: string; parentItemIndex?: number; purchasePrice: number; costs: Array<{ orderLineCostId: string; costKey: string }> }>
+  }
+
+  it('builds item seeds from the item line costs and asset seeds from the assetizable line costs, loading order line costs in one query', async () => {
+    const h = createActivationHarness(fixture())
+    await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+    const input = sentInput(h)
+    expect(input.items.map((i) => [i.name, i.costs.map((c) => c.costKey)])).toEqual([['Hosting', ['tail', 'install']], ['Support', []]])
+    expect(input.items[0].costs[0]).toMatchObject({ orderLineCostId: 'olc-1', totalAmount: '270', costType: 'mrc', origin: 'catalog' })
+    expect(input.assets).toHaveLength(1)
+    expect(input.assets[0]).toMatchObject({ name: 'Server', parentItemIndex: 0, purchasePrice: 5000 })
+    expect(input.assets[0].costs.map((c) => c.costKey)).toEqual(['hardware', 'licence'])
+    const costQueries = (h.txEm.find.mock.calls as unknown as Array<[unknown, Record<string, unknown>]>).filter(([entity]) => entity === CpqOrderLineCost)
+    expect(costQueries).toHaveLength(1)
+    expect(costQueries[0][1]).toMatchObject({ orderConfigurationId: 'oc-1', organizationId: ACTIVATION_SCOPE.organizationId, tenantId: ACTIVATION_SCOPE.tenantId, deletedAt: null })
+  })
+
+  it('links every order line cost to the inventory cost it set (item and asset costs), in the activation transaction', async () => {
+    const f = fixture()
+    const h = createActivationHarness({ ...f, createdCosts: { inventoryCostLinks: [
+      { orderLineCostId: 'olc-1', inventoryCostId: 'ic-1' }, { orderLineCostId: 'olc-2', inventoryCostId: 'ic-2' },
+      { orderLineCostId: 'olc-3', inventoryCostId: 'ic-3' }, { orderLineCostId: 'olc-4', inventoryCostId: 'ic-4' },
+    ] } })
+    await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+    expect(f.orderLineCosts.map((row) => row.inventoryCostId)).toEqual(['ic-1', 'ic-2', 'ic-3', 'ic-4'])
+    // the links are set before the parent-link flush, inside the transaction
+    expect(h.trace.indexOf('createSubscription')).toBeLessThan(h.trace.indexOf('flush[order=draft]'))
+    expect(h.trace.at(-1)).toBe('tx:commit')
+  })
+
+  it('writes costs whatever the cpq.cost_plus toggle says: the order service has no toggle dependency and always seeds', async () => {
+    // Only quote-side pricing is toggled (R14). The activation has no toggle lookup at all, so item costs are
+    // identical for a tenant with the toggle off; there is no config / cost-service read on the transaction EM.
+    const h = createActivationHarness(fixture())
+    await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+    expect(sentInput(h).items[0].costs).toHaveLength(2)
+    const readEntities = h.txEm.find.mock.calls.map(([entity]) => (entity as { name: string }).name)
+    expect(readEntities.filter((name) => /Config(uration)?$/.test(name) && !/Order|Quote/.test(name))).toEqual([])
+  })
+
+  it('threads the real inventory cost changes out of the transaction result (their events are covered in the step 7 block)', async () => {
+    const changes = [{ inventoryCostId: 'ic-1', subscriptionId: 'sub-1', ownerType: 'subscription_item', subscriptionItemId: 'item-1', assetId: null, costKey: 'tail', supplierId: null, kind: 'created' }]
+    const h = createActivationHarness({ ...fixture(), createdCosts: { inventoryCostChanges: changes } })
+    const emitSpy = jest.spyOn(eventsModule, 'emitCpqEvent').mockResolvedValue(undefined as never)
+    await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+    const transactionResult = await h.txEm.transactional.mock.results[0].value as { inventoryCostChanges: unknown[] }
+    expect(transactionResult.inventoryCostChanges).toEqual(changes)
+    expect(emitSpy.mock.calls.map(([event]) => event)).toEqual(['cpq.subscription.activated', 'cpq.subscription.cost_changed'])
+    emitSpy.mockRestore()
+  })
+
+  it('seeds nothing for a quote without costs and warns (never fails) about costs of an unknown order line', async () => {
+    const plain = createActivationHarness({ ...fixture(), orderLineCosts: [] })
+    await plain.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+    expect(sentInput(plain).items.every((item) => item.costs.length === 0)).toBe(true)
+    expect(sentInput(plain).assets[0].costs).toEqual([])
+
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const stale = createActivationHarness({ ...fixture(), orderLineCosts: [olc('olc-9', 'ol-gone', 'tail')] })
+    await expect(stale.service.activateOrder('oc-1', ACTIVATION_SCOPE)).resolves.toMatchObject({ cpqStatus: 'active' })
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('ol-gone'))
+    expect(sentInput(stale).items.every((item) => item.costs.length === 0)).toBe(true)
+    warn.mockRestore()
+  })
+
+  it('an activation that fails after the costs were written rolls the costs back with it', async () => {
+    const h = createActivationHarness({ ...fixture(), failInventory: 'createSubscription' })
+    jest.spyOn(console, 'error').mockImplementation(() => undefined)
+    await expect(h.service.activateOrder('oc-1', ACTIVATION_SCOPE)).rejects.toThrow()
+    expect(h.store.committed).toEqual([])
+    expect(h.store.committedOrderStatus).toBe('draft')
+    jest.restoreAllMocks()
+  })
+})
+
+describe('cpq.subscription.cost_changed (step 7)', () => {
+  const line = (over: Record<string, unknown>) => ({ orderConfigurationId: 'oc-1', quantity: 1, configuration: {}, charges: [], parentLineId: null,
+    startDate: null, termMonths: null, offeringId: null, productId: null, specId: null, sourceQuoteLineId: null, nrcTotal: '0', mrcTotal: '0', ...over })
+  const base = {
+    quoteType: 'new' as const,
+    orderLines: [line({ orderLineId: 'ol-1', mrcTotal: '100', configuration: { offeringName: 'Hosting' } })],
+    specs: [],
+    subscriptionItems: [{ id: 'item-1' }],
+  }
+  const change = (over: Record<string, unknown>) => ({ inventoryCostId: 'ic-1', subscriptionId: 'sub-1', ownerType: 'subscription_item', subscriptionItemId: 'item-1',
+    assetId: null, costKey: 'tail', supplierId: 'sup-1', kind: 'created', changeLogId: 'log-1', effectiveDate: '2026-11-14', ...over })
+  const costEvents = (spy: jest.SpyInstance) => spy.mock.calls.filter(([id]) => id === 'cpq.subscription.cost_changed').map(([, payload]) => payload as Record<string, unknown>)
+
+  afterEach(() => jest.restoreAllMocks())
+
+  it('emits one event per real change after the commit, with ids and keys only (no amount keys)', async () => {
+    const changes = [
+      change({}),
+      change({ inventoryCostId: 'ic-2', ownerType: 'asset', subscriptionItemId: null, assetId: 'asset-1', costKey: 'licence', supplierId: null, kind: 'changed' }),
+    ]
+    const h = createActivationHarness({ ...base, createdCosts: { inventoryCostChanges: changes } })
+    const emitSpy = jest.spyOn(eventsModule, 'emitCpqEvent').mockResolvedValue(undefined as never)
+    await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+
+    const payloads = costEvents(emitSpy)
+    expect(payloads).toHaveLength(2)
+    // emitted after the activated event, i.e. after the commit
+    expect(emitSpy.mock.calls[0][0]).toBe('cpq.subscription.activated')
+    expect(payloads[0]).toEqual({
+      organizationId: ACTIVATION_SCOPE.organizationId, tenantId: ACTIVATION_SCOPE.tenantId, subscriptionId: 'sub-1',
+      ownerType: 'subscription_item', subscriptionItemId: 'item-1', assetId: null, inventoryCostId: 'ic-1', changeLogId: 'log-1',
+      costKey: 'tail', effectiveDate: '2026-11-14', supplierId: 'sup-1', sourceOrderId: 'oc-1', cause: 'activation', kind: 'created',
+    })
+    expect(payloads[1]).toMatchObject({ ownerType: 'asset', subscriptionItemId: null, assetId: 'asset-1', kind: 'changed' })
+    for (const payload of payloads) {
+      expect(Object.keys(payload).filter((key) => /amount|cost$|price|total|margin|fx/i.test(key))).toEqual([])
+    }
+  })
+
+  it('emits no cost_changed when no row really changed (no-op rows are not in the change list)', async () => {
+    const h = createActivationHarness({ ...base, createdCosts: { inventoryCostChanges: [] } })
+    const emitSpy = jest.spyOn(eventsModule, 'emitCpqEvent').mockResolvedValue(undefined as never)
+    await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+    expect(costEvents(emitSpy)).toEqual([])
+  })
+
+  it('emits nothing on rollback, and a failing dispatch never fails the committed activation', async () => {
+    const failed = createActivationHarness({ ...base, failInventory: 'createSubscription' as const, createdCosts: { inventoryCostChanges: [change({})] } })
+    const emitSpy = jest.spyOn(eventsModule, 'emitCpqEvent').mockResolvedValue(undefined as never)
+    await expect(failed.service.activateOrder('oc-1', ACTIVATION_SCOPE)).rejects.toThrow()
+    expect(emitSpy).not.toHaveBeenCalled()
+
+    const ok = createActivationHarness({ ...base, createdCosts: { inventoryCostChanges: [change({})] } })
+    jest.spyOn(console, 'error').mockImplementation(() => undefined)
+    emitSpy.mockImplementation(async (id) => { if (id === 'cpq.subscription.cost_changed') throw new Error('bus down') })
+    await expect(ok.service.activateOrder('oc-1', ACTIVATION_SCOPE)).resolves.toMatchObject({ cpqStatus: 'active' })
+  })
+})
+
+describe('ARC write-back wiring in activateOrder (step 13)', () => {
+  const olc = (id: string, orderLineId: string, costKey: string) => ({ id, orderLineId, orderConfigurationId: 'oc-1', costKey, name: costKey, role: 'price_basis',
+    costType: 'one_off', source: 'supplier', costModel: 'fixed', valueStatus: 'known', origin: 'catalog', totalAmount: '300' })
+  const orderLine = (orderLineId: string, sourceQuoteLineId: string) => ({ orderLineId, orderConfigurationId: 'oc-1', sourceQuoteLineId, quantity: 1,
+    configuration: {}, charges: [], parentLineId: null, mrcTotal: '0', nrcTotal: '0' })
+  const quoteLine = (quoteLineId: string, action: string, configuration: Record<string, unknown>, over: Record<string, unknown> = {}) => ({
+    quoteLineId, action, configuration, targetSubscriptionId: 'sub-1', sourceSubscriptionItemId: `item-${quoteLineId}`, quantity: 1, charges: [],
+    mrcTotal: '0', nrcTotal: '0', parentLineId: null, ...over })
+  const costChange = (over: Record<string, unknown>) => ({ inventoryCostId: 'ic-1', subscriptionId: 'sub-1', ownerType: 'subscription_item', subscriptionItemId: 'item-1',
+    assetId: null, costKey: 'tail', supplierId: null, kind: 'changed', changeLogId: 'log-1', effectiveDate: '2026-11-14', ...over })
+  const subscription = { id: 'sub-1', customerId: 'cust-1', currentTermStart: new Date('2027-01-01'), currentTermEnd: new Date('2028-01-01') }
+  const arcResult = (inventoryCostChanges: unknown[]) => ({ changeLog: { effectiveAt: new Date('2026-06-01'), afterSnapshot: { items: [] }, lineChanges: [] }, subscription, inventoryCostChanges })
+  const fixture = (quoteType: 'amend' | 'renew' | 'cancel', primitive: string, changes: unknown[]) => ({
+    quoteType,
+    targets: [{ subscriptionId: 'sub-1', mergeAction: 'standalone', newTermStart: '2027-01-01', newTermEnd: '2028-01-01', newTermMonths: 12 }],
+    orderLines: [orderLine('ol-re', 'ql-re'), orderLine('ol-plain', 'ql-plain'), orderLine('ol-add', 'ql-add')],
+    orderLineCosts: [olc('c-re', 'ol-re', 'tail'), olc('c-plain', 'ol-plain', 'tail'), olc('c-add', 'ol-add', 'tail')],
+    quoteLines: [
+      quoteLine('ql-re', 'modify', { _arcMirroredFromItemId: 'i', _arcReconfigured: true }),
+      quoteLine('ql-plain', 'modify', { _arcMirroredFromItemId: 'i', _arcPriceFrozen: true }),
+      quoteLine('ql-add', 'add', {}, { sourceSubscriptionItemId: null }),
+    ],
+    inventory: { [primitive]: arcResult(changes) },
+  })
+  const costEvents = (spy: jest.SpyInstance) => spy.mock.calls.filter(([id]) => id === 'cpq.subscription.cost_changed').map(([, payload]) => payload as Record<string, unknown>)
+  afterEach(() => jest.restoreAllMocks())
+
+  it('seeds only the reconfigured mirror line (marker read from the source quote line) and add lines; plain mirrors carry no costSync', async () => {
+    const h = createActivationHarness(fixture('amend', 'applyAmendment', []))
+    await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+    const [input] = h.inventory.applyAmendment.mock.calls[0] as [{ lineChanges: Array<Record<string, unknown>> }]
+    const [reconfigured, plain, added] = input.lineChanges as Array<{ costSync?: { mode: string; seeds: Array<{ orderLineCostId: string }> } }>
+    expect(reconfigured.costSync?.mode).toBe('replace')
+    expect(reconfigured.costSync?.seeds.map((seed) => seed.orderLineCostId)).toEqual(['c-re'])
+    expect(plain.costSync).toBeUndefined()
+    expect(added.costSync?.mode).toBe('create')
+    expect(added.costSync?.seeds.map((seed) => seed.orderLineCostId)).toEqual(['c-add'])
+  })
+
+  it.each([
+    ['amend', 'applyAmendment'],
+    ['renew', 'applyRenewal'],
+    ['cancel', 'applyCancel'],
+  ] as const)('%s: one cost_changed per real change after the commit, with cause %s and the change kind', async (quoteType, primitive) => {
+    const changes = [costChange({}), costChange({ inventoryCostId: 'ic-2', kind: quoteType === 'cancel' ? 'ended' : 'created', costKey: 'install' })]
+    const h = createActivationHarness(fixture(quoteType, primitive, changes))
+    const emitSpy = jest.spyOn(eventsModule, 'emitCpqEvent').mockResolvedValue(undefined as never)
+    await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+    const payloads = costEvents(emitSpy)
+    expect(payloads.map((p) => [p.cause, p.kind, p.inventoryCostId, p.sourceOrderId, p.changeLogId])).toEqual([
+      [quoteType, 'changed', 'ic-1', 'oc-1', 'log-1'],
+      [quoteType, quoteType === 'cancel' ? 'ended' : 'created', 'ic-2', 'oc-1', 'log-1'],
+    ])
+    // emitted after the transaction committed
+    expect(h.trace.at(-1)).toBe('tx:commit')
+  })
+
+  it('merge: re-pointed costs are emitted after the commit with cause merge and kind repointed', async () => {
+    const changes = [costChange({ kind: 'repointed' }), costChange({ inventoryCostId: 'ic-2', kind: 'repointed', costKey: 'install' })]
+    const h = createActivationHarness({
+      quoteType: 'renew',
+      quoteOver: { arcMergeNewTermStart: '2027-01-01', arcMergeNewTermEnd: '2028-01-01', arcMergeNewTermMonths: 12 },
+      targets: [{ subscriptionId: 'sub-a', mergeAction: 'absorb' }, { subscriptionId: 'sub-b', mergeAction: 'absorb' }],
+      inventory: { applyMergeRenewal: { mergedSubscription: { id: 'sub-m', currentTermStart: new Date('2027-01-01') }, mergeResultChangeLog: { id: 'log-m' }, sourceChangeLogs: [], inventoryCostChanges: changes } },
+    })
+    const emitSpy = jest.spyOn(eventsModule, 'emitCpqEvent').mockResolvedValue(undefined as never)
+    await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+    expect(costEvents(emitSpy).map((p) => [p.cause, p.kind, p.inventoryCostId])).toEqual([['merge', 'repointed', 'ic-1'], ['merge', 'repointed', 'ic-2']])
+    expect(h.trace.at(-1)).toBe('tx:commit')
+  })
+
+  describe('cost-managed (carried) mirror lines (ARC costs step 8, Q5)', () => {
+    const carriedFixture = (costPlusEnabled: boolean) => ({
+      ...fixture('amend', 'applyAmendment', []),
+      orderLines: [orderLine('ol-c', 'ql-c')],
+      orderLineCosts: [{ ...olc('c-tail', 'ol-c', 'tail'), origin: 'carried', valueOrigin: 'carried', inventoryCostId: 'ic-1' }],
+      quoteLines: [quoteLine('ql-c', 'modify', { _arcMirroredFromItemId: 'i', _arcPriceFrozen: true, _arcCostsCarried: true })],
+      costPlusEnabled,
+    })
+
+    it.each([[true], [false]])('a carried line always syncs in replace mode as a full image (toggle on=%s); seeds carry the inventory cost id', async (on) => {
+      const h = createActivationHarness(carriedFixture(on))
+      await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+      const [input] = h.inventory.applyAmendment.mock.calls[0] as [{ lineChanges: Array<{ costSync?: { mode: string; fullImage?: boolean; seeds: Array<{ orderLineCostId: string; inventoryCostId?: string }> } }> }]
+      expect(input.lineChanges[0].costSync).toMatchObject({ mode: 'replace', fullImage: true })
+      expect(input.lineChanges[0].costSync?.seeds.map((seed) => [seed.orderLineCostId, seed.inventoryCostId])).toEqual([['c-tail', 'ic-1']])
+    })
+
+    it('a mirror line without the carried marker never gets fullImage', async () => {
+      const h = createActivationHarness(fixture('amend', 'applyAmendment', []))
+      await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+      const [input] = h.inventory.applyAmendment.mock.calls[0] as [{ lineChanges: Array<{ costSync?: { fullImage?: boolean } }> }]
+      expect(input.lineChanges[0].costSync?.fullImage).toBeUndefined()
+    })
+  })
+
+  describe('cpq.cost_plus toggle at activation (review1-b, spec Q5 + R14)', () => {
+    it.each([[true, 'replace'], [false, 'upsert']] as const)('toggle on=%s: the reconfigured mirror line syncs in %s mode, read once', async (on, mode) => {
+      const h = createActivationHarness({ ...fixture('amend', 'applyAmendment', []), costPlusEnabled: on })
+      await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+      const [input] = h.inventory.applyAmendment.mock.calls[0] as [{ lineChanges: Array<{ costSync?: { mode: string } }> }]
+      expect(input.lineChanges[0].costSync?.mode).toBe(mode)
+      expect(input.lineChanges[2].costSync?.mode).toBe('create')
+      expect(h.costService.enabled).toHaveBeenCalledTimes(1)
+      expect(h.costService.enabled).toHaveBeenCalledWith(ACTIVATION_SCOPE.tenantId)
+    })
+  })
+
+  describe('links order line costs to the inventory costs the ARC step created / updated (review1-a)', () => {
+    const links = [{ orderLineCostId: 'c-re', inventoryCostId: 'ic-re' }, { orderLineCostId: 'c-add', inventoryCostId: 'ic-add' }]
+    const withLinks = (primitive: string, quoteType: 'amend' | 'renew') => {
+      const f = fixture(quoteType, primitive, [])
+      f.inventory[primitive] = { ...f.inventory[primitive], inventoryCostLinks: links } as never
+      return f
+    }
+    const linked = (f: ReturnType<typeof fixture>) => Object.fromEntries(f.orderLineCosts.map((row) => [row.id, (row as { inventoryCostId?: string }).inventoryCostId ?? null]))
+
+    it.each([['amend', 'applyAmendment'], ['renew', 'applyRenewal']] as const)('%s: reconfigured mirror line (replace) and add line get inventory_cost_id; untouched lines stay unlinked', async (quoteType, primitive) => {
+      const f = withLinks(primitive, quoteType)
+      const h = createActivationHarness(f)
+      await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+      expect(linked(f)).toEqual({ 'c-re': 'ic-re', 'c-plain': null, 'c-add': 'ic-add' })
+    })
+
+    it('merge renew: operator-edit costs on M are linked', async () => {
+      const f = {
+        quoteType: 'renew' as const,
+        quoteOver: { arcMergeNewTermStart: '2027-01-01', arcMergeNewTermEnd: '2028-01-01', arcMergeNewTermMonths: 12 },
+        targets: [{ subscriptionId: 'sub-a', mergeAction: 'absorb' }, { subscriptionId: 'sub-b', mergeAction: 'absorb' }],
+        orderLines: [orderLine('ol-add', 'ql-add')],
+        orderLineCosts: [olc('c-add', 'ol-add', 'tail')],
+        quoteLines: [quoteLine('ql-add', 'add', {}, { sourceSubscriptionItemId: null, targetSubscriptionId: null })],
+        inventory: { applyMergeRenewal: { mergedSubscription: { id: 'sub-m', currentTermStart: new Date('2027-01-01') }, mergeResultChangeLog: { id: 'log-m' }, sourceChangeLogs: [], inventoryCostChanges: [], inventoryCostLinks: [links[1]] } },
+      }
+      const h = createActivationHarness(f)
+      await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+      expect(linked(f as never)).toEqual({ 'c-add': 'ic-add' })
+    })
+  })
+
+  it('emits no cost_changed when the ARC step wrote nothing (frozen / no-op)', async () => {
+    const h = createActivationHarness(fixture('renew', 'applyRenewal', []))
+    const emitSpy = jest.spyOn(eventsModule, 'emitCpqEvent').mockResolvedValue(undefined as never)
+    await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+    expect(costEvents(emitSpy)).toEqual([])
+  })
+})
+
+// Supplier sourcing step 9 (MODIFIED from the step-1 characterization): conversion cancels the quote's remaining open
+// cost requests (`quote_closed`) in its transaction; COST_ANSWER_PENDING (step 7) refuses before anything is cancelled.
+describe('conversion and supplier cost requests (step 9)', () => {
+  const charges = [{ chargeCode: 'fee', chargeType: 'mrc', pricingMethod: 'cost_plus', quantity: 1, unitPrice: 80, totalPrice: 80,
+    listUnitPrice: 80, listTotalPrice: 80, standardUnitPrice: 80, standardTotalPrice: 80, currencyCode: 'USD', adjustmentErrors: [] }]
+  const line = { quoteLineId: 'line', quantity: 1, action: 'add', nrcTotal: '0', mrcTotal: '80', charges, configuration: {}, offeringId: null }
+  const pending = { sourcingStatus: 'requested', costRequestId: 'req-1', requestSeq: 1, proposedAmount: null, declineReason: null }
+  const cost = (over: Record<string, unknown>) => ({ id: 'qc-1', quoteConfigurationId: 'quote', quoteId: 'sales', name: 'Tail', chargeCode: 'fee', quoteLineId: 'line', costKey: 'tail', role: 'price_basis',
+    valueStatus: 'confirmed', validUntil: null, requestHistory: [], requestedAt: new Date('2026-01-01'), requestedByUserId: 'u1', ...pending, ...over })
+
+  async function convert(costs: Array<Record<string, unknown>>) {
+    const { em, service } = createService()
+    em.findOne.mockResolvedValueOnce({ id: 'quote', quoteId: 'sales', cpqStatus: 'accepted', currencyCode: 'USD', customerId: 'customer', pricingSummary: { nrcTotal: 0, mrcTotal: 80 } })
+      .mockResolvedValueOnce(null)
+    // finds in order: lines, guard rows, open cost requests (cancelled on close), copy of the cost lines
+    em.find.mockResolvedValueOnce([line] as never).mockResolvedValueOnce(costs as never)
+      .mockResolvedValueOnce(costs.filter((row) => row.sourcingStatus === 'requested') as never).mockResolvedValueOnce(costs as never)
+    em.create.mockImplementation((_entity, values: Record<string, unknown>) => ({ createdAt: new Date(), ...values }))
+    return { em, run: () => service.convertQuoteToOrder('quote', SCOPE) }
+  }
+
+  it('converts a quote whose confirmed cost still has an open request and cancels the request (quote_closed, history, no proposal)', async () => {
+    const row = cost({})
+    const { em, run } = await convert([row])
+    await run()
+    expect(em.create).toHaveBeenCalledWith(CpqOrderLineConfiguration, expect.anything())
+    expect(row).toMatchObject({ sourcingStatus: 'cancelled', cancelReason: 'quote_closed', costRequestId: 'req-1', proposedAmount: null })
+    expect(row.requestHistory).toEqual([expect.objectContaining({ outcome: 'cancelled', reason: 'quote_closed' })])
+  })
+
+  it('publishes the cancellation signal after the conversion committed, once', async () => {
+    const row = cost({})
+    const { service, em } = createService()
+    const publisher = jest.fn()
+    ;(service as unknown as { sourcingPublisher: unknown }).sourcingPublisher = publisher
+    em.findOne.mockResolvedValueOnce({ id: 'quote', quoteId: 'sales', cpqStatus: 'accepted', currencyCode: 'USD', customerId: 'customer', pricingSummary: { nrcTotal: 0, mrcTotal: 80 } })
+      .mockResolvedValueOnce(null)
+    em.find.mockResolvedValueOnce([line] as never).mockResolvedValueOnce([row] as never).mockResolvedValueOnce([row] as never).mockResolvedValueOnce([row] as never)
+    em.create.mockImplementation((_entity, values: Record<string, unknown>) => ({ createdAt: new Date(), ...values }))
+    await service.convertQuoteToOrder('quote', SCOPE)
+    expect(publisher).toHaveBeenCalledTimes(1)
+    expect(publisher).toHaveBeenCalledWith([expect.objectContaining({ kind: 'request_cancelled', reason: 'quote_closed', costRequestId: 'req-1' })], expect.anything())
+  })
+
+  it('cancels a margin-only request (it never blocks) and still copies the cost line to the order', async () => {
+    const row = cost({ role: 'margin_only', valueStatus: 'estimated' })
+    const { em, run } = await convert([row])
+    await run()
+    expect(row).toMatchObject({ sourcingStatus: 'cancelled', cancelReason: 'quote_closed' })
+    expect(em.create.mock.calls.filter(([entity]) => entity === CpqOrderLineCost)).toHaveLength(1)
+  })
+
+  it('reads the open requests with their own query (the guard rows are not filtered on sourcing columns)', async () => {
+    const { em, run } = await convert([])
+    await run()
+    const [, guardWhere] = em.find.mock.calls.find(([, w]) => (w as Record<string, unknown>).role === 'price_basis')!
+    expect(Object.keys(guardWhere)).not.toEqual(expect.arrayContaining(['sourcingStatus']))
+    expect(em.find).toHaveBeenCalledWith(CpqQuoteLineCost, expect.objectContaining({ quoteConfigurationId: 'quote', sourcingStatus: 'requested', deletedAt: null }))
+  })
+
+  it('refuses on the value status only: an answered or declined request does not change the verdict, and rows stay unchanged', async () => {
+    const answered = cost({ valueStatus: 'estimated', sourcingStatus: 'answered' })
+    const refused = await convert([answered])
+    await expect(refused.run()).rejects.toMatchObject({ status: 422, message: 'COSTS_NOT_CONFIRMED', details: { lines: [{ quoteLineId: 'line', costKeys: ['tail'] }] } })
+    expect(answered).toMatchObject({ sourcingStatus: 'answered', costRequestId: 'req-1' })
+    expect(refused.em.create).not.toHaveBeenCalled()
+  })
+
+  it('COST_ANSWER_PENDING refuses and cancels nothing: the other open requests and the proposal stay', async () => {
+    const proposal = cost({ sourcingStatus: 'answered', proposedAmount: '70.0000', proposedAnswer: { unitAmount: '70' } })
+    const open = cost({ id: 'qc-2', costKey: 'other', role: 'margin_only' })
+    const refused = await convert([proposal, open])
+    await expect(refused.run()).rejects.toMatchObject({ status: 422, message: 'COST_ANSWER_PENDING' })
+    expect(open).toMatchObject(pending)
+    expect(proposal).toMatchObject({ sourcingStatus: 'answered', proposedAmount: '70.0000' })
+    expect(refused.em.create).not.toHaveBeenCalled()
+  })
+})
+
+// ARC costs step 1 (characterization, green on unchanged code). Already pinned above and NOT duplicated:
+//  - the conversion refusals and the cost copy ('conversion cost guard', 'conversion copies quote costs to order line costs',
+//    'conversion and supplier cost requests'), with the guard order check;
+//  - the activation transaction boundary ('activateOrder transaction boundary'): one forked transaction, order row lock,
+//    rollback, events after commit;
+//  - the ARC write-back wiring ('ARC write-back wiring in activateOrder').
+// New here: the billing payload of an Amend whose lines are all `modify` (a cost-only Amend later, I-9).
+describe('amended / renewed payload for an Amend with only modify lines (I-9 characterization)', () => {
+  const subscription = { id: 'sub-1', customerId: 'cust-1', currentTermStart: new Date('2027-01-01T00:00:00.000Z'), currentTermEnd: new Date('2028-01-01T00:00:00.000Z') }
+  const modifyOnly = {
+    id: 'log-1', subscriptionId: 'sub-1', effectiveAt: new Date('2026-06-01T10:00:00.000Z'), afterSnapshot: { items: [{ id: 'item-1', name: 'Tail' }] },
+    lineChanges: [{ action: 'modify', itemId: 'item-1', quoteLineId: 'ql-1', mrcDelta: 0 }],
+  }
+  const quoteLines = [{ quoteLineId: 'ql-1', action: 'modify', configuration: { _arcMirroredFromItemId: 'item-1', _arcPriceFrozen: true }, targetSubscriptionId: 'sub-1',
+    sourceSubscriptionItemId: 'item-1', quantity: 1, charges: [], mrcTotal: '345', nrcTotal: '0', parentLineId: null }]
+  afterEach(() => jest.restoreAllMocks())
+
+  it('amended: empty addedItems and removedSubscriptionItemIds, nothing else', async () => {
+    const h = createActivationHarness({ quoteType: 'amend', targets: [{ subscriptionId: 'sub-1', mergeAction: 'standalone' }], quoteLines, inventory: { applyAmendment: { changeLog: modifyOnly, subscription } } })
+    const emitSpy = jest.spyOn(eventsModule, 'emitCpqEvent').mockResolvedValue(undefined as never)
+    await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+    expect(emitSpy).toHaveBeenCalledTimes(1)
+    const [event, payload] = emitSpy.mock.calls[0] as unknown as [string, Record<string, unknown>]
+    expect(event).toBe('cpq.subscription.amended')
+    expect(JSON.stringify({ ...payload, timestamp: '<timestamp>' })).toBe(JSON.stringify({
+      tenantId: ACTIVATION_SCOPE.tenantId, organizationId: ACTIVATION_SCOPE.organizationId, subscriptionId: 'sub-1', customerId: 'cust-1', effectiveDate: '2026-06-01',
+      addedItems: [], removedSubscriptionItemIds: [], sourceQuoteId: 'quote-1', sourceOrderId: 'oc-1', timestamp: '<timestamp>',
+    }))
+  })
+
+  it('renewed: empty addedItems', async () => {
+    const h = createActivationHarness({
+      quoteType: 'renew', targets: [{ subscriptionId: 'sub-1', mergeAction: 'standalone', newTermStart: '2027-01-01', newTermEnd: '2028-01-01', newTermMonths: 12 }],
+      quoteLines, inventory: { applyRenewal: { changeLog: modifyOnly, subscription } },
+    })
+    const emitSpy = jest.spyOn(eventsModule, 'emitCpqEvent').mockResolvedValue(undefined as never)
+    await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+    const [event, payload] = emitSpy.mock.calls[0] as unknown as [string, Record<string, unknown>]
+    expect(event).toBe('cpq.subscription.renewed')
+    expect(JSON.stringify({ ...payload, timestamp: '<timestamp>' })).toBe(JSON.stringify({
+      tenantId: ACTIVATION_SCOPE.tenantId, organizationId: ACTIVATION_SCOPE.organizationId, subscriptionId: 'sub-1', customerId: 'cust-1',
+      newTermStart: '2027-01-01', newTermEnd: '2028-01-01', addedItems: [], sourceQuoteId: 'quote-1', sourceOrderId: 'oc-1', timestamp: '<timestamp>',
+    }))
+  })
+})
+
+// ARC costs step 9 (I-9): a cost-only Amend (a cost-managed frozen mirror line whose costs were renegotiated, `modify`
+// with `mrcDelta` 0, the charges untouched) bills nothing new: the `cpq.subscription.amended` payload is byte-identical to
+// the Phase A golden above, and the cost change surfaces only as its own `cost_changed (amend)` event.
+describe('cost-only Amend keeps the amended payload byte-identical (ARC costs step 9, I-9)', () => {
+  const subscription = { id: 'sub-1', customerId: 'cust-1', currentTermStart: new Date('2027-01-01T00:00:00.000Z'), currentTermEnd: new Date('2028-01-01T00:00:00.000Z') }
+  const changeLog = {
+    id: 'log-1', subscriptionId: 'sub-1', effectiveAt: new Date('2026-06-01T10:00:00.000Z'), afterSnapshot: { items: [{ id: 'item-1', name: 'Tail' }] },
+    lineChanges: [{ action: 'modify', itemId: 'item-1', quoteLineId: 'ql-1', mrcDelta: 0 }],
+  }
+  const costChange = { inventoryCostId: 'ic-1', subscriptionId: 'sub-1', ownerType: 'subscription_item', subscriptionItemId: 'item-1', assetId: null, costKey: 'tail',
+    supplierId: null, kind: 'changed', changeLogId: 'log-1', effectiveDate: '2026-06-01' }
+  afterEach(() => jest.restoreAllMocks())
+
+  it('amended payload equals the Phase A golden; one cost_changed (amend) is emitted separately', async () => {
+    const h = createActivationHarness({
+      quoteType: 'amend', targets: [{ subscriptionId: 'sub-1', mergeAction: 'standalone' }],
+      orderLines: [{ orderLineId: 'ol-1', orderConfigurationId: 'oc-1', sourceQuoteLineId: 'ql-1', quantity: 1, configuration: {}, charges: [], parentLineId: null, mrcTotal: '345', nrcTotal: '0' }],
+      orderLineCosts: [{ id: 'c-tail', orderLineId: 'ol-1', orderConfigurationId: 'oc-1', costKey: 'tail', name: 'tail', role: 'price_basis', costType: 'mrc', source: 'table',
+        costModel: 'flat', valueStatus: 'confirmed', origin: 'carried', valueOrigin: 'manual', totalAmount: '240', inventoryCostId: 'ic-1' }],
+      quoteLines: [{ quoteLineId: 'ql-1', action: 'modify', configuration: { _arcMirroredFromItemId: 'item-1', _arcPriceFrozen: true, _arcCostsCarried: true }, targetSubscriptionId: 'sub-1',
+        sourceSubscriptionItemId: 'item-1', quantity: 1, charges: [], mrcTotal: '345', nrcTotal: '0', parentLineId: null }],
+      inventory: { applyAmendment: { changeLog, subscription, inventoryCostChanges: [costChange] } },
+    })
+    const emitSpy = jest.spyOn(eventsModule, 'emitCpqEvent').mockResolvedValue(undefined as never)
+    await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+    const amended = emitSpy.mock.calls.filter(([id]) => id === 'cpq.subscription.amended')
+    expect(amended).toHaveLength(1)
+    expect(JSON.stringify({ ...(amended[0][1] as Record<string, unknown>), timestamp: '<timestamp>' })).toBe(JSON.stringify({
+      tenantId: ACTIVATION_SCOPE.tenantId, organizationId: ACTIVATION_SCOPE.organizationId, subscriptionId: 'sub-1', customerId: 'cust-1', effectiveDate: '2026-06-01',
+      addedItems: [], removedSubscriptionItemIds: [], sourceQuoteId: 'quote-1', sourceOrderId: 'oc-1', timestamp: '<timestamp>',
+    }))
+    expect(emitSpy.mock.calls.filter(([id]) => id === 'cpq.subscription.cost_changed').map(([, p]) => [(p as Record<string, unknown>).cause, (p as Record<string, unknown>).kind])).toEqual([['amend', 'changed']])
+  })
+})
+
+// ARC costs step 3: activation locks (spec Q2). Inside the activation transaction every path locks the source quote
+// row first (after the order row, which activateOrder reads for its status); ARC paths then lock the target
+// subscription rows sorted by id, before any inventory primitive writes. No quote revision bump, no event.
+describe('activateOrder locks (ARC costs step 3)', () => {
+  const newSale = () => ({
+    quoteType: 'new' as const,
+    orderLines: [{ orderLineId: 'ol-1', orderConfigurationId: 'oc-1', quantity: 1, configuration: { offeringName: 'Hosting' }, charges: [], parentLineId: null, startDate: null,
+      termMonths: null, offeringId: null, productId: null, specId: null, sourceQuoteLineId: null, nrcTotal: '10', mrcTotal: '100' }],
+    subscriptionItems: [{ id: 'item-1' }],
+  })
+  const subscription = { id: 'sub-1', customerId: 'cust-1', currentTermStart: new Date('2027-01-01'), currentTermEnd: new Date('2028-01-01') }
+  const arcResult = { changeLog: { effectiveAt: new Date('2026-06-01T00:00:00.000Z'), afterSnapshot: { items: [] }, lineChanges: [] }, subscription }
+  afterEach(() => jest.restoreAllMocks())
+
+  it('new sale: order row, then the source quote row, then the inventory write; no subscription lock', async () => {
+    const h = createActivationHarness(newSale())
+    await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+    expect(h.lockTrace).toEqual(['lock:order', 'lock:quote', 'createSubscription'])
+  })
+
+  it.each([
+    ['amend', 'applyAmendment', { mergeAction: 'standalone' }],
+    ['cancel', 'applyCancel', { mergeAction: 'standalone' }],
+    ['renew', 'applyRenewal', { mergeAction: 'standalone', newTermStart: '2027-01-01', newTermEnd: '2028-01-01', newTermMonths: 12 }],
+  ] as const)('%s: order row, source quote row, target subscription rows, then %s', async (quoteType, primitive, targetExtra) => {
+    const h = createActivationHarness({ quoteType, targets: [{ subscriptionId: 'sub-1', ...targetExtra }], quoteLines: [], inventory: { [primitive]: arcResult } })
+    await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+    expect(h.lockTrace).toEqual(['lock:order', 'lock:quote', 'lock:subscriptions[sub-1]', primitive])
+  })
+
+  it('merge renew: every absorbed subscription is locked in ascending id order, in one locking read, before applyMergeRenewal', async () => {
+    const h = createActivationHarness({
+      quoteType: 'renew',
+      quoteOver: { arcMergeNewTermStart: '2027-01-01', arcMergeNewTermEnd: '2028-01-01', arcMergeNewTermMonths: 12 },
+      targets: [{ subscriptionId: 'sub-b', mergeAction: 'absorb' }, { subscriptionId: 'sub-c', mergeAction: 'absorb' }, { subscriptionId: 'sub-a', mergeAction: 'absorb' }],
+      inventory: { applyMergeRenewal: { mergedSubscription: { id: 'sub-m', currentTermStart: new Date('2027-01-01') }, mergeResultChangeLog: {}, sourceChangeLogs: [] } },
+    })
+    await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+    expect(h.lockTrace).toEqual(['lock:order', 'lock:quote', 'lock:subscriptions[sub-a,sub-b,sub-c]', 'applyMergeRenewal'])
+  })
+
+  it('every lock is PESSIMISTIC_WRITE with a refresh on the transaction EM, scoped and ordered by id; the request EM is never used', async () => {
+    const h = createActivationHarness({ quoteType: 'amend', targets: [{ subscriptionId: 'sub-1', mergeAction: 'standalone' }], quoteLines: [], inventory: { applyAmendment: arcResult } })
+    await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+    expect(h.lockCalls).toHaveLength(3)
+    for (const call of h.lockCalls) expect(call.options).toMatchObject({ lockMode: LockMode.PESSIMISTIC_WRITE, refresh: true })
+    const [, quoteLock, subscriptionLock] = h.lockCalls
+    expect(quoteLock.where).toMatchObject({ id: 'quote-1', organizationId: ACTIVATION_SCOPE.organizationId, tenantId: ACTIVATION_SCOPE.tenantId, deletedAt: null })
+    expect(subscriptionLock.options).toMatchObject({ orderBy: { id: 'asc' } })
+    expect(subscriptionLock.where).toMatchObject({ id: { $in: ['sub-1'] }, organizationId: ACTIVATION_SCOPE.organizationId, tenantId: ACTIVATION_SCOPE.tenantId, deletedAt: null })
+    expect(h.em.find).not.toHaveBeenCalled()
+    expect(h.em.findOne).not.toHaveBeenCalled()
+  })
+
+  it('takes no quote or subscription lock when the order is not activatable (the status check comes first and fails fast)', async () => {
+    const h = createActivationHarness({ quoteType: 'amend', targets: [{ subscriptionId: 'sub-1', mergeAction: 'standalone' }], inventory: { applyAmendment: arcResult } })
+    h.orderConfig.cpqStatus = 'active'
+    await expect(h.service.activateOrder('oc-1', ACTIVATION_SCOPE)).rejects.toMatchObject({ status: 409 })
+    expect(h.lockTrace).toEqual(['lock:order'])
+  })
+
+  it('an order without a source quote is a new sale and locks no quote row', async () => {
+    const h = createActivationHarness(newSale())
+    h.orderConfig.sourceQuoteId = null
+    await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+    expect(h.lockTrace).toEqual(['lock:order', 'createSubscription'])
+  })
+
+  it('bumps no quote revision and emits no quote event: the quote row is only read under the lock', async () => {
+    const h = createActivationHarness({ quoteType: 'amend', targets: [{ subscriptionId: 'sub-1', mergeAction: 'standalone' }], quoteLines: [], inventory: { applyAmendment: arcResult } })
+    const emitSpy = jest.spyOn(eventsModule, 'emitCpqEvent').mockResolvedValue(undefined as never)
+    await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+    expect(emitSpy.mock.calls.map(([event]) => event)).toEqual(['cpq.subscription.amended'])
+    expect(h.txEm.persist).not.toHaveBeenCalled()
+  })
+})
+
+// ARC costs step 4: COST_SOURCE_CHANGED (App Spec I-12) at conversion and at activation. The carry step does not exist
+// yet, so these fixtures set the line markers (`_arcCostsCarried`, `_arcCarriedCostSetHash`) and the carried quote cost
+// lines directly. Without the markers the guard is a no-op with no read.
+describe('COST_SOURCE_CHANGED (ARC costs step 4)', () => {
+  const tailCost = (over: Partial<ItemCostStateRow> = {}): ItemCostStateRow => ({
+    id: 'ic-1', subscriptionItemId: 'item-1', costKey: 'tail', status: 'active', chargeCode: 'mrc', origin: 'catalog', costElementId: null, name: 'Tail', role: 'price_basis',
+    costType: 'mrc', source: 'table', costModel: 'flat', valueStatus: 'confirmed', valueOrigin: 'catalog', unitAmount: '270.0000', instanceAmount: '270.0000', totalAmount: '270.0000',
+    currencyCode: 'EUR', fxRate: null, fxRateDate: null, fxRateSource: null, fxRateDerivation: null, indexSnapshot: null, supplierId: 'sup-1', supplierName: 'Carrier X',
+    supplierQuoteRef: 'CX-1', validUntil: '2028-11-30', supplierTermEnd: '2028-11-30', supplierMinTermMonths: 12, note: null, ...over,
+  })
+  const mirroredAt = [tailCost()]
+  const markers = { _arcMirroredFromItemId: 'item-1', _arcPriceFrozen: true, _arcCostsCarried: true, _arcCarriedCostSetHash: itemCostSetHash(mirroredAt) }
+  const carriedQuoteCost = { quoteLineId: 'ql-1', costKey: 'tail', carriedFromItemCostId: 'ic-1', carriedFromHash: itemCostStateHash(tailCost()) }
+  const body = (costKeys: string[]) => ({ lines: [{ quoteLineId: 'ql-1', subscriptionItemId: 'item-1', costKeys }] })
+
+  // The live item costs another ARC left behind, per refusal kind: value, supplier, ended, re-pointed, an added key.
+  const stale: Array<[string, ItemCostStateRow[], string[]]> = [
+    ['a changed value', [tailCost({ unitAmount: '240', instanceAmount: '240', totalAmount: '240' })], ['tail']],
+    ['a changed supplier', [tailCost({ supplierId: 'sup-2', supplierName: 'Carrier Y' })], ['tail']],
+    ['a changed validity / term', [tailCost({ supplierTermEnd: '2029-12-31' })], ['tail']],
+    ['an ended row', [tailCost({ status: 'ended' })], ['tail']],
+    ['a re-pointed row (a merge moved it to a clone)', [tailCost({ subscriptionItemId: 'item-clone' })], ['tail']],
+    ['an added key', [tailCost(), tailCost({ id: 'ic-2', costKey: 'install' })], ['install']],
+  ]
+
+  describe('at activation', () => {
+    const arcResult = { changeLog: { effectiveAt: new Date('2026-06-01T00:00:00.000Z'), afterSnapshot: { items: [] }, lineChanges: [] },
+      subscription: { id: 'sub-1', customerId: 'cust-1', currentTermStart: new Date('2027-01-01'), currentTermEnd: new Date('2028-01-01') } }
+    const quoteLine = (configuration: Record<string, unknown>, over: Record<string, unknown> = {}) => ({ quoteLineId: 'ql-1', action: 'modify', configuration, targetSubscriptionId: 'sub-1',
+      sourceSubscriptionItemId: 'item-1', quantity: 1, charges: [], mrcTotal: '345', nrcTotal: '0', parentLineId: null, ...over })
+    const amend = (over: Record<string, unknown> = {}) => ({
+      quoteType: 'amend' as const, targets: [{ subscriptionId: 'sub-1', mergeAction: 'standalone' }], quoteLines: [quoteLine(markers)],
+      subscriptionItems: [{ id: 'item-1', status: 'active', deletedAt: null }], inventoryCosts: [...mirroredAt] as unknown as Array<Record<string, unknown>>,
+      carriedQuoteCosts: [carriedQuoteCost], inventory: { applyAmendment: arcResult }, ...over,
+    })
+    afterEach(() => jest.restoreAllMocks())
+
+    it.each(stale)('%s: 409 COST_SOURCE_CHANGED naming the line and keys, after the locks and before any write; nothing persisted', async (_label, live, costKeys) => {
+      const h = createActivationHarness(amend({ inventoryCosts: live as unknown as Array<Record<string, unknown>> }))
+      const emitSpy = jest.spyOn(eventsModule, 'emitCpqEvent').mockResolvedValue(undefined as never)
+      await expect(h.service.activateOrder('oc-1', ACTIVATION_SCOPE)).rejects.toMatchObject({ status: 409, message: 'COST_SOURCE_CHANGED', details: body(costKeys) })
+      // locks were taken, no inventory primitive ran, nothing flushed or committed, the order stays draft, no event
+      expect(h.lockTrace).toEqual(['lock:order', 'lock:quote', 'lock:subscriptions[sub-1]'])
+      expect(h.inventory.applyAmendment).not.toHaveBeenCalled()
+      expect(h.txEm.flush).not.toHaveBeenCalled()
+      expect(h.txEm.persist).not.toHaveBeenCalled()
+      expect(h.trace).toContain('tx:rollback')
+      expect(h.store.committed).toEqual([])
+      expect(h.store.committedOrderStatus).toBe('draft')
+      expect(h.orderConfig.cpqStatus).toBe('draft')
+      expect(h.salesOrder.status).toBe('draft')
+      expect(emitSpy).not.toHaveBeenCalled()
+    })
+
+    it('review: the baseline is the hash frozen on the order line at conversion; resetting the live quote line marker cannot let a stale order activate', async () => {
+      const live = [tailCost({ unitAmount: '240', instanceAmount: '240', totalAmount: '240' }), tailCost({ id: 'ic-2', costKey: 'install' })] as unknown as Array<Record<string, unknown>>
+      // Another ARC changed the tail and added a key; afterwards the quote line's marker was reset to the CURRENT set.
+      const reset = { ...markers, _arcCarriedCostSetHash: itemCostSetHash(live as never) }
+      const stale = createActivationHarness(amend({
+        quoteLines: [quoteLine(reset)], inventoryCosts: live,
+        orderLines: [{ orderLineId: 'ol-1', sourceQuoteLineId: 'ql-1', action: 'modify', configuration: { _arcConvertedCostSetHash: markers._arcCarriedCostSetHash } }],
+      }))
+      await expect(stale.service.activateOrder('oc-1', ACTIVATION_SCOPE)).rejects.toMatchObject({ status: 409, message: 'COST_SOURCE_CHANGED', details: body(['install', 'tail']) })
+      expect(stale.inventory.applyAmendment).not.toHaveBeenCalled()
+      expect(stale.store.committed).toEqual([])
+      // Control: an order converted before the freeze has no frozen hash and falls back to the (reset) quote marker.
+      const legacy = createActivationHarness(amend({ quoteLines: [quoteLine(reset)], inventoryCosts: live, carriedQuoteCosts: [] }))
+      await legacy.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+      expect(legacy.inventory.applyAmendment).toHaveBeenCalled()
+    })
+
+    it('review: a frozen hash that still matches the live costs activates normally', async () => {
+      const h = createActivationHarness(amend({
+        orderLines: [{ orderLineId: 'ol-1', sourceQuoteLineId: 'ql-1', action: 'modify', configuration: { _arcConvertedCostSetHash: markers._arcCarriedCostSetHash } }],
+      }))
+      await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+      expect(h.inventory.applyAmendment).toHaveBeenCalled()
+    })
+
+    it('stale after merge (ARC costs Q10): an Amend on A that carried A\'s tail is refused once a merge re-pointed the cost to the clone', async () => {
+      // `repointItemCosts` moved ic-1 onto the merged subscription's clone: same id and key, new item / subscription.
+      const repointed = tailCost({ subscriptionItemId: 'item-clone' }) as unknown as Record<string, unknown>
+      const h = createActivationHarness(amend({ inventoryCosts: [repointed], subscriptionItems: [{ id: 'item-1', status: 'superseded', deletedAt: null }] }))
+      await expect(h.service.activateOrder('oc-1', ACTIVATION_SCOPE)).rejects.toMatchObject({ status: 409, message: 'COST_SOURCE_CHANGED', details: body(['tail']) })
+      expect(h.inventory.applyAmendment).not.toHaveBeenCalled()
+      expect(h.store.committed).toEqual([])
+    })
+
+    it('a terminated item is stale against a recorded non-empty set', async () => {
+      const h = createActivationHarness(amend({ subscriptionItems: [{ id: 'item-1', status: 'terminated', deletedAt: null }] }))
+      await expect(h.service.activateOrder('oc-1', ACTIVATION_SCOPE)).rejects.toMatchObject({ status: 409, message: 'COST_SOURCE_CHANGED' })
+    })
+
+    it.each([['amend', 'applyAmendment'], ['renew', 'applyRenewal']] as const)('%s: fresh costs (the recorded state) activate normally', async (quoteType, primitive) => {
+      const h = createActivationHarness(amend({
+        quoteType, inventory: { [primitive]: arcResult },
+        targets: [{ subscriptionId: 'sub-1', mergeAction: 'standalone', newTermStart: '2027-01-01', newTermEnd: '2028-01-01', newTermMonths: 12 }],
+      }))
+      jest.spyOn(eventsModule, 'emitCpqEvent').mockResolvedValue(undefined as never)
+      await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+      expect(h.lockTrace).toEqual(['lock:order', 'lock:quote', 'lock:subscriptions[sub-1]', primitive])
+      expect(h.store.committedOrderStatus).toBe('active')
+    })
+
+    it('an empty recorded set (an item without costs) is fresh while the item still has none, stale once a cost appears', async () => {
+      const empty = { ...markers, _arcCarriedCostSetHash: itemCostSetHash([]) }
+      const fresh = createActivationHarness(amend({ quoteLines: [quoteLine(empty)], inventoryCosts: [], carriedQuoteCosts: [] }))
+      await fresh.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+      expect(fresh.inventory.applyAmendment).toHaveBeenCalled()
+      const changed = createActivationHarness(amend({ quoteLines: [quoteLine(empty)], carriedQuoteCosts: [] }))
+      await expect(changed.service.activateOrder('oc-1', ACTIVATION_SCOPE)).rejects.toMatchObject({ status: 409, details: body(['tail']) })
+    })
+
+    it('without carried-cost markers the guard is a no-op: no item or cost is read (every quote today, Phase 1 lines, merge lines)', async () => {
+      const h = createActivationHarness(amend({
+        quoteLines: [quoteLine({ _arcMirroredFromItemId: 'item-1', _arcPriceFrozen: true }), quoteLine({ ...markers, _arcCarriedCostSetHash: undefined }, { quoteLineId: 'ql-2' })],
+        inventoryCosts: [tailCost({ unitAmount: '1' })] as never,
+      }))
+      await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+      const entities = (h.txEm.find.mock.calls as unknown as Array<[unknown]>).map(([entity]) => entity)
+      expect(entities).not.toContain(CpqInventoryCost)
+      expect(entities).not.toContain(CpqInventorySubscriptionItem)
+      expect(h.inventory.applyAmendment).toHaveBeenCalled()
+    })
+
+    it('a cancelled line carries no costs: a stale marker on a cancel line does not block (its item costs end anyway)', async () => {
+      const h = createActivationHarness(amend({ quoteLines: [quoteLine(markers, { action: 'cancel' })], inventoryCosts: [tailCost({ unitAmount: '1' })] as never }))
+      await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+      expect(h.inventory.applyAmendment).toHaveBeenCalled()
+    })
+
+    it('reads the carried quote cost lines only to name the keys (no third read while fresh)', async () => {
+      const h = createActivationHarness(amend())
+      await h.service.activateOrder('oc-1', ACTIVATION_SCOPE)
+      const quoteCostReads = (h.txEm.find.mock.calls as unknown as Array<[unknown]>).filter(([entity]) => entity === CpqQuoteLineCost)
+      expect(quoteCostReads).toHaveLength(0)
+    })
+
+    describe('parallel Amends of one tail', () => {
+      function mutex() {
+        let tail: Promise<void> = Promise.resolve()
+        return { acquire: () => { let release!: () => void; const previous = tail; tail = new Promise<void>((resolve) => { release = resolve }); return previous.then(() => release) } }
+      }
+      const orderOn = (shared: ItemCostStateRow[], lock: ReturnType<typeof mutex>) => createActivationHarness(amend({ inventoryCosts: shared as never, subscriptionMutex: lock }))
+      // A renegotiates the tail 270 -> 240 in place (the real write-back updates the row, same id).
+      const renegotiates = (h: ReturnType<typeof createActivationHarness>, shared: ItemCostStateRow[]) => {
+        const original = h.inventory.applyAmendment.getMockImplementation()!
+        h.inventory.applyAmendment.mockImplementation(async (...args: unknown[]) => {
+          const result = await original(...args)
+          shared[0].unitAmount = '240'; shared[0].instanceAmount = '240'; shared[0].totalAmount = '240'
+          return result
+        })
+      }
+      afterEach(() => jest.restoreAllMocks())
+
+      it('two orders carry the same tail; the first renegotiates it; activating both at once: exactly one succeeds, the other 409s and writes nothing', async () => {
+        jest.spyOn(eventsModule, 'emitCpqEvent').mockResolvedValue(undefined as never)
+        const shared = [tailCost()]
+        const lock = mutex()
+        const first = orderOn(shared, lock)
+        const second = orderOn(shared, lock)
+        renegotiates(first, shared)
+
+        const [a, b] = await Promise.allSettled([first.service.activateOrder('oc-1', ACTIVATION_SCOPE), second.service.activateOrder('oc-1', ACTIVATION_SCOPE)])
+
+        expect(a.status).toBe('fulfilled')
+        expect(b).toMatchObject({ status: 'rejected', reason: { status: 409, message: 'COST_SOURCE_CHANGED', details: body(['tail']) } })
+        // the winner committed; the loser took the locks after it, saw the committed cost, and wrote nothing
+        expect(first.store.committedOrderStatus).toBe('active')
+        expect(first.inventory.applyAmendment).toHaveBeenCalledTimes(1)
+        expect(second.inventory.applyAmendment).not.toHaveBeenCalled()
+        expect(second.store.committed).toEqual([])
+        expect(second.store.committedOrderStatus).toBe('draft')
+        expect(second.orderConfig.cpqStatus).toBe('draft')
+        expect(second.txEm.flush).not.toHaveBeenCalled()
+        expect(second.trace).toContain('tx:rollback')
+      })
+
+      it('the same race with the other order first in line (the renegotiating order takes the lock first): still exactly one succeeds', async () => {
+        jest.spyOn(eventsModule, 'emitCpqEvent').mockResolvedValue(undefined as never)
+        const shared = [tailCost()]
+        const lock = mutex()
+        const first = orderOn(shared, lock)
+        const second = orderOn(shared, lock)
+        renegotiates(second, shared)
+        const results = await Promise.allSettled([second.service.activateOrder('oc-1', ACTIVATION_SCOPE), first.service.activateOrder('oc-1', ACTIVATION_SCOPE)])
+        expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
+        expect(results.filter((result) => result.status === 'rejected' && (result as PromiseRejectedResult).reason.message === 'COST_SOURCE_CHANGED')).toHaveLength(1)
+      })
+
+      it('when the first ARC leaves the item costs untouched, the second activation succeeds (equal hashes)', async () => {
+        jest.spyOn(eventsModule, 'emitCpqEvent').mockResolvedValue(undefined as never)
+        const shared = [tailCost()]
+        const lock = mutex()
+        const first = orderOn(shared, lock)
+        const second = orderOn(shared, lock)
+        const results = await Promise.allSettled([first.service.activateOrder('oc-1', ACTIVATION_SCOPE), second.service.activateOrder('oc-1', ACTIVATION_SCOPE)])
+        expect(results.map((result) => result.status)).toEqual(['fulfilled', 'fulfilled'])
+      })
+    })
+  })
+
+  describe('at conversion', () => {
+    const line = (configuration: Record<string, unknown>, over: Record<string, unknown> = {}) => ({ quoteLineId: 'ql-1', quantity: 1, action: 'modify', nrcTotal: '0', mrcTotal: '345', charges: [],
+      configuration, offeringId: null, targetSubscriptionId: 'sub-1', sourceSubscriptionItemId: 'item-1', ...over })
+
+    async function convertQuote(quoteLines: Array<Record<string, unknown>>, live: ItemCostStateRow[], quoteType = 'amend') {
+      const { em, service, numberGenerator } = createService()
+      em.findOne.mockResolvedValueOnce({ id: 'quote', quoteId: 'sales', cpqStatus: 'accepted', quoteType, currencyCode: 'EUR', customerId: 'customer', pricingSummary: { nrcTotal: 0, mrcTotal: 345 } })
+        .mockResolvedValueOnce(null)
+      em.find.mockImplementation((async (entity: unknown, where: Record<string, unknown>) => {
+        if (entity === CpqQuoteLineConfiguration) return quoteLines
+        if (entity === CpqQuoteLineCost) return where.carriedFromItemCostId ? [carriedQuoteCost] : []
+        if (entity === CpqInventorySubscriptionItem) return [{ id: 'item-1', status: 'active', deletedAt: null }]
+        if (entity === CpqInventoryCost) return live.filter((row) => row.status === 'active' && row.subscriptionItemId === 'item-1')
+        return []
+      }) as never)
+      em.create.mockImplementation((_entity, values: Record<string, unknown>) => ({ createdAt: new Date(), ...values }))
+      return { em, numberGenerator, run: () => service.convertQuoteToOrder('quote', SCOPE) }
+    }
+
+    it.each(stale)('%s: 409 COST_SOURCE_CHANGED naming the line and keys; no order, order line or order line cost is created', async (_label, live, costKeys) => {
+      const { em, numberGenerator, run } = await convertQuote([line(markers)], live)
+      await expect(run()).rejects.toMatchObject({ status: 409, message: 'COST_SOURCE_CHANGED', details: body(costKeys) })
+      expect(em.create).not.toHaveBeenCalled()
+      expect(em.persist).not.toHaveBeenCalled()
+      // (the only flush is withQuotePricingWrite's revision bump, inside the transaction that this refusal rolls back)
+      expect(numberGenerator.generate).not.toHaveBeenCalled()
+    })
+
+    it('comes after the R7 guard: an unconfirmed cost refuses first with 422 COSTS_NOT_CONFIRMED even when the item costs are stale', async () => {
+      const { em, service } = createService()
+      em.findOne.mockResolvedValueOnce({ id: 'quote', quoteId: 'sales', cpqStatus: 'accepted', quoteType: 'amend', currencyCode: 'EUR', customerId: 'customer', pricingSummary: {} }).mockResolvedValueOnce(null)
+      em.find.mockImplementation((async (entity: unknown, where: Record<string, unknown>) => {
+        if (entity === CpqQuoteLineConfiguration) return [line(markers)]
+        if (entity === CpqQuoteLineCost) return where.carriedFromItemCostId ? [carriedQuoteCost] : [{ quoteLineId: 'ql-1', costKey: 'tail', role: 'price_basis', valueStatus: 'estimated', validUntil: null }]
+        return []
+      }) as never)
+      await expect(service.convertQuoteToOrder('quote', SCOPE)).rejects.toMatchObject({ status: 422, message: 'COSTS_NOT_CONFIRMED' })
+    })
+
+    it('fresh carried costs convert', async () => {
+      const { em, run } = await convertQuote([line(markers)], mirroredAt)
+      await run()
+      expect(em.create).toHaveBeenCalledWith(CpqOrderLineConfiguration, expect.anything())
+    })
+
+    it('without carried-cost markers the guard is a no-op: no item or cost read, conversion unchanged', async () => {
+      const { em, run } = await convertQuote([line({ _arcMirroredFromItemId: 'item-1', _arcPriceFrozen: true })], [tailCost({ unitAmount: '1' })])
+      await run()
+      const entities = (em.find.mock.calls as unknown as Array<[unknown]>).map(([entity]) => entity)
+      expect(entities).not.toContain(CpqInventoryCost)
+      expect(entities).not.toContain(CpqInventorySubscriptionItem)
+      expect(em.create).toHaveBeenCalledWith(CpqOrderLineConfiguration, expect.anything())
+    })
+
+    it('review: freezes the carried-cost set hash onto the order line (own key); the quote-only marker itself stays on the quote', async () => {
+      const { em, run } = await convertQuote([line(markers)], mirroredAt)
+      await run()
+      const created = em.create.mock.calls.find(([entity]) => entity === CpqOrderLineConfiguration)![1] as { configuration: Record<string, unknown> }
+      expect(created.configuration).toMatchObject({ _arcConvertedCostSetHash: markers._arcCarriedCostSetHash })
+      expect(created.configuration).not.toHaveProperty('_arcCarriedCostSetHash')
+      expect(created.configuration).not.toHaveProperty('_arcCostsCarried')
+    })
+
+    it('review: a line without the carried marker freezes nothing', async () => {
+      const { em, run } = await convertQuote([line({ _arcMirroredFromItemId: 'item-1', _arcPriceFrozen: true })], [])
+      await run()
+      const created = em.create.mock.calls.find(([entity]) => entity === CpqOrderLineConfiguration)![1] as { configuration: Record<string, unknown> }
+      expect(created.configuration).not.toHaveProperty('_arcConvertedCostSetHash')
+    })
+
+    it('a new-sale quote never reads item costs', async () => {
+      const { em, run } = await convertQuote([line({}, { action: 'add', targetSubscriptionId: null, sourceSubscriptionItemId: null })], [], 'new')
+      await run()
+      expect((em.find.mock.calls as unknown as Array<[unknown]>).map(([entity]) => entity)).not.toContain(CpqInventoryCost)
+    })
   })
 })
 

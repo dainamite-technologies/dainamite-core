@@ -3,6 +3,8 @@ import { z } from 'zod'
 import { cpqContextError, resolveCpqRouteContext } from '../context'
 import { CpqProductOffering, CpqProductCharge, CpqProductSpecification, CpqOfferingComponent, CpqBundleSlot } from '../../data/entities'
 import { cpqProductOfferingCreateSchema, cpqProductOfferingUpdateSchema } from '../../data/validators'
+import { anyChargeHasMarkup, chargeMarkupFields } from '../../lib/chargeView'
+import { canViewCosts } from '../_helpers/costAccess'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { cpqErrorDoc, cpqPaginationQuery, cpqSortDirQuery, cpqDeleteByIdBody, cpqSuccessResponseSchema, CPQ_CRUD_BY_ID_ERRORS } from '../_helpers/quoteRouteOpenApi'
 
@@ -63,6 +65,8 @@ export async function GET(req: Request) {
         }
       }
 
+      // Markup is confidential: only resolve the costs-view grant when a charge carries it.
+      const showCosts = anyChargeHasMarkup(charges) && await canViewCosts(ctx)
       return NextResponse.json({
         id: offering.id,
         specId: offering.specId,
@@ -101,6 +105,7 @@ export async function GET(req: Request) {
           fixedPrice: c.fixedPrice,
           currencyCode: c.currencyCode,
           quantityAttributeCode: c.quantityAttributeCode,
+          ...chargeMarkupFields(c, showCosts),
           applicabilityCondition: c.applicabilityCondition,
           sortOrder: c.sortOrder,
           isActive: c.isActive,
@@ -160,6 +165,7 @@ export async function GET(req: Request) {
         { offeringId: { $in: offeringIds }, ...scope },
         { orderBy: { sortOrder: 'asc' } },
       )
+      const showCosts = anyChargeHasMarkup(allCharges) && await canViewCosts(ctx)
       for (const c of allCharges) {
         if (!c.offeringId) continue
         const list = chargesByOffering.get(c.offeringId) ?? []
@@ -176,6 +182,7 @@ export async function GET(req: Request) {
           fixedPrice: c.fixedPrice,
           currencyCode: c.currencyCode,
           quantityAttributeCode: c.quantityAttributeCode,
+          ...chargeMarkupFields(c, showCosts),
           applicabilityCondition: c.applicabilityCondition,
           sortOrder: c.sortOrder,
           isActive: c.isActive,

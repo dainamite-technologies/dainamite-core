@@ -37,6 +37,15 @@ export function isArcCancelledLine(line: Pick<ArcRemovalLine, 'action'>, quoteTy
   return line.action === 'cancel' && supportsItemRemoval(quoteType)
 }
 
+/**
+ * A line that takes a subscription item away instead of selling it: an Amend / Renew removal
+ * (`isArcCancelledLine`) or any line of a Cancel quote. Its costs never bind (conversion guard)
+ * and accept no writes.
+ */
+export function isArcTerminationLine(line: Pick<ArcRemovalLine, 'action'>, quoteType: string | null | undefined): boolean {
+  return line.action === 'cancel' && (supportsItemRemoval(quoteType) || quoteType === 'cancel')
+}
+
 /** The line and every descendant, root first. */
 export function collectLineSubtree<T extends ArcRemovalLine>(root: T, lines: readonly T[]): T[] {
   const children = new Map<string, T[]>()

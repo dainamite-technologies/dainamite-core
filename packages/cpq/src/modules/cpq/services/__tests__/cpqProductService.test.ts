@@ -122,6 +122,19 @@ describe('DefaultCpqProductService.getOfferingWithDetails', () => {
       charges: [{ code: 'setup' }, { code: 'support' }],
     })
   })
+
+  it('strips charge markup unless the caller can view costs', async () => {
+    const costPlus = { code: 'tail', pricingMethod: 'cost_plus', markupRule: 'markup_percent', markupValue: '25.0000' }
+    for (const canViewCosts of [undefined, true]) {
+      em.findOne.mockResolvedValueOnce({ id: 'o', specId: 'spec-1' }).mockResolvedValueOnce({ id: 'spec-1' })
+      em.find.mockResolvedValueOnce([costPlus])
+      const result = await service.getOfferingWithDetails({ offeringId: 'o', organizationId: SCOPE.organizationId, tenantId: SCOPE.tenantId, canViewCosts })
+      const [charge] = result!.charges as Array<Record<string, unknown>>
+      expect(charge.pricingMethod).toBe('cost_plus')
+      if (canViewCosts) expect(charge).toMatchObject({ markupRule: 'markup_percent', markupValue: '25.0000' })
+      else expect(charge).not.toHaveProperty('markupValue')
+    }
+  })
 })
 
 describe('DefaultCpqProductService.getConstrainedAttributes', () => {

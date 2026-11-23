@@ -235,6 +235,31 @@ describe('POST /api/demo_puffin/cloud-pricing-calculator/price', () => {
     expect(cpq.childItems).toEqual([])
   })
 
+  it('passes cost-plus markers through, keeps price-on-request out of totals and exposes no cost or markup', async () => {
+    installFetchMock({
+      capturePriceRequest: () => undefined,
+      priceResponse: {
+        primaryCharges: [
+          { chargeCode: 'cp_priced', chargeName: 'Managed', chargeType: 'mrc', pricingMethod: 'cost_plus', unitPrice: 120, totalPrice: 120, indicative: true },
+          { chargeCode: 'cp_pending', chargeName: 'Custom', chargeType: 'mrc', pricingMethod: 'cost_plus', unitPrice: null, totalPrice: null, priceOnRequest: true },
+        ],
+        childItems: [],
+        totals: { nrcTotal: 0, mrcTotal: 120, usageCharges: [] },
+        currencyCode: 'USD',
+      },
+    })
+    const { POST } = await import('../api/cloud-pricing-calculator/price/route')
+    const response = await POST(postBody({ items: [{ lineKey: 'l-vps', offeringId: VPS_ATLANTIC_ID }] }))
+    expect(response.status).toBe(200)
+    const text = await response.text()
+    const json = JSON.parse(text) as { lines: Array<{ mrcTotal: number; charges: Array<Record<string, unknown>> }>; totals: { mrcTotal: number } }
+    expect(json.lines[0].charges[0]).toMatchObject({ indicative: true, unitPrice: 120 })
+    expect(json.lines[0].charges[1]).toMatchObject({ priceOnRequest: true, unitPrice: null, totalPrice: null })
+    expect(json.lines[0].mrcTotal).toBe(120)
+    expect(json.totals.mrcTotal).toBe(120)
+    expect(text).not.toMatch(/"[a-zA-Z]*(cost|supplier|markup)[a-zA-Z]*":/i)
+  })
+
   it('returns 503 when the calculator is not configured', async () => {
     delete process.env.PUFFIN_PUBLIC_LEAD_JWT_SECRET
     const { POST } = await import('../api/cloud-pricing-calculator/price/route')

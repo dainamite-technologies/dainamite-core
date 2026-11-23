@@ -94,7 +94,7 @@ export function lineWaterfallTotals(line: { quantity: number; charges: Waterfall
 export function allowedAdjustmentTypes(level: AdjustmentLevel, charge?: Pick<WaterfallChargeInput, 'chargeType' | 'pricingMethod'>): AdjustmentType[] {
   if (level === 'line') return ['discount_percent']
   if (!charge || charge.chargeType === 'usage') return []
-  const overridable = charge.pricingMethod == null || charge.pricingMethod === 'flat' || charge.pricingMethod === 'per_unit'
+  const overridable = charge.pricingMethod == null || charge.pricingMethod === 'flat' || charge.pricingMethod === 'per_unit' || charge.pricingMethod === 'cost_plus'
   return overridable ? ['price_override', 'discount_percent', 'discount_absolute'] : ['discount_percent', 'discount_absolute']
 }
 

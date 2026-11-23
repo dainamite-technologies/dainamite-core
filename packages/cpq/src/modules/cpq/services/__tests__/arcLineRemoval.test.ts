@@ -1,6 +1,7 @@
 import {
   collectLineSubtree,
   isArcCancelledLine,
+  isArcTerminationLine,
   planArcLineRemoval,
   planArcLineRestore,
   removalCancelsItem,
@@ -47,6 +48,16 @@ describe('isArcCancelledLine', () => {
   it('is false for modify / add lines', () => {
     expect(isArcCancelledLine({ action: 'modify' }, 'amend')).toBe(false)
     expect(isArcCancelledLine({ action: 'add' }, 'amend')).toBe(false)
+  })
+})
+
+describe('isArcTerminationLine', () => {
+  it.each([['amend', true], ['renew', true], ['cancel', true], ['new', false], [null, false]])('a cancel line on a %s quote: %s', (quoteType, expected) => {
+    expect(isArcTerminationLine({ action: 'cancel' }, quoteType)).toBe(expected)
+  })
+
+  it.each(['amend', 'renew', 'cancel'])('a kept line on a %s quote is not one', (quoteType) => {
+    expect(isArcTerminationLine({ action: 'modify' }, quoteType)).toBe(false)
   })
 })
 

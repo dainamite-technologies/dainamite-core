@@ -84,6 +84,22 @@ export const CPQ_CATALOG_READ_TOOLS: readonly string[] = [
   'cpq.get_configurable_attributes',
 ]
 
+/**
+ * Read-only CRM lookups from the core `customers` module. `cpq.create_quote`
+ * takes a customer entity id (company or person) and an optional deal id, so
+ * the quoting assistant must be able to find them by name; without these the
+ * only lookup was `search.hybrid_search`, which needs a built search index.
+ * Each tool keeps its own `customers.*.view` feature check.
+ */
+export const CPQ_CUSTOMER_TOOLS: readonly string[] = [
+  'customers.list_companies',
+  'customers.get_company',
+  'customers.list_people',
+  'customers.get_person',
+  'customers.list_deals',
+  'customers.get_deal',
+]
+
 /** General-purpose packs shipped by the framework (search, attachments, meta). */
 export const CPQ_GENERAL_TOOLS: readonly string[] = [
   'search.hybrid_search',
@@ -128,6 +144,9 @@ const RULES = [
   '  the attribute codes and option values it returns. Ask the operator for required values you do not have.',
   '- Use cpq.validate_configuration when several offerings are combined, and report every error.',
   '- Never invent ids. Only use ids returned by an earlier tool call or supplied by the page context.',
+  '- To find the customer of a quote, search by name with customers.list_companies (B2B) or',
+  '  customers.list_people (B2C). The company or person id is the customerId for cpq.create_quote.',
+  '  If several match, show them and ask which one. Use customers.list_deals to find a deal to link.',
   '- To list everything, omit search filters. Do not pass wildcards such as "*".',
   '- If a tool returns nothing after two different queries, say what you searched for and stop.',
 ].join('\n')
@@ -169,7 +188,7 @@ export const cpqQuotingAssistant: AiAgentDefinition = {
   description:
     'Assistant for CPQ: finds and configures offerings, prices them through the calculate-price API, reads quotes, customer inventory and orders, and drafts quotes. Every write goes through the approval card.',
   systemPrompt: SYSTEM_PROMPT,
-  allowedTools: [...CPQ_READ_TOOLS, ...CPQ_WRITE_TOOLS, ...CPQ_GENERAL_TOOLS],
+  allowedTools: [...CPQ_READ_TOOLS, ...CPQ_WRITE_TOOLS, ...CPQ_CUSTOMER_TOOLS, ...CPQ_GENERAL_TOOLS],
   executionMode: 'chat',
   acceptedMediaTypes: ['image', 'pdf', 'file'],
   requiredFeatures: ['cpq.quotes.view'],
@@ -211,6 +230,7 @@ export const cpqQuotingAssistant: AiAgentDefinition = {
     { label: 'Price a configuration', prompt: 'Help me configure an offering and calculate its exact NRC and MRC price.' },
     { label: 'Explain a quote', prompt: 'Show my most recent quotes and explain the totals of the newest one.' },
     { label: 'Renewals due', prompt: 'Which subscriptions expire in the next 60 days?' },
+    { label: 'Draft a quote', prompt: 'Draft a new quote for a customer: find the customer, pick an offering, configure and price it.' },
   ],
 }
 

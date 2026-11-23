@@ -18,7 +18,7 @@ Operators can ask about CPQ in plain language, for example:
 - "Show the latest quotes of customer Acme and explain the totals of the newest one."
 - "Which subscriptions expire in the next 60 days?"
 - "What does customer Acme have installed today?"
-- "Create a draft quote for Acme and add offering X with this configuration." (approval card)
+- "Create a draft quote for Acme and add offering X with this configuration." (finds Acme with the customer lookups, then approval cards)
 
 The agent knows the CPQ concepts: product specification (attributes, relationships, bundle slots), offering (sellable package with NRC / MRC / usage charges), configuration (run-time attribute values per line), pricing (pricing tables and tiers, then price rules: discounts, surcharges, overrides), the quote lifecycle (new, incomplete, ready, in_approval, pre_approved, approved, with_customer, accepted / rejected / cancelled) and the ARC quote types (new, amend, renew, cancel).
 
@@ -80,6 +80,18 @@ The runner refuses to call a route that does not export `openApi`. Every route l
 | `cpq.add_bundle_component` | `POST /api/cpq/offering-components` | `cpq.offerings.manage` + `cpq.offerings.view` + `cpq.specifications.view` | Adds a child offering to a slot of a bundle offering, optionally as a default component. Bundle rules (V-COMP codes) apply. |
 | `cpq.remove_bundle_component` | `DELETE /api/cpq/offering-components` | `cpq.offerings.manage` + `cpq.offerings.view` | Removes a component from a bundle. Refuses a component id that does not belong to the named bundle. Priced quotes keep their lines. |
 
+### Customer lookups (from the core customers module)
+
+`cpq.create_quote` needs the customer's entity id, and optionally a deal id. The quoting assistant finds them by name with read-only tools from the core `customers` module. They are not CPQ tools: they come from `@open-mercato/core`, keep their own permissions and are only allowlisted on the quoting assistant. No customer write tool is allowlisted.
+
+| Tool | Permission | Use |
+|---|---|---|
+| `customers.list_companies` / `customers.get_company` | `customers.companies.view` | Find a B2B customer by name; its id is the `customerId` of the quote |
+| `customers.list_people` / `customers.get_person` | `customers.people.view` | Find a B2C customer (person) by name |
+| `customers.list_deals` / `customers.get_deal` | `customers.deals.view` | Find a deal to link the quote to (`dealId`) |
+
+Without these the only lookup was `search.hybrid_search`, which needs a built search index.
+
 The write tools that act on an existing quote also need `cpq.quotes.view`, because they read the quote through `GET /api/cpq/quotes/:quoteId` to build the preview card.
 
 ## How writes are gated
@@ -105,14 +117,15 @@ Not exposed as AI tools on purpose: converting a quote to an order, activating a
 ## Who can use it
 
 - The quoting assistant needs `cpq.quotes.view`, the catalog assistant `cpq.offerings.manage`. The default CPQ roles have them.
-- Each tool also needs its own permission (tables above). A user without `cpq.inventory.view` can open the agent, but inventory questions fail with a permission error.
+- Each tool also needs its own permission (tables above). A user without `cpq.inventory.view` can open the agent, but inventory questions fail with a permission error. To draft quotes from the chat, the user also needs `customers.companies.view` (or `customers.people.view`) to find the customer.
 - No new permissions were added. Nothing to sync.
 
 ## Try it
 
 1. After installing or upgrading, run `yarn generate` (registers the agent and tools) and restart `yarn dev`.
 2. Configure an AI provider, for example `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` in `.env`.
-3. Open **`/backend/config/ai-assistant/playground`**, pick **CPQ Quoting Assistant**, and try a starter suggestion (active offerings, price a configuration, explain a quote, renewals due).
+3. Open **`/backend/config/ai-assistant/playground`**, pick **CPQ Quoting Assistant**, and try a starter suggestion (active offerings, price a configuration, explain a quote, renewals due, draft a quote).
+   Multi-step quoting (customer, offering, attributes, price, quote, lines) works much better on a stronger model than the Haiku default. Set it for the CPQ agents only with `OM_AI_CPQ_MODEL` (for example a Claude Sonnet model id) in `.env`.
 4. The topbar AI launcher (Cmd/Ctrl+L) lists the agent too, for users with `cpq.quotes.view`.
 
 ## MCP clients

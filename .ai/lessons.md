@@ -41,6 +41,8 @@ Entry format (newest first within a section):
 
 ## CPQ
 
+- **Never `$ilike` a uuid column: Postgres rejects it (`operator does not exist: uuid ~~* unknown`) and the route answers 500.** (2026-11-23, `api/quotes/route.ts`)
+  `GET /api/cpq/quotes?search=` did this on `quoteId` / `customerId`; the backoffice list filters client-side, so only API and AI callers saw it. Match uuids exactly; match human text (quote number) on the entity that owns it, with `buildIlikeTerm` from `@open-mercato/shared/lib/db/buildIlikeTerm`.
 - **A unique constraint on a soft-deleted table blocks re-creating a removed row.** (2026-11-17, #122)
   The service check filters `deletedAt: null` and passes, then the full constraint fails the insert (500). Use a partial unique index (`@Index({ expression: '… WHERE "deleted_at" IS NULL' })`) and update the module snapshot to the `expression` form.
 - **A quote line's `isConfigured` is decided only by `recalculateInternal`.** (2026-11-17, #125)
@@ -83,6 +85,8 @@ Entry format (newest first within a section):
   The row is visible before React attaches the handler, so a single click plus `waitForURL` flakes. Wrap click and `waitForURL` (short timeout) in `expect(...).toPass()`.
 - **`yarn dev` serves `@dainamite/*` from `dist`, so rebuild all packages together with `yarn build:packages`.** (2026-11-23, #141)
   A source change is invisible until rebuilt. Rebuilding one package against another's stale `dist` can fail the page build (connector importing a billing export that no longer exists).
+- **Next refuses a second `next dev` in the same checkout ("Another next dev server is already running").** (2026-11-23)
+  A smoke server on another `PORT` and `DATABASE_URL` needs the running `yarn dev` stopped first (or a separate checkout). Agent chat can be driven without the UI: `POST /api/ai_assistant/ai/chat?agent=<id>` from the logged-in page, then `POST /api/ai_assistant/ai/actions/<pendingActionId>/confirm`.
 - **`localhost:5432` is an SSH tunnel to a remote database, not the local Docker Postgres.** (2026-11-16)
   For smoke tests run a separate container (e.g. `:5433`) and pass `DATABASE_URL` to `yarn initialize` / `yarn dev`; the shell env wins over `.env`.
 - **The shell's Anthropic base URL points at the local Caveman gateway (`127.0.0.1:8787`).** (2026-11-16)

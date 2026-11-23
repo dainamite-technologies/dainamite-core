@@ -1243,6 +1243,8 @@ export class DefaultCpqInventoryService {
     // Carry-over phase: clone every source's active items onto M.
     // Build sourceItemId → newItemIdOnM map for line resolution.
     const sourceItemToNewItem = new Map<string, string>()
+    // Bundle hierarchy: parents are re-linked once every source is cloned.
+    const clonedWithParent: Array<{ cloned: CpqInventorySubscriptionItem; sourceParentId: string }> = []
 
     for (const source of sources) {
       const activeItems = await this.em.find(CpqInventorySubscriptionItem, {
@@ -1289,7 +1291,14 @@ export class DefaultCpqInventoryService {
         })
         this.em.persist(cloned)
         sourceItemToNewItem.set(item.id, clonedId)
+        if (item.parentItemId) clonedWithParent.push({ cloned, sourceParentId: item.parentItemId })
       }
+    }
+    // Keep bundle components under their (cloned) bundle item, so later
+    // ARC quotes still price and validate them as a bundle. A parent that was
+    // not carried over (no longer live) leaves the child top-level.
+    for (const { cloned, sourceParentId } of clonedWithParent) {
+      cloned.parentItemId = sourceItemToNewItem.get(sourceParentId) ?? null
     }
     await this.em.flush()
 

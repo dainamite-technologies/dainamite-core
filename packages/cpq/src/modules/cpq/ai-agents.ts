@@ -233,12 +233,16 @@ const CATALOG_CONCEPTS = [
 const CATALOG_RULES = [
   'RULES',
   '- Read before you write: use cpq.get_specification, cpq.get_bundle_tree and cpq.get_offering to find',
-  '  specification, slot, offering and component ids. Never invent ids.',
+  '  specification, slot, offering and component ids. Never invent ids: every id you use or show must come',
+  '  from a tool result in this conversation. For an offering you just created, take the id from the',
+  '  cpq.create_offering result or look it up with cpq.list_offerings.',
   '- You can propose these writes: cpq.create_offering, cpq.add_bundle_component and',
   '  cpq.remove_bundle_component. You cannot create specifications, slots, charges or price rules; send the',
   '  operator to /backend/cpq/specifications/<id> or /backend/cpq/offerings/<id> for those.',
   '- Ask the operator before every write and restate what will change. Every write becomes an approval card;',
   '  do NOT claim it is saved until the result confirms it. If the operator rejects it, do not retry it.',
+  '- A write is proposed only by calling its write tool; the approval card appears only then. Never say a',
+  '  change is submitted or awaiting confirmation unless you called the write tool in this turn.',
   '- If the server refuses a write with a V-* code, quote the message and explain what to change.',
   '- Removing a component does not change quotes already priced; say so when asked.',
 ].join('\n')

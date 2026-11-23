@@ -6,8 +6,8 @@ import type { BundleTreeNode } from '../services/cpqBundleService'
  *
  * Cardinality is defined per slot *group* (V-SLOT-3), so defaults are picked
  * per group: slots in their order, components in their order, only active
- * child offerings marked `isDefault`, and never more than the group's
- * `cardinalityMax`. Fewer defaults than `cardinalityMin` is allowed — the
+ * child offerings (`isActive` and, since #133, `lifecycleStatus = active`)
+ * marked `isDefault`, and never more than the group's `cardinalityMax`. Fewer defaults than `cardinalityMin` is allowed — the
  * bundle then shows V-QBUN-1 until the user adds the rest.
  */
 export function selectDefaultComponents(node: BundleTreeNode): BundleTreeNode[] {
@@ -15,7 +15,8 @@ export function selectDefaultComponents(node: BundleTreeNode): BundleTreeNode[] 
   const countByGroup = new Map<string, number>()
   for (const slot of node.slots) {
     for (const component of slot.components) {
-      if (!component.isDefault || !component.childOffering.isActive) continue
+      const child = component.childOffering
+      if (!component.isDefault || !child.isActive || child.lifecycleStatus !== 'active') continue
       const count = countByGroup.get(slot.componentGroup) ?? 0
       if (slot.cardinalityMax != null && count >= slot.cardinalityMax) break
       countByGroup.set(slot.componentGroup, count + 1)

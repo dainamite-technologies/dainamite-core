@@ -54,7 +54,7 @@ export async function GET(req: Request) {
               slotId: c.slotId,
               slot: sl ? { id: sl.id, componentGroup: sl.componentGroup, name: sl.name, cardinalityMin: sl.cardinalityMin, cardinalityMax: sl.cardinalityMax } : null,
               childOfferingId: c.childOfferingId,
-              childOffering: ch ? { id: ch.id, code: ch.code, name: ch.name, offeringType: ch.offeringType, specId: ch.specId } : null,
+              childOffering: ch ? { id: ch.id, code: ch.code, name: ch.name, offeringType: ch.offeringType, specId: ch.specId, isSellable: ch.isSellable } : null,
               isDefault: c.isDefault,
               sortOrder: c.sortOrder,
               isActive: c.isActive,
@@ -73,6 +73,7 @@ export async function GET(req: Request) {
         offeringType: offering.offeringType,
         designTimeValues: offering.designTimeValues,
         lifecycleStatus: offering.lifecycleStatus,
+        isSellable: offering.isSellable,
         effectiveFrom: offering.effectiveFrom,
         effectiveTo: offering.effectiveTo,
         metadata: offering.metadata,
@@ -86,6 +87,7 @@ export async function GET(req: Request) {
               name: spec.name,
               productId: spec.productId,
               specType: spec.specType,
+              defaultOfferingSellable: spec.defaultOfferingSellable,
             }
           : null,
         charges: charges.map((c) => ({
@@ -125,6 +127,10 @@ export async function GET(req: Request) {
     const isActiveParam = url.searchParams.get('isActive')
     if (isActiveParam === 'true') filters.isActive = true
     else if (isActiveParam === 'false') filters.isActive = false
+    // #133: quote pickers pass `isSellable=true` to hide component-only offerings.
+    const isSellableParam = url.searchParams.get('isSellable')
+    if (isSellableParam === 'true') filters.isSellable = true
+    else if (isSellableParam === 'false') filters.isSellable = false
 
     // Free-text search across code, name, description (case-insensitive)
     const search = url.searchParams.get('search')?.trim()
@@ -195,6 +201,7 @@ export async function GET(req: Request) {
         offeringType: item.offeringType,
         designTimeValues: item.designTimeValues,
         lifecycleStatus: item.lifecycleStatus,
+        isSellable: item.isSellable,
         effectiveFrom: item.effectiveFrom,
         effectiveTo: item.effectiveTo,
         isActive: item.isActive,
@@ -240,7 +247,9 @@ export async function POST(req: Request) {
       )
     }
 
-    const entity = ctx.em.create(CpqProductOffering, { ...body, offeringType, ...scope })
+    // #133: when the caller omits `isSellable`, the spec's default pre-fills it.
+    const isSellable = body.isSellable ?? spec.defaultOfferingSellable ?? true
+    const entity = ctx.em.create(CpqProductOffering, { ...body, offeringType, isSellable, ...scope })
     await ctx.em.flush()
 
     return NextResponse.json(
@@ -254,6 +263,7 @@ export async function POST(req: Request) {
         offeringType: entity.offeringType,
         designTimeValues: entity.designTimeValues,
         lifecycleStatus: entity.lifecycleStatus,
+        isSellable: entity.isSellable,
         effectiveFrom: entity.effectiveFrom,
         effectiveTo: entity.effectiveTo,
         metadata: entity.metadata,
@@ -321,6 +331,7 @@ export async function PUT(req: Request) {
       offeringType: entity.offeringType,
       designTimeValues: entity.designTimeValues,
       lifecycleStatus: entity.lifecycleStatus,
+      isSellable: entity.isSellable,
       effectiveFrom: entity.effectiveFrom,
       effectiveTo: entity.effectiveTo,
       metadata: entity.metadata,
@@ -365,9 +376,9 @@ export const openApi: OpenApiRouteDoc = {
   summary: 'CPQ product offerings',
   methods: {
     GET: {
-      summary: 'List sellable CPQ product offerings, or get one by id with its specification and charges',
+      summary: 'List CPQ product offerings, or get one by id with its specification and charges',
       description:
-        'With `id` returns the offering plus its specification, charges and (for bundles) components with slots and child offerings. Otherwise a paged list with charges per offering; `search` matches code, name or description.',
+        'With `id` returns the offering plus its specification, charges and (for bundles) components with slots and child offerings. Otherwise a paged list with charges per offering; `search` matches code, name or description. `isSellable=true` lists only offerings that can be quoted on their own; an offering with `isSellable: false` can only be quoted as a bundle component.',
       query: cpqPaginationQuery.extend({
         id: z.string().uuid().optional(),
         specId: z.string().uuid().optional(),
@@ -375,6 +386,7 @@ export const openApi: OpenApiRouteDoc = {
         code: z.string().optional(),
         offeringType: z.enum(['simple', 'bundle']).optional(),
         isActive: z.enum(['true', 'false']).optional(),
+        isSellable: z.enum(['true', 'false']).optional().describe('`true` hides component-only offerings (only sold inside a bundle)'),
         search: z.string().optional(),
         sortField: z.enum(['createdAt', 'updatedAt', 'code', 'name', 'lifecycleStatus', 'offeringType']).optional(),
         sortDir: cpqSortDirQuery,
@@ -384,7 +396,7 @@ export const openApi: OpenApiRouteDoc = {
     },
     POST: {
       summary: 'Create a CPQ product offering for a specification',
-      description: "`offeringType` is optional: when omitted it is taken from the specification's `specType`. When sent, it must match `specType` (V-OFF-7).",
+      description: "`offeringType` is optional: when omitted it is taken from the specification's `specType`. When sent, it must match `specType` (V-OFF-7). `isSellable` is optional: when omitted it is taken from the specification's `defaultOfferingSellable`.",
       requestBody: { schema: cpqProductOfferingCreateSchema },
       responses: [{ status: 201, description: 'Created offering' }],
       errors: [

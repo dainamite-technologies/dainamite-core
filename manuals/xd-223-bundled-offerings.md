@@ -119,7 +119,11 @@ Components link child offerings to the bundle's slots.
 
 **To add components manually:** click **"+ Add"** in the relevant slot section, select the child offering, save.
 
-> **Default? = Yes** means the component is added automatically when the bundle is added to a quote (Step 2.2). A component you removed can be added again.
+> **Default? = Yes** means the component is added automatically when the bundle is added to a quote (Step 2.2). A component you removed can be added again. Only child offerings that are active with lifecycle status **Active** are added as defaults.
+
+**Component-only offerings.** An offering created only to be part of a bundle should not be quoted on its own. On the child offering's detail page, untick **Sellable on its own?**. It then shows a **Component only** tag in the offerings list, disappears from the quote's **Add Offering** list and from the wizard offering step, and the API refuses it as a top-level line with `422 V-QLINE-1: Offering <code> can only be sold as part of a bundle`. It can still be a bundle component (default or added with **Add Component**) and keeps its own charges and price rules.
+
+> To make every new offering of a specification component-only, untick **New offerings sellable on their own?** on the specification. This only pre-fills new offerings; existing offerings keep their own setting. The seeded GIX components stay sellable because the demo also quotes them on their own; the ACME **ONT** is seeded as component-only.
 
 ### Step 1.5 — Verify the Bundle Tree (optional)
 
@@ -144,7 +148,7 @@ You should see a JSON with `tree` (slots with components) and `validation` (comp
 
 ### Step 2.2 — Add the Bundle Offering to the Quote
 
-1. Click **"Add Offering"**
+1. Click **"Add Offering"**. The list shows only offerings that are sellable on their own; component-only offerings are added through the bundle (Step 2.3)
 2. In the list, find **"GIX Connectivity Bundle — Standard"**
 3. Click on it
 4. The configure panel appears — since the bundle spec has no attributes, just set **Quantity = 1**
@@ -153,7 +157,7 @@ You should see a JSON with `tree` (slots with components) and `validation` (comp
 
 > A slot group never gets more defaults than its maximum. A default component with required attributes is added incomplete: open it and fill them in.
 
-**Slot rules.** Expand the bundle line to see its slots. A required slot group with too few components (or one over its maximum) shows its counter in red with an **incomplete** tag, the bundle line is not configured, and the quote stays **incomplete** with an error such as `V-QBUN-1: Access Port requires at least 1 component(s) (0 selected)`. A child line whose offering is not a component of the bundle gets `V-QBUN-3`. A quote with such errors cannot be converted to an order (`422 BUNDLE_INCOMPLETE`).
+**Slot rules.** Expand the bundle line to see its slots. A required slot group with too few components (or one over its maximum) shows its counter in red with an **incomplete** tag, the bundle line is not configured, and the quote stays **incomplete** with an error such as `V-QBUN-1: Access Port requires at least 1 component(s) (0 selected)`. A child line whose offering is not a component of the bundle gets `V-QBUN-3`. A quote with such errors cannot be converted to an order (`422 BUNDLE_INCOMPLETE`). Conversion is also refused (`422 V-QLINE-1`) for a top-level line whose offering was made component-only after it was quoted; Amend / Renew changes to existing subscription items are not affected.
 
 > The check uses the result of the quote's last change. If you change a bundle's slots or components in the catalog, open quotes are re-checked the next time they are edited or recalculated (**Recalculate** button). Amend / Renew quotes of subscriptions sold under an older bundle shape are not held to the new slot minimums.
 

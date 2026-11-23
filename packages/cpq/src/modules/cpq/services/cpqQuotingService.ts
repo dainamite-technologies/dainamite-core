@@ -2,6 +2,7 @@ import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import { dateColumnToIso, toDateColumn } from '../lib/dateColumns'
 import { evaluateLineCompleteness, type LineCompletenessInput } from '../lib/lineCompleteness'
 import { selectDefaultComponents } from '../lib/bundleDefaults'
+import { NON_SELLABLE_TOP_LEVEL_CODE, nonSellableTopLevelMessage, violatesSellability } from '../lib/offeringSellability'
 import { DefaultCpqBundleService, type BundleTreeNode } from './cpqBundleService'
 import { cloneQuoteAdjustments, removeQuoteLineTree } from './priceAdjustments/quoteAdjustmentLifecycle'
 import type { PriceAdjustment } from '../data/price-adjustments'
@@ -267,6 +268,14 @@ export class DefaultCpqQuotingService {
   ): Promise<{ quoteLineId: string; offering: CpqProductOffering | null; targetSubscriptionId: string | null }> {
     // Resolve offering -> spec -> product
     const { offering, spec } = await this.resolveOffering(em, item, scope)
+
+    // #133: a component-only offering may only be added under a bundle line.
+    if (offering && violatesSellability(offering, item)) {
+      throw new QuotingError(422, nonSellableTopLevelMessage(offering.code), undefined, {
+        code: NON_SELLABLE_TOP_LEVEL_CODE,
+        offeringId: offering.id,
+      })
+    }
 
     // Merge context: quoteContext + designTimeValues + user configuration
     const mergedConfig = {

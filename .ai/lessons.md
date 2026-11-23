@@ -66,6 +66,8 @@ Entry format (newest first within a section):
 
 ## Packaging and release
 
+- **`yarn mercato db generate` writes no migration for `@dainamite/*` package modules here, even after the package is built.** (2026-11-23, #133)
+  It reports only `@app` modules. Write the package migration by hand in the generator's style and update the module's `migrations/.snapshot-open-mercato.json` in the same PR.
 - **In 0.x a minor bump of a peer leaves caret ranges, so changesets bumps every dependent major.** (2026-11-16, #106)
   Fixed with 1.0 releases plus `onlyUpdatePeerDependentsWhenOutOfRange` in `.changeset/config.json`.
 - **Any `package.json` dependency-meta change needs a `yarn.lock` refresh.** (2026-11-16, #112)
@@ -75,6 +77,8 @@ Entry format (newest first within a section):
 
 ## Local environment and tooling
 
+- **`yarn dev` serves `@dainamite/*` from `dist`, so rebuild all packages together with `yarn build:packages`.** (2026-11-23, #141)
+  A source change is invisible until rebuilt. Rebuilding one package against another's stale `dist` can fail the page build (connector importing a billing export that no longer exists).
 - **`localhost:5432` is an SSH tunnel to a remote database, not the local Docker Postgres.** (2026-11-16)
   For smoke tests run a separate container (e.g. `:5433`) and pass `DATABASE_URL` to `yarn initialize` / `yarn dev`; the shell env wins over `.env`.
 - **The shell's Anthropic base URL points at the local Caveman gateway (`127.0.0.1:8787`).** (2026-11-16)

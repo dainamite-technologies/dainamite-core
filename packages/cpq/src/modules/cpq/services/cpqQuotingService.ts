@@ -273,7 +273,10 @@ export class DefaultCpqQuotingService {
     const { offering, spec } = await this.resolveOffering(em, item, scope)
 
     // #133: a component-only offering may only be added under a bundle line.
-    if (offering && violatesSellability(offering, item)) {
+    // Check the line as it will be stored: `createQuoteLine` never stores a
+    // caller's `sourceSubscriptionItemId` (only the ARC mirror path sets it),
+    // and the configuration is already stripped of `_arc*` markers.
+    if (offering && violatesSellability(offering, { parentLineId: item.parentLineId, configuration: item.configuration })) {
       throw new QuotingError(422, nonSellableTopLevelMessage(offering.code), undefined, {
         code: NON_SELLABLE_TOP_LEVEL_CODE,
         offeringId: offering.id,

@@ -178,6 +178,22 @@ describe('addQuoteItem with a component-only offering (#133)', () => {
     expect(lineConfigs.map((l) => l.offeringId)).toEqual(['bundle', 'fiber', 'ont'])
   })
 
+  it('blocks a top-level line that sends its own sourceSubscriptionItemId (never stored by this path)', async () => {
+    const { service, lineConfigs } = setup(fiberHome, {}, componentOnly)
+    await expect(
+      service.addQuoteItem('cpq-1', { offeringId: 'ont', configuration: {}, sourceSubscriptionItemId: 'item-1' } as never, SCOPE),
+    ).rejects.toMatchObject({ status: 422, details: { code: 'V-QLINE-1' } })
+    expect(lineConfigs).toHaveLength(0)
+  })
+
+  it('blocks a top-level line that sends ARC markers in its configuration (stripped on input)', async () => {
+    const { service, lineConfigs } = setup(fiberHome, {}, componentOnly)
+    await expect(
+      service.addQuoteItem('cpq-1', { offeringId: 'ont', configuration: { _arcMirroredFromItemId: 'item-1' } }, SCOPE),
+    ).rejects.toMatchObject({ status: 422, details: { code: 'V-QLINE-1' } })
+    expect(lineConfigs).toHaveLength(0)
+  })
+
   it('blocks a top-level line that only claims to modify an item (the action is caller input)', async () => {
     const { service, lineConfigs } = setup(fiberHome, {}, componentOnly)
     await expect(

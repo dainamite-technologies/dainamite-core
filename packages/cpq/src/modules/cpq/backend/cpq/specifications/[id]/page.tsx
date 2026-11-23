@@ -52,6 +52,7 @@ type Specification = {
   description: string | null
   specType: string
   isAssetizable: boolean
+  defaultOfferingSellable?: boolean
   lifecycleStatus: string
   version: number
   effectiveFrom: string | null
@@ -86,6 +87,7 @@ type Offering = {
   offeringType: string
   designTimeValues: Record<string, unknown>
   lifecycleStatus: string
+  isSellable?: boolean
   isActive: boolean
 }
 
@@ -157,6 +159,7 @@ const EMPTY_SPEC = {
   description: '',
   specType: 'simple' as string,
   isAssetizable: false,
+  defaultOfferingSellable: true,
   lifecycleStatus: 'draft',
   version: 1,
   effectiveFrom: null as string | null,
@@ -198,6 +201,7 @@ const EMPTY_OFFERING: EditingOffering = {
   offeringType: 'simple',
   designTimeValues: {},
   lifecycleStatus: 'draft',
+  isSellable: true,
   isActive: true,
 }
 
@@ -312,6 +316,7 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
             description: spec.description ?? '',
             specType: spec.specType ?? 'simple',
             isAssetizable: spec.isAssetizable ?? false,
+            defaultOfferingSellable: spec.defaultOfferingSellable ?? true,
             lifecycleStatus: spec.lifecycleStatus,
             version: spec.version,
             effectiveFrom: spec.effectiveFrom,
@@ -368,6 +373,7 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
           description: saved.description ?? '',
           specType: saved.specType ?? form.specType,
           isAssetizable: saved.isAssetizable ?? form.isAssetizable,
+          defaultOfferingSellable: saved.defaultOfferingSellable ?? form.defaultOfferingSellable,
           lifecycleStatus: saved.lifecycleStatus,
           version: saved.version,
           effectiveFrom: saved.effectiveFrom,
@@ -537,7 +543,14 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
   }
 
   const startEditOffering = (offering?: Offering) => {
-    const editing = offering ? { ...offering } : { ...EMPTY_OFFERING, offeringType: form.specType === 'bundle' ? 'bundle' : 'simple' }
+    const editing = offering
+      ? { ...offering }
+      : {
+          ...EMPTY_OFFERING,
+          offeringType: form.specType === 'bundle' ? 'bundle' : 'simple',
+          // #133: a new offering starts from this spec's default.
+          isSellable: form.defaultOfferingSellable,
+        }
     setEditingOffering(editing)
     setEditingDtValues(editing.designTimeValues ? { ...editing.designTimeValues } : {})
   }
@@ -919,6 +932,28 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                       className="rounded border"
                     />
                     <span className="ml-2 text-xs text-muted-foreground">{t('cpq.specifications.detail.isAssetizableHelp', 'Creates asset records during fulfilment')}</span>
+                  </>
+                )}
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">{t('cpq.specifications.detail.defaultOfferingSellable', 'New offerings sellable on their own?')}</label>
+              <div className="flex items-center h-[38px]">
+                {isViewing ? (
+                  <Tag variant={form.defaultOfferingSellable ? 'success' : 'neutral'} dot>
+                    {form.defaultOfferingSellable ? t('cpq.common.yes', 'Yes') : t('cpq.common.no', 'No')}
+                  </Tag>
+                ) : (
+                  <>
+                    <input
+                      type="checkbox"
+                      checked={form.defaultOfferingSellable}
+                      onChange={(e) => setForm({ ...form, defaultOfferingSellable: e.target.checked })}
+                      className="rounded border"
+                    />
+                    <span className="ml-2 text-xs text-muted-foreground">
+                      {t('cpq.specifications.detail.defaultOfferingSellableHelp', 'Pre-fills new offerings; turn off for bundle-only components')}
+                    </span>
                   </>
                 )}
               </div>
@@ -1313,7 +1348,7 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
               <h3 className="font-medium text-sm">
                 {editingOffering.id ? t('cpq.specifications.offerings.form.editTitle', 'Edit Offering') : t('cpq.specifications.offerings.form.newTitle', 'New Offering')}
               </h3>
-              <div className="grid grid-cols-4 gap-3">
+              <div className="grid grid-cols-5 gap-3">
                 <div>
                   <label className="block text-xs font-medium mb-1">{t('cpq.specifications.offerings.fields.code', 'Code')}</label>
                   <input type="text" value={editingOffering.code} onChange={(e) => setEditingOffering({ ...editingOffering, code: e.target.value })} placeholder={t('cpq.specifications.offerings.fields.codePlaceholder', 'e.g. gix-cloud-connect-aws')} className="w-full rounded-md border px-2 py-1.5 text-sm" />
@@ -1334,6 +1369,12 @@ export default function SpecificationDetailPage(props: { params?: { id?: string 
                   <label className="block text-xs font-medium mb-1">{t('cpq.specifications.offerings.fields.isActive', 'Is Active?')}</label>
                   <div className="flex items-center h-[30px]">
                     <input type="checkbox" checked={editingOffering.isActive} onChange={(e) => setEditingOffering({ ...editingOffering, isActive: e.target.checked })} className="rounded border" />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium mb-1">{t('cpq.specifications.offerings.fields.isSellable', 'Sellable on its own?')}</label>
+                  <div className="flex items-center h-[30px]">
+                    <input type="checkbox" checked={editingOffering.isSellable ?? true} onChange={(e) => setEditingOffering({ ...editingOffering, isSellable: e.target.checked })} className="rounded border" />
                   </div>
                 </div>
               </div>

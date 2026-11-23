@@ -86,6 +86,7 @@ const CONCEPTS = [
   '  specifications (requires, excludes, parent-child) and, for bundles, slots with cardinality.',
   '- Offering: a sellable package built on a specification. It fixes design-time values and owns the',
   '  charges: NRC (one-off), MRC (monthly recurring) and usage. Bundle offerings group child offerings.',
+  '  An offering with isSellable false is component-only: it can only be quoted under a bundle line.',
   '- Configuration: the run-time attribute values chosen for one quote line, keyed by attribute code.',
   '- Pricing: charges resolve against pricing tables (by attribute values and tiers), then price rules',
   '  apply in order: discounts, surcharges, overrides. Only the calculate-price API knows the result.',
@@ -122,6 +123,8 @@ const MUTATION_POLICY = [
   '  to the backoffice page, for example /backend/cpq/quotes/<id>.',
   '- When you add a bundle offering, pass expandBundleDefaults: true unless you will add its components',
   '  yourself; otherwise its required slots stay empty and the quote is incomplete (V-QBUN-1).',
+  '- To pick a top-level offering, list with isSellable: true. Add a component-only offering only with the',
+  '  bundle line as parentLineId; otherwise the API refuses it with V-QLINE-1.',
   '- You never convert quotes to orders, activate orders or change inventory; send the operator to the backoffice.',
 ].join('\n')
 

@@ -16,6 +16,8 @@ export type AcmeSpec = {
   name: string
   specType: 'simple' | 'bundle'
   isAssetizable: boolean
+  /** CPQ #133: pre-fills `isSellable` on new offerings of this spec. Default true. */
+  defaultOfferingSellable?: boolean
 }
 
 export type AcmeAttribute = {
@@ -34,6 +36,8 @@ export type AcmeOffering = {
   name: string
   offeringType: 'simple' | 'bundle'
   designTimeValues: Record<string, unknown>
+  /** CPQ #133: false = only sold inside a bundle. Default true. */
+  isSellable?: boolean
 }
 
 export type AcmeCharge = {
@@ -66,7 +70,8 @@ export const ACME_MARKER_SKU = 'INTERNET-BUNDLE'
 
 export const ACME_SPECS: AcmeSpec[] = [
   { code: 'internet', productSku: 'INTERNET', name: 'Internet Service', specType: 'simple', isAssetizable: false },
-  { code: 'ont', productSku: 'ONT', name: 'ONT Device', specType: 'simple', isAssetizable: true },
+  // The ONT is customer equipment that only ships with an internet bundle (#133).
+  { code: 'ont', productSku: 'ONT', name: 'ONT Device', specType: 'simple', isAssetizable: true, defaultOfferingSellable: false },
   { code: 'internet-bundle', productSku: 'INTERNET-BUNDLE', name: 'Internet Bundle', specType: 'bundle', isAssetizable: false },
 ]
 
@@ -90,7 +95,7 @@ export const ACME_OFFERINGS: AcmeOffering[] = [
   { code: 'internet-100', specCode: 'internet', name: 'Internet Service - 100Mbps', offeringType: 'simple', designTimeValues: { bandwidth: '100mb' } },
   { code: 'internet-300', specCode: 'internet', name: 'Internet Service - 300Mbps', offeringType: 'simple', designTimeValues: { bandwidth: '300mb' } },
   { code: 'internet-600', specCode: 'internet', name: 'Internet Service - 600Mbps', offeringType: 'simple', designTimeValues: { bandwidth: '600mb' } },
-  { code: 'ont-device', specCode: 'ont', name: 'ONT', offeringType: 'simple', designTimeValues: {} },
+  { code: 'ont-device', specCode: 'ont', name: 'ONT', offeringType: 'simple', designTimeValues: {}, isSellable: false },
   { code: 'internet-family-bundle', specCode: 'internet-bundle', name: 'Internet Family Bundle', offeringType: 'bundle', designTimeValues: {} },
 ]
 

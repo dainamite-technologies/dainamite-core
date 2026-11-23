@@ -77,6 +77,7 @@ async function seedCatalog(em: EntityManager, scope: Scope): Promise<Map<string,
       name: s.name,
       specType: s.specType,
       isAssetizable: s.isAssetizable,
+      defaultOfferingSellable: s.defaultOfferingSellable ?? true,
       lifecycleStatus: 'active',
       version: 1,
     } as never)
@@ -114,6 +115,7 @@ async function seedCatalog(em: EntityManager, scope: Scope): Promise<Map<string,
       offeringType: o.offeringType,
       designTimeValues: o.designTimeValues,
       lifecycleStatus: 'active',
+      isSellable: o.isSellable ?? true,
     } as never)
     em.persist(offering)
     offerings.set(o.code, offering as CpqProductOffering)

@@ -216,7 +216,8 @@ export function OfferingSelectStep({ config, onComplete, onBack, stepData, curre
     async function load() {
       setLoading(true)
       try {
-        const params = new URLSearchParams({ page: '1', pageSize: '100' })
+        // #133: every pick becomes a top-level quote line, so hide component-only offerings.
+        const params = new URLSearchParams({ page: '1', pageSize: '100', isSellable: 'true' })
         const res = await fetch(`/api/cpq/product-offerings?${params}`)
         if (res.ok) {
           const data = await res.json()

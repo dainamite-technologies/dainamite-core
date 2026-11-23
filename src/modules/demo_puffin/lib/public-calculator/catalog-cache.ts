@@ -173,6 +173,7 @@ async function defaultDirectDbLoader(config: PuffinPublicConfig): Promise<Catalo
       })),
       components: offeringComponents,
       isActive: offering.isActive,
+      isSellable: offering.isSellable,
     }
   })
 
@@ -211,6 +212,7 @@ async function buildSnapshot(config: PuffinPublicConfig): Promise<CatalogSnapsho
     if (offering.metadata?.listedInCalculator !== true) continue
     if (offering.lifecycleStatus !== 'active') continue
     if (offering.isActive === false) continue
+    if (offering.isSellable === false) continue
     listedIds.add(offering.id)
   }
 

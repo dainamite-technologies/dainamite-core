@@ -1,4 +1,4 @@
-import { CpqOrderLineConfiguration } from '../../data/entities'
+import { CpqOrderLineConfiguration, CpqProductOffering, CpqQuoteLineConfiguration } from '../../data/entities'
 import { DefaultCpqOrderService, OrderError } from '../cpqOrderService'
 import type { TenantScope } from '../types'
 
@@ -667,3 +667,57 @@ describe('conversion of a quote with an incomplete bundle (#124)', () => {
     await expect(service.convertQuoteToOrder('quote', SCOPE)).resolves.toBeDefined()
   })
 })
+
+describe('conversion of a quote with a component-only offering (#133)', () => {
+  const quote = {
+    id: 'quote', quoteId: 'sales', cpqStatus: 'accepted', currencyCode: 'USD', customerId: 'customer',
+    pricingSummary: { nrcTotal: 0, mrcTotal: 0 }, validationResult: { valid: true, errors: [] },
+  }
+  const line = (overrides: Record<string, unknown>) => ({
+    quoteLineId: 'L1', quantity: 1, action: 'add', nrcTotal: '0', mrcTotal: '0', charges: [], configuration: {}, offeringId: 'ont', ...overrides,
+  })
+  const ont = { id: 'ont', code: 'ONT', isSellable: false }
+
+  function arrange(lines: unknown[]) {
+    const ctx = createService()
+    ctx.em.findOne.mockResolvedValueOnce(quote).mockResolvedValueOnce(null) // no existing order
+    ctx.em.find.mockImplementation(async (entity) => {
+      if (entity === CpqQuoteLineConfiguration) return lines
+      if (entity === CpqProductOffering) return [ont]
+      return []
+    })
+    return ctx
+  }
+
+  it('refuses a top-level line with 422 V-QLINE-1', async () => {
+    const { em, service } = arrange([line({})])
+    await expect(service.convertQuoteToOrder('quote', SCOPE)).rejects.toMatchObject({
+      status: 422,
+      message: 'V-QLINE-1',
+      details: { errors: [{ lineId: 'L1', offeringId: 'ont', message: 'V-QLINE-1: Offering ONT can only be sold as part of a bundle' }] },
+    })
+    expect(em.create).not.toHaveBeenCalled()
+  })
+
+  const bundleLine = line({ quoteLineId: 'B1', offeringId: 'bundle' })
+
+  it.each([
+    ['a child line under a bundle line of the quote', [bundleLine, line({ parentLineId: 'B1' })]],
+    ['a line bound to a subscription item', [line({ sourceSubscriptionItemId: 'item-1', action: 'modify' })]],
+    ['a server-made ARC mirror line', [line({ action: 'cancel', configuration: { _arcMirroredFromItemId: 'item-1' } })]],
+  ])('does not refuse %s', async (_label, lines) => {
+    const { service } = arrange(lines)
+    // The mocks are minimal, so conversion may fail later; it must not fail on sellability.
+    const outcome = await service.convertQuoteToOrder('quote', SCOPE).catch((err: unknown) => err)
+    expect((outcome as { message?: string } | undefined)?.message).not.toBe('V-QLINE-1')
+  })
+
+  it.each([
+    ['a child line whose parent is not on the quote', line({ parentLineId: 'missing' })],
+    ['a line that only claims a non-add action', line({ action: 'cancel' })],
+  ])('refuses %s', async (_label, candidate) => {
+    const { service } = arrange([candidate])
+    await expect(service.convertQuoteToOrder('quote', SCOPE)).rejects.toMatchObject({ status: 422, message: 'V-QLINE-1' })
+  })
+})
+

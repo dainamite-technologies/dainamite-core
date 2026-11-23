@@ -12,7 +12,7 @@ import { Entity, Index, PrimaryKey, Property, Unique } from '@mikro-orm/decorato
 @Unique({ name: 'cpq_product_specifications_code_unique', properties: ['organizationId', 'tenantId', 'code'] })
 @Index({ name: 'cpq_product_specifications_lifecycle_idx', properties: ['organizationId', 'tenantId', 'lifecycleStatus'] })
 export class CpqProductSpecification {
-  [OptionalProps]?: 'specType' | 'isAssetizable' | 'lifecycleStatus' | 'version' | 'isActive' | 'createdAt' | 'updatedAt' | 'deletedAt'
+  [OptionalProps]?: 'specType' | 'isAssetizable' | 'defaultOfferingSellable' | 'lifecycleStatus' | 'version' | 'isActive' | 'createdAt' | 'updatedAt' | 'deletedAt'
 
   @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
   id!: string
@@ -40,6 +40,10 @@ export class CpqProductSpecification {
 
   @Property({ name: 'is_assetizable', type: 'boolean', default: false })
   isAssetizable: boolean = false
+
+  /** #133: only pre-fills `isSellable` on new offerings of this spec. Never enforced. */
+  @Property({ name: 'default_offering_sellable', type: 'boolean', default: true })
+  defaultOfferingSellable: boolean = true
 
   @Property({ name: 'lifecycle_status', type: 'text', default: 'draft' })
   lifecycleStatus: string = 'draft'
@@ -80,7 +84,7 @@ export class CpqProductSpecification {
 @Index({ name: 'cpq_product_offerings_spec_idx', properties: ['organizationId', 'tenantId', 'specId'] })
 @Index({ name: 'cpq_product_offerings_lifecycle_idx', properties: ['organizationId', 'tenantId', 'lifecycleStatus'] })
 export class CpqProductOffering {
-  [OptionalProps]?: 'offeringType' | 'designTimeValues' | 'lifecycleStatus' | 'isActive' | 'createdAt' | 'updatedAt' | 'deletedAt'
+  [OptionalProps]?: 'offeringType' | 'designTimeValues' | 'lifecycleStatus' | 'isSellable' | 'isActive' | 'createdAt' | 'updatedAt' | 'deletedAt'
 
   @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
   id!: string
@@ -114,6 +118,13 @@ export class CpqProductOffering {
 
   @Property({ name: 'lifecycle_status', type: 'text', default: 'draft' })
   lifecycleStatus: string = 'draft'
+
+  /**
+   * #133 (TMF620 `isSellable`): false means the offering can only be quoted as a
+   * bundle component (a child line), never as a top-level quote line.
+   */
+  @Property({ name: 'is_sellable', type: 'boolean', default: true })
+  isSellable: boolean = true
 
   @Property({ name: 'effective_from', type: Date, nullable: true })
   effectiveFrom?: Date | null

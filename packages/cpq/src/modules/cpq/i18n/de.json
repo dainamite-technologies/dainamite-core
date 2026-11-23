@@ -694,6 +694,8 @@
   "cpq.pricing.validation.priceColumnLabelRequired": "Preisspalte #{index}: Bezeichnung ist erforderlich",
   "cpq.quotes.actions.open": "Öffnen",
   "cpq.quotes.add": "Neues Angebot",
+  "cpq.quotes.arc.deviceLine": "Gerät ist bereits im Abonnement. Behalten wird nicht erneut berechnet; Entfernen bedeutet Rückgabe bei Aktivierung des Auftrags.",
+  "cpq.quotes.arc.deviceRemovedHint": "Dieses Gerät wird bei Aktivierung des Auftrags zurückgegeben",
   "cpq.quotes.arc.drawer.actions.amendHint": "Positionen in bestehenden Abonnements hinzufügen oder entfernen. Die Laufzeit bleibt unverändert.",
   "cpq.quotes.arc.drawer.actions.cancelHint": "Ein oder mehrere Abonnements kündigen.",
   "cpq.quotes.arc.drawer.actions.renewHint": "Laufzeit verlängern. Bei 2+ Zielen werden diese zu einem neuen Vertrag zusammengeführt.",

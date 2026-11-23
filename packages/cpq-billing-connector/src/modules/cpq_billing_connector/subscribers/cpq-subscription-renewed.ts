@@ -6,6 +6,8 @@ import {
 } from '../lib/chargeMapper'
 import { arcItemBillStart, loadArcBillStartSetup, markArcSetupApplied } from '../lib/arcBillStart'
 import type { BillStartSetup } from '../lib/orderSetupResolution'
+import { applyRerates } from '../lib/arcRerate'
+import { resolveOrderReference } from '../lib/orderReference'
 
 /**
  * Subscriber: `cpq.subscription.renewed` → extend term + add items.
@@ -21,6 +23,10 @@ import type { BillStartSetup } from '../lib/orderSetupResolution'
  * on the subscription's own account, same shape as activation. Bill start
  * per added line (order billing setup, D7): line override → CPQ service
  * start → the order's default bill start → `newTermStart`.
+ *
+ * Items whose recurring price changed at renewal (`changedItems`, #126) are
+ * re-rated from `newTermStart`: the old recurring Billing Items end the day
+ * before and a new one starts at the new price (`lib/arcRerate.ts`).
  *
  * The connector does NOT post a proration line for renewals — by
  * definition renewal happens at the cycle boundary (or it's an early
@@ -42,6 +48,8 @@ export type RenewedPayload = {
   newTermStart: string
   newTermEnd?: string | null
   addedItems?: CpqSubscriptionItem[]
+  /** #126: items whose recurring price changed (new price in `charges`). */
+  changedItems?: CpqSubscriptionItem[]
   /** CPQ order id — the key of the order billing setup. */
   sourceOrderId?: string
 }
@@ -98,6 +106,20 @@ export default async function handle(payload: RenewedPayload): Promise<void> {
     (await billingApi.findAccountByCustomer(scope, payload.customerId))?.id ??
     null
   if (!accountId) return
+
+  // Re-rate the items whose recurring price changed. Runs after the end-date
+  // extension above, so a re-delivered event still ends the old price.
+  const changed = payload.changedItems ?? []
+  if (changed.length > 0) {
+    const reference = await resolveOrderReference(container, scope, payload.sourceOrderId)
+    await applyRerates(billingApi, scope, accountId, changed, {
+      subscriptionId: payload.subscriptionId,
+      effectiveDate: payload.newTermStart,
+      sourceOrderId: payload.sourceOrderId,
+      code: 'subscription_amended',
+      reference,
+    })
+  }
 
   const added = payload.addedItems ?? []
   if (added.length === 0) return

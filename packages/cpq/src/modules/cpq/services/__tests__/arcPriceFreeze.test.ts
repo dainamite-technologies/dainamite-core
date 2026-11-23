@@ -1,8 +1,13 @@
+import { retiredAssetStatus } from '../types'
 import {
+  ARC_MIRRORED_ASSET_KEY,
+  arcMirroredAssetId,
+  buildArcAssetMirrorConfiguration,
   ARC_PRICE_FROZEN_KEY,
   arcPricingInputsChanged,
   buildArcMirrorConfiguration,
   ARC_REPRICED_KEY,
+  isArcMirrorLine,
   isArcPriceFrozen,
   isFrozenAmendMirrorLine,
   stripArcMarkers,
@@ -137,5 +142,37 @@ describe('stripQuoteOnlyArcMarkers', () => {
     const cfg = { port_size: '1G' }
     expect(stripQuoteOnlyArcMarkers(cfg)).toBe(cfg)
     expect(stripQuoteOnlyArcMarkers(null)).toBeNull()
+  })
+})
+
+describe('asset mirror lines (#126)', () => {
+  it('builds the configuration from the asset, dropping inherited markers', () => {
+    expect(buildArcAssetMirrorConfiguration({ serial: 'X1', _arcPriceFrozen: true }, { id: 'asset-1', name: 'ONT' })).toEqual({
+      serial: 'X1',
+      [ARC_MIRRORED_ASSET_KEY]: 'asset-1',
+      _arcMirroredName: 'ONT',
+    })
+  })
+
+  it('recognises a device line only on ARC quotes', () => {
+    const cfg = { [ARC_MIRRORED_ASSET_KEY]: 'asset-1' }
+    expect(arcMirroredAssetId(cfg, 'amend')).toBe('asset-1')
+    expect(arcMirroredAssetId(cfg, 'cancel')).toBe('asset-1')
+    expect(arcMirroredAssetId(cfg, 'new')).toBeNull()
+    expect(arcMirroredAssetId({ _arcMirroredFromItemId: 'item-1' }, 'amend')).toBeNull()
+    expect(isArcMirrorLine(cfg, 'renew')).toBe(true)
+    expect(isArcMirrorLine(cfg, 'new')).toBe(false)
+  })
+})
+
+describe('retiredAssetStatus (#126)', () => {
+  it.each([
+    ['active', 'returned'],
+    ['delivered', 'returned'],
+    ['pending', 'cancelled'],
+    ['returned', 'returned'],
+    ['cancelled', 'cancelled'],
+  ])('%s becomes %s', (from, to) => {
+    expect(retiredAssetStatus(from)).toBe(to)
   })
 })

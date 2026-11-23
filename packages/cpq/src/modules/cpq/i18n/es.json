@@ -694,6 +694,8 @@
   "cpq.pricing.validation.priceColumnLabelRequired": "Columna de precio n.º {index}: la etiqueta es obligatoria",
   "cpq.quotes.actions.open": "Abrir",
   "cpq.quotes.add": "Nueva cotización",
+  "cpq.quotes.arc.deviceLine": "El dispositivo ya está en la suscripción. Conservarlo no se cobra de nuevo; quitarlo implica su devolución al activar el pedido.",
+  "cpq.quotes.arc.deviceRemovedHint": "Este dispositivo se devuelve al activar el pedido",
   "cpq.quotes.arc.drawer.actions.amendHint": "Añadir o quitar elementos de suscripciones existentes. El plazo no cambia.",
   "cpq.quotes.arc.drawer.actions.cancelHint": "Dar de baja una o varias suscripciones.",
   "cpq.quotes.arc.drawer.actions.renewHint": "Ampliar el plazo. Con 2 o más destinos, se fusionan en un nuevo contrato.",

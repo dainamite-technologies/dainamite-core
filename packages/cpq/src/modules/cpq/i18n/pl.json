@@ -694,6 +694,8 @@
   "cpq.pricing.validation.priceColumnLabelRequired": "Kolumna ceny #{index}: etykieta jest wymagana",
   "cpq.quotes.actions.open": "Otwórz",
   "cpq.quotes.add": "Nowa oferta",
+  "cpq.quotes.arc.deviceLine": "Urządzenie jest już na subskrypcji. Pozostawienie go nie jest ponownie naliczane; usunięcie oznacza jego zwrot po aktywacji zamówienia.",
+  "cpq.quotes.arc.deviceRemovedHint": "To urządzenie zostanie zwrócone po aktywacji zamówienia",
   "cpq.quotes.arc.drawer.actions.amendHint": "Dodaj lub usuń pozycje istniejących subskrypcji. Okres umowy bez zmian.",
   "cpq.quotes.arc.drawer.actions.cancelHint": "Zakończ jedną lub więcej subskrypcji.",
   "cpq.quotes.arc.drawer.actions.renewHint": "Przedłuż okres umowy. Przy co najmniej 2 celach scala je w nową umowę.",

@@ -8,6 +8,7 @@ import { arcItemBillStart, loadArcBillStartSetup, markArcSetupApplied } from '..
 import type { BillStartSetup } from '../lib/orderSetupResolution'
 import { arcItemEndDate, buildArcEndDateUpdates, type ArcEndDateItem } from '../lib/arcEndDate'
 import { resolveOrderReference } from '../lib/orderReference'
+import { applyRerates } from '../lib/arcRerate'
 
 /**
  * Subscriber: `cpq.subscription.amended` → mid-cycle add / remove.
@@ -21,7 +22,11 @@ import { resolveOrderReference } from '../lib/orderReference'
  *   2. End-dates every Billing Item of each removed subscription item at
  *      `effectiveDate - 1 day`, clamped to `billStartDate - 1 day` for an
  *      item that has not started yet (`lib/arcEndDate.ts`), with the
- *      generated credit reason `subscription_amended`.
+ *      generated credit reason `subscription_amended`. A returned device
+ *      (asset) arrives here too, keyed by its asset id.
+ *   3. Re-rates every changed item (`changedItems`, #126): its recurring
+ *      Billing Items end the day before `effectiveDate` and a new one at the
+ *      new price starts on it (`lib/arcRerate.ts`).
  *
  * Proration is billing's job (billing Spec A): the Bill Run engine prorates
  * the partial period of an item that starts mid-cycle, and credits the
@@ -47,6 +52,8 @@ export type AmendedPayload = {
   effectiveDate: string
   addedItems?: CpqSubscriptionItem[]
   removedSubscriptionItemIds?: string[]
+  /** #126: items whose recurring price changed (new price in `charges`). */
+  changedItems?: CpqSubscriptionItem[]
   /** CPQ order id — the key of the order billing setup. */
   sourceOrderId?: string
 }
@@ -102,7 +109,8 @@ export default async function handle(payload: AmendedPayload): Promise<void> {
 
   const added = payload.addedItems ?? []
   const removed = payload.removedSubscriptionItemIds ?? []
-  if (added.length === 0 && removed.length === 0) return
+  const changed = payload.changedItems ?? []
+  if (added.length === 0 && removed.length === 0 && changed.length === 0) return
 
   const container = await createRequestContainer()
   const billingApi = new BillingApiClient(container)
@@ -136,13 +144,23 @@ export default async function handle(payload: AmendedPayload): Promise<void> {
     })
   }
 
-  // 2. End-date every Billing Item of each removed subscription item.
-  if (removed.length === 0) return
+  if (removed.length === 0 && changed.length === 0) return
   const reference = await resolveOrderReference(container, scope, payload.sourceOrderId)
+
+  // 2. End-date every Billing Item of each removed subscription item.
   for (const removedSubItemId of removed) {
     const items = await billingApi.findItemsBySubscriptionItem(scope, removedSubItemId)
     for (const update of buildRemovedItemUpdates(items, payload, reference)) {
       await billingApi.updateItem(scope, update)
     }
   }
+
+  // 3. Re-rate the items whose recurring price changed.
+  await applyRerates(billingApi, scope, accountId, changed, {
+    subscriptionId: payload.subscriptionId,
+    effectiveDate: payload.effectiveDate,
+    sourceOrderId: payload.sourceOrderId,
+    code: 'subscription_amended',
+    reference,
+  })
 }

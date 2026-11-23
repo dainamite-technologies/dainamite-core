@@ -243,7 +243,7 @@ translates each into Billing API calls:
 |-----------|------------------|
 | `cpq.subscription.activated` | Create Billing Account if missing; create Billing Items per charge (one-time + recurring split) |
 | `cpq.subscription.amended` | Add Items for new lines; post proration for the partial cycle; end-date removed items |
-| `cpq.subscription.renewed` | Extend `bill_end_date`; add Items for new lines |
+| `cpq.subscription.renewed` | Extend `bill_end_date` on items running to the term end; end removed items; add Items for new lines |
 | `cpq.subscription.cancelled` | Set `bill_end_date` on all Items for the subscription |
 | `cpq.subscription.merged` | Re-point Items from source subscriptions to the merged one |
 | `cpq.subscription.superseded` | Set `bill_end_date` on all Items for the superseded subscription |

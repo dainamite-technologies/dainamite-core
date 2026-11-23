@@ -7,7 +7,9 @@ import {
 import { arcItemBillStart, loadArcBillStartSetup, markArcSetupApplied } from '../lib/arcBillStart'
 import type { BillStartSetup } from '../lib/orderSetupResolution'
 import { applyRerates } from '../lib/arcRerate'
+import { buildArcEndDateUpdates, type ArcEndDateItem } from '../lib/arcEndDate'
 import { resolveOrderReference } from '../lib/orderReference'
+import { toIsoDate } from '../lib/orderSetupResolution'
 
 /**
  * Subscriber: `cpq.subscription.renewed` → extend term + add items.
@@ -23,6 +25,12 @@ import { resolveOrderReference } from '../lib/orderReference'
  * on the subscription's own account, same shape as activation. Bill start
  * per added line (order billing setup, D7): line override → CPQ service
  * start → the order's default bill start → `newTermStart`.
+ *
+ * Items dropped at renewal (`removedSubscriptionItemIds`) end the day before
+ * `newTermStart`, like an amendment removal. Only items still billing up to
+ * the old term end get their end date extended: an item ended earlier (by an
+ * amendment, a cancellation or an operator) is not revived, and neither is
+ * one dropped at this renewal.
  *
  * Items whose recurring price changed at renewal (`changedItems`, #126) are
  * re-rated from `newTermStart`: the old recurring Billing Items end the day
@@ -48,6 +56,8 @@ export type RenewedPayload = {
   newTermStart: string
   newTermEnd?: string | null
   addedItems?: CpqSubscriptionItem[]
+  /** Subscription items (and devices) dropped at renewal. */
+  removedSubscriptionItemIds?: string[]
   /** #126: items whose recurring price changed (new price in `charges`). */
   changedItems?: CpqSubscriptionItem[]
   /** CPQ order id — the key of the order billing setup. */
@@ -77,6 +87,45 @@ export function buildRenewedItemPayloads(
   }))
 }
 
+function dayBefore(iso: string): string {
+  const d = new Date(`${iso.slice(0, 10)}T00:00:00.000Z`)
+  d.setUTCDate(d.getUTCDate() - 1)
+  return d.toISOString().slice(0, 10)
+}
+
+type RenewableItem = ArcEndDateItem & { subscriptionItemId?: string | null }
+
+/**
+ * Items whose `bill_end_date` moves to the new term end: those with an end
+ * date on or after the old term end (`newTermStart - 1`). Items that ended
+ * earlier, and items dropped at this renewal, keep their end date.
+ */
+export function selectItemsToExtend<T extends RenewableItem>(
+  items: T[],
+  payload: Pick<RenewedPayload, 'newTermStart' | 'removedSubscriptionItemIds'>,
+): T[] {
+  const oldTermEnd = dayBefore(payload.newTermStart)
+  const removed = new Set(payload.removedSubscriptionItemIds ?? [])
+  return items.filter((item) => {
+    const end = toIsoDate(item.billEndDate)
+    if (!end || end < oldTermEnd) return false
+    return !(item.subscriptionItemId && removed.has(item.subscriptionItemId))
+  })
+}
+
+/** End-date updates for the Billing Items of items dropped at renewal. */
+export function buildRenewalRemovedItemUpdates(
+  items: ArcEndDateItem[],
+  payload: Pick<RenewedPayload, 'newTermStart'>,
+  reference?: string,
+) {
+  return buildArcEndDateUpdates(items, {
+    effectiveDate: payload.newTermStart,
+    code: 'subscription_amended',
+    reference,
+  })
+}
+
 export default async function handle(payload: RenewedPayload): Promise<void> {
   if (!payload?.tenantId || !payload.organizationId) return
   if (!payload.subscriptionId || !payload.newTermStart) return
@@ -90,14 +139,27 @@ export default async function handle(payload: RenewedPayload): Promise<void> {
 
   const existingItems = await billingApi.findItemsBySubscription(scope, payload.subscriptionId)
 
-  // Extend the bill_end_date on items that had one. Items without
-  // an end date are open-ended; nothing to do.
-  for (const item of existingItems) {
-    if (!item.billEndDate) continue
+  // Extend the bill_end_date on fixed-term items that run to the old term
+  // end. Items without an end date are open-ended; nothing to do.
+  for (const item of selectItemsToExtend(existingItems, payload)) {
     await billingApi.updateItem(scope, {
       id: item.id,
       billEndDate: payload.newTermEnd ?? null,
     })
+  }
+
+  // End the Billing Items of the items dropped at renewal.
+  const removed = payload.removedSubscriptionItemIds ?? []
+  const changed = payload.changedItems ?? []
+  const reference =
+    removed.length > 0 || changed.length > 0
+      ? await resolveOrderReference(container, scope, payload.sourceOrderId)
+      : undefined
+  for (const removedSubItemId of removed) {
+    const items = await billingApi.findItemsBySubscriptionItem(scope, removedSubItemId)
+    for (const update of buildRenewalRemovedItemUpdates(items, payload, reference)) {
+      await billingApi.updateItem(scope, update)
+    }
   }
 
   // Add new items at the renewal boundary.
@@ -109,9 +171,7 @@ export default async function handle(payload: RenewedPayload): Promise<void> {
 
   // Re-rate the items whose recurring price changed. Runs after the end-date
   // extension above, so a re-delivered event still ends the old price.
-  const changed = payload.changedItems ?? []
   if (changed.length > 0) {
-    const reference = await resolveOrderReference(container, scope, payload.sourceOrderId)
     await applyRerates(billingApi, scope, accountId, changed, {
       subscriptionId: payload.subscriptionId,
       effectiveDate: payload.newTermStart,

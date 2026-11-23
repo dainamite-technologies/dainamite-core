@@ -47,10 +47,15 @@ test.describe('TC-CPQ-006: Specifications list page (UI)', () => {
       const row = page.locator('tr', { hasText: code }).first()
       await expect(row, `expected to find spec row with code ${code}`).toBeVisible({ timeout: 10_000 })
 
-      await row.click()
-      await page.waitForURL((url) => url.pathname.includes(`/backend/cpq/specifications/${specId}`), {
-        timeout: 10_000,
-      })
+      // The row is server-rendered before the table hydrates: a click that
+      // lands before React attaches the row handler does nothing. Retry the
+      // click until the navigation starts.
+      await expect(async () => {
+        await row.click()
+        await page.waitForURL((url) => url.pathname.includes(`/backend/cpq/specifications/${specId}`), {
+          timeout: 3_000,
+        })
+      }).toPass({ timeout: 20_000 })
       expect(page.url()).toContain(`/backend/cpq/specifications/${specId}`)
     } finally {
       await apiRequest(request, 'DELETE', '/api/cpq/product-specifications', {

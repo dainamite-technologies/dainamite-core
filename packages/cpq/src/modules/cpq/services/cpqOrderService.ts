@@ -1464,6 +1464,9 @@ async function emitRenewedEvent(
     newTermStart: iso10(result.subscription.currentTermStart),
     newTermEnd: iso10(result.subscription.currentTermEnd),
     addedItems: buildArcAddedItems(result.changeLog, envelope.lineRefs),
+    // Items (and devices) dropped at renewal: billing ends them the day
+    // before the new term starts.
+    removedSubscriptionItemIds: buildArcRemovedItemIds(result.changeLog),
     changedItems: buildArcChangedItems(result.changeLog),
     sourceQuoteId: envelope.sourceQuoteId,
     sourceOrderId: envelope.sourceOrderId,

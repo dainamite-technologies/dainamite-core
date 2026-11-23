@@ -356,6 +356,60 @@ describe('DefaultCpqInventoryService.applyMergeRenewal', () => {
   })
 })
 
+describe('applyMergeRenewal keeps the bundle hierarchy', () => {
+  it('re-links carried-over components to their cloned bundle item', async () => {
+    const { em, service } = makeService()
+    const s1 = fakeSub({ id: 's1', code: 'SUB-1' })
+    const s2 = fakeSub({ id: 's2', code: 'SUB-2' })
+    const itemsBySub: Record<string, unknown[]> = {
+      s1: [
+        fakeItem({ id: 'bundle', subscriptionId: 's1', name: 'Triple Play' }),
+        fakeItem({ id: 'tv', subscriptionId: 's1', parentItemId: 'bundle', name: 'TV' }),
+        fakeItem({ id: 'orphan', subscriptionId: 's1', parentItemId: 'gone', name: 'Orphan' }),
+      ],
+      s2: [fakeItem({ id: 'phone', subscriptionId: 's2', name: 'Phone' })],
+    }
+    const entityName = (entity: unknown) => (entity as { name: string }).name
+    em.find.mockImplementation(async (entity: unknown, where: Record<string, unknown>) => {
+      if (entityName(entity) === 'CpqInventorySubscription') return [s1, s2]
+      if (entityName(entity) === 'CpqInventorySubscriptionItem' && typeof where.subscriptionId === 'string') {
+        return itemsBySub[where.subscriptionId] ?? []
+      }
+      return []
+    })
+    em.findOne.mockImplementation(async (entity: unknown, where: Record<string, unknown>) => {
+      if (entityName(entity) === 'CpqInventorySubscription') return [s1, s2].find((s) => s.id === where.id) ?? null
+      return null
+    })
+
+    await service
+      .applyMergeRenewal(
+        {
+          sourceIds: ['s1', 's2'],
+          term: { newTermStart: new Date('2027-01-01'), newTermEnd: new Date('2028-01-01') },
+          mergeMeta: { newSubCode: 'SUB-M', newSubName: 'Merged' },
+          lineChanges: [],
+          sourceQuoteId: 'q',
+          sourceOrderId: 'o',
+          performedByUserId: null,
+        },
+        SCOPE,
+      )
+      .catch(() => undefined) // later phases are not under test; the clones are created first
+
+    const clones = em.create.mock.results
+      .map((r) => r.value as Record<string, unknown>)
+      .filter((v) => typeof v.name === 'string' && ['Triple Play', 'TV', 'Orphan', 'Phone'].includes(v.name as string))
+    const byName = new Map(clones.map((c) => [c.name, c]))
+    const bundle = byName.get('Triple Play') as Record<string, unknown>
+    expect(bundle).toBeDefined()
+    expect(bundle.parentItemId).toBeNull()
+    expect((byName.get('TV') as Record<string, unknown>).parentItemId).toBe(bundle.id)
+    expect((byName.get('Orphan') as Record<string, unknown>).parentItemId).toBeNull()
+    expect((byName.get('Phone') as Record<string, unknown>).parentItemId).toBeNull()
+  })
+})
+
 describe('applyAmendment with devices (assets, #126)', () => {
   function fakeAsset(overrides: Record<string, unknown> = {}) {
     return { id: 'asset-ont', subscriptionId: 'sub-1', subscriptionItemId: 'item-bundle', name: 'ONT', status: 'active', quantity: 1, ...overrides }

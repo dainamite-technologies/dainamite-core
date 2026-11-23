@@ -129,6 +129,11 @@ describe('cpq.catalog_assistant (#128)', () => {
     expect(cpqCatalogAssistant.systemPrompt).toMatch(/approval card/)
   })
 
+  it('forbids invented ids and writes claimed without a tool call (seen in a live run)', () => {
+    expect(cpqCatalogAssistant.systemPrompt).toMatch(/every id you use or show must come\s+from a tool result/)
+    expect(cpqCatalogAssistant.systemPrompt).toMatch(/unless you called the write tool in this turn/)
+  })
+
   it('never contains long dashes in operator-facing text', () => {
     const texts = [
       cpqCatalogAssistant.systemPrompt,

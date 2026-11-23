@@ -40,7 +40,7 @@ end-to-end**:
 |---|---|
 | `cpq.subscription.activated` | zakłada konto billingowe + pozycje |
 | `cpq.subscription.amended` | dodaje pozycje + proracja, kończy usunięte |
-| `cpq.subscription.renewed` | przedłuża `bill end date`, dodaje nowe pozycje |
+| `cpq.subscription.renewed` | przedłuża `bill end date` pozycji trwających do końca okresu, kończy usunięte pozycje, dodaje nowe pozycje |
 | `cpq.subscription.cancelled` | ustawia `bill end date` na pozycjach |
 | `cpq.subscription.merged` | przepina pozycje na subskrypcję docelową |
 | `cpq.subscription.superseded` | domyka pozycje pominięte przy scaleniu |

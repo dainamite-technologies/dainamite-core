@@ -30,7 +30,7 @@ to the billing API contract:
 |---|---|
 | `cpq.subscription.activated` | Resolve the Billing Account from the order billing setup (or reuse / create one); create Billing Items per charge (one-time + recurring split) with the per-line bill start |
 | `cpq.subscription.amended` | Create new Billing Items for added subscription items on the subscription's own account (billing prorates); set `bill_end_date` on removed items |
-| `cpq.subscription.renewed` | Extend `bill_end_date` on existing Billing Items; create new Items for any added subscription items |
+| `cpq.subscription.renewed` | Extend `bill_end_date` on Billing Items that run to the old term end; end the Items of removed subscription items the day before the new term; create new Items for any added subscription items |
 | `cpq.subscription.cancelled` | Set `bill_end_date` on all Billing Items for the subscription |
 | `cpq.subscription.merged` | Move Billing Items from source subscriptions to the merged subscription (update `subscription_id`) |
 | `cpq.subscription.superseded` | Set `bill_end_date` on all Billing Items for the superseded subscription |

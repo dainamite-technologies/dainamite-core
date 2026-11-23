@@ -50,6 +50,7 @@ type Offering = {
   offeringType: string
   designTimeValues: Record<string, unknown>
   lifecycleStatus: string
+  isSellable: boolean
   effectiveFrom: string | null
   effectiveTo: string | null
   metadata: Record<string, unknown> | null
@@ -98,6 +99,7 @@ type Specification = {
   name: string
   productId: string
   specType?: string
+  defaultOfferingSellable?: boolean
 }
 
 type PricingTableRef = { id: string; code: string; name: string; dimensions: Array<{ key: string; label: string }>; priceColumns: Array<{ key: string; label: string }> }
@@ -128,6 +130,8 @@ const EMPTY_FORM = {
   description: '',
   offeringType: 'simple' as string,
   lifecycleStatus: 'draft',
+  // #133: pre-filled from the chosen spec's `defaultOfferingSellable`.
+  isSellable: true,
   effectiveFrom: null as string | null,
   effectiveTo: null as string | null,
   isActive: true,
@@ -295,6 +299,7 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
             description: data.description ?? '',
             offeringType: data.offeringType ?? 'simple',
             lifecycleStatus: data.lifecycleStatus,
+            isSellable: data.isSellable ?? true,
             effectiveFrom: data.effectiveFrom,
             effectiveTo: data.effectiveTo,
             isActive: data.isActive,
@@ -392,6 +397,7 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
           description: saved.description ?? '',
           offeringType: saved.offeringType ?? form.offeringType,
           lifecycleStatus: saved.lifecycleStatus,
+          isSellable: saved.isSellable ?? true,
           effectiveFrom: saved.effectiveFrom,
           effectiveTo: saved.effectiveTo,
           isActive: saved.isActive,
@@ -593,7 +599,12 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                 value={form.specId}
                 onChange={(e) => {
                   const selected = specs.find((s) => s.id === e.target.value)
-                  setForm({ ...form, specId: e.target.value, offeringType: selected?.specType ?? 'simple' })
+                  setForm({
+                    ...form,
+                    specId: e.target.value,
+                    offeringType: selected?.specType ?? 'simple',
+                    isSellable: selected?.defaultOfferingSellable ?? true,
+                  })
                   loadSpecAttributes(e.target.value)
                   setDesignTimeValues({})
                 }}
@@ -679,6 +690,28 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                     onChange={(e) => setForm({ ...form, isActive: e.target.checked })}
                     className="rounded border"
                   />
+                )}
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">{t('cpq.offerings.isSellable', 'Sellable on its own?')}</label>
+              <div className="flex items-center h-[38px]">
+                {generalMode === 'view' && !isNew ? (
+                  <Tag variant={form.isSellable ? 'success' : 'neutral'} dot>
+                    {form.isSellable ? t('cpq.common.yes', 'Yes') : t('cpq.offerings.componentOnly', 'Component only')}
+                  </Tag>
+                ) : (
+                  <>
+                    <input
+                      type="checkbox"
+                      checked={form.isSellable}
+                      onChange={(e) => setForm({ ...form, isSellable: e.target.checked })}
+                      className="rounded border"
+                    />
+                    <span className="ml-2 text-xs text-muted-foreground">
+                      {t('cpq.offerings.isSellableHelp', 'Off: can only be quoted as part of a bundle')}
+                    </span>
+                  </>
                 )}
               </div>
             </div>

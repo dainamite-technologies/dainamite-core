@@ -207,6 +207,7 @@ describe('filterPublicOfferings', () => {
       metadata: overrides.metadata ?? { listedInCalculator: true },
       charges: overrides.charges,
       isActive: overrides.isActive ?? true,
+      isSellable: overrides.isSellable,
     }
   }
 
@@ -225,6 +226,11 @@ describe('filterPublicOfferings', () => {
   it('drops inactive lifecycle states', () => {
     const filtered = filterPublicOfferings([makeOffering({ lifecycleStatus: 'draft' })])
     expect(filtered).toHaveLength(0)
+  })
+
+  it('drops component-only offerings (CPQ #133), even when listed', () => {
+    expect(filterPublicOfferings([makeOffering({ isSellable: false })])).toHaveLength(0)
+    expect(filterPublicOfferings([makeOffering({ isSellable: true })])).toHaveLength(1)
   })
 })
 

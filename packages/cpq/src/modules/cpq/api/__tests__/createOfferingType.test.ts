@@ -81,3 +81,33 @@ describe('POST /api/cpq/product-offerings offering type', () => {
     expect(em.create).not.toHaveBeenCalled()
   })
 })
+
+describe('POST /api/cpq/product-offerings isSellable (#133)', () => {
+  function mockSpecDefault(defaultOfferingSellable: boolean) {
+    em.findOne.mockImplementation(async (entity: unknown) =>
+      entity === CpqProductSpecification ? { id: SPEC_ID, specType: 'simple', defaultOfferingSellable } : null,
+    )
+  }
+
+  it('takes the spec default when the caller omits isSellable', async () => {
+    mockSpecDefault(false)
+    const response = await POST(post({ specId: SPEC_ID, code: 'ONT', name: 'ONT' }))
+    expect(response.status).toBe(201)
+    expect(em.create).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ isSellable: false }))
+    expect((await response.json()).isSellable).toBe(false)
+  })
+
+  it('lets the caller override the spec default', async () => {
+    mockSpecDefault(false)
+    const response = await POST(post({ specId: SPEC_ID, code: 'ONT', name: 'ONT', isSellable: true }))
+    expect(response.status).toBe(201)
+    expect(em.create).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ isSellable: true }))
+  })
+
+  it('stays sellable for a spec without the default (existing data)', async () => {
+    mockSpec('simple')
+    await POST(post({ specId: SPEC_ID, code: 'S', name: 'Simple' }))
+    expect(em.create).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ isSellable: true }))
+  })
+})
+

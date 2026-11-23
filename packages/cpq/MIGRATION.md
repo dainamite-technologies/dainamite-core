@@ -187,6 +187,37 @@ longer revives cancelled assets. An assetizable offering added on an ARC quote
 creates only an asset (it also created a subscription item). The quote's slot
 counter ignores lines marked for removal.
 
+### 2026-11-23 - Component-only offerings: `isSellable` (#133)
+
+**Migration.** `Migration20261123100000_cpq_offering_is_sellable` adds
+`cpq_product_offerings.is_sellable` and
+`cpq_product_specifications.default_offering_sellable`, both
+`boolean not null default true`, so existing data behaves as before. Rollback
+drops both columns. Written by hand in the generator's style
+(`yarn mercato db generate` only diffs `@app` modules here); the module
+snapshot was updated to match.
+
+**API (additive).** Offerings: `isSellable` on create, update and every
+response (also on bundle `components[].childOffering`); `GET` list takes
+`isSellable=true|false`. On create, an omitted `isSellable` takes the spec's
+`defaultOfferingSellable`. Specifications: `defaultOfferingSellable` on create,
+update and responses (pre-fill only, never enforced). `BundleTreeNode` gains
+`lifecycleStatus` and `isSellable`. AI tool `cpq.list_offerings` takes
+`isSellable`.
+
+**Behaviour changes.** `POST /quotes/{id}/items` returns 422 with
+`code: 'V-QLINE-1'` for a top-level line (no `parentLineId`, action `add`)
+whose offering has `isSellable: false`. `POST /orders` re-checks it and returns
+422 `V-QLINE-1` with `errors`. Only server-set facts exempt a line: a
+`sourceSubscriptionItemId` or an `_arcMirrored*` marker; a caller's `action`
+does not. `POST /quotes/{id}/items` with a `parentLineId` that is not a line of
+the quote now returns 404 on every quote type (it was checked on ARC quotes
+only), and conversion treats such an orphan as a top-level line. Bundle default expansion now also
+requires the child offering's `lifecycleStatus` to be `active` (before: only
+`isActive`). The quote "Add Offering" picker, the wizard offering step and the
+Puffin public calculator hide component-only offerings; the bundle component
+picker still lists them.
+
 ### 2026-11-17 - Bundle setup, default components, slot validation (#122-#125)
 
 **Migration.** `Migration20261117120000_cpq_offering_components_partial_unique`

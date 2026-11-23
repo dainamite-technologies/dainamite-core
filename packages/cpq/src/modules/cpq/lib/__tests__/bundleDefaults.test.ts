@@ -3,7 +3,7 @@ import type { BundleTreeNode } from '../../services/cpqBundleService'
 
 function offering(id: string, overrides: Partial<BundleTreeNode> = {}): BundleTreeNode {
   return {
-    offeringId: id, offeringCode: id, offeringName: id, offeringType: 'simple', isActive: true,
+    offeringId: id, offeringCode: id, offeringName: id, offeringType: 'simple', isActive: true, lifecycleStatus: 'active', isSellable: true,
     specId: `spec-${id}`, specType: 'simple', isAssetizable: false, charges: [], slots: [], ...overrides,
   }
 }
@@ -68,6 +68,24 @@ describe('selectDefaultComponents', () => {
       ])],
     })
     expect(selectDefaultComponents(bundle).map((o) => o.offeringId)).toEqual(['fiber'])
+  })
+
+  it('skips default child offerings that are not lifecycle-active (#133)', () => {
+    const bundle = offering('bundle', {
+      slots: [slot('access', 1, [
+        { child: offering('draft', { lifecycleStatus: 'draft' }), isDefault: true },
+        { child: offering('deprecated', { lifecycleStatus: 'deprecated' }), isDefault: true },
+        { child: offering('fiber'), isDefault: true },
+      ])],
+    })
+    expect(selectDefaultComponents(bundle).map((o) => o.offeringId)).toEqual(['fiber'])
+  })
+
+  it('adds component-only (non-sellable) child offerings as defaults (#133)', () => {
+    const bundle = offering('bundle', {
+      slots: [slot('cpe', 1, [{ child: offering('ont', { isSellable: false }), isDefault: true }])],
+    })
+    expect(selectDefaultComponents(bundle).map((o) => o.offeringId)).toEqual(['ont'])
   })
 
   it('returns nothing for a bundle without defaults', () => {

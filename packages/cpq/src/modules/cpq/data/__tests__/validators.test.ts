@@ -842,3 +842,27 @@ describe('cpqOrderStatusTransitionSchema', () => {
     expect(cpqOrderStatusTransitionSchema.safeParse({ targetStatus: '' }).success).toBe(false)
   })
 })
+
+describe('offering sellability fields (#133)', () => {
+  it('leaves isSellable unset on create so the route can take the spec default', () => {
+    const result = cpqProductOfferingCreateSchema.safeParse({ specId: VALID_UUID, code: 'O', name: 'O' })
+    expect(result.success).toBe(true)
+    if (!result.success) return
+    expect(result.data.isSellable).toBeUndefined()
+  })
+
+  it('accepts an explicit isSellable on create and rejects a non-boolean', () => {
+    const ok = cpqProductOfferingCreateSchema.safeParse({ specId: VALID_UUID, code: 'O', name: 'O', isSellable: false })
+    expect(ok.success && ok.data.isSellable).toBe(false)
+    expect(cpqProductOfferingCreateSchema.safeParse({ specId: VALID_UUID, code: 'O', name: 'O', isSellable: 'no' }).success).toBe(false)
+  })
+
+  it('defaults defaultOfferingSellable to true on spec create only', () => {
+    const created = cpqProductSpecificationCreateSchema.safeParse({ code: 'S', name: 'S' })
+    expect(created.success && created.data.defaultOfferingSellable).toBe(true)
+    const updated = cpqProductSpecificationUpdateSchema.safeParse({ id: VALID_UUID, name: 'S2' })
+    expect(updated.success).toBe(true)
+    if (!updated.success) return
+    expect(updated.data).not.toHaveProperty('defaultOfferingSellable')
+  })
+})

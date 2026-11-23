@@ -49,6 +49,7 @@ type Offering = {
   offeringType: string
   designTimeValues: Record<string, unknown>
   lifecycleStatus: string
+  isSellable?: boolean
   isActive: boolean
   createdAt: string
   charges?: Charge[]
@@ -99,6 +100,8 @@ function buildFilterParams(values: FilterValues, params: URLSearchParams) {
   }
   if (values.isActive === true) params.set('isActive', 'true')
   if (values.isActive === false) params.set('isActive', 'false')
+  if (values.isSellable === true) params.set('isSellable', 'true')
+  if (values.isSellable === false) params.set('isSellable', 'false')
 }
 
 export default function OfferingsListPage() {
@@ -163,6 +166,11 @@ export default function OfferingsListPage() {
       {
         id: 'isActive',
         label: t('cpq.offerings.filters.isActive', 'Active'),
+        type: 'checkbox',
+      },
+      {
+        id: 'isSellable',
+        label: t('cpq.offerings.filters.isSellable', 'Sellable on its own'),
         type: 'checkbox',
       },
     ],
@@ -247,6 +255,11 @@ export default function OfferingsListPage() {
             {row.original.offeringType === 'bundle' && (
               <Tag variant="brand" className="ml-2 px-2 text-[10px]">
                 {t('cpq.offerings.list.tag.bundle', 'bundle')}
+              </Tag>
+            )}
+            {row.original.isSellable === false && (
+              <Tag variant="neutral" className="ml-2 px-2 text-[10px]">
+                {t('cpq.offerings.componentOnly', 'Component only')}
               </Tag>
             )}
           </span>

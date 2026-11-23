@@ -2,6 +2,7 @@ import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import { dateColumnToIso, toDateColumn } from '../lib/dateColumns'
 import { evaluateLineCompleteness, type LineCompletenessInput } from '../lib/lineCompleteness'
 import { selectDefaultComponents } from '../lib/bundleDefaults'
+import { NON_SELLABLE_TOP_LEVEL_CODE, nonSellableTopLevelMessage, violatesSellability } from '../lib/offeringSellability'
 import { DefaultCpqBundleService, type BundleTreeNode } from './cpqBundleService'
 import { cloneQuoteAdjustments, removeQuoteLineTree } from './priceAdjustments/quoteAdjustmentLifecycle'
 import type { PriceAdjustment } from '../data/price-adjustments'
@@ -226,7 +227,7 @@ export class DefaultCpqQuotingService {
       throw new QuotingError(409, `Cannot modify quote in '${cpqConfig.cpqStatus}' status`)
     }
 
-    if (item.parentLineId && cpqConfig.quoteType && cpqConfig.quoteType !== 'new') {
+    if (item.parentLineId) {
       const parent = await em.findOne(CpqQuoteLineConfiguration, {
         quoteLineId: item.parentLineId,
         quoteConfigurationId: cpqConfig.id,
@@ -234,7 +235,10 @@ export class DefaultCpqQuotingService {
         tenantId: scope.tenantId,
         deletedAt: null,
       })
-      if (parent && isArcCancelledLine(parent, cpqConfig.quoteType)) {
+      // #133: a child line needs a real parent on this quote, otherwise it is a
+      // top-level line in disguise (and could sell a component-only offering).
+      if (!parent) throw new QuotingError(404, 'Parent line not found on this quote')
+      if (cpqConfig.quoteType && cpqConfig.quoteType !== 'new' && isArcCancelledLine(parent, cpqConfig.quoteType)) {
         throw new QuotingError(409, 'Cannot add a component to a subscription item marked for removal')
       }
     }
@@ -272,6 +276,17 @@ export class DefaultCpqQuotingService {
   ): Promise<{ quoteLineId: string; offering: CpqProductOffering | null; targetSubscriptionId: string | null }> {
     // Resolve offering -> spec -> product
     const { offering, spec } = await this.resolveOffering(em, item, scope)
+
+    // #133: a component-only offering may only be added under a bundle line.
+    // Check the line as it will be stored: `createQuoteLine` never stores a
+    // caller's `sourceSubscriptionItemId` (only the ARC mirror path sets it),
+    // and the configuration is already stripped of `_arc*` markers.
+    if (offering && violatesSellability(offering, { parentLineId: item.parentLineId, configuration: item.configuration })) {
+      throw new QuotingError(422, nonSellableTopLevelMessage(offering.code), undefined, {
+        code: NON_SELLABLE_TOP_LEVEL_CODE,
+        offeringId: offering.id,
+      })
+    }
 
     // Merge context: quoteContext + designTimeValues + user configuration
     const mergedConfig = {

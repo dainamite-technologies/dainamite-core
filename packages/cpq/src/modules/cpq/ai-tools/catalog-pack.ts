@@ -28,6 +28,10 @@ export const listOfferingsInput = z.object({
   offeringType: z.enum(['simple', 'bundle']).optional().describe('Restrict to simple or bundle offerings.'),
   lifecycleStatus: z.enum(['draft', 'active', 'deprecated']).optional().describe('Lifecycle status filter.'),
   isActive: z.boolean().optional().describe('Filter on the active flag.'),
+  isSellable: z
+    .boolean()
+    .optional()
+    .describe('true = only offerings that can be quoted on their own. Component-only offerings (isSellable false) can only be added under a bundle line (parentLineId).'),
   sortField: z.enum(['createdAt', 'updatedAt', 'code', 'name', 'lifecycleStatus', 'offeringType']).optional().describe('Sort column (default createdAt).'),
   sortDir: sortDirField,
   page: pageField,
@@ -39,7 +43,7 @@ const listOfferingsTool = defineCpqApiTool<ListOfferingsInput, CpqPagedApiRespon
   name: 'cpq.list_offerings',
   displayName: 'List CPQ offerings',
   description:
-    'List sellable CPQ product offerings (what goes on a quote line) with their charges (NRC / MRC / usage definitions, not resolved prices). Returns { items, total, page, pageSize, totalPages }. Use cpq.calculate_price to get actual prices.',
+    'List CPQ product offerings (what goes on a quote line) with their charges (NRC / MRC / usage definitions, not resolved prices). Returns { items, total, page, pageSize, totalPages }. Use cpq.calculate_price to get actual prices. Pass isSellable true when picking a top-level quote line: an offering with isSellable false is a bundle component only.',
   inputSchema: listOfferingsInput,
   requiredFeatures: ['cpq.offerings.view'],
   toOperation: (input) => ({
@@ -51,6 +55,7 @@ const listOfferingsTool = defineCpqApiTool<ListOfferingsInput, CpqPagedApiRespon
       offeringType: input.offeringType,
       lifecycleStatus: input.lifecycleStatus,
       isActive: input.isActive,
+      isSellable: input.isSellable,
       sortField: input.sortField,
       sortDir: input.sortDir,
       page: input.page,

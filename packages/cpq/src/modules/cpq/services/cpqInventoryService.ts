@@ -10,6 +10,7 @@ import {
 import {
   INVENTORY_SUBSCRIPTION_TRANSITIONS,
   INVENTORY_ASSET_TRANSITIONS,
+  retiredAssetStatus,
   getBaseCurrencyCode,
   type ChangeLogType,
   type InventorySubscriptionStatus,
@@ -68,8 +69,14 @@ export interface ArcLineChange {
   /** Source quote line id (for traceability + sourceQuoteLineId on items). */
   quoteLineId?: string | null
   action: ArcLineAction
-  /** Required for action ∈ {cancel, modify}. */
+  /** Required for action ∈ {cancel, modify} on a subscription item. */
   sourceSubscriptionItemId?: string | null
+  /**
+   * #126: the line acts on an asset (a device mirrored from the subscription)
+   * instead of a subscription item. `modify` keeps it unchanged, `cancel`
+   * retires it (`returned`, or `cancelled` when never delivered).
+   */
+  sourceAssetId?: string | null
   /** Required for action='add'. Used to materialize the new item. */
   itemInput?: Omit<CreateSubscriptionItemInput, 'name'> & { name: string }
   /** XD-250 ARC: source quote line's `parentLineId`. When set, applyLineChanges
@@ -547,19 +554,23 @@ export class DefaultCpqInventoryService {
     }
 
     if (targetStatus === 'active' || targetStatus === 'terminated' || targetStatus === 'superseded') {
-      const assetTargetStatus = targetStatus === 'active' ? 'active' : 'cancelled'
-      const excludeStatuses = targetStatus === 'active'
-        ? ['returned']
-        : ['returned', 'cancelled']
+      // Retired assets (returned / cancelled) stay retired, also when the
+      // subscription is re-activated (#126: re-activation used to revive
+      // cancelled assets).
       const assets = await this.em.find(CpqInventoryAsset, {
         subscriptionId: sub.id,
         organizationId: scope.organizationId,
         tenantId: scope.tenantId,
         deletedAt: null,
-        status: { $nin: excludeStatuses },
+        status: { $nin: ['returned', 'cancelled'] },
       })
       for (const asset of assets) {
-        asset.status = assetTargetStatus
+        // #126: on termination the device comes back (`returned`) unless it was
+        // never delivered (`cancelled`). Superseded (merge renew) keeps the
+        // previous behaviour: assets left on the source are cancelled.
+        asset.status = targetStatus === 'active'
+          ? 'active'
+          : targetStatus === 'terminated' ? retiredAssetStatus(asset.status) : 'cancelled'
       }
     }
 
@@ -1602,9 +1613,11 @@ export class DefaultCpqInventoryService {
     // lines we pre-generate the new item id.
     const quoteLineToFinalItemId = new Map<string, string>()
     const preGeneratedAddIds = new Map<string, string>()
+    const isAssetAdd = (lc: ArcLineChange) =>
+      lc.action === 'add' && !!lc.itemInput?.specId && assetizableSpecs.get(lc.itemInput.specId) === true
     for (const lc of lineChanges) {
       if (!lc.quoteLineId) continue
-      if (lc.action === 'add') {
+      if (lc.action === 'add' && !isAssetAdd(lc)) {
         const id = crypto.randomUUID()
         preGeneratedAddIds.set(lc.quoteLineId, id)
         quoteLineToFinalItemId.set(lc.quoteLineId, id)
@@ -1614,6 +1627,69 @@ export class DefaultCpqInventoryService {
     }
 
     for (const lc of lineChanges) {
+      if (lc.sourceAssetId && (lc.action === 'modify' || lc.action === 'cancel')) {
+        // #126: a line mirrored from an asset. Keeping it changes nothing.
+        if (lc.action === 'modify') continue
+        const asset = await this.em.findOne(CpqInventoryAsset, {
+          id: lc.sourceAssetId,
+          subscriptionId: sub.id,
+          organizationId: scope.organizationId,
+          tenantId: scope.tenantId,
+          deletedAt: null,
+        })
+        if (!asset) {
+          throw { status: 404, error: `Asset ${lc.sourceAssetId} not found on subscription ${sub.id}` }
+        }
+        const before = asset.status
+        asset.status = retiredAssetStatus(asset.status)
+        if (asset.status !== before) {
+          summary.push({ action: 'retire_asset', assetId: asset.id, quoteLineId: lc.quoteLineId ?? null, status: asset.status })
+        }
+        continue
+      }
+      if (lc.action === 'add' && lc.itemInput && isAssetAdd(lc)) {
+        // #126: an assetizable offering becomes only an asset, under its parent
+        // line's subscription item, exactly like a new sale
+        // (`createInventoryFromOrder`). It used to create a billed
+        // subscription item as well.
+        const parentItemId =
+          lc.itemInput.parentItemId ??
+          (lc.parentQuoteLineId ? quoteLineToFinalItemId.get(lc.parentQuoteLineId) ?? null : null)
+        const code = await this.generateAssetCode(scope)
+        const asset = this.em.create(CpqInventoryAsset, {
+          id: crypto.randomUUID(),
+          organizationId: scope.organizationId,
+          tenantId: scope.tenantId,
+          customerId: sub.customerId,
+          subscriptionId: sub.id,
+          subscriptionItemId: parentItemId,
+          productId: lc.itemInput.productId ?? null,
+          offeringId: lc.itemInput.offeringId ?? null,
+          specId: lc.itemInput.specId,
+          code,
+          name: lc.itemInput.name,
+          status: 'pending',
+          assetType: 'one_time',
+          currencyCode: lc.itemInput.currencyCode ?? sub.currencyCode,
+          purchasePrice: String(lc.itemInput.nrcAmount ?? 0),
+          quantity: lc.itemInput.quantity ?? 1,
+          configuration: lc.itemInput.configuration ?? {},
+          charges: lc.itemInput.charges ?? null,
+          sourceOrderId: null,
+          sourceQuoteLineId: lc.quoteLineId ?? null,
+        })
+        this.em.persist(asset)
+        summary.push({
+          action: 'add_asset',
+          assetId: asset.id,
+          quoteLineId: lc.quoteLineId ?? null,
+          name: lc.itemInput.name,
+          mrcAmount: Number(lc.itemInput.mrcAmount ?? 0),
+          nrcAmount: Number(lc.itemInput.nrcAmount ?? 0),
+          quantity: asset.quantity,
+        })
+        continue
+      }
       if (lc.action === 'add') {
         if (!lc.itemInput) {
           throw { status: 400, error: 'add line is missing itemInput' }
@@ -1660,33 +1736,6 @@ export class DefaultCpqInventoryService {
         })
         this.em.persist(item)
 
-        // Materialize a pending asset only when the spec is assetizable.
-        if (lc.itemInput.specId && assetizableSpecs.get(lc.itemInput.specId)) {
-          const code = await this.generateAssetCode(scope)
-          const asset = this.em.create(CpqInventoryAsset, {
-            organizationId: scope.organizationId,
-            tenantId: scope.tenantId,
-            customerId: sub.customerId,
-            subscriptionId: sub.id,
-            subscriptionItemId: item.id,
-            productId: lc.itemInput.productId ?? null,
-            offeringId: lc.itemInput.offeringId ?? null,
-            specId: lc.itemInput.specId,
-            code,
-            name: lc.itemInput.name,
-            status: 'pending',
-            assetType: 'one_time',
-            currencyCode: lc.itemInput.currencyCode ?? sub.currencyCode,
-            purchasePrice: String(lc.itemInput.nrcAmount ?? 0),
-            quantity: lc.itemInput.quantity ?? 1,
-            configuration: lc.itemInput.configuration ?? {},
-            charges: lc.itemInput.charges ?? null,
-            sourceOrderId: null,
-            sourceQuoteLineId: lc.quoteLineId ?? null,
-          })
-          this.em.persist(asset)
-        }
-
         summary.push({
           action: 'add',
           itemId: item.id,
@@ -1714,7 +1763,8 @@ export class DefaultCpqInventoryService {
         }
         item.status = 'terminated'
 
-        // Cancel any active assets attached to this item.
+        // Retire the devices attached to this item (#126: delivered ones come
+        // back as `returned`, undelivered ones are `cancelled`).
         const assets = await this.em.find(CpqInventoryAsset, {
           subscriptionItemId: item.id,
           organizationId: scope.organizationId,
@@ -1722,7 +1772,7 @@ export class DefaultCpqInventoryService {
           deletedAt: null,
           status: { $nin: ['returned', 'cancelled'] },
         })
-        for (const asset of assets) asset.status = 'cancelled'
+        for (const asset of assets) asset.status = retiredAssetStatus(asset.status)
 
         summary.push({
           action: 'cancel',
@@ -1770,6 +1820,8 @@ export class DefaultCpqInventoryService {
             itemId: item.id,
             quoteLineId: lc.quoteLineId ?? null,
             mrcDelta: newMrc - oldMrc,
+            // #126: the new recurring amount, so billing can re-rate the item.
+            mrcAmount: newMrc,
           })
         }
       }

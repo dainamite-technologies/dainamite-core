@@ -107,7 +107,10 @@ export type LineEligibilityInput = {
 
 /** ARC mirror lines and free-form lines take no manual adjustments yet. */
 export function lineAdjustmentBlock(line: LineEligibilityInput, quoteType: string): 'mirror' | 'free_form' | null {
-  const mirrored = quoteType !== 'new' && typeof line.configuration?._arcMirroredFromItemId === 'string'
+  const mirrored =
+    quoteType !== 'new' &&
+    (typeof line.configuration?._arcMirroredFromItemId === 'string' ||
+      typeof line.configuration?._arcMirroredFromAssetId === 'string')
   if (mirrored) return 'mirror'
   if (!line.offeringId && !line.productId) return 'free_form'
   return null

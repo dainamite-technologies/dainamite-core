@@ -88,7 +88,7 @@ export const openApi: OpenApiRouteDoc = {
     PUT: {
       summary: 'Update a quote line (configuration, quantity, term)',
       description:
-        'Re-prices the line unless it is a frozen Amend mirror line whose pricing inputs are unchanged. Mutation guards run first (resource kind `cpq.quote_line`, update). `_arc*` configuration keys are server-owned and ignored.',
+        'Re-prices the line unless it is a frozen Amend mirror line whose pricing inputs are unchanged. Mutation guards run first (resource kind `cpq.quote_line`, update). `_arc*` configuration keys are server-owned and ignored. A device line mirrored from a subscription asset on an ARC quote cannot be changed (409); remove it and add the new device instead.',
       requestBody: { schema: cpqUpdateQuoteItemSchema },
       responses: [{ status: 200, description: 'Quote after the update' }],
       errors: CPQ_GUARDED_WRITE_ERRORS,

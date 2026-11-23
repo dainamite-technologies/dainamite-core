@@ -166,6 +166,27 @@ the `@dainamite/cpq` package, per
 
 ## Schema / API changelog (track breaking changes here)
 
+### 2026-11-23 - Devices (assets) on ARC quotes, device and price billing (#126)
+
+**Migration.** None. Device lines use the `_arcMirroredFromAssetId` marker in
+the line configuration, like the other `_arcMirrored*` markers.
+
+**API (additive).** ARC quotes mirror the target subscription's live assets
+as unpriced lines under their item's line (not on merge renew). `ArcLineChange`
+gains `sourceAssetId`. Change log `lineChanges` gain `add_asset` and
+`retire_asset` entries, and `modify` entries now carry the new `mrcAmount`.
+`cpq.subscription.activated` items include device lines (keyed by asset id);
+`cpq.subscription.amended` / `renewed` gain `changedItems` (re-rated recurring
+prices), and `amended` lists returned devices in `removedSubscriptionItemIds`.
+
+**Behaviour changes.** A device line cannot be edited (409); remove and add to
+swap it. At activation a removed device, the devices of a cancelled item and
+those of a terminated subscription become `returned` (`cancelled` when never
+delivered) instead of always `cancelled`. Re-activating a subscription no
+longer revives cancelled assets. An assetizable offering added on an ARC quote
+creates only an asset (it also created a subscription item). The quote's slot
+counter ignores lines marked for removal.
+
 ### 2026-11-17 - Bundle setup, default components, slot validation (#122-#125)
 
 **Migration.** `Migration20261117120000_cpq_offering_components_partial_unique`

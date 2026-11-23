@@ -476,8 +476,8 @@ removal with it; components this quote added under it are deleted.
 The line no longer counts towards the quote's NRC / MRC. In the Pricing Summary
 its old price stays in **Current MRC** and drops out of **New MRC**, so
 replacing a $400 item with a $1,130 one shows **MRC change +$730.00**. When the
-order is activated, the item is terminated on the subscription (its assets are
-cancelled) and the `cpq.subscription.amended` event lists it under
+order is activated, the item is terminated on the subscription (its devices are
+returned, see below) and the `cpq.subscription.amended` event lists it under
 `removedSubscriptionItemIds`.
 
 Until the quote leaves an editable status, **Restore** on the line brings the
@@ -488,6 +488,43 @@ Lines the quote added are still deleted outright, without a dialog.
 **Checkpoint:** on an Amend quote, remove the existing item → dialog → confirm.
 The line shows **remove**, Current MRC still includes the item, New MRC does not.
 Click **Restore** → the line is back to **modify** with **price kept**.
+
+## Devices (assets) on ARC quotes
+
+A device sold with a subscription (an offering of an **assetizable**
+specification, for example an ONT in a fibre bundle) is an **asset**, not a
+subscription item. Amend, Renew and Cancel quotes show every device that is
+still on the subscription (pending, delivered or active) as its own line, under
+the line of the item it belongs to, so a bundle's device slot is filled.
+
+- A device line is **not priced**: the device was bought on the original order,
+  so keeping it adds nothing to the quote and is not billed again.
+- It cannot be edited (the edit icon is hidden). To **swap** a device, remove
+  its line and add the new device with **Add Component** on the bundle. Adding
+  a second device while the old one stays counts twice in the slot
+  (`V-QBUN-2`).
+- **Remove** marks it for return, **Restore** brings it back, like an item.
+- When the order is activated, a removed device is **returned** (or
+  **cancelled** if it was never delivered). The same happens to the devices of
+  a cancelled item and of a terminated subscription. A re-activated
+  subscription never brings back returned or cancelled devices.
+- A device added on an ARC quote becomes only an asset under its parent's item,
+  exactly like on a new sale (it used to create a billed subscription item as
+  well).
+- Merge renewals keep moving the devices to the new subscription and do not
+  show device lines.
+
+**Billing.** A device's own charges (for example the ONT's one-time price) are
+billed on a new sale and when a device is added on an ARC quote, keyed by the
+asset id. A returned device stops billing like a removed item. When a
+`modify` line changes an item's recurring price on Amend or Renew, billing
+re-rates it from the effective date (Renew: the new term start); one-time
+charges of kept items are never billed again.
+
+**Checkpoint:** sell a bundle with an assetizable ONT, then Amend it. The ONT
+appears under the bundle with no price. Remove it and add a new ONT under the
+bundle, convert and activate: the old ONT is **returned**, the new one is a
+**pending** asset under the bundle item, and no ONT subscription item exists.
 
 ## Concurrency safeguards
 

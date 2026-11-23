@@ -70,7 +70,7 @@ describe('DefaultCpqInventoryService.transitionSubscriptionStatus', () => {
     expect(em.find).toHaveBeenCalledTimes(1)
   })
 
-  it('suspended → active clears suspendedAt and re-activates non-returned assets', async () => {
+  it('suspended → active clears suspendedAt and re-activates assets that are not retired', async () => {
     const { em, service } = makeService()
     const sub = {
       id: 's1',
@@ -90,12 +90,12 @@ describe('DefaultCpqInventoryService.transitionSubscriptionStatus', () => {
     expect(sub.suspendedAt).toBeNull()
     expect(asset.status).toBe('active')
 
-    // Verify the asset find excluded only "returned" status
+    // #126: returned and cancelled assets stay retired on re-activation.
     const [, assetWhere] = em.find.mock.calls[1]
-    expect(assetWhere).toMatchObject({ status: { $nin: ['returned'] } })
+    expect(assetWhere).toMatchObject({ status: { $nin: ['returned', 'cancelled'] } })
   })
 
-  it('active → terminated sets terminatedAt and cancels all non-returned/cancelled assets', async () => {
+  it('active → terminated sets terminatedAt and returns delivered devices, cancels undelivered ones (#126)', async () => {
     const { em, service } = makeService()
     const sub = {
       id: 's1',
@@ -107,13 +107,15 @@ describe('DefaultCpqInventoryService.transitionSubscriptionStatus', () => {
     em.findOne.mockResolvedValueOnce(sub)
     em.find.mockResolvedValueOnce([{ id: 'i1', status: 'active' }])
     const asset = { id: 'a1', status: 'active' }
-    em.find.mockResolvedValueOnce([asset])
+    const pending = { id: 'a2', status: 'pending' }
+    em.find.mockResolvedValueOnce([asset, pending])
 
     await service.transitionSubscriptionStatus('s1', 'terminated', SCOPE)
 
     expect(sub.status).toBe('terminated')
     expect(sub.terminatedAt).toBeInstanceOf(Date)
-    expect(asset.status).toBe('cancelled')
+    expect(asset.status).toBe('returned')
+    expect(pending.status).toBe('cancelled')
 
     const [, assetWhere] = em.find.mock.calls[1]
     expect(assetWhere).toMatchObject({ status: { $nin: ['returned', 'cancelled'] } })

@@ -22,6 +22,7 @@ import {
   CpqQuoteTargetSubscription,
   CpqInventorySubscription,
   CpqInventorySubscriptionItem,
+  CpqInventoryAsset,
   CpqOrderConfiguration,
   CpqProductAttribute,
   CpqProductCharge,
@@ -55,7 +56,9 @@ import {
 import {
   ARC_PRICE_FROZEN_KEY,
   ARC_REPRICED_KEY,
+  arcMirroredAssetId,
   arcPricingInputsChanged,
+  buildArcAssetMirrorConfiguration,
   buildArcMirrorConfiguration,
   isFrozenAmendMirrorLine,
   isArcMirrorLine,
@@ -507,6 +510,11 @@ export class DefaultCpqQuotingService {
     if (isArcCancelledLine(lineConfig, cpqConfig.quoteType)) {
       throw new QuotingError(409, 'This subscription item is marked for removal — restore it before changing it')
     }
+    if (arcMirroredAssetId(lineConfig.configuration as Record<string, unknown> | null, cpqConfig.quoteType)) {
+      // #126: a mirrored device is kept or returned as it is. To swap it,
+      // remove it and add the new device under the same parent.
+      throw new QuotingError(409, 'A device from the subscription cannot be changed. Remove it and add the new device instead.')
+    }
 
     const quoteLine = await em.findOne(SalesQuoteLine, {
       id: lineId,
@@ -715,9 +723,26 @@ export class DefaultCpqQuotingService {
     const plan = planArcLineRestore(lineConfig, lines, cpqConfig.quoteType)
     if (!plan.ok) throw new QuotingError(409, 'Restore the parent item first')
 
+    const assetIdOf = (line: CpqQuoteLineConfiguration) =>
+      arcMirroredAssetId(line.configuration as Record<string, unknown> | null, cpqConfig.quoteType)
     const itemIdOf = (line: CpqQuoteLineConfiguration) =>
       line.sourceSubscriptionItemId ?? ((line.configuration as Record<string, unknown> | null)?._arcMirroredFromItemId as string | undefined) ?? null
-    const itemIds = plan.restore.map(itemIdOf).filter((id): id is string => !!id)
+    // #126: device lines are restored from their asset, item lines from their item.
+    const assetLines = plan.restore.filter((line) => assetIdOf(line) !== null)
+    const itemLines = plan.restore.filter((line) => assetIdOf(line) === null)
+    const assetIds = assetLines.map((line) => assetIdOf(line) as string)
+    const assets = assetIds.length
+      ? await em.find(CpqInventoryAsset, { id: { $in: assetIds }, organizationId: scope.organizationId, tenantId: scope.tenantId, deletedAt: null })
+      : []
+    const assetById = new Map(assets.map((asset) => [asset.id, asset]))
+    const assetRestores = assetLines.map((line) => {
+      const asset = assetById.get(assetIdOf(line) as string)
+      if (!asset || !['pending', 'delivered', 'active'].includes(asset.status)) {
+        throw new QuotingError(409, 'The device is no longer on the subscription and cannot be restored')
+      }
+      return { line, asset }
+    })
+    const itemIds = itemLines.map(itemIdOf).filter((id): id is string => !!id)
     const items = itemIds.length
       ? await em.find(CpqInventorySubscriptionItem, { id: { $in: itemIds }, organizationId: scope.organizationId, tenantId: scope.tenantId, deletedAt: null })
       : []
@@ -730,7 +755,7 @@ export class DefaultCpqQuotingService {
     })
     const salesLineById = new Map(salesLines.map((line) => [line.id, line]))
 
-    const restores = plan.restore.map((line) => {
+    const restores = itemLines.map((line) => {
       const itemId = itemIdOf(line)
       const item = itemId ? itemById.get(itemId) : undefined
       if (!item || ['terminated', 'expired', 'superseded'].includes(item.status)) {
@@ -751,6 +776,16 @@ export class DefaultCpqQuotingService {
         line.validationErrors = null
         const salesLine = salesLineById.get(line.quoteLineId)
         if (salesLine) salesLine.quantity = String(item.quantity)
+      }
+      for (const { line, asset } of assetRestores) {
+        line.action = 'modify'
+        line.configuration = buildArcAssetMirrorConfiguration(asset.configuration, asset)
+        line.charges = []
+        line.quantity = asset.quantity ?? 1
+        line.nrcTotal = '0'
+        line.mrcTotal = '0'
+        line.isConfigured = true
+        line.validationErrors = null
       }
     }])
 
@@ -1113,13 +1148,15 @@ export class DefaultCpqQuotingService {
       // lineConfig — otherwise quantity edits would wipe them and flip the
       // line to "incomplete".
       const cfgRecord = lineConfig.configuration as Record<string, unknown> | null
-      const isArcMirrored = !!(cfgRecord?._arcMirroredFromItemId)
+      // #126: a device mirrored from the subscription is never priced.
+      const isAssetMirror = arcMirroredAssetId(cfgRecord, cpqConfig.quoteType) !== null
+      const isArcMirrored = !!(cfgRecord?._arcMirroredFromItemId) || isAssetMirror
       // Frozen Amend mirror lines keep the subscription item's stored charges
       // (see arcPriceFreeze.ts) — re-pricing them would silently move the
       // contracted price of items the amendment does not touch.
       const isFrozen = isFrozenAmendMirrorLine(cfgRecord, cpqConfig.quoteType)
       let charges: ResolvedCharge[]
-      if (isArcCancelledLine(lineConfig, cpqConfig.quoteType)) {
+      if (isArcCancelledLine(lineConfig, cpqConfig.quoteType) || isAssetMirror) {
         // Item marked for removal: it leaves the subscription, so it adds
         // nothing to the quote (its current price is shown via `arcSource`).
         charges = []
@@ -2629,7 +2666,9 @@ DefaultCpqQuotingService.prototype.validateArcQuote = async function (
     if (
       (line.action === 'cancel' || line.action === 'modify') &&
       cpqConfig.quoteType !== 'cancel' &&
-      !line.sourceSubscriptionItemId
+      !line.sourceSubscriptionItemId &&
+      // #126: a device line acts on its asset instead of a subscription item.
+      !arcMirroredAssetId(line.configuration as Record<string, unknown> | null, cpqConfig.quoteType)
     ) {
       errors.push(
         `Quote line ${line.quoteLineId} action='${line.action}' requires source_subscription_item_id`,
@@ -2910,7 +2949,19 @@ async function mirrorTargetSubscriptionItems(
     deletedAt: null,
     status: { $nin: ['terminated', 'expired', 'superseded'] },
   })
-  if (items.length === 0) return
+  // #126: devices (assets) of the subscription are mirrored too, so the
+  // operator can keep or return them and a bundle slot sees its device.
+  // Merge renew keeps its own asset migration (out of scope).
+  const assets = options?.mergeMode
+    ? []
+    : await em.find(CpqInventoryAsset, {
+        subscriptionId: sub.id,
+        organizationId: scope.organizationId,
+        tenantId: scope.tenantId,
+        deletedAt: null,
+        status: { $in: ['pending', 'delivered', 'active'] },
+      })
+  if (items.length === 0 && assets.length === 0) return
 
   const existingLines = await em.find(SalesQuoteLine, {
     quote: salesQuote,
@@ -2987,6 +3038,64 @@ async function mirrorTargetSubscriptionItems(
       sourceSubscriptionItemId: item.id,
     })
     em.persist(lineConfig)
+  }
+
+  for (const asset of assets) {
+    // Nest under the mirrored line of the item the device belongs to. A device
+    // whose item is gone (terminated) is not part of the live subscription.
+    const parentLineId = asset.subscriptionItemId
+      ? subItemIdToSalesLineId.get(asset.subscriptionItemId) ?? undefined
+      : null
+    if (parentLineId === undefined) continue
+    const salesLineId = crypto.randomUUID()
+    em.persist(em.create(SalesQuoteLine, {
+      id: salesLineId,
+      quote: salesQuote,
+      organizationId: scope.organizationId,
+      tenantId: scope.tenantId,
+      lineNumber: nextLineNumber++,
+      kind: 'product',
+      productId: asset.productId ?? null,
+      name: asset.name,
+      quantity: String(asset.quantity ?? 1),
+      unitPriceNet: '0',
+      unitPriceGross: '0',
+      totalNetAmount: '0',
+      totalGrossAmount: '0',
+      discountAmount: '0',
+      discountPercent: '0',
+      taxRate: '0',
+      taxAmount: '0',
+      currencyCode: sub.currencyCode,
+      configuration: asset.configuration ?? null,
+      normalizedQuantity: '0',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as never))
+    em.persist(em.create(CpqQuoteLineConfiguration, {
+      organizationId: scope.organizationId,
+      tenantId: scope.tenantId,
+      quoteLineId: salesLineId,
+      quoteConfigurationId: cpqConfig.id,
+      offeringId: asset.offeringId ?? null,
+      productId: asset.productId ?? null,
+      specId: asset.specId ?? null,
+      action: lineAction,
+      parentLineId,
+      startDate: null,
+      termMonths: null,
+      endDate: null,
+      configuration: buildArcAssetMirrorConfiguration(asset.configuration, asset),
+      quantity: asset.quantity ?? 1,
+      // The device was bought on the original order: keeping or returning it
+      // is not priced, so it neither inflates the quote nor bills again.
+      charges: [],
+      nrcTotal: '0',
+      mrcTotal: '0',
+      isConfigured: true,
+      targetSubscriptionId: sub.id,
+      sourceSubscriptionItemId: null,
+    }))
   }
 }
 

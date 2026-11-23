@@ -31,7 +31,7 @@ import {
 import { emitCpqEvent } from '../events'
 import { buildActivatedEventCustomerFields, type ActivatedEventCustomerFields } from '../lib/activatedEventCustomer'
 import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
-import { stripQuoteOnlyArcMarkers } from './arcPriceFreeze'
+import { arcMirroredAssetId, stripQuoteOnlyArcMarkers } from './arcPriceFreeze'
 import { summarizeOrderPricing, type OrderWaterfallSummary } from './orderPricingSummary'
 
 // ─── Types ──────────────────────────────────────────────────────
@@ -507,7 +507,7 @@ export class DefaultCpqOrderService {
             sourceQuoteId: sourceQuote.id,
             sourceOrderId: orderConfig.id,
             performedByUserId: null,
-            lineChanges: lines.map((l) => buildArcLineChange(l, specMap)),
+            lineChanges: lines.map((l) => buildArcLineChange(l, specMap, quoteType)),
           },
           scope,
         )
@@ -554,7 +554,7 @@ export class DefaultCpqOrderService {
                 newTermEnd: target.newTermEnd,
                 newTermMonths: target.newTermMonths ?? null,
               },
-              lineChanges: lines.map((l) => buildArcLineChange(l, specMap)),
+              lineChanges: lines.map((l) => buildArcLineChange(l, specMap, quoteType)),
             },
             scope,
           )
@@ -584,7 +584,7 @@ export class DefaultCpqOrderService {
               newSubCode: sourceQuote.arcMergeNewSubCode ?? null,
               newSubName: sourceQuote.arcMergeNewSubName ?? null,
             },
-            lineChanges: mergeLines.map((l) => buildArcLineChange(l, specMap)),
+            lineChanges: mergeLines.map((l) => buildArcLineChange(l, specMap, quoteType)),
           },
           scope,
         )
@@ -709,13 +709,14 @@ export class DefaultCpqOrderService {
     }
     await this.em.flush()
 
+    const assetEventItems: Array<{ subscriptionItemId: string; orderLineId: string; startDate: string | null; productName: string; mrcTotal: number; nrcTotal: number }> = []
     for (const line of assetLines) {
       let subscriptionItemId: string | undefined
       if (line.parentLineId) {
         subscriptionItemId = orderLineToSubItem.get(line.parentLineId) ?? undefined
       }
 
-      await this.inventoryService.createAsset(
+      const asset = await this.inventoryService.createAsset(
         {
           customerId: orderConfig.customerId,
           subscriptionId: subscription.id,
@@ -736,6 +737,17 @@ export class DefaultCpqOrderService {
         },
         scope,
       )
+      // #126: the device's own charges (e.g. an ONT's one-time price) are billed
+      // too. Billing has no asset concept, so the asset id stands in for the
+      // subscription item id (it keys the Billing Item's source ref).
+      assetEventItems.push({
+        subscriptionItemId: asset.id,
+        orderLineId: line.orderLineId,
+        startDate: iso10(line.startDate),
+        productName: this.getLineName(line),
+        mrcTotal: Number(line.mrcTotal),
+        nrcTotal: Number(line.nrcTotal),
+      })
     }
 
     // Pair each subscription line with its created subscription item —
@@ -750,6 +762,7 @@ export class DefaultCpqOrderService {
         mrcTotal: Number(line.mrcTotal),
         nrcTotal: Number(line.nrcTotal),
       }))
+      .concat(assetEventItems)
       // Only lines with a billable charge — a zero-value line yields
       // no Billing Item anyway; emitting it would just make the
       // connector create a needless shell account.
@@ -1123,8 +1136,14 @@ export function isOrderError(err: unknown): err is OrderError {
 function buildArcLineChange(
   line: CpqQuoteLineConfiguration,
   specMap: Map<string, CpqProductSpecification>,
+  quoteType: string,
 ): ArcLineChange {
   const action = line.action as 'add' | 'modify' | 'cancel'
+  // #126: a device line acts on its asset, never on the parent's item.
+  const sourceAssetId = arcMirroredAssetId(line.configuration as Record<string, unknown> | null, quoteType)
+  if (sourceAssetId && (action === 'modify' || action === 'cancel')) {
+    return { quoteLineId: line.quoteLineId, action, sourceAssetId }
+  }
   if (action === 'add') {
     const itemInput: Omit<CreateSubscriptionItemInput, 'name'> & { name: string } = {
       productId: line.productId ?? undefined,
@@ -1315,21 +1334,26 @@ export function buildArcAddedItems(
   const summary = (changeLog.lineChanges ?? []) as Array<{
     action?: string
     itemId?: string
+    assetId?: string
+    name?: string
     quoteLineId?: string | null
     mrcAmount?: unknown
     nrcAmount?: unknown
   }>
   const out: ArcChargeItem[] = []
   for (const change of summary) {
-    if (change.action !== 'add' || typeof change.itemId !== 'string') continue
+    // #126: an added device (asset) is billed like a new sale's device, keyed
+    // by its asset id (billing has no asset concept).
+    const billedId = change.action === 'add' ? change.itemId : change.action === 'add_asset' ? change.assetId : undefined
+    if (typeof billedId !== 'string') continue
     const mrc = Number(change.mrcAmount)
     const nrc = Number(change.nrcAmount)
     const ref = change.quoteLineId ? lineRefs?.get(change.quoteLineId) : undefined
     out.push({
-      subscriptionItemId: change.itemId,
+      subscriptionItemId: billedId,
       ...(ref ? { orderLineId: ref.orderLineId } : {}),
       ...(ref?.startDate ? { startDate: ref.startDate } : {}),
-      productName: nameById.get(change.itemId) || 'Configured item',
+      productName: nameById.get(billedId) || change.name || 'Configured item',
       quantity: 1,
       charges: [
         ...(mrc > 0
@@ -1344,15 +1368,52 @@ export function buildArcAddedItems(
   return out
 }
 
-/** Subscription-item ids removed by a change log's `cancel` line changes. */
-function buildArcRemovedItemIds(changeLog: ApplyArcResult['changeLog']): string[] {
+/**
+ * Billing keys that stop billing after a change log: subscription items of
+ * `cancel` line changes, and (#126) devices returned or cancelled through
+ * their own line (`retire_asset`, keyed by asset id like `add_asset`).
+ */
+export function buildArcRemovedItemIds(changeLog: ApplyArcResult['changeLog']): string[] {
   const summary = (changeLog.lineChanges ?? []) as Array<{
     action?: string
     itemId?: string
+    assetId?: string
   }>
-  return summary
-    .filter((c) => c.action === 'cancel' && typeof c.itemId === 'string')
-    .map((c) => c.itemId as string)
+  const out: string[] = []
+  for (const c of summary) {
+    if (c.action === 'cancel' && typeof c.itemId === 'string') out.push(c.itemId)
+    if (c.action === 'retire_asset' && typeof c.assetId === 'string') out.push(c.assetId)
+  }
+  return out
+}
+
+/**
+ * #126: subscription items whose recurring price changed on a `modify` line,
+ * with their new recurring amount, so billing can re-rate them. A modify line
+ * never re-bills one-time charges.
+ */
+export function buildArcChangedItems(changeLog: ApplyArcResult['changeLog']): ArcChargeItem[] {
+  const after = changeLog.afterSnapshot as { items?: Array<{ id?: string; name?: string }> } | null
+  const nameById = new Map((after?.items ?? []).map((i) => [String(i.id), i.name ?? '']))
+  const summary = (changeLog.lineChanges ?? []) as Array<{
+    action?: string
+    itemId?: string
+    mrcDelta?: unknown
+    mrcAmount?: unknown
+  }>
+  const out: ArcChargeItem[] = []
+  for (const change of summary) {
+    if (change.action !== 'modify' || typeof change.itemId !== 'string') continue
+    if (!Number(change.mrcDelta) || change.mrcAmount === undefined) continue
+    const mrc = Number(change.mrcAmount)
+    out.push({
+      subscriptionItemId: change.itemId,
+      productName: nameById.get(change.itemId) || 'Configured item',
+      quantity: 1,
+      charges: mrc > 0 ? [{ type: 'recurring', unitPrice: mrc, description: 'Recurring charge' }] : [],
+    })
+  }
+  return out
 }
 
 async function emitAmendedEvent(
@@ -1370,6 +1431,7 @@ async function emitAmendedEvent(
     effectiveDate: iso10(result.changeLog.effectiveAt),
     addedItems: buildArcAddedItems(result.changeLog, envelope.lineRefs),
     removedSubscriptionItemIds: buildArcRemovedItemIds(result.changeLog),
+    changedItems: buildArcChangedItems(result.changeLog),
     sourceQuoteId: envelope.sourceQuoteId,
     sourceOrderId: envelope.sourceOrderId,
     timestamp: new Date().toISOString(),
@@ -1388,6 +1450,7 @@ async function emitRenewedEvent(
     newTermStart: iso10(result.subscription.currentTermStart),
     newTermEnd: iso10(result.subscription.currentTermEnd),
     addedItems: buildArcAddedItems(result.changeLog, envelope.lineRefs),
+    changedItems: buildArcChangedItems(result.changeLog),
     sourceQuoteId: envelope.sourceQuoteId,
     sourceOrderId: envelope.sourceOrderId,
     timestamp: new Date().toISOString(),

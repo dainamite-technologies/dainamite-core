@@ -304,6 +304,18 @@ export const INVENTORY_ASSET_TRANSITIONS: Record<InventoryAssetStatus, Inventory
   cancelled: [],
 }
 
+/**
+ * #126: status an asset gets when it leaves a subscription (its line removed
+ * on an ARC quote, its parent item cancelled, or the subscription
+ * terminated). A device the customer already has comes back (`returned`); one
+ * not yet delivered is `cancelled`. Already-retired assets keep their status.
+ */
+export function retiredAssetStatus(status: string): InventoryAssetStatus {
+  if (status === 'delivered' || status === 'active') return 'returned'
+  if (status === 'returned') return 'returned'
+  return 'cancelled'
+}
+
 // ─── Order status constants ─────────────────────────────────────
 
 export const CPQ_ORDER_STATUSES = ['draft', 'pending_activation', 'active', 'cancelled', 'fulfilled'] as const

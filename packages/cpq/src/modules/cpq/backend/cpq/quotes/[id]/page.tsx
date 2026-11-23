@@ -1191,8 +1191,10 @@ function BundleSlotPanel({ bundleTree, treeLoading, children, allLines, currency
   return (
     <div className="border-t bg-muted/5">
       {bundleTree.slots.map((slot) => {
+        // A child marked for removal no longer fills the slot (same rule as the
+        // server's V-QBUN check, #126).
         const filledChildren = children.filter((c) =>
-          slot.components.some((comp) => comp.childOffering.offeringId === c.offeringId),
+          c.action !== 'cancel' && slot.components.some((comp) => comp.childOffering.offeringId === c.offeringId),
         )
         const filledCount = filledChildren.length
         const isRequired = slot.cardinalityMin > 0
@@ -1316,6 +1318,7 @@ function QuoteLineRow({ line, lineIdx, currency, isExpanded, pricingDetail, isBu
   const adjustmentUi = usePriceAdjustmentUi()
   const removalUi = useArcLineRemovalUi()
   const isRemoved = removalUi?.isRemoved(line) ?? false
+  const isDeviceLine = typeof line.configuration?._arcMirroredFromAssetId === 'string'
   const paddingLeft = indent > 0 ? `${indent * 2 + 1}rem` : undefined
   const chargeActions = {
     reasonLabels: adjustmentUi?.reasonLabels,
@@ -1347,7 +1350,11 @@ function QuoteLineRow({ line, lineIdx, currency, isExpanded, pricingDetail, isBu
             <LineActionBadge
               action={line.action}
               label={isRemoved ? t('cpq.quotes.arc.lineRemoved', 'remove') : undefined}
-              title={isRemoved ? t('cpq.quotes.arc.lineRemovedHint', 'This item is cancelled on the subscription when the order is activated') : undefined}
+              title={isRemoved
+                ? isDeviceLine
+                  ? t('cpq.quotes.arc.deviceRemovedHint', 'This device is returned when the order is activated')
+                  : t('cpq.quotes.arc.lineRemovedHint', 'This item is cancelled on the subscription when the order is activated')
+                : undefined}
             />
             {!isRemoved && line.configuration?._arcPriceFrozen === true && (
               <Tag
@@ -1423,11 +1430,14 @@ function QuoteLineRow({ line, lineIdx, currency, isExpanded, pricingDetail, isBu
               </svg>
             </button>
           )}
+          {/* #126: a device from the subscription is kept or removed, never edited. */}
+          {!isDeviceLine && (
           <button onClick={onEdit} className="rounded p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors" title={t('cpq.common.edit', 'Edit')}>
             <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0115.75 21H5.25A2.25 2.25 0 013 18.75V8.25A2.25 2.25 0 015.25 6H10" />
             </svg>
           </button>
+          )}
           <button onClick={onRemove} className="rounded p-1.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors" title={t('cpq.quotes.detail.removeLine', 'Remove')}>
             <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
@@ -1463,10 +1473,13 @@ function LineSummaryFallback({ line, currency }: { line: QuoteLine; currency: st
   const t = useT()
   const hasTotals = line.nrcTotal > 0 || line.mrcTotal > 0
   const mirroredFromItemId = (line.configuration?._arcMirroredFromItemId as string | undefined) ?? null
+  const mirroredFromAssetId = (line.configuration?._arcMirroredFromAssetId as string | undefined) ?? null
   return (
     <div className="border-t bg-muted/10 px-12 py-2 text-xs text-muted-foreground space-y-1">
       <div>
-        {t('cpq.quotes.detail.noBreakdown', 'No detailed charge breakdown available for this line.')}
+        {mirroredFromAssetId
+          ? t('cpq.quotes.arc.deviceLine', 'Device already on the subscription. Keeping it is not charged again; removing it returns it when the order is activated.')
+          : t('cpq.quotes.detail.noBreakdown', 'No detailed charge breakdown available for this line.')}
         {mirroredFromItemId && ' '}
         {mirroredFromItemId && t('cpq.orders.detail.mirroredItem', 'Mirrored from existing subscription item.')}
       </div>

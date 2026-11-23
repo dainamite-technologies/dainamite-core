@@ -333,7 +333,7 @@ updateQuoteLineTool = defineCpqApiTool<UpdateQuoteLineInput, Record<string, unkn
   name: 'cpq.update_quote_line',
   displayName: 'Update CPQ quote line',
   description:
-    'Change the configuration, quantity or term of an existing CPQ quote line. Configuration values are merged over the current ones. The server re-prices the line and recalculates the quote. Goes through the operator approval card before anything is saved. Returns { quote } after the change.',
+    'Change the configuration, quantity or term of an existing CPQ quote line. Configuration values are merged over the current ones. The server re-prices the line and recalculates the quote. Goes through the operator approval card before anything is saved. Returns { quote } after the change. A device line mirrored from a subscription asset on an ARC quote cannot be changed: remove it in the backoffice and add the new device instead.',
   inputSchema: updateQuoteLineInput,
   requiredFeatures: ['cpq.quotes.manage', 'cpq.quotes.view'],
   isMutation: true,

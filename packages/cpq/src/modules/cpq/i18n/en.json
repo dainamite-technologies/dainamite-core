@@ -690,6 +690,8 @@
   "cpq.pricing.validation.priceColumnLabelRequired": "Price Column #{index}: label is required",
   "cpq.quotes.actions.open": "Open",
   "cpq.quotes.add": "New Quote",
+  "cpq.quotes.arc.deviceLine": "Device already on the subscription. Keeping it is not charged again; removing it returns it when the order is activated.",
+  "cpq.quotes.arc.deviceRemovedHint": "This device is returned when the order is activated",
   "cpq.quotes.arc.drawer.actions.amendHint": "Add or remove items on existing subscriptions. Term untouched.",
   "cpq.quotes.arc.drawer.actions.cancelHint": "Terminate one or more subscriptions.",
   "cpq.quotes.arc.drawer.actions.renewHint": "Extend term. With 2+ targets, merges them into a new contract.",

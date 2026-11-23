@@ -41,7 +41,40 @@ export function isArcPriceFrozen(configuration: Record<string, unknown> | null |
  * is a new quote).
  */
 export function isArcMirrorLine(configuration: Record<string, unknown> | null | undefined, quoteType: string | null | undefined): boolean {
-  return (quoteType === 'amend' || quoteType === 'renew' || quoteType === 'cancel') && typeof configuration?._arcMirroredFromItemId === 'string'
+  return (
+    (quoteType === 'amend' || quoteType === 'renew' || quoteType === 'cancel') &&
+    (typeof configuration?._arcMirroredFromItemId === 'string' || typeof configuration?.[ARC_MIRRORED_ASSET_KEY] === 'string')
+  )
+}
+
+/**
+ * #126: marker of a line mirrored from an asset (a device such as an ONT) of
+ * the target subscription. Such a line is never priced (the device was bought
+ * once, on the original order); `modify` keeps the device and `cancel` returns
+ * it at activation.
+ */
+export const ARC_MIRRORED_ASSET_KEY = '_arcMirroredFromAssetId'
+
+/** The mirrored asset id of a server-made asset mirror line, else null. */
+export function arcMirroredAssetId(
+  configuration: Record<string, unknown> | null | undefined,
+  quoteType: string | null | undefined,
+): string | null {
+  if (quoteType !== 'amend' && quoteType !== 'renew' && quoteType !== 'cancel') return null
+  const id = configuration?.[ARC_MIRRORED_ASSET_KEY]
+  return typeof id === 'string' ? id : null
+}
+
+/** Configuration for an asset mirror line: the asset's configuration plus the ARC markers. */
+export function buildArcAssetMirrorConfiguration(
+  assetConfiguration: Record<string, unknown> | null | undefined,
+  asset: { id: string; name: string },
+): Record<string, unknown> {
+  return {
+    ...stripArcMarkers(assetConfiguration),
+    [ARC_MIRRORED_ASSET_KEY]: asset.id,
+    _arcMirroredName: asset.name,
+  }
 }
 
 export function isFrozenAmendMirrorLine(

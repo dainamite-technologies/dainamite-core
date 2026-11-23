@@ -54,6 +54,10 @@ export interface BundleTreeNode {
   offeringType: string
   /** Whether the offering itself is active (inactive defaults are not added to quotes). */
   isActive: boolean
+  /** #133: offering lifecycle; only `active` children are added as defaults. */
+  lifecycleStatus: string
+  /** #133: false = component-only, can't be quoted as a top-level line. */
+  isSellable: boolean
   specId: string
   specType: string
   isAssetizable: boolean
@@ -486,6 +490,8 @@ export class DefaultCpqBundleService {
       offeringName: offering.name,
       offeringType: offering.offeringType,
       isActive: offering.isActive,
+      lifecycleStatus: offering.lifecycleStatus,
+      isSellable: offering.isSellable,
       specId: spec.id,
       specType: spec.specType,
       isAssetizable: spec.isAssetizable,

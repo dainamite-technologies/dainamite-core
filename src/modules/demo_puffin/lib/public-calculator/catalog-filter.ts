@@ -5,6 +5,8 @@
  * Responsibilities:
  *   - Drop offerings whose `metadata.listedInCalculator` is not strictly true.
  *   - Drop offerings whose `lifecycleStatus` is not `'active'`.
+ *   - Drop component-only offerings (`isSellable: false`, CPQ #133): they can
+ *     only be quoted inside a bundle, never as a calculator line.
  *   - Strip every metadata key that could leak internal data (cost, margin,
  *     vendor, anything starting with `_internal_`).
  *   - Compute a `fromPriceMonthly` per spec from offering charges so the
@@ -77,6 +79,8 @@ export type RawOffering = {
   charges?: RawCharge[]
   components?: Array<Record<string, unknown>> | null
   isActive: boolean
+  /** CPQ #133: false = component-only. Missing means sellable. */
+  isSellable?: boolean
 }
 
 export type RawSpecification = {
@@ -226,6 +230,7 @@ export function filterPublicOfferings(offerings: RawOffering[]): PublicOffering[
   for (const offering of offerings) {
     if (offering.lifecycleStatus !== 'active') continue
     if (!offering.isActive) continue
+    if (offering.isSellable === false) continue
     if (!isListedInCalculator(offering.metadata)) continue
     const { monthly, oneTime } = computeFromPrice(offering)
     const metaDtvRaw = (offering.metadata as Record<string, unknown> | null | undefined)?.designTimeValues

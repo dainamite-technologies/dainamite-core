@@ -193,7 +193,7 @@ describe('cpq.add_quote_line preview', () => {
 
   it('counts the default component lines a bundle will add', async () => {
     api.on('GET', `/cpq/quotes/${QUOTE_ID}`, quote())
-    const leaf = (id: string) => ({ offeringId: id, offeringType: 'simple', isActive: true, slots: [] })
+    const leaf = (id: string) => ({ offeringId: id, offeringType: 'simple', isActive: true, lifecycleStatus: 'active', isSellable: true, slots: [] })
     api.on('GET', '/cpq/bundle-tree', {
       tree: {
         offeringId: OFFERING_ID_2, offeringType: 'bundle', isActive: true,

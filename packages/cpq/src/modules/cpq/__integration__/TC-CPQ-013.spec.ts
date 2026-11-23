@@ -13,6 +13,10 @@ import { deleteCustomer, seedCustomer, uniq } from './_helpers/cpqArcFixtures'
  *    are still configured (#125). The quote is `ready`.
  * 4. Removing a required component makes the bundle line incomplete with a
  *    V-QBUN-1 error naming the slot, and conversion is refused (#124).
+ * 5. The CPE spec has `defaultOfferingSellable: false`, so the ONT offering is
+ *    component-only (#133): it is hidden from `isSellable=true` lists, is still
+ *    a default component, is refused as a top-level line (422 V-QLINE-1) and
+ *    can be added back under the bundle line.
  */
 
 type Json = Record<string, unknown>
@@ -24,9 +28,9 @@ async function post(request: APIRequestContext, token: string, path: string, dat
   return { status: res.status(), body: (await res.json().catch(() => ({}))) as Json }
 }
 
-async function createSpec(request: APIRequestContext, token: string, specType: 'simple' | 'bundle', label: string): Promise<string> {
+async function createSpec(request: APIRequestContext, token: string, specType: 'simple' | 'bundle', label: string, extra: Json = {}): Promise<string> {
   const { status, body } = await post(request, token, '/api/cpq/product-specifications', {
-    code: `TC013-${label}-${uniq()}`, name: `TC-013 ${label}`, specType, lifecycleStatus: 'active',
+    code: `TC013-${label}-${uniq()}`, name: `TC-013 ${label}`, specType, lifecycleStatus: 'active', ...extra,
   })
   expect(status, `create ${label} spec`).toBe(201)
   return body.id as string
@@ -54,7 +58,8 @@ test.describe('TC-CPQ-013: bundle setup and bundle quoting (API)', () => {
 
     // ── Catalog: bundle "Fiber Home" with two required 1..1 slots ──────────
     const accessSpec = await createSpec(request, token, 'simple', 'access')
-    const cpeSpec = await createSpec(request, token, 'simple', 'cpe')
+    // #133: CPE offerings are bundle-only components by default.
+    const cpeSpec = await createSpec(request, token, 'simple', 'cpe', { defaultOfferingSellable: false })
     const bundleSpec = await createSpec(request, token, 'bundle', 'bundle')
     cleanup.push(del('/api/cpq/product-specifications', accessSpec), del('/api/cpq/product-specifications', cpeSpec), del('/api/cpq/product-specifications', bundleSpec))
 
@@ -73,6 +78,13 @@ test.describe('TC-CPQ-013: bundle setup and bundle quoting (API)', () => {
     cleanup.push(del('/api/cpq/product-offerings', fiber.id as string), del('/api/cpq/product-offerings', ont.id as string), del('/api/cpq/product-offerings', bundle.id as string))
     expect(fiber.offeringType).toBe('simple')
     expect(bundle.offeringType).toBe('bundle') // #122: derived from the bundle spec
+    expect(ont.isSellable).toBe(false) // #133: pre-filled from the CPE spec
+    expect(fiber.isSellable).toBe(true)
+
+    // #133: the top-level picker list (`isSellable=true`) hides the ONT.
+    const sellableList = await apiRequest(request, 'GET', `/api/cpq/product-offerings?specId=${cpeSpec}&isSellable=true`, { token })
+    expect(sellableList.ok()).toBeTruthy()
+    expect(((await sellableList.json()) as { items: Json[] }).items).toHaveLength(0)
 
     // ── #122: remove a component and add it back ────────────────────────────
     const first = await post(request, token, '/api/cpq/offering-components', {
@@ -114,6 +126,11 @@ test.describe('TC-CPQ-013: bundle setup and bundle quoting (API)', () => {
     expect(quote.lines.every((l) => l.isConfigured)).toBe(true)
     expect(quote.cpqStatus).toBe('ready')
 
+    // ── #133: the component-only ONT can't be a top-level line ──────────────
+    const topLevelOnt = await post(request, token, `/api/cpq/quotes/${quoteId}/items`, { offeringId: ont.id, configuration: {} })
+    expect(topLevelOnt.status, JSON.stringify(topLevelOnt.body)).toBe(422)
+    expect(topLevelOnt.body.code).toBe('V-QLINE-1')
+
     // ── #124: remove the required CPE line ──────────────────────────────────
     const ontLine = children.find((l) => l.offeringId === ont.id)!
     const afterRemove = await apiRequest(request, 'DELETE', `/api/cpq/quotes/${quoteId}/items/${ontLine.lineId}`, { token })
@@ -127,5 +144,12 @@ test.describe('TC-CPQ-013: bundle setup and bundle quoting (API)', () => {
     const convert = await post(request, token, '/api/cpq/orders', { quoteId })
     expect(convert.status).toBe(422)
     expect(convert.body.error).toBe('BUNDLE_INCOMPLETE')
+
+    // ── #133: the ONT can be added back under the bundle line ───────────────
+    const readded = await post(request, token, `/api/cpq/quotes/${quoteId}/items`, {
+      offeringId: ont.id, configuration: {}, parentLineId: bundleLine.lineId,
+    })
+    expect(readded.status, JSON.stringify(readded.body)).toBe(201)
+    expect((readded.body as unknown as Quote).cpqStatus).toBe('ready')
   })
 })

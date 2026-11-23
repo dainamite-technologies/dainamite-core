@@ -433,10 +433,14 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
 
   // ─── Actions ─────────────────────────────────────────────────
 
-  const loadOfferings = async () => {
+  // #133: the top-level picker hides component-only offerings (`isSellable: false`);
+  // the bundle component picker must still list them.
+  const loadOfferings = async ({ sellableOnly }: { sellableOnly: boolean }) => {
     setOfferingsLoading(true)
     try {
-      const result = await apiJson<{ items: Offering[] }>(t, '/api/cpq/product-offerings?pageSize=100&lifecycleStatus=active')
+      const params = new URLSearchParams({ pageSize: '100', lifecycleStatus: 'active' })
+      if (sellableOnly) params.set('isSellable', 'true')
+      const result = await apiJson<{ items: Offering[] }>(t, `/api/cpq/product-offerings?${params}`)
       setOfferings(result.items ?? [])
     } catch { setOfferings([]) }
     finally { setOfferingsLoading(false) }
@@ -572,7 +576,7 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
     resetConfigState()
     // Default: apply to all attached targets (operator can uncheck in the picker).
     setAddingTargetSubIds(arcTargets.map((t) => t.subscriptionId))
-    loadOfferings()
+    loadOfferings({ sellableOnly: true })
     setView('add-offering')
   }
 
@@ -599,7 +603,7 @@ export default function CpqQuoteDetailPage(props: { params?: { id?: string } }) 
         }
       } catch { /* fall through to browser */ }
     }
-    loadOfferings()
+    loadOfferings({ sellableOnly: false })
     setView('add-offering')
   }
 

@@ -22,7 +22,7 @@ const SCOPE: TenantScope = {
 type Row = Record<string, unknown>
 
 const node = (id: string, overrides: Partial<BundleTreeNode> = {}): BundleTreeNode => ({
-  offeringId: id, offeringCode: id, offeringName: id, offeringType: 'simple', isActive: true,
+  offeringId: id, offeringCode: id, offeringName: id, offeringType: 'simple', isActive: true, lifecycleStatus: 'active', isSellable: true,
   specId: `spec-${id}`, specType: 'simple', isAssetizable: false, charges: [], slots: [], ...overrides,
 })
 const slot = (group: string, children: Array<[BundleTreeNode, boolean]>): BundleTreeNode['slots'][number] => ({
@@ -30,7 +30,7 @@ const slot = (group: string, children: Array<[BundleTreeNode, boolean]>): Bundle
   components: children.map(([child, isDefault], i) => ({ componentId: `c-${child.offeringId}`, childOffering: child, isDefault, sortOrder: i })),
 })
 
-function setup(tree: BundleTreeNode, attributesBySpec: Record<string, Row[]> = {}) {
+function setup(tree: BundleTreeNode, attributesBySpec: Record<string, Row[]> = {}, offeringOverrides: Record<string, Row> = {}) {
   const quote = { id: 'cpq-1', quoteId: 'sq-1', cpqStatus: 'new', customerId: 'cust', currencyCode: 'USD', version: 1, quoteType: 'new', quoteContext: null }
   ;(globalThis as Record<string, unknown>).__cpqTestQuote = quote
   const offerings = new Map<string, Row>([
@@ -40,12 +40,14 @@ function setup(tree: BundleTreeNode, attributesBySpec: Record<string, Row[]> = {
     ['tv', { id: 'tv', specId: 'spec-tv', offeringType: 'bundle', name: 'TV', code: 'TV' }],
     ['base', { id: 'base', specId: 'spec-base', offeringType: 'simple', name: 'Base', code: 'B' }],
   ])
+  for (const [id, override] of Object.entries(offeringOverrides)) offerings.set(id, { ...offerings.get(id), ...override })
   const lineConfigs: Row[] = []
   const salesLines: Row[] = []
   const em = {
     findOne: jest.fn(async (entity: unknown, where: Row) => {
       if (entity === SalesQuote) return { id: 'sq-1', currencyCode: 'USD', quoteNumber: 'Q-1' }
       if (entity === CpqProductOffering) return offerings.get(where.id as string) ?? null
+      if (entity === CpqQuoteLineConfiguration) return lineConfigs.find((l) => l.quoteLineId === where.quoteLineId) ?? null
       if (entity === CpqProductSpecification) return { id: where.id, productId: null, name: 'spec' }
       if (entity === SalesQuoteLine) return salesLines.find((l) => l.id === where.id) ?? null
       return null
@@ -138,5 +140,65 @@ describe('addQuoteItem with expandBundleDefaults (#123)', () => {
     expect(fiberLine.configuration).toEqual({ region: 'fra1', speed: '1G' })
     expect(fiberLine.termMonths).toBe(24)
     expect(fiberLine.quantity).toBe(1)
+  })
+})
+
+describe('addQuoteItem with a component-only offering (#133)', () => {
+  const componentOnly = { ont: { isSellable: false } }
+
+  it('rejects it as a top-level line with 422 V-QLINE-1 and creates no line', async () => {
+    const { service, lineConfigs } = setup(fiberHome, {}, componentOnly)
+    await expect(service.addQuoteItem('cpq-1', { offeringId: 'ont', configuration: {} }, SCOPE)).rejects.toMatchObject({
+      status: 422,
+      message: 'V-QLINE-1: Offering O can only be sold as part of a bundle',
+      details: { code: 'V-QLINE-1', offeringId: 'ont' },
+    })
+    expect(lineConfigs).toHaveLength(0)
+  })
+
+  it('accepts it as a child line under a bundle line of the quote', async () => {
+    const { service, lineConfigs } = setup(fiberHome, {}, componentOnly)
+    await service.addQuoteItem('cpq-1', { offeringId: 'bundle', configuration: {} }, SCOPE)
+    const bundleLineId = lineConfigs[0].quoteLineId as string
+    await service.addQuoteItem('cpq-1', { offeringId: 'ont', configuration: {}, parentLineId: bundleLineId }, SCOPE)
+    expect(lineConfigs.map((l) => [l.offeringId, l.parentLineId ?? null])).toEqual([['bundle', null], ['ont', bundleLineId]])
+  })
+
+  it('refuses a child line whose parent is not on the quote (404), so it cannot pose as a component', async () => {
+    const { service, lineConfigs } = setup(fiberHome, {}, componentOnly)
+    await expect(
+      service.addQuoteItem('cpq-1', { offeringId: 'ont', configuration: {}, parentLineId: 'no-such-line' }, SCOPE),
+    ).rejects.toMatchObject({ status: 404 })
+    expect(lineConfigs).toHaveLength(0)
+  })
+
+  it('still adds it as a default component of the bundle', async () => {
+    const { service, lineConfigs } = setup(fiberHome, {}, componentOnly)
+    await service.addQuoteItem('cpq-1', { offeringId: 'bundle', configuration: {}, expandBundleDefaults: true }, SCOPE)
+    expect(lineConfigs.map((l) => l.offeringId)).toEqual(['bundle', 'fiber', 'ont'])
+  })
+
+  it('blocks a top-level line that sends its own sourceSubscriptionItemId (never stored by this path)', async () => {
+    const { service, lineConfigs } = setup(fiberHome, {}, componentOnly)
+    await expect(
+      service.addQuoteItem('cpq-1', { offeringId: 'ont', configuration: {}, sourceSubscriptionItemId: 'item-1' } as never, SCOPE),
+    ).rejects.toMatchObject({ status: 422, details: { code: 'V-QLINE-1' } })
+    expect(lineConfigs).toHaveLength(0)
+  })
+
+  it('blocks a top-level line that sends ARC markers in its configuration (stripped on input)', async () => {
+    const { service, lineConfigs } = setup(fiberHome, {}, componentOnly)
+    await expect(
+      service.addQuoteItem('cpq-1', { offeringId: 'ont', configuration: { _arcMirroredFromItemId: 'item-1' } }, SCOPE),
+    ).rejects.toMatchObject({ status: 422, details: { code: 'V-QLINE-1' } })
+    expect(lineConfigs).toHaveLength(0)
+  })
+
+  it('blocks a top-level line that only claims to modify an item (the action is caller input)', async () => {
+    const { service, lineConfigs } = setup(fiberHome, {}, componentOnly)
+    await expect(
+      service.addQuoteItem('cpq-1', { offeringId: 'ont', configuration: {}, action: 'modify' }, SCOPE),
+    ).rejects.toMatchObject({ status: 422, details: { code: 'V-QLINE-1' } })
+    expect(lineConfigs).toHaveLength(0)
   })
 })

@@ -1,6 +1,7 @@
 import { dateColumnToIso } from '../lib/dateColumns'
 import { storedAdjustmentFailure } from './priceAdjustments/storedAdjustmentFailure'
 import { storedBundleSlotErrors } from './storedBundleSlotErrors'
+import { NON_SELLABLE_TOP_LEVEL_CODE, nonSellableTopLevelMessage, violatesSellability } from '../lib/offeringSellability'
 import { withQuotePricingWrite } from './priceAdjustments/quotePricingWrite'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { SalesOrder, SalesOrderLine } from '@open-mercato/core/modules/sales/data/entities'
@@ -187,6 +188,19 @@ export class DefaultCpqOrderService {
     if (bundleErrors.length > 0) {
       throw new OrderError(422, 'BUNDLE_INCOMPLETE', {
         errors: bundleErrors.map(({ lineId, slotGroup, slotName, message }) => ({ lineId, slotGroup, slotName, message })),
+      })
+    }
+
+    // #133: re-check sellability, so a quote written before an offering was
+    // made component-only can't convert a top-level line for it.
+    const nonSellable = await findNonSellableTopLevelLines(em, quoteLines, scope)
+    if (nonSellable.length > 0) {
+      throw new OrderError(422, NON_SELLABLE_TOP_LEVEL_CODE, {
+        errors: nonSellable.map(({ lineId, offeringId, offeringCode }) => ({
+          lineId,
+          offeringId,
+          message: nonSellableTopLevelMessage(offeringCode),
+        })),
       })
     }
 
@@ -1440,4 +1454,33 @@ async function emitSupersededEvent(
     sourceOrderId: envelope.sourceOrderId,
     timestamp: new Date().toISOString(),
   } as never)
+}
+
+/** #133: top-level quote lines whose offering is component-only (`isSellable = false`). */
+async function findNonSellableTopLevelLines(
+  em: EntityManager,
+  quoteLines: CpqQuoteLineConfiguration[],
+  scope: TenantScope,
+): Promise<Array<{ lineId: string; offeringId: string; offeringCode: string }>> {
+  // A parent that is not on the quote counts as no parent.
+  const lineIds = new Set(quoteLines.map((line) => line.quoteLineId))
+  const asChecked = (line: CpqQuoteLineConfiguration) => ({
+    parentLineId: line.parentLineId && lineIds.has(line.parentLineId) ? line.parentLineId : null,
+    sourceSubscriptionItemId: line.sourceSubscriptionItemId,
+    configuration: line.configuration as Record<string, unknown> | null,
+  })
+  const candidates = quoteLines.filter((line) => line.offeringId && violatesSellability({ isSellable: false }, asChecked(line)))
+  if (candidates.length === 0) return []
+  const offeringIds = [...new Set(candidates.map((line) => line.offeringId as string))]
+  const offerings = await em.find(CpqProductOffering, {
+    id: { $in: offeringIds },
+    organizationId: scope.organizationId,
+    tenantId: scope.tenantId,
+  })
+  const byId = new Map(offerings.map((offering) => [offering.id, offering]))
+  return candidates.flatMap((line) => {
+    const offering = byId.get(line.offeringId as string)
+    if (!offering || !violatesSellability(offering, asChecked(line))) return []
+    return [{ lineId: line.quoteLineId, offeringId: offering.id, offeringCode: offering.code }]
+  })
 }

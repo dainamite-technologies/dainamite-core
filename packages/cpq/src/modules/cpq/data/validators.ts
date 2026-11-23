@@ -28,6 +28,8 @@ export const cpqProductSpecificationCreateSchema = z.object({
   description: z.string().nullish(),
   specType: z.enum(['simple', 'bundle']).optional().default('simple'),
   isAssetizable: z.boolean().optional().default(false),
+  // #133: pre-fills `isSellable` on new offerings of this spec; never enforced.
+  defaultOfferingSellable: z.boolean().optional().default(true),
   // `retired` was merged into `deprecated` — see migration
   // `<timestamp>-merge-spec-retired-into-deprecated.ts`. Offerings still have
   // four states because the user-facing semantics there are different
@@ -61,6 +63,9 @@ export const cpqProductOfferingCreateSchema = z.object({
   // `<timestamp>-merge-offering-retired-into-deprecated.ts`. Aligned with
   // specifications: a single 3-state lifecycle keeps the UX uniform.
   lifecycleStatus: z.enum(['draft', 'active', 'deprecated']).optional().default('draft'),
+  // #133 (TMF620 `isSellable`). No default: when omitted, the create route takes
+  // the specification's `defaultOfferingSellable`.
+  isSellable: z.boolean().optional(),
   effectiveFrom: z.string().datetime().nullish(),
   effectiveTo: z.string().datetime().nullish(),
   metadata: z.record(z.string(), z.unknown()).nullish(),

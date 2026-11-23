@@ -77,6 +77,8 @@ Entry format (newest first within a section):
 
 ## Local environment and tooling
 
+- **The backend header's organization switcher is a `combobox` that can render after the page content.** (2026-11-23, TC-CPQ-ARC-005)
+  A page-wide `[role="combobox"]` `.first()` re-resolves on each use and can hit the switcher instead of the page's picker. Scope it: `page.getByRole('main').locator(...)`. Also clean up in `afterEach`: a `finally` in a timed-out test never completes, so fixtures pile up.
 - **A Playwright click on a server-rendered DataTable row can land before hydration and do nothing.** (2026-11-23, TC-CPQ-006)
   The row is visible before React attaches the handler, so a single click plus `waitForURL` flakes. Wrap click and `waitForURL` (short timeout) in `expect(...).toPass()`.
 - **`yarn dev` serves `@dainamite/*` from `dist`, so rebuild all packages together with `yarn build:packages`.** (2026-11-23, #141)

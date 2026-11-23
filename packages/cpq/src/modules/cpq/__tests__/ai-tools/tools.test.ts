@@ -268,6 +268,52 @@ const cases: ToolCase[] = [
     arrange: (fake) => fake.on('POST', `/cpq/quotes/${QUOTE_ID}/items`, { id: QUOTE_ID, lines: [] }, 201),
     expectedOutput: { quote: { id: QUOTE_ID, lines: [] } },
   },
+  // ─── catalog writes (#128) ───────────────────────────────────────────────
+  {
+    name: 'cpq.create_offering',
+    routeFile: 'product-offerings/route.ts',
+    method: 'POST',
+    mutation: true,
+    // specifications.view: the preview reads the specification.
+    extraFeatures: ['cpq.specifications.view'],
+    input: { specId: SPEC_ID, code: ' ont-basic ', name: 'ONT basic', lifecycleStatus: 'active', isSellable: false },
+    invalidInput: { specId: SPEC_ID, code: 'x', name: 'x', offeringType: 'bundle' },
+    expectedPath: '/cpq/product-offerings',
+    expectedBody: { specId: SPEC_ID, code: 'ont-basic', name: 'ONT basic', lifecycleStatus: 'active', isSellable: false },
+    arrange: (fake) => fake.on('POST', '/cpq/product-offerings', { id: OFFERING_ID, code: 'ont-basic' }, 201),
+    expectedOutput: { offering: { id: OFFERING_ID, code: 'ont-basic' } },
+  },
+  {
+    name: 'cpq.add_bundle_component',
+    routeFile: 'offering-components/route.ts',
+    method: 'POST',
+    mutation: true,
+    // offerings.view + specifications.view: the preview reads both offerings and the slot.
+    extraFeatures: ['cpq.offerings.view', 'cpq.specifications.view'],
+    input: { offeringId: OFFERING_ID, slotId: SPEC_ID, childOfferingId: OFFERING_ID_2, isDefault: true },
+    invalidInput: { offeringId: OFFERING_ID, slotId: 'not-a-uuid', childOfferingId: OFFERING_ID_2 },
+    expectedPath: '/cpq/offering-components',
+    expectedBody: { offeringId: OFFERING_ID, slotId: SPEC_ID, childOfferingId: OFFERING_ID_2, isDefault: true },
+    arrange: (fake) => fake.on('POST', '/cpq/offering-components', { id: LINE_ID }, 201),
+    expectedOutput: { component: { id: LINE_ID } },
+  },
+  {
+    name: 'cpq.remove_bundle_component',
+    routeFile: 'offering-components/route.ts',
+    method: 'DELETE',
+    mutation: true,
+    // offerings.view: the bundle is read to check the component belongs to it.
+    extraFeatures: ['cpq.offerings.view'],
+    input: { offeringId: OFFERING_ID, componentId: LINE_ID },
+    invalidInput: { offeringId: OFFERING_ID },
+    expectedPath: '/cpq/offering-components',
+    expectedBody: { id: LINE_ID },
+    arrange: (fake) =>
+      fake
+        .on('GET', '/cpq/product-offerings', { id: OFFERING_ID, components: [{ id: LINE_ID, childOfferingId: OFFERING_ID_2 }] })
+        .on('DELETE', '/cpq/offering-components', { success: true }),
+    expectedOutput: { removed: true, componentId: LINE_ID },
+  },
   {
     name: 'cpq.update_quote_line',
     routeFile: 'quotes/[quoteId]/items/[lineId]/route.ts',
@@ -494,8 +540,10 @@ describe.each(cases)('$name', (entry) => {
 
   it('surfaces a route error instead of returning data', async () => {
     // The error responder is registered first so it wins for its own path;
-    // mutation tools still get the quote for their pre-flight read.
+    // mutation tools still get their pre-flight reads (the quote, or the
+    // bundle offering for cpq.remove_bundle_component) from `arrange`.
     api.on(entry.method, entry.expectedPath, 'Forbidden', 403)
+    entry.arrange(api)
     api.on('GET', `/cpq/quotes/${QUOTE_ID}`, SAMPLE_QUOTE)
     const parsed = tool.inputSchema.parse(entry.input)
     await expect(tool.handler(parsed, ctxFor(entry))).rejects.toThrow('Forbidden')

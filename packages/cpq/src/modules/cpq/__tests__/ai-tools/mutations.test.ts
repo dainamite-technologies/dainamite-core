@@ -14,6 +14,8 @@ import {
 } from '../../data/validators'
 import { quoteRecordVersion, type CpqQuoteSnapshot } from '../../ai-tools/_shared'
 import { CPQ_QUOTE_MUTATION_TOOL_NAMES, mergeLinePatch } from '../../ai-tools/quotes-pack'
+import { CPQ_CATALOG_WRITE_TOOL_NAMES } from '../../ai-tools/catalog-write-pack'
+import { cpqOfferingComponentCreateSchema, cpqProductOfferingCreateSchema } from '../../data/validators'
 import { aiTools } from '../../ai-tools'
 import {
   CUSTOMER_ID,
@@ -22,6 +24,7 @@ import {
   OFFERING_ID,
   OFFERING_ID_2,
   QUOTE_ID,
+  SPEC_ID,
   getTool,
   makeCtx,
 } from './harness'
@@ -66,12 +69,18 @@ beforeEach(() => {
 })
 
 describe('mutation flags', () => {
-  it('flags exactly the four quote write tools as mutations', () => {
+  it('flags exactly the quote and catalog write tools as mutations', () => {
     const mutations = aiTools.filter((tool) => tool.isMutation === true).map((tool) => tool.name).sort()
-    expect(mutations).toEqual(
-      ['cpq.add_quote_line', 'cpq.create_quote', 'cpq.submit_quote_for_approval', 'cpq.update_quote_line'],
-    )
-    expect([...CPQ_QUOTE_MUTATION_TOOL_NAMES].sort()).toEqual(mutations)
+    expect(mutations).toEqual([
+      'cpq.add_bundle_component',
+      'cpq.add_quote_line',
+      'cpq.create_offering',
+      'cpq.create_quote',
+      'cpq.remove_bundle_component',
+      'cpq.submit_quote_for_approval',
+      'cpq.update_quote_line',
+    ])
+    expect([...CPQ_QUOTE_MUTATION_TOOL_NAMES, ...CPQ_CATALOG_WRITE_TOOL_NAMES].sort()).toEqual(mutations)
   })
 
   it('gives every mutation tool a preview resolver and no read tool one', () => {
@@ -374,5 +383,77 @@ describe('request bodies satisfy the route validators', () => {
   it('cpq.validate_configuration -> cpqValidateRelationshipsSchema', async () => {
     const body = await bodyOf('cpq.validate_configuration', { offeringIds: [OFFERING_ID] }, 'POST')
     expect(cpqValidateRelationshipsSchema.safeParse(body).success).toBe(true)
+  })
+})
+
+describe('catalog write tools (#128)', () => {
+  const offeringDetail = {
+    id: OFFERING_ID,
+    code: 'FH',
+    name: 'Fiber Home',
+    offeringType: 'bundle',
+    components: [{ id: LINE_ID, slot: { name: 'CPE' }, childOfferingId: OFFERING_ID_2, childOffering: { name: 'ONT' }, isDefault: true }],
+  }
+
+  it.each(['', undefined])('refuses every catalog write when approvedPendingActionId is %p', async (approved) => {
+    api.on('GET', '/cpq/product-offerings', offeringDetail)
+    const inputs: Record<string, Record<string, unknown>> = {
+      'cpq.create_offering': { specId: SPEC_ID, code: 'ont', name: 'ONT' },
+      'cpq.add_bundle_component': { offeringId: OFFERING_ID, slotId: SPEC_ID, childOfferingId: OFFERING_ID_2 },
+      'cpq.remove_bundle_component': { offeringId: OFFERING_ID, componentId: LINE_ID },
+    }
+    for (const name of CPQ_CATALOG_WRITE_TOOL_NAMES) {
+      const tool = getTool(name)
+      await expect(
+        tool.handler(tool.inputSchema.parse(inputs[name]), makeCtx({ approvedPendingActionId: approved })),
+      ).rejects.toMatchObject({ code: 'mutation_not_approved' })
+    }
+    expect(api.writes()).toHaveLength(0)
+  })
+
+  it('builds request bodies the routes accept', async () => {
+    api.on('POST', '/cpq/product-offerings', { id: OFFERING_ID }, 201).on('POST', '/cpq/offering-components', { id: LINE_ID }, 201)
+    const create = getTool('cpq.create_offering')
+    await create.handler(create.inputSchema.parse({ specId: SPEC_ID, code: 'ont', name: 'ONT', isSellable: false }), approvedCtx())
+    const add = getTool('cpq.add_bundle_component')
+    await add.handler(add.inputSchema.parse({ offeringId: OFFERING_ID, slotId: SPEC_ID, childOfferingId: OFFERING_ID_2 }), approvedCtx())
+    const [createCall, addCall] = api.writes()
+    expect(cpqProductOfferingCreateSchema.safeParse(createCall.body).success).toBe(true)
+    expect(cpqOfferingComponentCreateSchema.safeParse(addCall.body).success).toBe(true)
+  })
+
+  it('previews a new offering with the spec default for isSellable', async () => {
+    api.on('GET', '/cpq/product-specifications', { id: SPEC_ID, code: 'cpe', name: 'CPE', specType: 'simple', defaultOfferingSellable: false })
+    const tool = getTool('cpq.create_offering')
+    const preview = await tool.loadBeforeRecord!({ specId: SPEC_ID, code: 'ont', name: 'ONT' }, makeCtx())
+    expect(preview).toMatchObject({
+      recordId: SPEC_ID,
+      before: { code: null, name: null, isSellable: null },
+      after: { specification: 'CPE (cpe)', offeringType: 'simple', code: 'ont', name: 'ONT', lifecycleStatus: 'draft', isSellable: false },
+    })
+  })
+
+  it('previews adding a component with the slot and offering names', async () => {
+    api
+      .on('GET', '/cpq/bundle-slots', { id: SPEC_ID, name: 'CPE' })
+      .on('GET', '/cpq/product-offerings', offeringDetail)
+    const tool = getTool('cpq.add_bundle_component')
+    const preview = await tool.loadBeforeRecord!({ offeringId: OFFERING_ID, slotId: SPEC_ID, childOfferingId: OFFERING_ID_2 }, makeCtx())
+    expect(preview).toMatchObject({ before: { slot: null, childOffering: null }, after: { bundle: 'Fiber Home (FH)', slot: 'CPE', isDefault: false } })
+  })
+
+  it('previews and runs a removal, and refuses a component of another bundle', async () => {
+    api.on('GET', '/cpq/product-offerings', offeringDetail).on('DELETE', '/cpq/offering-components', { success: true })
+    const tool = getTool('cpq.remove_bundle_component')
+    const preview = await tool.loadBeforeRecord!({ offeringId: OFFERING_ID, componentId: LINE_ID }, makeCtx())
+    expect(preview).toMatchObject({ before: { slot: 'CPE', childOffering: 'ONT', isDefault: true }, after: { slot: null, childOffering: null } })
+
+    const foreign = tool.inputSchema.parse({ offeringId: OFFERING_ID, componentId: QUOTE_ID })
+    await expect(tool.handler(foreign, approvedCtx())).rejects.toThrow(/was not found on bundle offering/)
+    expect(api.writes()).toHaveLength(0)
+
+    await expect(tool.handler(tool.inputSchema.parse({ offeringId: OFFERING_ID, componentId: LINE_ID }), approvedCtx()))
+      .resolves.toEqual({ removed: true, componentId: LINE_ID })
+    expect(api.writes()).toEqual([expect.objectContaining({ method: 'DELETE', path: '/cpq/offering-components', body: { id: LINE_ID } })])
   })
 })

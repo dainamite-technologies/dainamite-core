@@ -1,12 +1,17 @@
 /**
- * Contract tests for the `cpq.quoting_assistant` agent definition.
+ * Contract tests for the `cpq.quoting_assistant` and `cpq.catalog_assistant`
+ * agent definitions.
  */
 import aiAgentsDefault, {
+  CPQ_CATALOG_ASSISTANT_ID,
+  CPQ_CATALOG_READ_TOOLS,
+  CPQ_CATALOG_WRITE_TOOLS,
   CPQ_GENERAL_TOOLS,
   CPQ_QUOTING_ASSISTANT_ID,
   CPQ_READ_TOOLS,
   CPQ_WRITE_TOOLS,
   aiAgents,
+  cpqCatalogAssistant,
   cpqQuotingAssistant,
 } from '../../ai-agents'
 import { aiTools } from '../../ai-tools'
@@ -16,10 +21,9 @@ import setup from '../../setup'
 const toolByName = new Map(aiTools.map((tool) => [tool.name, tool]))
 
 describe('cpq.quoting_assistant', () => {
-  it('is the single agent exported by the module', () => {
-    expect(aiAgents).toHaveLength(1)
+  it('is exported by the module next to the catalog assistant', () => {
+    expect(aiAgents).toEqual([cpqQuotingAssistant, cpqCatalogAssistant])
     expect(aiAgentsDefault).toBe(aiAgents)
-    expect(aiAgents[0]).toBe(cpqQuotingAssistant)
     expect(cpqQuotingAssistant.id).toBe(CPQ_QUOTING_ASSISTANT_ID)
     expect(cpqQuotingAssistant.id).toBe('cpq.quoting_assistant')
     expect(cpqQuotingAssistant.moduleId).toBe('cpq')
@@ -32,10 +36,11 @@ describe('cpq.quoting_assistant', () => {
     for (const name of cpqTools) expect({ name, registered: toolByName.has(name) }).toEqual({ name, registered: true })
   })
 
-  it('exposes every registered CPQ tool', () => {
+  it('exposes every registered CPQ tool except the catalog writes (#128)', () => {
     expect(cpqQuotingAssistant.allowedTools.filter((name) => name.startsWith('cpq.')).sort()).toEqual(
-      aiTools.map((tool) => tool.name).sort(),
+      aiTools.map((tool) => tool.name).filter((name) => !CPQ_CATALOG_WRITE_TOOLS.includes(name)).sort(),
     )
+    for (const name of CPQ_CATALOG_WRITE_TOOLS) expect(cpqQuotingAssistant.allowedTools).not.toContain(name)
   })
 
   it('is write-capable with confirmation, so tenant overrides can still lock it to read-only', () => {
@@ -55,7 +60,7 @@ describe('cpq.quoting_assistant', () => {
       expect({ name, isMutation: toolByName.get(name)?.isMutation === true }).toEqual({ name, isMutation: false })
     }
     const flagged = aiTools.filter((tool) => tool.isMutation === true).map((tool) => tool.name).sort()
-    expect([...CPQ_WRITE_TOOLS].sort()).toEqual(flagged)
+    expect([...CPQ_WRITE_TOOLS, ...CPQ_CATALOG_WRITE_TOOLS].sort()).toEqual(flagged)
   })
 
   it('keeps the general-purpose framework packs on the allowlist', () => {
@@ -95,6 +100,40 @@ describe('cpq.quoting_assistant', () => {
       cpqQuotingAssistant.description,
       ...(cpqQuotingAssistant.suggestions ?? []).flatMap((s) => [s.label, s.prompt]),
       ...aiTools.map((tool) => tool.description),
+    ]
+    for (const text of texts) expect(text).not.toMatch(/[\u2013\u2014]/)
+  })
+})
+
+describe('cpq.catalog_assistant (#128)', () => {
+  it('has a stable id in the cpq module', () => {
+    expect(cpqCatalogAssistant.id).toBe(CPQ_CATALOG_ASSISTANT_ID)
+    expect(cpqCatalogAssistant.id).toBe('cpq.catalog_assistant')
+    expect(cpqCatalogAssistant.moduleId).toBe('cpq')
+  })
+
+  it('allows the catalog reads and writes and nothing from quotes', () => {
+    const cpqTools = cpqCatalogAssistant.allowedTools.filter((name) => name.startsWith('cpq.')).sort()
+    expect(cpqTools).toEqual([...CPQ_CATALOG_READ_TOOLS, ...CPQ_CATALOG_WRITE_TOOLS].sort())
+    for (const name of cpqTools) expect({ name, registered: toolByName.has(name) }).toEqual({ name, registered: true })
+    for (const name of CPQ_CATALOG_READ_TOOLS) expect(CPQ_READ_TOOLS).toContain(name)
+    for (const name of CPQ_CATALOG_WRITE_TOOLS) expect(toolByName.get(name)?.isMutation).toBe(true)
+    for (const name of CPQ_GENERAL_TOOLS) expect(cpqCatalogAssistant.allowedTools).toContain(name)
+  })
+
+  it('is write-capable with confirmation and only for catalog admins', () => {
+    expect(cpqCatalogAssistant.readOnly).toBe(false)
+    expect(cpqCatalogAssistant.mutationPolicy).toBe('confirm-required')
+    expect(cpqCatalogAssistant.requiredFeatures).toEqual(['cpq.offerings.manage'])
+    expect(new Set<string>(features.map((feature) => feature.id)).has('cpq.offerings.manage')).toBe(true)
+    expect(cpqCatalogAssistant.systemPrompt).toMatch(/approval card/)
+  })
+
+  it('never contains long dashes in operator-facing text', () => {
+    const texts = [
+      cpqCatalogAssistant.systemPrompt,
+      cpqCatalogAssistant.description,
+      ...(cpqCatalogAssistant.suggestions ?? []).flatMap((s) => [s.label, s.prompt]),
     ]
     for (const text of texts) expect(text).not.toMatch(/[\u2013\u2014]/)
   })

@@ -15,6 +15,7 @@
  * See `ai-tools/_shared.ts` and `manuals/cpq-ai-agent.md`.
  */
 import { catalogAiTools } from './ai-tools/catalog-pack'
+import { catalogWriteAiTools } from './ai-tools/catalog-write-pack'
 import { pricingAiTools } from './ai-tools/pricing-pack'
 import { quotesAiTools } from './ai-tools/quotes-pack'
 import { inventoryAiTools } from './ai-tools/inventory-pack'
@@ -23,6 +24,7 @@ import type { CpqAiToolDefinition } from './ai-tools/_shared'
 
 export const aiTools: CpqAiToolDefinition[] = [
   ...catalogAiTools,
+  ...catalogWriteAiTools,
   ...pricingAiTools,
   ...quotesAiTools,
   ...inventoryAiTools,

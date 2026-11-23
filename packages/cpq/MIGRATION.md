@@ -166,6 +166,18 @@ the `@dainamite/cpq` package, per
 
 ## Schema / API changelog (track breaking changes here)
 
+### 2026-11-23 - Catalog AI tools and catalog assistant (#128)
+
+**Migration.** None.
+
+**API (additive).** New AI tools `cpq.create_offering`
+(`POST /product-offerings`), `cpq.add_bundle_component` and
+`cpq.remove_bundle_component` (`POST` / `DELETE /offering-components`), all
+mutations flagged destructive and gated by the approval card. New agent
+`cpq.catalog_assistant` (requires `cpq.offerings.manage`) is the only one that
+allowlists them; `cpq.quoting_assistant` is unchanged. Run `yarn generate` to
+register them.
+
 ### 2026-11-17 - Bundle setup, default components, slot validation (#122-#125)
 
 **Migration.** `Migration20261117120000_cpq_offering_components_partial_unique`

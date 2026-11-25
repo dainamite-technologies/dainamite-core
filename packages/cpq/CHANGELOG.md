@@ -1,5 +1,25 @@
 # @dainamite/cpq
 
+## 1.3.0
+
+### Minor Changes
+
+- aa79996: Devices on ARC quotes (#126). Amend, Renew and Cancel quotes show the subscription's devices (assets) as unpriced lines under their bundle, so they can be kept, returned or swapped; removed devices are returned at activation. A device added on an ARC quote creates only an asset, like a new sale. Billing now receives a device's own charges (new sale and ARC add), stops billing returned devices, and re-rates items whose recurring price changed on an Amend or Renew (`changedItems`).
+- b80fcbd: Catalog AI tools (#128): `cpq.create_offering`, `cpq.add_bundle_component` and `cpq.remove_bundle_component`, available only to the new `cpq.catalog_assistant` agent for catalog admins (`cpq.offerings.manage`). Every write goes through the approval card; the quoting assistant cannot change the catalog. Run `yarn generate` after upgrading.
+- feea38b: Component-only offerings (#133). Offerings get `isSellable` (TMF620): when false, the offering can only be quoted as a bundle component. Adding it as a top-level quote line returns 422 `V-QLINE-1`, and conversion to an order re-checks it. Specifications get `defaultOfferingSellable`, which pre-fills the flag on new offerings. The quote "Add Offering" picker, the wizard offering step and `cpq.list_offerings` can filter on it. Bundle default expansion now skips child offerings that are not lifecycle-active. Run `yarn mercato db migrate` after upgrading.
+- 28daa65: The CPQ Quoting Assistant can now find the customer of a quote: the read-only core tools `customers.list_companies`, `customers.get_company`, `customers.list_people`, `customers.get_person`, `customers.list_deals` and `customers.get_deal` are on its allowlist, and the prompt tells it to use them for the `customerId` and `dealId` of `cpq.create_quote`. Before, drafting a quote from the chat needed a built search index. New starter suggestion "Draft a quote". Run `yarn generate` after upgrading.
+
+  Fix: `GET /api/cpq/quotes?search=` answered 500 for every search (it ran `ilike` on uuid columns). It now matches the quote number (case-insensitive substring) or an exact quote, sales quote or customer id, so the agent can find "QUOTE-20261123-00003".
+
+### Patch Changes
+
+- a4df5a5: Renewal billing: `cpq.subscription.renewed` now carries `removedSubscriptionItemIds`, and the billing connector ends the Billing Items of those items (and devices) the day before the new term starts. Before, items dropped at renewal kept billing. The renewal term extension now moves `bill_end_date` only for items that run to the old term end, so items ended earlier by an amendment, a cancellation or an operator are no longer revived.
+- b3916fd: CPQ Quoting and Catalog assistants propose one write at a time. Two approval cards for the same quote shared one record version, so after the first was confirmed the second was refused as stale (412) and the chat showed the card again with no error.
+
+  They also re-read the saved quote when the operator continues after a confirmed card. The chat history holds only message text, so the agent used to call its own earlier prices unverified and try to create the quote again.
+
+- 6e7e95c: Merge renewal keeps the bundle hierarchy: carried-over components stay under their cloned bundle item instead of becoming top-level items. Before, later Amend and Renew quotes on the merged subscription saw the components as standalone items.
+
 ## 1.2.0
 
 ### Minor Changes

@@ -29,6 +29,8 @@ Entry format (newest first within a section):
   Read ids from `logEntry.resourceId`. `action_logs.command_id` is encrypted at rest: query by `resource_kind` / `resource_id`.
 - **`sales.quotes.delete` hard-deletes the quote graph in 0.9, and its undo emits no domain event.** (2026-11-16, #115)
   React with a command interceptor (`commands/interceptors.ts`, `afterExecute` / `afterUndo`), not a subscriber.
+- **Two approval cards for the same record: the second can never be confirmed, and the chat hides why.** (2026-11-25)
+  Each pending action stores the record version of its preview; confirm refuses a changed record with 412 `stale_version`. Cards proposed in the same turn share one version, so confirming the first makes the second stale. The chat UI swallows the 412 and re-renders the card, so Confirm looks dead. Write-capable agent prompts must say "one write at a time" (see `ONE_WRITE_AT_A_TIME` in `cpq/ai-agents.ts`). Diagnose with `select tool_name,status,record_version from ai_pending_actions order by created_at desc`.
 - **The `ai_assistant test-tools` runner works as superadmin and can show false scope errors.** (2026-11-16)
   "Customer not found" or "Organization context is required" there is not proof of bad data. Re-check as a normal user with the API runner.
 

@@ -134,6 +134,22 @@ const CONCEPTS = [
   '  its term; "cancel" ends it. ARC quotes always point at an existing subscription.',
 ].join('\n')
 
+/**
+ * Each approval card captures the record version it previews, and confirm
+ * refuses a card whose record changed since (412 `stale_version`). Two cards
+ * proposed in parallel for the same quote or offering share one version, so
+ * the second can never be confirmed once the first is. Seen in a live run:
+ * the agent proposed two quote lines at once and the second card kept coming back.
+ */
+const ONE_WRITE_AT_A_TIME = [
+  '- Propose ONE write at a time. Never call two write tools in the same turn, even for different lines',
+  '  of the same quote. Wait until the operator confirms or cancels the card, then propose the next write.',
+  '  Every card captures the current version of the record, and a confirmed write makes the other open',
+  '  cards on that record stale, so they can no longer be confirmed.',
+  '- If the operator says a card did nothing, came back or is outdated, read the record again and propose',
+  '  that one write again with a new tool call.',
+].join('\n')
+
 const RULES = [
   'RULES',
   '- Call tools right away with sensible defaults; show data first, then offer refinements.',
@@ -166,6 +182,7 @@ const MUTATION_POLICY = [
   '- To pick a top-level offering, list with isSellable: true. Add a component-only offering only with the',
   '  bundle line as parentLineId; otherwise the API refuses it with V-QLINE-1.',
   '- You never convert quotes to orders, activate orders or change inventory; send the operator to the backoffice.',
+  ONE_WRITE_AT_A_TIME,
 ].join('\n')
 
 const RESPONSE_STYLE = [
@@ -268,6 +285,7 @@ const CATALOG_RULES = [
   '  change is submitted or awaiting confirmation unless you called the write tool in this turn.',
   '- If the server refuses a write with a V-* code, quote the message and explain what to change.',
   '- Removing a component does not change quotes already priced; say so when asked.',
+  ONE_WRITE_AT_A_TIME,
 ].join('\n')
 
 const CATALOG_SYSTEM_PROMPT = [CATALOG_ROLE, CATALOG_CONCEPTS, CATALOG_RULES, RESPONSE_STYLE].join('\n\n')

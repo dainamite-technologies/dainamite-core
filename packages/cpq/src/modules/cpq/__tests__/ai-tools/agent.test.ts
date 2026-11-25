@@ -112,6 +112,21 @@ describe('cpq.quoting_assistant', () => {
     }
   })
 
+  it('re-reads saved records after a confirmed card instead of distrusting its own history (seen in a live run)', () => {
+    const prompt = cpqQuotingAssistant.systemPrompt
+    expect(prompt).toMatch(/Your history keeps only the text of earlier messages/)
+    expect(prompt).toMatch(/after cpq\.create_quote, find the new quote with cpq\.list_quotes/)
+    expect(prompt).toMatch(/Never create a second quote for the same request/)
+  })
+
+  it('proposes one write at a time so cards do not go stale (seen in a live run)', () => {
+    for (const agent of [cpqQuotingAssistant, cpqCatalogAssistant]) {
+      expect(agent.systemPrompt).toMatch(/Propose ONE write at a time/)
+      expect(agent.systemPrompt).toMatch(/Never call two write tools in the same turn/)
+      expect(agent.systemPrompt).toMatch(/propose\s+that one write again with a new tool call/)
+    }
+  })
+
   it('never contains long dashes in operator-facing text', () => {
     const texts = [
       cpqQuotingAssistant.systemPrompt,

@@ -1,5 +1,15 @@
 # @dainamite/cpq-billing-connector
 
+## 5.3.0
+
+### Minor Changes
+
+- aa79996: Devices on ARC quotes (#126). Amend, Renew and Cancel quotes show the subscription's devices (assets) as unpriced lines under their bundle, so they can be kept, returned or swapped; removed devices are returned at activation. A device added on an ARC quote creates only an asset, like a new sale. Billing now receives a device's own charges (new sale and ARC add), stops billing returned devices, and re-rates items whose recurring price changed on an Amend or Renew (`changedItems`).
+
+### Patch Changes
+
+- a4df5a5: Renewal billing: `cpq.subscription.renewed` now carries `removedSubscriptionItemIds`, and the billing connector ends the Billing Items of those items (and devices) the day before the new term starts. Before, items dropped at renewal kept billing. The renewal term extension now moves `bill_end_date` only for items that run to the old term end, so items ended earlier by an amendment, a cancellation or an operator are no longer revived.
+
 ## 5.2.0
 
 ### Minor Changes

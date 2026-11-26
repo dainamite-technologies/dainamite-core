@@ -1,5 +1,11 @@
 # @dainamite/billing
 
+## 1.1.2
+
+### Patch Changes
+
+- f960e81: Invoices table: the Period column no longer gets squeezed. It keeps the whole date range on one line and uses the same billing date format as the Issued and Due columns.
+
 ## 1.1.1
 
 ### Patch Changes

@@ -1569,6 +1569,9 @@ export class DefaultCpqInventoryService {
         currencyCode: i.currencyCode,
         quantity: i.quantity,
         sourceQuoteLineId: i.sourceQuoteLineId,
+        // D5: per-charge billing periods, so ARC payloads can split the
+        // recurring amount per period (`buildArcAddedItems`).
+        ...(Array.isArray(i.charges) && i.charges.length > 0 ? { charges: i.charges } : {}),
       })),
       assets: assets.map((a) => ({
         id: a.id,

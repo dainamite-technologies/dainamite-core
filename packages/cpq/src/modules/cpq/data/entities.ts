@@ -505,7 +505,7 @@ export class CpqPricingTableEntry {
   properties: ['organizationId', 'tenantId', 'offeringId', 'code'],
 })
 export class CpqProductCharge {
-  [OptionalProps]?: 'isActive' | 'sortOrder' | 'createdAt' | 'updatedAt' | 'deletedAt'
+  [OptionalProps]?: 'isActive' | 'sortOrder' | 'billingPeriodUnit' | 'billingPeriodInterval' | 'createdAt' | 'updatedAt' | 'deletedAt'
 
   @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
   id!: string
@@ -564,6 +564,16 @@ export class CpqProductCharge {
 
   @Property({ name: 'applicability_condition', type: 'jsonb', nullable: true })
   applicabilityCondition?: Record<string, unknown> | null
+
+  // Billing period (spec 2026-11-26 line period, D5): the fixed or table price
+  // of a recurring (MRC) charge is the price per `interval × unit`, e.g. every
+  // 1 year. Default every 1 month = today's behaviour. MRC totals use the
+  // monthly equivalent (`lib/chargeBillingPeriod.ts`).
+  @Property({ name: 'billing_period_unit', type: 'text', default: 'month' })
+  billingPeriodUnit: string = 'month'
+
+  @Property({ name: 'billing_period_interval', type: 'integer', default: 1 })
+  billingPeriodInterval: number = 1
 
   @Property({ name: 'sort_order', type: 'integer', default: 0 })
   sortOrder: number = 0

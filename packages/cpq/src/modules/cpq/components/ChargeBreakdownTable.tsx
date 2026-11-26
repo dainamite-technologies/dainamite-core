@@ -8,6 +8,7 @@ import { Tag } from '@open-mercato/ui/primitives/tag'
 import { DepthBadge, PriceWaterfall } from './PriceWaterfall'
 import { ADJUSTMENT_ERROR_FALLBACKS, type WaterfallChargeInput } from '../lib/priceAdjustmentView'
 import { formatMoney } from '../lib/formatMoney'
+import { ChargePeriodTotal } from './ChargePeriodTotal'
 
 type TierBreakdownEntry = { tier: number; from: number; to: number; pricePerUnit: number; quantity: number; subtotal: number }
 
@@ -18,6 +19,8 @@ export type ChargeRowView = WaterfallChargeInput & {
   note?: string | null
   breakdown?: { tiers: TierBreakdownEntry[] } | null
   adjustmentErrors?: Array<{ code: string }>
+  /** D5: MRC price per this period (absent = every 1 month). */
+  billingPeriod?: { unit: 'month' | 'year'; interval: number }
 }
 
 /** Right-aligned price column header with an explanatory hover tooltip. */
@@ -110,7 +113,7 @@ export function ChargeBreakdownTable<C extends ChargeRowView>({
                   </span>
                 </td>
                 <td className="py-1 text-right font-mono">{c.quantity ?? '—'}</td>
-                <td className="py-1 text-right font-mono">{c.totalPrice != null ? formatMoney(c.totalPrice, currency) : c.note ?? '—'}</td>
+                <td className="py-1 text-right font-mono"><ChargePeriodTotal charge={c} currency={currency} /></td>
                 <td className="py-1 text-right whitespace-nowrap">
                   {renderChargeActions?.(c)}
                   {hasDetail && (
@@ -196,7 +199,7 @@ function ChargePricingDetail({ charge: c, currency, reasonLabels, renderManualAc
 
       <div className="flex items-center justify-between pt-1 border-t text-sm font-semibold">
         <span>{t('cpq.charges.finalTotal', 'Final Total')}</span>
-        <span className="font-mono">{c.totalPrice != null ? formatMoney(c.totalPrice, currency) : '—'}</span>
+        <span className="font-mono">{c.totalPrice != null ? <ChargePeriodTotal charge={c} currency={currency} /> : '—'}</span>
       </div>
     </div>
   )

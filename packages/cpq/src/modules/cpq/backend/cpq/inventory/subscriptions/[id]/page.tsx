@@ -13,6 +13,7 @@ import {
 import { StatusPath } from '../../../../../components/StatusPath'
 import { DepthBadge, PriceWaterfall } from '../../../../../components/PriceWaterfall'
 import { parseStoredCharge } from '../../../../../lib/priceAdjustmentView'
+import { ChargePeriodTotal } from '../../../../../components/ChargePeriodTotal'
 import { buildInventoryStatusLabels, inventoryStatusLabel } from '../../shared'
 
 // XD-250 — ARC integration on subscription detail.
@@ -709,7 +710,7 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
                                         </span>
                                       </td>
                                       <td className="py-1 text-right font-mono">{c.quantity ?? '—'}</td>
-                                      <td className="py-1 text-right font-mono">{c.totalPrice != null ? fmt(c.totalPrice, currency) : '—'}</td>
+                                      <td className="py-1 text-right font-mono">{c.totalPrice != null ? <ChargePeriodTotal charge={c} currency={currency} format={fmt} /> : '—'}</td>
                                     </tr>
                                     {(c.adjustments?.length ?? 0) > 0 && (
                                       <tr>

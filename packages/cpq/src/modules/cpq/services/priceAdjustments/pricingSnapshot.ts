@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import type { PriceAdjustment } from '../../data/price-adjustments'
 import type { PricingWaterfallSummary, ResolvedCharge } from '../types'
 import { withChargeWaterfall } from './chargeWaterfall'
+import { chargeMonthlyTotal } from '../../lib/chargeBillingPeriod'
 
 export interface SnapshotLine {
   lineId: string
@@ -40,9 +41,11 @@ export function computeWaterfallSummary(
     for (const input of line.charges) {
       const charge = withChargeWaterfall(input)
       if (charge.chargeType === 'usage') continue
-      const list = (charge.listTotalPrice ?? 0) * line.quantity
-      const standard = (charge.standardTotalPrice ?? 0) * line.quantity
-      const offer = (charge.totalPrice ?? 0) * line.quantity
+      // D5: an MRC price is per its billing period; totals and deal value use
+      // the monthly equivalent (identity for every 1 month).
+      const list = chargeMonthlyTotal(charge, charge.listTotalPrice ?? 0) * line.quantity
+      const standard = chargeMonthlyTotal(charge, charge.standardTotalPrice ?? 0) * line.quantity
+      const offer = chargeMonthlyTotal(charge, charge.totalPrice ?? 0) * line.quantity
       if (charge.chargeType === 'nrc') { listNrcTotal += list; standardNrcTotal += standard }
       else { listMrcTotal += list; standardMrcTotal += standard }
       for (const entry of charge.adjustments ?? []) {
@@ -67,7 +70,9 @@ export function computeWaterfallSummary(
       return { chargeCode: charge.chargeCode, chargeType: charge.chargeType, currencyCode: charge.currencyCode,
         listUnitPrice: charge.listUnitPrice, listTotalPrice: charge.listTotalPrice,
         standardUnitPrice: charge.standardUnitPrice, standardTotalPrice: charge.standardTotalPrice,
-        unitPrice: charge.unitPrice, totalPrice: charge.totalPrice }
+        unitPrice: charge.unitPrice, totalPrice: charge.totalPrice,
+        // Only a non-monthly period enters the hash, so existing hashes are unchanged.
+        ...(charge.billingPeriod ? { billingPeriod: charge.billingPeriod } : {}) }
     }).sort((a, b) => a.chargeCode.localeCompare(b.chargeCode) || canonical(a).localeCompare(canonical(b))),
   })).sort((a, b) => a.lineId.localeCompare(b.lineId))
   const pricedAdjustments = adjustments.map((row) => ({

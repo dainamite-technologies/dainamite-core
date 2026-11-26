@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { normalizeChargePricing } from './charge-pricing'
+import { CHARGE_BILLING_PERIOD_MAX_INTERVAL, CHARGE_BILLING_PERIOD_UNITS } from '../lib/chargeBillingPeriod'
 
 /**
  * Update schemas must not inject defaults. `.partial()` keeps `.default()`
@@ -215,9 +216,33 @@ const cpqProductChargeBase = z.object({
   currencyCode: z.string().nullish(),
   quantityAttributeCode: z.string().nullish(),
   applicabilityCondition: z.record(z.string(), z.unknown()).nullish(),
+  // D5 (spec 2026-11-26 line period): the price is per interval × unit.
+  // No `.default()`: the column defaults to every 1 month.
+  billingPeriodUnit: z.enum(CHARGE_BILLING_PERIOD_UNITS).optional()
+    .describe('Unit of the billing period the price is for: month or year (default month).'),
+  billingPeriodInterval: z.number().int().min(1).max(CHARGE_BILLING_PERIOD_MAX_INTERVAL).optional()
+    .describe('Number of units per billing period, e.g. 1 with unit year = every 1 year (default 1).'),
   sortOrder: z.number().int().optional().default(0),
   isActive: z.boolean().optional().default(true),
 })
+
+// V-CHG-2: only a recurring (MRC) charge can have a period other than every
+// 1 month; a one-time or usage price has no period.
+const refineChargeBillingPeriod = (
+  ctx: z.RefinementCtx,
+  charge: { chargeType?: string; billingPeriodUnit?: string; billingPeriodInterval?: number },
+) => {
+  if (charge.chargeType === undefined || charge.chargeType === 'mrc') return
+  const unit = charge.billingPeriodUnit ?? 'month'
+  const interval = charge.billingPeriodInterval ?? 1
+  if (unit !== 'month' || interval !== 1) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['billingPeriodUnit'],
+      message: 'V-CHG-2: only a recurring (MRC) charge can have a billing period other than every 1 month',
+    })
+  }
+}
 
 // V-CHG-1: the (chargeModel × pricingMethod) combination must match the fields.
 //  fixed  → fixedPrice + currencyCode required; table fields forbidden.
@@ -274,6 +299,7 @@ const refineChargePricingShape = (
 
 export const cpqProductChargeCreateSchema = cpqProductChargeBase.superRefine((data, ctx) => {
   refineChargePricingShape(ctx, data)
+  refineChargeBillingPeriod(ctx, data)
 })
 
 export const cpqProductChargeUpdateSchema = partialWithoutDefaults(cpqProductChargeBase).extend({
@@ -285,6 +311,7 @@ export const cpqProductChargeUpdateSchema = partialWithoutDefaults(cpqProductCha
   if (data.pricingMethod !== undefined || data.chargeModel !== undefined) {
     refineChargePricingShape(ctx, data)
   }
+  refineChargeBillingPeriod(ctx, data)
 })
 
 // ─── Price Rule ──────────────────────────────────────────────────

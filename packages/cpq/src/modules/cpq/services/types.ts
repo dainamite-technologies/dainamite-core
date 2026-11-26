@@ -258,6 +258,12 @@ export interface ResolvedCharge {
   breakdown?: TierBreakdown | null
   note?: string | null
   adjustments?: RuleAdjustment[] | null
+  /**
+   * D5 (spec 2026-11-26 line period): MRC prices are per this period. Absent
+   * = every 1 month. MRC totals use the monthly equivalent
+   * (`lib/chargeBillingPeriod.ts`); `unitPrice` / `totalPrice` stay per period.
+   */
+  billingPeriod?: { unit: 'month' | 'year'; interval: number }
 }
 
 // ─── Inventory status constants ──────────────────────────────────

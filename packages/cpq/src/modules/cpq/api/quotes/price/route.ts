@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { sumMonthlyRecurring } from '../../../lib/chargeBillingPeriod'
 import { z } from 'zod'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { cpqErrorDoc } from '../../_helpers/quoteRouteOpenApi'
@@ -57,9 +58,8 @@ export async function POST(req: Request) {
     const nrcTotal = allCharges
       .filter((c) => c.chargeType === 'nrc' && c.totalPrice != null)
       .reduce((s, c) => s + (c.totalPrice ?? 0), 0)
-    const mrcTotal = allCharges
-      .filter((c) => c.chargeType === 'mrc' && c.totalPrice != null)
-      .reduce((s, c) => s + (c.totalPrice ?? 0), 0)
+    // D5: MRC totals are monthly equivalents; each charge keeps its price per period.
+    const mrcTotal = sumMonthlyRecurring(allCharges)
     const usageCharges = allCharges
       .filter((c) => c.chargeType === 'usage')
       .map((c) => ({
@@ -92,6 +92,8 @@ const chargeDoc = z.object({
   unitPrice: z.number(), quantity: z.number().nullable(), totalPrice: z.number().nullable(),
   listUnitPrice: z.number().optional(), listTotalPrice: z.number().nullable().optional(),
   standardUnitPrice: z.number().optional(), standardTotalPrice: z.number().nullable().optional(),
+  billingPeriod: z.object({ unit: z.enum(['month', 'year']), interval: z.number().int().min(1) }).optional()
+    .describe('MRC only: unitPrice / totalPrice are per this period. Absent = every 1 month.'),
   adjustments: z.array(z.object({ origin: z.literal('rule'), ruleCode: z.string(), ruleName: z.string(),
     ruleType: z.string(), value: z.number(), unitPriceBefore: z.number(), unitPriceAfter: z.number(), delta: z.number() }).passthrough()).nullish(),
 }).passthrough()

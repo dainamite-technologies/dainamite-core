@@ -2,7 +2,7 @@ import * as React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { I18nProvider } from '@open-mercato/shared/lib/i18n/context'
 import { PriceAdjustmentsPanel, PRICE_ADJUSTMENTS_SPOT_ID } from '../PriceAdjustmentsPanel'
-import { AdjustChargeAction, DiscountLineAction, PriceAdjustmentProvider, type PriceAdjustmentUi } from '../priceAdjustmentContext'
+import { AdjustChargeAction, AdjustLinePriceAction, PriceAdjustmentProvider, type PriceAdjustmentUi } from '../priceAdjustmentContext'
 import { adjustmentAccess } from '../../../../../../lib/priceAdjustmentView'
 
 jest.mock('@open-mercato/ui/backend/injection/InjectionSpot', () => ({
@@ -67,10 +67,18 @@ it('renders nothing when the toggle is off and nothing is stored', () => {
 
 it('hides actions without permission and disables them with a tooltip on ARC mirror lines', () => {
   const charge = { chargeCode: 'fee', chargeName: 'Monthly fee', chargeType: 'mrc' as const, unitPrice: 100, totalPrice: 100 }
-  expect(render(ui({ canAdjust: false }), <><DiscountLineAction line={line} /><AdjustChargeAction line={line} charge={charge} /></>)).toBe('')
+  expect(render(ui({ canAdjust: false }), <><AdjustLinePriceAction line={line} /><AdjustChargeAction line={line} charge={charge} /></>)).toBe('')
   const mirror = { ...line, configuration: { _arcMirroredFromItemId: 'item' } }
   const html = render(ui({}, { quoteType: 'amend' }), <AdjustChargeAction line={mirror} charge={charge} />)
   expect(html).toContain('disabled')
   expect(html).toContain('Price changes on existing subscription items arrive with a later release')
   expect(render(ui(), <AdjustChargeAction line={line} charge={{ ...charge, chargeType: 'usage' }} />)).toBe('')
+})
+
+it('shows the line action as a labelled Adjust price button', () => {
+  const html = render(ui(), <AdjustLinePriceAction line={line} />)
+  expect(html).toContain('data-testid="cpq-adjust-line"')
+  expect(html).toContain('Adjust price')
+  const mirror = render(ui({}, { quoteType: 'amend' }), <AdjustLinePriceAction line={{ ...line, configuration: { _arcMirroredFromItemId: 'item' } }} />)
+  expect(mirror).toContain('disabled')
 })

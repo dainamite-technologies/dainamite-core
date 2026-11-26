@@ -7,6 +7,7 @@ import { Button } from '@open-mercato/ui/primitives/button'
 import { Input } from '@open-mercato/ui/primitives/input'
 import { Textarea } from '@open-mercato/ui/primitives/textarea'
 import { Alert, AlertDescription } from '@open-mercato/ui/primitives/alert'
+import { Tag } from '@open-mercato/ui/primitives/tag'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@open-mercato/ui/primitives/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@open-mercato/ui/primitives/select'
 import {
@@ -16,6 +17,10 @@ import {
   buildAdjustmentDraft,
   formatDepth,
   discountDepth,
+  isAboveStandard,
+  lineTypeTotals,
+  overrideSetsChargeTotal,
+  requiresChargeType,
   toAdjustmentPatch,
   type AdjustmentForm,
   type AdjustmentTarget,
@@ -28,7 +33,7 @@ export type AdjustmentReason = { value: string; label: string }
 /** Minimal view of the quote the dialog needs, kept local so the page owns the full type. */
 type PreviewQuote = {
   pricingRevision?: number
-  lines: Array<{ lineId: string; mrcTotal: number; nrcTotal: number; charges: Array<WaterfallChargeInput & { chargeCode: string; adjustmentErrors?: Array<{ adjustmentId: string; code: string }> }> }>
+  lines: Array<{ lineId: string; quantity?: number; mrcTotal: number; nrcTotal: number; charges: Array<WaterfallChargeInput & { chargeCode: string; adjustmentErrors?: Array<{ adjustmentId: string; code: string }> }> }>
 }
 
 export type ExistingAdjustment = {
@@ -60,10 +65,26 @@ export type PriceAdjustmentDialogProps<Q extends PreviewQuote> = {
   onStale: () => void
 }
 
+/** Short type labels shared by line and charge targets (spec F: Set price / % off / Amount off). */
 const TYPE_FALLBACKS: Record<AdjustmentType, string> = {
-  price_override: 'Set a new unit price',
-  discount_percent: 'Percentage discount',
-  discount_absolute: 'Amount off the charge total',
+  price_override: 'Set price',
+  discount_percent: '% off',
+  discount_absolute: 'Amount off',
+}
+
+/** "Standard → new price, depth" with an "Above standard" badge for uplifts. */
+function PreviewChange({ label, standard, offer, currency, aboveLabel }: { label: string; standard: number; offer: number; currency: string; aboveLabel: string }) {
+  const depth = formatDepth(discountDepth(standard, offer))
+  return (
+    <div className="flex flex-wrap items-center gap-1">
+      <span>{label}:</span>
+      <span className="font-mono text-muted-foreground">{money(standard, currency)}</span>
+      <span aria-hidden>→</span>
+      <span className="font-mono font-medium">{money(offer, currency)}</span>
+      {depth && <span className="font-mono">({depth})</span>}
+      {isAboveStandard(standard, offer) && <Tag variant="warning" className="px-1.5 text-xs" data-testid="cpq-adjustment-above-standard">{aboveLabel}</Tag>}
+    </div>
+  )
 }
 
 function money(amount: number, currency: string) {
@@ -93,6 +114,12 @@ export function PriceAdjustmentDialog<Q extends PreviewQuote>(props: PriceAdjust
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
 
+  const needsChargeType = requiresChargeType(target.level, form.adjustmentType)
+  const setType = (adjustmentType: AdjustmentType) => setForm((current) => ({
+    ...current, adjustmentType,
+    // Set price / Amount off on a line cover one charge type: default to Recurring.
+    chargeTypeFilter: requiresChargeType(target.level, adjustmentType) && !current.chargeTypeFilter ? 'mrc' : current.chargeTypeFilter,
+  }))
   const draft = buildAdjustmentDraft(form, target, currency, pricingRevision)
   const draftKey = draft && form.reasonCode ? JSON.stringify(draft) : null
   const message = (code: string) => t(`cpq.priceAdjustments.errors.${code}`, ADJUSTMENT_ERROR_FALLBACKS[code] ?? code)
@@ -120,7 +147,7 @@ export function PriceAdjustmentDialog<Q extends PreviewQuote>(props: PriceAdjust
   // The draft's id is server-generated on create, so "not stored" identifies it; on edit it keeps its id.
   const previewErrors = preview?.errors.filter((error) => existing ? error.adjustmentId === existing.id : !storedAdjustmentIds.includes(error.adjustmentId)) ?? []
   const noteRequired = form.reasonCode === 'other' && !form.reasonNote.trim()
-  const canSave = !!draft && !!form.reasonCode && !noteRequired && !saving && previewErrors.length === 0
+  const canSave = !!draft && !!form.reasonCode && !noteRequired && !saving && previewErrors.length === 0 && (!needsChargeType || !!form.chargeTypeFilter)
 
   const save = async () => {
     if (!draft || !canSave) return
@@ -142,11 +169,26 @@ export function PriceAdjustmentDialog<Q extends PreviewQuote>(props: PriceAdjust
   }
 
   const standardUnit = charge?.standardUnitPrice ?? charge?.unitPrice
+  const setsTotal = overrideSetsChargeTotal(charge)
+  const lineScope = form.chargeTypeFilter === 'nrc'
+    ? t('cpq.priceAdjustments.dialog.scopeNrc', 'one-time')
+    : t('cpq.priceAdjustments.dialog.scopeMrc', 'recurring')
   const valueHint = form.adjustmentType === 'discount_percent'
     ? t('cpq.priceAdjustments.dialog.percentHint', 'Percent off the standard price (0–100)')
-    : form.adjustmentType === 'price_override'
-      ? t('cpq.priceAdjustments.dialog.overrideHint', 'New unit price, at most the standard price')
-      : t('cpq.priceAdjustments.dialog.absoluteHint', 'Amount taken off this charge’s total')
+    : target.level === 'line'
+      ? form.adjustmentType === 'price_override'
+        ? t('cpq.priceAdjustments.dialog.lineOverrideHint', 'New {scope} total for this line (all quantities), spread over its charges', { scope: lineScope })
+        : t('cpq.priceAdjustments.dialog.lineAbsoluteHint', 'Amount taken off this line’s {scope} total, spread over its charges', { scope: lineScope })
+      : form.adjustmentType === 'price_override'
+        ? setsTotal
+          ? t('cpq.priceAdjustments.dialog.totalOverrideHint', 'New charge total (volume and tiered charges have no single unit price)')
+          : t('cpq.priceAdjustments.dialog.overrideHint', 'New unit price')
+        : t('cpq.priceAdjustments.dialog.absoluteHint', 'Amount taken off this charge’s total')
+  const aboveLabel = t('cpq.priceAdjustments.aboveStandard', 'Above standard')
+  const typeLabel = (type: AdjustmentType) => type === 'price_override' && target.level === 'charge' && setsTotal
+    ? t('cpq.priceAdjustments.dialog.types.price_override_total', 'Set charge total')
+    : t(`cpq.priceAdjustments.dialog.types.${type}`, TYPE_FALLBACKS[type])
+  const previewTypes: Array<'mrc' | 'nrc'> = form.chargeTypeFilter ? [form.chargeTypeFilter] : ['mrc', 'nrc']
 
   return (
     <Dialog open={open} onOpenChange={(next) => { if (!next) onClose() }}>
@@ -156,7 +198,7 @@ export function PriceAdjustmentDialog<Q extends PreviewQuote>(props: PriceAdjust
             {existing
               ? t('cpq.priceAdjustments.dialog.editTitle', 'Edit price adjustment')
               : target.level === 'line'
-                ? t('cpq.priceAdjustments.dialog.lineTitle', 'Discount line')
+                ? t('cpq.priceAdjustments.dialog.lineTitle', 'Adjust line price')
                 : t('cpq.priceAdjustments.dialog.chargeTitle', 'Adjust price')}
           </DialogTitle>
           <DialogDescription>
@@ -170,11 +212,11 @@ export function PriceAdjustmentDialog<Q extends PreviewQuote>(props: PriceAdjust
         <div className="space-y-3 text-sm">
           <label className="block space-y-1">
             <span className="text-xs font-medium">{t('cpq.priceAdjustments.dialog.type', 'Adjustment')}</span>
-            <Select value={form.adjustmentType} onValueChange={(value) => setForm({ ...form, adjustmentType: value as AdjustmentType })}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
+            <Select value={form.adjustmentType} onValueChange={(value) => setType(value as AdjustmentType)}>
+              <SelectTrigger data-testid="cpq-adjustment-type"><SelectValue /></SelectTrigger>
               <SelectContent>
                 {types.map((type) => (
-                  <SelectItem key={type} value={type}>{t(`cpq.priceAdjustments.dialog.types.${type}`, TYPE_FALLBACKS[type])}</SelectItem>
+                  <SelectItem key={type} value={type}>{typeLabel(type)}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
@@ -184,9 +226,10 @@ export function PriceAdjustmentDialog<Q extends PreviewQuote>(props: PriceAdjust
             <label className="block space-y-1">
               <span className="text-xs font-medium">{t('cpq.priceAdjustments.dialog.appliesTo', 'Applies to')}</span>
               <Select value={form.chargeTypeFilter || 'all'} onValueChange={(value) => setForm({ ...form, chargeTypeFilter: value === 'all' ? '' : value as 'nrc' | 'mrc' })}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectTrigger data-testid="cpq-adjustment-applies-to"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">{t('cpq.priceAdjustments.dialog.allCharges', 'All one-time and recurring charges')}</SelectItem>
+                  {/* One amount can't span both: Set price / Amount off need Recurring or One-time. */}
+                  {!needsChargeType && <SelectItem value="all">{t('cpq.priceAdjustments.dialog.allCharges', 'All one-time and recurring charges')}</SelectItem>}
                   <SelectItem value="mrc">{t('cpq.priceAdjustments.dialog.mrcOnly', 'Recurring charges only')}</SelectItem>
                   <SelectItem value="nrc">{t('cpq.priceAdjustments.dialog.nrcOnly', 'One-time charges only')}</SelectItem>
                 </SelectContent>
@@ -221,16 +264,24 @@ export function PriceAdjustmentDialog<Q extends PreviewQuote>(props: PriceAdjust
             {!draftKey && <span className="text-muted-foreground">{t('cpq.priceAdjustments.dialog.previewEmpty', 'Enter a value and reason to preview the new price.')}</span>}
             {draftKey && previewing && <span className="text-muted-foreground">{t('cpq.priceAdjustments.dialog.previewing', 'Calculating…')}</span>}
             {draftKey && !previewing && previewCharge && (
-              <span>
-                {t('cpq.priceAdjustments.dialog.previewCharge', 'New offer price')}: <span className="font-mono font-medium">{money(previewCharge.unitPrice, currency)}</span>
-                {' '}{formatDepth(discountDepth(previewCharge.standardUnitPrice ?? standardUnit, previewCharge.unitPrice)) ?? ''}
-              </span>
+              <PreviewChange
+                label={setsTotal ? t('cpq.priceAdjustments.dialog.previewChargeTotal', 'Charge total') : t('cpq.priceAdjustments.dialog.previewCharge', 'New offer price')}
+                standard={setsTotal ? previewCharge.standardTotalPrice ?? previewCharge.totalPrice ?? 0 : previewCharge.standardUnitPrice ?? standardUnit ?? previewCharge.unitPrice}
+                offer={setsTotal ? previewCharge.totalPrice ?? 0 : previewCharge.unitPrice}
+                currency={currency} aboveLabel={aboveLabel}
+              />
             )}
             {draftKey && !previewing && !previewCharge && previewLine && (
-              <span>
-                {t('cpq.priceAdjustments.dialog.previewLine', 'Line totals')}: {t('cpq.lines.mrc', 'MRC')} <span className="font-mono font-medium">{money(previewLine.mrcTotal, currency)}</span>
-                {' · '}{t('cpq.lines.nrc', 'NRC')} <span className="font-mono font-medium">{money(previewLine.nrcTotal, currency)}</span>
-              </span>
+              <div className="space-y-0.5">
+                <div className="text-muted-foreground">{t('cpq.priceAdjustments.dialog.previewLine', 'Line totals')}</div>
+                {previewTypes.map((type) => {
+                  const totals = lineTypeTotals(previewLine, type)
+                  return (
+                    <PreviewChange key={type} label={type === 'mrc' ? t('cpq.lines.mrc', 'MRC') : t('cpq.lines.nrc', 'NRC')}
+                      standard={totals.standard} offer={totals.offer} currency={currency} aboveLabel={aboveLabel} />
+                  )
+                })}
+              </div>
             )}
           </div>
 

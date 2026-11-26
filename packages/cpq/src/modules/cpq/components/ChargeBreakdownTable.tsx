@@ -6,7 +6,7 @@ import { Info } from 'lucide-react'
 import { SimpleTooltip } from '@open-mercato/ui/primitives/tooltip'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { DepthBadge, PriceWaterfall } from './PriceWaterfall'
-import { ADJUSTMENT_ERROR_FALLBACKS, type WaterfallChargeInput } from '../lib/priceAdjustmentView'
+import { ADJUSTMENT_ERROR_FALLBACKS, isAboveStandard, type WaterfallChargeInput } from '../lib/priceAdjustmentView'
 import { formatMoney } from '../lib/formatMoney'
 
 type TierBreakdownEntry = { tier: number; from: number; to: number; pricePerUnit: number; quantity: number; subtotal: number }
@@ -105,6 +105,11 @@ export function ChargeBreakdownTable<C extends ChargeRowView>({
                 <td className="py-1 text-right font-mono text-muted-foreground">{formatMoney(standardUnit, currency)}</td>
                 <td className="py-1 text-right font-mono">
                   <span className="inline-flex items-center gap-1">
+                    {isAboveStandard(c.standardTotalPrice ?? standardUnit, c.standardTotalPrice != null ? c.totalPrice : c.unitPrice) && (
+                      <Tag variant="warning" className="px-1.5 text-xs" data-testid="cpq-charge-above-standard">
+                        {t('cpq.priceAdjustments.aboveStandard', 'Above standard')}
+                      </Tag>
+                    )}
                     <DepthBadge before={listUnit} after={c.unitPrice} />
                     {formatMoney(c.unitPrice, currency)}
                   </span>

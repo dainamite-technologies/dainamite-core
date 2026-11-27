@@ -35,7 +35,7 @@ to the billing API contract:
 | `cpq.subscription.merged` | Move Billing Items from source subscriptions to the merged subscription (update `subscription_id`) |
 | `cpq.subscription.superseded` | Set `bill_end_date` on all Billing Items for the superseded subscription |
 | `cpq.subscription_item.status_changed` | Pause / suspend / grace → a billing line status period on every recurring Billing Item of the affected items; resume → the period in force on `fromDate` ends the day before (later periods untouched) |
-| `cpq.subscription.terminated` | End the Billing Items like `cancelled` (whole subscription, or only the terminated items and their devices) |
+| `cpq.subscription.terminated` | End the Billing Items like `cancelled`: `wholeSubscription: true` (decided by CPQ at emit time) → every Billing Item of the subscription; `false` / absent → only the listed items and their devices. CPQ's current status is never read, so a replayed item-level terminate cannot end the other items |
 
 ### Line period, price phases and line status (contract C3)
 

@@ -40,7 +40,9 @@ export const setsChargeTotal = (charge: Pick<ResolvedCharge, 'pricingMethod'>) =
  * 3. spread line-level Set price / Amount off over the charges each one won
  *    (`applyLineSpread`), deepest target line first, so the line (or bundle)
  *    total equals the typed price even when more specific adjustments fix
- *    some of its charges (spec F-D3).
+ *    some of its charges (spec F-D3);
+ * 4. apply charge-level phases last: in its months a phase wins on its charge,
+ *    and the other charges keep the share they have without it (review F8).
  */
 export function resolveManualAdjustments(
   lines: AdjustmentPricingLine[],
@@ -182,10 +184,18 @@ function resolveSegment(
   }
 
   const winners = pickWinners(output, adjustments, invalid, lineages, currencyCode, addError)
+  // A charge-level phase wins in its months without moving the line spread
+  // around it (review F8): the spread runs as if the phase were not there, so
+  // the other charges keep their regular share, and the phase is applied last.
+  const isChargePhase = (row: PriceAdjustment) => row.level === 'charge' && isPhasedRange(row)
+  const chargePhases = [...winners.values()].filter(({ row }) => isChargePhase(row))
+  const spreadWinners = chargePhases.length
+    ? pickWinners(output, adjustments.filter((row) => !isChargePhase(row)), invalid, lineages, currencyCode, () => {})
+    : winners
 
   // 2. Charge targets and line % off: per charge, independent of other charges.
   const spreads = new Map<string, { row: PriceAdjustment; won: ChargeRef[] }>()
-  for (const { ref, row } of winners.values()) {
+  for (const { ref, row } of spreadWinners.values()) {
     if (row.level === 'line' && isLineAmountType(row.adjustmentType)) {
       const group = spreads.get(row.id) ?? { row, won: [] }
       group.won.push(ref)
@@ -204,6 +214,12 @@ function resolveSegment(
       for (const charge of line.charges) if (charge.chargeType === row.chargeTypeFilter) scope.push({ line, charge })
     }
     applyLineSpread(row, scope, won)
+  }
+
+  // 4. Charge-level phases replace whatever the steps above set on their charge.
+  for (const { ref, row } of chargePhases) {
+    ref.charge.adjustments = ref.charge.adjustments.filter((entry) => entry.origin !== 'manual')
+    applyToCharge(row, ref.charge)
   }
   return { lines: output, errors }
 }

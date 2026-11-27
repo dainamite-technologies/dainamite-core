@@ -331,6 +331,9 @@ export class BillingItem {
 @Index({
   name: 'billing_item_phases_item_idx',
   properties: ['billingItemId', 'sequence'],
+  // Partial, as created by Migration20261126000000 — keeps `db generate` from diffing it.
+  expression:
+    'CREATE INDEX "billing_item_phases_item_idx" ON "billing_item_phases" ("billing_item_id", "sequence") WHERE "deleted_at" IS NULL',
 })
 @Index({
   name: 'billing_item_phases_scope_idx',

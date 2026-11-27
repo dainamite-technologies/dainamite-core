@@ -30,7 +30,7 @@ import { ItemPhaseTag, ItemStatusTag, ownPeriodText } from '../../../../componen
 import { serverErrorCode } from '../../../../components/ItemStatusDialog'
 import { isStatusReadOnly, type PhaseRow, type StatusPeriodRow } from '../../../../lib/itemStatusLabel'
 import { phaseRowsFromApi } from '../../../../lib/phaseEditorRows'
-import { PHASE_EDIT_BILLED } from '../../../../lib/pricePhases'
+import { BILLING_PERIOD_CHANGE_BILLED, PHASE_EDIT_BILLED } from '../../../../lib/pricePhases'
 import { localTodayIso } from '../../../../lib/dateOnly'
 import type { BillCycle } from '../../../../lib/billCycle'
 
@@ -338,6 +338,16 @@ export default function BillingItemDetailPage(props: { params?: { id?: string } 
             t(
               'billing.items.phases.error.edit_billed',
               'This change re-prices days that are already invoiced. Phases can change only unbilled periods — correct invoiced periods with a credit memo.',
+            ),
+            'error',
+          )
+          return
+        }
+        if (serverErrorCode(err) === BILLING_PERIOD_CHANGE_BILLED) {
+          flash(
+            t(
+              'billing.items.period.error.change_billed',
+              'This item is already invoiced, so its billing period is fixed. End it and add a new item with the new period.',
             ),
             'error',
           )

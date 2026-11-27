@@ -479,6 +479,14 @@ const linePeriodFields = {
 
 export const LINE_PERIOD_RECURRING_ONLY_MESSAGE = 'billingPeriod / phases can only be set on recurring items'
 
+/**
+ * `BILLING_PERIOD_CHANGE_BILLED` (lib/pricePhases): the own billing period is fixed once the item was invoiced (`billed_to_date`
+ * set): a new grid would not line up with the watermark — with `prorate=false`
+ * the next run skips the partial period it lands in, leaving days unbilled.
+ */
+export const BILLING_PERIOD_CHANGE_BILLED_MESSAGE =
+  'The billing period cannot change once the item has been invoiced — end this item and add a new one with the new period.'
+
 /** Cross-field checks of the period pair (shared by create and the update command). */
 export function billingPeriodIssue(
   unit: string | null | undefined,

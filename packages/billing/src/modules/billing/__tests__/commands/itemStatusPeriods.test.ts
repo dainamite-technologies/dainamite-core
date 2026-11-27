@@ -148,6 +148,78 @@ describe('billing.items.status_periods.update — resume', () => {
   })
 })
 
+describe('billing.items.status_periods — undo re-validates (review F2)', () => {
+  const ID_A = '55555555-5555-4555-8555-555555555555'
+  const pauseRow = (overrides: Row = {}): Row => ({
+    id: ID_A, billingItemId: ITEM, tenantId: TENANT, organizationId: ORG, status: 'paused',
+    fromDate: '2026-12-11', toDate: '2026-12-20', chargeBehavior: 'no_charge', reason: null, deletedAt: null, ...overrides,
+  })
+
+  it('undo of a delete is refused when another live period now covers the days', async () => {
+    const a = pauseRow({ deletedAt: new Date('2026-12-22T00:00:00Z') })
+    const b = pauseRow({ id: 'sp-b' })
+    const { ctx } = env({ periods: [a, b] })
+    await expect(
+      deleteStatusPeriodCommand.undo!({
+        input: {} as never,
+        ctx: ctx as never,
+        logEntry: { commandPayload: { undo: { before: pauseRow() } }, tenantId: TENANT, organizationId: ORG },
+      }),
+    ).rejects.toMatchObject({ status: 422, body: { code: 'billing.item.status_period_overlap' } })
+    expect(a.deletedAt).toBeInstanceOf(Date)
+  })
+
+  it('undo of an update is refused when it would overlap a later period', async () => {
+    const a = pauseRow({ toDate: '2026-12-15' })
+    const later = pauseRow({ id: 'sp-b', fromDate: '2026-12-18', toDate: '2026-12-25' })
+    const { ctx } = env({ periods: [a, later] })
+    await expect(
+      updateStatusPeriodCommand.undo!({
+        input: {} as never,
+        ctx: ctx as never,
+        logEntry: { commandPayload: { undo: { before: pauseRow() } }, tenantId: TENANT, organizationId: ORG },
+      }),
+    ).rejects.toMatchObject({ status: 422, body: { code: 'billing.item.status_period_overlap' } })
+    expect(a.toDate).toBe('2026-12-15')
+  })
+
+  it('D6: undo on a CPQ line is refused for a UI caller, allowed from the system context', async () => {
+    const cpqItem = { id: ITEM, tenantId: TENANT, organizationId: ORG, type: 'recurring', subscriptionId: 'sub-1' }
+    const a = pauseRow({ deletedAt: new Date('2026-12-22T00:00:00Z') })
+    const ui = env({ items: [cpqItem], periods: [a] })
+    const logEntry = { commandPayload: { undo: { before: pauseRow() } }, tenantId: TENANT, organizationId: ORG }
+    await expect(deleteStatusPeriodCommand.undo!({ input: {} as never, ctx: ui.ctx as never, logEntry })).rejects.toMatchObject({
+      status: 422,
+      body: { code: 'billing.item.status_period_read_only' },
+    })
+    expect(a.deletedAt).toBeInstanceOf(Date)
+    const system = env({ items: [cpqItem], periods: [a], auth: null })
+    await deleteStatusPeriodCommand.undo!({ input: {} as never, ctx: system.ctx as never, logEntry })
+    expect(a.deletedAt).toBeNull()
+  })
+
+  it('undo of a delete without a clash restores the row', async () => {
+    const a = pauseRow({ deletedAt: new Date('2026-12-22T00:00:00Z') })
+    const { ctx } = env({ periods: [a] })
+    await deleteStatusPeriodCommand.undo!({
+      input: {} as never,
+      ctx: ctx as never,
+      logEntry: { commandPayload: { undo: { before: pauseRow() } }, tenantId: TENANT, organizationId: ORG },
+    })
+    expect(a.deletedAt).toBeNull()
+  })
+})
+
+describe('billing.items.status_periods.create — item type (nit)', () => {
+  it('refuses a status on a one-time item (the bulk action skips them too)', async () => {
+    const { ctx, created } = env({ items: [{ id: ITEM, tenantId: TENANT, organizationId: ORG, type: 'one_time', subscriptionId: null }] })
+    await expect(
+      createStatusPeriodCommand.execute({ ...scope, billingItemId: ITEM, status: 'paused', fromDate: d('2027-01-10') } as never, ctx as never),
+    ).rejects.toMatchObject({ status: 422, body: { code: 'billing.item.status_period_recurring_only' } })
+    expect(created).toHaveLength(0)
+  })
+})
+
 describe('billing.items.status_periods.bulk_create', () => {
   it('suspends every live line, skipping CPQ lines, overlaps, ended and one-time lines', async () => {
     const base = { tenantId: TENANT, organizationId: ORG, billAccountId: ACCOUNT, isActive: true, deletedAt: null, billEndDate: null, subscriptionId: null }

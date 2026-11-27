@@ -25,6 +25,8 @@ export type PhaseDurationUnit = (typeof PHASE_DURATION_UNITS)[number]
 export const MAX_PHASES_PER_ITEM = 12
 
 export const PHASE_EDIT_BILLED = 'billing.item.phase_edit_billed'
+/** Item schedule guard next to PHASE_EDIT_BILLED: the own billing period is fixed once invoiced. */
+export const BILLING_PERIOD_CHANGE_BILLED = 'billing.item.billing_period_change_billed'
 export const PHASES_RECURRING_ONLY = 'billing.item.phases_recurring_only'
 
 export type PhaseDefinition = {

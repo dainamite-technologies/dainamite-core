@@ -217,6 +217,59 @@ describe('billing.items.update — phases only change unbilled periods', () => {
   })
 })
 
+describe('billing.items.update — own billing period is fixed once billed (review G1)', () => {
+  const billed = (billedToDate: string | null, period: Row = {}): Row => ({
+    id: ITEM,
+    tenantId: TENANT,
+    organizationId: ORG,
+    type: 'recurring',
+    billStartDate: '2026-12-01',
+    billEndDate: null,
+    billedToDate,
+    prorate: false,
+    rateJson: { unit_price: 3_100 },
+    phasesEnabled: false,
+    priceBasis: 'net',
+    billingPeriodUnit: null,
+    billingPeriodInterval: null,
+    ...period,
+  })
+
+  it('refuses switching to an own period after the item was billed, with the credit-memo hint', async () => {
+    const item = billed('2026-12-31')
+    const { ctx } = env({ item })
+    await expect(
+      updateItemCommand.execute(
+        { tenantId: TENANT, organizationId: ORG, id: ITEM, billingPeriodUnit: 'monthly', billingPeriodInterval: 3 } as never,
+        ctx as never,
+      ),
+    ).rejects.toMatchObject({ status: 422, body: { code: 'billing.item.billing_period_change_billed' } })
+    expect(item.billingPeriodUnit).toBeNull()
+  })
+
+  it('refuses changing the interval or clearing the period once billed', async () => {
+    const own = { billingPeriodUnit: 'monthly', billingPeriodInterval: 1 }
+    const a = env({ item: billed('2026-12-31', own) })
+    await expect(
+      updateItemCommand.execute({ tenantId: TENANT, organizationId: ORG, id: ITEM, billingPeriodInterval: 3 } as never, a.ctx as never),
+    ).rejects.toMatchObject({ body: { code: 'billing.item.billing_period_change_billed' } })
+    const b = env({ item: billed('2026-12-31', own) })
+    await expect(
+      updateItemCommand.execute({ tenantId: TENANT, organizationId: ORG, id: ITEM, billingPeriodUnit: null } as never, b.ctx as never),
+    ).rejects.toMatchObject({ body: { code: 'billing.item.billing_period_change_billed' } })
+  })
+
+  it('re-sending the unchanged period of a billed item is accepted (form saves)', async () => {
+    const item = billed('2026-12-31', { billingPeriodUnit: 'monthly', billingPeriodInterval: 1 })
+    const { ctx } = env({ item })
+    await updateItemCommand.execute(
+      { tenantId: TENANT, organizationId: ORG, id: ITEM, billingPeriodUnit: 'monthly', billingPeriodInterval: 1, description: 'Renamed' } as never,
+      ctx as never,
+    )
+    expect(item).toMatchObject({ billingPeriodUnit: 'monthly', billingPeriodInterval: 1 })
+  })
+})
+
 describe('billing.items.change_price — phases keep their dates', () => {
   it('copies the remaining phases as "until" dates and the running pause', async () => {
     const item: Row = {

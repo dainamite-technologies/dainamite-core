@@ -134,7 +134,9 @@ export const GET = crud.GET
 const errorsNote =
   '422 `billing.item.status_period_overlap` when the period overlaps another one on the item (periods never overlap); ' +
   '422 `billing.item.status_period_read_only` for an item with a `subscriptionId` (a CPQ line — change it on the CPQ ' +
-  'subscription; the connector writes it); 422 `billing.item.status_period_end_before_start`; 404 when the item is missing.'
+  'subscription; the connector writes it); 422 `billing.item.status_period_end_before_start`; 422 ' +
+  '`billing.item.status_period_recurring_only` on a one-time item; 404 when the item is missing. Undo re-applies the ' +
+  'same overlap and read-only checks.'
 
 export const openApi = createBillingCrudOpenApi({
   resourceName: 'BillingItemStatusPeriod',

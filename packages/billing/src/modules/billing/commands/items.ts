@@ -21,6 +21,7 @@ import { assertItemDates } from '../lib/itemDates'
 import { previewCredit } from '../lib/creditPreview'
 import { toCreditReason, type CreditReason, type CreditReasonInput } from '../lib/creditReason'
 import {
+  BILLING_PERIOD_CHANGE_BILLED,
   PHASE_EDIT_BILLED,
   PHASES_RECURRING_ONLY,
   phaseEditTouchesBilled,
@@ -39,6 +40,7 @@ import {
   billingItemDeleteSchema,
   billingItemUpdateSchema,
   billingPeriodIssue,
+  BILLING_PERIOD_CHANGE_BILLED_MESSAGE,
   CHARGE_TIMING_RECURRING_ONLY_MESSAGE,
   LINE_PERIOD_RECURRING_ONLY_MESSAGE,
   GROSS_TIERED_UNSUPPORTED_MESSAGE,
@@ -320,6 +322,9 @@ const updateItemCommand: CommandHandler<BillingItemUpdateInput, { id: string }> 
       }
       const issue = billingPeriodIssue(unit, unit ? interval : null)
       if (issue) throw invalid(issue.message, 'billing.item.billing_period_invalid')
+      const nextInterval = unit ? interval : null
+      const changed = (unit ?? null) !== (record.billingPeriodUnit ?? null) || nextInterval !== (record.billingPeriodInterval ?? null)
+      if (changed && record.billedToDate) throw invalid(BILLING_PERIOD_CHANGE_BILLED_MESSAGE, BILLING_PERIOD_CHANGE_BILLED)
       record.billingPeriodUnit = (unit ?? null) as BillingItem['billingPeriodUnit']
       record.billingPeriodInterval = unit ? interval : null
     }

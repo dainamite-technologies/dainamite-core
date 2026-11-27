@@ -344,8 +344,9 @@ export const openApi = createBillingCrudOpenApi({
       'or `creditReasonCode` + `creditReasonParams` (generated, rendered in the invoice language) — else 422 ' +
       '`billing.item.credit_reason_required`. A reason sent when nothing is credited is ignored. ' +
       '422 `billing.item.end_before_start` when the end date is more than one day before the start. ' +
-      '`billingPeriodUnit` / `billingPeriodInterval` (recurring only; null clears = follow the account) may change at any ' +
-      'time — billing resumes from `billed_to_date`. `phases` REPLACES the whole schedule; `phasesEnabled` toggles it. A ' +
+      '`billingPeriodUnit` / `billingPeriodInterval` (recurring only; null clears = follow the account) may change only ' +
+      'until the item is first invoiced — then 422 `billing.item.billing_period_change_billed` (end the item and add a new ' +
+      'one; re-sending the unchanged period is fine). `phases` REPLACES the whole schedule; `phasesEnabled` toggles it. A ' +
       'phase change that would re-price a day already invoiced (on or before `billed_to_date`) is refused with 422 ' +
       '`billing.item.phase_edit_billed` — correct invoiced periods with a credit memo. 422 `billing.item.phases_recurring_only` / ' +
       '`billing.item.billing_period_recurring_only` on other item types. Ending an item drops its later phases.',

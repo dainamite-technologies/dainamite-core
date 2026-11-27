@@ -45,6 +45,8 @@ Entry format (newest first within a section):
 
 ## CPQ
 
+- **Adding a column to `cpq_quote_price_adjustments` means adding it to the undo `snapshotSchema` too.** (2026-11-27, price phases)
+  `commands/price-adjustments.ts` parses undo snapshots with a non-strict `z.object`, which silently drops unknown keys: undo then restores the row without the new field (a phase came back permanent), and `snapshotKey` no longer matches `adjustmentSnapshot(row)`, so undo answers 409. Keep `adjustmentInput`, `values()`, `loadQuoteAdjustments`, `cloneQuoteAdjustments` and the snapshot schema in step.
 - **Never `$ilike` a uuid column: Postgres rejects it (`operator does not exist: uuid ~~* unknown`) and the route answers 500.** (2026-11-23, `api/quotes/route.ts`)
   `GET /api/cpq/quotes?search=` did this on `quoteId` / `customerId`; the backoffice list filters client-side, so only API and AI callers saw it. Match uuids exactly; match human text (quote number) on the entity that owns it, with `buildIlikeTerm` from `@open-mercato/shared/lib/db/buildIlikeTerm`.
 - **A unique constraint on a soft-deleted table blocks re-creating a removed row.** (2026-11-17, #122)

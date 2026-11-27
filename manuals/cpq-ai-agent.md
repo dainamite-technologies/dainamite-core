@@ -105,7 +105,9 @@ The write tools that act on an existing quote also need `cpq.quotes.view`, becau
 
 Every CPQ write tool is flagged destructive, so it always goes through the approval card, also when a tenant sets the agent to `destructive-confirm-required`. A tenant that wants no AI writes sets the agent to `read-only`.
 
-Not exposed as AI tools on purpose: converting a quote to an order, activating an order, ARC quote creation from a subscription, price adjustments, deleting quotes or lines, and any pricing table or inventory edit. Catalog edits are limited to the three catalog write tools above (no specifications, slots, charges or price rules).
+Price phases (trials, promotions, ramps) are read-only for the agent: `cpq.get_quote` returns each phased recurring charge's `schedule` (month ranges, price, source rule or manual) and `cpq.list_price_rules` the rules' month range and campaign dates; the rep creates phases in the quote's **Phases** editor.
+
+Not exposed as AI tools on purpose: converting a quote to an order, activating an order, ARC quote creation from a subscription, price adjustments, price adjustments and price phases, deleting quotes or lines, and any pricing table or inventory edit. Catalog edits are limited to the three catalog write tools above (no specifications, slots, charges or price rules).
 
 ## Catalog assistant
 

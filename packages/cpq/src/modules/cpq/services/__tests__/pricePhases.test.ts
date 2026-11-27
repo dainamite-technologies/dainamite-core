@@ -242,3 +242,43 @@ describe('C2 payload phases', () => {
     expect(withoutSchedule({ ...mrc, schedule: [segment(1, 1, 0), segment(2, null, 100)] })).toEqual(mrc)
   })
 })
+
+describe('price rule phase validation (V-PR-PHASE)', () => {
+  const { cpqPriceRuleCreateSchema, cpqPriceRuleUpdateSchema } = jest.requireActual('../../data/validators') as typeof import('../../data/validators')
+  const rule = { code: 'TRIAL', name: 'Free trial', ruleType: 'price_override', value: 0 }
+  it('accepts a month range and campaign dates', () => {
+    expect(cpqPriceRuleCreateSchema.parse({ ...rule, fromMonth: 1, toMonth: 1, chargeTypeFilter: 'mrc', validFrom: '2026-11-01', validUntil: '2026-12-31' }))
+      .toMatchObject({ fromMonth: 1, toMonth: 1, validFrom: '2026-11-01', validUntil: '2026-12-31' })
+  })
+  it.each([
+    [{ fromMonth: 3, toMonth: 2 }, 'PHASE_RANGE_INVALID'],
+    [{ toMonth: 1, chargeTypeFilter: 'nrc' }, 'PHASE_RECURRING_ONLY'],
+    [{ validFrom: '2026-12-31', validUntil: '2026-11-01' }, 'CAMPAIGN_RANGE_INVALID'],
+    [{ validFrom: '31/12/2026' }, 'Expected YYYY-MM-DD'],
+  ])('refuses %j', (patch, message) => {
+    const result = cpqPriceRuleCreateSchema.safeParse({ ...rule, ...patch })
+    expect(result.success).toBe(false)
+    expect(result.error?.issues.map((issue) => issue.message)).toContain(message)
+  })
+  it('a partial update without phase fields keeps defaults out', () => {
+    expect(cpqPriceRuleUpdateSchema.parse({ id: '11111111-1111-4111-8111-111111111111', name: 'x' })).toEqual({ id: '11111111-1111-4111-8111-111111111111', name: 'x' })
+  })
+})
+
+describe('stored phase rows', () => {
+  const { adjustmentInput, adjustmentSnapshot } = jest.requireActual('../priceAdjustments/adjustmentService') as typeof import('../priceAdjustments/adjustmentService')
+  const row = {
+    id: '11111111-1111-4111-8111-111111111111', level: 'charge', quoteLineId: '22222222-2222-4222-8222-222222222222', chargeCode: 'net', chargeTypeFilter: null,
+    adjustmentType: 'price_override', value: '0', currencyCode: 'USD', reasonCode: 'promotion', reasonNote: null,
+    windowKind: 'relative', fromMonth: 1, toMonth: 3, phaseName: 'Free trial',
+    quoteConfigurationId: '33333333-3333-4333-8333-333333333333', quoteId: '44444444-4444-4444-8444-444444444444',
+    tenantId: '55555555-5555-4555-8555-555555555555', organizationId: '66666666-6666-4666-8666-666666666666',
+    createdByUserId: '77777777-7777-4777-8777-777777777777', createdAt: new Date('2026-11-27T00:00:00Z'), updatedAt: new Date('2026-11-27T00:00:00Z'),
+    deletedAt: null, isActive: true,
+  }
+  it('keeps the month range and name in the input and the audit snapshot (undo restores a phase, not a permanent price)', () => {
+    expect(adjustmentInput(row as never)).toMatchObject({ fromMonth: 1, toMonth: 3, windowKind: 'relative', phaseName: 'Free trial' })
+    expect(adjustmentSnapshot(row as never)).toMatchObject({ fromMonth: 1, toMonth: 3, phaseName: 'Free trial' })
+    expect(adjustmentInput({ ...row, toMonth: null, phaseName: null } as never)).not.toHaveProperty('fromMonth')
+  })
+})

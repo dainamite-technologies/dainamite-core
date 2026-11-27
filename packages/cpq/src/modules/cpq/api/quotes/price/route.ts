@@ -99,7 +99,7 @@ const chargeDoc = z.object({
 }).passthrough()
 export const openApi: OpenApiRouteDoc = { tag: 'CPQ Pricing', methods: { POST: {
   summary: 'Calculate catalog prices and price rules without saving',
-  description: 'Manual quote adjustments are never applied. Set includeWaterfall=true to return list and standard prices; these fields are omitted by default.',
+  description: 'Manual quote adjustments are never applied. Set includeWaterfall=true to return list and standard prices and, for recurring charges priced by a phased price rule, the month `schedule`; these fields are omitted by default.',
   requestBody: { schema: cpqPricePreviewSchema },
   responses: [{ status: 200, description: 'Resolved rule prices and optional waterfall', schema: z.object({
     primaryCharges: z.array(chargeDoc),

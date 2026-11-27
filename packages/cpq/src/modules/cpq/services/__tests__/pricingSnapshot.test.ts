@@ -73,7 +73,7 @@ it('D5: a non-monthly period changes the hash; monthly charges keep their existi
   expect(computeWaterfallSummary([yearly], [], "USD").snapshotHash).not.toBe(plain)
 })
 const yearlyCharge = (price: number, adjustments: NonNullable<SnapshotLine['charges'][number]['adjustments']> = []) => ({
-  chargeCode: 'y', chargeName: 'Yearly', chargeType: 'mrc' as const, pricingMethod: 'flat', currencyCode: 'USD', quantity: 1,
+  chargeCode: 'y', chargeName: 'Yearly', chargeType: 'mrc' as const, pricingMethod: 'flat' as const, currencyCode: 'USD', quantity: 1,
   billingPeriod: { unit: 'year' as const, interval: 1 },
   listUnitPrice: price, listTotalPrice: price, standardUnitPrice: price, standardTotalPrice: price, unitPrice: price, totalPrice: price, adjustments,
 })

@@ -83,9 +83,7 @@ describe('billing.items.create — own period and phases', () => {
         ],
       } as never,
       ctx as never,
-    ).catch((err) => {
-      throw err
-    })
+    )
     const [item] = of(BillingItem)
     expect(item).toMatchObject({ billingPeriodUnit: 'annually', billingPeriodInterval: 1, phasesEnabled: true })
     expect(result.id).toBe(item.id)

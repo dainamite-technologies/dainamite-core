@@ -93,6 +93,7 @@ Entry format (newest first within a section):
 
 - **The root `yarn typecheck` can be OOM-killed on an ~11 GB box, taking the agent session down with it.** (2026-11-27, billing/CPQ flex run)
   Typecheck one package instead: `cd packages/<pkg> && NODE_OPTIONS=--max-old-space-size=2500 ../../node_modules/.bin/tsc --noEmit -p . --ignoreDeprecations 6.0`. In a fresh worktree run `yarn build:packages` first, or the connector tests fail on missing `@dainamite/billing` modules.
+  **But a package typecheck skips tests:** `packages/*/tsconfig.json` excludes `__tests__/` and `__integration__/`, and CI runs the root `yarn typecheck`, which includes them. A green `yarn workspace @dainamite/<pkg> typecheck` still let PR #153 fail CI on test fixtures (2026-11-27). Before pushing, run the root `yarn typecheck` on a machine with room for it (fine on 32 GB with CI's `NODE_OPTIONS=--max-old-space-size=4096`).
 - **The backend header's organization switcher is a `combobox` that can render after the page content.** (2026-11-23, TC-CPQ-ARC-005)
   A page-wide `[role="combobox"]` `.first()` re-resolves on each use and can hit the switcher instead of the page's picker. Scope it: `page.getByRole('main').locator(...)`. Also clean up in `afterEach`: a `finally` in a timed-out test never completes, so fixtures pile up.
 - **A Playwright click on a server-rendered DataTable row can land before hydration and do nothing.** (2026-11-23, TC-CPQ-006)

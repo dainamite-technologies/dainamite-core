@@ -342,6 +342,10 @@ describe('writeDraftInvoice — gross price basis (Spec F)', () => {
           servicePeriodEnd: new Date('2026-11-30T00:00:00Z'),
           amount: 32,
           proration: { activeDays: 16, periodDays: 30 },
+          quantity: 1,
+          unitAmount: 32,
+          phase: null,
+          reason: null,
         },
       ],
     )

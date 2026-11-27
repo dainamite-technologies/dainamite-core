@@ -145,7 +145,9 @@ export const updateItemScheduleTool = defineAiTool<UpdateItemScheduleInput, { ok
   description:
     'Set a recurring billing item\'s own billing period (e.g. every 1 year on a monthly account) and/or its price phases ' +
     '(free trial, promotion, ramp). Only periods not yet invoiced can change: the route refuses with ' +
-    'billing.item.phase_edit_billed when invoiced days would be re-priced (correct those with a credit memo). Requires ' +
+    'billing.item.phase_edit_billed when invoiced days would be re-priced (correct those with a credit memo), and ' +
+    'billing.item.billing_period_change_billed when the billing period changes after the item was first invoiced (end ' +
+    'it and add a new item instead). Requires ' +
     'the operator to approve the preview card. Returns { ok, id }; read the result back with billing.list_items.',
   inputSchema: updateItemScheduleInput,
   requiredFeatures: [...UPDATE_SCHEDULE.requiredFeatures],

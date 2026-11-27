@@ -23,6 +23,7 @@ import {
   STATUS_PERIOD_END_BEFORE_START,
   STATUS_PERIOD_OVERLAP,
   STATUS_PERIOD_READ_ONLY,
+  STATUS_PERIOD_RECURRING_ONLY,
   defaultChargeBehavior,
   findOverlap,
   isStatusWriteAllowed,
@@ -181,11 +182,27 @@ async function loadRow(em: EntityManager, id: string, scope: { tenantId: string;
   } as never)
 }
 
-/** Undo: put the row back to `snap` (applied* stay engine-owned). */
+/**
+ * Undo: put the row back to `snap` (applied* stay engine-owned). Undo is a
+ * write like any other: D6 applies, and a row brought back to life must not
+ * overlap a period created since (the engine relies on non-overlapping rows
+ * for a readable history; it dedupes days on its own regardless).
+ */
 async function restore(ctx: CommandRuntimeContext, snap: StatusSnapshot): Promise<void> {
   const em = getEm(ctx)
   const row = await loadRow(em, snap.id, snap, true)
   if (!row) return
+  if (snap.deletedAt) {
+    // Soft-delete (undo of a create): the item may be gone already — then nothing to guard.
+    const item = await em.findOne(BillingItem, { id: row.billingItemId, tenantId: snap.tenantId, organizationId: snap.organizationId, deletedAt: null })
+    if (item) assertWritable(item, ctx)
+  } else {
+    const item = await loadItem(em, snap, row.billingItemId)
+    assertWritable(item, ctx)
+    assertRange(snap.fromDate, snap.toDate)
+    assertNoOverlap(await siblings(em, item), snap, row.id)
+  }
+  // Reads and checks done — mutate.
   row.status = snap.status
   row.fromDate = snap.fromDate
   row.toDate = snap.toDate
@@ -216,6 +233,13 @@ const createStatusPeriodCommand: CommandHandler<BillingItemStatusPeriodCreateInp
     ensureOrganizationScope(ctx, parsed.organizationId)
     const em = getEm(ctx)
     const item = await loadItem(em, parsed, parsed.billingItemId)
+    // A one-time charge has no service days to pause (the bulk action skips them).
+    if (item.type === 'one_time') {
+      throw new CrudHttpError(422, {
+        error: 'A line status can only be set on recurring and usage lines',
+        code: STATUS_PERIOD_RECURRING_ONLY,
+      })
+    }
     assertWritable(item, ctx)
     assertRange(parsed.fromDate, parsed.toDate)
     assertNoOverlap(await siblings(em, item), parsed)

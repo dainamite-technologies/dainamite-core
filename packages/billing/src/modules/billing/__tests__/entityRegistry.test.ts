@@ -50,6 +50,8 @@ const suffixOf = (id: string) => id.split(':')[1]
 const EXPECTED_TABLES: Record<string, string> = {
   [billingEntityIds.account]: 'billing_accounts',
   [billingEntityIds.item]: 'billing_items',
+  [billingEntityIds.itemPhase]: 'billing_item_phases',
+  [billingEntityIds.itemStatusPeriod]: 'billing_item_status_periods',
   [billingEntityIds.usage]: 'billing_account_usage',
   [billingEntityIds.run]: 'billing_runs',
   [billingEntityIds.runOutcome]: 'billing_run_outcomes',
@@ -111,7 +113,7 @@ describe('shipped registry — generated/entities.ids.generated.ts', () => {
     // are what matters.
     const expected = Object.fromEntries(ALL_IDS.map((id) => [suffixOf(id), id]))
     expect(E.billing).toEqual(expected)
-    expect(Object.keys(E.billing)).toHaveLength(17)
+    expect(Object.keys(E.billing)).toHaveLength(19)
   })
 
   it('ships one column file per entity, matching the ORM columns', () => {

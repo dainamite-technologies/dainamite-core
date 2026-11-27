@@ -11,7 +11,8 @@ import {
 } from '@open-mercato/shared/lib/commands/helpers'
 import { CrudHttpError } from '@open-mercato/shared/lib/crud/errors'
 import type { DataEngine } from '@open-mercato/shared/lib/data/engine'
-import { BillingAccount, BillingItem } from '../data/entities'
+import { randomUUID } from 'node:crypto'
+import { BillingAccount, BillingItem, BillingItemStatusPeriod } from '../data/entities'
 import { billingEntityIds } from '../data/entityIds'
 import { findBySourceRef } from '../lib/idempotency'
 import { getBillingSettings, taxRateColumn } from '../lib/billingSettings'
@@ -20,13 +21,26 @@ import { assertItemDates } from '../lib/itemDates'
 import { previewCredit } from '../lib/creditPreview'
 import { toCreditReason, type CreditReason, type CreditReasonInput } from '../lib/creditReason'
 import {
+  PHASE_EDIT_BILLED,
+  PHASES_RECURRING_ONLY,
+  phaseEditTouchesBilled,
+  remainingPhasesFrom,
+  resolvePhases,
+  validatePhaseSchedule,
+  type PhaseDefinition,
+} from '../lib/pricePhases'
+import { createPhaseRows, itemResolvedPhases, loadPhasesByItem, loadStatusPeriodsByItem, phaseRowToDefinition } from '../lib/itemSchedules'
+import { toIsoDate } from '../lib/dateOnly'
+import {
   billingItemBulkCreateSchema,
   billingItemChangePriceSchema,
   type BillingItemChangePriceInput,
   billingItemCreateSchema,
   billingItemDeleteSchema,
   billingItemUpdateSchema,
+  billingPeriodIssue,
   CHARGE_TIMING_RECURRING_ONLY_MESSAGE,
+  LINE_PERIOD_RECURRING_ONLY_MESSAGE,
   GROSS_TIERED_UNSUPPORTED_MESSAGE,
   isTieredRate,
   validateRateJson,
@@ -68,6 +82,32 @@ function requireCreditReason(
     })
   }
   return reason
+}
+
+/** Own period columns from a create / bulk payload (null = follow the account). */
+function periodColumns(input: { billingPeriodUnit?: string | null; billingPeriodInterval?: number | null }) {
+  return input.billingPeriodUnit
+    ? {
+        billingPeriodUnit: input.billingPeriodUnit as NonNullable<BillingItem['billingPeriodUnit']>,
+        billingPeriodInterval: input.billingPeriodInterval ?? 1,
+      }
+    : { billingPeriodUnit: null, billingPeriodInterval: null }
+}
+
+/**
+ * Phases of a create / bulk payload: the switch defaults to ON when phases
+ * are sent without it (contract C1: the connector sends both anyway).
+ */
+function phasesFromInput(input: { phasesEnabled?: boolean; phases?: PhaseDefinition[] }): {
+  enabled: boolean
+  phases: PhaseDefinition[]
+} {
+  const phases = input.phases ?? []
+  return { enabled: input.phasesEnabled ?? phases.length > 0, phases }
+}
+
+function invalid(message: string, code: string): CrudHttpError {
+  return new CrudHttpError(422, { error: message, code })
 }
 
 const itemIndexer = { entityType: billingEntityIds.item } as const
@@ -140,7 +180,10 @@ const createItemCommand: CommandHandler<
         : (await getBillingSettings(em, parsed)).defaultTaxRate
 
     const now = new Date()
+    const schedule = phasesFromInput(parsed)
     const entity = em.create(BillingItem, {
+      // Assigned here so the item and its phases go in one flush.
+      id: randomUUID(),
       organizationId: parsed.organizationId,
       tenantId: parsed.tenantId,
       billAccountId: account.id,
@@ -158,6 +201,8 @@ const createItemCommand: CommandHandler<
       prorate: parsed.prorate ?? true,
       taxRate,
       priceBasis: parsed.priceBasis ?? 'net',
+      ...periodColumns(parsed),
+      phasesEnabled: schedule.enabled,
       // `currency_mismatch` is set by Phase 2 / connectors when the
       // posted value's currency differs from the account's. Stays
       // false on create (operator opts in to flagging).
@@ -170,6 +215,7 @@ const createItemCommand: CommandHandler<
       updatedAt: now,
     })
     em.persist(entity)
+    createPhaseRows(em, entity, schedule.phases, now)
     await em.flush()
 
     await emitCrudSideEffects({
@@ -209,6 +255,13 @@ const updateItemCommand: CommandHandler<BillingItemUpdateInput, { id: string }> 
     if (!record) {
       throw new CrudHttpError(404, { error: 'Billing item not found' })
     }
+    // Every read happens before the first mutation (no withAtomicFlush needed).
+    const touchesSchedule =
+      parsed.phases !== undefined || parsed.phasesEnabled !== undefined || parsed.billStartDate !== undefined
+    const currentPhaseRows = touchesSchedule
+      ? ((await loadPhasesByItem(em, parsed, [record.id])).get(record.id) ?? [])
+      : []
+    const scheduleBefore = itemResolvedPhases(record, currentPhaseRows)
 
     const previousEnd = record.billEndDate ? new Date(record.billEndDate).getTime() : null
     if (parsed.billStartDate !== undefined) record.billStartDate = parsed.billStartDate
@@ -252,6 +305,59 @@ const updateItemCommand: CommandHandler<BillingItemUpdateInput, { id: string }> 
     }
 
     if (parsed.priceBasis !== undefined) record.priceBasis = parsed.priceBasis
+
+    // ── Own billing period (L §4.2) ──
+    if (parsed.billingPeriodUnit !== undefined || parsed.billingPeriodInterval !== undefined) {
+      const unit = parsed.billingPeriodUnit !== undefined ? parsed.billingPeriodUnit : (record.billingPeriodUnit ?? null)
+      const interval =
+        parsed.billingPeriodInterval !== undefined
+          ? parsed.billingPeriodInterval
+          : unit
+            ? (record.billingPeriodInterval ?? 1)
+            : null
+      if (unit && record.type !== 'recurring') {
+        throw invalid(LINE_PERIOD_RECURRING_ONLY_MESSAGE, 'billing.item.billing_period_recurring_only')
+      }
+      const issue = billingPeriodIssue(unit, unit ? interval : null)
+      if (issue) throw invalid(issue.message, 'billing.item.billing_period_invalid')
+      record.billingPeriodUnit = (unit ?? null) as BillingItem['billingPeriodUnit']
+      record.billingPeriodInterval = unit ? interval : null
+    }
+
+    // ── Price phases (P §4.1): only periods not yet invoiced are editable ──
+    let replacementPhases: PhaseDefinition[] | null = null
+    if (touchesSchedule) {
+      const enabled = parsed.phasesEnabled ?? record.phasesEnabled
+      const definitions = parsed.phases ?? currentPhaseRows.map(phaseRowToDefinition)
+      if ((enabled || (parsed.phases?.length ?? 0) > 0) && record.type !== 'recurring') {
+        throw invalid(LINE_PERIOD_RECURRING_ONLY_MESSAGE, PHASES_RECURRING_ONLY)
+      }
+      const issue = validatePhaseSchedule(record.billStartDate, definitions)
+      if (issue) throw invalid(issue.message, 'billing.item.phases_invalid')
+      const scheduleAfter = enabled ? resolvePhases(record.billStartDate, definitions) : []
+      const regular = (record.rateJson as { unit_price?: number } | null)?.unit_price ?? 0
+      const firstDay = toIsoDate(
+        Math.min(new Date(record.billStartDate).getTime(), scheduleBefore[0]?.start.getTime() ?? Infinity),
+      )
+      if (phaseEditTouchesBilled(scheduleBefore, scheduleAfter, record.billedToDate ?? null, regular, regular, firstDay)) {
+        throw new CrudHttpError(422, {
+          error:
+            'This change would re-price days that are already invoiced. Only periods not yet invoiced can change — issue a credit memo to correct an invoiced period.',
+          code: PHASE_EDIT_BILLED,
+        })
+      }
+      record.phasesEnabled = enabled
+      if (parsed.phases !== undefined) replacementPhases = parsed.phases
+    }
+    if (replacementPhases) {
+      const now = new Date()
+      for (const row of currentPhaseRows) {
+        row.deletedAt = now
+        row.updatedAt = now
+      }
+      createPhaseRows(em, record, replacementPhases, now)
+    }
+
     // Spec F (P-D4): tiered usage rates are always net — checked on the
     // resulting state, since either field may change alone.
     if (record.priceBasis === 'gross' && isTieredRate(record.rateJson)) {
@@ -445,7 +551,9 @@ const bulkCreateItemsCommand: CommandHandler<
 
       validateRateJson(entry.type, entry.rateJson)
       assertItemDates(entry.billStartDate, entry.billEndDate)
+      const schedule = phasesFromInput(entry)
       const item = em.create(BillingItem, {
+        id: randomUUID(),
         organizationId: parsed.organizationId,
         tenantId: parsed.tenantId,
         billAccountId: entry.billAccountId,
@@ -462,6 +570,8 @@ const bulkCreateItemsCommand: CommandHandler<
         prorate: entry.prorate ?? true,
         taxRate: entry.taxRate !== undefined ? taxRateColumn(entry.taxRate) : defaultTaxRate,
         priceBasis: entry.priceBasis ?? 'net',
+        ...periodColumns(entry),
+        phasesEnabled: schedule.enabled,
         currencyMismatch: false,
         billedToDate: null,
         isActive: true,
@@ -469,6 +579,7 @@ const bulkCreateItemsCommand: CommandHandler<
         updatedAt: now,
       })
       em.persist(item)
+      createPhaseRows(em, item, schedule.phases, now)
       createdEntities.push(item)
       const createdResult: BulkCreateResultEntry = {
         sourceRef: entry.sourceRef ?? null,
@@ -547,6 +658,10 @@ const changeItemPriceCommand: CommandHandler<
         deletedAt: null,
       })
       if (!record) throw new CrudHttpError(404, { error: 'Billing item not found' })
+      // Reads first: phases and status periods carried to the copy.
+      const scope = { tenantId: record.tenantId, organizationId: record.organizationId }
+      const phaseRows = (await loadPhasesByItem(tem, scope, [record.id])).get(record.id) ?? []
+      const statusRows = (await loadStatusPeriodsByItem(tem, scope, [record.id])).get(record.id) ?? []
       const planned = planPriceChange(record, parsed.effectiveDate)
       if (!planned.ok) {
         throw new CrudHttpError(422, { error: 'The price cannot be changed on this date', code: planned.error })
@@ -573,13 +688,43 @@ const changeItemPriceCommand: CommandHandler<
         prorate: record.prorate,
         taxRate: record.taxRate,
         priceBasis: record.priceBasis,
+        billingPeriodUnit: record.billingPeriodUnit ?? null,
+        billingPeriodInterval: record.billingPeriodInterval ?? null,
+        // P §4.1: the copy keeps the remaining phases on their original dates.
+        phasesEnabled: record.phasesEnabled,
         currencyMismatch: record.currencyMismatch,
         billedToDate: null,
         isActive: true,
         createdAt: now,
         updatedAt: now,
+        id: randomUUID(),
       })
       tem.persist(copy)
+      if (record.phasesEnabled) {
+        createPhaseRows(tem, copy, remainingPhasesFrom(itemResolvedPhases(record, phaseRows), plan.newItemStartDate), now)
+      }
+      // A running or future status (pause, suspension) continues on the copy.
+      const startMs = plan.newItemStartDate.getTime()
+      for (const row of statusRows) {
+        if (row.toDate && new Date(row.toDate).getTime() < startMs) continue
+        tem.persist(
+          tem.create(BillingItemStatusPeriod, {
+            id: randomUUID(),
+            organizationId: row.organizationId,
+            tenantId: row.tenantId,
+            billingItemId: copy.id,
+            status: row.status,
+            fromDate: toIsoDate(Math.max(new Date(row.fromDate).getTime(), startMs)),
+            toDate: row.toDate ? toIsoDate(row.toDate) : null,
+            chargeBehavior: row.chargeBehavior,
+            reason: row.reason ?? null,
+            appliedFrom: null,
+            appliedTo: null,
+            createdAt: now,
+            updatedAt: now,
+          }),
+        )
+      }
       await tem.flush()
       return { previous: record, created: copy }
     })

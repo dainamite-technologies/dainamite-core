@@ -193,6 +193,9 @@ export class BillingItem {
     | 'prorate'
     | 'taxRate'
     | 'priceBasis'
+    | 'billingPeriodUnit'
+    | 'billingPeriodInterval'
+    | 'phasesEnabled'
     | 'isActive'
     | 'createdAt'
     | 'updatedAt'
@@ -288,8 +291,158 @@ export class BillingItem {
   @Property({ name: 'price_basis', type: 'text', default: 'net' })
   priceBasis: 'net' | 'gross' = 'net'
 
+  // Line-period spec (L §4.2) — recurring items only. Own billing period
+  // "every N <unit>", counted from `bill_start_date` (no stub, L-D3); the
+  // recurring price is per that period. Null = follow the account cycle.
+  @Property({ name: 'billing_period_unit', type: 'text', nullable: true })
+  billingPeriodUnit?: 'daily' | 'weekly' | 'monthly' | 'annually' | null
+
+  @Property({ name: 'billing_period_interval', type: 'integer', nullable: true })
+  billingPeriodInterval?: number | null
+
+  // Price-phases spec (P §4.1) — the "price changes over time" switch. Off =
+  // the `BillingItemPhase` rows are kept but ignored by the engine.
+  @Property({ name: 'phases_enabled', type: 'boolean', default: false })
+  phasesEnabled: boolean = false
+
   @Property({ name: 'is_active', type: 'boolean', default: true })
   isActive: boolean = true
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+
+  @Property({ name: 'updated_at', type: Date, onUpdate: () => new Date() })
+  updatedAt: Date = new Date()
+
+  @Property({ name: 'deleted_at', type: Date, nullable: true })
+  deletedAt?: Date | null
+}
+
+// ─── BillingItemPhase ────────────────────────────────────────────
+//
+// Price phases (P §4.1): child rows of a recurring billing item, back to back
+// from its `bill_start_date` in `sequence` order. Each has a duration (unit +
+// count) XOR an inclusive `end_date`, and a price: free | fixed (per item
+// period) | percent_off | amount_off of the regular price. FK string to the
+// item (intra-module, no ORM relation). Replaced as a set by the item
+// commands; soft-deleted rows are history.
+
+@Entity({ tableName: 'billing_item_phases' })
+@Index({
+  name: 'billing_item_phases_item_idx',
+  properties: ['billingItemId', 'sequence'],
+})
+@Index({
+  name: 'billing_item_phases_scope_idx',
+  properties: ['organizationId', 'tenantId'],
+})
+export class BillingItemPhase {
+  [OptionalProps]?: 'name' | 'durationUnit' | 'durationCount' | 'endDate' | 'value' | 'createdAt' | 'updatedAt' | 'deletedAt'
+
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @Property({ name: 'organization_id', type: 'uuid' })
+  organizationId!: string
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  @Property({ name: 'billing_item_id', type: 'uuid' })
+  billingItemId!: string
+
+  // 0-based position in the schedule.
+  @Property({ type: 'integer' })
+  sequence!: number
+
+  // Printed on the invoice line ("Internet — Promo 50% · …").
+  @Property({ type: 'text', nullable: true })
+  name?: string | null
+
+  // 'day' | 'week' | 'month' | 'year' — with `duration_count`, XOR `end_date`.
+  @Property({ name: 'duration_unit', type: 'text', nullable: true })
+  durationUnit?: 'day' | 'week' | 'month' | 'year' | null
+
+  @Property({ name: 'duration_count', type: 'integer', nullable: true })
+  durationCount?: number | null
+
+  @Property({ name: 'end_date', type: 'date', columnType: 'date', nullable: true })
+  endDate?: Date | string | null
+
+  // 'free' | 'fixed' | 'percent_off' | 'amount_off'.
+  @Property({ name: 'price_type', type: 'text' })
+  priceType!: 'free' | 'fixed' | 'percent_off' | 'amount_off'
+
+  // fixed: price per item period; percent_off: 0–100; amount_off: per period.
+  @Property({ type: 'numeric', columnType: 'numeric(18, 4)', nullable: true })
+  value?: string | null
+
+  @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
+  createdAt: Date = new Date()
+
+  @Property({ name: 'updated_at', type: Date, onUpdate: () => new Date() })
+  updatedAt: Date = new Date()
+
+  @Property({ name: 'deleted_at', type: Date, nullable: true })
+  deletedAt?: Date | null
+}
+
+// ─── BillingItemStatusPeriod ─────────────────────────────────────
+//
+// Dated line status (L §4.3): paused | suspended | grace from `from_date` to
+// `to_date` (null = open). Never overlapping on one item. `charge_behavior`
+// decides the billing effect (paused → no_charge, suspended / grace → charge
+// by default). `applied_from` / `applied_to` are engine-owned: the days of
+// this period the Bill Run already left uncharged (or credited), so a late
+// pause is credited once and a shortened one re-charged once.
+
+@Entity({ tableName: 'billing_item_status_periods' })
+@Index({
+  name: 'billing_item_status_periods_item_idx',
+  properties: ['billingItemId', 'fromDate'],
+})
+@Index({
+  name: 'billing_item_status_periods_scope_idx',
+  properties: ['organizationId', 'tenantId'],
+})
+export class BillingItemStatusPeriod {
+  [OptionalProps]?: 'toDate' | 'reason' | 'appliedFrom' | 'appliedTo' | 'createdAt' | 'updatedAt' | 'deletedAt'
+
+  @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
+  id!: string
+
+  @Property({ name: 'organization_id', type: 'uuid' })
+  organizationId!: string
+
+  @Property({ name: 'tenant_id', type: 'uuid' })
+  tenantId!: string
+
+  @Property({ name: 'billing_item_id', type: 'uuid' })
+  billingItemId!: string
+
+  // 'paused' | 'suspended' | 'grace'.
+  @Property({ type: 'text' })
+  status!: 'paused' | 'suspended' | 'grace'
+
+  @Property({ name: 'from_date', type: 'date', columnType: 'date' })
+  fromDate!: Date | string
+
+  @Property({ name: 'to_date', type: 'date', columnType: 'date', nullable: true })
+  toDate?: Date | string | null
+
+  // 'charge' | 'no_charge'.
+  @Property({ name: 'charge_behavior', type: 'text' })
+  chargeBehavior!: 'charge' | 'no_charge'
+
+  // Operator / CPQ reason, printed on a credit line for already-billed days.
+  @Property({ type: 'text', nullable: true })
+  reason?: string | null
+
+  @Property({ name: 'applied_from', type: 'date', columnType: 'date', nullable: true })
+  appliedFrom?: Date | string | null
+
+  @Property({ name: 'applied_to', type: 'date', columnType: 'date', nullable: true })
+  appliedTo?: Date | string | null
 
   @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
   createdAt: Date = new Date()

@@ -208,6 +208,8 @@ export type EditorState = {
   then: ThenForm
   reasonCode: string
   reasonNote: string
+  /** True while the reason is the automatic default (not stored, not picked): it then follows the mode. */
+  reasonDefaulted: boolean
 }
 
 export function emptyStep(kind: StepKind = 'free'): StepForm {
@@ -217,12 +219,12 @@ export function emptyStep(kind: StepKind = 'free'): StepForm {
 const valueText = (value: number | null | undefined) => (value == null ? '' : String(value))
 
 /** Editor state of a target's rows; rows with any month range open in Price phases (D1). */
-export function editorFromRows(t: Translate, option: Pick<TargetOption, 'rows' | 'types' | 'takesPhases'>, defaultReason: string): EditorState {
+export function editorFromRows(t: Translate, option: Pick<TargetOption, 'rows' | 'types' | 'takesPhases'>, phasesReason: string): EditorState {
   const steps = stepsFromRows(option.rows)
   const firstType = option.types[0] ?? 'discount_percent'
   const base: EditorState = {
     mode: 'one_price', one: { adjustmentType: firstType, value: '' }, steps: [emptyStep()], then: { kind: 'regular', value: '' },
-    reasonCode: steps.reasonCode ?? defaultReason, reasonNote: steps.reasonNote ?? '',
+    reasonCode: steps.reasonCode ?? '', reasonNote: steps.reasonNote ?? '', reasonDefaulted: !steps.reasonCode,
   }
   if (steps.mode === 'one_price') {
     return steps.then ? { ...base, one: { adjustmentType: steps.then.adjustmentType, value: valueText(steps.then.value), ...named(steps.then.name) } } : base
@@ -234,14 +236,27 @@ export function editorFromRows(t: Translate, option: Pick<TargetOption, 'rows' |
       value: free ? '' : valueText(phase.value), name: phase.name ?? '', nameTouched: false }
   })
   const ranges = stepRanges(loaded)
-  return {
+  return withDefaultReason({
     ...base,
     mode: 'phases',
     // A stored name equal to the suggestion keeps following the value (§3.5); any other name
     // (also none, on a row stored without one) counts as typed, so a resave never renames it.
     steps: loaded.map((step, index) => ({ ...step, nameTouched: step.name !== suggestedPhaseName(t, step, index, ranges[index]) })),
     then: steps.then ? { kind: steps.then.adjustmentType, value: valueText(steps.then.value), ...named(steps.then.name) } : { kind: 'regular', value: '' },
-  }
+  }, phasesReason)
+}
+
+/**
+ * The One price / Price phases switch. A defaulted reason follows the mode:
+ * `phasesReason` (Promotion) in Price phases, none in One price, where the rep
+ * picks one. A stored or picked reason is kept.
+ */
+export function withMode(state: EditorState, mode: EditorMode, phasesReason: string): EditorState {
+  return withDefaultReason({ ...state, mode }, phasesReason)
+}
+
+function withDefaultReason(state: EditorState, phasesReason: string): EditorState {
+  return state.reasonDefaulted ? { ...state, reasonCode: state.mode === 'phases' ? phasesReason : '' } : state
 }
 
 const named = (name: string | null | undefined) => (name ? { name } : {})
@@ -312,12 +327,14 @@ export function bodyFromEditor(t: Translate, state: EditorState, option: Pick<Ta
   { body: TargetPriceBody | null; error: EditorError | null; stepIndex?: number } {
   const reason = { currencyCode, reasonCode: state.reasonCode || null, reasonNote: state.reasonNote.trim() || null }
   const fail = (error: EditorError, stepIndex?: number) => ({ body: null, error, ...(stepIndex !== undefined ? { stepIndex } : {}) })
-  if (!state.reasonCode) return fail('REASON_REQUIRED')
-  if (state.reasonCode === 'other' && !state.reasonNote.trim()) return fail('REASON_NOTE_REQUIRED')
+  // Value errors first, then the reason: the hints follow the order of the form.
+  const reasonError: EditorError | null = !state.reasonCode ? 'REASON_REQUIRED'
+    : state.reasonCode === 'other' && !state.reasonNote.trim() ? 'REASON_NOTE_REQUIRED' : null
   if (state.mode === 'one_price' || !option.takesPhases) {
     const value = amount(state.one.value)
     if (!state.one.value.trim()) return fail('VALUE_REQUIRED')
     if (!valid(state.one.adjustmentType, value)) return fail('PHASE_VALUE_INVALID')
+    if (reasonError) return fail(reasonError)
     return { body: { target: option.target, phases: [], then: { adjustmentType: state.one.adjustmentType, value, ...named(state.one.name) }, ...reason }, error: null }
   }
   if (state.steps.length > MAX_TARGET_STEPS) return fail('PHASE_TOO_MANY')
@@ -345,6 +362,7 @@ export function bodyFromEditor(t: Translate, state: EditorState, option: Pick<Ta
     then = { adjustmentType: state.then.kind, value, ...named(state.then.name) }
   }
   if (!phases.some((phase) => phase.adjustmentType !== 'regular') && !then) return fail('PHASE_NONE')
+  if (reasonError) return fail(reasonError)
   return { body: { target: option.target, phases, then, ...reason }, error: null }
 }
 

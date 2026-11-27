@@ -65,10 +65,14 @@ Spec `.ai/specs/2026-11-27-cpq-billing-phases-ux-feedback.md` (one Price dialog)
    charges in proportion to their standard totals (the rounding cent goes to the
    largest charge; if every charge is at 0, the first takes it all).
 6. Choose a **reason** (required) and an optional note (required for "Other").
-   They apply to every row the save writes.
-7. The **preview** (live, nothing saved) shows each affected charge before →
-   after (with **Above standard** for an uplift), the schedule of phased charges,
-   the line MRC / NRC totals, and what the save replaces ("Replaces 2 phases").
+   They apply to every row the save writes. *Price phases* starts with
+   **Promotion**; *One price* starts empty, so you pick the reason. A stored or
+   picked reason is kept when you switch between the two.
+7. The draft is **previewed live** (nothing saved), but the dialog shows only
+   what needs attention: a conflict with another target, what is still missing
+   (e.g. a reason), a charge priced **above the standard price**, a charge that
+   keeps its own price, and what the save replaces ("Replaces 2 phases"). It
+   shows no before → after prices: the current prices are in the table at the top.
 8. **Save** (`Ctrl/Cmd+Enter`; `Esc` cancels) writes the whole target in one go
    (`PUT …/price-adjustments/target`): one reprice, one undo for the whole save.
    **Remove adjustment** (after a confirmation) clears the target.

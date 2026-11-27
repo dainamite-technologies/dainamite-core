@@ -152,6 +152,9 @@ test.describe('TC-CPQ-015: Price dialog, target API and the order panel', () => 
     await dialog.getByTestId('cpq-price-target').click()
     await page.getByRole('option', { name: /Whole line · all charges/ }).click()
     await dialog.getByTestId('cpq-price-one-value').fill('10')
+    // One price starts without a reason (Promotion is the default only in Price phases).
+    await dialog.getByTestId('cpq-price-reason').click()
+    await page.getByRole('option', { name: 'Competitive match' }).click()
     await expect(dialog.getByTestId('cpq-price-conflict')).toContainText('Overlaps Whole line · recurring — 2 phases', { timeout: 10_000 })
     await expect(dialog.getByTestId('cpq-price-save')).toBeDisabled()
   })

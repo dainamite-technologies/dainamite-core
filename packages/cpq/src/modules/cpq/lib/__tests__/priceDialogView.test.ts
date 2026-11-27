@@ -1,6 +1,6 @@
 import {
   authorText, bodyFromEditor, canSaveTarget, serverEditorError, bundleLines, defaultTargetKey, editorFromRows, emptyStep, groupByTarget, groupSummary, pricedByText,
-  scheduleText, stepRanges, suggestedPhaseName, targetOptionLabel, targetOptions,
+  scheduleText, stepRanges, suggestedPhaseName, targetOptionLabel, targetOptions, withMode,
   type DialogLine, type EditorState, type StoredRow, type Translate,
 } from '../priceDialogView'
 import { planTargetWrite, rowsForTarget } from '../targetPrice'
@@ -81,7 +81,7 @@ describe('editor ↔ body', () => {
   })
 
   it('fills suggested names until the rep types one, supports years and a Then price', () => {
-    const state: EditorState = { ...editorFromRows(t, { rows: [], types: recurring.types, takesPhases: true }, 'promotion'), mode: 'phases',
+    const state: EditorState = { ...withMode(editorFromRows(t, { rows: [], types: recurring.types, takesPhases: true }, 'promotion'), 'phases', 'promotion'),
       steps: [emptyStep('free'), { ...emptyStep('discount_percent'), value: '50', length: '3' }, { ...emptyStep('price_override'), value: '110', length: '1', unit: 'year', name: 'Ramp', nameTouched: true }],
       then: { kind: 'price_override', value: '120' } }
     expect(stepRanges(state.steps)).toEqual([{ fromMonth: 1, toMonth: 1 }, { fromMonth: 2, toMonth: 4 }, { fromMonth: 5, toMonth: 16 }])
@@ -104,7 +104,8 @@ describe('editor ↔ body', () => {
 
   it('saves One price as then without phases, also on a target without the switcher', () => {
     const oneTime = targetOptions(line, [line], [])[1]
-    const state = { ...editorFromRows(t, oneTime, 'promotion'), mode: 'phases' as const, one: { adjustmentType: 'discount_percent' as const, value: '20' } }
+    const state = { ...editorFromRows(t, oneTime, 'promotion'), mode: 'phases' as const, reasonCode: 'loyalty', reasonDefaulted: false,
+      one: { adjustmentType: 'discount_percent' as const, value: '20' } }
     expect(bodyFromEditor(t, state, oneTime, 'USD').body).toMatchObject({ phases: [], then: { adjustmentType: 'discount_percent', value: 20 } })
     expect(bodyFromEditor(t, { ...state, one: { ...state.one, value: '' } }, oneTime, 'USD')).toMatchObject({ error: 'VALUE_REQUIRED' })
   })
@@ -112,6 +113,31 @@ describe('editor ↔ body', () => {
   it('opens a legacy months 4–6 row as Regular price then the phase', () => {
     const legacy = targetOptions(line, [line], [row({ value: 40, fromMonth: 4, toMonth: 6 })])[0]
     expect(editorFromRows(t, legacy, 'promotion').steps.map((step) => [step.length, step.kind])).toEqual([['3', 'regular'], ['3', 'discount_percent']])
+  })
+})
+
+describe('default reason follows the mode', () => {
+  const empty = targetOptions(line, [line], [])[0]
+
+  it('starts One price without a reason and fills Promotion only in Price phases', () => {
+    const state = editorFromRows(t, empty, 'promotion')
+    expect(state).toMatchObject({ mode: 'one_price', reasonCode: '', reasonDefaulted: true })
+    expect(withMode(state, 'phases', 'promotion').reasonCode).toBe('promotion')
+    expect(withMode(withMode(state, 'phases', 'promotion'), 'one_price', 'promotion').reasonCode).toBe('')
+  })
+
+  it('keeps a picked reason across switches, and a stored one on load', () => {
+    const picked = { ...editorFromRows(t, empty, 'promotion'), reasonCode: 'loyalty', reasonDefaulted: false }
+    expect(withMode(picked, 'phases', 'promotion').reasonCode).toBe('loyalty')
+    const stored = editorFromRows(t, targetOptions(line, [line], [row({ value: 10, reasonCode: 'competitive_match' })])[0], 'promotion')
+    expect(stored).toMatchObject({ mode: 'one_price', reasonCode: 'competitive_match', reasonDefaulted: false })
+    expect(withMode(stored, 'phases', 'promotion').reasonCode).toBe('competitive_match')
+  })
+
+  it('asks for the value before the reason', () => {
+    const state = editorFromRows(t, empty, 'promotion')
+    expect(bodyFromEditor(t, state, empty, 'USD')).toMatchObject({ error: 'VALUE_REQUIRED' })
+    expect(bodyFromEditor(t, { ...state, one: { ...state.one, value: '80' } }, empty, 'USD')).toMatchObject({ error: 'REASON_REQUIRED' })
   })
 })
 
@@ -170,7 +196,7 @@ describe('loaded names follow the value until typed (F3)', () => {
 
 describe('Then past the term (F4)', () => {
   const recurring = targetOptions(line, [line], [])[0]
-  const filling: EditorState = { ...editorFromRows(t, recurring, 'promotion'), mode: 'phases',
+  const filling: EditorState = { ...withMode(editorFromRows(t, recurring, 'promotion'), 'phases', 'promotion'),
     steps: [{ ...emptyStep('discount_percent'), value: '10', length: '1', unit: 'year' }], then: { kind: 'price_override', value: '120' } }
 
   it('refuses a Then price after phases that fill the term, on the Then row', () => {

@@ -67,7 +67,7 @@ export function PhaseScheduleEditor({ steps, then, types, currency, errorStep, o
             const range = ranges[index]
             const suggestion = suggestedPhaseName(t, step, index, range)
             return (
-              <tr key={index} className="border-t align-top" data-testid="cpq-price-step">
+              <tr key={index} className="border-t align-middle" data-testid="cpq-price-step">
                 <td className="py-1 pr-2 whitespace-nowrap text-muted-foreground">{range ? monthRangeText(t, range.fromMonth, range.toMonth) : '—'}</td>
                 <td className="py-1 pr-2">
                   <div className="flex gap-1">
@@ -118,7 +118,7 @@ export function PhaseScheduleEditor({ steps, then, types, currency, errorStep, o
               </tr>
             )
           })}
-          <tr className="border-t align-top" data-testid="cpq-price-then">
+          <tr className="border-t align-middle" data-testid="cpq-price-then">
             <td className="py-1 pr-2 whitespace-nowrap text-muted-foreground">{thenFrom ? monthRangeText(t, thenFrom, null) : '—'}</td>
             <td className="py-1 pr-2 text-muted-foreground">{t('cpq.priceDialog.phases.then', 'Then')}</td>
             <td className="py-1 pr-2">

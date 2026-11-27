@@ -2,11 +2,9 @@
 
 import * as React from 'react'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
-import { Tag } from '@open-mercato/ui/primitives/tag'
-import { formatMoney } from '../../../../../lib/formatMoney'
-import { ADJUSTMENT_ERROR_FALLBACKS, discountDepth, formatDepth, isAboveStandard, lineTypeTotals } from '../../../../../lib/priceAdjustmentView'
+import { ADJUSTMENT_ERROR_FALLBACKS, isAboveStandard } from '../../../../../lib/priceAdjustmentView'
 import { isOnTarget, targetOf, targetKey } from '../../../../../lib/targetPrice'
-import { scheduleText, stateText, targetOptionLabel, type DialogCharge, type DialogLine, type StoredRow, type TargetOption } from '../../../../../lib/priceDialogView'
+import { stateText, targetOptionLabel, type DialogCharge, type DialogLine, type StoredRow, type TargetOption } from '../../../../../lib/priceDialogView'
 
 export type PreviewError = { adjustmentId: string; code: string; conflictsWith?: string }
 
@@ -21,12 +19,14 @@ function affected(option: TargetOption, bundle: DialogLine[]): Array<{ line: Dia
 }
 
 /**
- * Live preview (§3.4): each affected charge before → after (with "Above
- * standard" for uplifts), its schedule, the line totals, and what the save
- * replaces. Overlaps name the other target (D2) and block Save; a line target
- * hidden behind a charge adjustment is explained (most specific wins).
+ * Preview messages (§3.4): the draft is priced live, but the dialog shows only
+ * what needs attention, never the before → after prices (the Current prices
+ * table is above). Overlaps name the other target (D2) and block Save; other
+ * preview errors; why no preview can run yet; an uplift above standard; a line
+ * target hidden behind a charge adjustment (most specific wins); what the save
+ * replaces. Renders nothing when there is nothing to say.
  */
-export function PricePreview({ option, options, rows, bundle, previewBundle, errors, previewing, invalidText, currency }: {
+export function PricePreview({ option, options, rows, bundle, previewBundle, errors, invalidText }: {
   option: TargetOption
   options: TargetOption[]
   /** Every stored row of the quote. */
@@ -35,13 +35,10 @@ export function PricePreview({ option, options, rows, bundle, previewBundle, err
   /** The same lines from the preview quote; null before the first preview. */
   previewBundle: DialogLine[] | null
   errors: PreviewError[]
-  previewing: boolean
   /** Why no preview can run yet (invalid draft); null when it can. */
   invalidText: string | null
-  currency: string
 }) {
   const t = useT()
-  const money = (value: number | null | undefined) => formatMoney(value ?? 0, currency)
   const message = (code: string) => t(`cpq.priceAdjustments.errors.${code}`, ADJUSTMENT_ERROR_FALLBACKS[code] ?? code)
   const conflictLabel = (id?: string) => {
     const other = rows.find((row) => row.id === id)
@@ -54,55 +51,37 @@ export function PricePreview({ option, options, rows, bundle, previewBundle, err
   const replaced = stateText(t, option.state)
   const previewCharge = (line: DialogLine, charge: DialogCharge) =>
     previewBundle?.find((entry) => entry.lineId === line.lineId)?.charges.find((entry) => entry.chargeCode === charge.chargeCode)
+  const uplifts = invalidText || !previewBundle ? [] : affected(option, bundle).filter(({ line, charge }) => {
+    const after = previewCharge(line, charge)
+    return !!after && isAboveStandard(after.standardTotalPrice, after.totalPrice ?? 0)
+  })
+  const empty = !errors.length && !invalidText && !uplifts.length && !hidden.length && !replaced
 
   return (
-    <div className="space-y-1 rounded border bg-muted/20 p-2 text-xs" aria-live="polite" data-testid="cpq-price-preview">
-      {errors.map((error, index) => (
-        <div key={`${error.adjustmentId}:${index}`} className="text-destructive" data-testid={error.code === 'ADJUSTMENT_OVERLAP' ? 'cpq-price-conflict' : 'cpq-price-preview-error'}>
-          {error.code === 'ADJUSTMENT_OVERLAP'
-            ? t('cpq.priceDialog.preview.overlap', 'Overlaps {target}. Remove it first, or pick it in Applies to.', { target: conflictLabel(error.conflictsWith) })
-            : message(error.code)}
+    <div aria-live="polite" data-testid="cpq-price-preview">
+      {!empty && (
+        <div className="space-y-1 rounded border bg-muted/20 p-2 text-xs">
+          {errors.map((error, index) => (
+            <div key={`${error.adjustmentId}:${index}`} className="text-destructive" data-testid={error.code === 'ADJUSTMENT_OVERLAP' ? 'cpq-price-conflict' : 'cpq-price-preview-error'}>
+              {error.code === 'ADJUSTMENT_OVERLAP'
+                ? t('cpq.priceDialog.preview.overlap', 'Overlaps {target}. Remove it first, or pick it in Applies to.', { target: conflictLabel(error.conflictsWith) })
+                : message(error.code)}
+            </div>
+          ))}
+          {invalidText && <div className="text-muted-foreground">{invalidText}</div>}
+          {uplifts.map(({ line, charge }) => (
+            <div key={`${line.lineId}:${charge.chargeCode}`} className="text-status-warning-text" data-testid="cpq-adjustment-above-standard">
+              {t('cpq.priceDialog.preview.aboveStandard', '{charge}: above the standard price', { charge: charge.chargeName })}
+            </div>
+          ))}
+          {hidden.map(({ charge }) => (
+            <div key={charge.chargeCode} className="text-muted-foreground" data-testid="cpq-price-most-specific">
+              {t('cpq.priceDialog.preview.mostSpecific', '{charge} keeps its own price: a charge adjustment beats a line one', { charge: charge.chargeName })}
+            </div>
+          ))}
+          {replaced && <div className="text-muted-foreground" data-testid="cpq-price-replaces">{t('cpq.priceDialog.preview.replaces', 'Replaces {state}', { state: replaced })}</div>}
         </div>
-      ))}
-      {invalidText && <div className="text-muted-foreground">{invalidText}</div>}
-      {!invalidText && previewing && <div className="text-muted-foreground">{t('cpq.priceAdjustments.dialog.previewing', 'Calculating…')}</div>}
-      {!invalidText && !previewing && previewBundle && (
-        <>
-          {affected(option, bundle).map(({ line, charge }) => {
-            const after = previewCharge(line, charge)
-            if (!after) return null
-            const before = charge.totalPrice ?? 0
-            const offer = after.totalPrice ?? 0
-            const depth = formatDepth(discountDepth(after.standardTotalPrice ?? before, offer))
-            return (
-              <div key={`${line.lineId}:${charge.chargeCode}`} className="flex flex-wrap items-center gap-1" data-testid="cpq-price-preview-charge">
-                <span>{charge.chargeName}</span>
-                <span className="font-mono text-muted-foreground">{money(before)}</span>
-                <span aria-hidden>→</span>
-                {after.schedule?.length
-                  ? <span className="font-mono font-medium">{scheduleText(t, after.schedule, line.termMonths)}</span>
-                  : <span className="font-mono font-medium">{money(offer)}</span>}
-                {depth && !after.schedule?.length && <span className="font-mono">({depth})</span>}
-                {isAboveStandard(after.standardTotalPrice, offer) && <Tag variant="warning" className="px-1.5 text-xs" data-testid="cpq-adjustment-above-standard">{t('cpq.priceAdjustments.aboveStandard', 'Above standard')}</Tag>}
-              </div>
-            )
-          })}
-          <div className="text-muted-foreground">
-            {t('cpq.priceAdjustments.dialog.previewLine', 'Line totals')}:{' '}
-            {(['mrc', 'nrc'] as const).map((type) => {
-              const before = bundle.reduce((sum, line) => sum + lineTypeTotals(line, type).offer, 0)
-              const after = previewBundle.reduce((sum, line) => sum + lineTypeTotals(line, type).offer, 0)
-              return <span key={type} className="mr-3">{type === 'mrc' ? t('cpq.lines.mrc', 'MRC') : t('cpq.lines.nrc', 'NRC')} <span className="font-mono">{money(before)} → {money(after)}</span></span>
-            })}
-          </div>
-        </>
       )}
-      {hidden.map(({ charge }) => (
-        <div key={charge.chargeCode} className="text-muted-foreground" data-testid="cpq-price-most-specific">
-          {t('cpq.priceDialog.preview.mostSpecific', '{charge} keeps its own price: a charge adjustment beats a line one', { charge: charge.chargeName })}
-        </div>
-      ))}
-      {replaced && <div className="text-muted-foreground" data-testid="cpq-price-replaces">{t('cpq.priceDialog.preview.replaces', 'Replaces {state}', { state: replaced })}</div>}
     </div>
   )
 }

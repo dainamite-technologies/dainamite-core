@@ -10,6 +10,7 @@ import { ADJUSTMENT_ERROR_FALLBACKS, isAboveStandard, type WaterfallChargeInput 
 import { formatMoney } from '../lib/formatMoney'
 import { ChargePeriodTotal } from './ChargePeriodTotal'
 import { PriceScheduleTable } from './PriceScheduleTable'
+import { IconAction } from './IconAction'
 
 type TierBreakdownEntry = { tier: number; from: number; to: number; pricePerUnit: number; quantity: number; subtotal: number }
 
@@ -125,18 +126,17 @@ export function ChargeBreakdownTable<C extends ChargeRowView>({
                 </td>
                 <td className="py-1 text-right font-mono">{c.quantity ?? '—'}</td>
                 <td className="py-1 text-right font-mono"><ChargePeriodTotal charge={c} currency={currency} /></td>
-                <td className="py-1 text-right whitespace-nowrap">
-                  {renderChargeActions?.(c)}
-                  {hasDetail && (
-                    <button
-                      type="button"
-                      onClick={() => onToggleDetail(i)}
-                      className="inline-flex items-center justify-center rounded p-0.5 hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
-                      title={t('cpq.priceAdjustments.showBreakdown', 'Show price breakdown')}
-                    >
-                      <Info className="h-3.5 w-3.5" />
-                    </button>
-                  )}
+                <td className="py-1 whitespace-nowrap">
+                  {/* The breakdown toggle goes first, so the row actions (Adjust price %) stay in one column at the right edge. */}
+                  <div className="flex items-center justify-end">
+                    {hasDetail && (
+                      <IconAction label={t('cpq.priceAdjustments.showBreakdown', 'Show price breakdown')} size="xs" onClick={() => onToggleDetail(i)}
+                        data-testid="cpq-charge-breakdown-toggle">
+                        <Info className="h-3.5 w-3.5" />
+                      </IconAction>
+                    )}
+                    {renderChargeActions?.(c)}
+                  </div>
                 </td>
               </tr>
               {isDetailOpen && (

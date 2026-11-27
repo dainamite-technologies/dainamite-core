@@ -50,7 +50,7 @@ export function PriceAdjustmentsTable({ rows, lines, reasonLabel, errorsById, re
           const reasons = [...new Set(group.rows.map(reasonLabel))]
           const notes = [...new Set(group.rows.map((row) => row.reasonNote?.trim()).filter(Boolean))]
           return (
-            <tr key={group.key} className="border-t align-top" data-testid="cpq-price-adjustment-row">
+            <tr key={group.key} className="border-t align-middle" data-testid="cpq-price-adjustment-row">
               <td className="px-4 py-1.5">
                 <span className="font-medium">{line?.offeringName ?? t('cpq.priceAdjustments.panel.removedLine', 'Removed line')}</span>
                 <span className="text-muted-foreground"> · {targetName(t, { kind: kindOfTarget(group.target), target: group.target, chargeName })}</span>
@@ -67,7 +67,7 @@ export function PriceAdjustmentsTable({ rows, lines, reasonLabel, errorsById, re
               </td>
               <td className="py-1.5 text-muted-foreground" title={group.latest.createdByUserId} data-testid="cpq-price-adjustment-author">{authorText(group.latest)}</td>
               <td className="py-1.5 text-muted-foreground">{formatDisplayDate(group.latest.updatedAt ?? group.latest.createdAt, locale) ?? '—'}</td>
-              {renderActions && <td className="py-1.5 pr-2 text-right">{renderActions(group)}</td>}
+              {renderActions && <td className="py-1.5 pr-2"><div className="flex items-center justify-end">{renderActions(group)}</div></td>}
             </tr>
           )
         })}

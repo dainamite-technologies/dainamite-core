@@ -3,10 +3,10 @@
 import * as React from 'react'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { Pencil, Percent, Trash2 } from 'lucide-react'
-import { IconButton } from '@open-mercato/ui/primitives/icon-button'
 import { SimpleTooltip } from '@open-mercato/ui/primitives/tooltip'
 import type { AdjustmentAccess, LineEligibilityInput, WaterfallChargeInput } from '../../../../../lib/priceAdjustmentView'
 import { lineAdjustmentBlock } from '../../../../../lib/priceAdjustmentView'
+import { IconAction } from '../../../../../components/IconAction'
 
 export type AdjustableLine = LineEligibilityInput & { lineId: string; offeringName: string; termMonths?: number | null }
 export type AdjustableCharge = WaterfallChargeInput & { chargeCode: string; chargeName: string }
@@ -88,14 +88,12 @@ export function AdjustPriceAction({ line, charge }: { line: AdjustableLine; char
   const label = t('cpq.priceAdjustments.adjustPrice', 'Adjust price')
   return (
     <BlockedReason reason={reason}>
-      <SimpleTooltip content={label} size="sm" disabled={!!reason}>
-        <IconButton
-          type="button" variant="ghost" size={charge ? 'xs' : 'sm'} aria-label={label} disabled={!!reason}
-          onClick={() => ui.openPrice(line, charge)} data-testid={charge ? 'cpq-adjust-price-charge' : 'cpq-adjust-price-line'}
-        >
-          <Percent className={charge ? 'h-3.5 w-3.5' : 'h-4 w-4'} />
-        </IconButton>
-      </SimpleTooltip>
+      <IconAction
+        label={label} size={charge ? 'xs' : 'sm'} disabled={!!reason}
+        onClick={() => ui.openPrice(line, charge)} data-testid={charge ? 'cpq-adjust-price-charge' : 'cpq-adjust-price-line'}
+      >
+        <Percent className={charge ? 'h-3.5 w-3.5' : 'h-4 w-4'} />
+      </IconAction>
     </BlockedReason>
   )
 }
@@ -111,13 +109,14 @@ export function ManualAdjustmentActions({ adjustmentId }: { adjustmentId: string
   return (
     <span className="inline-flex items-center gap-0.5">
       {editable && (
-        <IconButton variant="ghost" size="xs" aria-label={t('cpq.priceAdjustments.edit', 'Edit adjustment')} onClick={() => ui.edit(adjustmentId)}>
+        <IconAction label={t('cpq.priceAdjustments.edit', 'Edit adjustment')} size="xs" onClick={() => ui.edit(adjustmentId)}>
           <Pencil className="h-3.5 w-3.5" />
-        </IconButton>
+        </IconAction>
       )}
-      <IconButton variant="ghost" size="xs" aria-label={t('cpq.priceAdjustments.delete', 'Delete adjustment')} onClick={() => ui.remove(adjustmentId)}>
+      <IconAction label={t('cpq.priceAdjustments.delete', 'Delete adjustment')} size="xs" onClick={() => ui.remove(adjustmentId)}
+        className="hover:bg-destructive/10 hover:text-destructive">
         <Trash2 className="h-3.5 w-3.5" />
-      </IconButton>
+      </IconAction>
     </span>
   )
 }

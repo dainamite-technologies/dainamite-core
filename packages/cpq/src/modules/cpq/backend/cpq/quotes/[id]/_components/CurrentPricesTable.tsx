@@ -31,13 +31,13 @@ export function CurrentPricesTable({ rootLineId, bundle, rows, currency }: {
         <thead>
           <tr className="text-muted-foreground">
             <th className="py-1 text-left font-medium">{t('cpq.priceDialog.current.charge', 'Charge')}</th>
-            <th className="py-1 text-left font-medium">{t('cpq.priceDialog.current.type', 'Type')}</th>
-            <th className="py-1 text-right font-medium">{t('cpq.priceDialog.current.list', 'List')}</th>
-            <th className="py-1 text-right font-medium">{t('cpq.priceDialog.current.standard', 'Standard')}</th>
-            <th className="py-1 text-right font-medium">{t('cpq.priceDialog.current.offer', 'Offer')}</th>
-            <th className="py-1 text-right font-medium">{t('cpq.priceDialog.current.quantity', 'Qty')}</th>
-            <th className="py-1 text-right font-medium">{t('cpq.priceDialog.current.total', 'Total')}</th>
-            <th className="py-1 pl-4 text-left font-medium">{t('cpq.priceDialog.current.pricedBy', 'Priced by')}</th>
+            <th className="whitespace-nowrap py-1 pl-4 text-left font-medium">{t('cpq.priceDialog.current.type', 'Type')}</th>
+            <th className="whitespace-nowrap py-1 pl-4 text-right font-medium">{t('cpq.priceDialog.current.list', 'List')}</th>
+            <th className="whitespace-nowrap py-1 pl-4 text-right font-medium">{t('cpq.priceDialog.current.standard', 'Standard')}</th>
+            <th className="whitespace-nowrap py-1 pl-4 text-right font-medium">{t('cpq.priceDialog.current.offer', 'Offer')}</th>
+            <th className="whitespace-nowrap py-1 pl-4 text-right font-medium">{t('cpq.priceDialog.current.quantity', 'Qty')}</th>
+            <th className="whitespace-nowrap py-1 pl-4 text-right font-medium">{t('cpq.priceDialog.current.total', 'Total')}</th>
+            <th className="whitespace-nowrap py-1 pl-6 text-left font-medium">{t('cpq.priceDialog.current.pricedBy', 'Priced by')}</th>
           </tr>
         </thead>
         <tbody>
@@ -50,13 +50,13 @@ export function CurrentPricesTable({ rootLineId, bundle, rows, currency }: {
                     {line.lineId !== rootLineId && <span className="text-muted-foreground">{line.offeringName} · </span>}
                     {charge.chargeName}
                   </td>
-                  <td className="py-1 pr-2">{charge.chargeType === 'mrc' ? t('cpq.lines.mrc', 'MRC') : t('cpq.lines.nrc', 'NRC')}</td>
-                  <td className="py-1 text-right font-mono">{money(charge.listUnitPrice ?? charge.standardUnitPrice ?? charge.unitPrice)}</td>
-                  <td className="py-1 text-right font-mono">{money(charge.standardUnitPrice ?? charge.unitPrice)}</td>
-                  <td className="py-1 text-right font-mono">{money(charge.unitPrice)}</td>
-                  <td className="py-1 text-right font-mono">{charge.quantity ?? 1}</td>
-                  <td className="py-1 text-right font-mono">{money(charge.totalPrice)}</td>
-                  <td className="py-1 pl-4" data-testid="cpq-current-priced-by">{pricedByText(t, charge, rootLineId, rows)}</td>
+                  <td className="whitespace-nowrap py-1 pl-4">{charge.chargeType === 'mrc' ? t('cpq.lines.mrc', 'MRC') : t('cpq.lines.nrc', 'NRC')}</td>
+                  <td className="whitespace-nowrap py-1 pl-4 text-right font-mono">{money(charge.listUnitPrice ?? charge.standardUnitPrice ?? charge.unitPrice)}</td>
+                  <td className="whitespace-nowrap py-1 pl-4 text-right font-mono">{money(charge.standardUnitPrice ?? charge.unitPrice)}</td>
+                  <td className="whitespace-nowrap py-1 pl-4 text-right font-mono">{money(charge.unitPrice)}</td>
+                  <td className="whitespace-nowrap py-1 pl-4 text-right font-mono">{charge.quantity ?? 1}</td>
+                  <td className="whitespace-nowrap py-1 pl-4 text-right font-mono">{money(charge.totalPrice)}</td>
+                  <td className="py-1 pl-6" data-testid="cpq-current-priced-by">{pricedByText(t, charge, rootLineId, rows)}</td>
                 </tr>
                 {schedule && (
                   <tr>

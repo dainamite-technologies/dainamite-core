@@ -165,7 +165,7 @@ Code paths are relative to `packages/cpq/src/modules/cpq/` unless marked *billin
 - **Remove adjustment** (when the target has rows) asks for confirmation, then sends the PUT with nothing on the target.
 - **Preview:**
   - `POST …/price-adjustments/target/preview`, debounced 400 ms, the same body as Save, no write;
-  - shows each affected charge's before → after (with "Above standard" for uplifts, spec F), the schedule for phases, and the line totals.
+  - shows **messages only**: conflicts, what is still missing (not an empty value), "*charge*: above the standard price" for uplifts (spec F), a charge that keeps its own price, and what the save replaces. No before → after prices: the Current prices table covers them (review 2026-11-27). Nothing is shown when there is nothing to say.
 - **The reason and note** apply to every row the save writes. Loading a set with mixed reasons shows the first step's reason.
 
 ### 3.5 Suggested phase names (item 8)
@@ -419,3 +419,4 @@ All routes:
 |---|---|
 | 2026-11-27 | Skeleton from the 10-point review. Item 8 root cause verified in the local DB. Open questions Q1–Q3 |
 | 2026-11-27 | Q1 → D1 (switcher replaces month fields, Regular price steps, Then row). Q2 → D2 (one set per target, conflicts in preview). Q3 → D3 (usage phases: separate spec). Design: atomic target PUT (D4), no schema change (D5), AI tool policy (D6), author names (D7), order panel (D8). Implementation plan and risks |
+| 2026-11-27 | Review of the built dialog: wider (`sm:max-w-5xl`), Promotion as the default reason only in Price phases, preview reduced to messages (§3.4) |

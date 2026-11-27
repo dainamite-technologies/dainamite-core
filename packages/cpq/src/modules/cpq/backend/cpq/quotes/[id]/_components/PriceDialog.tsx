@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@open-mercato/ui/primitives/select'
 import { ADJUSTMENT_ERROR_FALLBACKS } from '../../../../../lib/priceAdjustmentView'
 import {
-  bodyFromEditor, bundleLines, canSaveTarget, defaultTargetKey, editorFromRows, serverEditorError, targetOptions,
+  bodyFromEditor, bundleLines, canSaveTarget, defaultTargetKey, editorFromRows, serverEditorError, targetOptions, withMode,
   type DialogLine, type EditorState, type StoredRow, type TargetOption,
 } from '../../../../../lib/priceDialogView'
 import { CurrentPricesTable } from './CurrentPricesTable'
@@ -60,10 +60,11 @@ export function PriceDialog<Q extends PreviewQuote>(props: {
   const t = useT()
   const bundle = React.useMemo(() => bundleLines(line, lines), [line, lines])
   const options = React.useMemo(() => targetOptions(line, bundle, rows), [line, bundle, rows])
-  const defaultReason = reasons.some((reason) => reason.value === 'promotion') ? 'promotion' : ''
+  // Promotion is the default only in Price phases; One price starts without a reason, for the rep to pick.
+  const phasesReason = reasons.some((reason) => reason.value === 'promotion') ? 'promotion' : ''
   const [key, setKey] = React.useState<string>(() => props.targetKey ?? defaultTargetKey(options, chargeCode) ?? '')
   const option = options.find((entry) => entry.key === key) ?? options[0]
-  const [editor, setEditor] = React.useState<EditorState>(() => editorFromRows(t, option ?? { rows: [], types: [], takesPhases: false }, defaultReason))
+  const [editor, setEditor] = React.useState<EditorState>(() => editorFromRows(t, option ?? { rows: [], types: [], takesPhases: false }, phasesReason))
   // `key` is the body the preview priced: Save needs the preview of the current body.
   const [preview, setPreview] = React.useState<{ key: string; quote: Q; errors: PreviewError[] } | null>(null)
   const [previewing, setPreviewing] = React.useState(false)
@@ -73,7 +74,7 @@ export function PriceDialog<Q extends PreviewQuote>(props: {
   const selectTarget = (next: string) => {
     const picked = options.find((entry) => entry.key === next)
     setKey(next)
-    if (picked) setEditor(editorFromRows(t, picked, defaultReason))
+    if (picked) setEditor(editorFromRows(t, picked, phasesReason))
     setPreview(null); setServerError(null)
   }
 
@@ -120,11 +121,13 @@ export function PriceDialog<Q extends PreviewQuote>(props: {
   const previewBundle = preview ? bundle.map((entry) => preview.quote.lines.find((candidate) => candidate.lineId === entry.lineId) ?? entry) : null
   const charge = option.target.level === 'charge' ? line.charges.find((entry) => option.target.level === 'charge' && entry.chargeCode === option.target.chargeCode) : undefined
   const phases = option.takesPhases && editor.mode === 'phases'
-  const invalidText = built.error ? message(built.error) : null
+  // An empty value needs no hint (Save stays disabled); the other hints say what is missing.
+  const invalidText = built.error && built.error !== 'VALUE_REQUIRED' ? message(built.error) : null
 
   return (
     <Dialog open={open} onOpenChange={(next) => { if (!next) onClose() }}>
-      <DialogContent onKeyDown={onKeyDown} className="max-h-[85vh] max-w-5xl overflow-y-auto" data-testid="cpq-price-dialog">
+      {/* `sm:` prefix required: DialogContent's default size is `sm:max-w-lg`, which beats an unprefixed max-w on desktop. */}
+      <DialogContent onKeyDown={onKeyDown} className="sm:max-w-5xl" data-testid="cpq-price-dialog">
         <DialogHeader>
           <DialogTitle>{t('cpq.priceDialog.title', 'Adjust price — {line}', { line: line.offeringName })}</DialogTitle>
           <DialogDescription>
@@ -136,7 +139,7 @@ export function PriceDialog<Q extends PreviewQuote>(props: {
           <CurrentPricesTable rootLineId={line.lineId} bundle={bundle} rows={rows} currency={currency} />
           <div className="space-y-3 border-t pt-3">
             <TargetPicker options={options} value={option.key} onChange={selectTarget} mode={phases ? 'phases' : 'one_price'}
-              onModeChange={(mode) => setEditor((current) => ({ ...current, mode }))} />
+              onModeChange={(mode) => setEditor((current) => withMode(current, mode, phasesReason))} />
             {phases ? (
               <PhaseScheduleEditor steps={editor.steps} then={editor.then} types={option.types} currency={currency}
                 errorStep={built.error ? built.stepIndex : serverError?.stepIndex} onChange={(steps, then) => setEditor((current) => ({ ...current, steps, then }))} />
@@ -146,7 +149,7 @@ export function PriceDialog<Q extends PreviewQuote>(props: {
             <div className="grid grid-cols-[16rem_1fr] gap-3">
               <label className="block space-y-1">
                 <span className="text-xs font-medium">{t('cpq.priceAdjustments.dialog.reason', 'Reason')}</span>
-                <Select value={editor.reasonCode} onValueChange={(reasonCode) => setEditor((current) => ({ ...current, reasonCode }))}>
+                <Select value={editor.reasonCode} onValueChange={(reasonCode) => setEditor((current) => ({ ...current, reasonCode, reasonDefaulted: false }))}>
                   <SelectTrigger data-testid="cpq-price-reason"><SelectValue placeholder={t('cpq.priceAdjustments.dialog.reasonPlaceholder', 'Pick a reason')} /></SelectTrigger>
                   <SelectContent>
                     {reasons.map((reason) => <SelectItem key={reason.value} value={reason.value}>{reason.label}</SelectItem>)}
@@ -159,7 +162,7 @@ export function PriceDialog<Q extends PreviewQuote>(props: {
               </label>
             </div>
             <PricePreview option={option} options={options} rows={rows} bundle={bundle} previewBundle={previewBundle} errors={errors}
-              previewing={previewing} invalidText={invalidText} currency={currency} />
+              invalidText={invalidText} />
             {serverError && (
               <Alert variant="warning">
                 <AlertDescription>

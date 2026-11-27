@@ -141,3 +141,29 @@ The system SHALL keep the schedule on the order line and subscription item and S
 - THEN the recurring charge has `unitPrice` 150 and `phases` [{ months 1, value 25 }, { months 2, value 125 }]
 
 Source: .ai/specs/2026-11-26-billing-price-phases-ramp-deals.md
+
+## Requirement: One target's price in one write
+The system SHALL treat the manual adjustments of a quote line as one set per **target** (whole line · recurring / one-time / all charges, or one charge) and SHALL replace every row of a target in one undoable write (`PUT /api/cpq/quotes/{quoteId}/price-adjustments/target`, command `cpq.quote_price_adjustment.replace_target`): `phases[]` back to back from month 1 (at most 12, `regular` = a gap with no row, recurring targets only), then `then` (the price from the month after them to the end; without phases, the One price `[1, null]`). Every row SHALL pass the per-row POST rules. Rows that do not change SHALL keep their id, author and `created_at`; a row over the same months SHALL be updated in place (its author becomes the actor); the rest SHALL be created or soft-deleted. The write SHALL take the quote lock, check `expectedRevision`, reprice once and emit the pricing signals once. Overlap with another target SHALL be refused on save (`422 ADJUSTMENT_OVERLAP` with the other row's `adjustmentId`) and reported, not thrown, by the preview (`POST …/target/preview`, no write, no event). Undo SHALL answer 409 when a row the save wrote changed since, and SHALL overlap-check the restored rows. No schema change: a target's steps are read back from its rows (`stepsFromRows`), gaps as Regular price steps.
+
+### Scenario: Free trial then 50 % off, saved in one go
+- WHEN a rep saves `phases: [{ months 1, price_override 0, "Free trial" }, { months 3, discount_percent 50, "50% off" }]`, `then: null` on the line's recurring target
+- THEN two rows `[1,1]` and `[2,4]` exist, the quote's `pricingRevision` rises by 1, and one undo removes both
+
+### Scenario: All charges against recurring phases
+- WHEN the line's recurring target has phases and a rep previews `chargeTypeFilter: null`, 10 % off
+- THEN the preview's `errors` hold `ADJUSTMENT_OVERLAP` with `conflictsWith` a phase row, and the PUT answers 422
+
+### Scenario: Re-save keeps the author
+- WHEN a rep re-saves a set with one changed step
+- THEN the unchanged steps keep their id, `createdByUserId` and dates; the changed step keeps its id and shows the rep as author
+
+Source: .ai/specs/2026-11-27-cpq-billing-phases-ux-feedback.md
+
+## Requirement: Adjustment authors and the order's adjustments
+The system SHALL return `createdByName` and `createdByEmail` on every item of `GET /api/cpq/quotes/{quoteId}/price-adjustments`, from one batched, tenant-scoped read of `auth` users by id (no ORM relation), and SHALL return the source quote's active adjustments, with the same author fields and `reasonLabel`, as `order.priceAdjustments` on `GET /api/cpq/orders/{orderId}` (guarded by `cpq.orders.view` only; empty without a source quote). The AI tool `cpq.list_price_adjustments` SHALL read the list; price-adjustment writes SHALL stay out of the AI tools.
+
+### Scenario: Unknown author
+- WHEN an adjustment's author no longer resolves in the tenant
+- THEN `createdByName` and `createdByEmail` are null and the UI shows the short user id (full id in the tooltip)
+
+Source: .ai/specs/2026-11-27-cpq-billing-phases-ux-feedback.md

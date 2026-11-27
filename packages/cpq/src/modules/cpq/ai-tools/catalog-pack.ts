@@ -43,7 +43,7 @@ const listOfferingsTool = defineCpqApiTool<ListOfferingsInput, CpqPagedApiRespon
   name: 'cpq.list_offerings',
   displayName: 'List CPQ offerings',
   description:
-    'List CPQ product offerings (what goes on a quote line) with their charges (NRC / MRC / usage definitions, not resolved prices). Returns { items, total, page, pageSize, totalPages }. Use cpq.calculate_price to get actual prices. Pass isSellable true when picking a top-level quote line: an offering with isSellable false is a bundle component only.',
+    'List CPQ product offerings (what goes on a quote line) with their charges (NRC / MRC / usage definitions, not resolved prices; an MRC price is per its billingPeriodUnit × billingPeriodInterval, e.g. 480000 every 1 year, and MRC totals use the monthly equivalent). Returns { items, total, page, pageSize, totalPages }. Use cpq.calculate_price to get actual prices. Pass isSellable true when picking a top-level quote line: an offering with isSellable false is a bundle component only.',
   inputSchema: listOfferingsInput,
   requiredFeatures: ['cpq.offerings.view'],
   toOperation: (input) => ({
@@ -78,7 +78,7 @@ const getOfferingTool = defineCpqApiTool<GetOfferingInput, Record<string, unknow
   name: 'cpq.get_offering',
   displayName: 'Get CPQ offering',
   description:
-    'Fetch one CPQ offering with its specification summary, charge definitions and, for bundles, its components per slot. Returns { offering }.',
+    'Fetch one CPQ offering with its specification summary, charge definitions (each MRC with its billing period, default every 1 month) and, for bundles, its components per slot. Returns { offering }.',
   inputSchema: getOfferingInput,
   requiredFeatures: ['cpq.offerings.view'],
   toOperation: (input) => ({

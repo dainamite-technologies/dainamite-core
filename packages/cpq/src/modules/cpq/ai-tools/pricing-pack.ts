@@ -68,7 +68,7 @@ const calculatePriceTool = defineCpqApiTool<CalculatePriceInput, CalculatePriceA
   name: 'cpq.calculate_price',
   displayName: 'Calculate CPQ price',
   description:
-    'Calculate the price of one or more configured offerings without saving anything: resolves pricing tables, tiers and active price rules. Returns { currencyCode, totals: { nrcTotal, mrcTotal, usageCharges }, primaryCharges, childItems } where each charge carries unitPrice, quantity, totalPrice and the applied rule adjustments. This is the only source of truth for prices; never estimate a price yourself.',
+    'Calculate the price of one or more configured offerings without saving anything: resolves pricing tables, tiers and active price rules. Returns { currencyCode, totals: { nrcTotal, mrcTotal, usageCharges }, primaryCharges, childItems } where each charge carries unitPrice, quantity, totalPrice (per the charge billingPeriod for MRC; absent = per month) and the applied rule adjustments; totals.mrcTotal is the monthly equivalent. This is the only source of truth for prices; never estimate a price yourself.',
   inputSchema: calculatePriceInput,
   requiredFeatures: ['cpq.quotes.view'],
   toOperation: (input) => {

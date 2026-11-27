@@ -3,7 +3,10 @@
 Operator and integrator manual for three features of `@dainamite/billing`
 (specs [line period and status](../.ai/specs/2026-11-26-billing-line-period-and-status.md),
 Phases 1–2, and [price phases](../.ai/specs/2026-11-26-billing-price-phases-ramp-deals.md), Phase 1).
-They work without CPQ; the CPQ → connector path is a later phase.
+They work without CPQ. From CPQ, `@dainamite/cpq-billing-connector` (Phase 3) fills them in:
+a charge's billing period becomes the item's own period, CPQ's phases become fixed month
+phases, and CPQ pause / suspend / grace / resume / terminate become line status periods
+and end dates. See the connector README → "Line period, price phases and line status".
 
 ## The account stays the invoice anchor
 

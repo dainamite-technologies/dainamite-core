@@ -1,6 +1,7 @@
 import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import { BillingApiClient, type ItemCreatePayload, type Scope } from '../lib/billingApiClient'
 import {
+  billingItemCreateFields,
   mapSubscriptionItemsToBillingItems,
   type CpqSubscriptionItem,
 } from '../lib/chargeMapper'
@@ -69,15 +70,10 @@ export function buildAddedItemPayloads(
     items: payload.addedItems ?? [],
     billStartDate: payload.effectiveDate,
     billStartDateFor: (item) => arcItemBillStart(item, setup, payload.effectiveDate),
+    event: 'cpq.subscription.amended',
   }).map((item) => ({
     billAccountId,
-    type: item.type,
-    billStartDate: item.billStartDate,
-    description: item.description,
-    rateJson: item.rateJson,
-    subscriptionId: item.subscriptionId,
-    subscriptionItemId: item.subscriptionItemId,
-    sourceRef: item.sourceRef,
+    ...billingItemCreateFields(item),
   }))
 }
 

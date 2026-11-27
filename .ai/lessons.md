@@ -71,6 +71,8 @@ Entry format (newest first within a section):
 
 - **Prepaid statements bucket the ledger by `created_at`, but period-close charges are stamped at run time.** (2026-11-18, #138)
   A catch-up or future-dated run creates charges long after (or before) their bill date. Attribute charges by `metadata.bill_date`, never by `created_at`, when computing a balance at a bill date (`sumLedgerBefore` in `prepaidPeriodClose.ts`).
+- **`billing.items.bulk_create` validates the whole batch with one Zod parse: one bad entry fails every item of the event.** (2026-11-27, connector C3)
+  Billing caps phases at 12 per item and the monthly line period at 24 (annual at 5); CPQ allows more (merged multi-charge schedules, up to 120-month periods). The connector refuses such a charge before the bulk write (`mapCharge` in `lib/chargeMapper.ts`) instead of trimming it, so the subscription's other items still bill.
 
 ## Packaging and release
 

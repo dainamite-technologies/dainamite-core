@@ -9,7 +9,7 @@ import type { CommandBus } from '@open-mercato/shared/lib/commands/command-bus'
 // `@dainamite/billing` will manifest here as a silent runtime crash.
 // Migrate to billing REST list endpoints once the connector graduates to
 // stable v1 — track in the dainamite-cpq packaging plan.
-import { BillingAccount, BillingItem } from '@dainamite/billing/modules/billing/data/entities'
+import { BillingAccount, BillingItem, BillingItemStatusPeriod } from '@dainamite/billing/modules/billing/data/entities'
 import type { BillCycle } from '@dainamite/billing/modules/billing/lib/billCycle'
 
 /**
@@ -71,6 +71,19 @@ export type ItemCreatePayload = {
    * at creation. Set it once CPQ exposes a per-charge rate.
    */
   taxRate?: number
+  /** Contract C1: own billing period; omitted = follow the account cycle. */
+  billingPeriodUnit?: 'daily' | 'weekly' | 'monthly' | 'annually' | null
+  billingPeriodInterval?: number | null
+  /** Contract C1: price phases, back to back from `billStartDate` (max 12). */
+  phasesEnabled?: boolean
+  phases?: Array<{
+    name?: string | null
+    durationUnit?: 'day' | 'week' | 'month' | 'year'
+    durationCount?: number
+    endDate?: string
+    priceType: 'free' | 'fixed' | 'percent_off' | 'amount_off'
+    value?: number | null
+  }>
 }
 
 /** Generated credit reasons billing renders in the invoice language (billing Part 2, D10). */
@@ -96,6 +109,16 @@ export type ItemUpdatePayload = {
    */
   creditReasonCode?: CreditReasonCode
   creditReasonParams?: CreditReasonParams
+}
+
+/** Contract C1: a line status period (`billing.items.status_periods.create`). */
+export type StatusPeriodCreatePayload = {
+  billingItemId: string
+  status: 'paused' | 'suspended' | 'grace'
+  fromDate: string
+  toDate?: string | null
+  chargeBehavior?: 'charge' | 'no_charge'
+  reason?: string | null
 }
 
 function buildSystemCtx(container: AwilixContainer, scope: Scope) {
@@ -275,6 +298,47 @@ export class BillingApiClient {
         organizationId: scope.organizationId,
         ...payload,
       },
+      ctx: buildSystemCtx(this.container, scope),
+    })
+    return (result as { result?: { id: string } }).result ?? { id: '' }
+  }
+
+  // ─── Line status periods (contract C1) ──────────────────────────
+  //
+  // CPQ owns the status of its lines (D6): billing refuses status writes on
+  // an item with a `subscriptionId` unless `ctx.auth` is null — the system
+  // ctx below.
+
+  async findStatusPeriods(scope: Scope, billingItemIds: string[]): Promise<BillingItemStatusPeriod[]> {
+    if (billingItemIds.length === 0) return []
+    return this.em.find(BillingItemStatusPeriod, {
+      tenantId: scope.tenantId,
+      organizationId: scope.organizationId,
+      billingItemId: { $in: billingItemIds },
+      deletedAt: null,
+    } as never)
+  }
+
+  async createStatusPeriod(scope: Scope, payload: StatusPeriodCreatePayload): Promise<{ id: string }> {
+    const result = await this.commandBus.execute('billing.items.status_periods.create', {
+      input: { tenantId: scope.tenantId, organizationId: scope.organizationId, ...payload },
+      ctx: buildSystemCtx(this.container, scope),
+    })
+    return (result as { result?: { id: string } }).result ?? { id: '' }
+  }
+
+  /** Resume = set `toDate` of the open period. */
+  async updateStatusPeriod(scope: Scope, payload: { id: string; toDate: string | null }): Promise<{ id: string }> {
+    const result = await this.commandBus.execute('billing.items.status_periods.update', {
+      input: { tenantId: scope.tenantId, organizationId: scope.organizationId, ...payload },
+      ctx: buildSystemCtx(this.container, scope),
+    })
+    return (result as { result?: { id: string } }).result ?? { id: '' }
+  }
+
+  async deleteStatusPeriod(scope: Scope, id: string): Promise<{ id: string }> {
+    const result = await this.commandBus.execute('billing.items.status_periods.delete', {
+      input: { tenantId: scope.tenantId, organizationId: scope.organizationId, id },
       ctx: buildSystemCtx(this.container, scope),
     })
     return (result as { result?: { id: string } }).result ?? { id: '' }

@@ -1,6 +1,6 @@
 import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import { BillingApiClient, type Scope, type AccountSeed } from '../lib/billingApiClient'
-import { mapSubscriptionItemsToBillingItems } from '../lib/chargeMapper'
+import { billingItemCreateFields, mapSubscriptionItemsToBillingItems } from '../lib/chargeMapper'
 import type { CpqSubscriptionItem } from '../lib/chargeMapper'
 import {
   buildAccountSeedValues,
@@ -35,8 +35,12 @@ import type { CpqBillingOrderSetupService } from '../services/orderSetupService'
  *   3. Create one Billing Item per charge. Bill start per line: operator
  *      override → CPQ service start → the order's default bill start →
  *      activation date. `source_ref` is the deterministic
- *      `cpq-<subId>-<subItemId>-<chargeType>` key, so a re-fired event hits
- *      billing's idempotency guard instead of duplicating items.
+ *      `cpq-<subId>-<subItemId>-<chargeType>` key (plus `-<N><m|y>` for a
+ *      recurring charge not billed every 1 month), so a re-fired event hits
+ *      billing's idempotency guard instead of duplicating items. A charge's
+ *      own billing period and price phases go in the same create write; a
+ *      charge billing cannot take (e.g. more than 12 phases) is refused and
+ *      logged (`reportRejectedCharges`), the item's other charges still bill.
  *
  * Errors propagate to the persistent queue worker, which retries
  * per the OM queue contract.
@@ -205,6 +209,7 @@ export default async function handle(payload: ActivatedPayload): Promise<void> {
     items: payload.items,
     billStartDate: activationDate,
     billStartDateFor: billStartFor,
+    event: 'cpq.subscription.activated',
   })
 
   // Bulk-create — one command for the whole subscription's charges
@@ -214,13 +219,7 @@ export default async function handle(payload: ActivatedPayload): Promise<void> {
     scope,
     itemPayloads.map((item) => ({
       billAccountId: account.id,
-      type: item.type,
-      billStartDate: item.billStartDate,
-      description: item.description,
-      rateJson: item.rateJson,
-      subscriptionId: item.subscriptionId,
-      subscriptionItemId: item.subscriptionItemId,
-      sourceRef: item.sourceRef,
+      ...billingItemCreateFields(item),
     })),
   )
 }

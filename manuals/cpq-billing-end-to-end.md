@@ -33,7 +33,7 @@ powiela ich:
 
 ## Jak to działa — łącznik CPQ → Billing
 
-Connector ma 6 subskrybentów zdarzeń CPQ — **wszystkie 6 działają
+Connector ma 8 subskrybentów zdarzeń CPQ — **wszystkie 8 działają
 end-to-end**:
 
 | Zdarzenie CPQ | Co robi connector |
@@ -44,6 +44,16 @@ end-to-end**:
 | `cpq.subscription.cancelled` | ustawia `bill end date` na pozycjach |
 | `cpq.subscription.merged` | przepina pozycje na subskrypcję docelową |
 | `cpq.subscription.superseded` | domyka pozycje pominięte przy scaleniu |
+| `cpq.subscription_item.status_changed` | wstrzymanie / zawieszenie / grace → okres statusu linii w billingu; wznowienie → zamyka otwarty okres dzień przed |
+| `cpq.subscription.terminated` | kończy pozycje jak `cancelled` (cała subskrypcja albo tylko zakończone pozycje i ich urządzenia) |
+
+> **Okres rozliczeniowy, fazy cen, status linii.** Opłata MRC z własnym okresem
+> (np. „480 000 / rok") tworzy pozycję z własnym okresem billingu (`annually` / 1) i
+> `sourceRef` z sufiksem `-1y`; miesięczna zostaje bez zmian. Fazy z oferty (np.
+> „Free trial" 1 mies., „Promo 50%" 2 mies.) idą do billingu jako fazy *Fixed price*
+> w tym samym zapisie. Więcej niż 12 faz na pozycję billing nie przyjmie — connector
+> **odrzuca** taką opłatę (nie obcina faz) i loguje błąd
+> `[cpq-billing-connector] charge refused…`; pozostałe opłaty powstają normalnie.
 
 **Wniosek praktyczny:** cały handover CPQ → billing jest **automatyczny**.
 Nowa sprzedaż zakłada konto + pozycje; zmiany ARC (amend/renew/cancel)
@@ -147,6 +157,7 @@ płyną do billingu **same**:
 | Nowa sprzedaż → konto + pozycje billingowe | ✅ **automatycznie** |
 | Uzupełnienie danych fakturowych na koncie | ✍️ ręcznie (Część 2) |
 | Amend / Renew / Cancel / Merge → aktualizacja billingu | ✅ **automatycznie** |
+| Wstrzymanie / zawieszenie / wznowienie / zakończenie w inwentarzu CPQ → status i daty końca w billingu | ✅ **automatycznie** |
 | Przebieg rozliczeniowy (bill run) | ⚙️ API / cron |
 | Przegląd i zaksięgowanie faktury | ✅ w UI billingu |
 
@@ -163,5 +174,11 @@ płyną do billingu **same**:
   łączący.
 - **ARC nie zaktualizował pozycji.** Pozycje muszą mieć `Subscription ID`
   zgodne z subskrypcją CPQ (connector ustawia je przy aktywacji).
+- **Brak pozycji dla opłaty z fazami.** W logu workera szukaj
+  `[cpq-billing-connector] charge refused` — np. `too_many_phases` (ponad 12
+  scalonych faz). Uprość harmonogram w CPQ i powtórz zmianę.
+- **Status linii nie zmienia się w billingu.** Status pozycji z CPQ zmienia się
+  tylko w CPQ (billing pokazuje go tylko do odczytu); przy konflikcie okresów
+  connector loguje `status period not created`.
 - **Przebieg nie utworzył faktury.** Konto musi mieć `Next bill date`
   w przeszłości (lub równą `asOfDate`) i aktywną, należną pozycję.

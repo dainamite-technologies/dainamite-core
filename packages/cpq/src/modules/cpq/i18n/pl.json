@@ -542,6 +542,7 @@
   "cpq.priceAdjustments.errors.REASON_NOT_FOUND": "Wybierz powód z listy",
   "cpq.priceAdjustments.errors.STALE_REVISION": "Ceny zmieniły się od otwarcia — wczytaj ponownie i spróbuj jeszcze raz",
   "cpq.priceAdjustments.errors.TARGET_AMBIGUOUS": "Korygowana opłata występuje w tej pozycji więcej niż raz",
+  "cpq.priceAdjustments.errors.THEN_PAST_TERM": "Fazy wypełniają cały okres, więc cena Potem nigdy nie zostanie zastosowana: skróć fazę lub ustaw Potem na Cenę regularną",
   "cpq.priceAdjustments.errors.TYPE_NOT_ALLOWED": "Ten rodzaj korekty jest niedozwolony dla tej opłaty",
   "cpq.priceAdjustments.invalid": "Nieprawidłowa",
   "cpq.priceAdjustments.invalidReason": "Nieprawidłowa: {reason}",

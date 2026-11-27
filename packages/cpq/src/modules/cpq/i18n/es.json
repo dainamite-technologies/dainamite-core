@@ -542,6 +542,7 @@
   "cpq.priceAdjustments.errors.REASON_NOT_FOUND": "Elija un motivo de la lista",
   "cpq.priceAdjustments.errors.STALE_REVISION": "Los precios han cambiado desde que se abrió esta vista: recargue e inténtelo de nuevo",
   "cpq.priceAdjustments.errors.TARGET_AMBIGUOUS": "El cargo ajustado aparece más de una vez en esta línea",
+  "cpq.priceAdjustments.errors.THEN_PAST_TERM": "Las fases ocupan todo el plazo, así que un precio Después nunca se aplicaría: acorta una fase o pon Después en Precio regular",
   "cpq.priceAdjustments.errors.TYPE_NOT_ALLOWED": "Este tipo de ajuste no está permitido para este cargo",
   "cpq.priceAdjustments.invalid": "No válido",
   "cpq.priceAdjustments.invalidReason": "No válido: {reason}",

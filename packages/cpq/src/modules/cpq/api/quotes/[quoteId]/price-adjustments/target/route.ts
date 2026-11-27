@@ -47,7 +47,7 @@ export const openApi: OpenApiRouteDoc = { tag: 'CPQ Quotes', pathParams: cpqQuot
   summary: 'Set one target\'s price: replace every adjustment on it in one undoable write',
   description: 'A target is the whole line (`chargeTypeFilter` mrc = recurring, nrc = one-time, null = all charges) or one charge. ' +
     '`phases` run back to back from month 1 (at most 12, recurring targets only); a `regular` step is a gap at the regular price. ' +
-    '`then` is the price after the phases to the end (null = regular price); with no phases it is the One price, every month. ' +
+    '`then` is the price after the phases to the end (null = regular price); with no phases it is the One price, every month. Its optional `name` keeps the name a stored row to the end already has. ' +
     '`phases: []` and `then: null` remove everything on the target. Every written row follows the POST rules. ' +
     'Rows that do not change keep their id, author and date; a row over the same months is updated in place. One quote write, one reprice, one undo (`x-om-operation`). ' +
     'Price-adjustment writes are not AI tools on purpose (manuals/cpq-ai-agent.md).',
@@ -56,7 +56,7 @@ export const openApi: OpenApiRouteDoc = { tag: 'CPQ Quotes', pathParams: cpqQuot
   errors: [
     cpqErrorDoc(400, 'Invalid body'),
     cpqErrorDoc(403, 'Missing feature, or manual price adjustments are turned off'),
-    cpqErrorDoc(404, 'Quote, line or charge not found'),
+    cpqErrorDoc(404, 'Quote, line or charge not found. A removal (`phases: []`, `then: null`) needs only the line, so the rows of a charge that left the line can be removed'),
     cpqErrorDoc(409, 'ADJUSTMENT_LOCKED or STALE_REVISION'),
     cpqErrorDoc(422, 'LINE_NOT_ELIGIBLE, PHASE_RECURRING_ONLY, PHASE_PAST_TERM, PHASE_TOO_MANY, ADJUSTMENT_OVERLAP (adjustmentId = the other target\'s row), REASON_NOT_FOUND, REASON_NOTE_REQUIRED, CHARGE_TYPE_REQUIRED, INVALID_PERCENT, INVALID_AMOUNT, or a pricing error of a written row; `stepIndex` points at the step'),
   ],

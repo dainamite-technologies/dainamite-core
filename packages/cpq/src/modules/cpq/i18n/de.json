@@ -542,6 +542,7 @@
   "cpq.priceAdjustments.errors.REASON_NOT_FOUND": "Wählen Sie einen Grund aus der Liste",
   "cpq.priceAdjustments.errors.STALE_REVISION": "Die Preise haben sich seit dem Öffnen geändert — neu laden und erneut versuchen",
   "cpq.priceAdjustments.errors.TARGET_AMBIGUOUS": "Die angepasste Gebühr kommt in dieser Position mehrfach vor",
+  "cpq.priceAdjustments.errors.THEN_PAST_TERM": "Die Phasen füllen die Laufzeit, ein Danach-Preis würde nie gelten: Kürzen Sie eine Phase oder setzen Sie Danach auf Regulärer Preis",
   "cpq.priceAdjustments.errors.TYPE_NOT_ALLOWED": "Diese Art der Anpassung ist für diese Gebühr nicht zulässig",
   "cpq.priceAdjustments.invalid": "Ungültig",
   "cpq.priceAdjustments.invalidReason": "Ungültig: {reason}",

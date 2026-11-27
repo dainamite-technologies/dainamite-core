@@ -37,6 +37,8 @@ export interface TargetPhase {
 export interface TargetThen {
   adjustmentType: PricedAdjustmentType
   value: number
+  /** Name of the row to the end; kept from a stored row (rows stored through the API may carry one). */
+  name?: string | null
 }
 
 export interface TargetPriceBody {
@@ -140,10 +142,12 @@ export function rowsForTarget(body: TargetPriceBody, termMonths?: number | null)
     rows.push(build(index, { adjustmentType: phase.adjustmentType, value: phase.value, windowKind: 'relative', fromMonth, toMonth, ...(name ? { phaseName: name } : {}) }))
   })
   if (then) {
-    if (!phases.length) rows.push(build(0, { adjustmentType: then.adjustmentType, value: then.value }))
+    const thenName = then.name?.trim()
+    const named = thenName ? { phaseName: thenName } : {}
+    if (!phases.length) rows.push(build(0, { adjustmentType: then.adjustmentType, value: then.value, ...named }))
     else {
       if (term && cursor > term) throw new TargetPriceError('PHASE_PAST_TERM', phases.length)
-      rows.push(build(phases.length, { adjustmentType: then.adjustmentType, value: then.value, windowKind: 'relative', fromMonth: cursor, toMonth: null }))
+      rows.push(build(phases.length, { adjustmentType: then.adjustmentType, value: then.value, windowKind: 'relative', fromMonth: cursor, toMonth: null, ...named }))
     }
   }
   return rows
@@ -180,14 +184,16 @@ export function stepsFromRows(rows: ReadonlyArray<TargetRow>): TargetSteps {
   for (const entry of sorted) {
     if (entry.fromMonth > cursor) phases.push({ months: entry.fromMonth - cursor, adjustmentType: 'regular', value: null, name: null })
     if (entry.toMonth === null) { then = priced(entry.row); break }
-    phases.push({ months: entry.toMonth - Math.max(entry.fromMonth, cursor) + 1, ...priced(entry.row), name: entry.row.phaseName ?? null })
+    phases.push({ months: entry.toMonth - Math.max(entry.fromMonth, cursor) + 1, adjustmentType: entry.row.adjustmentType as PricedAdjustmentType, value: Number(entry.row.value), name: entry.row.phaseName ?? null })
     cursor = entry.toMonth + 1
   }
   return { mode: sorted.length ? 'phases' : 'one_price', phases, then, reasonCode, reasonNote }
 }
 
+/** The open-ended row (Then or One price), with its stored name so a resave keeps the row. */
 function priced(row: TargetRow): TargetThen {
-  return { adjustmentType: row.adjustmentType as PricedAdjustmentType, value: Number(row.value) }
+  const name = row.phaseName?.trim()
+  return { adjustmentType: row.adjustmentType as PricedAdjustmentType, value: Number(row.value), ...(name ? { name } : {}) }
 }
 
 function sameRange(a: TargetRow, b: TargetRow): boolean {

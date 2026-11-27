@@ -542,6 +542,7 @@
   "cpq.priceAdjustments.errors.REASON_NOT_FOUND": "Pick a reason from the list",
   "cpq.priceAdjustments.errors.STALE_REVISION": "Prices changed since you opened this — reload and try again",
   "cpq.priceAdjustments.errors.TARGET_AMBIGUOUS": "The adjusted charge appears more than once on this line",
+  "cpq.priceAdjustments.errors.THEN_PAST_TERM": "The phases fill the term, so a Then price would never apply: shorten a phase or set Then to Regular price",
   "cpq.priceAdjustments.errors.TYPE_NOT_ALLOWED": "This kind of adjustment is not allowed for this charge",
   "cpq.priceAdjustments.invalid": "Invalid",
   "cpq.priceAdjustments.invalidReason": "Invalid: {reason}",

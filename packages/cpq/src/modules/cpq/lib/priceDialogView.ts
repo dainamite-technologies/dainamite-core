@@ -4,7 +4,7 @@
  * §3 / §4). Client-safe: no ORM, no DI. Labels go through an injected
  * `translate` so the helpers stay testable and every text has an i18n key.
  */
-import { allowedAdjustmentTypes, type AdjustmentType, type WaterfallChargeInput } from './priceAdjustmentView'
+import { adjustmentErrorCode, allowedAdjustmentTypes, type AdjustmentType, type WaterfallChargeInput } from './priceAdjustmentView'
 import type { ChargeScheduleSegment } from './priceSchedule'
 import { MAX_TARGET_STEPS, isOnTarget, stepsFromRows, targetKey, targetOf, type PriceTarget, type TargetPhase, type TargetPriceBody } from './targetPrice'
 
@@ -198,11 +198,12 @@ export function pricedByText(t: Translate, charge: Pick<DialogCharge, 'adjustmen
 
 export type StepKind = 'regular' | 'free' | AdjustmentType
 export type StepForm = { length: string; unit: 'month' | 'year'; kind: StepKind; value: string; name: string; nameTouched: boolean }
-export type ThenForm = { kind: 'regular' | AdjustmentType; value: string }
+/** `name` is a stored name of the row to the end: never shown or suggested (§3.5), only sent back so a resave keeps it. */
+export type ThenForm = { kind: 'regular' | AdjustmentType; value: string; name?: string | null }
 export type EditorMode = 'one_price' | 'phases'
 export type EditorState = {
   mode: EditorMode
-  one: { adjustmentType: AdjustmentType; value: string }
+  one: { adjustmentType: AdjustmentType; value: string; name?: string | null }
   steps: StepForm[]
   then: ThenForm
   reasonCode: string
@@ -216,7 +217,7 @@ export function emptyStep(kind: StepKind = 'free'): StepForm {
 const valueText = (value: number | null | undefined) => (value == null ? '' : String(value))
 
 /** Editor state of a target's rows; rows with any month range open in Price phases (D1). */
-export function editorFromRows(option: Pick<TargetOption, 'rows' | 'types' | 'takesPhases'>, defaultReason: string): EditorState {
+export function editorFromRows(t: Translate, option: Pick<TargetOption, 'rows' | 'types' | 'takesPhases'>, defaultReason: string): EditorState {
   const steps = stepsFromRows(option.rows)
   const firstType = option.types[0] ?? 'discount_percent'
   const base: EditorState = {
@@ -224,21 +225,26 @@ export function editorFromRows(option: Pick<TargetOption, 'rows' | 'types' | 'ta
     reasonCode: steps.reasonCode ?? defaultReason, reasonNote: steps.reasonNote ?? '',
   }
   if (steps.mode === 'one_price') {
-    return steps.then ? { ...base, one: { adjustmentType: steps.then.adjustmentType, value: valueText(steps.then.value) } } : base
+    return steps.then ? { ...base, one: { adjustmentType: steps.then.adjustmentType, value: valueText(steps.then.value), ...named(steps.then.name) } } : base
   }
+  const loaded = steps.phases.map((phase): StepForm => {
+    const years = phase.months % 12 === 0 && phase.months >= 12
+    const free = phase.adjustmentType === 'price_override' && phase.value === 0
+    return { length: String(years ? phase.months / 12 : phase.months), unit: years ? 'year' : 'month', kind: free ? 'free' : phase.adjustmentType,
+      value: free ? '' : valueText(phase.value), name: phase.name ?? '', nameTouched: false }
+  })
+  const ranges = stepRanges(loaded)
   return {
     ...base,
     mode: 'phases',
-    steps: steps.phases.map((phase) => {
-      const years = phase.months % 12 === 0 && phase.months >= 12
-      const free = phase.adjustmentType === 'price_override' && phase.value === 0
-      // Loaded names count as typed: re-saving never renames a stored phase.
-      return { length: String(years ? phase.months / 12 : phase.months), unit: years ? 'year' : 'month', kind: free ? 'free' : phase.adjustmentType,
-        value: free ? '' : valueText(phase.value), name: phase.name ?? '', nameTouched: true }
-    }),
-    then: steps.then ? { kind: steps.then.adjustmentType, value: valueText(steps.then.value) } : { kind: 'regular', value: '' },
+    // A stored name equal to the suggestion keeps following the value (§3.5); any other name
+    // (also none, on a row stored without one) counts as typed, so a resave never renames it.
+    steps: loaded.map((step, index) => ({ ...step, nameTouched: step.name !== suggestedPhaseName(t, step, index, ranges[index]) })),
+    then: steps.then ? { kind: steps.then.adjustmentType, value: valueText(steps.then.value), ...named(steps.then.name) } : { kind: 'regular', value: '' },
   }
 }
+
+const named = (name: string | null | undefined) => (name ? { name } : {})
 
 function positiveInt(raw: string): number | null {
   const value = Number(raw.trim())
@@ -289,7 +295,7 @@ export function stepName(t: Translate, step: StepForm, stepIndex: number, range:
   return step.nameTouched ? step.name.trim() : suggestedPhaseName(t, step, stepIndex, range)
 }
 
-export type EditorError = 'PHASE_LENGTH_INVALID' | 'PHASE_VALUE_INVALID' | 'PHASE_TOO_MANY' | 'PHASE_NONE' | 'PHASE_PAST_TERM' | 'VALUE_REQUIRED' | 'REASON_REQUIRED' | 'REASON_NOTE_REQUIRED'
+export type EditorError = 'PHASE_LENGTH_INVALID' | 'PHASE_VALUE_INVALID' | 'PHASE_TOO_MANY' | 'PHASE_NONE' | 'PHASE_PAST_TERM' | 'THEN_PAST_TERM' | 'VALUE_REQUIRED' | 'REASON_REQUIRED' | 'REASON_NOTE_REQUIRED'
 
 function valid(type: AdjustmentType, value: number | null): value is number {
   if (value === null || value < 0) return false
@@ -312,7 +318,7 @@ export function bodyFromEditor(t: Translate, state: EditorState, option: Pick<Ta
     const value = amount(state.one.value)
     if (!state.one.value.trim()) return fail('VALUE_REQUIRED')
     if (!valid(state.one.adjustmentType, value)) return fail('PHASE_VALUE_INVALID')
-    return { body: { target: option.target, phases: [], then: { adjustmentType: state.one.adjustmentType, value }, ...reason }, error: null }
+    return { body: { target: option.target, phases: [], then: { adjustmentType: state.one.adjustmentType, value, ...named(state.one.name) }, ...reason }, error: null }
   }
   if (state.steps.length > MAX_TARGET_STEPS) return fail('PHASE_TOO_MANY')
   const ranges = stepRanges(state.steps)
@@ -333,10 +339,34 @@ export function bodyFromEditor(t: Translate, state: EditorState, option: Pick<Ta
   if (state.then.kind !== 'regular') {
     const value = amount(state.then.value)
     if (!valid(state.then.kind, value)) return fail('PHASE_VALUE_INVALID', state.steps.length)
-    then = { adjustmentType: state.then.kind, value }
+    // The server's rule (PHASE_PAST_TERM on the Then): a price after phases that fill the term never applies.
+    const last = ranges.at(-1)
+    if (termMonths && last && last.toMonth >= termMonths) return fail('THEN_PAST_TERM', state.steps.length)
+    then = { adjustmentType: state.then.kind, value, ...named(state.then.name) }
   }
   if (!phases.some((phase) => phase.adjustmentType !== 'regular') && !then) return fail('PHASE_NONE')
   return { body: { target: option.target, phases, then, ...reason }, error: null }
+}
+
+/**
+ * A refused save or preview as an editor error: the server's code and, for a
+ * 422 with a `stepIndex`, the step it points at. PHASE_PAST_TERM on the Then
+ * step reads as THEN_PAST_TERM, as the editor's own check does.
+ */
+export function serverEditorError(status: number, body: unknown, stepCount: number): { code: string; stepIndex?: number } {
+  const code = adjustmentErrorCode(status, body)
+  const raw = (body as { stepIndex?: unknown } | null)?.stepIndex
+  if (status !== 422 || typeof raw !== 'number' || !Number.isInteger(raw) || raw < 0) return { code }
+  return { code: code === 'PHASE_PAST_TERM' && raw === stepCount ? 'THEN_PAST_TERM' : code, stepIndex: raw }
+}
+
+/**
+ * Save (and Ctrl/Cmd+Enter) needs the preview of the body being saved: a
+ * preview of an earlier body (during the debounce) does not count.
+ */
+export function canSaveTarget(input: { previewKey: string | null; preview: { key: string; errors: ReadonlyArray<unknown> } | null; saving: boolean; previewing: boolean; serverError: string | null }): boolean {
+  const { previewKey, preview, saving, previewing, serverError } = input
+  return !!previewKey && !!preview && preview.key === previewKey && preview.errors.length === 0 && !saving && !previewing && !serverError
 }
 
 /** The removal body: nothing on the target (§3.4). */

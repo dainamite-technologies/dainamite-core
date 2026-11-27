@@ -69,6 +69,8 @@ Entry format (newest first within a section):
 
 ## Billing
 
+- **Status-period credits work out which days `prorate=false` never charged from the item's current grid and `prorate` flag.** (2026-11-27, billing review F1)
+  Changing `prorate`, or the account cycle day, after an item was billed can make a later pause credit or re-charge the wrong days. Billing refuses a billing-period change once the item is invoiced (`billing.item.billing_period_change_billed`), but not a `prorate` change. Do the same for `prorate`, or keep a per-day charged ledger, before relying on late pauses on such items.
 - **Prepaid statements bucket the ledger by `created_at`, but period-close charges are stamped at run time.** (2026-11-18, #138)
   A catch-up or future-dated run creates charges long after (or before) their bill date. Attribute charges by `metadata.bill_date`, never by `created_at`, when computing a balance at a bill date (`sumLedgerBefore` in `prepaidPeriodClose.ts`).
 - **`billing.items.bulk_create` validates the whole batch with one Zod parse: one bad entry fails every item of the event.** (2026-11-27, connector C3)

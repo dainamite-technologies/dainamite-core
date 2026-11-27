@@ -85,6 +85,32 @@ describe('planStatusWrites', () => {
     ])
   })
 
+  it('F5: a late / replayed resume never deletes a pause that starts after its fromDate', () => {
+    // pause(01-10) → resume(02-01) → pause(03-01), then resume(02-01) replayed.
+    const periods = [
+      period({ id: 'sp-1', fromDate: '2027-01-10', toDate: '2027-01-31' }),
+      period({ id: 'sp-2', fromDate: '2027-03-01', toDate: null }),
+    ]
+    expect(planStatusWrites([recurring], periods, { status: 'active', fromDate: '2027-02-01' })).toEqual({ writes: [], conflicts: [] })
+  })
+
+  it('F5: a late resume closes only the period covering its fromDate, never a later one', () => {
+    // pause(01-10, open) and a scheduled suspension from 03-01; resume(02-01) arrives late.
+    const periods = [
+      period({ id: 'sp-1', fromDate: '2027-01-10', toDate: '2027-02-28' }),
+      period({ id: 'sp-2', status: 'suspended', fromDate: '2027-03-01', toDate: null }),
+    ]
+    expect(planStatusWrites([recurring], periods, { status: 'active', fromDate: '2027-02-01' }).writes).toEqual([
+      { kind: 'update', id: 'sp-1', billingItemId: 'bi-1', toDate: '2027-01-31' },
+    ])
+  })
+
+  it('F5: a resume with no period covering its fromDate is a no-op', () => {
+    expect(
+      planStatusWrites([recurring], [period({ fromDate: '2027-03-01' })], { status: 'active', fromDate: '2027-02-01' }).writes,
+    ).toEqual([])
+  })
+
   it('grace → suspended closes the grace period the day before, then creates the suspension', () => {
     const plan = planStatusWrites([recurring], [period({ status: 'grace', fromDate: '2027-01-01' })], {
       status: 'suspended',

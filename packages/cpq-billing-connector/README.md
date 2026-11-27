@@ -34,7 +34,7 @@ to the billing API contract:
 | `cpq.subscription.cancelled` | Set `bill_end_date` on all Billing Items for the subscription |
 | `cpq.subscription.merged` | Move Billing Items from source subscriptions to the merged subscription (update `subscription_id`) |
 | `cpq.subscription.superseded` | Set `bill_end_date` on all Billing Items for the superseded subscription |
-| `cpq.subscription_item.status_changed` | Pause / suspend / grace → a billing line status period on every recurring Billing Item of the affected items; resume → the open period ends the day before |
+| `cpq.subscription_item.status_changed` | Pause / suspend / grace → a billing line status period on every recurring Billing Item of the affected items; resume → the period in force on `fromDate` ends the day before (later periods untouched) |
 | `cpq.subscription.terminated` | End the Billing Items like `cancelled` (whole subscription, or only the terminated items and their devices) |
 
 ### Line period, price phases and line status (contract C3)
@@ -70,8 +70,11 @@ Mapping in `lib/chargeMapper.ts`; full contract in `.ai/runs/2026-11-26-billing-
   REST / UI, D6). Replays are no-ops: a period with the same status and start is
   not created twice; a resume with no open period writes nothing; a period of
   another status still running is closed the day before the new one; a clash
-  that cannot be reconciled is logged, not retried. Resume on or before a pause
-  start removes that pause. One-time items carry no status.
+  that cannot be reconciled is logged, not retried. A resume only closes the
+  period in force on its `fromDate` (one starting that very day is removed, it
+  never took effect); a period starting after `fromDate` is a later change and is
+  never touched, so a late or replayed resume cannot undo a later pause. One-time
+  items carry no status.
 - **Devices.** A device's own charges bill under the asset id. Status and
   terminate events cover the assets attached to the affected items
   (`cpqInventoryService.listAssets`, best effort).

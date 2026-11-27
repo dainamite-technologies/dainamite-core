@@ -76,6 +76,19 @@ describe('price rules with a month range (D9)', () => {
     expect(setup.totalPrice).toBe(50)
   })
 
+  it('review F4: an open-ended phased rule (13+) does not touch the NRC; a permanent rule still does', async () => {
+    const service = pricingWith([{ code: 'net', chargeType: 'mrc', fixedPrice: 100 }, { code: 'setup', chargeType: 'nrc', fixedPrice: 50 }], [
+      { code: 'BASE10', name: 'Base 10', ruleType: 'discount_percent', value: 10 },
+      { code: 'LOYAL', name: 'Loyalty', ruleType: 'discount_percent', value: 10, fromMonth: 13, toMonth: null },
+    ])
+    const [net, setup] = await resolve(service)
+    expect(setup).toMatchObject({ totalPrice: 45, standardTotalPrice: 45 })
+    expect(setup.adjustments?.map((entry) => entry.ruleCode)).toEqual(['BASE10'])
+    expect(setup.schedule).toBeUndefined()
+    expect(net.totalPrice).toBeCloseTo(81)
+    expect(net.schedule?.map((segment) => [segment.fromMonth, segment.toMonth, segment.totalPrice])).toEqual([[1, 12, 90], [13, null, 81]])
+  })
+
   it('runs permanent and phased rules in sort order per segment', async () => {
     const service = pricingWith([{ code: 'net', chargeType: 'mrc', fixedPrice: 100 }], [
       { code: 'BASE10', name: 'Base 10', ruleType: 'discount_percent', value: 10 },

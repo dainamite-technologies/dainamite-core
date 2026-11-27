@@ -175,9 +175,14 @@ export class DefaultCpqPricingService {
       return withStandard(copy)
     })
     const regular = priced.at(-1)!
+    // Phases price recurring charges only (spec §4.3): one-time / usage get the
+    // rules without a month range — also not an open-ended phase (13+), which
+    // is in force in the regular segment (review F4).
+    const permanentOnly = results.map((charge) => ({ ...charge, adjustments: [...(charge.adjustments ?? [])] }))
+    this.applyPriceRules(permanentOnly, rules.filter((rule) => !isPhasedRange(rule)), configuration)
+    withStandard(permanentOnly)
     return regular.map((charge, index) => {
-      // Phases price recurring charges only (spec §4.3): one-time / usage keep the regular price.
-      if (charge.chargeType !== 'mrc') return charge
+      if (charge.chargeType !== 'mrc') return permanentOnly[index]
       const schedule = compactSchedule(segments.map((segment, at): ChargeScheduleSegment => {
         const segmentCharge = priced[at][index]
         const applied = (segmentCharge.adjustments ?? []).filter((entry) => entry.origin === 'rule')

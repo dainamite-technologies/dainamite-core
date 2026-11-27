@@ -12,13 +12,16 @@ import { toIsoDate } from './orderSetupResolution'
  *     `toDate`, or open). A period of another status still running on
  *     `fromDate` (e.g. grace → suspended) is closed at `fromDate − 1` first,
  *     so the two never overlap.
- *   - **active** (resume) → the item runs again from `fromDate`: the open
- *     period gets `toDate = fromDate − 1`; a period that would start on or
- *     after `fromDate` is removed (it never took effect).
+ *   - **active** (resume) → the item runs again from `fromDate`: the period
+ *     in force on `fromDate` gets `toDate = fromDate − 1` (one starting on
+ *     `fromDate` itself is removed — it never took effect). A period starting
+ *     after `fromDate` is a later change and is never touched; with no period
+ *     covering `fromDate` the resume is a no-op.
  *
  * Idempotent on replay: a period with the same status and `fromDate` already
  * there is the earlier delivery's, so nothing is written; after a resume no
- * period covers `fromDate`, so a replayed resume writes nothing either. A
+ * period covers `fromDate`, so a replayed resume writes nothing either — even
+ * when a later pause has been recorded since. A
  * period that cannot be reconciled (a different status already starting
  * inside the new period) is reported as a conflict instead of failing the
  * event on billing's overlap check.
@@ -96,9 +99,14 @@ function planItem(item: StatusTargetItem, periods: ExistingStatusPeriod[], chang
   const live = periods.filter((p) => p.billingItemId === item.id && !p.deletedAt)
 
   if (change.status === 'active') {
+    // Only the period in force on `fromDate` is superseded. A period starting
+    // after `fromDate` is a later status change (a late / replayed resume must
+    // never undo it), so it is left alone.
     for (const period of live) {
-      if (!reaches(period, from)) continue
-      if (iso(period.fromDate) < from) plan.writes.push({ kind: 'update', id: period.id, billingItemId: item.id, toDate: minusOneDay(from) })
+      const pFrom = iso(period.fromDate)
+      if (pFrom > from || !reaches(period, from)) continue
+      if (pFrom < from) plan.writes.push({ kind: 'update', id: period.id, billingItemId: item.id, toDate: minusOneDay(from) })
+      // Starts on `fromDate` itself: resumed the day it began, it never took effect.
       else plan.writes.push({ kind: 'delete', id: period.id, billingItemId: item.id })
     }
     return

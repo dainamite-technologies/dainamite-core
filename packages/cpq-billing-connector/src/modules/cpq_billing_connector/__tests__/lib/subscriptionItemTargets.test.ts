@@ -1,4 +1,4 @@
-import { isSubscriptionTerminated, resolveBillingItemKeys } from '../../lib/subscriptionItemTargets'
+import { resolveBillingItemKeys } from '../../lib/subscriptionItemTargets'
 
 const scope = { tenantId: 't', organizationId: 'o' }
 const containerWith = (service: unknown) =>
@@ -26,13 +26,5 @@ describe('subscriptionItemTargets', () => {
     const failing = { listAssets: jest.fn().mockRejectedValue(new Error('boom')) }
     expect(await resolveBillingItemKeys(containerWith(failing), scope, 'sub-1', ['si-1'])).toEqual(['si-1'])
     warn.mockRestore()
-  })
-
-  it('reports whether the whole subscription is terminated (null when unknown)', async () => {
-    const getSubscription = jest.fn().mockResolvedValueOnce({ status: 'terminated' }).mockResolvedValueOnce({ status: 'active' })
-    const container = containerWith({ getSubscription })
-    expect(await isSubscriptionTerminated(container, scope, 'sub-1')).toBe(true)
-    expect(await isSubscriptionTerminated(container, scope, 'sub-1')).toBe(false)
-    expect(await isSubscriptionTerminated(containerWith(null), scope, 'sub-1')).toBeNull()
   })
 })

@@ -16,7 +16,6 @@ import type { Scope } from './billingApiClient'
  */
 
 export type CpqInventoryReader = {
-  getSubscription(subscriptionId: string, scope: Scope): Promise<{ status?: string | null } | null>
   listAssets(
     filters: { subscriptionId?: string; subscriptionItemId?: string; page?: number; pageSize?: number },
     scope: Scope,
@@ -62,24 +61,4 @@ export async function resolveBillingItemKeys(
     })
   }
   return [...keys]
-}
-
-/**
- * Whether the whole CPQ subscription is terminated (a subscription-wide
- * terminate, or the last live item ending). `null` when CPQ cannot be read.
- */
-export async function isSubscriptionTerminated(
-  container: AwilixContainer,
-  scope: Scope,
-  subscriptionId: string,
-): Promise<boolean | null> {
-  const cpq = reader(container)
-  if (!cpq) return null
-  try {
-    const sub = await cpq.getSubscription(subscriptionId, scope)
-    return sub ? sub.status === 'terminated' : null
-  } catch (err) {
-    console.warn('[cpq-billing-connector] CPQ subscription unavailable for terminate', { subscriptionId, err })
-    return null
-  }
 }

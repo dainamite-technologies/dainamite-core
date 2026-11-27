@@ -1,7 +1,7 @@
 import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import { BillingApiClient, type Scope } from '../lib/billingApiClient'
 import { buildArcEndDateUpdates, type ArcEndDateItem } from '../lib/arcEndDate'
-import { isSubscriptionTerminated, resolveBillingItemKeys } from '../lib/subscriptionItemTargets'
+import { resolveBillingItemKeys } from '../lib/subscriptionItemTargets'
 
 /**
  * Subscriber: `cpq.subscription.terminated` → end the Billing Items, exactly
@@ -15,11 +15,13 @@ import { isSubscriptionTerminated, resolveBillingItemKeys } from '../lib/subscri
  * left alone (idempotent on re-delivery; never pushes an end later). The
  * Bill Run prorates / credits as for a cancel.
  *
- * Scope: when the whole CPQ subscription is terminated (subscription-wide, or
- * the last live item), every Billing Item of the subscription ends — as for
- * cancel. An item-level terminate ends only the Billing Items of the listed
- * items and of their devices. If CPQ cannot be read, the listed items are
- * ended (a subscription-wide terminate lists every live item).
+ * Scope comes from the event's `wholeSubscription` flag, which CPQ decides at
+ * emit time (subscription-wide terminate, or the last live item ending):
+ * `true` → every Billing Item of the subscription ends — as for cancel;
+ * `false` / absent → only the Billing Items of the listed items and of their
+ * devices. The subscriber never reads CPQ's current subscription status: a
+ * replayed or late item-level terminate must not end the other items once the
+ * subscription was terminated later.
  */
 
 export const metadata = {
@@ -36,6 +38,8 @@ export type TerminatedPayload = {
   /** YYYY-MM-DD; the first day no longer billed. */
   effectiveDate: string
   reason?: string | null
+  /** The whole subscription is terminated by this event (decided by CPQ at emit time). */
+  wholeSubscription?: boolean
 }
 
 /** End-date updates, the cancel rule with the `subscription_cancelled` reason. Pure. */
@@ -81,8 +85,8 @@ export default async function handle(payload: TerminatedPayload): Promise<void> 
   const scope: Scope = { tenantId: payload.tenantId, organizationId: payload.organizationId }
   const itemIds = Array.isArray(payload.subscriptionItemIds) ? payload.subscriptionItemIds.filter(Boolean) : []
 
-  const whole = await isSubscriptionTerminated(container, scope, payload.subscriptionId)
-  if (whole !== true && itemIds.length === 0) return
-  const keys = whole === true ? [] : await resolveBillingItemKeys(container, scope, payload.subscriptionId, itemIds)
-  await applyTermination(billingApi, scope, payload, { wholeSubscription: whole === true, keys })
+  const whole = payload.wholeSubscription === true
+  if (!whole && itemIds.length === 0) return
+  const keys = whole ? [] : await resolveBillingItemKeys(container, scope, payload.subscriptionId, itemIds)
+  await applyTermination(billingApi, scope, payload, { wholeSubscription: whole, keys })
 }

@@ -5,6 +5,12 @@ import type { LegacyColumnDef as ColumnDef } from '@tanstack/react-table/legacy'
 import { useLocale, useT } from '@open-mercato/shared/lib/i18n/context'
 import { BillingDataTable as DataTable } from '../BillingDataTable'
 import { Tag } from '@open-mercato/ui/primitives/tag'
+import { Button } from '@open-mercato/ui/primitives/button'
+import { IconButton } from '@open-mercato/ui/primitives/icon-button'
+import { Pause, X } from 'lucide-react'
+import { ItemPhaseTag, ItemStatusTag, ownPeriodText } from '../ItemLineLabels'
+import { ItemStatusDialog, type BulkStatusResult } from '../ItemStatusDialog'
+import type { PhaseRow, StatusPeriodRow } from '../../lib/itemStatusLabel'
 import { readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
 import { itemBillingState, type ItemBillingState } from '../../lib/itemBillingState'
 import { localTodayIso } from '../../lib/dateOnly'
@@ -23,6 +29,11 @@ type AccountItemRow = {
   price_basis?: 'net' | 'gross'
   uom_code: string | null
   is_active: boolean
+  billing_period_unit?: string | null
+  billing_period_interval?: number | null
+  phases_enabled?: boolean
+  phases?: PhaseRow[]
+  statusPeriods?: StatusPeriodRow[]
 }
 
 function stateVariant(state: ItemBillingState): 'success' | 'warning' | 'neutral' | 'info' {
@@ -57,6 +68,8 @@ export function AccountItemsTab({ accountId, currencyCode }: { accountId: string
   const [loading, setLoading] = React.useState(true)
   const pageSize = 25
   const today = React.useMemo(() => localTodayIso(), [])
+  const [bulkOpen, setBulkOpen] = React.useState(false)
+  const [bulkResult, setBulkResult] = React.useState<BulkStatusResult | null>(null)
 
   const load = React.useCallback(async () => {
     setLoading(true)
@@ -80,9 +93,12 @@ export function AccountItemsTab({ accountId, currencyCode }: { accountId: string
     (row: AccountItemRow) => {
       if (row.type === 'one_time') return t('billing.items.form.type.one_time', 'One-time charge')
       if (row.type === 'usage') return t('billing.items.form.type.usage', 'Usage (metered)')
-      return row.charge_timing === 'in_arrears'
-        ? t('billing.accounts.items.recurring_arrears', 'Recurring · in arrears')
-        : t('billing.accounts.items.recurring_advance', 'Recurring · in advance')
+      const base =
+        row.charge_timing === 'in_arrears'
+          ? t('billing.accounts.items.recurring_arrears', 'Recurring · in arrears')
+          : t('billing.accounts.items.recurring_advance', 'Recurring · in advance')
+      // Own-period lines (L §4.2): "Recurring · in advance · every 1 year".
+      return row.billing_period_unit ? `${base} · ${ownPeriodText(t, row.billing_period_unit, row.billing_period_interval)}` : base
     },
     [t],
   )
@@ -164,26 +180,86 @@ export function AccountItemsTab({ accountId, currencyCode }: { accountId: string
         header: t('billing.accounts.items.state', 'Billing'),
         cell: ({ row }) => {
           const state = itemBillingState(row.original, today)
-          return <Tag variant={stateVariant(state)}>{stateLabel(state)}</Tag>
+          return (
+            <span className="inline-flex flex-wrap items-center gap-1">
+              <Tag variant={stateVariant(state)}>{stateLabel(state)}</Tag>
+              {row.original.type === 'recurring' ? (
+                <>
+                  <ItemStatusTag periods={row.original.statusPeriods} today={today} />
+                  <ItemPhaseTag phases={row.original.phases} phasesEnabled={row.original.phases_enabled} today={today} />
+                </>
+              ) : null}
+            </span>
+          )
         },
       },
     ],
     [rateLabel, stateLabel, t, today, typeLabel, locale],
   )
 
+  const skippedSummary = React.useMemo(() => {
+    if (!bulkResult || bulkResult.skipped.length === 0) return null
+    const count = (reason: 'read_only' | 'overlap' | 'ended') => bulkResult.skipped.filter((s) => s.reason === reason).length
+    const names = bulkResult.skipped.map((s) => rows.find((r) => r.id === s.billingItemId)?.description ?? s.billingItemId)
+    const parts = [
+      count('read_only') ? t('billing.accounts.items.bulk_status.skipped_read_only', '{count} CPQ lines (status comes from CPQ)', { count: count('read_only') }) : null,
+      count('overlap') ? t('billing.accounts.items.bulk_status.skipped_overlap', '{count} already have a status in that period', { count: count('overlap') }) : null,
+      count('ended') ? t('billing.accounts.items.bulk_status.skipped_ended', '{count} ended before the start date', { count: count('ended') }) : null,
+    ].filter((part): part is string => Boolean(part))
+    return { total: bulkResult.skipped.length, parts, names }
+  }, [bulkResult, rows, t])
+
   return (
-    <DataTable
-      title={t('billing.accounts.detail.items.title', 'Items')}
-      columns={columns}
-      data={rows}
-      isLoading={loading}
-      onRowClick={(row) => router.push(`/backend/billing/items/${row.id}`)}
-      pagination={{ page, pageSize, total, totalPages, onPageChange: setPage }}
-      emptyState={
-        <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
-          {t('billing.accounts.detail.items.empty', 'No items for this account yet.')}
+    <>
+      {skippedSummary ? (
+        <div className="mb-3 flex items-start justify-between gap-3 rounded-lg border border-status-warning-border bg-status-warning-bg p-3 text-sm text-status-warning-text">
+          <div>
+            <div className="font-medium">
+              {t('billing.accounts.items.bulk_status.skipped_title', '{count} lines were skipped', { count: skippedSummary.total })}
+            </div>
+            <div>{skippedSummary.parts.join(' · ')}</div>
+            <div className="text-xs">{skippedSummary.names.join(', ')}</div>
+          </div>
+          <IconButton
+            type="button"
+            variant="ghost"
+            size="sm"
+            aria-label={t('billing.common.close', 'Close')}
+            onClick={() => setBulkResult(null)}
+          >
+            <X />
+          </IconButton>
         </div>
-      }
-    />
+      ) : null}
+      <DataTable
+        title={t('billing.accounts.detail.items.title', 'Items')}
+        actions={
+          <Button type="button" variant="outline" size="sm" onClick={() => setBulkOpen(true)}>
+            <Pause size={14} />
+            {t('billing.accounts.items.bulk_status.action', 'Pause / suspend all lines')}
+          </Button>
+        }
+        columns={columns}
+        data={rows}
+        isLoading={loading}
+        onRowClick={(row) => router.push(`/backend/billing/items/${row.id}`)}
+        pagination={{ page, pageSize, total, totalPages, onPageChange: setPage }}
+        emptyState={
+          <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
+            {t('billing.accounts.detail.items.empty', 'No items for this account yet.')}
+          </div>
+        }
+      />
+      <ItemStatusDialog
+        open={bulkOpen}
+        onOpenChange={setBulkOpen}
+        target={{ kind: 'account', accountId }}
+        status="paused"
+        onSaved={(result) => {
+          setBulkResult(result ?? null)
+          void load()
+        }}
+      />
+    </>
   )
 }

@@ -29,6 +29,10 @@ for the full implementation plan.
 - **Draft invoice approval** — invoices land in `draft`; a human reviews and
   **posts** them (a guarded ACL action) before they leave draft.
 - **Usage rating** — metered items are rated at run time from ingested usage.
+- **Line period, status and price phases** — a recurring line can bill on its
+  own period (yearly mobile on a monthly account), be paused / suspended / in
+  grace for dated periods, and carry price phases (trials, promotions, ramps).
+  See [`manuals/billing-line-period-status-phases.md`](../../manuals/billing-line-period-status-phases.md).
 - **Admin UI** under `/backend/billing/*` — Accounts, Items, Bill Runs,
   Invoices (list + detail pages).
 - **Commands** for every write (accounts / items / runs / invoices / usage),

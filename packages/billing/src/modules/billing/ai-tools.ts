@@ -15,6 +15,7 @@ import invoicesAiTools from './ai-tools/invoices-pack'
 import paymentsLedgerAiTools from './ai-tools/payments-ledger-pack'
 import runsAiTools from './ai-tools/runs-pack'
 import mutationAiTools from './ai-tools/mutation-pack'
+import itemScheduleAiTools from './ai-tools/item-schedule-pack'
 import type { BillingAiToolDefinition } from './ai-tools/types'
 
 export const aiTools: BillingAiToolDefinition[] = [
@@ -24,6 +25,7 @@ export const aiTools: BillingAiToolDefinition[] = [
   ...paymentsLedgerAiTools,
   ...runsAiTools,
   ...mutationAiTools,
+  ...itemScheduleAiTools,
 ]
 
 export default aiTools

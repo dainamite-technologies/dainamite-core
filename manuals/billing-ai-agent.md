@@ -51,6 +51,7 @@ Every tool calls an existing billing REST route in-process. So the tool needs th
 | `billing.list_bill_runs` | `GET /api/billing/runs` | `billing.run.view` |
 | `billing.get_bill_run` | `GET /api/billing/runs?id=` + `GET /api/billing/run-outcomes?billRunId=` | `billing.run.view` |
 | `billing.list_run_outcomes` | `GET /api/billing/run-outcomes` | `billing.run.view` |
+| `billing.list_item_status_periods` | `GET /api/billing/items/status-periods` | `billing.item.view` |
 | `cpq_billing_connector.get_order_setup` (connector) | `GET /api/cpq_billing_connector/order-setups/:orderId` | `cpq_billing_connector.order_setup.view` |
 
 Notes:
@@ -65,6 +66,10 @@ Notes:
 |---|---|---|---|
 | `billing.trigger_bill_run` | `POST /api/billing/runs` | `billing.run.trigger` | Starts a **dry** or **test** run, optionally for an as-of date and selected accounts. Real runs are not available to the agent. |
 | `billing.record_payment` | `POST /api/billing/payments` | `billing.payment.manage` | Records a manual payment. With an account it is matched and applied to that account's open invoices, oldest due first. |
+| `billing.update_item_schedule` | `PUT /api/billing/items` | `billing.item.manage` + `billing.item.view` | Sets a recurring item's own billing period and / or its price phases (trial, promotion, ramp). Refused when invoiced days would be re-priced (`billing.item.phase_edit_billed`). |
+| `billing.set_item_status` | `POST /api/billing/items/status-periods` | `billing.item.manage` + `billing.item.view` | Pauses, suspends or flags (grace) one line for a date range. Refused for CPQ lines and overlapping periods. |
+| `billing.end_item_status` | `PUT /api/billing/items/status-periods` | `billing.item.manage` + `billing.item.view` | Resumes a line: sets the last day of its status period. |
+| `billing.set_account_lines_status` | `POST /api/billing/items/status-periods/bulk` | `billing.item.manage` | Pauses / suspends every active line of an account; reports skipped lines. |
 
 ## How writes are gated
 

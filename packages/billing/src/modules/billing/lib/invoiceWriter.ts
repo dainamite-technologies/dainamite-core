@@ -6,7 +6,7 @@ import type { RecurringLine } from './servicePeriods'
 import { draftNumber, testNumber } from './numbering'
 import { sumTotals } from './vat'
 import { lineVat, priceBasisOf, unitPriceNetOf, type PriceBasis } from './lineAmounts'
-import { parseCreditReason } from './creditReason'
+import { parseCreditReason, type CreditReason } from './creditReason'
 
 /**
  * Writes a billing-owned draft invoice (`billing_invoices` +
@@ -244,23 +244,30 @@ export function displayPeriod(lines: readonly InvoiceLineDescriptor[], fallback:
  */
 export function buildRecurringLineDescriptors(
   item: Pick<BillingItem, 'id' | 'description' | 'chargeTiming' | 'taxRate' | 'priceBasis'> &
-    Partial<Pick<BillingItem, 'creditReason'>>,
+    Partial<Pick<BillingItem, 'creditReason' | 'billingPeriodUnit' | 'billingPeriodInterval'>>,
   lines: readonly RecurringLine[],
 ): InvoiceLineDescriptor[] {
   // Part 2 (D8): the customer-facing reason travels with the credit lines,
   // frozen into line metadata at bill time.
   const creditReason = parseCreditReason(item.creditReason ?? null)
+  const ownPeriod = Boolean(item.billingPeriodUnit)
   return lines.map((line) => {
     const amount = format4dp(line.amount)
-    const dated = line.proration !== null || line.kind === 'credit'
+    const quantity = line.quantity ?? 1
+    const unitAmount = format4dp(line.unitAmount ?? line.amount)
+    const phase = line.phase ?? null
+    const reason = line.reason ?? null
+    // Dated when the line is not one plain full account period: prorated,
+    // credit, phased ("Internet — Promo 50% · …"), grouped or on its own period.
+    const dated = line.proration !== null || line.kind === 'credit' || phase !== null || quantity > 1 || ownPeriod || reason !== null
+    const label = phase?.name ? `${item.description} — ${phase.name}` : item.description
+    const lineReason = reason ? statusCreditReason(reason) : line.kind === 'credit' ? creditReason : null
     return {
       billingItemId: item.id,
       billingType: 'recurring' as const,
-      description: dated
-        ? `${item.description} · ${isoDate(line.servicePeriodStart)} – ${isoDate(line.servicePeriodEnd)}`
-        : item.description,
-      unitPrice: amount,
-      quantity: '1',
+      description: dated ? `${label} · ${isoDate(line.servicePeriodStart)} – ${isoDate(line.servicePeriodEnd)}` : label,
+      unitPrice: quantity > 1 ? unitAmount : amount,
+      quantity: String(quantity),
       lineAmount: amount,
       // Proration and credit lines inherit the item's rate (Spec B) and basis (Spec F).
       priceBasis: priceBasisOf(item.priceBasis),
@@ -272,9 +279,45 @@ export function buildRecurringLineDescriptors(
         ...(line.proration
           ? { proration: { active_days: line.proration.activeDays, period_days: line.proration.periodDays } }
           : {}),
+        ...(quantity > 1 || ownPeriod
+          ? {
+              billing_period: {
+                unit: item.billingPeriodUnit ?? null,
+                interval: item.billingPeriodInterval ?? null,
+                count: quantity,
+              },
+            }
+          : {}),
+        ...(phase
+          ? { phase: { sequence: phase.index, name: phase.name, price_type: phase.priceType, value: phase.value } }
+          : {}),
+        ...(reason
+          ? {
+              item_status: {
+                status_period_id: reason.statusPeriodId,
+                status: reason.status,
+                from_date: isoDate(reason.fromDate),
+                to_date: reason.toDate ? isoDate(reason.toDate) : null,
+                effect: reason.kind === 'status' ? 'credit' : 'recharge',
+              },
+            }
+          : {}),
         ...(line.kind === 'credit' ? { credit_for: item.id } : {}),
-        ...(line.kind === 'credit' && creditReason ? { credit_reason: creditReason } : {}),
+        ...(lineReason ? { credit_reason: lineReason } : {}),
       },
     }
   })
+}
+
+/** Credit reason of a status line: the operator's words, else "Paused 10 Jan – 19 Jan" (rendered per language). */
+function statusCreditReason(reason: NonNullable<RecurringLine['reason']>): CreditReason {
+  if (reason.text) return { kind: 'text', text: reason.text }
+  return {
+    kind: 'code',
+    code: reason.kind === 'status_reversal' ? 'item_status_reversed' : reason.status === 'suspended' ? 'item_suspended' : 'item_paused',
+    params: {
+      effectiveDate: isoDate(reason.fromDate),
+      ...(reason.toDate ? { untilDate: isoDate(reason.toDate) } : {}),
+    },
+  }
 }

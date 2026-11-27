@@ -74,6 +74,11 @@ const TOOL_ROUTES: Array<[string, Array<[string, string]>]> = [
   ['billing.list_run_outcomes', [['GET', 'api/run-outcomes/route.ts']]],
   ['billing.trigger_bill_run', [['POST', 'api/runs/route.ts']]],
   ['billing.record_payment', [['POST', 'api/payments/route.ts']]],
+  ['billing.list_item_status_periods', [['GET', 'api/items/status-periods/route.ts']]],
+  ['billing.update_item_schedule', [['PUT', 'api/items/route.ts'], ['GET', 'api/items/route.ts']]],
+  ['billing.set_item_status', [['POST', 'api/items/status-periods/route.ts'], ['GET', 'api/items/route.ts']]],
+  ['billing.end_item_status', [['PUT', 'api/items/status-periods/route.ts'], ['GET', 'api/items/status-periods/route.ts']]],
+  ['billing.set_account_lines_status', [['POST', 'api/items/status-periods/bulk/route.ts']]],
 ]
 
 describe('billing AI tool registry', () => {
@@ -104,9 +109,16 @@ describe('billing AI tool registry', () => {
     }
   })
 
-  it('flags only the two write tools as mutations, both destructive with a preview resolver', () => {
+  it('flags only the write tools as mutations, all destructive with a preview resolver', () => {
     const mutations = aiTools.filter((entry) => entry.isMutation === true).map((entry) => entry.name)
-    expect(mutations.sort()).toEqual(['billing.record_payment', 'billing.trigger_bill_run'])
+    expect(mutations.sort()).toEqual([
+      'billing.end_item_status',
+      'billing.record_payment',
+      'billing.set_account_lines_status',
+      'billing.set_item_status',
+      'billing.trigger_bill_run',
+      'billing.update_item_schedule',
+    ])
     for (const name of mutations) {
       const entry = tool(name)
       expect(entry.isDestructive).toBe(true)
@@ -423,5 +435,123 @@ describe('billing.record_payment', () => {
       body: { receivedAt: '2026-11-15', amount: 120.5, currencyCode: 'EUR', billAccountId: ACCOUNT_ID },
     })
     expect(result).toEqual({ paymentId: 'p1', status: 'matched', unallocatedAmount: '0.0000' })
+  })
+})
+
+/* ------------------------------------------------------------------------ */
+/*  Line period / phases / status tools (2026-11-26 specs)                   */
+/* ------------------------------------------------------------------------ */
+
+const ITEM_ID = '77777777-7777-4777-8777-777777777777'
+const STATUS_ID = '88888888-8888-4888-8888-888888888888'
+
+describe('billing.list_item_status_periods', () => {
+  it('maps filters onto GET /billing/items/status-periods', async () => {
+    mockRun.mockResolvedValueOnce(ok(pagedEmpty))
+    await tool('billing.list_item_status_periods').handler(
+      tool('billing.list_item_status_periods').inputSchema.parse({ billingItemId: ITEM_ID, status: 'paused' }),
+      makeToolContext(),
+    )
+    expect(mockRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: 'GET',
+        path: '/billing/items/status-periods',
+        query: expect.objectContaining({ billingItemId: ITEM_ID, status: 'paused' }),
+      }),
+    )
+  })
+})
+
+describe('billing.update_item_schedule', () => {
+  const schedule = () => tool('billing.update_item_schedule')
+  const valid = {
+    id: ITEM_ID,
+    phases: [
+      { name: 'Free trial', durationUnit: 'month', durationCount: 1, priceType: 'free' },
+      { name: 'Promo 50%', durationUnit: 'month', durationCount: 2, priceType: 'percent_off', value: 50 },
+    ],
+  }
+
+  it('validates the input (strict, cap 12, known price types)', () => {
+    expect(schedule().inputSchema.safeParse(valid).success).toBe(true)
+    expect(schedule().inputSchema.safeParse({ ...valid, unknown: 1 }).success).toBe(false)
+    expect(schedule().inputSchema.safeParse({ id: ITEM_ID, phases: [{ priceType: 'gift' }] }).success).toBe(false)
+    expect(
+      schedule().inputSchema.safeParse({ id: ITEM_ID, phases: Array.from({ length: 13 }, () => ({ priceType: 'free', durationUnit: 'day', durationCount: 1 })) }).success,
+    ).toBe(false)
+  })
+
+  it('previews the current schedule next to the new one', async () => {
+    mockRun.mockResolvedValueOnce(ok({ items: [{ id: ITEM_ID, description: 'Internet', billing_period_unit: null, phases_enabled: false, phases: [] }] }))
+    const preview = await schedule().loadBeforeRecord!(schedule().inputSchema.parse(valid), makeToolContext())
+    expect(mockRun).toHaveBeenCalledWith({ method: 'GET', path: '/billing/items', query: { id: ITEM_ID, page: 1, pageSize: 1 } })
+    expect(preview).toMatchObject({
+      recordId: ITEM_ID,
+      entityType: 'billing:billing_item',
+      before: { billingPeriod: 'same as account', phasesEnabled: false },
+      after: { phases: valid.phases },
+    })
+  })
+
+  it('fails closed without approval and PUTs the schedule once approved', async () => {
+    const input = schedule().inputSchema.parse({ ...valid, billingPeriodUnit: 'annually', billingPeriodInterval: 1 })
+    await expect(schedule().handler(input, makeToolContext())).rejects.toThrow(/approval card/)
+    expect(mockRun).not.toHaveBeenCalled()
+    mockRun.mockResolvedValueOnce(ok({ ok: true }))
+    await expect(schedule().handler(input, makeToolContext({ approvedPendingActionId: 'pa-3' }))).resolves.toEqual({ ok: true, id: ITEM_ID })
+    expect(mockRun).toHaveBeenCalledWith({
+      method: 'PUT',
+      path: '/billing/items',
+      body: { id: ITEM_ID, billingPeriodUnit: 'annually', billingPeriodInterval: 1, phases: valid.phases },
+    })
+  })
+
+  it('surfaces the phase_edit_billed refusal', async () => {
+    mockRun.mockResolvedValueOnce(fail(422, 'billing.item.phase_edit_billed'))
+    await expect(
+      schedule().handler(schedule().inputSchema.parse(valid), makeToolContext({ approvedPendingActionId: 'pa-4' })),
+    ).rejects.toThrow(/phase_edit_billed/)
+  })
+})
+
+describe('billing line status write tools', () => {
+  it('billing.set_item_status posts the status period once approved', async () => {
+    const entry = tool('billing.set_item_status')
+    const input = entry.inputSchema.parse({ billingItemId: ITEM_ID, status: 'paused', fromDate: '2027-01-10', toDate: '2027-01-19' })
+    await expect(entry.handler(input, makeToolContext())).rejects.toThrow(/approval card/)
+    mockRun.mockResolvedValueOnce(ok({ id: STATUS_ID }, 201))
+    await expect(entry.handler(input, makeToolContext({ approvedPendingActionId: 'pa-5' }))).resolves.toEqual({ id: STATUS_ID })
+    expect(mockRun).toHaveBeenCalledWith({
+      method: 'POST',
+      path: '/billing/items/status-periods',
+      body: { billingItemId: ITEM_ID, status: 'paused', fromDate: '2027-01-10', toDate: '2027-01-19' },
+    })
+  })
+
+  it('billing.end_item_status previews the period and PUTs toDate', async () => {
+    const entry = tool('billing.end_item_status')
+    const input = entry.inputSchema.parse({ id: STATUS_ID, toDate: '2027-01-14' })
+    mockRun.mockResolvedValueOnce(ok({ items: [{ id: STATUS_ID, status: 'paused', from_date: '2027-01-10', to_date: null }] }))
+    const preview = await entry.loadBeforeRecord!(input, makeToolContext())
+    expect(preview).toMatchObject({ before: { toDate: null }, after: { toDate: '2027-01-14' } })
+    mockRun.mockResolvedValueOnce(ok({ ok: true }))
+    await entry.handler(input, makeToolContext({ approvedPendingActionId: 'pa-6' }))
+    expect(mockRun).toHaveBeenLastCalledWith({ method: 'PUT', path: '/billing/items/status-periods', body: { id: STATUS_ID, toDate: '2027-01-14' } })
+  })
+
+  it('billing.set_account_lines_status posts to the bulk route and reports skipped lines', async () => {
+    const entry = tool('billing.set_account_lines_status')
+    const input = entry.inputSchema.parse({ billAccountId: ACCOUNT_ID, status: 'suspended', fromDate: '2027-02-01', chargeBehavior: 'no_charge' })
+    await expect(entry.handler(input, makeToolContext())).rejects.toThrow(/approval card/)
+    mockRun.mockResolvedValueOnce(ok({ created: [{ id: STATUS_ID, billingItemId: ITEM_ID }], skipped: [{ billingItemId: 'x', reason: 'read_only' }] }))
+    await expect(entry.handler(input, makeToolContext({ approvedPendingActionId: 'pa-7' }))).resolves.toEqual({
+      created: 1,
+      skipped: [{ billingItemId: 'x', reason: 'read_only' }],
+    })
+    expect(mockRun).toHaveBeenCalledWith({
+      method: 'POST',
+      path: '/billing/items/status-periods/bulk',
+      body: { billAccountId: ACCOUNT_ID, status: 'suspended', fromDate: '2027-02-01', chargeBehavior: 'no_charge' },
+    })
   })
 })

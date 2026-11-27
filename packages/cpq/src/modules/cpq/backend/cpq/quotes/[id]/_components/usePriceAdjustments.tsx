@@ -11,14 +11,12 @@ import {
   adjustmentErrorCode,
   canDeleteInvalidAdjustment,
   collectAdjustmentErrors,
-  isPermanentAdjustment,
   type AdjustmentErrorSourceQuote,
-  type AdjustmentTarget,
 } from '../../../../../lib/priceAdjustmentView'
-import { PriceAdjustmentDialog, type AdjustmentReason, type ExistingAdjustment } from './PriceAdjustmentDialog'
-import { PricePhasesDialog } from './PricePhasesDialog'
+import { removalBody, targetName, kindOfTarget, type DialogLine, type StoredRow } from '../../../../../lib/priceDialogView'
+import { isOnTarget, targetKey, targetOf, type PriceTarget } from '../../../../../lib/targetPrice'
+import { PriceDialog, type AdjustmentReason } from './PriceDialog'
 import type { AdjustableCharge, AdjustableLine, PriceAdjustmentUi } from './priceAdjustmentContext'
-import type { StoredAdjustment } from './PriceAdjustmentsPanel'
 
 type ControllerQuote = {
   id: string
@@ -27,28 +25,23 @@ type ControllerQuote = {
   convertedOrderId: string | null
   pricingRevision?: number
   adjustmentErrors?: Array<{ adjustmentId: string; code: string }>
-  lines: Array<AdjustableLine & { mrcTotal: number; nrcTotal: number; charges: AdjustableCharge[] }>
+  lines: Array<AdjustableLine & DialogLine & { charges: AdjustableCharge[] }>
 }
 
 type ListResponse = {
-  items: StoredAdjustment[]
+  items: StoredRow[]
   total: number
   pricingRevision: number
   enabled: boolean
   reasons?: AdjustmentReason[]
 }
 
-type DialogState = {
-  target: AdjustmentTarget
-  targetLabel: string
-  charge?: AdjustableCharge
-  existing?: ExistingAdjustment | null
-}
+type DialogState = { lineId: string; chargeCode?: string; targetKey?: string }
 
 /**
  * Owns negotiated-price state for the quote page: the adjustment list,
- * reason options, the dialog and delete confirmation. Every write returns the
- * repriced quote, which is handed back through `onQuote`.
+ * reason options, the Price dialog and remove confirmation. Every write
+ * returns the repriced quote, which is handed back through `onQuote`.
  */
 export function usePriceAdjustments<Q extends ControllerQuote>({ quote, quoteType, canAdjust, onQuote, reloadQuote }: {
   quote: Q | null
@@ -61,7 +54,6 @@ export function usePriceAdjustments<Q extends ControllerQuote>({ quote, quoteTyp
   const { confirm, ConfirmDialogElement } = useConfirmDialog()
   const [list, setList] = React.useState<ListResponse | null>(null)
   const [dialog, setDialog] = React.useState<DialogState | null>(null)
-  const [phases, setPhases] = React.useState<{ target: AdjustmentTarget; targetLabel: string; termMonths: number | null } | null>(null)
   const quoteId = quote?.id ?? null
   const revision = quote?.pricingRevision ?? 0
 
@@ -75,6 +67,7 @@ export function usePriceAdjustments<Q extends ControllerQuote>({ quote, quoteTyp
   // Refresh whenever the quote's pricing revision moves (own writes, line edits, recalculation).
   React.useEffect(() => { void loadList() }, [loadList, revision])
 
+  const items = React.useMemo(() => list?.items ?? [], [list])
   const reasons = React.useMemo(() => list?.reasons ?? [], [list])
   const reasonLabels = React.useMemo(() => Object.fromEntries(reasons.map((reason) => [reason.value, reason.label])), [reasons])
   const errorsById = React.useMemo(() => collectAdjustmentErrors(quote as AdjustmentErrorSourceQuote | null), [quote])
@@ -87,8 +80,33 @@ export function usePriceAdjustments<Q extends ControllerQuote>({ quote, quoteTyp
   }
   const access = adjustmentAccess(accessInput)
 
-  const remove = React.useCallback(async (adjustmentId: string) => {
-    if (!quoteId) return
+  const failed = React.useCallback(async (status: number, body: unknown) => {
+    const code = adjustmentErrorCode(status, body)
+    flash(t(`cpq.priceAdjustments.errors.${code}`, ADJUSTMENT_ERROR_FALLBACKS[code] ?? code), 'error')
+    if (code === 'STALE_REVISION') await reloadQuote()
+  }, [t, reloadQuote])
+
+  /** Confirm, then one PUT with nothing on the target (§3.4 / §4.2). */
+  const removeTarget = React.useCallback(async (target: PriceTarget, label: string): Promise<boolean> => {
+    if (!quoteId) return false
+    const ok = await confirm({
+      title: t('cpq.priceAdjustments.deleteConfirm.title', 'Remove this price adjustment?'),
+      text: t('cpq.priceDialog.removeConfirm', '{target} goes back to its standard price.', { target: label }),
+      confirmText: t('cpq.priceAdjustments.deleteConfirm.confirm', 'Remove'),
+      variant: 'destructive',
+    })
+    if (!ok) return false
+    const call = await apiCall<{ quote: Q }>(`/api/cpq/quotes/${quoteId}/price-adjustments/target`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...removalBody(target), expectedRevision: revision }),
+    })
+    if (call.ok && call.result?.quote) { onQuote(call.result.quote); return true }
+    await failed(call.status, call.result)
+    return false
+  }, [quoteId, revision, confirm, t, onQuote, failed])
+
+  /** Locked-quote exception (§4.2): only the invalid rows, one DELETE each, as before. */
+  const removeInvalid = React.useCallback(async (ids: string[]) => {
+    if (!quoteId || !ids.length) return
     const ok = await confirm({
       title: t('cpq.priceAdjustments.deleteConfirm.title', 'Remove this price adjustment?'),
       text: t('cpq.priceAdjustments.deleteConfirm.text', 'The charge goes back to its standard price.'),
@@ -96,12 +114,20 @@ export function usePriceAdjustments<Q extends ControllerQuote>({ quote, quoteTyp
       variant: 'destructive',
     })
     if (!ok) return
-    const call = await apiCall<{ quote: Q }>(`/api/cpq/quotes/${quoteId}/price-adjustments/${adjustmentId}?expectedRevision=${revision}`, { method: 'DELETE' })
-    if (call.ok && call.result?.quote) { onQuote(call.result.quote); return }
-    const code = adjustmentErrorCode(call.status, call.result)
-    flash(t(`cpq.priceAdjustments.errors.${code}`, ADJUSTMENT_ERROR_FALLBACKS[code] ?? code), 'error')
-    if (code === 'STALE_REVISION') await reloadQuote()
-  }, [quoteId, revision, confirm, t, onQuote, reloadQuote])
+    let current = revision
+    for (const id of ids) {
+      const call = await apiCall<{ quote: Q }>(`/api/cpq/quotes/${quoteId}/price-adjustments/${id}?expectedRevision=${current}`, { method: 'DELETE' })
+      if (!call.ok || !call.result?.quote) { await failed(call.status, call.result); return }
+      onQuote(call.result.quote)
+      current = call.result.quote.pricingRevision ?? current + 1
+    }
+  }, [quoteId, revision, confirm, t, onQuote, failed])
+
+  const labelOf = React.useCallback((target: PriceTarget) => {
+    const line = quote?.lines.find((entry) => entry.lineId === target.quoteLineId)
+    const chargeName = target.level === 'charge' ? line?.charges.find((entry) => entry.chargeCode === target.chargeCode)?.chargeName : undefined
+    return `${line?.offeringName ?? ''} · ${targetName(t, { kind: kindOfTarget(target), target, chargeName })}`
+  }, [quote, t])
 
   const ui: PriceAdjustmentUi = {
     access,
@@ -110,83 +136,46 @@ export function usePriceAdjustments<Q extends ControllerQuote>({ quote, quoteTyp
     reasonLabels,
     invalidIds: new Set(errorsById.keys()),
     canDeleteInvalid: canDeleteInvalidAdjustment(accessInput),
-    openCharge: (line, charge) => {
-      // "Adjust price" edits the permanent adjustment; phases are edited one by one from the panel.
-      const existing = list?.items.find((item) => item.level === 'charge' && item.quoteLineId === line.lineId && item.chargeCode === charge.chargeCode && isPermanentAdjustment(item))
-      setDialog({
-        target: { level: 'charge', quoteLineId: line.lineId, chargeCode: charge.chargeCode },
-        targetLabel: `${line.offeringName} · ${charge.chargeName}`,
-        charge,
-        existing: existing ?? null,
-      })
-    },
-    openLine: (line) => {
-      const existing = list?.items.find((item) => item.level === 'line' && item.quoteLineId === line.lineId && isPermanentAdjustment(item))
-      setDialog({ target: { level: 'line', quoteLineId: line.lineId }, targetLabel: line.offeringName, existing: existing ?? null })
-    },
-    openPhases: (line, charge) => {
-      setPhases({
-        target: charge ? { level: 'charge', quoteLineId: line.lineId, chargeCode: charge.chargeCode } : { level: 'line', quoteLineId: line.lineId },
-        targetLabel: charge ? `${line.offeringName} · ${charge.chargeName}` : line.offeringName,
-        termMonths: line.termMonths ?? null,
-      })
-    },
+    openPrice: (line, charge) => setDialog({ lineId: line.lineId, ...(charge ? { chargeCode: charge.chargeCode } : {}) }),
     edit: (adjustmentId) => {
-      const item = list?.items.find((entry) => entry.id === adjustmentId)
-      const line = quote?.lines.find((entry) => entry.lineId === item?.quoteLineId)
-      if (!item || !line) return
-      const charge = item.chargeCode ? line.charges.find((entry) => entry.chargeCode === item.chargeCode) : undefined
-      setDialog({
-        target: item.level === 'charge' && item.chargeCode
-          ? { level: 'charge', quoteLineId: item.quoteLineId, chargeCode: item.chargeCode }
-          : { level: 'line', quoteLineId: item.quoteLineId },
-        targetLabel: charge ? `${line.offeringName} · ${charge.chargeName}` : line.offeringName,
-        charge,
-        existing: item,
-      })
+      const row = items.find((entry) => entry.id === adjustmentId)
+      if (row) setDialog({ lineId: row.quoteLineId, targetKey: targetKey(targetOf(row)) })
     },
-    remove: (adjustmentId) => { void remove(adjustmentId) },
+    remove: (adjustmentId) => {
+      const row = items.find((entry) => entry.id === adjustmentId)
+      if (!row) return
+      const target = targetOf(row)
+      if (access.editable) { void removeTarget(target, labelOf(target)); return }
+      void removeInvalid(items.filter((entry) => isOnTarget(entry, target) && errorsById.has(entry.id)).map((entry) => entry.id))
+    },
   }
 
-  const dialogElement = quote && dialog ? (
-    <PriceAdjustmentDialog<Q>
+  const line = dialog ? quote?.lines.find((entry) => entry.lineId === dialog.lineId) : undefined
+  const dialogElement = quote && dialog && line ? (
+    <PriceDialog<Q>
+      key={`${dialog.lineId}:${dialog.chargeCode ?? ''}:${dialog.targetKey ?? ''}`}
       open
       quoteId={quote.id}
       currency={quote.currencyCode}
       pricingRevision={revision}
-      target={dialog.target}
-      targetLabel={dialog.targetLabel}
-      charge={dialog.charge}
-      existing={dialog.existing}
-      storedAdjustmentIds={list?.items.map((item) => item.id) ?? []}
+      line={line}
+      lines={quote.lines}
+      rows={items}
+      chargeCode={dialog.chargeCode}
+      targetKey={dialog.targetKey}
       reasons={reasons}
       onClose={() => setDialog(null)}
       onSaved={(next) => onQuote(next)}
       onStale={() => { void reloadQuote() }}
-    />
-  ) : null
-
-  const phasesElement = quote && phases ? (
-    <PricePhasesDialog<Q>
-      open
-      quoteId={quote.id}
-      currency={quote.currencyCode}
-      pricingRevision={revision}
-      target={phases.target}
-      targetLabel={phases.targetLabel}
-      termMonths={phases.termMonths}
-      reasons={reasons}
-      onClose={() => setPhases(null)}
-      onSaved={(next) => onQuote(next)}
-      onStale={() => { void reloadQuote() }}
+      onRemove={(option) => removeTarget(option.target, labelOf(option.target))}
     />
   ) : null
 
   return {
     ui,
-    items: list?.items ?? [],
+    items,
     total: list?.total ?? 0,
     errorsById,
-    elements: <>{dialogElement}{phasesElement}{ConfirmDialogElement}</>,
+    elements: <>{dialogElement}{ConfirmDialogElement}</>,
   }
 }

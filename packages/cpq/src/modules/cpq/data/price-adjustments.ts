@@ -73,7 +73,37 @@ export const cpqPriceAdjustmentPreviewSchema = z.object({
   replaceAdjustmentId: z.string().uuid().optional(),
 }).strict()
 
-export const ADJUSTMENT_TOGGLE = 'cpq.manual_price_adjustments'
+// ─── One target's price (UX feedback spec, D1 / D4) ──────────────────
+const uuid = z.string().uuid()
+export const cpqPriceTargetSchema = z.discriminatedUnion('level', [
+  z.object({ level: z.literal('line'), quoteLineId: uuid, chargeTypeFilter: z.enum(['mrc', 'nrc']).nullable()
+    .describe('mrc = the line\'s recurring charges, nrc = one-time, null = all charges (% off only, no phases).') }).strict(),
+  z.object({ level: z.literal('charge'), quoteLineId: uuid, chargeCode: z.string().trim().min(1).max(255) }).strict(),
+]).describe('Whole line (recurring, one-time or all charges) or one charge of the line.')
+const pricedTypeSchema = z.enum(['price_override', 'discount_percent', 'discount_absolute'])
+export const cpqTargetPriceInputSchema = z.object({
+  target: cpqPriceTargetSchema,
+  // Bounded so a body stays small; more than 12 steps answers 422 PHASE_TOO_MANY.
+  phases: z.array(z.object({
+    months: z.number().int().min(1).max(MAX_PHASE_MONTH).describe('Length of the step in months (a year = 12).'),
+    adjustmentType: z.enum(['regular', ...pricedTypeSchema.options]).describe('regular = the regular price (a gap, no row); Free = price_override 0.'),
+    value: adjustmentFields.value.nullish().describe('Required except for regular.'),
+    name: z.string().trim().max(100).nullish().describe('Phase name sent to billing, e.g. "Free trial".'),
+  }).strict()).max(120).describe('Steps back to back from month 1; at most 12. Recurring targets only.'),
+  then: z.object({ adjustmentType: pricedTypeSchema, value: adjustmentFields.value }).strict().nullable()
+    .describe('With phases: the price from the month after them to the end (null = regular price). Without phases: the One price, every month.'),
+  currencyCode: adjustmentFields.currencyCode,
+  reasonCode: adjustmentFields.reasonCode.nullish().describe('Value from the cpq.price_adjustment_reason dictionary; optional only when nothing is written (phases: [] and then: null).'),
+  reasonNote: adjustmentFields.reasonNote,
+  expectedRevision: adjustmentFields.expectedRevision,
+}).strict()
+export type TargetPriceInput = z.infer<typeof cpqTargetPriceInputSchema>
+export const targetPreviewErrorSchema = z.object({
+  adjustmentId: z.string(), code: z.string(),
+  conflictsWith: z.string().optional().describe('ADJUSTMENT_OVERLAP: the other target\'s row.'),
+})
+
+export const ADJUSTMENT_TOGGLE ='cpq.manual_price_adjustments'
 export const REASON_DICTIONARY = 'cpq.price_adjustment_reason'
 export const DEFAULT_ADJUSTMENT_REASONS = [
   { value: 'competitive_match', label: 'Competitive match' },

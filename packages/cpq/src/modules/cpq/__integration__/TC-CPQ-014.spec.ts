@@ -11,7 +11,7 @@ import { deleteCustomer, seedCustomer, uniq } from './_helpers/cpqArcFixtures'
  * 2. A line-level Set price on the recurring charges is spread over them in
  *    proportion to their standard totals; the line MRC equals the typed price.
  * 3. A charge Set price above standard is accepted (ABOVE_STANDARD is gone).
- * 4. The line row shows an "Adjust price" button (UI).
+ * 4. The line row shows the icon-only "Adjust price" (%) button (UI, UX feedback spec §4.1).
  * 5. A volume / tiered charge takes a Set charge total (skipped when the
  *    tenant has no such charge in its seed data).
  *
@@ -82,10 +82,11 @@ test.describe('TC-CPQ-014: line Set price, above standard, charge total', () => 
     expect(setup.unitPrice).toBe(75)
     expect(setup.standardUnitPrice).toBe(50)
 
-    // 4. UI: the line row has an Adjust price button.
+    // 4. UI: the line row has the icon-only Adjust price (%) button.
     await login(page, 'admin')
     await page.goto(`/backend/cpq/quotes/${quoteId}`, { waitUntil: 'domcontentloaded' })
-    await expect(page.getByRole('main').getByTestId('cpq-adjust-line').first()).toBeVisible({ timeout: 15_000 })
+    await expect(page.getByRole('main').getByTestId('cpq-adjust-price-line').first()).toBeVisible({ timeout: 15_000 })
+    await expect(page.getByRole('main').getByTestId('cpq-adjust-price-line').first()).toHaveAttribute('aria-label', 'Adjust price')
   })
 
   test('sets the total of a volume or tiered charge', async ({ request }) => {

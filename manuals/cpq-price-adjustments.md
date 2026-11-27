@@ -38,33 +38,47 @@ gets an **Above standard** badge.
 
 ## Operator flow
 
+Spec `.ai/specs/2026-11-27-cpq-billing-phases-ux-feedback.md` (one Price dialog).
+
 1. Open a quote in status **New**, **Incomplete** or **Ready**.
-2. Expand a line. Each charge row shows **List** and **Offer** with a depth badge.
-3. Pick an action:
-   - **Adjust price** (button on the line row) — the whole line; on a bundle
-     parent, the whole bundle (parent and components):
-     - *Set price* — the line's new **recurring** or **one-time** total (choose
-       one), e.g. "this line costs 500 a month". It covers all line quantities.
-     - *% off* — a percentage on every billable charge of the line, or only its
-       recurring / one-time charges.
-     - *Amount off* — taken off the line's recurring or one-time total (choose one).
-     Set price and Amount off are spread over the line's charges in proportion
-     to their standard totals, so every charge keeps its own price. The rounding
-     cent goes to the largest charge; if every charge is at 0, the first charge
-     takes the whole amount. Want both a recurring and a one-time price? Add two
-     line adjustments, one per type.
-   - **Adjust price** (pencil on a charge row) — one charge:
-     - *Set price* — the new unit price, e.g. 100 → 80. On volume and tiered
-       charges it is **Set charge total**, because they have no single unit price.
-     - *% off* — e.g. 20 %.
-     - *Amount off* — taken off the charge total, e.g. 40 off.
-4. Enter the value, choose a **reason** (required) and an optional note (the note
-   is required for "Other"). The dialog previews standard → new price and the
-depth as you type (and flags a price above standard);
-   nothing is saved until **Save** (`Ctrl/Cmd+Enter`; `Esc` cancels).
-5. The adjustment appears in the **Price adjustments** panel under the lines, with
-   target, type, value, reason, author and date. Edit or delete it there or from
-   the waterfall.
+2. Click the **%** button (tooltip "Adjust price") on a line row, or on a charge
+   row to start on that charge. Both open the same wide **Price dialog**.
+3. **Current prices** (top): the line's charges (the whole bundle on a bundle
+   parent) with list, standard, offer, quantity, total and **Priced by**: what
+   sets the offer now (*Line · recurring: 2 phases*, *Charge: Set price 80.00*, a
+   price rule, or *—*). A phased charge shows its schedule on one line under it.
+4. **Applies to** picks the target. Each option shows what is set on it now:
+   | Option | Shown when | Types | Phases |
+   |---|---|---|---|
+   | Whole line · recurring | the line (bundle) has MRC charges | Set price, % off, Amount off | yes |
+   | Whole line · one-time | it has NRC charges | Set price, % off, Amount off | no |
+   | Whole line · all charges | it has both | % off | no |
+   | Charge · *name* | each MRC / NRC charge | Set price (Set charge total on volume / tiered), % off, Amount off | MRC only |
+
+   The line's **%** opens the first target that has an adjustment, otherwise
+   *Whole line · recurring* (*one-time* when there is no MRC). Picking a target
+   loads what is on it; a free target starts empty. **A second adjustment on the
+   same line = another target** (e.g. recurring phases plus 20 % off the setup fee).
+5. On a recurring target choose **One price** or **Price phases** (below).
+   *One price* is a Type and a Value, priced every month. Line *Set price* and
+   *Amount off* are the line's recurring or one-time total, spread over its
+   charges in proportion to their standard totals (the rounding cent goes to the
+   largest charge; if every charge is at 0, the first takes it all).
+6. Choose a **reason** (required) and an optional note (required for "Other").
+   They apply to every row the save writes.
+7. The **preview** (live, nothing saved) shows each affected charge before →
+   after (with **Above standard** for an uplift), the schedule of phased charges,
+   the line MRC / NRC totals, and what the save replaces ("Replaces 2 phases").
+8. **Save** (`Ctrl/Cmd+Enter`; `Esc` cancels) writes the whole target in one go
+   (`PUT …/price-adjustments/target`): one reprice, one undo for the whole save.
+   **Remove adjustment** (after a confirmation) clears the target.
+9. The **Price adjustments** panel under the lines shows **one row per target**:
+   the price ("2 phases: Free trial (month 1) → 50% off (months 2–4), then
+   regular"), reason and note, and the **author name** (else the email; the user
+   id is in the tooltip) and date of the set's latest change. **Edit** opens the
+   dialog on that target; **Delete** removes the whole target.
+10. The **order** shows the same table, read-only, on its Line items tab: the
+   source quote's adjustments are frozen once it is converted.
 
 ### Rules
 
@@ -78,9 +92,20 @@ depth as you type (and flags a price above standard);
   `cpq.quotes.adjust_price` and the `cpq.quote.pricing_changed` event stay, so an
   approval workflow can react to it.
 - **Usage charges** cannot be adjusted.
+- **One adjustment set per target, never two on the same price in the same
+  month.** *All charges* overlaps *recurring* and *one-time*; a permanent price
+  overlaps every phase of its target. The preview names the other target
+  ("Overlaps *Whole line · recurring — 2 phases*. Remove it first, or pick it in
+  Applies to.") and Save stays disabled; the API answers `422 ADJUSTMENT_OVERLAP`
+  with the other row's `adjustmentId`.
+- **Most specific wins, informational.** When a charge has its own adjustment,
+  the preview of a line target says "*Monthly fee* keeps its own price: a charge
+  adjustment beats a line one".
 - **Locked after submission.** Once the quote leaves New / Incomplete / Ready
   (e.g. *In approval*), adjustments are read-only: move the quote back to
-  **Ready** to change them. A converted quote is always locked.
+  **Ready** to change them. A converted quote is always locked. On a locked
+  quote **Delete** is offered only for an invalid row and removes only the
+  invalid rows of the target.
 - **Invalid adjustments are kept, not applied.** If a reconfiguration removes the
   adjusted charge, or the quote currency changes, the adjustment gets an
   **Invalid** badge, the charge falls back to the next valid price, and the line
@@ -105,17 +130,37 @@ price can change over the months of the subscription:
 | First month free | Phase *Free*, 1 month |
 | 50% off for 3 months | Phase *% off* 50, 3 months |
 | Free month, then 50% for 2 months | *Free* 1 month → *% off* 50, 2 months |
-| Ramp 100 / 110 / 120 | *Set price* 100, 1 year → *Set price* 110, 1 year; the list price 120 is the regular price |
+| Ramp 100 / 110 / 120 | *Regular price* 1 year → *Set price* 110, 1 year, **Then** *Set price* 120 (or, on a product listed at 120: *Set price* 100, 1 year → *Set price* 110, 1 year) |
+| 40 % off in months 4–6 only | *Regular price* 3 months → *% off* 40, 3 months |
 
-**Operator flow.** On a line (button **Phases**, the line's recurring total) or
-on a recurring charge (calendar icon), add steps: a length in **months** or
-**years** (= 12 months), a price type (**Free** = Set price 0, **Set price**,
-**% off**, **Amount off**), a value and an optional name ("Free trial",
-"Year 1"). Steps run back to back from month 1. After the last step the
-**regular price** applies. One reason covers all steps. Each step is saved as a
-manual adjustment with a month range (`fromMonth` / `toMonth`), one write at a
-time; edit or delete a step from the **Price adjustments** panel (the row shows
-its months and name). The edit dialog also accepts a month range directly.
+**Operator flow.** In the Price dialog, pick a recurring target and switch to
+**Price phases**. Rows stored with any month range (through the API, the AI or
+an older version) open here. Each step has:
+
+- a **length** in months or years (= 12 months);
+- a **kind**: *Regular price* (a gap at the regular price, no row stored),
+  *Free* (= Set price 0), *Set price*, *% off* or *Amount off*;
+- a **value** and a **name**.
+
+Steps run back to back from month 1, at most **12** (Regular price steps
+included: each becomes one billing phase); reorder them with ↑ / ↓. The
+**Then** row is what applies after the last step: *Regular price* (default) or
+a *Set price* / *% off* / *Amount off* that runs to the end. So "40 % off in
+months 4–6 only" is *Regular price 3 months → % off 40, 3 months*, and a ramp
+100 → 110 → 120 on a product listed at 100 is *Regular price 1 year → Set price
+110, 1 year*, **Then** *Set price 120* (above standard is allowed). At least one
+step must not be *Regular price*, otherwise use One price. Switching modes keeps
+the other mode's input until Save; Save replaces everything on the target.
+
+**Suggested names.** Each step's name is prefilled, in the rep's UI language,
+until the rep types in it (any suggestion can be changed): *Free trial* (Free,
+first step), *Free* (Free, later), *50% off*, *10.00 off*, *Year N* (Set price
+over exactly 12 months starting on a year boundary), otherwise *Special price*.
+Regular price steps and the Then price have no name: the Then price becomes the
+item's regular price in billing. Names travel to the billing item and the
+invoice as typed; a name in the rep's language prints as is on an invoice in
+another language, so edit it when that matters. Billing keeps its "Phase N"
+fallback for unnamed phases created through its API.
 
 **Rules.**
 - Phases price **recurring (MRC)** charges only: a line phase targets the
@@ -190,10 +235,15 @@ A typical project recipe with Open Mercato **Workflows**:
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/cpq/quotes/{quoteId}/price-adjustments` | List, `pricingRevision`, `enabled`, `reasons`. |
+| GET | `/api/cpq/quotes/{quoteId}/price-adjustments` | List, `pricingRevision`, `enabled`, `reasons`. Each item carries `createdByName` / `createdByEmail` (resolved on the server). |
+| PUT | `/api/cpq/quotes/{quoteId}/price-adjustments/target` | **The dialog's save.** Replaces every adjustment on one target (`{ level: 'line', quoteLineId, chargeTypeFilter: 'mrc' \| 'nrc' \| null }` or `{ level: 'charge', quoteLineId, chargeCode }`) in one undoable write: `phases[]` (`months`, `adjustmentType` `regular` / `price_override` / `discount_percent` / `discount_absolute`, `value`, `name`; at most 12), `then` (the price after them, or the One price when there are no phases), reason, `expectedRevision`. `phases: []` + `then: null` clears the target. Unchanged rows keep id, author and date. 409 `ADJUSTMENT_LOCKED` / `STALE_REVISION`; 422 `PHASE_RECURRING_ONLY`, `PHASE_PAST_TERM`, `PHASE_TOO_MANY`, `ADJUSTMENT_OVERLAP`, reason and value codes (`stepIndex` points at the step). |
+| POST | `/api/cpq/quotes/{quoteId}/price-adjustments/target/preview` | Same body, no write: `{ quote, errors }`, overlaps reported with `conflictsWith`. |
+| GET | `/api/cpq/orders/{orderId}` | `priceAdjustments`: the source quote's rows, read-only, with author and `reasonLabel` (needs only `cpq.orders.view`). |
 | POST | `/api/cpq/quotes/{quoteId}/price-adjustments` | Create. A line-level `price_override` / `discount_absolute` needs `chargeTypeFilter` `mrc` or `nrc` (`CHARGE_TYPE_REQUIRED`). Send `expectedRevision` to avoid overwriting a colleague's change (`409 STALE_REVISION`). Optional `fromMonth` / `toMonth` (1-based, inclusive, `toMonth` null = to the end) and `phaseName` make it a price phase. |
 | PATCH / DELETE | `/api/cpq/quotes/{quoteId}/price-adjustments/{adjustmentId}` | Level and target are immutable. The month range and `phaseName` can change. |
-| POST | `/api/cpq/quotes/{quoteId}/price-adjustments/preview` | Price a draft without saving. |
+| POST | `/api/cpq/quotes/{quoteId}/price-adjustments/preview` | Price one draft row without saving (per-row API). |
 | POST | `/api/cpq/quotes/price` | Public calculator. `includeWaterfall: true` adds list / standard prices; negotiated prices never appear here. |
 
 Full contracts: the OpenAPI document (`openApi` on each route) and the spec.
+
+The AI assistant reads adjustments (`cpq.list_price_adjustments`, `cpq.get_order`) but never writes them: see `manuals/cpq-ai-agent.md`.

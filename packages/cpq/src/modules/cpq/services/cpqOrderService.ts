@@ -35,6 +35,7 @@ import { buildActivatedEventCustomerFields, type ActivatedEventCustomerFields } 
 import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import { arcMirroredAssetId, stripQuoteOnlyArcMarkers } from './arcPriceFreeze'
 import { summarizeOrderPricing, type OrderWaterfallSummary } from './orderPricingSummary'
+import { loadOrderPriceAdjustments, type OrderPriceAdjustment } from './priceAdjustments/adjustmentReadModel'
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -108,6 +109,8 @@ interface OrderResult {
   activatedAt: string | null
   createdAt: string
   lines: OrderLineResult[]
+  /** The source quote's manual price adjustments, read-only (UX feedback spec D8); empty without a source quote. */
+  priceAdjustments: OrderPriceAdjustment[]
 }
 
 interface OrderServiceDeps {
@@ -1104,6 +1107,7 @@ export class DefaultCpqOrderService {
       activatedAt: orderConfig.activatedAt?.toISOString() ?? null,
       createdAt: orderConfig.createdAt.toISOString(),
       lines,
+      priceAdjustments: await loadOrderPriceAdjustments(em, orderConfig.sourceQuoteId, scope),
     }
   }
 }

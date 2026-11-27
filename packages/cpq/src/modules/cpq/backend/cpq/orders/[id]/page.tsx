@@ -13,6 +13,7 @@ import {
 } from '../../../../components/statusMaps'
 import { StatusPath } from '../../../../components/StatusPath'
 import { ChargeBreakdownTable, type ChargeRowView } from '../../../../components/ChargeBreakdownTable'
+import { OrderPriceAdjustmentsPanel, type OrderPriceAdjustment } from './_components/OrderPriceAdjustmentsPanel'
 import { PricingSummaryCard, type PricingSummaryView } from '../../../../components/PricingSummaryCard'
 import { ArcLineDiff, LineActionBadge } from '../../../../components/ArcLineDiff'
 import { arcRecurringDelta } from '../../../../lib/quoteSummaryView'
@@ -90,6 +91,8 @@ type OrderResult = {
   activatedAt: string | null
   createdAt: string
   lines: OrderLineResult[]
+  /** The source quote's negotiated prices, read-only (D8). */
+  priceAdjustments?: OrderPriceAdjustment[]
 }
 
 const ARC_BADGE_VARIANTS: Record<string, 'brand' | 'success' | 'error'> = {
@@ -465,15 +468,18 @@ export default function CpqOrderDetailPage(props: { params?: { id?: string } }) 
             id: 'lines',
             label: t('cpq.orders.detail.tabs.lines', 'Line items'),
             render: () => (
-              <OrderLineTree
-                lines={order.lines}
-                quoteType={order.quoteType}
-                currency={currency}
-                expandedLines={expandedLines}
-                pricingDetail={pricingDetail}
-                onToggleLine={toggleLine}
-                onTogglePricingDetail={togglePricingDetail}
-              />
+              <>
+                <OrderLineTree
+                  lines={order.lines}
+                  quoteType={order.quoteType}
+                  currency={currency}
+                  expandedLines={expandedLines}
+                  pricingDetail={pricingDetail}
+                  onToggleLine={toggleLine}
+                  onTogglePricingDetail={togglePricingDetail}
+                />
+                <OrderPriceAdjustmentsPanel orderId={order.id} adjustments={order.priceAdjustments ?? []} lines={order.lines} />
+              </>
             ),
           },
         ]}

@@ -106,3 +106,38 @@ The system SHALL report `ruleDiscountTotal` and `manualDiscountTotal` (both incl
 - THEN `manualDiscountTotal` includes 40 and `discountTotal` equals its value before this change
 
 Source: .ai/specs/2026-11-10-cpq-manual-price-adjustments.md
+
+## Requirement: Price phases on recurring prices
+The system SHALL accept a month range (`fromMonth` ≥ 1, `toMonth` ≥ `fromMonth` or null = to the end) on a manual adjustment of a recurring price (an MRC charge, or a line with `chargeTypeFilter: mrc`; `PHASE_RECURRING_ONLY` otherwise), SHALL refuse a range past the line's term (`PHASE_PAST_TERM`) and two adjustments on one target that share a month (`ADJUSTMENT_OVERLAP`), and SHALL price every month segment with the waterfall in force in it: list → the price rules in force that month = standard → the manual adjustment in force that month = offer. A phased charge SHALL carry `schedule` (contiguous segments from month 1, the last open, each with standard and offer price and source `rule` | `manual` | `list`); the charge's own price and the MRC totals SHALL be the regular price (last segment). The deal value SHALL sum each month of the term at its segment price, and the snapshot hash and `hasTimeBasedAdjustments` SHALL reflect the schedule so pricing signals fire.
+
+### Scenario: Ramp
+- WHEN a rep sets `price_override` 80 for months 1–12 and 90 for months 13–24 on an MRC charge listed at 100 on a 24-month line
+- THEN the schedule is 1–12 = 80, 13–24 = 90, 25+ = 100 (regular), the charge's `totalPrice` is 100 and the deal value is 12×80 + 12×90
+
+### Scenario: Rule phase and manual phase in the same month
+- WHEN a price rule gives 50% off months 1–3 (standard 50) and a rep sets price 30 for month 1
+- THEN month 1 is 30 (source manual, standard 50), months 2–3 are 50 (source rule), month 4+ is 100
+
+### Scenario: ARC mirror line
+- WHEN a rep adds a phase on a line that mirrors an existing subscription item
+- THEN the adjustment is refused with `LINE_NOT_ELIGIBLE`, and re-priced mirror lines carry no schedule (D8)
+
+Source: .ai/specs/2026-11-26-billing-price-phases-ramp-deals.md
+
+## Requirement: Price rule phases and campaign dates
+The system SHALL accept on a price rule an optional month range (`fromMonth` / `toMonth`, recurring charges only, `PHASE_RECURRING_ONLY` for an `nrc` / `usage` filter) and optional campaign dates (`validFrom` / `validUntil`, inclusive). A rule SHALL apply only in its months, and only when the quote is priced inside its campaign dates; a quote line already priced with the rule (its stored snapshot names the rule) SHALL keep it when re-priced after the campaign ended.
+
+### Scenario: Quote priced before the campaign ended, re-saved after
+- WHEN a line was priced on 20 Dec with a rule valid until 31 Dec and the quote is re-saved on 1 Feb
+- THEN the line keeps the rule's phase; a line added on 1 Feb does not get it
+
+Source: .ai/specs/2026-11-26-billing-price-phases-ramp-deals.md
+
+## Requirement: Phases on the activation and added-item payloads
+The system SHALL keep the schedule on the order line and subscription item and SHALL send it on the recurring charge of the activation event and of ARC `addedItems` (contract C2): per billing period, the item's MRC charges merged into one schedule (union of boundaries, prices summed, quantity applied), each phase `{ name, months, priceType: 'fixed', value }` with `value` per that billing period, and `unitPrice` the regular price after the last phase.
+
+### Scenario: Two charges merged
+- WHEN an item has Internet 100 (free month 1) and TV 50 (25 for months 1–3)
+- THEN the recurring charge has `unitPrice` 150 and `phases` [{ months 1, value 25 }, { months 2, value 125 }]
+
+Source: .ai/specs/2026-11-26-billing-price-phases-ramp-deals.md

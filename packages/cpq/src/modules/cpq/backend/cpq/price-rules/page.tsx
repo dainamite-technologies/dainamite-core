@@ -159,9 +159,22 @@ export default function PriceRulesPage() {
       {
         accessorKey: 'ruleType',
         header: t('cpq.priceRules.table.type', 'Type'),
-        cell: ({ row }) => (
-          <span>{ruleTypeLabels[row.original.ruleType] ?? row.original.ruleType}</span>
-        ),
+        cell: ({ row }) => {
+          const rule = row.original
+          const phased = (rule.fromMonth ?? 1) > 1 || rule.toMonth != null
+          return (
+            <span className="inline-flex items-center gap-1.5">
+              {ruleTypeLabels[rule.ruleType] ?? rule.ruleType}
+              {phased && (
+                <Tag variant="info" className="px-1.5 text-xs" data-testid="cpq-price-rule-phase-tag">
+                  {rule.toMonth == null
+                    ? t('cpq.phases.monthsFrom', 'From month {from}', { from: rule.fromMonth ?? 1 })
+                    : t('cpq.phases.months', 'Months {from}–{to}', { from: rule.fromMonth ?? 1, to: rule.toMonth })}
+                </Tag>
+              )}
+            </span>
+          )
+        },
       },
       {
         id: 'value',

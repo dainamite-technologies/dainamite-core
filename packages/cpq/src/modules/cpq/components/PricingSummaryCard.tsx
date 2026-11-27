@@ -16,6 +16,8 @@ export type PricingSummaryView = {
   discountDepth?: { total: number | null } | null
   usageTotalEstimated?: number | null
   usageCharges?: Array<{ chargeName: string; unitPrice: number }>
+  /** Price phases on a deal line: the deal value is summed over the schedule. */
+  hasTimeBasedAdjustments?: boolean
 }
 
 export function SummaryFigure({
@@ -78,11 +80,18 @@ export function PricingSummaryCard({ summary, currency, arcDelta }: {
         {summary.dealValue && (
           <SummaryFigure
             label={t('cpq.priceAdjustments.summary.dealValue', 'Deal value')}
-            title={t('cpq.priceAdjustments.summary.hint', 'Deal value counts recurring charges over the term plus one-time charges; existing subscription items on change quotes are excluded.')}
+            title={summary.hasTimeBasedAdjustments
+              ? t('cpq.phases.dealValueHint', 'Deal value counts each month of the term at its phase price (trials, promotions, ramps), then the regular price, plus one-time charges.')
+              : t('cpq.priceAdjustments.summary.hint', 'Deal value counts recurring charges over the term plus one-time charges; existing subscription items on change quotes are excluded.')}
             value={formatMoney(summary.dealValue.offer, currency)}
             note={formatDepth(summary.discountDepth?.total ?? null)}
             testId="cpq-deal-value"
           />
+        )}
+        {summary.dealValue && summary.hasTimeBasedAdjustments && (
+          <p className="col-span-2 sm:col-span-4 -mt-2 text-xs text-muted-foreground" data-testid="cpq-deal-value-phases">
+            {t('cpq.phases.dealValueNote', 'Includes price phases: MRC shows the regular price after the last phase.')}
+          </p>
         )}
         {summary.usageTotalEstimated != null && (
           <SummaryFigure

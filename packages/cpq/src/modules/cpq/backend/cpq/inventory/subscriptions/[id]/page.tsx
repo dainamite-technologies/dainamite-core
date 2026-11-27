@@ -14,6 +14,7 @@ import { StatusPath } from '../../../../../components/StatusPath'
 import { DepthBadge, PriceWaterfall } from '../../../../../components/PriceWaterfall'
 import { parseStoredCharge } from '../../../../../lib/priceAdjustmentView'
 import { ChargePeriodTotal } from '../../../../../components/ChargePeriodTotal'
+import { PriceScheduleTable } from '../../../../../components/PriceScheduleTable'
 import { StatusActionDialog, statusActionLabel, type StatusActionTarget } from './_components/StatusActionDialog'
 import {
   SUBSCRIPTION_STATUS_ACTIONS,
@@ -837,6 +838,14 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
                                       <td className="py-1 text-right font-mono">{c.quantity ?? '—'}</td>
                                       <td className="py-1 text-right font-mono">{c.totalPrice != null ? <ChargePeriodTotal charge={c} currency={currency} format={fmt} /> : '—'}</td>
                                     </tr>
+                                    {c.schedule?.length ? (
+                                      <tr>
+                                        <td colSpan={6} className="pb-2 pl-4">
+                                          <div className="font-medium text-muted-foreground mb-1 text-xs">{t('cpq.phases.scheduleTitle', 'Price phases')}</div>
+                                          <PriceScheduleTable schedule={c.schedule} currency={currency} />
+                                        </td>
+                                      </tr>
+                                    ) : null}
                                     {(c.adjustments?.length ?? 0) > 0 && (
                                       <tr>
                                         <td colSpan={6} className="pb-2 pl-4">

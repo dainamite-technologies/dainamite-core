@@ -6,6 +6,7 @@ import { Tag } from '@open-mercato/ui/primitives/tag'
 import { InjectionSpot } from '@open-mercato/ui/backend/injection/InjectionSpot'
 import { ADJUSTMENT_ERROR_FALLBACKS } from '../../../../../lib/priceAdjustmentView'
 import { ManualAdjustmentActions, useAccessReasonText, usePriceAdjustmentUi } from './priceAdjustmentContext'
+import { useMonthRangeLabel } from '../../../../../components/PriceScheduleTable'
 
 export const PRICE_ADJUSTMENTS_SPOT_ID = 'data-table:cpq.quote_price_adjustments'
 
@@ -22,6 +23,11 @@ export type StoredAdjustment = {
   reasonNote?: string | null
   createdByUserId: string
   createdAt: string
+  /** Price phases: month range (absent / 1 → null = every month) and optional name. */
+  windowKind?: 'relative'
+  fromMonth?: number
+  toMonth?: number | null
+  phaseName?: string | null
 }
 
 type LineRef = { lineId: string; offeringName: string; offeringId: string | null; configuration?: Record<string, unknown> | null; charges: Array<{ chargeCode: string; chargeName: string }> }
@@ -49,6 +55,7 @@ export function PriceAdjustmentsPanel({ quoteId, items, total, lines, currency, 
   const ui = usePriceAdjustmentUi()
   const lineById = React.useMemo(() => new Map(lines.map((line) => [line.lineId, line])), [lines])
   const accessText = useAccessReasonText()
+  const rangeLabel = useMonthRangeLabel()
   // Toggle off: stored adjustments still price the quote, so keep them visible (read-only).
   if (!ui || (ui.access.reason === 'disabled' && items.length === 0)) return null
 
@@ -95,6 +102,11 @@ export function PriceAdjustmentsPanel({ quoteId, items, total, lines, currency, 
                   <td className="px-4 py-1.5">
                     <span className="font-medium">{line?.offeringName ?? t('cpq.priceAdjustments.panel.removedLine', 'Removed line')}</span>
                     <span className="text-muted-foreground"> · {scope}</span>
+                    {((item.fromMonth ?? 1) > 1 || item.toMonth != null) && (
+                      <Tag variant="info" className="ml-1.5 px-1.5 text-xs" data-testid="cpq-price-adjustment-phase">
+                        {rangeLabel(item.fromMonth ?? 1, item.toMonth ?? null)}{item.phaseName ? ` · ${item.phaseName}` : ''}
+                      </Tag>
+                    )}
                     {error && (
                       <Tag variant="warning" className="ml-1.5 px-1.5 text-xs">
                         {t('cpq.priceAdjustments.invalid', 'Invalid')}: {t(`cpq.priceAdjustments.errors.${error}`, ADJUSTMENT_ERROR_FALLBACKS[error] ?? error)}

@@ -144,7 +144,7 @@ describe('request bodies', () => {
   })
   it('drops immutable target fields from a patch and clears removed notes', () => {
     const draft = buildAdjustmentDraft(form, { level: 'charge', quoteLineId: 'l1', chargeCode: 'fee' }, 'USD', 2)!
-    expect(toAdjustmentPatch(draft)).toEqual({ adjustmentType: 'price_override', value: 80, currencyCode: 'USD', reasonCode: 'competitive_match', reasonNote: null, expectedRevision: 2 })
+    expect(toAdjustmentPatch(draft)).toEqual({ adjustmentType: 'price_override', value: 80, currencyCode: 'USD', reasonCode: 'competitive_match', reasonNote: null, expectedRevision: 2, fromMonth: 1, toMonth: null, phaseName: null })
   })
   it.each([
     [409, { error: 'STALE_REVISION' }, 'STALE_REVISION'],
@@ -181,5 +181,40 @@ describe('collectAdjustmentErrors', () => {
   })
   it('is empty for a missing quote', () => {
     expect(collectAdjustmentErrors(null).size).toBe(0)
+  })
+})
+
+describe('price phases view helpers', () => {
+  const { buildPhaseDrafts, phaseStepRanges, monthRangeFields, isPermanentAdjustment } = jest.requireActual('../priceAdjustmentView') as typeof import('../priceAdjustmentView')
+  const step = (values: Partial<import('../priceAdjustmentView').PhaseStepForm>) => ({ length: '1', unit: 'month' as const, kind: 'free' as const, value: '', name: '', ...values })
+  it('lays steps back to back from month 1; years are 12 months', () => {
+    expect(phaseStepRanges([step({}), step({ length: '2' }), step({ length: '1', unit: 'year' }), step({ length: 'x' })])).toEqual([
+      { fromMonth: 1, toMonth: 1 }, { fromMonth: 2, toMonth: 3 }, { fromMonth: 4, toMonth: 15 }, null,
+    ])
+  })
+  it('builds one draft per step: Free = Set price 0, line phases on the recurring total', () => {
+    const result = buildPhaseDrafts({
+      steps: [step({ name: 'Free trial' }), step({ length: '2', kind: 'discount_percent', value: '50', name: 'Promo 50%' })],
+      target: { level: 'line', quoteLineId: 'l1' }, reasonCode: 'promotion', reasonNote: '', currencyCode: 'USD', termMonths: 12,
+    })
+    expect(result.error).toBeNull()
+    expect(result.drafts).toEqual([
+      { level: 'line', quoteLineId: 'l1', chargeTypeFilter: 'mrc', adjustmentType: 'price_override', value: 0, currencyCode: 'USD', reasonCode: 'promotion', fromMonth: 1, toMonth: 1, phaseName: 'Free trial' },
+      { level: 'line', quoteLineId: 'l1', chargeTypeFilter: 'mrc', adjustmentType: 'discount_percent', value: 50, reasonCode: 'promotion', fromMonth: 2, toMonth: 3, phaseName: 'Promo 50%' },
+    ])
+  })
+  it('refuses a sequence past the term, an empty value or an invalid percent', () => {
+    const target = { level: 'charge' as const, quoteLineId: 'l1', chargeCode: 'net' }
+    const base = { target, reasonCode: 'promotion', reasonNote: '', currencyCode: 'USD' }
+    expect(buildPhaseDrafts({ ...base, steps: [step({ length: '2', unit: 'year' })], termMonths: 12 })).toMatchObject({ error: 'PHASE_PAST_TERM', stepIndex: 0 })
+    expect(buildPhaseDrafts({ ...base, steps: [step({}), step({ kind: 'price_override', value: '' })] })).toMatchObject({ error: 'PHASE_VALUE_INVALID', stepIndex: 1 })
+    expect(buildPhaseDrafts({ ...base, steps: [step({ kind: 'discount_percent', value: '120' })] })).toMatchObject({ error: 'PHASE_VALUE_INVALID' })
+    expect(buildPhaseDrafts({ ...base, steps: [] })).toMatchObject({ error: 'PHASE_NONE' })
+  })
+  it('omits the range for a permanent adjustment and tells permanent from phases', () => {
+    expect(monthRangeFields({ fromMonth: '', toMonth: '' })).toEqual({})
+    expect(monthRangeFields({ fromMonth: '2', toMonth: '', phaseName: ' Year 2 ' })).toEqual({ fromMonth: 2, toMonth: null, phaseName: 'Year 2' })
+    expect(isPermanentAdjustment({ fromMonth: 1, toMonth: null })).toBe(true)
+    expect(isPermanentAdjustment({ fromMonth: 1, toMonth: 3 })).toBe(false)
   })
 })

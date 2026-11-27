@@ -21,7 +21,7 @@ import { arcRecurringDelta } from '../../../../lib/quoteSummaryView'
 import { usePriceAdjustments } from './_components/usePriceAdjustments'
 import { PriceAdjustmentsPanel } from './_components/PriceAdjustmentsPanel'
 import { ArcLineRemovalProvider, useArcLineRemoval, useArcLineRemovalUi } from './_components/arcLineRemoval'
-import { AdjustChargeAction, AdjustLinePriceAction, ManualAdjustmentActions, PriceAdjustmentProvider, usePriceAdjustmentUi } from './_components/priceAdjustmentContext'
+import { AdjustChargeAction, AdjustLinePriceAction, ManualAdjustmentActions, PriceAdjustmentProvider, PricePhasesAction, usePriceAdjustmentUi } from './_components/priceAdjustmentContext'
 import { useGrantedFeatures } from '../../../../components/useGrantedFeatures'
 import { canRecalculateQuote, QUOTE_MANAGE_FEATURE } from '../../../../lib/quotePermissions'
 import {
@@ -1326,7 +1326,7 @@ function QuoteLineRow({ line, lineIdx, currency, isExpanded, pricingDetail, isBu
   const paddingLeft = indent > 0 ? `${indent * 2 + 1}rem` : undefined
   const chargeActions = {
     reasonLabels: adjustmentUi?.reasonLabels,
-    renderChargeActions: (charge: ResolvedCharge) => <AdjustChargeAction line={line} charge={charge} />,
+    renderChargeActions: (charge: ResolvedCharge) => <><AdjustChargeAction line={line} charge={charge} /><PricePhasesAction line={line} charge={charge} /></>,
     renderManualActions: (adjustmentId: string) => <ManualAdjustmentActions adjustmentId={adjustmentId} />,
   }
 
@@ -1427,6 +1427,7 @@ function QuoteLineRow({ line, lineIdx, currency, isExpanded, pricingDetail, isBu
         ) : (
         <div className="flex items-center gap-1 shrink-0">
           <AdjustLinePriceAction line={line} />
+          {line.charges.some((charge) => charge.chargeType === 'mrc') && <PricePhasesAction line={line} />}
           {onAddComponent && (
             <button onClick={onAddComponent} className="rounded p-1.5 text-muted-foreground hover:text-primary hover:bg-primary/5 transition-colors" title={t('cpq.quotes.detail.addComponent', 'Add Component')}>
               <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor">

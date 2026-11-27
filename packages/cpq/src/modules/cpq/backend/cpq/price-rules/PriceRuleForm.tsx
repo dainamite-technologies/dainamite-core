@@ -50,6 +50,12 @@ export type PriceRule = {
   applicabilityCondition: Record<string, unknown> | null
   sortOrder: number
   isActive: boolean
+  /** Price phases (D9): months of the subscription the rule prices; 1 → null = every month. */
+  fromMonth?: number
+  toMonth?: number | null
+  /** Campaign dates (D10), `YYYY-MM-DD`. */
+  validFrom?: string | null
+  validUntil?: string | null
 }
 
 export type ProductOffering = { id: string; code: string; name: string }
@@ -68,6 +74,10 @@ export type PriceRuleFormData = {
   conditionValue: string
   sortOrder: string
   isActive: boolean
+  fromMonth: string
+  toMonth: string
+  validFrom: string
+  validUntil: string
 }
 
 export const emptyPriceRuleForm: PriceRuleFormData = {
@@ -84,6 +94,10 @@ export const emptyPriceRuleForm: PriceRuleFormData = {
   conditionValue: '',
   sortOrder: '0',
   isActive: true,
+  fromMonth: '',
+  toMonth: '',
+  validFrom: '',
+  validUntil: '',
 }
 
 export function priceRuleToFormData(rule: PriceRule): PriceRuleFormData {
@@ -102,6 +116,10 @@ export function priceRuleToFormData(rule: PriceRule): PriceRuleFormData {
     conditionValue: cond?.value ?? '',
     sortOrder: String(rule.sortOrder),
     isActive: rule.isActive,
+    fromMonth: rule.fromMonth && rule.fromMonth > 1 ? String(rule.fromMonth) : '',
+    toMonth: rule.toMonth != null ? String(rule.toMonth) : '',
+    validFrom: rule.validFrom ?? '',
+    validUntil: rule.validUntil ?? '',
   }
 }
 
@@ -114,6 +132,11 @@ export function priceRuleFormToPayload(form: PriceRuleFormData): Record<string, 
     sortOrder: Number(form.sortOrder),
     isActive: form.isActive,
     productOfferingId: form.productOfferingId || null,
+    // Always sent, so clearing a range or a campaign date on edit takes effect.
+    fromMonth: form.fromMonth.trim() ? Number(form.fromMonth) : 1,
+    toMonth: form.toMonth.trim() ? Number(form.toMonth) : null,
+    validFrom: form.validFrom || null,
+    validUntil: form.validUntil || null,
   }
   if (form.description) payload.description = form.description
   if (form.chargeCodeFilter) payload.chargeCodeFilter = form.chargeCodeFilter
@@ -269,6 +292,36 @@ export function PriceRuleForm({
             {t('cpq.priceRules.form.productOfferingHint', 'Leave as "Global" to apply to all products, or select a specific offering')}
           </span>
         </label>
+        <div className="col-span-2 space-y-1" data-testid="cpq-price-rule-phase">
+          <span className="text-sm font-medium">{t('cpq.priceRules.form.phase', 'Price phase (months)')}</span>
+          <span className="ml-2 text-xs text-muted-foreground">
+            {t('cpq.priceRules.form.phaseHint', '(optional — e.g. 1 to 1 = first month free; empty = every month; recurring charges only)')}
+          </span>
+          <div className="grid grid-cols-2 gap-2">
+            <NumberInput integer placeholder={t('cpq.priceRules.form.fromMonth', 'From month (1)')}
+              value={form.fromMonth === '' ? null : Number(form.fromMonth)}
+              onChange={(n) => onFormChange({ ...form, fromMonth: n == null ? '' : String(n) })} />
+            <NumberInput integer placeholder={t('cpq.priceRules.form.toMonth', 'To month (to the end)')}
+              value={form.toMonth === '' ? null : Number(form.toMonth)}
+              onChange={(n) => onFormChange({ ...form, toMonth: n == null ? '' : String(n) })} />
+          </div>
+        </div>
+        <div className="col-span-2 space-y-1" data-testid="cpq-price-rule-campaign">
+          <span className="text-sm font-medium">{t('cpq.priceRules.form.campaign', 'Campaign dates')}</span>
+          <span className="ml-2 text-xs text-muted-foreground">
+            {t('cpq.priceRules.form.campaignHint', '(optional — quotes priced in these dates get the rule; a priced quote keeps it after the end)')}
+          </span>
+          <div className="grid grid-cols-2 gap-2">
+            <label className="space-y-1">
+              <span className="text-xs">{t('cpq.priceRules.form.validFrom', 'Valid from')}</span>
+              <Input type="date" value={form.validFrom} onChange={(e) => onFormChange({ ...form, validFrom: e.target.value })} />
+            </label>
+            <label className="space-y-1">
+              <span className="text-xs">{t('cpq.priceRules.form.validUntil', 'Valid until')}</span>
+              <Input type="date" value={form.validUntil} onChange={(e) => onFormChange({ ...form, validUntil: e.target.value })} />
+            </label>
+          </div>
+        </div>
         <div className="col-span-2 space-y-1">
           <span className="text-sm font-medium">{t('cpq.priceRules.form.applicabilityCondition', 'Applicability Condition')}</span>
           <span className="ml-2 text-xs text-muted-foreground">

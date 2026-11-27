@@ -694,52 +694,6 @@ export function ItemForm({
           </span>
         </label>
 
-        {values.type === 'recurring' ? (
-          <label className="flex flex-col gap-1 text-sm">
-            <span className="text-muted-foreground">
-              {t('billing.items.form.charge_timing', 'Charge timing')}
-            </span>
-            <Select
-              value={values.chargeTiming}
-              onValueChange={(next) => set('chargeTiming', next === 'in_arrears' ? 'in_arrears' : 'in_advance')}
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="in_advance">
-                  {t('billing.items.charge_timing.in_advance', 'In advance')}
-                </SelectItem>
-                <SelectItem value="in_arrears">
-                  {t('billing.items.charge_timing.in_arrears', 'In arrears')}
-                </SelectItem>
-              </SelectContent>
-            </Select>
-            <span className="text-xs text-muted-foreground">
-              {values.chargeTiming === 'in_arrears'
-                ? t('billing.items.form.charge_timing.help_arrears', 'Each bill date charges the period that just ended.')
-                : t('billing.items.form.charge_timing.help_advance', 'Each bill date charges the coming period.')}
-            </span>
-          </label>
-        ) : null}
-
-        {values.type === 'recurring' ? (
-          <div className="flex items-center justify-between gap-3 text-sm">
-            <div>
-              <div className="font-medium">
-                {t('billing.items.form.prorate', 'Prorate partial periods')}
-              </div>
-              <div className="text-xs text-muted-foreground">
-                {t(
-                  'billing.items.form.prorate.help',
-                  'Charge by calendar days when the item starts or ends mid-period, and credit unused days if it ends after being billed in advance.',
-                )}
-              </div>
-            </div>
-            <Switch checked={values.prorate} onCheckedChange={(next) => set('prorate', next)} />
-          </div>
-        ) : null}
-
         {values.type === 'usage' ? (
           <>
             <label className="flex flex-col gap-1 text-sm">
@@ -813,8 +767,84 @@ export function ItemForm({
 
       {values.type === 'recurring' ? (
         <>
-          <h3 className="mt-6 mb-2 text-sm font-semibold">{t('billing.items.period.title', 'Billing period')}</h3>
+          <div className="mt-6 mb-2 flex items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-semibold">{t('billing.items.phases.switch', 'Price changes over time (phases)')}</div>
+              <div className="text-xs text-muted-foreground">
+                {t('billing.items.phases.switch_help', 'Free trial, introductory discount or a ramp deal before the regular price.')}
+              </div>
+            </div>
+            <Switch
+              checked={values.phasesEnabled}
+              onCheckedChange={(next) =>
+                setValues((prev) => ({
+                  ...prev,
+                  phasesEnabled: next,
+                  phases: next && prev.phases.length === 0 ? [newPhaseRow()] : prev.phases,
+                }))
+              }
+            />
+          </div>
+          {values.phasesEnabled ? (
+            <PhaseEditor
+              rows={values.phases}
+              onChange={(next) => set('phases', next)}
+              billStartDate={values.billStartDate}
+              currencyCode={currencyCode}
+              errorIndex={phaseErrorIndex}
+            />
+          ) : isEdit && values.phases.length > 0 ? (
+            <p className="text-xs text-muted-foreground">
+              {t('billing.items.phases.switched_off_help', 'The saved schedule is kept but not applied while phases are off.')}
+            </p>
+          ) : null}
+        </>
+      ) : null}
+
+      {values.type === 'recurring' ? (
+        <>
+          <h3 className="mt-6 mb-2 text-sm font-semibold">{t('billing.items.form.billing_settings.title', 'Billing settings')}</h3>
           <div className="grid grid-cols-2 gap-4">
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="text-muted-foreground">
+              {t('billing.items.form.charge_timing', 'Charge timing')}
+            </span>
+            <Select
+              value={values.chargeTiming}
+              onValueChange={(next) => set('chargeTiming', next === 'in_arrears' ? 'in_arrears' : 'in_advance')}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="in_advance">
+                  {t('billing.items.charge_timing.in_advance', 'In advance')}
+                </SelectItem>
+                <SelectItem value="in_arrears">
+                  {t('billing.items.charge_timing.in_arrears', 'In arrears')}
+                </SelectItem>
+              </SelectContent>
+            </Select>
+            <span className="text-xs text-muted-foreground">
+              {values.chargeTiming === 'in_arrears'
+                ? t('billing.items.form.charge_timing.help_arrears', 'Each bill date charges the period that just ended.')
+                : t('billing.items.form.charge_timing.help_advance', 'Each bill date charges the coming period.')}
+            </span>
+          </label>
+          <div className="flex items-center justify-between gap-3 text-sm">
+            <div>
+              <div className="font-medium">
+                {t('billing.items.form.prorate', 'Prorate partial periods')}
+              </div>
+              <div className="text-xs text-muted-foreground">
+                {t(
+                  'billing.items.form.prorate.help',
+                  'Charge by calendar days when the item starts or ends mid-period, and credit unused days if it ends after being billed in advance.',
+                )}
+              </div>
+            </div>
+            <Switch checked={values.prorate} onCheckedChange={(next) => set('prorate', next)} />
+          </div>
             <label className="flex flex-col gap-1 text-sm">
               <span className="text-muted-foreground">{t('billing.items.period.label', 'Bill this line')}</span>
               <Select value={values.periodMode} onValueChange={(next) => set('periodMode', next === 'own' ? 'own' : 'account')}>
@@ -862,38 +892,6 @@ export function ItemForm({
               </div>
             ) : null}
           </div>
-
-          <div className="mt-6 mb-2 flex items-center justify-between gap-3">
-            <div>
-              <div className="text-sm font-semibold">{t('billing.items.phases.switch', 'Price changes over time (phases)')}</div>
-              <div className="text-xs text-muted-foreground">
-                {t('billing.items.phases.switch_help', 'Free trial, introductory discount or a ramp deal before the regular price.')}
-              </div>
-            </div>
-            <Switch
-              checked={values.phasesEnabled}
-              onCheckedChange={(next) =>
-                setValues((prev) => ({
-                  ...prev,
-                  phasesEnabled: next,
-                  phases: next && prev.phases.length === 0 ? [newPhaseRow()] : prev.phases,
-                }))
-              }
-            />
-          </div>
-          {values.phasesEnabled ? (
-            <PhaseEditor
-              rows={values.phases}
-              onChange={(next) => set('phases', next)}
-              billStartDate={values.billStartDate}
-              currencyCode={currencyCode}
-              errorIndex={phaseErrorIndex}
-            />
-          ) : isEdit && values.phases.length > 0 ? (
-            <p className="text-xs text-muted-foreground">
-              {t('billing.items.phases.switched_off_help', 'The saved schedule is kept but not applied while phases are off.')}
-            </p>
-          ) : null}
         </>
       ) : null}
 

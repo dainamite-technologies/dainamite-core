@@ -14,6 +14,19 @@ The account's bill cycle and cycle day decide **when invoices go out**. Everythi
 due on a bill date lands on one invoice with one due date. What each line charges,
 and how often, is set on the line.
 
+## The item form: Rate and Billing settings
+
+Create and edit use the same form. Below the dates and description it has two sections:
+
+| Section | Recurring item | One-time item | Usage item |
+|---|---|---|---|
+| **Rate** (with the **Net / Gross** switch) | Unit price per cycle, VAT rate, **Price changes over time (phases)** and its editor (with "Regular price from …") | Amount, VAT rate | Rate model, rates, UoM code, VAT rate |
+| **Billing settings** | Charge timing, Prorate partial periods, Billing period | — | — |
+
+The phases sit with the price, so you see the regular price next to the schedule that
+changes it. On the item page the read-only **Price phases** card stays under the form.
+This is a layout change only: the fields, validation and what is saved are unchanged.
+
 ## Own billing period per line
 
 A recurring item has **Billing period: Same as account** (default) or **Every N

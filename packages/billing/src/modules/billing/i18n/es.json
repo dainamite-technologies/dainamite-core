@@ -429,6 +429,7 @@
   "billing.items.form.rate.tiered_json": "JSON de tarifas por tramos",
   "billing.items.form.rate.tiered_json.help": "Modelos: volume / graduated / flat. Exactamente un tramo debe tener `up_to: null` (el tramo superior sin límite). Los validadores del servidor rechazan estructuras incorrectas.",
   "billing.items.form.rate.title": "Tarifa",
+  "billing.items.form.billing_settings.title": "Ajustes de facturación",
   "billing.items.form.rate.unit_price_recurring": "Precio unitario por ciclo",
   "billing.items.form.rate.unit_price_usage": "Precio unitario por unidad consumida",
   "billing.items.form.rate.usage_mode": "Modelo de tarifa",

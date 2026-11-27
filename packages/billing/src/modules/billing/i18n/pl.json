@@ -429,6 +429,7 @@
   "billing.items.form.rate.tiered_json": "JSON stawki progowej",
   "billing.items.form.rate.tiered_json.help": "Modele: volume / graduated / flat. Dokładnie jeden próg musi mieć `up_to: null` (otwarty próg najwyższy). Walidatory po stronie serwera odrzucają nieprawidłowe struktury.",
   "billing.items.form.rate.title": "Stawka",
+  "billing.items.form.billing_settings.title": "Ustawienia rozliczeń",
   "billing.items.form.rate.unit_price_recurring": "Cena jednostkowa za cykl",
   "billing.items.form.rate.unit_price_usage": "Cena jednostkowa za jednostkę zużycia",
   "billing.items.form.rate.usage_mode": "Model stawki",

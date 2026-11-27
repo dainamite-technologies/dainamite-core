@@ -25,6 +25,14 @@ import {
 import { DetailCard, DetailField } from '../../../../components/DetailFields'
 import { resolveItemReturnTarget } from '../../../../lib/navigation'
 import { ChangeItemPriceDialog } from '../../../../components/ChangeItemPriceDialog'
+import { ItemPhaseScheduleCard, ItemStatusPeriodsCard } from '../../../../components/ItemScheduleSections'
+import { ItemPhaseTag, ItemStatusTag, ownPeriodText } from '../../../../components/ItemLineLabels'
+import { serverErrorCode } from '../../../../components/ItemStatusDialog'
+import { isStatusReadOnly, type PhaseRow, type StatusPeriodRow } from '../../../../lib/itemStatusLabel'
+import { phaseRowsFromApi } from '../../../../lib/phaseEditorRows'
+import { PHASE_EDIT_BILLED } from '../../../../lib/pricePhases'
+import { localTodayIso } from '../../../../lib/dateOnly'
+import type { BillCycle } from '../../../../lib/billCycle'
 
 /**
  * `/backend/billing/items/[id]` — Billing Item detail.
@@ -63,6 +71,14 @@ type BillingItemRow = {
   tax_rate: string | number | null
   price_basis?: 'net' | 'gross'
   is_active: boolean
+  /** L §4.2: own billing period; null = follow the account cycle. */
+  billing_period_unit?: BillCycle | null
+  billing_period_interval?: number | null
+  /** P §4.1: price phases (computed dates) and the switch. */
+  phases_enabled?: boolean
+  phases?: PhaseRow[]
+  /** L §4.3: dated line status periods. */
+  statusPeriods?: StatusPeriodRow[]
   created_at: string
   updated_at: string
 }
@@ -104,6 +120,11 @@ function toFormValues(row: BillingItemRow): Partial<ItemFormValues> {
     prorate: row.prorate ?? true,
     taxRate: row.tax_rate != null ? String(Number(row.tax_rate)) : '',
     priceBasis: row.price_basis === 'gross' ? 'gross' : 'net',
+    periodMode: row.billing_period_unit ? 'own' : 'account',
+    periodUnit: row.billing_period_unit ?? 'monthly',
+    periodInterval: String(row.billing_period_interval ?? 1),
+    phasesEnabled: Boolean(row.phases_enabled),
+    phases: phaseRowsFromApi(row.phases),
   }
   if (row.type === 'one_time' && typeof rate.amount === 'number') {
     out.oneTimeAmount = String(rate.amount)
@@ -191,6 +212,9 @@ function ItemView({ row }: { row: BillingItemRow }) {
           <DetailField label={t('billing.items.form.prorate', 'Prorate partial periods')}>
             {row.prorate === false ? t('billing.common.no', 'No') : t('billing.common.yes', 'Yes')}
           </DetailField>
+          <DetailField label={t('billing.items.period.title', 'Billing period')}>
+            {ownPeriodText(t, row.billing_period_unit, row.billing_period_interval)}
+          </DetailField>
         </>
       ) : null}
       <DetailField label={t('billing.items.detail.field.billed_to', 'Billed through')}>
@@ -238,6 +262,10 @@ export default function BillingItemDetailPage(props: { params?: { id?: string } 
   const [deleting, setDeleting] = React.useState(false)
 
   const { confirm, ConfirmDialogElement } = useConfirmDialog()
+  const today = React.useMemo(() => localTodayIso(), [])
+  // Memoised: the phase editor rows carry generated keys, a new object per
+  // render would reset the form.
+  const formInitial = React.useMemo(() => (row ? toFormValues(row) : undefined), [row])
 
   const load = React.useCallback(async () => {
     if (!itemId) return
@@ -289,6 +317,12 @@ export default function BillingItemDetailPage(props: { params?: { id?: string } 
         if (assembled.taxRate !== undefined) payload.taxRate = assembled.taxRate
         if (assembled.priceBasis !== undefined) payload.priceBasis = assembled.priceBasis
         if (assembled.creditReason) payload.creditReason = assembled.creditReason
+        if (assembled.billingPeriodUnit !== undefined) {
+          payload.billingPeriodUnit = assembled.billingPeriodUnit
+          payload.billingPeriodInterval = assembled.billingPeriodInterval ?? null
+        }
+        if (assembled.phasesEnabled !== undefined) payload.phasesEnabled = assembled.phasesEnabled
+        if (assembled.phases !== undefined) payload.phases = assembled.phases
 
         await apiCallOrThrow('/api/billing/items', {
           method: 'PUT',
@@ -299,6 +333,16 @@ export default function BillingItemDetailPage(props: { params?: { id?: string } 
         setEditing(false)
         void load()
       } catch (err) {
+        if (serverErrorCode(err) === PHASE_EDIT_BILLED) {
+          flash(
+            t(
+              'billing.items.phases.error.edit_billed',
+              'This change re-prices days that are already invoiced. Phases can change only unbilled periods — correct invoiced periods with a credit memo.',
+            ),
+            'error',
+          )
+          return
+        }
         const { message } = normalizeCrudServerError(err)
         flash(message || t('billing.items.detail.save.error', 'Save failed'), 'error')
       } finally {
@@ -365,11 +409,15 @@ export default function BillingItemDetailPage(props: { params?: { id?: string } 
         entityTypeLabel={t('billing.items.detail.title', 'Billing Item')}
         title={row.description}
         statusBadge={
-          row.is_active ? (
-            <Tag variant="success">{t('billing.common.active', 'Active')}</Tag>
-          ) : (
-            <Tag variant="default">{t('billing.common.inactive', 'Inactive')}</Tag>
-          )
+          <span className="inline-flex flex-wrap items-center gap-2">
+            {row.is_active ? (
+              <Tag variant="success">{t('billing.common.active', 'Active')}</Tag>
+            ) : (
+              <Tag variant="default">{t('billing.common.inactive', 'Inactive')}</Tag>
+            )}
+            <ItemStatusTag periods={row.statusPeriods} today={today} />
+            <ItemPhaseTag phases={row.phases} phasesEnabled={row.phases_enabled} today={today} />
+          </span>
         }
         actionsContent={
           <>
@@ -402,7 +450,7 @@ export default function BillingItemDetailPage(props: { params?: { id?: string } 
         {editing ? (
           <ItemForm
             mode="edit"
-            initial={toFormValues(row)}
+            initial={formInitial}
             accountCurrency={row.bill_account_currency ?? undefined}
             accountBillingMode={row.bill_account_mode ?? undefined}
             billedToDate={row.billed_to_date}
@@ -413,6 +461,25 @@ export default function BillingItemDetailPage(props: { params?: { id?: string } 
         ) : (
           <ItemView row={row} />
         )}
+        {!editing && row.type === 'recurring' ? (
+          <div className="mt-4 flex flex-col gap-4">
+            {row.phases && row.phases.length > 0 ? (
+              <ItemPhaseScheduleCard
+                phases={row.phases}
+                phasesEnabled={Boolean(row.phases_enabled)}
+                regularPrice={typeof row.rate_json?.unit_price === 'number' ? row.rate_json.unit_price : null}
+                currencyCode={row.bill_account_currency}
+              />
+            ) : null}
+            <ItemStatusPeriodsCard
+              itemId={row.id}
+              periods={row.statusPeriods ?? []}
+              readOnly={isStatusReadOnly(row)}
+              canSetStatus={row.is_active}
+              onChanged={() => void load()}
+            />
+          </div>
+        ) : null}
         {row.type === 'recurring' ? (
           <ChangeItemPriceDialog
             open={changePriceOpen}

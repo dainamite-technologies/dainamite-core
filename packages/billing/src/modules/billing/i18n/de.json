@@ -429,6 +429,7 @@
   "billing.items.form.rate.tiered_json": "Staffelpreis-JSON",
   "billing.items.form.rate.tiered_json.help": "Modelle: volume / graduated / flat. Genau eine Staffel muss `up_to: null` haben (die unbegrenzte oberste Staffel). Serverseitige Validatoren lehnen fehlerhafte Strukturen ab.",
   "billing.items.form.rate.title": "Tarif",
+  "billing.items.form.billing_settings.title": "Abrechnungseinstellungen",
   "billing.items.form.rate.unit_price_recurring": "Stückpreis pro Zyklus",
   "billing.items.form.rate.unit_price_usage": "Preis pro verbrauchter Einheit",
   "billing.items.form.rate.usage_mode": "Tarifmodell",

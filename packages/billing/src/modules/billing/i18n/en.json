@@ -429,6 +429,7 @@
   "billing.items.form.rate.tiered_json": "Tiered rate JSON",
   "billing.items.form.rate.tiered_json.help": "Models: volume / graduated / flat. Exactly one tier must have `up_to: null` (the open-ended top tier). Server-side validators reject malformed shapes.",
   "billing.items.form.rate.title": "Rate",
+  "billing.items.form.billing_settings.title": "Billing settings",
   "billing.items.form.rate.unit_price_recurring": "Unit price per cycle",
   "billing.items.form.rate.unit_price_usage": "Unit price per unit consumed",
   "billing.items.form.rate.usage_mode": "Rate model",

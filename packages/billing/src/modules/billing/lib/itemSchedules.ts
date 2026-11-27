@@ -165,3 +165,69 @@ export function serializeStatusPeriod(row: BillingItemStatusPeriod): Record<stri
     updatedAt: row.updatedAt instanceof Date ? row.updatedAt.toISOString() : row.updatedAt,
   }
 }
+
+/**
+ * Per-account schedule state for the engines (postpaid Bill Run and prepaid
+ * close): phases and status periods loaded once, the status `applied*`
+ * ranges advanced in memory every simulated cycle (like the watermarks), and
+ * written to the managed rows in real mode only.
+ */
+export type RecurringSchedules = {
+  toState(
+    item: BillingItem,
+    billedToDate: Date | null,
+    unitPrice: number,
+  ): import('./servicePeriods').RecurringItemState
+  /** Advance the in-memory applied ranges (every mode). */
+  remember(updates: readonly import('./servicePeriods').StatusAppliedUpdate[]): void
+  /** Write the applied ranges to the managed rows (real mode; flushed by the caller). */
+  persist(updates: readonly import('./servicePeriods').StatusAppliedUpdate[], now: Date): void
+}
+
+export async function loadRecurringSchedules(
+  em: EntityManager,
+  scope: Scope,
+  items: readonly BillingItem[],
+): Promise<RecurringSchedules> {
+  const ids = items.map((item) => item.id)
+  const phases = await loadPhasesByItem(em, scope, ids)
+  const statuses = await loadStatusPeriodsByItem(em, scope, ids, { includeDeletedApplied: true })
+  const rowsById = new Map<string, BillingItemStatusPeriod>()
+  for (const list of statuses.values()) for (const row of list) rowsById.set(row.id, row)
+  const applied = new Map<string, { appliedFrom: Date | string | null; appliedTo: Date | string | null }>()
+  for (const row of rowsById.values()) applied.set(row.id, { appliedFrom: row.appliedFrom ?? null, appliedTo: row.appliedTo ?? null })
+
+  return {
+    toState(item, billedToDate, unitPrice) {
+      return {
+        id: item.id,
+        chargeTiming: item.chargeTiming ?? 'in_advance',
+        prorate: item.prorate ?? true,
+        billStartDate: item.billStartDate,
+        billEndDate: item.billEndDate ?? null,
+        billedToDate,
+        unitPrice,
+        isActive: item.isActive,
+        deletedAt: item.deletedAt ?? null,
+        billingPeriod: itemBillingPeriod(item),
+        phases: itemResolvedPhases(item, phases.get(item.id)),
+        statusPeriods: (statuses.get(item.id) ?? []).map((row) => ({
+          ...statusRowToState(row),
+          ...(applied.get(row.id) ?? {}),
+        })),
+      }
+    },
+    remember(updates) {
+      for (const update of updates) applied.set(update.id, { appliedFrom: update.appliedFrom, appliedTo: update.appliedTo })
+    },
+    persist(updates, now) {
+      for (const update of updates) {
+        const row = rowsById.get(update.id)
+        if (!row) continue
+        row.appliedFrom = update.appliedFrom ? toIsoDate(update.appliedFrom) : null
+        row.appliedTo = update.appliedTo ? toIsoDate(update.appliedTo) : null
+        row.updatedAt = now
+      }
+    },
+  }
+}

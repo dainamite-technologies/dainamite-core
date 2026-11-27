@@ -27,7 +27,8 @@ import {
   type InvoiceLineDescriptor,
   type WriteMode,
 } from './invoiceWriter'
-import { computeRecurringLines, type RecurringSkip } from './servicePeriods'
+import { computeRecurringLines, type RecurringSkip, type StatusAppliedUpdate } from './servicePeriods'
+import { loadRecurringSchedules } from './itemSchedules'
 import { withTenantLock } from './tenantLock'
 import { processUsageForAccount } from './usageRunner'
 import { accountCycleSpec } from './accountCycle'
@@ -351,6 +352,8 @@ async function processPostpaidAccount(
   const recurringItems = items.filter((it) => it.type === 'recurring')
   const oneTimeItems = items.filter((it) => it.type === 'one_time')
   const usageItems = items.filter((it) => it.type === 'usage')
+  // Own period, phases and status periods of the recurring items (2026-11-26 specs).
+  const schedules = await loadRecurringSchedules(em, account, recurringItems)
 
   // In-memory cycle state — persisted per cycle only in real mode.
   const watermarks = new Map<string, Date | null>(
@@ -393,24 +396,16 @@ async function processPostpaidAccount(
     // ── Recurring: service periods against the in-memory watermarks ──
     const lines: InvoiceLineDescriptor[] = []
     const watermarkUpdates = new Map<string, Date | null>()
+    const statusUpdates: StatusAppliedUpdate[] = []
     const chargedItems: BillingItem[] = []
     for (const item of recurringItems) {
       const unitPrice = (item.rateJson as { unit_price?: number } | null)?.unit_price
       if (typeof unitPrice !== 'number') continue
       const computed = computeRecurringLines(
-        {
-          id: item.id,
-          chargeTiming: item.chargeTiming ?? 'in_advance',
-          prorate: item.prorate ?? true,
-          billStartDate: item.billStartDate,
-          billEndDate: item.billEndDate ?? null,
-          billedToDate: watermarks.get(item.id) ?? null,
-          unitPrice,
-          isActive: item.isActive,
-          deletedAt: item.deletedAt ?? null,
-        },
+        schedules.toState(item, watermarks.get(item.id) ?? null, unitPrice),
         { billDate, cycle },
       )
+      if (computed.statusApplied.length > 0) statusUpdates.push(...computed.statusApplied)
       pushSkips(computed.skipped)
       if (computed.newBilledToDate?.getTime() !== watermarks.get(item.id)?.getTime()) {
         watermarkUpdates.set(item.id, computed.newBilledToDate)
@@ -505,6 +500,7 @@ async function processPostpaidAccount(
         billDate = nextBillDate
         lastBilled = arrearsPeriod.periodEnd
         for (const [itemId, date] of watermarkUpdates) watermarks.set(itemId, date)
+        schedules.remember(statusUpdates)
         for (const it of oneTimesThisCycle) billedOneTimes.add(it.id)
         usageCountedThrough = arrearsPeriod.periodEnd
         continue
@@ -523,6 +519,7 @@ async function processPostpaidAccount(
 
     // ── Advance state: in memory always, persisted in real mode ──
     for (const [itemId, date] of watermarkUpdates) watermarks.set(itemId, date)
+    schedules.remember(statusUpdates)
     for (const it of oneTimesThisCycle) billedOneTimes.add(it.id)
     usageCountedThrough = arrearsPeriod.periodEnd
 
@@ -533,6 +530,7 @@ async function processPostpaidAccount(
         item.billedToDate = watermarkUpdates.get(item.id) ?? null
         item.updatedAt = now
       }
+      schedules.persist(statusUpdates, now)
       for (const item of oneTimesThisCycle) {
         item.billedToDate = oneTimeWindow.periodEnd
         item.updatedAt = now

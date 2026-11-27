@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { runCommandRoute } from '../../../lib/commandRoute'
+import { creditReasonInputFields } from '../../../lib/creditReason'
 
 /**
  * `POST /api/billing/items/change-price` — change a recurring item's price
@@ -16,6 +17,8 @@ const bodySchema = z.object({
   id: z.string().uuid(),
   effectiveDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   unitPrice: z.coerce.number().finite().nonnegative(),
+  // Part 2: forwarded to the command (required when the change credits billed days).
+  ...creditReasonInputFields,
 })
 
 const responseSchema = z.object({ previousItemId: z.string().uuid(), newItemId: z.string().uuid() })
@@ -39,7 +42,10 @@ export const openApi = {
         'Ends the item the day before `effectiveDate` and creates a copy with the new `unitPrice` (on the item price basis) ' +
         'starting on `effectiveDate`. Already-billed days after the change are credited / re-charged by the Bill Run per the ' +
         "item's proration setting, so nothing is billed twice. When the change credits billed days (prorate on, item billed " +
-        'past the effective date) a customer-facing reason is required: `creditReason` or `creditReasonCode` + `creditReasonParams`.',
+        'past the effective date) a customer-facing reason is required: `creditReason` or `creditReasonCode` + `creditReasonParams`. ' +
+        'Phased items (`phasesEnabled`): the copy keeps the remaining price phases on their ORIGINAL dates (the promotion does not ' +
+        'restart) — they are stored as "until" phases. A running or future status period (pause, suspension) continues on the copy. ' +
+        'The own billing period is copied; the copy counts its periods from `effectiveDate`.',
       requestBody: { schema: bodySchema },
       responses: [{ status: 200, description: 'Both item ids', schema: responseSchema }],
       errors: [

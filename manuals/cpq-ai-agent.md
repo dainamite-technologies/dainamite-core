@@ -71,6 +71,7 @@ The runner refuses to call a route that does not export `openApi`. Every route l
 | `cpq.add_quote_line` | `POST /api/cpq/quotes/:quoteId/items` | `cpq.quotes.manage` + `cpq.quotes.view` | Adds a configured offering as a new line. The server prices it and recalculates the quote. |
 | `cpq.update_quote_line` | `PUT /api/cpq/quotes/:quoteId/items/:lineId` | `cpq.quotes.manage` + `cpq.quotes.view` | Changes configuration (merged over the current values), quantity or term of a line.  |
 | `cpq.submit_quote_for_approval` | `POST /api/cpq/quotes/:quoteId/status` | `cpq.quotes.manage` + `cpq.quotes.view` | Moves a quote from new, incomplete or ready to `in_approval`. Project approval rules still apply. |
+| `cpq.change_subscription_status` | `POST /api/cpq/inventory/subscriptions/actions` | `cpq.inventory.manage` + `cpq.inventory.view` | Pauses, suspends, puts in grace, resumes or terminates a whole subscription or one item, with dates, charge behaviour and reason (spec 2026-11-26 line status, D6). Billing follows through `cpq.subscription_item.status_changed` / `cpq.subscription.terminated`. |
 
 ### Catalog write tools (catalog assistant only)
 

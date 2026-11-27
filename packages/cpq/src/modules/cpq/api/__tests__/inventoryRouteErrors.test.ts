@@ -18,6 +18,7 @@ import { GET as getAssets } from '../inventory/assets/route'
 import { DELETE as deleteSubscriptionItem } from '../inventory/subscription-items/route'
 import { POST as transitionSubscription } from '../inventory/subscriptions/status/route'
 import { POST as transitionAsset } from '../inventory/assets/status/route'
+import { POST as transitionSubscriptionAction } from '../inventory/subscriptions/actions/route'
 
 const ID = '11111111-1111-4111-8111-111111111111'
 const get = (path: string) => new Request(`http://localhost/api/cpq/inventory/${path}`)
@@ -47,13 +48,15 @@ it.each([
 })
 
 it.each([
-  ['subscription', 'transitionSubscriptionStatus', transitionSubscription, 'subscriptions/status'],
+  ['subscription', 'changeSubscriptionStatus', transitionSubscription, 'subscriptions/status'],
+  ['subscription action', 'applyStatusAction', transitionSubscriptionAction, 'subscriptions/actions'],
   ['asset', 'transitionAssetStatus', transitionAsset, 'assets/status'],
 ])('%s status transition keeps 409 and now returns 404', async (_label, method, handler, path) => {
   service[method] = jest.fn().mockRejectedValue({ status: 409, error: 'Invalid transition' })
-  expect((await handler(json(path, 'POST', { id: ID, targetStatus: 'active' }))).status).toBe(409)
+  const body = path === 'subscriptions/actions' ? { subscriptionId: ID, action: 'resume' } : { id: ID, targetStatus: 'active' }
+  expect((await handler(json(path, 'POST', body))).status).toBe(409)
   service[method] = jest.fn().mockRejectedValue({ status: 404, error: 'Not found' })
-  expect((await handler(json(path, 'POST', { id: ID, targetStatus: 'active' }))).status).toBe(404)
+  expect((await handler(json(path, 'POST', body))).status).toBe(404)
 })
 
 it('still returns a generic 500 for unexpected errors', async () => {

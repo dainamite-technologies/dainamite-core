@@ -505,7 +505,7 @@ export class CpqPricingTableEntry {
   properties: ['organizationId', 'tenantId', 'offeringId', 'code'],
 })
 export class CpqProductCharge {
-  [OptionalProps]?: 'isActive' | 'sortOrder' | 'createdAt' | 'updatedAt' | 'deletedAt'
+  [OptionalProps]?: 'isActive' | 'sortOrder' | 'billingPeriodUnit' | 'billingPeriodInterval' | 'createdAt' | 'updatedAt' | 'deletedAt'
 
   @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
   id!: string
@@ -565,6 +565,16 @@ export class CpqProductCharge {
   @Property({ name: 'applicability_condition', type: 'jsonb', nullable: true })
   applicabilityCondition?: Record<string, unknown> | null
 
+  // Billing period (spec 2026-11-26 line period, D5): the fixed or table price
+  // of a recurring (MRC) charge is the price per `interval × unit`, e.g. every
+  // 1 year. Default every 1 month = today's behaviour. MRC totals use the
+  // monthly equivalent (`lib/chargeBillingPeriod.ts`).
+  @Property({ name: 'billing_period_unit', type: 'text', default: 'month' })
+  billingPeriodUnit: string = 'month'
+
+  @Property({ name: 'billing_period_interval', type: 'integer', default: 1 })
+  billingPeriodInterval: number = 1
+
   @Property({ name: 'sort_order', type: 'integer', default: 0 })
   sortOrder: number = 0
 
@@ -588,7 +598,7 @@ export class CpqProductCharge {
 @Unique({ name: 'cpq_price_rules_code_unique', properties: ['organizationId', 'tenantId', 'code'] })
 @Index({ name: 'cpq_price_rules_product_idx', properties: ['organizationId', 'tenantId', 'productOfferingId'] })
 export class CpqPriceRule {
-  [OptionalProps]?: 'sortOrder' | 'isActive' | 'createdAt' | 'updatedAt' | 'deletedAt'
+  [OptionalProps]?: 'sortOrder' | 'fromMonth' | 'toMonth' | 'validFrom' | 'validUntil' | 'isActive' | 'createdAt' | 'updatedAt' | 'deletedAt'
 
   @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
   id!: string
@@ -628,6 +638,23 @@ export class CpqPriceRule {
 
   @Property({ name: 'sort_order', type: 'integer', default: 0 })
   sortOrder: number = 0
+
+  /**
+   * Spec 2026-11-26 price phases (D9): months of the subscription the rule
+   * prices, 1-based and inclusive. 1 → null (the default) = every month.
+   */
+  @Property({ name: 'from_month', type: 'integer', default: 1 })
+  fromMonth: number = 1
+
+  @Property({ name: 'to_month', type: 'integer', nullable: true })
+  toMonth: number | null = null
+
+  /** D10 campaign dates (`YYYY-MM-DD`, inclusive): the quotes priced inside them get the rule. */
+  @Property({ name: 'valid_from', type: 'date', nullable: true })
+  validFrom: string | null = null
+
+  @Property({ name: 'valid_until', type: 'date', nullable: true })
+  validUntil: string | null = null
 
   @Property({ name: 'is_active', type: 'boolean', default: true })
   isActive: boolean = true
@@ -945,6 +972,22 @@ export class CpqInventorySubscription {
   @Property({ type: 'text', default: 'pending' })
   status: string = 'pending'
 
+  // Spec 2026-11-26 line status (D6): the current stop period — paused /
+  // suspended / grace from a date (to a date; null = open), its billing
+  // charge behaviour and reason. A resume sets status `active` with
+  // `statusFromDate` = the first day running again and clears the rest.
+  @Property({ name: 'status_from_date', type: 'date', nullable: true })
+  statusFromDate?: string | null
+
+  @Property({ name: 'status_to_date', type: 'date', nullable: true })
+  statusToDate?: string | null
+
+  @Property({ name: 'status_charge_behavior', type: 'text', nullable: true })
+  statusChargeBehavior?: string | null
+
+  @Property({ name: 'status_reason', type: 'text', nullable: true })
+  statusReason?: string | null
+
   @Property({ name: 'billing_cycle', type: 'text', default: 'monthly' })
   billingCycle: string = 'monthly'
 
@@ -1059,6 +1102,22 @@ export class CpqInventorySubscriptionItem {
 
   @Property({ type: 'text', default: 'pending' })
   status: string = 'pending'
+
+  // Spec 2026-11-26 line status (D6): the current stop period — paused /
+  // suspended / grace from a date (to a date; null = open), its billing
+  // charge behaviour and reason. A resume sets status `active` with
+  // `statusFromDate` = the first day running again and clears the rest.
+  @Property({ name: 'status_from_date', type: 'date', nullable: true })
+  statusFromDate?: string | null
+
+  @Property({ name: 'status_to_date', type: 'date', nullable: true })
+  statusToDate?: string | null
+
+  @Property({ name: 'status_charge_behavior', type: 'text', nullable: true })
+  statusChargeBehavior?: string | null
+
+  @Property({ name: 'status_reason', type: 'text', nullable: true })
+  statusReason?: string | null
 
   @Property({ type: 'jsonb', default: '{}' })
   configuration: Record<string, unknown> = {}
@@ -1508,7 +1567,7 @@ export class CpqSubscriptionChangeLog {
 @Index({ name: 'cpq_qpa_quote_line_idx', properties: ['organizationId', 'tenantId', 'quoteLineId'] })
 @Index({ name: 'cpq_qpa_quote_idx', properties: ['organizationId', 'tenantId', 'quoteId'] })
 export class CpqQuotePriceAdjustment {
-  [OptionalProps]?: 'windowKind' | 'fromMonth' | 'toMonth' | 'isActive' | 'createdAt' | 'updatedAt' | 'deletedAt'
+  [OptionalProps]?: 'windowKind' | 'fromMonth' | 'toMonth' | 'phaseName' | 'isActive' | 'createdAt' | 'updatedAt' | 'deletedAt'
 
   @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
   id!: string
@@ -1560,6 +1619,10 @@ export class CpqQuotePriceAdjustment {
 
   @Property({ name: 'reason_note', type: 'text', nullable: true })
   reasonNote: string | null = null
+
+  /** Price phases spec: optional phase name, sent with the billing phase ("Free trial"). */
+  @Property({ name: 'phase_name', type: 'text', nullable: true })
+  phaseName: string | null = null
 
   @Property({ name: 'created_by_user_id', type: 'uuid' })
   createdByUserId!: string

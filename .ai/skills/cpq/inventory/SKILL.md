@@ -29,7 +29,8 @@ CpqInventorySubscription          commercial wrapper (contract terms, billing cy
 | API | `api/inventory/subscriptions/`, `api/inventory/subscription-items/`, `api/inventory/assets/`, `api/inventory/customer/[customerId]/`, `api/inventory/customer/[customerId]/parent-items/` |
 | Backend pages | `backend/cpq/inventory/`, `backend/cpq/inventory/subscriptions/[id]/`, `backend/cpq/inventory/assets/[id]/` |
 | Customer-page widget | `widgets/injection/customer-inventory/` (drops a tab onto the customer detail page) |
-| Status enums | `services/types.ts` — `INVENTORY_SUBSCRIPTION_STATUSES`, `INVENTORY_ASSET_STATUSES` |
+| Status enums | `services/types.ts` — `INVENTORY_SUBSCRIPTION_STATUSES`, `INVENTORY_SUBSCRIPTION_TRANSITIONS` (shared by items), `INVENTORY_ASSET_STATUSES` |
+| Status actions (D6) | `lib/subscriptionStatusActions.ts`, `cpqInventoryService.applyStatusAction`, `api/inventory/subscriptions/actions/route.ts`, AI tool `cpq.change_subscription_status` |
 
 ## Mandatory reading
 
@@ -48,6 +49,20 @@ CpqInventorySubscription          commercial wrapper (contract terms, billing cy
 - **Items can survive their parent.** Status transitions on a subscription
   (suspended, terminated) propagate to items by default but item statuses
   can override (e.g. an item is replaced mid-contract).
+- **Status actions (spec 2026-11-26 line status, D6).** Statuses are
+  `pending / active / paused / suspended / grace / terminated / expired /
+  superseded`. Pause, suspend, grace, resume and terminate run on the whole
+  subscription or one item through `applyStatusAction` — never by writing
+  `status` directly — with `fromDate` / `toDate`, `chargeBehavior` (default
+  paused → no_charge, suspended / grace → charge) and a reason. Each action
+  emits `cpq.subscription_item.status_changed` (terminate:
+  `cpq.subscription.terminated`) **after** the flush; the billing connector
+  applies it. `transitionSubscriptionStatus` stays the event-free internal
+  cascade (used by ARC cancel, which emits its own event).
+- **Charge billing period (D5).** Item `charges[].billingPeriod` (absent =
+  every 1 month) is the period of an MRC price; `mrcAmount` is the monthly
+  equivalent. Payloads split recurring charges per period
+  (`lib/chargeBillingPeriod.ts`).
 - **Assets are independent.** An asset can be re-pointed to a different
   subscription item over time (hardware swap, license re-allocation).
 - **Cross-customer joins are by `customer_id` string.** No ORM relation
@@ -69,8 +84,13 @@ CpqInventorySubscription          commercial wrapper (contract terms, billing cy
 
 1. Add the constant to `INVENTORY_SUBSCRIPTION_STATUSES` in
    `services/types.ts`.
-2. Update the state-machine in `cpqInventoryService` (allowed transitions).
-3. Update the status badge styling in `backend/cpq/inventory/`.
+2. Update `INVENTORY_SUBSCRIPTION_TRANSITIONS` (and, for an operator action,
+   `lib/subscriptionStatusActions.ts`) plus `services/__tests__/types.test.ts`.
+3. Update the status badge (`components/statusMaps.ts`), the label
+   (`backend/cpq/inventory/shared.tsx`) and the detail page's
+   `ALLOWED_TRANSITIONS`.
+4. If billing must react, emit an event declared in `events.ts` after commit
+   and tell the connector.
 
 ### Show inventory on a non-customer page
 

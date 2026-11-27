@@ -25,7 +25,8 @@ import {
   type InvoiceLineDescriptor,
 } from './invoiceWriter'
 import { shouldIncludeItem, type SelectableItem } from './itemSelector'
-import { computeRecurringLines, type RecurringSkip } from './servicePeriods'
+import { computeRecurringLines, type RecurringSkip, type StatusAppliedUpdate } from './servicePeriods'
+import { loadRecurringSchedules } from './itemSchedules'
 import { absMoney, addMoney, fromUnits, subMoney, toUnits } from './money'
 import {
   getLowBalanceThresholdDefault,
@@ -213,6 +214,8 @@ export async function processPrepaidAccount(
   const recurringItems = items.filter((it) => it.type === 'recurring')
   const oneTimeItems = items.filter((it) => it.type === 'one_time')
   const billingStart = earliestBillStart(items)
+  // Own period, phases and status periods of the recurring items (same engine as postpaid).
+  const schedules = await loadRecurringSchedules(em, account, recurringItems)
 
   // In-memory cycle state — persisted per cycle only in real mode.
   const watermarks = new Map<string, Date | null>(
@@ -255,23 +258,15 @@ export async function processPrepaidAccount(
     // ── Recurring: service periods against the in-memory watermarks ──
     const charges: ChargeLine[] = []
     const watermarkUpdates = new Map<string, Date | null>()
+    const statusUpdates: StatusAppliedUpdate[] = []
     for (const item of recurringItems) {
       const unitPrice = (item.rateJson as { unit_price?: number } | null)?.unit_price
       if (typeof unitPrice !== 'number') continue
       const computed = computeRecurringLines(
-        {
-          id: item.id,
-          chargeTiming: item.chargeTiming ?? 'in_advance',
-          prorate: item.prorate ?? true,
-          billStartDate: item.billStartDate,
-          billEndDate: item.billEndDate ?? null,
-          billedToDate: watermarks.get(item.id) ?? null,
-          unitPrice,
-          isActive: item.isActive,
-          deletedAt: item.deletedAt ?? null,
-        },
+        schedules.toState(item, watermarks.get(item.id) ?? null, unitPrice),
         { billDate, cycle },
       )
+      if (computed.statusApplied.length > 0) statusUpdates.push(...computed.statusApplied)
       pushSkips(computed.skipped)
       if (computed.newBilledToDate?.getTime() !== watermarks.get(item.id)?.getTime()) {
         watermarkUpdates.set(item.id, computed.newBilledToDate)
@@ -303,6 +298,7 @@ export async function processPrepaidAccount(
 
     // Advance the in-memory state (every mode); persist in real mode only.
     for (const [itemId, watermark] of watermarkUpdates) watermarks.set(itemId, watermark)
+    schedules.remember(statusUpdates)
     for (const item of oneTimesThisCycle) billedOneTimes.add(item.id)
     if (params.mode === 'real') {
       const now = new Date()
@@ -311,6 +307,7 @@ export async function processPrepaidAccount(
         item.billedToDate = watermarkUpdates.get(item.id) ?? null
         item.updatedAt = now
       }
+      schedules.persist(statusUpdates, now)
       for (const item of oneTimesThisCycle) {
         item.billedToDate = closedThrough
         item.updatedAt = now

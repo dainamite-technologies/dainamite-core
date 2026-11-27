@@ -92,6 +92,8 @@ describe('changeItemPriceCommand', () => {
     const created: Record<string, unknown>[] = []
     const em = {
       findOne: jest.fn(async () => record),
+      // Phases / status periods carried to the copy (none here).
+      find: jest.fn(async () => []),
       create: jest.fn((_entity: unknown, data: Record<string, unknown>) => {
         const row = { id: 'new-item', ...data }
         created.push(row)
@@ -137,7 +139,7 @@ describe('changeItemPriceCommand', () => {
       { tenantId: TENANT, organizationId: ORG, id: ITEM, effectiveDate: d('2026-12-15'), unitPrice: 59 },
       ctx as never,
     )
-    expect(result).toEqual({ previousItemId: ITEM, newItemId: 'new-item' })
+    expect(result).toEqual({ previousItemId: ITEM, newItemId: created[0].id })
     expect(iso(record.billEndDate as Date)).toBe('2026-12-14')
     expect(created[0]).toMatchObject({
       billAccountId: 'acc',

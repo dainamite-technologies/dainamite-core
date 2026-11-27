@@ -13,6 +13,14 @@ import {
 import { StatusPath } from '../../../../../components/StatusPath'
 import { DepthBadge, PriceWaterfall } from '../../../../../components/PriceWaterfall'
 import { parseStoredCharge } from '../../../../../lib/priceAdjustmentView'
+import { ChargePeriodTotal } from '../../../../../components/ChargePeriodTotal'
+import { PriceScheduleTable } from '../../../../../components/PriceScheduleTable'
+import { StatusActionDialog, statusActionLabel, type StatusActionTarget } from './_components/StatusActionDialog'
+import {
+  SUBSCRIPTION_STATUS_ACTIONS,
+  SUBSCRIPTION_STATUS_ACTION_FROM,
+  type SubscriptionStatusAction,
+} from '../../../../../lib/subscriptionStatusActions'
 import { buildInventoryStatusLabels, inventoryStatusLabel } from '../../shared'
 
 // XD-250 — ARC integration on subscription detail.
@@ -73,6 +81,7 @@ function changeTypeLabel(t: TranslateFn, changeType: string): string {
     case 'cancel': return t('cpq.inventory.subscriptions.detail.changeType.cancel', 'Cancelled')
     case 'merge-result': return t('cpq.inventory.subscriptions.detail.changeType.mergeResult', 'Created from merging contracts')
     case 'merge-source': return t('cpq.inventory.subscriptions.detail.changeType.mergeSource', 'Merged into a new contract')
+    case 'status': return t('cpq.inventory.subscriptions.detail.changeType.status', 'Status changed')
     default: return changeType
   }
 }
@@ -84,6 +93,7 @@ const CHANGE_TYPE_VARIANTS: Record<string, 'info' | 'success' | 'error' | 'brand
   cancel: 'error',
   'merge-result': 'brand',
   'merge-source': 'warning',
+  status: 'warning',
 }
 
 type SubscriptionItem = {
@@ -109,6 +119,11 @@ type SubscriptionItem = {
   sortOrder: number
   createdAt: string
   updatedAt: string
+  /** D6: the current stop period (present once a status action ran). */
+  statusFromDate?: string | null
+  statusToDate?: string | null
+  statusChargeBehavior?: string | null
+  statusReason?: string | null
   children?: SubscriptionItem[]
 }
 
@@ -143,6 +158,10 @@ type SubscriptionDetail = {
   activatedAt: string | null
   suspendedAt: string | null
   terminatedAt: string | null
+  statusFromDate?: string | null
+  statusToDate?: string | null
+  statusChargeBehavior?: string | null
+  statusReason?: string | null
   pricingSummary: Record<string, unknown> | null
   sourceQuoteId: string | null
   sourceOrderId: string | null
@@ -152,15 +171,48 @@ type SubscriptionDetail = {
   items: SubscriptionItem[]
 }
 
+// Mirrors INVENTORY_SUBSCRIPTION_TRANSITIONS (XD-215 + D6) minus the
+// order-driven moves (superseded) the operator never picks here.
 const ALLOWED_TRANSITIONS: Record<string, string[]> = {
   pending: ['active', 'terminated'],
-  active: ['suspended', 'terminated', 'expired'],
+  active: ['paused', 'suspended', 'grace', 'terminated', 'expired'],
   suspended: ['active', 'terminated'],
+  paused: ['active', 'terminated'],
+  grace: ['active', 'suspended', 'terminated'],
   terminated: [],
   expired: [],
 }
 
-const SUBSCRIPTION_STATUSES = ['pending', 'active', 'suspended', 'terminated', 'expired'] as const
+const SUBSCRIPTION_STATUSES = ['pending', 'active', 'paused', 'suspended', 'grace', 'terminated', 'expired'] as const
+
+/** The D6 action behind a status-path click, or null for a plain transition. */
+function statusPathAction(current: string, target: string): SubscriptionStatusAction | null {
+  if (target === 'paused') return 'pause'
+  if (target === 'suspended') return 'suspend'
+  if (target === 'grace') return 'grace'
+  if (target === 'terminated') return current === 'pending' ? null : 'terminate'
+  if (target === 'active' && (current === 'paused' || current === 'suspended' || current === 'grace')) return 'resume'
+  return null
+}
+
+function allowedActions(status: string): SubscriptionStatusAction[] {
+  return SUBSCRIPTION_STATUS_ACTIONS.filter((action) => SUBSCRIPTION_STATUS_ACTION_FROM[action].includes(status as never))
+}
+
+/** "from 2027-01-10 until 2027-01-19 · no charge". */
+function stopPeriodText(
+  t: TranslateFn,
+  row: { status: string; statusFromDate?: string | null; statusToDate?: string | null; statusChargeBehavior?: string | null },
+): string | null {
+  if (!row.statusFromDate || (row.status !== 'paused' && row.status !== 'suspended' && row.status !== 'grace')) return null
+  const period = row.statusToDate
+    ? t('cpq.inventory.statusActions.period.fromTo', 'from {from} until {to}', { from: row.statusFromDate, to: row.statusToDate })
+    : t('cpq.inventory.statusActions.period.from', 'from {from}', { from: row.statusFromDate })
+  const charge = row.statusChargeBehavior === 'no_charge'
+    ? t('cpq.inventory.statusActions.charge.noChargeShort', 'no charge')
+    : t('cpq.inventory.statusActions.charge.chargeShort', 'charged')
+  return `${period} · ${charge}`
+}
 
 function fmt(amount: number | string, currency: string): string {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(Number(amount))
@@ -188,6 +240,7 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
   const [assets, setAssets] = React.useState<LinkedAsset[]>([])
   const [expandedItems, setExpandedItems] = React.useState<Set<string>>(new Set())
   const [transitioning, setTransitioning] = React.useState(false)
+  const [statusTarget, setStatusTarget] = React.useState<StatusActionTarget | null>(null)
   // Resolved display names for ID references — fetched alongside the main
   // subscription record so the UI never shows "62e90a3d…" placeholders.
   const [sourceQuoteNumber, setSourceQuoteNumber] = React.useState<string | null>(null)
@@ -202,6 +255,7 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
   const [arcInFlight, setArcInFlight] = React.useState<'amend' | 'renew' | 'cancel' | null>(null)
   const [changeLog, setChangeLog] = React.useState<ChangeLogRow[]>([])
   const [changeLogLoading, setChangeLogLoading] = React.useState(false)
+  const [changeLogReload, setChangeLogReload] = React.useState(0)
 
   const startArcQuote = React.useCallback(
     async (type: 'amend' | 'renew' | 'cancel') => {
@@ -240,6 +294,31 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
     },
     [router, sub, t],
   )
+
+  // Status writes cascade to items, assets and the change log server-side;
+  // re-fetch the detail (item tree), the assets and the history.
+  const reloadAfterStatusChange = async () => {
+    if (!sub) return
+    const [freshSub, freshAssets] = await Promise.all([
+      fetch(`/api/cpq/inventory/subscriptions?id=${sub.id}`).then((r) => (r.ok ? r.json() : null)),
+      fetch(`/api/cpq/inventory/assets?subscriptionId=${sub.id}&pageSize=50`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((r) => (r?.items ?? []) as LinkedAsset[]),
+    ])
+    if (freshSub) setSub(freshSub)
+    setAssets(freshAssets)
+    setChangeLogReload((n) => n + 1)
+  }
+
+  const onStatusPathTransition = (targetStatus: string) => {
+    if (!sub) return
+    const action = statusPathAction(sub.status, targetStatus)
+    if (action) {
+      setStatusTarget({ subscriptionId: sub.id, label: sub.name, action })
+      return
+    }
+    void transitionStatus(targetStatus)
+  }
 
   const transitionStatus = async (targetStatus: string) => {
     if (!sub) return
@@ -318,7 +397,7 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
     }
     if (subId) void loadLog()
     return () => { cancelled = true }
-  }, [subId])
+  }, [subId, changeLogReload])
 
   React.useEffect(() => {
     let cancelled = false
@@ -440,6 +519,10 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
   const flatItems = flattenItems(sub.items)
 
   const canArc = sub.status === 'active' || sub.status === 'suspended'
+  const subscriptionActions = allowedActions(sub.status)
+  // Item-level actions need the subscription itself running (D6).
+  const itemActionsEnabled = sub.status === 'active' || sub.status === 'grace'
+  const subStopText = stopPeriodText(t, sub)
   const statusTransitions = ALLOWED_TRANSITIONS[sub.status] ?? []
   const statusLabels = buildInventoryStatusLabels(t, SUBSCRIPTION_STATUSES)
 
@@ -467,8 +550,20 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
           </div>
         }
         actionsContent={
-          canArc ? (
+          canArc || subscriptionActions.length > 0 ? (
             <>
+              {subscriptionActions.map((action) => (
+                <Button
+                  key={action}
+                  type="button"
+                  variant={action === 'terminate' ? 'destructive-outline' : 'outline'}
+                  disabled={transitioning}
+                  onClick={() => setStatusTarget({ subscriptionId: sub.id, label: sub.name, action })}
+                >
+                  {statusActionLabel(t, action)}
+                </Button>
+              ))}
+              {canArc && (<>
               <Button
                 type="button"
                 variant="outline"
@@ -493,6 +588,7 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
               >
                 {t('cpq.inventory.subscriptions.detail.arc.cancel', 'Cancel')}
               </Button>
+              </>)}
             </>
           ) : null
         }
@@ -504,17 +600,26 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
         <StatusPath
           current={sub.status}
           path={['pending', 'active']}
-          terminals={['suspended', 'terminated', 'expired']}
+          terminals={['paused', 'suspended', 'grace', 'terminated', 'expired']}
           statusMap={subscriptionStatusMap}
           labels={statusLabels}
-          onTransition={transitionStatus}
+          onTransition={onStatusPathTransition}
           allowedTransitions={statusTransitions}
           disabled={transitioning}
           ariaLabel={t('cpq.inventory.subscriptions.detail.statusPath', 'Subscription status path')}
         />
       </div>
 
+      {subStopText && (
+        <p className="text-xs text-muted-foreground">
+          {t('cpq.inventory.statusActions.subscriptionPeriod', '{status} {period}', { status: inventoryStatusLabel(t, sub.status), period: subStopText })}
+          {sub.statusReason ? ` · ${sub.statusReason}` : ''}
+        </p>
+      )}
+
       {error && <ErrorBanner message={error} />}
+
+      <StatusActionDialog target={statusTarget} onClose={() => setStatusTarget(null)} onDone={() => void reloadAfterStatusChange()} />
 
       {/* Detail Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -624,6 +729,9 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
                         <span className="font-medium text-sm">{item.name}</span>
                         {item.quantity > 1 && <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-medium">x{item.quantity}</span>}
                         <StatusBadge status={item.status} />
+                        {stopPeriodText(t, item) && (
+                          <span className="text-xs text-muted-foreground">{stopPeriodText(t, item)}</span>
+                        )}
                       </div>
                     </div>
                     <div className="shrink-0 text-right text-xs space-y-0.5">
@@ -634,6 +742,25 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
 
                   {isExpanded && (
                     <div className="border-t bg-muted/10 px-12 py-3 space-y-3" style={{ paddingLeft: `${40 + indent * 24}px` }}>
+                      {itemActionsEnabled && allowedActions(item.status).length > 0 && (
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-xs text-muted-foreground">{t('cpq.inventory.statusActions.itemActions', 'This item:')}</span>
+                          {allowedActions(item.status).map((action) => (
+                            <Button
+                              key={action}
+                              type="button"
+                              size="sm"
+                              variant={action === 'terminate' ? 'destructive-outline' : 'outline'}
+                              onClick={() => setStatusTarget({ subscriptionId: sub.id, subscriptionItemId: item.id, label: item.name, action })}
+                            >
+                              {statusActionLabel(t, action)}
+                            </Button>
+                          ))}
+                        </div>
+                      )}
+                      {item.statusReason && (
+                        <Field label={t('cpq.inventory.statusActions.fields.reason', 'Reason')} value={item.statusReason} />
+                      )}
                       <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-2">
                         {item.offeringId && (
                           <RefField
@@ -709,8 +836,16 @@ export default function SubscriptionDetailPage(props: { params?: { id?: string }
                                         </span>
                                       </td>
                                       <td className="py-1 text-right font-mono">{c.quantity ?? '—'}</td>
-                                      <td className="py-1 text-right font-mono">{c.totalPrice != null ? fmt(c.totalPrice, currency) : '—'}</td>
+                                      <td className="py-1 text-right font-mono">{c.totalPrice != null ? <ChargePeriodTotal charge={c} currency={currency} format={fmt} /> : '—'}</td>
                                     </tr>
+                                    {c.schedule?.length ? (
+                                      <tr>
+                                        <td colSpan={6} className="pb-2 pl-4">
+                                          <div className="font-medium text-muted-foreground mb-1 text-xs">{t('cpq.phases.scheduleTitle', 'Price phases')}</div>
+                                          <PriceScheduleTable schedule={c.schedule} currency={currency} />
+                                        </td>
+                                      </tr>
+                                    ) : null}
                                     {(c.adjustments?.length ?? 0) > 0 && (
                                       <tr>
                                         <td colSpan={6} className="pb-2 pl-4">

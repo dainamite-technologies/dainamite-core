@@ -8,6 +8,8 @@ import { Tag } from '@open-mercato/ui/primitives/tag'
 import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import { NumberInput } from '../../../../components/NumberInput'
 import { normalizeChargePricing } from '../../../../data/charge-pricing'
+import { billingPeriodLabel, catalogChargePeriodSuffix } from '../../../../lib/chargeBillingPeriodLabel'
+import { normalizeBillingPeriod } from '../../../../lib/chargeBillingPeriod'
 import {
   chargeTypeMap,
   formatStatusLabel,
@@ -74,6 +76,9 @@ type Charge = {
   currencyCode: string | null
   quantityAttributeCode: string | null
   applicabilityCondition: Record<string, unknown> | null
+  /** D5: the price is per billingPeriodInterval × billingPeriodUnit (MRC only). */
+  billingPeriodUnit?: 'month' | 'year'
+  billingPeriodInterval?: number
   sortOrder: number
   isActive: boolean
 }
@@ -151,6 +156,8 @@ const EMPTY_CHARGE: EditingCharge = {
   currencyCode: 'USD',
   quantityAttributeCode: null,
   applicabilityCondition: null,
+  billingPeriodUnit: 'month',
+  billingPeriodInterval: 1,
   sortOrder: 0,
   isActive: true,
 }
@@ -870,12 +877,48 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                 </div>
                 <div>
                   <label className="block text-xs font-medium mb-1">{t('cpq.offerings.charge.fields.chargeType', 'Charge Type')}</label>
-                  <select value={editingCharge.chargeType} onChange={(e) => setEditingCharge({ ...editingCharge, chargeType: e.target.value })} className="w-full rounded-md border px-2 py-1.5 text-sm">
+                  <select
+                    value={editingCharge.chargeType}
+                    onChange={(e) => setEditingCharge({
+                      ...editingCharge,
+                      chargeType: e.target.value,
+                      // V-CHG-2: only a recurring charge has a billing period.
+                      ...(e.target.value === 'mrc' ? {} : { billingPeriodUnit: 'month' as const, billingPeriodInterval: 1 }),
+                    })}
+                    className="w-full rounded-md border px-2 py-1.5 text-sm"
+                  >
                     <option value="mrc">{t('cpq.offerings.chargeType.mrc', 'MRC (Monthly Recurring)')}</option>
                     <option value="nrc">{t('cpq.offerings.chargeType.nrc', 'NRC (Non-Recurring)')}</option>
                     <option value="usage">{t('cpq.offerings.chargeType.usage', 'Usage')}</option>
                   </select>
                 </div>
+                {editingCharge.chargeType === 'mrc' && (
+                  <div>
+                    <label className="block text-xs font-medium mb-1">{t('cpq.billingPeriod.field.label', 'Billing period')}</label>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-muted-foreground">{t('cpq.billingPeriod.field.every', 'Every')}</span>
+                      <div className="w-20">
+                        <NumberInput
+                          integer
+                          value={editingCharge.billingPeriodInterval ?? 1}
+                          onChange={(n) => setEditingCharge({ ...editingCharge, billingPeriodInterval: Math.min(120, Math.max(1, n ?? 1)) })}
+                        />
+                      </div>
+                      <select
+                        value={editingCharge.billingPeriodUnit ?? 'month'}
+                        onChange={(e) => setEditingCharge({ ...editingCharge, billingPeriodUnit: e.target.value === 'year' ? 'year' : 'month' })}
+                        className="rounded-md border px-2 py-1.5 text-sm"
+                        aria-label={t('cpq.billingPeriod.field.unit', 'Billing period unit')}
+                      >
+                        <option value="month">{t('cpq.billingPeriod.unit.month', 'month(s)')}</option>
+                        <option value="year">{t('cpq.billingPeriod.unit.year', 'year(s)')}</option>
+                      </select>
+                    </div>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {t('cpq.billingPeriod.field.hint', 'The price is per this period. MRC totals use the monthly equivalent.')}
+                    </p>
+                  </div>
+                )}
                 <div>
                   <label className="block text-xs font-medium mb-1">{t('cpq.offerings.charge.fields.chargeModel', 'Charge Model')}</label>
                   <select
@@ -1088,7 +1131,7 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                           {source === 'fixed' ? (
                             <div className="flex flex-col gap-0.5">
                               {charge.fixedPrice != null
-                                ? <span>{`${charge.currencyCode ?? 'USD'} ${charge.fixedPrice}`}</span>
+                                ? <span>{`${charge.currencyCode ?? 'USD'} ${charge.fixedPrice}`} {catalogChargePeriodSuffix(t, charge)}</span>
                                 : <span className="text-muted-foreground">—</span>}
                               {model === 'per_unit' && (
                                 <span>
@@ -1103,6 +1146,9 @@ export default function OfferingDetailPage(props: { params?: { id?: string } }) 
                                 <span className="text-muted-foreground">{t('cpq.offerings.charges.tableLabel', 'Table:')}</span>{' '}
                                 {tableRef ? `${tableRef.name} → ${charge.priceColumnKey ?? '?'}` : <span className="text-destructive">{t('cpq.offerings.charges.missing', 'missing')}</span>}
                               </span>
+                              {charge.chargeType === 'mrc' && (
+                                <span className="text-muted-foreground">{billingPeriodLabel(t, normalizeBillingPeriod(charge))}</span>
+                              )}
                               {model !== 'flat' && (
                                 <span>
                                   <span className="text-muted-foreground">{t('cpq.offerings.charges.qtyLabel', '× Qty:')}</span>{' '}

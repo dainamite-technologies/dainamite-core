@@ -77,7 +77,7 @@ const getOrderTool = defineCpqApiTool<GetOrderInput, Record<string, unknown>, { 
   name: 'cpq.get_order',
   displayName: 'Get CPQ order',
   description:
-    'Fetch one CPQ order with its lines, charges, pricing summary (NRC / MRC, list and discount figures), source quote and ARC quote type. Returns { order }.',
+    'Fetch one CPQ order with its lines, charges, pricing summary (NRC / MRC, list and discount figures), source quote, ARC quote type and `priceAdjustments`: the source quote\'s negotiated prices, read-only (target, months, phase name, type and value, reason with its label, author name and email). Returns { order }.',
   inputSchema: getOrderInput,
   requiredFeatures: ['cpq.orders.view'],
   toOperation: (input) => ({

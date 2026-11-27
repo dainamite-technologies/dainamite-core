@@ -3,6 +3,13 @@ import { DEFAULT_INVOICE_LANGUAGE, INVOICE_LANGUAGE_CODES } from '../lib/invoice
 import { DOCUMENT_SERIES, validateMask } from '../lib/numbering'
 import { isValidBic, isValidIban, normalizeIban } from '../lib/iban'
 import { creditReasonInputFields, refineCreditReasonInput } from '../lib/creditReason'
+import {
+  MAX_PHASES_PER_ITEM,
+  PHASE_DURATION_UNITS,
+  PHASE_PRICE_TYPES,
+  validatePhaseSchedule,
+} from '../lib/pricePhases'
+import { ITEM_STATUSES, STATUS_CHARGE_BEHAVIORS } from '../lib/itemStatusPeriods'
 
 // ─── Enums ───────────────────────────────────────────────────────
 
@@ -15,6 +22,7 @@ import {
   BILL_CYCLES,
   DEFAULT_BILL_CYCLE,
   DEFAULT_BILL_CYCLE_INTERVAL,
+  BILL_CYCLE_INTERVAL_MAX,
   defaultCycleDay,
   normalizeCycleDay,
   validateCycleSpec,
@@ -446,6 +454,82 @@ function refinePriceBasis(val: { priceBasis?: PriceBasis; rateJson: unknown }, c
   }
 }
 
+// ─── Line period + price phases (2026-11-26 specs) ───────────────
+
+/** Contract C1: one price phase of a recurring item, back to back from its start. */
+export const billingItemPhaseInputSchema = z.object({
+  name: z.string().trim().max(120).nullable().optional(),
+  // Exactly one of (durationUnit + durationCount) or endDate — checked below.
+  durationUnit: z.enum(PHASE_DURATION_UNITS).optional(),
+  durationCount: z.coerce.number().int().min(1).max(1200).optional(),
+  endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  priceType: z.enum(PHASE_PRICE_TYPES),
+  value: z.coerce.number().finite().nonnegative().nullable().optional(),
+})
+export type BillingItemPhaseInput = z.infer<typeof billingItemPhaseInputSchema>
+
+const linePeriodFields = {
+  // Own billing period (L §4.2). null / omitted = follow the account cycle.
+  billingPeriodUnit: z.enum(BILL_CYCLES).nullable().optional(),
+  billingPeriodInterval: z.coerce.number().int().min(1).nullable().optional(),
+  // Price phases (P §4.1). Recurring items only.
+  phasesEnabled: z.boolean().optional(),
+  phases: z.array(billingItemPhaseInputSchema).max(MAX_PHASES_PER_ITEM).optional(),
+}
+
+export const LINE_PERIOD_RECURRING_ONLY_MESSAGE = 'billingPeriod / phases can only be set on recurring items'
+
+/**
+ * `BILLING_PERIOD_CHANGE_BILLED` (lib/pricePhases): the own billing period is fixed once the item was invoiced (`billed_to_date`
+ * set): a new grid would not line up with the watermark — with `prorate=false`
+ * the next run skips the partial period it lands in, leaving days unbilled.
+ */
+export const BILLING_PERIOD_CHANGE_BILLED_MESSAGE =
+  'The billing period cannot change once the item has been invoiced — end this item and add a new one with the new period.'
+
+/** Cross-field checks of the period pair (shared by create and the update command). */
+export function billingPeriodIssue(
+  unit: string | null | undefined,
+  interval: number | null | undefined,
+): { path: 'billingPeriodUnit' | 'billingPeriodInterval'; message: string } | null {
+  const hasUnit = unit !== null && unit !== undefined
+  const hasInterval = interval !== null && interval !== undefined
+  if (!hasUnit && hasInterval) return { path: 'billingPeriodUnit', message: 'billingPeriodInterval needs a billingPeriodUnit' }
+  if (hasUnit && !hasInterval) return { path: 'billingPeriodInterval', message: 'billingPeriodInterval is required with a billingPeriodUnit' }
+  if (hasUnit && hasInterval) {
+    const max = BILL_CYCLE_INTERVAL_MAX[unit as keyof typeof BILL_CYCLE_INTERVAL_MAX]
+    if (interval! > max) return { path: 'billingPeriodInterval', message: `billingPeriodInterval must be 1–${max} for ${unit}` }
+  }
+  return null
+}
+
+function refineLinePeriod(
+  val: {
+    type?: BillingItemType
+    billStartDate?: Date
+    billingPeriodUnit?: string | null
+    billingPeriodInterval?: number | null
+    phasesEnabled?: boolean
+    phases?: BillingItemPhaseInput[]
+  },
+  ctx: z.RefinementCtx,
+): void {
+  const periodIssue = billingPeriodIssue(val.billingPeriodUnit, val.billingPeriodInterval)
+  if (periodIssue) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [periodIssue.path], message: periodIssue.message })
+  if (val.type && val.type !== 'recurring') {
+    if (val.billingPeriodUnit) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['billingPeriodUnit'], message: LINE_PERIOD_RECURRING_ONLY_MESSAGE })
+    }
+    if (val.phasesEnabled || (val.phases && val.phases.length > 0)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['phases'], message: LINE_PERIOD_RECURRING_ONLY_MESSAGE })
+    }
+  }
+  if (val.phases) {
+    const issue = validatePhaseSchedule(val.billStartDate ?? null, val.phases)
+    if (issue) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['phases', issue.index, issue.path], message: issue.message })
+  }
+}
+
 export const CHARGE_TIMING_RECURRING_ONLY_MESSAGE =
   'chargeTiming / prorate can only be set on recurring items'
 
@@ -494,11 +578,13 @@ export const billingItemCreateSchema = scopedSchema
     sourceRef: z.string().trim().min(1).max(255).optional(),
     taxRate: taxRateSchema.optional(),
     ...chargeTimingFields,
+    ...linePeriodFields,
     // currency_mismatch and billed_to_date are system-managed, never set by
     // clients on create.
   })
   .superRefine((val, ctx) => {
     refineChargeTiming(val, ctx)
+    refineLinePeriod(val, ctx)
     refinePriceBasis(val, ctx)
     try {
       validateRateJson(val.type, val.rateJson)
@@ -538,9 +624,11 @@ const billingItemBulkEntrySchema = z
     sourceRef: z.string().trim().min(1).max(255).optional(),
     taxRate: taxRateSchema.optional(),
     ...chargeTimingFields,
+    ...linePeriodFields,
   })
   .superRefine((val, ctx) => {
     refineChargeTiming(val, ctx)
+    refineLinePeriod(val, ctx)
     refinePriceBasis(val, ctx)
     try {
       validateRateJson(val.type, val.rateJson)
@@ -588,9 +676,19 @@ export const billingItemUpdateSchema = scopedSchema.extend({
   // Safe to change after billing: the `billed_to_date` watermark prevents
   // any day from being billed twice.
   ...chargeTimingFields,
+  // Own period + phases: the type is not in the payload — the command checks
+  // "recurring only", the merged period pair and "only unbilled periods".
+  // `phases` replaces the whole schedule when sent.
+  ...linePeriodFields,
   // Part 2: required (by the command) when a new end date credits billed days.
   ...creditReasonInputFields,
-}).superRefine(refineCreditReasonInput)
+}).superRefine((val, ctx) => {
+  refineCreditReasonInput(val, ctx)
+  if (val.phases) {
+    const issue = validatePhaseSchedule(val.billStartDate ?? null, val.phases)
+    if (issue) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['phases', issue.index, issue.path], message: issue.message })
+  }
+})
 
 export type BillingItemUpdateInput = z.infer<typeof billingItemUpdateSchema>
 
@@ -626,6 +724,69 @@ export const billingItemListQuerySchema = z
   .passthrough()
 
 export type BillingItemListQuery = z.infer<typeof billingItemListQuerySchema>
+
+// ─── BillingItemStatusPeriod payloads (L §4.3, contract C1) ──────
+
+const isoDay = z.coerce.date()
+
+export const billingItemStatusPeriodCreateSchema = scopedSchema
+  .extend({
+    billingItemId: z.string().uuid(),
+    status: z.enum(ITEM_STATUSES),
+    fromDate: isoDay,
+    toDate: isoDay.nullable().optional(),
+    // Default: paused → no_charge, suspended / grace → charge.
+    chargeBehavior: z.enum(STATUS_CHARGE_BEHAVIORS).optional(),
+    reason: z.string().trim().max(500).nullable().optional(),
+  })
+  .superRefine((val, ctx) => {
+    if (val.toDate && val.toDate.getTime() < val.fromDate.getTime()) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['toDate'], message: 'toDate cannot be before fromDate' })
+    }
+  })
+export type BillingItemStatusPeriodCreateInput = z.infer<typeof billingItemStatusPeriodCreateSchema>
+
+export const billingItemStatusPeriodUpdateSchema = scopedSchema.extend({
+  id: z.string().uuid(),
+  // Resume = set the end of the open period.
+  fromDate: isoDay.optional(),
+  toDate: isoDay.nullable().optional(),
+  chargeBehavior: z.enum(STATUS_CHARGE_BEHAVIORS).optional(),
+  reason: z.string().trim().max(500).nullable().optional(),
+})
+export type BillingItemStatusPeriodUpdateInput = z.infer<typeof billingItemStatusPeriodUpdateSchema>
+
+export const billingItemStatusPeriodDeleteSchema = scopedSchema.extend({
+  id: z.string().uuid(),
+})
+export type BillingItemStatusPeriodDeleteInput = z.infer<typeof billingItemStatusPeriodDeleteSchema>
+
+/** Bulk: pause / suspend every recurring line of an account (L §4.3). */
+export const billingItemStatusPeriodBulkSchema = scopedSchema
+  .extend({
+    billAccountId: z.string().uuid(),
+    status: z.enum(ITEM_STATUSES),
+    fromDate: isoDay,
+    toDate: isoDay.nullable().optional(),
+    chargeBehavior: z.enum(STATUS_CHARGE_BEHAVIORS).optional(),
+    reason: z.string().trim().max(500).nullable().optional(),
+  })
+  .superRefine((val, ctx) => {
+    if (val.toDate && val.toDate.getTime() < val.fromDate.getTime()) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['toDate'], message: 'toDate cannot be before fromDate' })
+    }
+  })
+export type BillingItemStatusPeriodBulkInput = z.infer<typeof billingItemStatusPeriodBulkSchema>
+
+export const billingItemStatusPeriodListQuerySchema = z
+  .object({
+    ...listPaginationBase,
+    id: z.string().uuid().optional(),
+    billingItemId: z.string().uuid().optional(),
+    status: z.enum(ITEM_STATUSES).optional(),
+  })
+  .passthrough()
+export type BillingItemStatusPeriodListQuery = z.infer<typeof billingItemStatusPeriodListQuerySchema>
 
 // ─── BillingAccountUsage payloads ────────────────────────────────
 

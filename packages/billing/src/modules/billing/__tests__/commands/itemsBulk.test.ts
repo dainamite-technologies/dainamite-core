@@ -152,7 +152,7 @@ describe('bulkCreateItemsCommand', () => {
     // Every created row carries the id the flush assigned — the
     // result must not snapshot the pre-flush (undefined) value.
     for (const item of result.items) {
-      expect(item.id).toMatch(/^new-item-/)
+      expect(item.id).toMatch(/^[0-9a-f-]{36}$/)
       expect(item.deduplicated).toBe(false)
     }
     // The batching contract: ONE flush for the whole batch.
@@ -224,7 +224,7 @@ describe('bulkCreateItemsCommand', () => {
     // that id is the flush-assigned value (not '' captured pre-flush).
     const created = result.items.find((i) => !i.deduplicated)
     const repeated = result.items.find((i) => i.deduplicated)
-    expect(created?.id).toMatch(/^new-item-/)
+    expect(created?.id).toMatch(/^[0-9a-f-]{36}$/)
     expect(repeated?.id).toBe(created?.id)
   })
 

@@ -21,6 +21,9 @@
 export const billingEntityIds = {
   account: 'billing:billing_account',
   item: 'billing:billing_item',
+  // Line period / status + price phases specs (2026-11-26)
+  itemPhase: 'billing:billing_item_phase',
+  itemStatusPeriod: 'billing:billing_item_status_period',
   usage: 'billing:billing_account_usage',
   run: 'billing:billing_run',
   runOutcome: 'billing:billing_run_outcome',

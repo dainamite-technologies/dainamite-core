@@ -7,8 +7,15 @@ import {
   CpqProductSpecification,
   CpqSubscriptionChangeLog,
 } from '../data/entities'
+import { emitCpqEvent } from '../events'
 import {
   INVENTORY_SUBSCRIPTION_TRANSITIONS,
+  INVENTORY_TERMINAL_STATUSES,
+  SUBSCRIPTION_STATUS_ACTION_FROM,
+  SUBSCRIPTION_STATUS_ACTION_TARGET,
+  defaultChargeBehavior,
+  type StatusChargeBehavior,
+  type SubscriptionStatusAction,
   INVENTORY_ASSET_TRANSITIONS,
   retiredAssetStatus,
   getBaseCurrencyCode,
@@ -59,6 +66,40 @@ interface CustomerInventoryFilters {
   status?: string | string[]
   productId?: string
   includeTerminated?: boolean
+}
+
+// ─── Status actions (spec 2026-11-26 line status, D6) ───────────
+
+export interface ApplyStatusActionInput {
+  subscriptionId: string
+  /** One item; omitted / null = the whole subscription (every live item). */
+  subscriptionItemId?: string | null
+  action: SubscriptionStatusAction
+  /** `YYYY-MM-DD`, default today. Resume: the first day running again. Terminate: the effective end date. */
+  fromDate?: string | null
+  /** `YYYY-MM-DD` inclusive end of a pause / suspension / grace; null = open-ended. */
+  toDate?: string | null
+  /** Pause / suspend / grace only; defaults: paused → no_charge, suspended / grace → charge. */
+  chargeBehavior?: StatusChargeBehavior | null
+  reason?: string | null
+  performedByUserId?: string | null
+}
+
+export interface StatusActionEvent {
+  id: 'cpq.subscription_item.status_changed' | 'cpq.subscription.terminated'
+  payload: Record<string, unknown>
+}
+
+export interface ApplyStatusActionResult {
+  subscription: CpqInventorySubscription
+  subscriptionItemIds: string[]
+  event: StatusActionEvent
+}
+
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
+
+function todayIso(): string {
+  return new Date().toISOString().slice(0, 10)
 }
 
 // ─── ARC (Amend / Renew / Cancel) — XD-250 input shapes ─────────
@@ -269,6 +310,11 @@ interface SubscriptionItemResultNode {
   capacityUnit: string | null
   metadata: Record<string, unknown> | null
   sortOrder: number
+  /** D6: the current stop period (present once a status action ran on the item). */
+  statusFromDate?: string | null
+  statusToDate?: string | null
+  statusChargeBehavior?: string | null
+  statusReason?: string | null
   children: SubscriptionItemResultNode[]
 }
 
@@ -577,6 +623,210 @@ export class DefaultCpqInventoryService {
     sub.status = targetStatus
     await this.em.flush()
     return sub
+  }
+
+  /**
+   * D6 — pause, suspend, grace, resume or terminate a whole subscription or
+   * one of its items, with effective dates, the billing charge behaviour and a
+   * reason. Validates against the XD-215 state machine, records the stop
+   * period on the affected rows plus a `status` change-log entry, flushes, and
+   * only then emits the contract C2 event:
+   *   - pause / suspend / grace / resume → `cpq.subscription_item.status_changed`
+   *     (`status: 'active'` for a resume);
+   *   - terminate → `cpq.subscription.terminated` (billing ends the items like
+   *     an ARC cancel).
+   * A subscription-wide action lists every affected item. Item-level actions
+   * need the subscription itself running (active or grace).
+   */
+  async applyStatusAction(input: ApplyStatusActionInput, scope: TenantScope): Promise<ApplyStatusActionResult> {
+    const { action } = input
+    const target = SUBSCRIPTION_STATUS_ACTION_TARGET[action]
+    if (!target) throw { status: 400, error: `Unknown status action '${String(action)}'` }
+    const fromDate = input.fromDate ?? todayIso()
+    if (!ISO_DATE.test(fromDate)) throw { status: 400, error: 'fromDate must be YYYY-MM-DD' }
+    const isStop = action === 'pause' || action === 'suspend' || action === 'grace'
+    const toDate = isStop ? input.toDate ?? null : null
+    if (!isStop && input.toDate) throw { status: 400, error: `toDate is only allowed for pause, suspend and grace` }
+    if (toDate && (!ISO_DATE.test(toDate) || toDate < fromDate)) {
+      throw { status: 400, error: 'toDate must be YYYY-MM-DD and not before fromDate' }
+    }
+    if (!isStop && input.chargeBehavior) throw { status: 400, error: 'chargeBehavior is only allowed for pause, suspend and grace' }
+    const chargeBehavior: StatusChargeBehavior | null = isStop
+      ? input.chargeBehavior ?? defaultChargeBehavior(target as 'paused' | 'suspended' | 'grace')
+      : null
+    const reason = input.reason?.trim() ? input.reason.trim() : null
+
+    const sub = await this.em.findOne(CpqInventorySubscription, {
+      id: input.subscriptionId,
+      organizationId: scope.organizationId,
+      tenantId: scope.tenantId,
+      deletedAt: null,
+    })
+    if (!sub) throw { status: 404, error: 'Subscription not found' }
+    const allowedFrom = SUBSCRIPTION_STATUS_ACTION_FROM[action]
+    const beforeSnapshot = await this.snapshotSubscription(sub, scope)
+
+    let affected: CpqInventorySubscriptionItem[]
+    const itemLevel = typeof input.subscriptionItemId === 'string' && input.subscriptionItemId.length > 0
+    if (itemLevel) {
+      const item = await this.em.findOne(CpqInventorySubscriptionItem, {
+        id: input.subscriptionItemId!,
+        subscriptionId: sub.id,
+        organizationId: scope.organizationId,
+        tenantId: scope.tenantId,
+        deletedAt: null,
+      })
+      if (!item) throw { status: 404, error: 'Subscription item not found on this subscription' }
+      if (sub.status !== 'active' && sub.status !== 'grace') {
+        throw { status: 409, error: `Subscription is '${sub.status}': item status actions need an active subscription` }
+      }
+      if (!allowedFrom.includes(item.status as InventorySubscriptionStatus)) {
+        throw { status: 409, error: `Cannot ${action} an item in status '${item.status}'` }
+      }
+      affected = [item]
+    } else {
+      if (!allowedFrom.includes(sub.status as InventorySubscriptionStatus)) {
+        throw { status: 409, error: `Cannot ${action} a subscription in status '${sub.status}'` }
+      }
+      const items = await this.em.find(CpqInventorySubscriptionItem, {
+        subscriptionId: sub.id,
+        organizationId: scope.organizationId,
+        tenantId: scope.tenantId,
+        deletedAt: null,
+        status: { $nin: [...INVENTORY_TERMINAL_STATUSES] },
+      })
+      // Only items the action applies to move (e.g. a subscription-wide
+      // suspend leaves an item already paused on its own as it is; a resume
+      // runs every stopped item again). Terminate ends every live item.
+      affected = (items ?? []).filter((item) => allowedFrom.includes(item.status as InventorySubscriptionStatus))
+    }
+
+    const now = new Date()
+    const lineChanges: Array<Record<string, unknown>> = []
+    for (const item of affected) {
+      lineChanges.push({ action: 'status', itemId: item.id, fromStatus: item.status, toStatus: target })
+      this.applyStatusFields(item, target, fromDate, toDate, chargeBehavior, reason)
+    }
+
+    if (action === 'terminate') {
+      const itemIds = affected.map((item) => item.id)
+      const assets = itemIds.length > 0 || !itemLevel
+        ? await this.em.find(CpqInventoryAsset, {
+            subscriptionId: sub.id,
+            organizationId: scope.organizationId,
+            tenantId: scope.tenantId,
+            deletedAt: null,
+            status: { $nin: ['returned', 'cancelled'] },
+            ...(itemLevel ? { subscriptionItemId: { $in: itemIds } } : {}),
+          })
+        : []
+      for (const asset of assets ?? []) asset.status = retiredAssetStatus(asset.status)
+    }
+
+    if (!itemLevel) {
+      this.applyStatusFields(sub, target, fromDate, toDate, chargeBehavior, reason)
+      if (target === 'suspended') sub.suspendedAt = now
+      if (target === 'active') sub.suspendedAt = null
+      if (target === 'terminated') sub.terminatedAt = now
+    } else if (target === 'terminated') {
+      // The last live item ending ends the subscription too.
+      const remaining = await this.em.find(CpqInventorySubscriptionItem, {
+        subscriptionId: sub.id,
+        organizationId: scope.organizationId,
+        tenantId: scope.tenantId,
+        deletedAt: null,
+        status: { $nin: [...INVENTORY_TERMINAL_STATUSES] },
+      })
+      const live = (remaining ?? []).filter((item) => !affected.some((a) => a.id === item.id))
+      if (live.length === 0) {
+        this.applyStatusFields(sub, 'terminated', fromDate, null, null, reason)
+        sub.terminatedAt = now
+      }
+    }
+    if (target === 'terminated') {
+      await this.em.flush()
+      await this.recomputeSubscriptionAggregatesInPlace(sub, scope)
+    }
+
+    await this.em.flush()
+    const afterSnapshot = await this.snapshotSubscription(sub, scope)
+    const log = this.createChangeLog({
+      subscription: sub,
+      changeType: 'status',
+      performedByUserId: input.performedByUserId ?? null,
+      beforeSnapshot,
+      afterSnapshot,
+      lineChanges,
+      reasonCode: action,
+      reasonText: reason,
+    })
+    sub.lastChangeLogId = log.id
+    await this.em.flush()
+
+    const subscriptionItemIds = affected.map((item) => item.id)
+    const envelope = { tenantId: scope.tenantId, organizationId: scope.organizationId, subscriptionId: sub.id, subscriptionItemIds }
+    const event: StatusActionEvent = target === 'terminated'
+      // `wholeSubscription` is the action's scope, decided here (review F6): a
+      // replayed item-level terminate must not end the other items just because
+      // the subscription has since been terminated.
+      ? { id: 'cpq.subscription.terminated', payload: { ...envelope, effectiveDate: fromDate, reason, wholeSubscription: !itemLevel } }
+      : {
+          id: 'cpq.subscription_item.status_changed',
+          payload: {
+            ...envelope,
+            status: target,
+            fromDate,
+            toDate,
+            ...(chargeBehavior ? { chargeBehavior } : {}),
+            reason,
+          },
+        }
+    // After commit (the flushes above), like every CPQ subscription event.
+    if (subscriptionItemIds.length > 0) {
+      await emitCpqEvent(event.id as never, event.payload as never)
+    }
+    return { subscription: sub, subscriptionItemIds, event }
+  }
+
+  /**
+   * Legacy status endpoint (`POST /inventory/subscriptions/status`): a target
+   * status that is a D6 action goes through `applyStatusAction`, so it now
+   * emits its event too (closes the "suspend/terminate from inventory emits
+   * nothing" gap). Other moves (pending → active, expired, superseded) keep the
+   * plain state-machine transition.
+   */
+  async changeSubscriptionStatus(
+    id: string,
+    targetStatus: string,
+    scope: TenantScope,
+    options: Omit<ApplyStatusActionInput, 'subscriptionId' | 'action' | 'subscriptionItemId'> = {},
+  ) {
+    const sub = await this.em.findOne(CpqInventorySubscription, {
+      id,
+      organizationId: scope.organizationId,
+      tenantId: scope.tenantId,
+      deletedAt: null,
+    })
+    if (!sub) throw { status: 404, error: 'Subscription not found' }
+    const action = statusActionFor(sub.status, targetStatus)
+    if (!action) return this.transitionSubscriptionStatus(id, targetStatus, scope)
+    const result = await this.applyStatusAction({ ...options, subscriptionId: id, action }, scope)
+    return result.subscription
+  }
+
+  private applyStatusFields(
+    row: CpqInventorySubscription | CpqInventorySubscriptionItem,
+    status: InventorySubscriptionStatus,
+    fromDate: string,
+    toDate: string | null,
+    chargeBehavior: StatusChargeBehavior | null,
+    reason: string | null,
+  ): void {
+    row.status = status
+    row.statusFromDate = toDateColumn(fromDate)
+    row.statusToDate = toDate ? toDateColumn(toDate) : null
+    row.statusChargeBehavior = chargeBehavior
+    row.statusReason = reason
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -1569,6 +1819,9 @@ export class DefaultCpqInventoryService {
         currencyCode: i.currencyCode,
         quantity: i.quantity,
         sourceQuoteLineId: i.sourceQuoteLineId,
+        // D5: per-charge billing periods, so ARC payloads can split the
+        // recurring amount per period (`buildArcAddedItems`).
+        ...(Array.isArray(i.charges) && i.charges.length > 0 ? { charges: i.charges } : {}),
       })),
       assets: assets.map((a) => ({
         id: a.id,
@@ -1927,6 +2180,14 @@ export class DefaultCpqInventoryService {
         capacityUnit: item.capacityUnit ?? null,
         metadata: item.metadata ?? null,
         sortOrder: item.sortOrder,
+        ...(item.statusFromDate
+          ? {
+              statusFromDate: toIsoOrNull(item.statusFromDate),
+              statusToDate: toIsoOrNull(item.statusToDate),
+              statusChargeBehavior: item.statusChargeBehavior ?? null,
+              statusReason: item.statusReason ?? null,
+            }
+          : {}),
         children: [],
       })
     }
@@ -1994,4 +2255,14 @@ function toIsoOrNull(value: Date | string | null | undefined): string | null {
   if (value == null) return null
   if (value instanceof Date) return value.toISOString()
   return String(value)
+}
+
+/** The D6 action that moves `current` to `target`, or null for a plain transition. */
+export function statusActionFor(current: string, target: string): SubscriptionStatusAction | null {
+  if (target === 'paused') return 'pause'
+  if (target === 'suspended') return 'suspend'
+  if (target === 'grace') return 'grace'
+  if (target === 'terminated') return current === 'pending' ? null : 'terminate'
+  if (target === 'active' && (current === 'paused' || current === 'suspended' || current === 'grace')) return 'resume'
+  return null
 }

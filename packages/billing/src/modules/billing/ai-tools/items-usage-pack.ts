@@ -45,7 +45,10 @@ export const listItemsTool = defineApiBackedAiTool<ListItemsInput, unknown, Page
     'List billing items (what an account is charged for). Returns { items, total, page, pageSize, totalPages }; each ' +
     'item carries id, bill_account_id, type, description, rate_json (price model), uom_code, bill_start_date, ' +
     'bill_end_date, billed_to_date, charge_timing (in_advance / in_arrears), prorate, tax_rate, price_basis ' +
-    '(net / gross), subscription_id, is_active.',
+    '(net / gross), subscription_id, is_active, billing_period_unit / billing_period_interval (own billing period; ' +
+    'null = follows the account cycle), phases_enabled, phases[] (price phases with computed startDate / endDate, ' +
+    'priceType free / fixed / percent_off / amount_off, value) and statusPeriods[] (paused / suspended / grace, ' +
+    'fromDate, toDate, chargeBehavior).',
   inputSchema: listItemsInput,
   requiredFeatures: [ITEM_VIEW_FEATURE],
   toOperation: (input, ctx) => {

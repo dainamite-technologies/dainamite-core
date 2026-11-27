@@ -23,6 +23,7 @@ export function withChargeWaterfall(charge: ResolvedCharge): ResolvedCharge {
 
 /** Keep the public calculator's default response compatible and free of waterfall data. */
 export function withoutChargeWaterfall(charge: ResolvedCharge): ResolvedCharge {
-  const { listUnitPrice, listTotalPrice, standardUnitPrice, standardTotalPrice, ...publicCharge } = charge
+  // Price phases: the schedule carries standard prices per segment, so it is waterfall data too.
+  const { listUnitPrice, listTotalPrice, standardUnitPrice, standardTotalPrice, schedule, ...publicCharge } = charge
   return publicCharge
 }

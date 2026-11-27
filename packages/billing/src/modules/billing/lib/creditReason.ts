@@ -14,6 +14,11 @@ export const CREDIT_REASON_CODES = [
   'subscription_amended',
   'subscription_cancelled',
   'subscription_superseded',
+  // Line status (L §4.3): days already billed in advance that a late pause /
+  // no-charge suspension removes, or re-charged after a shortened one.
+  'item_paused',
+  'item_suspended',
+  'item_status_reversed',
 ] as const
 export type CreditReasonCode = (typeof CREDIT_REASON_CODES)[number]
 
@@ -24,6 +29,8 @@ const isoDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
 export const creditReasonParamsSchema = z.object({
   reference: z.string().trim().min(1).max(120).optional(),
   effectiveDate: isoDay,
+  /** Status codes: last day of the status period (absent = open). */
+  untilDate: isoDay.optional(),
 })
 
 export const creditReasonSchema = z.discriminatedUnion('kind', [
@@ -88,7 +95,12 @@ const CODE_FALLBACKS: Record<CreditReasonCode, { withRef: string; plain: string 
     withRef: 'Subscription replaced (order {reference}), effective {date}',
     plain: 'Subscription replaced, effective {date}',
   },
+  item_paused: { withRef: 'Paused {date} – {until}', plain: 'Paused from {date}' },
+  item_suspended: { withRef: 'Suspended without charge {date} – {until}', plain: 'Suspended without charge from {date}' },
+  item_status_reversed: { withRef: 'Pause shortened, {date} – {until} charged', plain: 'Pause removed, from {date} charged' },
 }
+
+const STATUS_CODES: readonly CreditReasonCode[] = ['item_paused', 'item_suspended', 'item_status_reversed']
 
 /**
  * Human text of a reason. `translate` decides the language: the document
@@ -102,6 +114,12 @@ export function creditReasonText(
   if (reason.kind === 'text') return reason.text
   const fallback = CODE_FALLBACKS[reason.code]
   const date = formatDate(reason.params.effectiveDate)
+  if (STATUS_CODES.includes(reason.code)) {
+    // Status codes: `withRef` = closed period ({date} – {until}), `plain` = open.
+    return reason.params.untilDate
+      ? fill(translate(`billing.credit_reason.${reason.code}`, fallback.withRef), { date, until: formatDate(reason.params.untilDate) })
+      : fill(translate(`billing.credit_reason.${reason.code}.plain`, fallback.plain), { date })
+  }
   return reason.params.reference
     ? fill(translate(`billing.credit_reason.${reason.code}`, fallback.withRef), { reference: reason.params.reference, date })
     : fill(translate(`billing.credit_reason.${reason.code}.plain`, fallback.plain), { date })

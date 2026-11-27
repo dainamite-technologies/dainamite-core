@@ -45,6 +45,10 @@ Entry format (newest first within a section):
 
 ## CPQ
 
+- **`replace_target` updates a changed step in place and makes the actor its author, so its undo must restore `createdByUserId` from the snapshot.** (2026-11-27, `services/priceAdjustments/targetPriceService.ts`)
+  `adjustmentService.values()` carries no author, and the per-row undo never needed one. Restoring only `values()` leaves the new author on the old price, and the next undo's snapshot check answers 409. Match overlap errors by membership in tests: `loadQuoteAdjustments` orders by uuid, so "the first overlapping row" is random.
+- **Adding a column to `cpq_quote_price_adjustments` means adding it to the undo `snapshotSchema` too.** (2026-11-27, price phases)
+  `commands/price-adjustments.ts` parses undo snapshots with a non-strict `z.object`, which silently drops unknown keys: undo then restores the row without the new field (a phase came back permanent), and `snapshotKey` no longer matches `adjustmentSnapshot(row)`, so undo answers 409. Keep `adjustmentInput`, `values()`, `loadQuoteAdjustments`, `cloneQuoteAdjustments` and the snapshot schema in step.
 - **Never `$ilike` a uuid column: Postgres rejects it (`operator does not exist: uuid ~~* unknown`) and the route answers 500.** (2026-11-23, `api/quotes/route.ts`)
   `GET /api/cpq/quotes?search=` did this on `quoteId` / `customerId`; the backoffice list filters client-side, so only API and AI callers saw it. Match uuids exactly; match human text (quote number) on the entity that owns it, with `buildIlikeTerm` from `@open-mercato/shared/lib/db/buildIlikeTerm`.
 - **A unique constraint on a soft-deleted table blocks re-creating a removed row.** (2026-11-17, #122)
@@ -67,8 +71,12 @@ Entry format (newest first within a section):
 
 ## Billing
 
+- **Status-period credits work out which days `prorate=false` never charged from the item's current grid and `prorate` flag.** (2026-11-27, billing review F1)
+  Changing `prorate`, or the account cycle day, after an item was billed can make a later pause credit or re-charge the wrong days. Billing refuses a billing-period change once the item is invoiced (`billing.item.billing_period_change_billed`), but not a `prorate` change. Do the same for `prorate`, or keep a per-day charged ledger, before relying on late pauses on such items.
 - **Prepaid statements bucket the ledger by `created_at`, but period-close charges are stamped at run time.** (2026-11-18, #138)
   A catch-up or future-dated run creates charges long after (or before) their bill date. Attribute charges by `metadata.bill_date`, never by `created_at`, when computing a balance at a bill date (`sumLedgerBefore` in `prepaidPeriodClose.ts`).
+- **`billing.items.bulk_create` validates the whole batch with one Zod parse: one bad entry fails every item of the event.** (2026-11-27, connector C3)
+  Billing caps phases at 12 per item and the monthly line period at 24 (annual at 5); CPQ allows more (merged multi-charge schedules, up to 120-month periods). The connector refuses such a charge before the bulk write (`mapCharge` in `lib/chargeMapper.ts`) instead of trimming it, so the subscription's other items still bill.
 
 ## Packaging and release
 
@@ -83,6 +91,8 @@ Entry format (newest first within a section):
 
 ## Local environment and tooling
 
+- **The root `yarn typecheck` can be OOM-killed on an ~11 GB box, taking the agent session down with it.** (2026-11-27, billing/CPQ flex run)
+  Typecheck one package instead: `cd packages/<pkg> && NODE_OPTIONS=--max-old-space-size=2500 ../../node_modules/.bin/tsc --noEmit -p . --ignoreDeprecations 6.0`. In a fresh worktree run `yarn build:packages` first, or the connector tests fail on missing `@dainamite/billing` modules.
 - **The backend header's organization switcher is a `combobox` that can render after the page content.** (2026-11-23, TC-CPQ-ARC-005)
   A page-wide `[role="combobox"]` `.first()` re-resolves on each use and can hit the switcher instead of the page's picker. Scope it: `page.getByRole('main').locator(...)`. Also clean up in `afterEach`: a `finally` in a timed-out test never completes, so fixtures pile up.
 - **A Playwright click on a server-rendered DataTable row can land before hydration and do nothing.** (2026-11-23, TC-CPQ-006)

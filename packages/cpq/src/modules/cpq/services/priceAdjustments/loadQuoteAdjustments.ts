@@ -17,7 +17,7 @@ export async function loadQuoteAdjustments(em: EntityManager, quoteConfiguration
       id: row.id, level: row.level, quoteLineId: row.quoteLineId, chargeCode: row.chargeCode,
       chargeTypeFilter: row.chargeTypeFilter, adjustmentType: row.adjustmentType, value: Number(row.value),
       currencyCode: row.currencyCode, reasonCode: row.reasonCode, reasonNote: row.reasonNote,
-      fromMonth: row.fromMonth, toMonth: row.toMonth, windowKind: row.windowKind, createdByUserId: row.createdByUserId,
+      fromMonth: row.fromMonth, toMonth: row.toMonth, windowKind: row.windowKind, phaseName: row.phaseName, createdByUserId: row.createdByUserId,
     }))
     if (rows.length < 500) return result
     after = rows[rows.length - 1].id

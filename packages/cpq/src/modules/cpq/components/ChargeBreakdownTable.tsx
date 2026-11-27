@@ -6,8 +6,11 @@ import { Info } from 'lucide-react'
 import { SimpleTooltip } from '@open-mercato/ui/primitives/tooltip'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { DepthBadge, PriceWaterfall } from './PriceWaterfall'
-import { ADJUSTMENT_ERROR_FALLBACKS, type WaterfallChargeInput } from '../lib/priceAdjustmentView'
+import { ADJUSTMENT_ERROR_FALLBACKS, isAboveStandard, type WaterfallChargeInput } from '../lib/priceAdjustmentView'
 import { formatMoney } from '../lib/formatMoney'
+import { ChargePeriodTotal } from './ChargePeriodTotal'
+import { PriceScheduleTable } from './PriceScheduleTable'
+import { IconAction } from './IconAction'
 
 type TierBreakdownEntry = { tier: number; from: number; to: number; pricePerUnit: number; quantity: number; subtotal: number }
 
@@ -18,6 +21,8 @@ export type ChargeRowView = WaterfallChargeInput & {
   note?: string | null
   breakdown?: { tiers: TierBreakdownEntry[] } | null
   adjustmentErrors?: Array<{ code: string }>
+  /** D5: MRC price per this period (absent = every 1 month). */
+  billingPeriod?: { unit: 'month' | 'year'; interval: number }
 }
 
 /** Right-aligned price column header with an explanatory hover tooltip. */
@@ -82,7 +87,7 @@ export function ChargeBreakdownTable<C extends ChargeRowView>({
       </thead>
       <tbody>
         {charges.map((c, i) => {
-          const hasDetail = !!(c.breakdown?.tiers?.length || c.adjustments?.length)
+          const hasDetail = !!(c.breakdown?.tiers?.length || c.adjustments?.length || c.schedule?.length)
           const isDetailOpen = openDetailIndex === i
           const listUnit = c.listUnitPrice ?? c.unitPrice
           const standardUnit = c.standardUnitPrice ?? c.unitPrice
@@ -92,6 +97,11 @@ export function ChargeBreakdownTable<C extends ChargeRowView>({
               <tr className="border-t border-dashed border-border/50">
                 <td className="py-1">
                   <span>{c.chargeName}</span>
+                  {c.schedule?.length ? (
+                    <Tag variant="info" className="ml-1.5 px-1.5 text-xs" data-testid="cpq-charge-phases">
+                      {t('cpq.phases.badge', '{count} phases', { count: c.schedule.length - 1 })}
+                    </Tag>
+                  ) : null}
                   {errors.length > 0 && (
                     <Tag variant="warning" className="ml-1.5 px-1.5 text-xs" data-testid="cpq-adjustment-invalid">
                       {t('cpq.priceAdjustments.invalidReason', 'Invalid: {reason}', {
@@ -105,24 +115,28 @@ export function ChargeBreakdownTable<C extends ChargeRowView>({
                 <td className="py-1 text-right font-mono text-muted-foreground">{formatMoney(standardUnit, currency)}</td>
                 <td className="py-1 text-right font-mono">
                   <span className="inline-flex items-center gap-1">
+                    {isAboveStandard(c.standardTotalPrice ?? standardUnit, c.standardTotalPrice != null ? c.totalPrice : c.unitPrice) && (
+                      <Tag variant="warning" className="px-1.5 text-xs" data-testid="cpq-charge-above-standard">
+                        {t('cpq.priceAdjustments.aboveStandard', 'Above standard')}
+                      </Tag>
+                    )}
                     <DepthBadge before={listUnit} after={c.unitPrice} />
                     {formatMoney(c.unitPrice, currency)}
                   </span>
                 </td>
                 <td className="py-1 text-right font-mono">{c.quantity ?? '—'}</td>
-                <td className="py-1 text-right font-mono">{c.totalPrice != null ? formatMoney(c.totalPrice, currency) : c.note ?? '—'}</td>
-                <td className="py-1 text-right whitespace-nowrap">
-                  {renderChargeActions?.(c)}
-                  {hasDetail && (
-                    <button
-                      type="button"
-                      onClick={() => onToggleDetail(i)}
-                      className="inline-flex items-center justify-center rounded p-0.5 hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
-                      title={t('cpq.priceAdjustments.showBreakdown', 'Show price breakdown')}
-                    >
-                      <Info className="h-3.5 w-3.5" />
-                    </button>
-                  )}
+                <td className="py-1 text-right font-mono"><ChargePeriodTotal charge={c} currency={currency} /></td>
+                <td className="py-1 whitespace-nowrap">
+                  {/* The breakdown toggle goes first, so the row actions (Adjust price %) stay in one column at the right edge. */}
+                  <div className="flex items-center justify-end">
+                    {hasDetail && (
+                      <IconAction label={t('cpq.priceAdjustments.showBreakdown', 'Show price breakdown')} size="xs" onClick={() => onToggleDetail(i)}
+                        data-testid="cpq-charge-breakdown-toggle">
+                        <Info className="h-3.5 w-3.5" />
+                      </IconAction>
+                    )}
+                    {renderChargeActions?.(c)}
+                  </div>
                 </td>
               </tr>
               {isDetailOpen && (
@@ -189,6 +203,16 @@ function ChargePricingDetail({ charge: c, currency, reasonLabels, renderManualAc
         </div>
       )}
 
+      {c.schedule?.length ? (
+        <div>
+          <div className="font-medium text-muted-foreground mb-1">{t('cpq.phases.scheduleTitle', 'Price phases')}</div>
+          <PriceScheduleTable schedule={c.schedule} currency={currency} />
+          <p className="mt-1 text-muted-foreground">
+            {t('cpq.phases.regularHint', 'After the last phase the regular price applies. The waterfall below is the regular price.')}
+          </p>
+        </div>
+      ) : null}
+
       <div>
         <div className="font-medium text-muted-foreground mb-1">{t('cpq.priceAdjustments.waterfall.title', 'Price waterfall')}</div>
         <PriceWaterfall charge={c} currency={currency} reasonLabels={reasonLabels} renderManualActions={renderManualActions} />
@@ -196,7 +220,7 @@ function ChargePricingDetail({ charge: c, currency, reasonLabels, renderManualAc
 
       <div className="flex items-center justify-between pt-1 border-t text-sm font-semibold">
         <span>{t('cpq.charges.finalTotal', 'Final Total')}</span>
-        <span className="font-mono">{c.totalPrice != null ? formatMoney(c.totalPrice, currency) : '—'}</span>
+        <span className="font-mono">{c.totalPrice != null ? <ChargePeriodTotal charge={c} currency={currency} /> : '—'}</span>
       </div>
     </div>
   )

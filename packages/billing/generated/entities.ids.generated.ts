@@ -13,6 +13,8 @@ export const E = {
   billing: {
     billing_account: 'billing:billing_account',
     billing_item: 'billing:billing_item',
+    billing_item_phase: 'billing:billing_item_phase',
+    billing_item_status_period: 'billing:billing_item_status_period',
     billing_account_usage: 'billing:billing_account_usage',
     billing_run: 'billing:billing_run',
     billing_run_outcome: 'billing:billing_run_outcome',

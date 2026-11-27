@@ -100,3 +100,36 @@ describe('ARC billing payloads for devices and price changes (#126)', () => {
   })
 })
 
+
+describe('D5: ARC payloads split the recurring amount per billing period', () => {
+  const yearly = { unit: 'year', interval: 1 }
+  const log = (lineChanges: Array<Record<string, unknown>>, items: Array<Record<string, unknown>>) =>
+    ({ lineChanges, afterSnapshot: { items } }) as unknown as ApplyArcResult['changeLog']
+
+  it('an added item with a monthly and a yearly charge gets one recurring charge per period', () => {
+    const [item] = buildArcAddedItems(log(
+      [{ action: 'add', itemId: 'si-1', mrcAmount: 119900, nrcAmount: 0 }],
+      [{
+        id: 'si-1',
+        name: 'Internet + Mobile',
+        quantity: 1,
+        charges: [
+          { chargeType: 'mrc', totalPrice: 79900 },
+          { chargeType: 'mrc', totalPrice: 480000, billingPeriod: yearly },
+        ],
+      }],
+    ))
+    expect(item.charges).toEqual([
+      { type: 'recurring', unitPrice: 79900, description: 'Recurring charge' },
+      { type: 'recurring', unitPrice: 480000, description: 'Recurring charge', billingPeriod: yearly },
+    ])
+  })
+
+  it('a changed yearly item is re-rated with its price per year', () => {
+    const [item] = buildArcChangedItems(log(
+      [{ action: 'modify', itemId: 'si-1', mrcDelta: 5000, mrcAmount: 45000 }],
+      [{ id: 'si-1', name: 'Mobile', quantity: 1, charges: [{ chargeType: 'mrc', totalPrice: 540000, billingPeriod: yearly }] }],
+    ))
+    expect(item.charges).toEqual([{ type: 'recurring', unitPrice: 540000, description: 'Recurring charge', billingPeriod: yearly }])
+  })
+})

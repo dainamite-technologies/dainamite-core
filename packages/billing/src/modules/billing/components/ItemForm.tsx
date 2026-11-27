@@ -21,6 +21,17 @@ import { BILLING_SETTINGS_HREF } from './BillingSettingsLink'
 import { counterpartAmount, type PriceBasis } from '../lib/lineAmounts'
 import { CreditReasonField, isCreditReasonRequired } from './CreditReasonField'
 import { endsBeforeStart } from '../lib/itemDates'
+import { BILL_CYCLES, BILL_CYCLE_INTERVAL_MAX, type BillCycle } from '../lib/billCycle'
+import {
+  newPhaseRow,
+  phaseRowsToPayload,
+  samePhasePayload,
+  validatePhaseRows,
+  type PhaseEditorRow,
+  type PhasePayload,
+} from '../lib/phaseEditorRows'
+import type { PhaseScheduleIssue } from '../lib/pricePhases'
+import { PhaseEditor } from './PhaseEditor'
 
 /**
  * Shared form for Billing Item create + edit.
@@ -67,6 +78,13 @@ export type ItemFormValues = {
   taxRate: string
   // Spec F (F-D2) — the basis the price inputs are entered on.
   priceBasis: PriceBasis
+  // Line period spec §4.2 — recurring only. `account` = follow the account cycle.
+  periodMode: 'account' | 'own'
+  periodUnit: BillCycle
+  periodInterval: string
+  // Price phases spec §4.1 — recurring only.
+  phasesEnabled: boolean
+  phases: PhaseEditorRow[]
 }
 
 // The accounts list API (`/api/billing/accounts`) returns snake_case
@@ -114,6 +132,12 @@ export type AssembledItemPayload = {
   priceBasis?: PriceBasis
   /** Part 2: set when the new end date credits already-billed days. */
   creditReason?: string
+  /** Contract C1: own billing period (null = follow the account cycle). */
+  billingPeriodUnit?: BillCycle | null
+  billingPeriodInterval?: number | null
+  /** Contract C1: price phases. `phases` replaces the whole schedule. */
+  phasesEnabled?: boolean
+  phases?: PhasePayload[]
 }
 
 const EMPTY_VALUES: ItemFormValues = {
@@ -135,6 +159,36 @@ const EMPTY_VALUES: ItemFormValues = {
   prorate: true,
   taxRate: '',
   priceBasis: 'net',
+  periodMode: 'account',
+  periodUnit: 'monthly',
+  periodInterval: '1',
+  phasesEnabled: false,
+  phases: [],
+}
+
+function phaseIssueMessage(t: ReturnType<typeof useT>, issue: PhaseScheduleIssue): string {
+  const n = issue.index + 1
+  switch (issue.path) {
+    case 'phases':
+      return issue.index === 0
+        ? t('billing.items.phases.error.empty', 'Add at least one phase, or switch phases off')
+        : t('billing.items.phases.error.too_many', 'At most 12 phases per item')
+    case 'durationCount':
+      return t('billing.items.phases.error.duration', 'Phase {n}: the duration must be a whole number of at least 1', { n })
+    case 'durationUnit':
+      return t('billing.items.phases.error.length', 'Phase {n}: give a duration or a last day', { n })
+    case 'value':
+      return t('billing.items.phases.error.value', 'Phase {n}: enter a value of 0 or more (percent off: 0–100)', { n })
+    default:
+      return t('billing.items.phases.error.dates', 'Phase {n}: pick a last day on or after the phase start — phases run back to back', { n })
+  }
+}
+
+const PERIOD_UNIT_KEYS: Record<BillCycle, [string, string]> = {
+  daily: ['billing.items.period.unit.daily', 'days'],
+  weekly: ['billing.items.period.unit.weekly', 'weeks'],
+  monthly: ['billing.items.period.unit.monthly', 'months'],
+  annually: ['billing.items.period.unit.annually', 'years'],
 }
 
 function todayIso(): string {
@@ -175,6 +229,7 @@ export function ItemForm({
   const [error, setError] = React.useState<string | null>(null)
   const isEdit = mode === 'edit'
   const [creditReason, setCreditReason] = React.useState('')
+  const [phaseErrorIndex, setPhaseErrorIndex] = React.useState<number | null>(null)
   // Part 2: an earlier end date on a billed recurring item credits days — ask why.
   const initialEndDate = initial?.billEndDate ?? ''
   const endDateChanged = isEdit && values.billEndDate !== initialEndDate
@@ -362,6 +417,26 @@ export function ItemForm({
       setError(rateJsonResult)
       return
     }
+    const isRecurring = values.type === 'recurring'
+    let periodInterval: number | null = null
+    if (isRecurring && values.periodMode === 'own') {
+      const n = Number(values.periodInterval)
+      const max = BILL_CYCLE_INTERVAL_MAX[values.periodUnit]
+      if (!Number.isInteger(n) || n < 1 || n > max) {
+        setError(t('billing.items.period.error.interval', 'The billing period must be every 1–{max} units', { max }))
+        return
+      }
+      periodInterval = n
+    }
+    if (isRecurring && values.phasesEnabled) {
+      const issue = validatePhaseRows(values.billStartDate, values.phases)
+      if (issue) {
+        setPhaseErrorIndex(issue.path === 'phases' ? null : issue.index)
+        setError(phaseIssueMessage(t, issue))
+        return
+      }
+    }
+    setPhaseErrorIndex(null)
     setError(null)
 
     const payload: AssembledItemPayload = {
@@ -387,8 +462,28 @@ export function ItemForm({
     payload.priceBasis = effectiveBasis
     if (isEdit) payload.isActive = values.isActive
     if (creditReasonRequired) payload.creditReason = creditReason.trim()
+    if (isRecurring) {
+      // Own billing period (L §4.2): on edit only a change is sent.
+      const unit = values.periodMode === 'own' ? values.periodUnit : null
+      const initialUnit = initial?.periodMode === 'own' ? initial.periodUnit ?? null : null
+      const initialInterval = initialUnit ? Number(initial?.periodInterval ?? 1) : null
+      if (!isEdit ? unit !== null : unit !== initialUnit || periodInterval !== initialInterval) {
+        payload.billingPeriodUnit = unit
+        payload.billingPeriodInterval = periodInterval
+      }
+      // Price phases (P §4.1): `phases` replaces the schedule, so on edit an
+      // unchanged schedule is not re-sent (it would be re-checked against billed days).
+      if (values.phasesEnabled) {
+        if (!isEdit || !initial?.phasesEnabled) payload.phasesEnabled = true
+        if (!isEdit || !samePhasePayload(initial?.phases ?? [], values.phases)) {
+          payload.phases = phaseRowsToPayload(values.phases)
+        }
+      } else if (isEdit && initial?.phasesEnabled) {
+        payload.phasesEnabled = false
+      }
+    }
     await onSubmit(payload)
-  }, [buildRateJson, creditReason, creditReasonRequired, effectiveBasis, isEdit, onSubmit, t, values])
+  }, [buildRateJson, creditReason, creditReasonRequired, effectiveBasis, initial, isEdit, onSubmit, t, values])
 
   const handleKeyDown = React.useCallback(
     (event: React.KeyboardEvent<HTMLDivElement>) => {
@@ -599,52 +694,6 @@ export function ItemForm({
           </span>
         </label>
 
-        {values.type === 'recurring' ? (
-          <label className="flex flex-col gap-1 text-sm">
-            <span className="text-muted-foreground">
-              {t('billing.items.form.charge_timing', 'Charge timing')}
-            </span>
-            <Select
-              value={values.chargeTiming}
-              onValueChange={(next) => set('chargeTiming', next === 'in_arrears' ? 'in_arrears' : 'in_advance')}
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="in_advance">
-                  {t('billing.items.charge_timing.in_advance', 'In advance')}
-                </SelectItem>
-                <SelectItem value="in_arrears">
-                  {t('billing.items.charge_timing.in_arrears', 'In arrears')}
-                </SelectItem>
-              </SelectContent>
-            </Select>
-            <span className="text-xs text-muted-foreground">
-              {values.chargeTiming === 'in_arrears'
-                ? t('billing.items.form.charge_timing.help_arrears', 'Each bill date charges the period that just ended.')
-                : t('billing.items.form.charge_timing.help_advance', 'Each bill date charges the coming period.')}
-            </span>
-          </label>
-        ) : null}
-
-        {values.type === 'recurring' ? (
-          <div className="flex items-center justify-between gap-3 text-sm">
-            <div>
-              <div className="font-medium">
-                {t('billing.items.form.prorate', 'Prorate partial periods')}
-              </div>
-              <div className="text-xs text-muted-foreground">
-                {t(
-                  'billing.items.form.prorate.help',
-                  'Charge by calendar days when the item starts or ends mid-period, and credit unused days if it ends after being billed in advance.',
-                )}
-              </div>
-            </div>
-            <Switch checked={values.prorate} onCheckedChange={(next) => set('prorate', next)} />
-          </div>
-        ) : null}
-
         {values.type === 'usage' ? (
           <>
             <label className="flex flex-col gap-1 text-sm">
@@ -715,6 +764,136 @@ export function ItemForm({
           </>
         ) : null}
       </div>
+
+      {values.type === 'recurring' ? (
+        <>
+          <div className="mt-6 mb-2 flex items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-semibold">{t('billing.items.phases.switch', 'Price changes over time (phases)')}</div>
+              <div className="text-xs text-muted-foreground">
+                {t('billing.items.phases.switch_help', 'Free trial, introductory discount or a ramp deal before the regular price.')}
+              </div>
+            </div>
+            <Switch
+              checked={values.phasesEnabled}
+              onCheckedChange={(next) =>
+                setValues((prev) => ({
+                  ...prev,
+                  phasesEnabled: next,
+                  phases: next && prev.phases.length === 0 ? [newPhaseRow()] : prev.phases,
+                }))
+              }
+            />
+          </div>
+          {values.phasesEnabled ? (
+            <PhaseEditor
+              rows={values.phases}
+              onChange={(next) => set('phases', next)}
+              billStartDate={values.billStartDate}
+              currencyCode={currencyCode}
+              errorIndex={phaseErrorIndex}
+            />
+          ) : isEdit && values.phases.length > 0 ? (
+            <p className="text-xs text-muted-foreground">
+              {t('billing.items.phases.switched_off_help', 'The saved schedule is kept but not applied while phases are off.')}
+            </p>
+          ) : null}
+        </>
+      ) : null}
+
+      {values.type === 'recurring' ? (
+        <>
+          <h3 className="mt-6 mb-2 text-sm font-semibold">{t('billing.items.form.billing_settings.title', 'Billing settings')}</h3>
+          <div className="grid grid-cols-2 gap-4">
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="text-muted-foreground">
+              {t('billing.items.form.charge_timing', 'Charge timing')}
+            </span>
+            <Select
+              value={values.chargeTiming}
+              onValueChange={(next) => set('chargeTiming', next === 'in_arrears' ? 'in_arrears' : 'in_advance')}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="in_advance">
+                  {t('billing.items.charge_timing.in_advance', 'In advance')}
+                </SelectItem>
+                <SelectItem value="in_arrears">
+                  {t('billing.items.charge_timing.in_arrears', 'In arrears')}
+                </SelectItem>
+              </SelectContent>
+            </Select>
+            <span className="text-xs text-muted-foreground">
+              {values.chargeTiming === 'in_arrears'
+                ? t('billing.items.form.charge_timing.help_arrears', 'Each bill date charges the period that just ended.')
+                : t('billing.items.form.charge_timing.help_advance', 'Each bill date charges the coming period.')}
+            </span>
+          </label>
+          <div className="flex items-center justify-between gap-3 text-sm">
+            <div>
+              <div className="font-medium">
+                {t('billing.items.form.prorate', 'Prorate partial periods')}
+              </div>
+              <div className="text-xs text-muted-foreground">
+                {t(
+                  'billing.items.form.prorate.help',
+                  'Charge by calendar days when the item starts or ends mid-period, and credit unused days if it ends after being billed in advance.',
+                )}
+              </div>
+            </div>
+            <Switch checked={values.prorate} onCheckedChange={(next) => set('prorate', next)} />
+          </div>
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="text-muted-foreground">{t('billing.items.period.label', 'Bill this line')}</span>
+              <Select value={values.periodMode} onValueChange={(next) => set('periodMode', next === 'own' ? 'own' : 'account')}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="account">{t('billing.items.period.same_as_account', 'Same as account')}</SelectItem>
+                  <SelectItem value="own">{t('billing.items.period.own', 'On its own period')}</SelectItem>
+                </SelectContent>
+              </Select>
+              <span className="text-xs text-muted-foreground">
+                {values.periodMode === 'own'
+                  ? t('billing.items.period.own_help', 'Charged once per period, counted from the bill start date, on the account’s bill runs.')
+                  : t('billing.items.period.account_help', 'Charged on the account’s bill cycle.')}
+              </span>
+            </label>
+            {values.periodMode === 'own' ? (
+              <div className="flex flex-col gap-1 text-sm">
+                <span className="text-muted-foreground">{t('billing.items.period.every', 'Every')}</span>
+                <div className="flex gap-2">
+                  <Input
+                    type="number"
+                    min="1"
+                    max={BILL_CYCLE_INTERVAL_MAX[values.periodUnit]}
+                    step="1"
+                    className="w-24"
+                    aria-label={t('billing.items.period.interval', 'Period length')}
+                    value={values.periodInterval}
+                    onChange={(event) => set('periodInterval', event.currentTarget.value)}
+                  />
+                  <Select value={values.periodUnit} onValueChange={(next) => set('periodUnit', next as BillCycle)}>
+                    <SelectTrigger aria-label={t('billing.items.period.unit', 'Period unit')}>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {BILL_CYCLES.map((cycle) => (
+                        <SelectItem key={cycle} value={cycle}>
+                          {t(PERIOD_UNIT_KEYS[cycle][0], PERIOD_UNIT_KEYS[cycle][1])}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        </>
+      ) : null}
 
       <h3 className="text-sm font-semibold mt-6 mb-2">
         {t('billing.items.form.refs.title', 'External references (optional)')}

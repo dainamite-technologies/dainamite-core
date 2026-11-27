@@ -15,6 +15,7 @@ import {
 import { quoteRecordVersion, type CpqQuoteSnapshot } from '../../ai-tools/_shared'
 import { CPQ_QUOTE_MUTATION_TOOL_NAMES, mergeLinePatch } from '../../ai-tools/quotes-pack'
 import { CPQ_CATALOG_WRITE_TOOL_NAMES } from '../../ai-tools/catalog-write-pack'
+import { CPQ_INVENTORY_WRITE_TOOL_NAMES } from '../../ai-tools/inventory-pack'
 import { cpqOfferingComponentCreateSchema, cpqProductOfferingCreateSchema } from '../../data/validators'
 import { aiTools } from '../../ai-tools'
 import {
@@ -69,18 +70,19 @@ beforeEach(() => {
 })
 
 describe('mutation flags', () => {
-  it('flags exactly the quote and catalog write tools as mutations', () => {
+  it('flags exactly the quote, catalog and inventory write tools as mutations', () => {
     const mutations = aiTools.filter((tool) => tool.isMutation === true).map((tool) => tool.name).sort()
     expect(mutations).toEqual([
       'cpq.add_bundle_component',
       'cpq.add_quote_line',
+      'cpq.change_subscription_status',
       'cpq.create_offering',
       'cpq.create_quote',
       'cpq.remove_bundle_component',
       'cpq.submit_quote_for_approval',
       'cpq.update_quote_line',
     ])
-    expect([...CPQ_QUOTE_MUTATION_TOOL_NAMES, ...CPQ_CATALOG_WRITE_TOOL_NAMES].sort()).toEqual(mutations)
+    expect([...CPQ_QUOTE_MUTATION_TOOL_NAMES, ...CPQ_CATALOG_WRITE_TOOL_NAMES, ...CPQ_INVENTORY_WRITE_TOOL_NAMES].sort()).toEqual(mutations)
   })
 
   it('gives every mutation tool a preview resolver and no read tool one', () => {

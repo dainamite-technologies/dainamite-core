@@ -20,6 +20,7 @@ import { Alert } from '@open-mercato/ui/primitives/alert'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { CpqListView, useCpqListData } from '../../../components/CpqListView'
 import { NumberInput } from '../../../components/NumberInput'
+import { catalogChargePeriodSuffix } from '../../../lib/chargeBillingPeriodLabel'
 import {
   chargeTypeMap,
   formatStatusLabel,
@@ -37,6 +38,8 @@ type Charge = {
   pricingMethod: string
   fixedPrice: string | null
   currencyCode: string | null
+  billingPeriodUnit?: string | null
+  billingPeriodInterval?: number | null
   isActive: boolean
 }
 
@@ -79,7 +82,7 @@ function ChargePopover({ charge }: { charge: Charge }) {
             <span>{t('cpq.offerings.list.chargePopover.pricing', 'Pricing: {method}', { method: charge.pricingMethod })}</span>
             {charge.fixedPrice != null && (
               <span className="font-medium">
-                {charge.currencyCode ?? 'USD'} {charge.fixedPrice}
+                {charge.currencyCode ?? 'USD'} {charge.fixedPrice} {catalogChargePeriodSuffix(t, charge)}
               </span>
             )}
           </div>

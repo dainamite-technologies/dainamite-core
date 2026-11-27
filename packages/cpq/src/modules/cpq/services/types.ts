@@ -258,6 +258,12 @@ export interface ResolvedCharge {
   breakdown?: TierBreakdown | null
   note?: string | null
   adjustments?: RuleAdjustment[] | null
+  /**
+   * D5 (spec 2026-11-26 line period): MRC prices are per this period. Absent
+   * = every 1 month. MRC totals use the monthly equivalent
+   * (`lib/chargeBillingPeriod.ts`); `unitPrice` / `totalPrice` stay per period.
+   */
+  billingPeriod?: { unit: 'month' | 'year'; interval: number }
 }
 
 // ─── Inventory status constants ──────────────────────────────────
@@ -269,29 +275,50 @@ export const INVENTORY_SUBSCRIPTION_STATUSES = [
   'terminated',
   'expired',
   'superseded',
+  // Spec 2026-11-26 line status (D6): the customer asked to stop for a while,
+  // and payment overdue with the service still on (a flag before suspension).
+  'paused',
+  'grace',
 ] as const
 export type InventorySubscriptionStatus = (typeof INVENTORY_SUBSCRIPTION_STATUSES)[number]
 
 export const INVENTORY_BILLING_CYCLES = ['monthly', 'quarterly', 'annually'] as const
 
+/**
+ * XD-215 state machine, shared by subscriptions and their items (an item can
+ * now be paused / suspended / put in grace on its own, D6). `pending → active`
+ * is order activation; paused / suspended / grace go back to `active` (resume).
+ * Grace can escalate to a suspension. Terminal: terminated, expired, superseded.
+ */
 export const INVENTORY_SUBSCRIPTION_TRANSITIONS: Record<InventorySubscriptionStatus, InventorySubscriptionStatus[]> = {
   pending: ['active', 'terminated'],
-  active: ['suspended', 'terminated', 'expired', 'superseded'],
+  active: ['suspended', 'paused', 'grace', 'terminated', 'expired', 'superseded'],
   suspended: ['active', 'terminated', 'superseded'],
+  paused: ['active', 'terminated', 'superseded'],
+  grace: ['active', 'suspended', 'terminated', 'superseded'],
   terminated: [],
   expired: [],
   superseded: [],
 }
 
-export const INVENTORY_SUBSCRIPTION_ITEM_STATUSES = [
-  'pending',
-  'active',
-  'suspended',
-  'terminated',
-  'expired',
-  'superseded',
-] as const
-export type InventorySubscriptionItemStatus = (typeof INVENTORY_SUBSCRIPTION_ITEM_STATUSES)[number]
+export const INVENTORY_SUBSCRIPTION_ITEM_STATUSES = INVENTORY_SUBSCRIPTION_STATUSES
+export type InventorySubscriptionItemStatus = InventorySubscriptionStatus
+export const INVENTORY_SUBSCRIPTION_ITEM_TRANSITIONS = INVENTORY_SUBSCRIPTION_TRANSITIONS
+
+/** Statuses after which an item / subscription never runs again. */
+export const INVENTORY_TERMINAL_STATUSES: readonly InventorySubscriptionStatus[] = ['terminated', 'expired', 'superseded']
+
+// ─── Subscription status actions (spec 2026-11-26 line status, D6) ──
+// Pure constants live in `lib/subscriptionStatusActions.ts` (client-safe).
+export {
+  SUBSCRIPTION_STATUS_ACTIONS,
+  SUBSCRIPTION_STATUS_ACTION_TARGET,
+  SUBSCRIPTION_STATUS_ACTION_FROM,
+  STATUS_CHARGE_BEHAVIORS,
+  defaultChargeBehavior,
+  type SubscriptionStatusAction,
+  type StatusChargeBehavior,
+} from '../lib/subscriptionStatusActions'
 
 export const INVENTORY_ASSET_STATUSES = ['pending', 'delivered', 'active', 'returned', 'cancelled'] as const
 export type InventoryAssetStatus = (typeof INVENTORY_ASSET_STATUSES)[number]
@@ -346,6 +373,8 @@ export const CHANGE_LOG_TYPES = [
   'cancel',
   'merge-result',
   'merge-source',
+  // D6: pause / suspend / grace / resume / terminate from the inventory.
+  'status',
 ] as const
 export type ChangeLogType = (typeof CHANGE_LOG_TYPES)[number]
 

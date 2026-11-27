@@ -22,6 +22,8 @@ export function inventoryStatusLabel(t: TranslateFn, status: string): string {
     case 'delivered': return t('cpq.inventory.status.delivered', 'Delivered')
     case 'returned': return t('cpq.inventory.status.returned', 'Returned')
     case 'suspended': return t('cpq.inventory.status.suspended', 'Suspended')
+    case 'paused': return t('cpq.inventory.status.paused', 'Paused')
+    case 'grace': return t('cpq.inventory.status.grace', 'Grace period')
     case 'terminated': return t('cpq.inventory.status.terminated', 'Terminated')
     case 'expired': return t('cpq.inventory.status.expired', 'Expired')
     case 'cancelled': return t('cpq.inventory.status.cancelled', 'Cancelled')

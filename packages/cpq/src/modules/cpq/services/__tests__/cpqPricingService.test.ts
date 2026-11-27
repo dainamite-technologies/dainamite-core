@@ -1238,3 +1238,26 @@ describe('negotiated-pricing baseline — all rule types across charge models', 
     },
   )
 })
+
+describe('D5 — charge billing period on resolved charges', () => {
+  const resolve = async (overrides: Record<string, unknown>) => {
+    const em = createMockEm()
+    const service = new DefaultCpqPricingService(em as unknown as never)
+    const charge = { ...makeCharge({ code: 'mob', name: 'Mobile', chargeType: 'mrc', pricingMethod: 'fixed', fixedPrice: '480000', currencyCode: 'COP' }), chargeModel: 'flat', ...overrides }
+    return service.calculateCharge({ charge: charge as unknown as never, configuration: {}, tenantId: SCOPE.tenantId, organizationId: SCOPE.organizationId })
+  }
+
+  it('a yearly MRC keeps its price per year and carries billingPeriod', async () => {
+    const result = await resolve({ billingPeriodUnit: 'year', billingPeriodInterval: 1 })
+    expect(result).toMatchObject({ unitPrice: 480000, totalPrice: 480000, billingPeriod: { unit: 'year', interval: 1 } })
+  })
+
+  it('a monthly MRC (default) carries no billingPeriod, as before', async () => {
+    expect(await resolve({ billingPeriodUnit: 'month', billingPeriodInterval: 1 })).not.toHaveProperty('billingPeriod')
+    expect(await resolve({})).not.toHaveProperty('billingPeriod')
+  })
+
+  it('an NRC never carries a period', async () => {
+    expect(await resolve({ chargeType: 'nrc', billingPeriodUnit: 'year' })).not.toHaveProperty('billingPeriod')
+  })
+})

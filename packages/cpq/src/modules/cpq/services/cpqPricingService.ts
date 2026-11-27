@@ -1,4 +1,5 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
+import { billingPeriodField, normalizeBillingPeriod } from '../lib/chargeBillingPeriod'
 import { CpqProductCharge, CpqPricingTable, CpqPricingTableEntry, CpqPriceRule } from '../data/entities'
 import type { ResolvedCharge, RuleAdjustment, TierBreakdown } from './types'
 import { getBaseCurrencyCode } from './types'
@@ -268,6 +269,8 @@ export class DefaultCpqPricingService {
       quantity: 1,
       totalPrice: 0,
       currencyCode: fallbackCurrency,
+      // D5: an MRC price is per the charge's billing period (absent = every 1 month).
+      ...(charge.chargeType === 'mrc' ? billingPeriodField(normalizeBillingPeriod(charge)) : {}),
     }
 
     // ── Fixed price: unit price is the charge's own fixedPrice. Also the

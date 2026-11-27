@@ -65,6 +65,8 @@ export const CPQ_WRITE_TOOLS: readonly string[] = [
   'cpq.add_quote_line',
   'cpq.update_quote_line',
   'cpq.submit_quote_for_approval',
+  // D6: inventory status actions (pause / suspend / grace / resume / terminate).
+  'cpq.change_subscription_status',
 ]
 
 /** #128: catalog writes, allowlisted only on `cpq.catalog_assistant`. */
@@ -199,7 +201,9 @@ const MUTATION_POLICY = [
   '  yourself; otherwise its required slots stay empty and the quote is incomplete (V-QBUN-1).',
   '- To pick a top-level offering, list with isSellable: true. Add a component-only offering only with the',
   '  bundle line as parentLineId; otherwise the API refuses it with V-QLINE-1.',
-  '- You never convert quotes to orders, activate orders or change inventory; send the operator to the backoffice.',
+  '- You never convert quotes to orders, activate orders or change inventory rows; send the operator to the backoffice.',
+  '  The one inventory write is cpq.change_subscription_status (pause / suspend / grace / resume / terminate a',
+  '  subscription or one item); read the subscription first and pass the item id from cpq.get_subscription.',
   ONE_WRITE_AT_A_TIME,
 ].join('\n')
 

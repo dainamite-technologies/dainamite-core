@@ -30,6 +30,7 @@ import {
   type TenantScope,
 } from './types'
 import { emitCpqEvent } from '../events'
+import { buildRecurringPayloadCharges } from '../lib/chargeBillingPeriod'
 import { buildActivatedEventCustomerFields, type ActivatedEventCustomerFields } from '../lib/activatedEventCustomer'
 import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
 import { arcMirroredAssetId, stripQuoteOnlyArcMarkers } from './arcPriceFreeze'
@@ -687,6 +688,8 @@ export class DefaultCpqOrderService {
       {
         customerId: orderConfig.customerId,
         name: subscriptionName,
+        // The account-level default cycle. Each item's charges keep their own
+        // billing period (D5), carried to billing on the activation payload.
         billingCycle: 'monthly',
         currencyCode: orderConfig.currencyCode,
         startDate: dateColumnToIso(lineWithDates?.startDate) ?? undefined,
@@ -723,7 +726,7 @@ export class DefaultCpqOrderService {
     }
     await this.em.flush()
 
-    const assetEventItems: Array<{ subscriptionItemId: string; orderLineId: string; startDate: string | null; productName: string; mrcTotal: number; nrcTotal: number }> = []
+    const assetEventItems: ActivatedInventory['items'] = []
     for (const line of assetLines) {
       let subscriptionItemId: string | undefined
       if (line.parentLineId) {
@@ -761,6 +764,8 @@ export class DefaultCpqOrderService {
         productName: this.getLineName(line),
         mrcTotal: Number(line.mrcTotal),
         nrcTotal: Number(line.nrcTotal),
+        charges: (line.charges ?? null) as Array<Record<string, unknown>> | null,
+        quantity: line.quantity,
       })
     }
 
@@ -768,13 +773,15 @@ export class DefaultCpqOrderService {
     // input for the `cpq.subscription.activated` billing-onboarding event.
     const eventItems = subscriptionLines
       .slice(0, allSubItems.length)
-      .map((line, i) => ({
+      .map((line, i): ActivatedInventory['items'][number] => ({
         subscriptionItemId: allSubItems[i].id,
         orderLineId: line.orderLineId,
         startDate: iso10(line.startDate),
         productName: this.getLineName(line),
         mrcTotal: Number(line.mrcTotal),
         nrcTotal: Number(line.nrcTotal),
+        charges: (line.charges ?? null) as Array<Record<string, unknown>> | null,
+        quantity: line.quantity,
       }))
       .concat(assetEventItems)
       // Only lines with a billable charge — a zero-value line yields
@@ -1253,9 +1260,13 @@ type ActivatedInventory = {
     /** The line's service start (`YYYY-MM-DD`), or null when the quote set none. */
     startDate: string | null
     productName: string
-    /** Line totals — CPQ pricing has already applied line quantity. */
+    /** Line totals — CPQ pricing has already applied line quantity. `mrcTotal` is the monthly equivalent (D5). */
     mrcTotal: number
     nrcTotal: number
+    /** The line's per-instance charges (carry each MRC charge's `billingPeriod`). */
+    charges?: Array<Record<string, unknown>> | null
+    /** Line quantity — only used to turn per-instance prices per period into line totals. */
+    quantity?: number
   }>
 }
 
@@ -1284,10 +1295,10 @@ async function emitActivatedEvent(
     // `unitPrice × quantity` stays internally consistent no matter
     // how the connector treats the multiplier.
     quantity: 1,
+    // C2: one recurring charge per distinct billing period, priced per that
+    // period; `billingPeriod` is omitted for every 1 month (today's payload).
     charges: [
-      ...(it.mrcTotal > 0
-        ? [{ type: 'recurring', unitPrice: it.mrcTotal, description: 'Recurring charge' }]
-        : []),
+      ...(it.mrcTotal > 0 ? buildRecurringPayloadCharges(it.charges, it.quantity ?? 1, it.mrcTotal) : []),
       ...(it.nrcTotal > 0
         ? [{ type: 'one_time', amount: it.nrcTotal, description: 'One-time charge' }]
         : []),
@@ -1329,6 +1340,18 @@ type ArcChargeItem = {
   charges: Array<Record<string, unknown>>
 }
 
+/** A subscription item as stored in a change log's `afterSnapshot`. */
+type SnapshotItem = { id?: string; name?: string; quantity?: number; charges?: Array<Record<string, unknown>> }
+
+/**
+ * C2 recurring charges of an ARC item: split per billing period using the
+ * item's stored charges (after snapshot); `mrc` is the item's monthly-equivalent
+ * total. Without stored charges this is the single monthly charge of today.
+ */
+function recurringFromSnapshot(item: SnapshotItem | undefined, mrc: number): Array<Record<string, unknown>> {
+  return buildRecurringPayloadCharges(item?.charges ?? null, Number(item?.quantity ?? 1), mrc)
+}
+
 /**
  * Build the connector's `addedItems` from a change log's `add` line
  * changes. `mrcAmount` / `nrcAmount` are line totals (CPQ pricing has
@@ -1340,11 +1363,12 @@ export function buildArcAddedItems(
   lineRefs?: Map<string, ArcLineRef>,
 ): ArcChargeItem[] {
   const after = changeLog.afterSnapshot as
-    | { items?: Array<{ id?: string; name?: string }> }
+    | { items?: SnapshotItem[] }
     | null
   const nameById = new Map(
     (after?.items ?? []).map((i) => [String(i.id), i.name ?? '']),
   )
+  const itemById = new Map((after?.items ?? []).map((i) => [String(i.id), i]))
   const summary = (changeLog.lineChanges ?? []) as Array<{
     action?: string
     itemId?: string
@@ -1370,9 +1394,7 @@ export function buildArcAddedItems(
       productName: nameById.get(billedId) || change.name || 'Configured item',
       quantity: 1,
       charges: [
-        ...(mrc > 0
-          ? [{ type: 'recurring', unitPrice: mrc, description: 'Recurring charge' }]
-          : []),
+        ...(mrc > 0 ? recurringFromSnapshot(itemById.get(billedId), mrc) : []),
         ...(nrc > 0
           ? [{ type: 'one_time', amount: nrc, description: 'One-time charge' }]
           : []),
@@ -1407,8 +1429,9 @@ export function buildArcRemovedItemIds(changeLog: ApplyArcResult['changeLog']): 
  * never re-bills one-time charges.
  */
 export function buildArcChangedItems(changeLog: ApplyArcResult['changeLog']): ArcChargeItem[] {
-  const after = changeLog.afterSnapshot as { items?: Array<{ id?: string; name?: string }> } | null
+  const after = changeLog.afterSnapshot as { items?: SnapshotItem[] } | null
   const nameById = new Map((after?.items ?? []).map((i) => [String(i.id), i.name ?? '']))
+  const itemById = new Map((after?.items ?? []).map((i) => [String(i.id), i]))
   const summary = (changeLog.lineChanges ?? []) as Array<{
     action?: string
     itemId?: string
@@ -1424,7 +1447,7 @@ export function buildArcChangedItems(changeLog: ApplyArcResult['changeLog']): Ar
       subscriptionItemId: change.itemId,
       productName: nameById.get(change.itemId) || 'Configured item',
       quantity: 1,
-      charges: mrc > 0 ? [{ type: 'recurring', unitPrice: mrc, description: 'Recurring charge' }] : [],
+      charges: mrc > 0 ? recurringFromSnapshot(itemById.get(change.itemId), mrc) : [],
     })
   }
   return out

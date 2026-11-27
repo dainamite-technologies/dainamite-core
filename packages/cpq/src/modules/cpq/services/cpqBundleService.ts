@@ -503,6 +503,8 @@ export class DefaultCpqBundleService {
         pricingMethod: c.pricingMethod,
         fixedPrice: c.fixedPrice,
         currencyCode: c.currencyCode,
+        billingPeriodUnit: c.billingPeriodUnit,
+        billingPeriodInterval: c.billingPeriodInterval,
       })),
       slots: [],
     }

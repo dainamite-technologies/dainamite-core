@@ -19,7 +19,13 @@ export async function POST(req: Request) {
     const scope = { organizationId: ctx.organizationId, tenantId: ctx.tenantId }
     const service = ctx.container.resolve('cpqInventoryService') as any
 
-    const result = await service.transitionSubscriptionStatus(body.id, body.targetStatus, scope)
+    // D6: suspend / pause / grace / resume / terminate go through the status
+    // actions and emit their event; other moves are plain transitions.
+    const { id, targetStatus, ...options } = body
+    const result = await service.changeSubscriptionStatus(id, targetStatus, scope, {
+      ...options,
+      performedByUserId: typeof ctx.auth?.sub === 'string' ? ctx.auth.sub : null,
+    })
     return NextResponse.json(result)
   } catch (err) {
     return handleArcError(err, 'cpq/inventory/subscriptions/status.POST')
@@ -32,7 +38,7 @@ export const openApi: OpenApiRouteDoc = {
   methods: {
     POST: {
       summary: 'Transition an inventory subscription to another status',
-      description: 'Validates the transition against the subscription state machine. Non-terminal items follow the new status, and linked assets are activated or cancelled accordingly.',
+      description: 'Validates the transition against the subscription state machine (statuses: pending, active, paused, suspended, grace, terminated, expired, superseded). Moves to paused / suspended / grace, back to active from those, and to terminated run as the matching status action of POST /api/cpq/inventory/subscriptions/actions (dates, charge behaviour, reason; emits cpq.subscription_item.status_changed or cpq.subscription.terminated). Prefer that route; it also acts on one item.',
       requestBody: { schema: cpqInventoryStatusTransitionSchema },
       responses: [{ status: 200, description: 'Subscription with its new status' }],
       errors: [

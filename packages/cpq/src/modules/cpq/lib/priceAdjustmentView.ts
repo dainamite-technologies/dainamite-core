@@ -235,7 +235,7 @@ export function adjustmentErrorCode(status: number, body: unknown): string {
 }
 
 /** Narrow a stored charge jsonb (subscription / order item) to the waterfall shape; null when unusable. */
-export function parseStoredCharge(raw: unknown): (WaterfallChargeInput & { chargeName: string; quantity: number | null }) | null {
+export function parseStoredCharge(raw: unknown): (WaterfallChargeInput & { chargeName: string; quantity: number | null; billingPeriod?: unknown }) | null {
   if (!raw || typeof raw !== 'object') return null
   const record = raw as Record<string, unknown>
   const num = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) ? value : undefined)
@@ -258,6 +258,8 @@ export function parseStoredCharge(raw: unknown): (WaterfallChargeInput & { charg
     standardUnitPrice: num(record.standardUnitPrice),
     standardTotalPrice: num(record.standardTotalPrice) ?? null,
     adjustments,
+    // D5: MRC price per period (absent = every 1 month).
+    ...(record.billingPeriod && typeof record.billingPeriod === 'object' ? { billingPeriod: record.billingPeriod } : {}),
   }
 }
 

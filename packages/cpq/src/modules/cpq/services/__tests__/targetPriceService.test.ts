@@ -126,8 +126,10 @@ describe('replaceTarget', () => {
     const { service, active } = setup()
     const recurringSet = await service.replaceTarget(quoteId, phases, actor, scope)
     const allCharges = { target: { level: 'line' as const, quoteLineId: lineId, chargeTypeFilter: null }, phases: [], then: { adjustmentType: 'discount_percent' as const, value: 10 }, reasonCode: 'promotion' }
-    await expect(service.replaceTarget(quoteId, allCharges, actor, scope))
-      .rejects.toMatchObject({ status: 422, message: 'ADJUSTMENT_OVERLAP', details: { adjustmentId: recurringSet.after[0].id } })
+    const refused = await service.replaceTarget(quoteId, allCharges, actor, scope).catch((error: unknown) => error)
+    expect(refused).toMatchObject({ status: 422, message: 'ADJUSTMENT_OVERLAP' })
+    // The details name the other target's row (either phase overlaps "every month").
+    expect(recurringSet.after.map((row) => row.id)).toContain((refused as { details: { adjustmentId: string } }).details.adjustmentId)
     expect(active()).toHaveLength(2)
     // A one-time target on the same line does not overlap the recurring phases.
     await service.replaceTarget(quoteId, { ...allCharges, target: { ...allCharges.target, chargeTypeFilter: 'nrc' } }, actor, scope)
@@ -166,7 +168,8 @@ describe('previewTarget', () => {
     em.persist.mockClear()
     const recurringIds = active().map((row) => row.id)
     const preview = await service.previewTarget(quoteId, { target: { level: 'line', quoteLineId: lineId, chargeTypeFilter: null }, phases: [], then: { adjustmentType: 'discount_percent', value: 10 }, reasonCode: 'promotion' }, scope)
-    expect(preview.errors).toEqual([expect.objectContaining({ code: 'ADJUSTMENT_OVERLAP', conflictsWith: recurringIds[0] })])
+    expect(preview.errors).toEqual([expect.objectContaining({ code: 'ADJUSTMENT_OVERLAP' })])
+    expect(recurringIds).toContain(preview.errors[0].conflictsWith)
     expect(em.persist).not.toHaveBeenCalled()
     expect(recalculateLockedQuote).toHaveBeenLastCalledWith(em, expect.anything(), scope, false, expect.any(Array))
   })

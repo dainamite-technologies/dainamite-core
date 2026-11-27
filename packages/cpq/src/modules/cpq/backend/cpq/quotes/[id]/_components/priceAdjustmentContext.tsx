@@ -2,8 +2,7 @@
 
 import * as React from 'react'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
-import { CalendarRange, Pencil, Tags, Trash2 } from 'lucide-react'
-import { Button } from '@open-mercato/ui/primitives/button'
+import { Pencil, Percent, Trash2 } from 'lucide-react'
 import { IconButton } from '@open-mercato/ui/primitives/icon-button'
 import { SimpleTooltip } from '@open-mercato/ui/primitives/tooltip'
 import type { AdjustmentAccess, LineEligibilityInput, WaterfallChargeInput } from '../../../../../lib/priceAdjustmentView'
@@ -20,11 +19,11 @@ export type PriceAdjustmentUi = {
   /** Ids of adjustments currently flagged invalid (they keep Delete while locked). */
   invalidIds: Set<string>
   canDeleteInvalid: boolean
-  openCharge: (line: AdjustableLine, charge: AdjustableCharge) => void
-  openLine: (line: AdjustableLine) => void
-  /** Price phases editor on a line's recurring total, or on one recurring charge. */
-  openPhases: (line: AdjustableLine, charge?: AdjustableCharge) => void
+  /** Price dialog on the line's default target, or on one charge. */
+  openPrice: (line: AdjustableLine, charge?: AdjustableCharge) => void
+  /** Price dialog on the target of a stored row. */
   edit: (adjustmentId: string) => void
+  /** Removes the row's whole target (PUT); on a locked quote only the invalid rows (per-row DELETE). */
   remove: (adjustmentId: string) => void
 }
 
@@ -74,43 +73,29 @@ function BlockedReason({ reason, children }: { reason: string | null; children: 
   )
 }
 
-/** Per-charge "Adjust price" action. Hidden entirely when the feature is off or not permitted. */
-export function AdjustChargeAction({ line, charge }: { line: AdjustableLine; charge: AdjustableCharge }) {
+/**
+ * The one "Adjust price" action (§4.1): an icon-only `Percent` button on the
+ * line and on each non-usage charge, opening the Price dialog on the line's
+ * default target or on that charge. Hidden when the feature is off or not
+ * permitted; otherwise disabled with the reason (locked, ARC mirror, free-form).
+ */
+export function AdjustPriceAction({ line, charge }: { line: AdjustableLine; charge?: AdjustableCharge }) {
   const t = useT()
   const ui = usePriceAdjustmentUi()
   const reason = useAdjustmentBlockReason(line)
-  if (!ui || charge.chargeType === 'usage') return null
+  if (!ui || charge?.chargeType === 'usage') return null
   if (ui.access.reason === 'disabled' || ui.access.reason === 'no_permission' || ui.access.reason === 'loading') return null
   const label = t('cpq.priceAdjustments.adjustPrice', 'Adjust price')
   return (
     <BlockedReason reason={reason}>
-      <IconButton
-        variant="ghost" size="xs" aria-label={label} title={reason ? undefined : label} disabled={!!reason}
-        onClick={() => ui.openCharge(line, charge)} data-testid="cpq-adjust-charge"
-      >
-        <Pencil className="h-3.5 w-3.5" />
-      </IconButton>
-    </BlockedReason>
-  )
-}
-
-/** Line-level "Adjust price" action: Set price, % off or Amount off for the whole line (or bundle). */
-export function AdjustLinePriceAction({ line }: { line: AdjustableLine }) {
-  const t = useT()
-  const ui = usePriceAdjustmentUi()
-  const reason = useAdjustmentBlockReason(line)
-  if (!ui || ui.access.reason === 'disabled' || ui.access.reason === 'no_permission' || ui.access.reason === 'loading') return null
-  const label = t('cpq.priceAdjustments.adjustLinePrice', 'Adjust price')
-  return (
-    <BlockedReason reason={reason}>
-      <Button
-        type="button" variant="ghost" size="sm" disabled={!!reason}
-        title={reason ? undefined : t('cpq.priceAdjustments.adjustLinePriceHint', 'Set a price, % off or amount off for this line')}
-        onClick={() => ui.openLine(line)} data-testid="cpq-adjust-line"
-      >
-        <Tags className="h-4 w-4" />
-        {label}
-      </Button>
+      <SimpleTooltip content={label} size="sm" disabled={!!reason}>
+        <IconButton
+          type="button" variant="ghost" size={charge ? 'xs' : 'sm'} aria-label={label} disabled={!!reason}
+          onClick={() => ui.openPrice(line, charge)} data-testid={charge ? 'cpq-adjust-price-charge' : 'cpq-adjust-price-line'}
+        >
+          <Percent className={charge ? 'h-3.5 w-3.5' : 'h-4 w-4'} />
+        </IconButton>
+      </SimpleTooltip>
     </BlockedReason>
   )
 }
@@ -134,35 +119,5 @@ export function ManualAdjustmentActions({ adjustmentId }: { adjustmentId: string
         <Trash2 className="h-3.5 w-3.5" />
       </IconButton>
     </span>
-  )
-}
-
-/** "Phases" action (spec P §4.3): trial / promotion / ramp steps on a line or one recurring charge. */
-export function PricePhasesAction({ line, charge }: { line: AdjustableLine; charge?: AdjustableCharge }) {
-  const t = useT()
-  const ui = usePriceAdjustmentUi()
-  const reason = useAdjustmentBlockReason(line)
-  if (!ui || ui.access.reason === 'disabled' || ui.access.reason === 'no_permission' || ui.access.reason === 'loading') return null
-  if (charge && charge.chargeType !== 'mrc') return null
-  const label = t('cpq.phases.action', 'Phases')
-  const hint = t('cpq.phases.actionHint', 'Trial, promotion or ramp: prices per month range')
-  if (charge) {
-    return (
-      <BlockedReason reason={reason}>
-        <IconButton type="button" variant="ghost" size="xs" aria-label={label} title={reason ? undefined : hint} disabled={!!reason}
-          onClick={() => ui.openPhases(line, charge)} data-testid="cpq-phases-charge">
-          <CalendarRange className="h-3.5 w-3.5" />
-        </IconButton>
-      </BlockedReason>
-    )
-  }
-  return (
-    <BlockedReason reason={reason}>
-      <Button type="button" variant="ghost" size="sm" disabled={!!reason} title={reason ? undefined : hint}
-        onClick={() => ui.openPhases(line)} data-testid="cpq-phases-line">
-        <CalendarRange className="h-4 w-4" />
-        {label}
-      </Button>
-    </BlockedReason>
   )
 }

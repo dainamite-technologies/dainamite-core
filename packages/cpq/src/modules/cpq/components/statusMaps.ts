@@ -82,6 +82,8 @@ export type SubscriptionStatus =
   | 'pending'
   | 'active'
   | 'suspended'
+  | 'paused'
+  | 'grace'
   | 'terminated'
   | 'expired'
   | 'cancelled'
@@ -90,6 +92,8 @@ export const subscriptionStatusMap: TagMap<SubscriptionStatus> = {
   pending: 'info',
   active: 'success',
   suspended: 'warning',
+  paused: 'neutral',
+  grace: 'warning',
   terminated: 'error',
   expired: 'neutral',
   cancelled: 'neutral',

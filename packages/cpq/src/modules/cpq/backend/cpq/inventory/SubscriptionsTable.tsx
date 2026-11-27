@@ -46,7 +46,7 @@ type Subscription = {
 
 const PAGE_SIZE = 50
 
-const SUBSCRIPTION_STATUSES = ['pending', 'active', 'suspended', 'terminated', 'expired', 'cancelled'] as const
+const SUBSCRIPTION_STATUSES = ['pending', 'active', 'paused', 'suspended', 'grace', 'terminated', 'expired', 'cancelled'] as const
 
 function buildFilterParams(values: FilterValues, params: URLSearchParams) {
   if (typeof values.status === 'string' && values.status) {

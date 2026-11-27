@@ -71,6 +71,19 @@ export type ItemCreatePayload = {
    * at creation. Set it once CPQ exposes a per-charge rate.
    */
   taxRate?: number
+  /** Contract C1: own billing period; omitted = follow the account cycle. */
+  billingPeriodUnit?: 'daily' | 'weekly' | 'monthly' | 'annually' | null
+  billingPeriodInterval?: number | null
+  /** Contract C1: price phases, back to back from `billStartDate` (max 12). */
+  phasesEnabled?: boolean
+  phases?: Array<{
+    name?: string | null
+    durationUnit?: 'day' | 'week' | 'month' | 'year'
+    durationCount?: number
+    endDate?: string
+    priceType: 'free' | 'fixed' | 'percent_off' | 'amount_off'
+    value?: number | null
+  }>
 }
 
 /** Generated credit reasons billing renders in the invoice language (billing Part 2, D10). */

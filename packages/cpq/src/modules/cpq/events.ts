@@ -31,7 +31,9 @@ const quotePricingSnapshotFields: EventPayloadSchemaField[] = [
  * subscription mutations driven by CPQ orders.
  *
  * Emission rule: events fire AFTER their transaction commits.
- * Subscription events: `cpqOrderService.activateOrder` is the sole emitter.
+ * Subscription events: `cpqOrderService.activateOrder` emits the activation /
+ * ARC events; `cpqInventoryService.applyStatusAction` emits the inventory
+ * status events (`subscription_item.status_changed`, `subscription.terminated`).
  * Quote events: `withQuotePricingWrite` (plus `cloneQuote` for the copy).
  */
 const events = [
@@ -99,6 +101,50 @@ const events = [
     entity: 'subscription',
     category: 'lifecycle',
     clientBroadcast: true,
+  },
+  // Spec 2026-11-26 line status (D6, contract C2): pause / suspend / grace /
+  // resume of a whole subscription or one item, from the inventory. Emitted
+  // after the status write commits by `cpqInventoryService.applyStatusAction`.
+  // `subscriptionItemIds` lists every affected item (subscription-wide lists
+  // all). `status: 'active'` is a resume, `fromDate` its first running day.
+  {
+    id: 'cpq.subscription_item.status_changed',
+    label: 'Subscription Item Status Changed',
+    entity: 'subscription_item',
+    category: 'lifecycle',
+    clientBroadcast: true,
+    payloadSchema: {
+      fields: [
+        { path: 'tenantId', type: 'text' },
+        { path: 'organizationId', type: 'text' },
+        { path: 'subscriptionId', type: 'text' },
+        { path: 'subscriptionItemIds', type: 'object', label: 'Affected subscription item ids' },
+        { path: 'status', type: 'select', label: 'Status (paused | suspended | grace | active)' },
+        { path: 'fromDate', type: 'date' },
+        { path: 'toDate', type: 'date', optional: true },
+        { path: 'chargeBehavior', type: 'select', label: 'Charge behaviour (charge | no_charge)', optional: true },
+        { path: 'reason', type: 'text', optional: true },
+      ],
+    },
+  },
+  // D6 (contract C2): terminate from the inventory, so billing ends the items
+  // like an ARC cancel. Emitted after commit by `applyStatusAction`.
+  {
+    id: 'cpq.subscription.terminated',
+    label: 'Subscription Terminated',
+    entity: 'subscription',
+    category: 'lifecycle',
+    clientBroadcast: true,
+    payloadSchema: {
+      fields: [
+        { path: 'tenantId', type: 'text' },
+        { path: 'organizationId', type: 'text' },
+        { path: 'subscriptionId', type: 'text' },
+        { path: 'subscriptionItemIds', type: 'object', label: 'Terminated subscription item ids' },
+        { path: 'effectiveDate', type: 'date' },
+        { path: 'reason', type: 'text', optional: true },
+      ],
+    },
   },
   // Quote pricing signals (manual price adjustments). Emitted after the quote
   // write commits by `withQuotePricingWrite`; payload carries the pricing

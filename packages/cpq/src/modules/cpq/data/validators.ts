@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { normalizeChargePricing } from './charge-pricing'
 import { CHARGE_BILLING_PERIOD_MAX_INTERVAL, CHARGE_BILLING_PERIOD_UNITS } from '../lib/chargeBillingPeriod'
+import { INVENTORY_SUBSCRIPTION_STATUSES, STATUS_CHARGE_BEHAVIORS, SUBSCRIPTION_STATUS_ACTIONS } from '../services/types'
 
 /**
  * Update schemas must not inject defaults. `.partial()` keeps `.default()`
@@ -667,9 +668,37 @@ export const cpqInventorySubscriptionUpdateSchema = z.object({
   metadata: z.record(z.string(), z.unknown()).nullish(),
 })
 
+const isoDateField = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD')
+
+/** D6 options shared by the status action route and the legacy status route. */
+const statusActionOptions = {
+  fromDate: isoDateField.nullish()
+    .describe('Effective date, YYYY-MM-DD (default today). Resume: the first day the service runs again. Terminate: the end date billing uses.'),
+  toDate: isoDateField.nullish()
+    .describe('Pause / suspend / grace only: inclusive last day, YYYY-MM-DD. Omit or null for an open-ended stop (end it later with resume).'),
+  chargeBehavior: z.enum(STATUS_CHARGE_BEHAVIORS).nullish()
+    .describe('Pause / suspend / grace only: whether billing keeps charging. Default: paused → no_charge, suspended / grace → charge.'),
+  reason: z.string().trim().max(500).nullish().describe('Why (shown on the change log and the billing credit line).'),
+}
+
 export const cpqInventoryStatusTransitionSchema = z.object({
   id: z.string().uuid(),
-  targetStatus: z.string().min(1),
+  targetStatus: z.enum(INVENTORY_SUBSCRIPTION_STATUSES),
+  ...statusActionOptions,
+})
+
+/** D6 — pause / suspend / grace / resume / terminate a subscription or one item. */
+export const cpqSubscriptionStatusActionSchema = z.object({
+  subscriptionId: z.string().uuid().describe('Subscription id (UUID).'),
+  subscriptionItemId: z.string().uuid().nullish()
+    .describe('One subscription item; omit for the whole subscription (every item the action applies to).'),
+  action: z.enum(SUBSCRIPTION_STATUS_ACTIONS).describe('pause | suspend | grace | resume | terminate'),
+  ...statusActionOptions,
+}).strict().superRefine((data, ctx) => {
+  const isStop = data.action === 'pause' || data.action === 'suspend' || data.action === 'grace'
+  if (!isStop && data.toDate) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['toDate'], message: 'toDate is only allowed for pause, suspend and grace' })
+  if (!isStop && data.chargeBehavior) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['chargeBehavior'], message: 'chargeBehavior is only allowed for pause, suspend and grace' })
+  if (data.fromDate && data.toDate && data.toDate < data.fromDate) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['toDate'], message: 'toDate must not be before fromDate' })
 })
 
 // ─── Inventory Subscription Item ─────────────────────────────────

@@ -955,6 +955,22 @@ export class CpqInventorySubscription {
   @Property({ type: 'text', default: 'pending' })
   status: string = 'pending'
 
+  // Spec 2026-11-26 line status (D6): the current stop period — paused /
+  // suspended / grace from a date (to a date; null = open), its billing
+  // charge behaviour and reason. A resume sets status `active` with
+  // `statusFromDate` = the first day running again and clears the rest.
+  @Property({ name: 'status_from_date', type: 'date', nullable: true })
+  statusFromDate?: string | null
+
+  @Property({ name: 'status_to_date', type: 'date', nullable: true })
+  statusToDate?: string | null
+
+  @Property({ name: 'status_charge_behavior', type: 'text', nullable: true })
+  statusChargeBehavior?: string | null
+
+  @Property({ name: 'status_reason', type: 'text', nullable: true })
+  statusReason?: string | null
+
   @Property({ name: 'billing_cycle', type: 'text', default: 'monthly' })
   billingCycle: string = 'monthly'
 
@@ -1069,6 +1085,22 @@ export class CpqInventorySubscriptionItem {
 
   @Property({ type: 'text', default: 'pending' })
   status: string = 'pending'
+
+  // Spec 2026-11-26 line status (D6): the current stop period — paused /
+  // suspended / grace from a date (to a date; null = open), its billing
+  // charge behaviour and reason. A resume sets status `active` with
+  // `statusFromDate` = the first day running again and clears the rest.
+  @Property({ name: 'status_from_date', type: 'date', nullable: true })
+  statusFromDate?: string | null
+
+  @Property({ name: 'status_to_date', type: 'date', nullable: true })
+  statusToDate?: string | null
+
+  @Property({ name: 'status_charge_behavior', type: 'text', nullable: true })
+  statusChargeBehavior?: string | null
+
+  @Property({ name: 'status_reason', type: 'text', nullable: true })
+  statusReason?: string | null
 
   @Property({ type: 'jsonb', default: '{}' })
   configuration: Record<string, unknown> = {}

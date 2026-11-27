@@ -275,29 +275,68 @@ export const INVENTORY_SUBSCRIPTION_STATUSES = [
   'terminated',
   'expired',
   'superseded',
+  // Spec 2026-11-26 line status (D6): the customer asked to stop for a while,
+  // and payment overdue with the service still on (a flag before suspension).
+  'paused',
+  'grace',
 ] as const
 export type InventorySubscriptionStatus = (typeof INVENTORY_SUBSCRIPTION_STATUSES)[number]
 
 export const INVENTORY_BILLING_CYCLES = ['monthly', 'quarterly', 'annually'] as const
 
+/**
+ * XD-215 state machine, shared by subscriptions and their items (an item can
+ * now be paused / suspended / put in grace on its own, D6). `pending → active`
+ * is order activation; paused / suspended / grace go back to `active` (resume).
+ * Grace can escalate to a suspension. Terminal: terminated, expired, superseded.
+ */
 export const INVENTORY_SUBSCRIPTION_TRANSITIONS: Record<InventorySubscriptionStatus, InventorySubscriptionStatus[]> = {
   pending: ['active', 'terminated'],
-  active: ['suspended', 'terminated', 'expired', 'superseded'],
+  active: ['suspended', 'paused', 'grace', 'terminated', 'expired', 'superseded'],
   suspended: ['active', 'terminated', 'superseded'],
+  paused: ['active', 'terminated', 'superseded'],
+  grace: ['active', 'suspended', 'terminated', 'superseded'],
   terminated: [],
   expired: [],
   superseded: [],
 }
 
-export const INVENTORY_SUBSCRIPTION_ITEM_STATUSES = [
-  'pending',
-  'active',
-  'suspended',
-  'terminated',
-  'expired',
-  'superseded',
-] as const
-export type InventorySubscriptionItemStatus = (typeof INVENTORY_SUBSCRIPTION_ITEM_STATUSES)[number]
+export const INVENTORY_SUBSCRIPTION_ITEM_STATUSES = INVENTORY_SUBSCRIPTION_STATUSES
+export type InventorySubscriptionItemStatus = InventorySubscriptionStatus
+export const INVENTORY_SUBSCRIPTION_ITEM_TRANSITIONS = INVENTORY_SUBSCRIPTION_TRANSITIONS
+
+/** Statuses after which an item / subscription never runs again. */
+export const INVENTORY_TERMINAL_STATUSES: readonly InventorySubscriptionStatus[] = ['terminated', 'expired', 'superseded']
+
+// ─── Subscription status actions (spec 2026-11-26 line status, D6) ──
+
+export const SUBSCRIPTION_STATUS_ACTIONS = ['pause', 'suspend', 'grace', 'resume', 'terminate'] as const
+export type SubscriptionStatusAction = (typeof SUBSCRIPTION_STATUS_ACTIONS)[number]
+
+export const SUBSCRIPTION_STATUS_ACTION_TARGET: Record<SubscriptionStatusAction, InventorySubscriptionStatus> = {
+  pause: 'paused',
+  suspend: 'suspended',
+  grace: 'grace',
+  resume: 'active',
+  terminate: 'terminated',
+}
+
+/** Statuses an action can be taken from (resume only leaves a stop status). */
+export const SUBSCRIPTION_STATUS_ACTION_FROM: Record<SubscriptionStatusAction, InventorySubscriptionStatus[]> = {
+  pause: ['active'],
+  suspend: ['active', 'grace'],
+  grace: ['active'],
+  resume: ['paused', 'suspended', 'grace'],
+  terminate: ['pending', 'active', 'paused', 'suspended', 'grace'],
+}
+
+export const STATUS_CHARGE_BEHAVIORS = ['charge', 'no_charge'] as const
+export type StatusChargeBehavior = (typeof STATUS_CHARGE_BEHAVIORS)[number]
+
+/** Billing default per stop status (spec §4.3): paused = no charge; suspended / grace = charge. */
+export function defaultChargeBehavior(status: 'paused' | 'suspended' | 'grace'): StatusChargeBehavior {
+  return status === 'paused' ? 'no_charge' : 'charge'
+}
 
 export const INVENTORY_ASSET_STATUSES = ['pending', 'delivered', 'active', 'returned', 'cancelled'] as const
 export type InventoryAssetStatus = (typeof INVENTORY_ASSET_STATUSES)[number]
@@ -352,6 +391,8 @@ export const CHANGE_LOG_TYPES = [
   'cancel',
   'merge-result',
   'merge-source',
+  // D6: pause / suspend / grace / resume / terminate from the inventory.
+  'status',
 ] as const
 export type ChangeLogType = (typeof CHANGE_LOG_TYPES)[number]
 

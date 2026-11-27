@@ -97,7 +97,8 @@ New CPQ events (declared in `cpq/events.ts`, emitted after commit):
 // T3 — terminate from inventory (closes the §3 gap)
 'cpq.subscription.terminated': {
   tenantId, organizationId, subscriptionId,
-  subscriptionItemIds: string[], effectiveDate: 'YYYY-MM-DD', reason?: string | null }
+  subscriptionItemIds: string[], effectiveDate: 'YYYY-MM-DD', reason?: string | null,
+  wholeSubscription: boolean }
 ```
 
 ## Contract C3 — connector mapping (T5)
@@ -117,4 +118,5 @@ New CPQ events (declared in `cpq/events.ts`, emitted after commit):
 - **T1 (merged)**: no AI tool writes price adjustments (deliberate, `manuals/cpq-ai-agent.md`); openApi enriched only. Line Set price / Amount off amounts are line totals over all quantities; phases reuse `applyLineSpread`.
 - **T3 (merged)**: terminate emits only `cpq.subscription.terminated` (never `status_changed`). ARC `changedItems` (modify / re-rate) are split per billing period too, with `billingPeriod` on non-monthly charges — the C3 `sourceRef` suffix rule applies to `changedItems` as well as `addedItems`. CPQ status writes go through `cpqInventoryService.applyStatusAction` (no command bus in CPQ inventory, so no undo). A subscription-wide resume also resumes items paused on their own. `billingPeriod` is omitted for `{month,1}`.
 - **T4 (merged)**: `charges[].phases` rides on activation, ARC `addedItems` **and** `changedItems` recurring charges (shared `buildRecurringPayloadCharges` → `lib/payloadPhases.ts` `mergeRecurringPhases`). `value` is per the charge's billing period, `unitPrice` is the regular price. A merged multi-charge schedule can exceed billing's 12-phase cap (CPQ caps only editor steps at 12) — the connector must not silently drop phases. The Phases editor saves steps as sequential undoable commands (not one atomic write).
+- **Review fixes (CPQ, F1–F4/F7/F8 + F6 contract)**: `cpq.subscription.terminated` carries `wholeSubscription: boolean`, decided at emit time in `applyStatusAction` (true only for a subscription-wide terminate; an item-level terminate that ends the last item is false) — the connector scopes the end by it, never by CPQ's current status.
 - **T2 (merged)**: item reads keep snake_case columns plus camelCase aliases; `phases[].endDate` on read = computed end, the stored until-date is `untilDate`. `phasesEnabled` defaults to true when phases are sent. CPQ item status is written via `billing.items.status_periods.*` with `ctx.auth = null` (D6); resume = update `toDate` of the open period; overlap → 422 `billing.item.status_period_overlap`. A weekly line on a monthly account billed in advance bills 5 weeks on 1 Dec (D3 literal); the spec's "4 weeks 1–28 Dec" example holds in arrears.

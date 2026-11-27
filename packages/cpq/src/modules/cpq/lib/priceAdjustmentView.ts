@@ -90,12 +90,40 @@ export function lineWaterfallTotals(line: { quantity: number; charges: Waterfall
   return { list, standard, offer }
 }
 
-/** Adjustment types the server accepts for a target. */
+/** Adjustment types the server accepts for a target. Any price is allowed, also above standard (spec F-D1). */
 export function allowedAdjustmentTypes(level: AdjustmentLevel, charge?: Pick<WaterfallChargeInput, 'chargeType' | 'pricingMethod'>): AdjustmentType[] {
-  if (level === 'line') return ['discount_percent']
+  if (level === 'line') return ['price_override', 'discount_percent', 'discount_absolute']
   if (!charge || charge.chargeType === 'usage') return []
-  const overridable = charge.pricingMethod == null || charge.pricingMethod === 'flat' || charge.pricingMethod === 'per_unit'
-  return overridable ? ['price_override', 'discount_percent', 'discount_absolute'] : ['discount_percent', 'discount_absolute']
+  return ['price_override', 'discount_percent', 'discount_absolute']
+}
+
+/** Line-level Set price and Amount off cover one charge type: Recurring or One-time must be chosen. */
+export function requiresChargeType(level: AdjustmentLevel, type: AdjustmentType): boolean {
+  return level === 'line' && (type === 'price_override' || type === 'discount_absolute')
+}
+
+/** Volume / tiered charges have no single unit price: a Set price there sets the charge total. */
+export function overrideSetsChargeTotal(charge?: Pick<WaterfallChargeInput, 'pricingMethod'> | null): boolean {
+  return charge?.pricingMethod === 'volume' || charge?.pricingMethod === 'tiered'
+}
+
+/** True when a manual price lifted the offer above the standard price (shown as an "Above standard" badge). */
+export function isAboveStandard(standard: number | null | undefined, offer: number | null | undefined): boolean {
+  if (standard == null || offer == null) return false
+  return offer - standard > 0.000001
+}
+
+/** Standard and offer totals of one line (all line quantities) for one charge type, or both when no type is given. */
+export function lineTypeTotals(line: { quantity?: number; charges: WaterfallChargeInput[] }, chargeType?: 'nrc' | 'mrc' | null) {
+  const quantity = line.quantity ?? 1
+  let standard = 0, offer = 0
+  for (const charge of line.charges) {
+    if (charge.chargeType === 'usage' || charge.totalPrice == null) continue
+    if (chargeType && charge.chargeType !== chargeType) continue
+    standard += (charge.standardTotalPrice ?? charge.totalPrice) * quantity
+    offer += charge.totalPrice * quantity
+  }
+  return { standard, offer }
 }
 
 export type LineEligibilityInput = {
@@ -144,6 +172,7 @@ export const ADJUSTMENT_ERROR_FALLBACKS: Record<string, string> = {
   ADJUSTMENT_TARGET_MISSING: 'The adjusted charge no longer exists on this line',
   TARGET_AMBIGUOUS: 'The adjusted charge appears more than once on this line',
   ABOVE_STANDARD: 'The price is above the standard price',
+  CHARGE_TYPE_REQUIRED: 'Choose Recurring or One-time for a line price or amount off',
   CURRENCY_MISMATCH: 'The currency does not match the quote',
   TYPE_NOT_ALLOWED: 'This kind of adjustment is not allowed for this charge',
   LINE_NOT_ELIGIBLE: 'This line cannot be adjusted',

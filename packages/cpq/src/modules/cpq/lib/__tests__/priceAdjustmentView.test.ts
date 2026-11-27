@@ -1,6 +1,6 @@
 import {
   adjustmentAccess, adjustmentErrorCode, collectAdjustmentErrors, allowedAdjustmentTypes, buildAdjustmentDraft, canDeleteInvalidAdjustment, discountDepth, formatDepth, parseStoredCharge, toAdjustmentPatch,
-  lineAdjustmentBlock, lineWaterfallTotals, waterfallRows,
+  lineAdjustmentBlock, lineWaterfallTotals, waterfallRows, requiresChargeType, overrideSetsChargeTotal, isAboveStandard, lineTypeTotals,
 } from '../priceAdjustmentView'
 import { TERMINAL_STATUSES } from '../../services/types'
 
@@ -54,14 +54,47 @@ describe('depth', () => {
 
 describe('allowedAdjustmentTypes', () => {
   it.each([
-    ['line', undefined, ['discount_percent']],
+    ['line', undefined, ['price_override', 'discount_percent', 'discount_absolute']],
     ['charge', { chargeType: 'mrc', pricingMethod: 'flat' }, ['price_override', 'discount_percent', 'discount_absolute']],
     ['charge', { chargeType: 'nrc', pricingMethod: 'per_unit' }, ['price_override', 'discount_percent', 'discount_absolute']],
-    ['charge', { chargeType: 'mrc', pricingMethod: 'tiered' }, ['discount_percent', 'discount_absolute']],
-    ['charge', { chargeType: 'mrc', pricingMethod: 'volume' }, ['discount_percent', 'discount_absolute']],
+    ['charge', { chargeType: 'mrc', pricingMethod: 'tiered' }, ['price_override', 'discount_percent', 'discount_absolute']],
+    ['charge', { chargeType: 'mrc', pricingMethod: 'volume' }, ['price_override', 'discount_percent', 'discount_absolute']],
     ['charge', { chargeType: 'usage', pricingMethod: 'flat' }, []],
   ] as const)('%s %j → %j', (level, charge, expected) => {
     expect(allowedAdjustmentTypes(level, charge)).toEqual(expected)
+  })
+})
+
+describe('manual pricing flexibility helpers (spec F)', () => {
+  it('requires Recurring or One-time only for line-level Set price and Amount off', () => {
+    expect(requiresChargeType('line', 'price_override')).toBe(true)
+    expect(requiresChargeType('line', 'discount_absolute')).toBe(true)
+    expect(requiresChargeType('line', 'discount_percent')).toBe(false)
+    expect(requiresChargeType('charge', 'price_override')).toBe(false)
+  })
+  it('sets the charge total on volume and tiered charges only', () => {
+    expect(overrideSetsChargeTotal({ pricingMethod: 'tiered' })).toBe(true)
+    expect(overrideSetsChargeTotal({ pricingMethod: 'volume' })).toBe(true)
+    expect(overrideSetsChargeTotal({ pricingMethod: 'flat' })).toBe(false)
+    expect(overrideSetsChargeTotal(undefined)).toBe(false)
+  })
+  it('flags an offer above standard and shows the uplift as a negative discount', () => {
+    expect(isAboveStandard(100, 120)).toBe(true)
+    expect(isAboveStandard(100, 100)).toBe(false)
+    expect(isAboveStandard(100, 80)).toBe(false)
+    expect(isAboveStandard(null, 80)).toBe(false)
+    expect(discountDepth(100, 120)).toBeCloseTo(-0.2)
+    expect(formatDepth(discountDepth(100, 120))).toBe('+20%')
+  })
+  it('totals one charge type of a line over the line quantity', () => {
+    const line = { quantity: 2, charges: [
+      { chargeType: 'mrc' as const, unitPrice: 80, totalPrice: 80, standardTotalPrice: 100 },
+      { chargeType: 'nrc' as const, unitPrice: 10, totalPrice: 10 },
+      { chargeType: 'usage' as const, unitPrice: 1, totalPrice: null },
+    ] }
+    expect(lineTypeTotals(line, 'mrc')).toEqual({ standard: 200, offer: 160 })
+    expect(lineTypeTotals(line, 'nrc')).toEqual({ standard: 20, offer: 20 })
+    expect(lineTypeTotals(line)).toEqual({ standard: 220, offer: 180 })
   })
 })
 

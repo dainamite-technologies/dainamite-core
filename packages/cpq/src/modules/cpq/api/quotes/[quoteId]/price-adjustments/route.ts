@@ -38,5 +38,7 @@ export async function POST(req: Request, { params }: Params) {
 const errors = [cpqErrorDoc(400, 'Invalid input'), cpqErrorDoc(403, 'Missing permission or disabled feature'), cpqErrorDoc(404, 'Quote not found'), cpqErrorDoc(409, 'Adjustment locked or stale revision'), cpqErrorDoc(422, 'Invalid adjustment or guard rejection')]
 export const openApi: OpenApiRouteDoc = { tag: 'CPQ Quotes', pathParams: cpqQuoteIdPathParams, methods: {
   GET: { summary: 'List quote price adjustments', query: listQuery, responses: [{ status: 200, description: 'Paged adjustments, pricing revision, feature state and the reason options (`reasons: [{ value, label }]`)' }], errors },
-  POST: { summary: 'Create a negotiated quote price adjustment', requestBody: { schema: cpqPriceAdjustmentInputSchema }, responses: [{ status: 201, description: 'Adjustment and updated quote' }], errors },
+  POST: { summary: 'Create a negotiated quote price adjustment',
+    description: 'Charge level: Set price (new unit price; the charge total on volume / tiered charges), % off or Amount off the charge total. Line level: % off (all charges, recurring or one-time), or Set price / Amount off for the line\'s recurring (`chargeTypeFilter: mrc`) or one-time (`nrc`) total, spread over its charges in proportion to their standard totals; on a bundle parent it covers the whole bundle. Charge beats line beats bundle parent; a line Set price is spread over the charges left, so the line total equals the typed price. Any price is allowed, also above standard. 422 CHARGE_TYPE_REQUIRED when a line Set price / Amount off has no chargeTypeFilter.',
+    requestBody: { schema: cpqPriceAdjustmentInputSchema }, responses: [{ status: 201, description: 'Adjustment and updated quote' }], errors },
 } }

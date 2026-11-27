@@ -65,7 +65,7 @@ export function PriceAdjustmentsPanel({ quoteId, items, total, lines, currency, 
       </div>
       {items.length === 0 ? (
         <p className="px-4 py-3 text-xs text-muted-foreground">
-          {t('cpq.priceAdjustments.panel.empty', 'No negotiated prices yet. Use “Adjust price” on a charge or “Discount line” on a line.')}
+          {t('cpq.priceAdjustments.panel.empty', 'No negotiated prices yet. Use “Adjust price” on a line or on a charge.')}
         </p>
       ) : (
         <table className="w-full text-xs">

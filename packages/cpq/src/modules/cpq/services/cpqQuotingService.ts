@@ -1260,7 +1260,7 @@ export class DefaultCpqQuotingService {
     }
     const adjustments = draftAdjustments ?? await loadQuoteAdjustments(em, cpqConfig.id, scope)
     const adjusted = resolveManualAdjustments(computedLines.map(({ lineConfig, charges }) => ({
-      lineId: lineConfig.quoteLineId, parentLineId: lineConfig.parentLineId ?? null,
+      lineId: lineConfig.quoteLineId, parentLineId: lineConfig.parentLineId ?? null, quantity: lineConfig.quantity,
       enginePriced: !!(lineConfig.offeringId || lineConfig.productId),
       mirrored: isArcMirrorLine(lineConfig.configuration, cpqConfig.quoteType), charges,
     })), adjustments, cpqConfig.currencyCode)

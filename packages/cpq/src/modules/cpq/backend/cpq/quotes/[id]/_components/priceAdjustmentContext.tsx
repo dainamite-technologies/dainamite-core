@@ -2,7 +2,8 @@
 
 import * as React from 'react'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
-import { Percent, Pencil, Trash2 } from 'lucide-react'
+import { Pencil, Tags, Trash2 } from 'lucide-react'
+import { Button } from '@open-mercato/ui/primitives/button'
 import { IconButton } from '@open-mercato/ui/primitives/icon-button'
 import { SimpleTooltip } from '@open-mercato/ui/primitives/tooltip'
 import type { AdjustmentAccess, LineEligibilityInput, WaterfallChargeInput } from '../../../../../lib/priceAdjustmentView'
@@ -91,21 +92,23 @@ export function AdjustChargeAction({ line, charge }: { line: AdjustableLine; cha
   )
 }
 
-/** Line-level "Discount line" action. */
-export function DiscountLineAction({ line }: { line: AdjustableLine }) {
+/** Line-level "Adjust price" action: Set price, % off or Amount off for the whole line (or bundle). */
+export function AdjustLinePriceAction({ line }: { line: AdjustableLine }) {
   const t = useT()
   const ui = usePriceAdjustmentUi()
   const reason = useAdjustmentBlockReason(line)
   if (!ui || ui.access.reason === 'disabled' || ui.access.reason === 'no_permission' || ui.access.reason === 'loading') return null
-  const label = t('cpq.priceAdjustments.discountLine', 'Discount line')
+  const label = t('cpq.priceAdjustments.adjustLinePrice', 'Adjust price')
   return (
     <BlockedReason reason={reason}>
-      <IconButton
-        variant="ghost" size="sm" aria-label={label} title={reason ? undefined : label} disabled={!!reason}
-        onClick={() => ui.openLine(line)} data-testid="cpq-discount-line"
+      <Button
+        type="button" variant="ghost" size="sm" disabled={!!reason}
+        title={reason ? undefined : t('cpq.priceAdjustments.adjustLinePriceHint', 'Set a price, % off or amount off for this line')}
+        onClick={() => ui.openLine(line)} data-testid="cpq-adjust-line"
       >
-        <Percent className="h-4 w-4" />
-      </IconButton>
+        <Tags className="h-4 w-4" />
+        {label}
+      </Button>
     </BlockedReason>
   )
 }

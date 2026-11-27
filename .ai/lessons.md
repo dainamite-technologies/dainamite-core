@@ -83,6 +83,8 @@ Entry format (newest first within a section):
 
 ## Local environment and tooling
 
+- **The root `yarn typecheck` can be OOM-killed on an ~11 GB box, taking the agent session down with it.** (2026-11-27, billing/CPQ flex run)
+  Typecheck one package instead: `cd packages/<pkg> && NODE_OPTIONS=--max-old-space-size=2500 ../../node_modules/.bin/tsc --noEmit -p . --ignoreDeprecations 6.0`. In a fresh worktree run `yarn build:packages` first, or the connector tests fail on missing `@dainamite/billing` modules.
 - **The backend header's organization switcher is a `combobox` that can render after the page content.** (2026-11-23, TC-CPQ-ARC-005)
   A page-wide `[role="combobox"]` `.first()` re-resolves on each use and can hit the switcher instead of the page's picker. Scope it: `page.getByRole('main').locator(...)`. Also clean up in `afterEach`: a `finally` in a timed-out test never completes, so fixtures pile up.
 - **A Playwright click on a server-rendered DataTable row can land before hydration and do nothing.** (2026-11-23, TC-CPQ-006)

@@ -111,3 +111,8 @@ New CPQ events (declared in `cpq/events.ts`, emitted after commit):
   `priceType: 'fixed'`, `phasesEnabled: true`, in the same create write.
 - `status_changed` → create a status period (or, for `active`, set `toDate = fromDate − 1`
   on the open period). `terminated` → `billEndDate = effectiveDate` like cancel.
+
+## As built — deviations recorded after merge
+
+- **T1 (merged)**: no AI tool writes price adjustments (deliberate, `manuals/cpq-ai-agent.md`); openApi enriched only. Line Set price / Amount off amounts are line totals over all quantities; phases reuse `applyLineSpread`.
+- **T3 (merged)**: terminate emits only `cpq.subscription.terminated` (never `status_changed`). ARC `changedItems` (modify / re-rate) are split per billing period too, with `billingPeriod` on non-monthly charges — the C3 `sourceRef` suffix rule applies to `changedItems` as well as `addedItems`. CPQ status writes go through `cpqInventoryService.applyStatusAction` (no command bus in CPQ inventory, so no undo). A subscription-wide resume also resumes items paused on their own. `billingPeriod` is omitted for `{month,1}`.

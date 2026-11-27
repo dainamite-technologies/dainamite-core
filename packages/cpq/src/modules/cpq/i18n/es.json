@@ -501,6 +501,7 @@
   "cpq.priceAdjustments.adjustLinePriceHint": "Fijar un precio, % de descuento o importe de descuento para esta línea",
   "cpq.priceAdjustments.adjustPrice": "Ajustar precio",
   "cpq.priceAdjustments.audit.adjust": "Ajustar precio de la cotización",
+  "cpq.priceAdjustments.audit.replaceTarget": "Fijar precio de la cotización",
   "cpq.priceAdjustments.blocked.converted": "Esta cotización ya se ha convertido en pedido",
   "cpq.priceAdjustments.blocked.disabled": "Los ajustes manuales de precio están desactivados",
   "cpq.priceAdjustments.blocked.freeForm": "Las líneas libres no se pueden ajustar",

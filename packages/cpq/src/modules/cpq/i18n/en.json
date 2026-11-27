@@ -501,6 +501,7 @@
   "cpq.priceAdjustments.adjustLinePriceHint": "Set a price, % off or amount off for this line",
   "cpq.priceAdjustments.adjustPrice": "Adjust price",
   "cpq.priceAdjustments.audit.adjust": "Adjust quote price",
+  "cpq.priceAdjustments.audit.replaceTarget": "Set quote price",
   "cpq.priceAdjustments.blocked.converted": "This quote has been converted to an order",
   "cpq.priceAdjustments.blocked.disabled": "Manual price adjustments are turned off",
   "cpq.priceAdjustments.blocked.freeForm": "Free-form lines cannot be adjusted",

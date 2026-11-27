@@ -501,6 +501,7 @@
   "cpq.priceAdjustments.adjustLinePriceHint": "Ustaw cenę, % rabatu lub kwotę rabatu dla tej pozycji",
   "cpq.priceAdjustments.adjustPrice": "Dostosuj cenę",
   "cpq.priceAdjustments.audit.adjust": "Dostosuj cenę w ofercie",
+  "cpq.priceAdjustments.audit.replaceTarget": "Ustal cenę w ofercie",
   "cpq.priceAdjustments.blocked.converted": "Ta oferta została przekształcona w zamówienie",
   "cpq.priceAdjustments.blocked.disabled": "Ręczne korekty cen są wyłączone",
   "cpq.priceAdjustments.blocked.freeForm": "Pozycji dowolnych nie można korygować",

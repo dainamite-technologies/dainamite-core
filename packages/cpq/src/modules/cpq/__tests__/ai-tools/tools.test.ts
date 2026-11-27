@@ -241,6 +241,38 @@ const cases: ToolCase[] = [
     arrange: (fake) => fake.on('GET', `/cpq/quotes/${QUOTE_ID}`, SAMPLE_QUOTE),
     expectedOutput: { quote: SAMPLE_QUOTE },
   },
+  {
+    name: 'cpq.list_price_adjustments',
+    routeFile: 'quotes/[quoteId]/price-adjustments/route.ts',
+    method: 'GET',
+    mutation: false,
+    input: { quoteId: QUOTE_ID, page: 1, pageSize: 50 },
+    invalidInput: { quoteId: 'nope' },
+    expectedPath: `/cpq/quotes/${QUOTE_ID}/price-adjustments`,
+    expectedQuery: { page: 1, pageSize: 50 },
+    arrange: (fake) => fake.on('GET', `/cpq/quotes/${QUOTE_ID}/price-adjustments`, {
+      items: [
+        { id: 'adj-1', level: 'line', quoteLineId: LINE_ID, chargeTypeFilter: 'mrc', adjustmentType: 'price_override', value: 0, currencyCode: 'EUR',
+          windowKind: 'relative', fromMonth: 1, toMonth: 1, phaseName: 'Free trial', reasonCode: 'promotion', createdByUserId: CUSTOMER_ID,
+          createdByName: 'Ann Rep', createdByEmail: 'ann@example.com', createdAt: '2026-11-27T10:00:00.000Z' },
+        { id: 'adj-2', level: 'charge', quoteLineId: LINE_ID, chargeCode: 'SETUP', adjustmentType: 'discount_percent', value: 20,
+          reasonCode: 'gone', reasonNote: 'old', createdByUserId: CUSTOMER_ID, createdByName: null, createdByEmail: null },
+      ],
+      total: 2, page: 1, pageSize: 50, totalPages: 1, pricingRevision: 4, enabled: true,
+      reasons: [{ value: 'promotion', label: 'Promotion' }],
+    }),
+    expectedOutput: {
+      items: [
+        { id: 'adj-1', target: { level: 'line', quoteLineId: LINE_ID, chargeTypeFilter: 'mrc' }, fromMonth: 1, toMonth: 1, phaseName: 'Free trial',
+          adjustmentType: 'price_override', value: 0, currencyCode: 'EUR', reasonCode: 'promotion', reasonLabel: 'Promotion', reasonNote: null,
+          author: { name: 'Ann Rep', email: 'ann@example.com', userId: CUSTOMER_ID }, createdAt: '2026-11-27T10:00:00.000Z' },
+        { id: 'adj-2', target: { level: 'charge', quoteLineId: LINE_ID, chargeCode: 'SETUP' }, fromMonth: 1, toMonth: null, phaseName: null,
+          adjustmentType: 'discount_percent', value: 20, currencyCode: null, reasonCode: 'gone', reasonLabel: null, reasonNote: 'old',
+          author: { name: null, email: null, userId: CUSTOMER_ID }, createdAt: null },
+      ],
+      total: 2, page: 1, pageSize: 50, totalPages: 1, pricingRevision: 4,
+    },
+  },
   // ─── quotes (mutations) ──────────────────────────────────────────────────
   {
     name: 'cpq.create_quote',

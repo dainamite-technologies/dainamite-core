@@ -501,6 +501,7 @@
   "cpq.priceAdjustments.adjustLinePriceHint": "Preis, % Rabatt oder Betrag für diese Position festlegen",
   "cpq.priceAdjustments.adjustPrice": "Preis anpassen",
   "cpq.priceAdjustments.audit.adjust": "Angebotspreis anpassen",
+  "cpq.priceAdjustments.audit.replaceTarget": "Angebotspreis festlegen",
   "cpq.priceAdjustments.blocked.converted": "Dieses Angebot wurde bereits in eine Bestellung umgewandelt",
   "cpq.priceAdjustments.blocked.disabled": "Manuelle Preisanpassungen sind deaktiviert",
   "cpq.priceAdjustments.blocked.freeForm": "Freitextpositionen können nicht angepasst werden",

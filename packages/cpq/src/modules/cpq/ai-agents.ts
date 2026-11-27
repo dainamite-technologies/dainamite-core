@@ -47,6 +47,7 @@ export const CPQ_READ_TOOLS: readonly string[] = [
   // quotes
   'cpq.list_quotes',
   'cpq.get_quote',
+  'cpq.list_price_adjustments',
   // inventory
   'cpq.list_subscriptions',
   'cpq.get_subscription',

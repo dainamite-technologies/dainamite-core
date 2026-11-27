@@ -120,6 +120,7 @@ describe('applyStatusAction — whole subscription', () => {
       subscriptionItemIds: ['i1', 'i2'],
       effectiveDate: '2027-02-01',
       reason: 'Moved away',
+      wholeSubscription: true,
     })
   })
 
@@ -181,13 +182,16 @@ describe('applyStatusAction — one item', () => {
     await service.applyStatusAction({ subscriptionId: 'sub-1', subscriptionItemId: 'i1', action: 'terminate', fromDate: '2027-03-01' }, SCOPE)
     expect(items[0].status).toBe('terminated')
     expect(sub.status).toBe('active')
-    expect(emitted).toHaveBeenCalledWith('cpq.subscription.terminated', expect.objectContaining({ subscriptionItemIds: ['i1'], effectiveDate: '2027-03-01' }))
+    expect(emitted).toHaveBeenCalledWith('cpq.subscription.terminated', expect.objectContaining({ subscriptionItemIds: ['i1'], effectiveDate: '2027-03-01', wholeSubscription: false }))
   })
 
   it('terminating the last live item terminates the subscription', async () => {
     const { sub, service } = setup('active', [{ id: 'i1', status: 'active' }, { id: 'i2', status: 'terminated' }])
     await service.applyStatusAction({ subscriptionId: 'sub-1', subscriptionItemId: 'i1', action: 'terminate' }, SCOPE)
     expect(sub.status).toBe('terminated')
+    // Review F6: the scope is the action's, decided at emit time — an item-level
+    // terminate stays item-level even when it ends the subscription.
+    expect(emitted).toHaveBeenCalledWith('cpq.subscription.terminated', expect.objectContaining({ subscriptionItemIds: ['i1'], wholeSubscription: false }))
   })
 
   it('404 for an item that is not on the subscription', async () => {

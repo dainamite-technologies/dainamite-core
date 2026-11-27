@@ -143,6 +143,9 @@ const events = [
         { path: 'subscriptionItemIds', type: 'object', label: 'Terminated subscription item ids' },
         { path: 'effectiveDate', type: 'date' },
         { path: 'reason', type: 'text', optional: true },
+        // True when the action targeted the whole subscription; false for an
+        // item-level terminate, even one that ends the last live item.
+        { path: 'wholeSubscription', type: 'boolean', label: 'Whole subscription terminated' },
       ],
     },
   },

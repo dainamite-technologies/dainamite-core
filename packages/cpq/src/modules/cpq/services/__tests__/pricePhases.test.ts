@@ -76,6 +76,19 @@ describe('price rules with a month range (D9)', () => {
     expect(setup.totalPrice).toBe(50)
   })
 
+  it('review F4: an open-ended phased rule (13+) does not touch the NRC; a permanent rule still does', async () => {
+    const service = pricingWith([{ code: 'net', chargeType: 'mrc', fixedPrice: 100 }, { code: 'setup', chargeType: 'nrc', fixedPrice: 50 }], [
+      { code: 'BASE10', name: 'Base 10', ruleType: 'discount_percent', value: 10 },
+      { code: 'LOYAL', name: 'Loyalty', ruleType: 'discount_percent', value: 10, fromMonth: 13, toMonth: null },
+    ])
+    const [net, setup] = await resolve(service)
+    expect(setup).toMatchObject({ totalPrice: 45, standardTotalPrice: 45 })
+    expect(setup.adjustments?.map((entry) => entry.ruleCode)).toEqual(['BASE10'])
+    expect(setup.schedule).toBeUndefined()
+    expect(net.totalPrice).toBeCloseTo(81)
+    expect(net.schedule?.map((segment) => [segment.fromMonth, segment.toMonth, segment.totalPrice])).toEqual([[1, 12, 90], [13, null, 81]])
+  })
+
   it('runs permanent and phased rules in sort order per segment', async () => {
     const service = pricingWith([{ code: 'net', chargeType: 'mrc', fixedPrice: 100 }], [
       { code: 'BASE10', name: 'Base 10', ruleType: 'discount_percent', value: 10 },
@@ -121,6 +134,24 @@ const phase = (values: Partial<PriceAdjustment>): PriceAdjustment => ({
 })
 
 describe('manual phases (month ranges on recurring adjustments)', () => {
+  it('review F8: a charge-level phase wins in its months; a line Set price does not absorb it into the other charges', () => {
+    const a: ResolvedCharge = { ...mrc, chargeCode: 'a', unitPrice: 60, totalPrice: 60 }
+    const b: ResolvedCharge = { ...mrc, chargeCode: 'b', unitPrice: 60, totalPrice: 60 }
+    const lineSet: PriceAdjustment = { id: 'set', quoteLineId: 'line', level: 'line', chargeTypeFilter: 'mrc', adjustmentType: 'price_override',
+      value: 100, currencyCode: 'USD', reasonCode: 'competitive_match' }
+    const result = resolveManualAdjustments([lineOf([a, b])], [lineSet, phase({ id: 'trial', chargeCode: 'a', value: 0, fromMonth: 1, toMonth: 3, phaseName: 'Trial' })], 'USD')
+    expect(result.errors).toEqual([])
+    const [pricedA, pricedB] = result.lines[0].charges
+    // Regular: the line Set price 100 is spread 50 / 50.
+    expect([pricedA.totalPrice, pricedB.totalPrice]).toEqual([50, 50])
+    // Months 1–3: A is free and B keeps its regular share, so the trial saves 50 a month.
+    expect(pricedA.schedule?.map((segment) => [segment.fromMonth, segment.toMonth, segment.totalPrice, segment.source, segment.name])).toEqual([
+      [1, 3, 0, 'manual', 'Trial'], [4, null, 50, 'manual', null],
+    ])
+    expect(pricedB.schedule).toBeUndefined()
+    expect(pricedA.schedule?.[0].adjustmentId).toBe('trial')
+  })
+
   it('prices a ramp per segment and keeps the regular price after the last phase', () => {
     const result = resolveManualAdjustments([lineOf([mrc])], [
       phase({ id: 'y1', value: 80, fromMonth: 1, toMonth: 12, phaseName: 'Year 1' }),

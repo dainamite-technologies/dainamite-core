@@ -153,6 +153,16 @@ describe('line-level Set price and Amount off (F-D3)', () => {
     expect(sumMrc(result, [3])).toBe(300)
   })
 
+  it('review F7: a line Set price on quantity > 1 gives whole-cent per-instance totals and a whole-cent line total', () => {
+    const qty3: AdjustmentPricingLine = { ...line, quantity: 3, charges: [mrc('a', 60), mrc('b', 40)] }
+    const result = price([lineRow({ value: 100 })], [qty3])
+    const perInstance = totals(result)
+    for (const total of perInstance) expect(Number.isInteger(Math.round(total! * 1e6) / 1e4)).toBe(true)
+    // 100 over 3 instances cannot be exact: the line lands on the nearest whole-cent total (99.99).
+    expect(perInstance).toEqual([20, 13.33])
+    expect(Math.round(sumMrc(result, [3]) * 1e6) / 1e6).toBe(99.99)
+  })
+
   it('lets a charge adjustment beat the line Set price, which is then spread over the remaining charges only', () => {
     const chargeRow: PriceAdjustment = { ...row, id: 'charge-adj', chargeCode: 'a', adjustmentType: 'price_override', currencyCode: 'USD', value: 10 }
     const result = price([lineRow({ value: 50 }), chargeRow], [spreadLine])
@@ -182,8 +192,10 @@ describe('line-level Set price and Amount off (F-D3)', () => {
     expect(result.errors).toEqual([])
     // Standard bundle MRC: 50 + 2×25 + 50 = 150 → 100 keeps the 1:1:1 split.
     // Equal weights tie: the cent remainder goes to the first largest charge.
-    expect(totals(result, 0)).toEqual([33.34])
-    expect(totals(result, 1)).toEqual([16.665])
+    // Review F7: the quantity-2 seat gets whole per-instance cents (16.66, not
+    // 16.665); the cent it cannot hold moves to the base charge.
+    expect(totals(result, 0)).toEqual([33.35])
+    expect(totals(result, 1)).toEqual([16.66])
     expect(totals(result, 2)).toEqual([33.33, 50])
     expect(sumMrc(result, [1, 2, 1])).toBeCloseTo(100, 10)
   })

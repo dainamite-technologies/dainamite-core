@@ -766,7 +766,10 @@ export class DefaultCpqInventoryService {
     const subscriptionItemIds = affected.map((item) => item.id)
     const envelope = { tenantId: scope.tenantId, organizationId: scope.organizationId, subscriptionId: sub.id, subscriptionItemIds }
     const event: StatusActionEvent = target === 'terminated'
-      ? { id: 'cpq.subscription.terminated', payload: { ...envelope, effectiveDate: fromDate, reason } }
+      // `wholeSubscription` is the action's scope, decided here (review F6): a
+      // replayed item-level terminate must not end the other items just because
+      // the subscription has since been terminated.
+      ? { id: 'cpq.subscription.terminated', payload: { ...envelope, effectiveDate: fromDate, reason, wholeSubscription: !itemLevel } }
       : {
           id: 'cpq.subscription_item.status_changed',
           payload: {

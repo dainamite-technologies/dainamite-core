@@ -40,7 +40,9 @@ export const setsChargeTotal = (charge: Pick<ResolvedCharge, 'pricingMethod'>) =
  * 3. spread line-level Set price / Amount off over the charges each one won
  *    (`applyLineSpread`), deepest target line first, so the line (or bundle)
  *    total equals the typed price even when more specific adjustments fix
- *    some of its charges (spec F-D3).
+ *    some of its charges (spec F-D3);
+ * 4. apply charge-level phases last: in its months a phase wins on its charge,
+ *    and the other charges keep the share they have without it (review F8).
  */
 export function resolveManualAdjustments(
   lines: AdjustmentPricingLine[],
@@ -182,10 +184,18 @@ function resolveSegment(
   }
 
   const winners = pickWinners(output, adjustments, invalid, lineages, currencyCode, addError)
+  // A charge-level phase wins in its months without moving the line spread
+  // around it (review F8): the spread runs as if the phase were not there, so
+  // the other charges keep their regular share, and the phase is applied last.
+  const isChargePhase = (row: PriceAdjustment) => row.level === 'charge' && isPhasedRange(row)
+  const chargePhases = [...winners.values()].filter(({ row }) => isChargePhase(row))
+  const spreadWinners = chargePhases.length
+    ? pickWinners(output, adjustments.filter((row) => !isChargePhase(row)), invalid, lineages, currencyCode, () => {})
+    : winners
 
   // 2. Charge targets and line % off: per charge, independent of other charges.
   const spreads = new Map<string, { row: PriceAdjustment; won: ChargeRef[] }>()
-  for (const { ref, row } of winners.values()) {
+  for (const { ref, row } of spreadWinners.values()) {
     if (row.level === 'line' && isLineAmountType(row.adjustmentType)) {
       const group = spreads.get(row.id) ?? { row, won: [] }
       group.won.push(ref)
@@ -204,6 +214,12 @@ function resolveSegment(
       for (const charge of line.charges) if (charge.chargeType === row.chargeTypeFilter) scope.push({ line, charge })
     }
     applyLineSpread(row, scope, won)
+  }
+
+  // 4. Charge-level phases replace whatever the steps above set on their charge.
+  for (const { ref, row } of chargePhases) {
+    ref.charge.adjustments = ref.charge.adjustments.filter((entry) => entry.origin !== 'manual')
+    applyToCharge(row, ref.charge)
   }
   return { lines: output, errors }
 }
@@ -296,13 +312,39 @@ function applyLineSpread(row: PriceAdjustment, scope: ChargeRef[], won: ChargeRe
   const standardWon = won.reduce((sum, ref) => sum + contribution(ref, ref.charge.standardTotalPrice), 0)
   const fixed = scope.filter((ref) => !wonSet.has(ref.charge)).reduce((sum, ref) => sum + contribution(ref, ref.charge.totalPrice), 0)
   const target = row.adjustmentType === 'price_override' ? row.value - fixed : standardWon - row.value
-  const shares = spreadAmount(Math.max(0, target), won.map((ref) => contribution(ref, ref.charge.standardTotalPrice)))
+  const weights = won.map((ref) => contribution(ref, ref.charge.standardTotalPrice))
+  const shares = spreadAmount(Math.max(0, target), weights)
+  const perInstance = perInstanceCents(shares, weights, won.map((ref) => lineQuantity(ref.line)))
   won.forEach((ref, index) => {
-    const lineQty = lineQuantity(ref.line)
-    const afterTotal = lineQty > 0 ? shares[index] / lineQty : 0
+    const afterTotal = perInstance[index] / 100
     const quantity = ref.charge.quantity ?? 1
     record(row, ref.charge, quantity > 0 ? afterTotal / quantity : 0, afterTotal)
   })
+}
+
+/**
+ * Line shares (whole cents over all line quantities) → per-instance totals in
+ * whole cents (review F7): each share is floored to a multiple of its line
+ * quantity, then the remainder goes to the largest charges in whole
+ * per-instance cents. A remainder smaller than every quantity rounds to the
+ * nearest cent on the largest charge, so the line total is always whole cents
+ * — the typed price exactly whenever the quantities allow it (100 over 3
+ * instances lands on 99.99).
+ */
+function perInstanceCents(shares: number[], weights: number[], quantities: number[]): number[] {
+  const out = shares.map((share, index) => (quantities[index] > 0 ? Math.floor(Math.round(share * 100) / quantities[index]) : 0))
+  let remainder = shares.reduce((sum, share) => sum + Math.round(share * 100), 0) -
+    out.reduce((sum, cents, index) => sum + cents * Math.max(0, quantities[index]), 0)
+  const byWeight = shares.map((_, index) => index).filter((index) => quantities[index] > 0)
+    .sort((a, b) => (weights[b] || 0) - (weights[a] || 0) || a - b)
+  for (const index of byWeight) {
+    const cents = Math.floor(remainder / quantities[index])
+    out[index] += cents
+    remainder -= cents * quantities[index]
+  }
+  const largest = byWeight[0]
+  if (largest !== undefined && remainder > 0 && remainder * 2 >= quantities[largest]) out[largest] += 1
+  return out
 }
 
 function record(row: PriceAdjustment, charge: OutputCharge, afterUnit: number, afterTotal: number) {

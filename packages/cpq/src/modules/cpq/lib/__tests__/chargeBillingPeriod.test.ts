@@ -51,6 +51,31 @@ describe('charge billing period (D5)', () => {
     ])
   })
 
+  it('review F1: the monthly charge does not absorb the qty-multiplied rounding of a yearly charge', () => {
+    // M = 50 / month + Y = 100 / year, quantity 1000. Line MRC as stored = round4(50 + 8.3333) × 1000 = 58,333.3.
+    const charges = [mrc(50), mrc(100, yearly)]
+    const lineMrc = sumMonthlyRecurring(charges) * 1000
+    expect(recurringChargesByPeriod(charges, 1000, lineMrc)).toEqual([
+      { billingPeriod: { unit: 'month', interval: 1 }, unitPrice: 50000 },
+      { billingPeriod: yearly, unitPrice: 100000 },
+    ])
+    // The phases of the monthly entry and its unitPrice use the same amount.
+    const phased = { ...mrc(50), schedule: [
+      { fromMonth: 1, toMonth: 3, unitPrice: 0, totalPrice: 0, standardUnitPrice: 0, standardTotalPrice: 0, source: 'manual', name: 'Trial' },
+      { fromMonth: 4, toMonth: null, unitPrice: 50, totalPrice: 50, standardUnitPrice: 50, standardTotalPrice: 50, source: 'list', name: null },
+    ] }
+    const [monthly] = buildRecurringPayloadCharges([phased, mrc(100, yearly)], 1000, lineMrc)
+    expect(monthly).toEqual({ type: 'recurring', unitPrice: 50000, description: 'Recurring charge',
+      phases: [{ name: 'Trial', months: 3, priceType: 'fixed', value: 0 }] })
+  })
+
+  it('review F1: per-period amounts are summed unrounded and rounded once', () => {
+    // Three yearly charges of 0.00004 × qty 1 each round to 0 per charge but sum to 0.0001.
+    expect(recurringChargesByPeriod([mrc(0.00004, yearly), mrc(0.00004, yearly), mrc(0.00004, yearly)], 1, 0)).toEqual([
+      { billingPeriod: yearly, unitPrice: 0.0001 },
+    ])
+  })
+
   it('groups charges of the same period and orders periods by length', () => {
     const quarterly = { unit: 'month' as const, interval: 3 }
     expect(recurringChargesByPeriod([mrc(100, yearly), mrc(30, quarterly), mrc(20, yearly)], 1, 20)).toEqual([

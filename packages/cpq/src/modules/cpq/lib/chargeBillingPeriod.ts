@@ -114,10 +114,11 @@ export interface RecurringChargeByPeriod {
  * `monthlyTotal` is the line's MRC total (monthly equivalent, quantity
  * applied) as stored on the line / subscription item. When every MRC charge is
  * monthly the result is exactly `[{ every 1 month, monthlyTotal }]`, i.e.
- * today's payload. Otherwise each non-monthly period gets the sum of its
- * charges' price per period × quantity, and the monthly entry keeps the rest
- * of `monthlyTotal` (so a line-level figure that differs from the charge sum
- * still lands on the monthly charge, as today). Entries with no positive
+ * today's payload. Otherwise every period's amount is built directly from
+ * its own charges — Σ price per period × quantity, summed unrounded and
+ * rounded once — so the monthly entry never absorbs the (quantity-multiplied)
+ * rounding of a non-monthly charge's monthly equivalent (review F1) and
+ * matches its own phases (`lib/payloadPhases.ts`). Entries with no positive
  * amount are dropped. Order: monthly first, then by period length.
  */
 export function recurringChargesByPeriod(
@@ -127,26 +128,28 @@ export function recurringChargesByPeriod(
 ): RecurringChargeByPeriod[] {
   const qty = Number.isFinite(quantity) && quantity > 0 ? quantity : 1
   const groups = new Map<string, RecurringChargeByPeriod>()
-  let nonMonthlyEquivalent = 0
+  let monthlyCharges = 0
   for (const charge of charges ?? []) {
     if (charge.chargeType !== 'mrc' || charge.totalPrice == null) continue
     const period = chargeBillingPeriod(charge)
-    if (isDefaultBillingPeriod(period)) continue
-    const perPeriod = Number(charge.totalPrice) * qty
+    const perPeriod = Number(charge.totalPrice)
     if (!Number.isFinite(perPeriod)) continue
+    if (isDefaultBillingPeriod(period)) { monthlyCharges += perPeriod; continue }
     const key = billingPeriodKey(period)
     const group = groups.get(key) ?? { billingPeriod: period, unitPrice: 0 }
-    group.unitPrice = round4(group.unitPrice + perPeriod)
+    group.unitPrice += perPeriod
     groups.set(key, group)
-    nonMonthlyEquivalent += toMonthlyEquivalent(perPeriod, period)
   }
-  const monthly = round4((Number(monthlyTotal) || 0) - nonMonthlyEquivalent)
+  // Monthly only: the stored line MRC, exactly today's payload.
+  if (groups.size === 0) {
+    const monthly = round4(Number(monthlyTotal) || 0)
+    return monthly > 0 ? [{ billingPeriod: { ...DEFAULT_CHARGE_BILLING_PERIOD }, unitPrice: monthly }] : []
+  }
   const out: RecurringChargeByPeriod[] = []
-  // A rounding remainder from the monthly-equivalent conversion is not a charge.
-  if (groups.size === 0 ? monthly > 0 : monthly > 0.01) {
-    out.push({ billingPeriod: { ...DEFAULT_CHARGE_BILLING_PERIOD }, unitPrice: monthly })
-  }
+  const monthly = round4(monthlyCharges * qty)
+  if (monthly > 0) out.push({ billingPeriod: { ...DEFAULT_CHARGE_BILLING_PERIOD }, unitPrice: monthly })
   const others = [...groups.values()]
+    .map((group) => ({ ...group, unitPrice: round4(group.unitPrice * qty) }))
     .filter((group) => group.unitPrice > 0)
     .sort((a, b) => billingPeriodMonths(a.billingPeriod) - billingPeriodMonths(b.billingPeriod))
   return out.concat(others)

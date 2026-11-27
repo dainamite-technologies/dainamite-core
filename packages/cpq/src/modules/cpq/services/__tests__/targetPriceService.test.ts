@@ -30,7 +30,7 @@ function matches(row: Record<string, unknown>, where: Record<string, unknown>): 
 function setup() {
   const quote = { id: quoteId, quoteId, ...scope, cpqStatus: 'ready', pricingRevision: 0, quoteType: 'new' }
   const rows: Row[] = []
-  const state = { enabled: true, order: false, reasons: ['promotion', 'loyalty', 'other'], target: true, term: 12 as number | null }
+  const state = { enabled: true, order: false, reasons: ['promotion', 'loyalty', 'other'], target: true, term: 12 as number | null, charges: ['fee', 'setup'] }
   const em = {
     fork: jest.fn(), transactional: jest.fn(), flush: jest.fn().mockResolvedValue(undefined),
     assign: jest.fn((entity: object, values: object) => Object.assign(entity, values)),
@@ -44,7 +44,7 @@ function setup() {
     findOne: jest.fn(async (entity: unknown, where: Record<string, unknown>) => {
       if (entity === CpqQuoteConfiguration) return quote
       if (entity === CpqOrderConfiguration) return state.order ? { id: 'order' } : null
-      if (entity === CpqQuoteLineConfiguration) return state.target ? { offeringId: 'offer', configuration: {}, termMonths: state.term, charges: [{ chargeCode: 'fee' }, { chargeCode: 'setup' }] } : null
+      if (entity === CpqQuoteLineConfiguration) return state.target ? { offeringId: 'offer', configuration: {}, termMonths: state.term, charges: state.charges.map((chargeCode) => ({ chargeCode })) } : null
       if (entity === Dictionary) return { id: 'dictionary' }
       if (entity === DictionaryEntry) return state.reasons.includes(String(where.value)) ? { value: where.value } : null
       return null
@@ -158,6 +158,27 @@ describe('replaceTarget', () => {
     // Phases on a one-time charge: the resolver rejects them, the save rolls back.
     await expect(service.replaceTarget(quoteId, { ...phases, target: { level: 'charge', quoteLineId: lineId, chargeCode: 'setup' } }, actor, scope)).rejects.toMatchObject({ status: 422, message: 'PHASE_RECURRING_ONLY' })
     await expect(service.replaceTarget(quoteId, { ...phases, currencyCode: 'EUR' }, actor, scope)).rejects.toMatchObject({ status: 422, message: 'CURRENCY_MISMATCH' })
+  })
+})
+
+describe('replaceTarget on a charge that left the line (F1)', () => {
+  it('removes the orphan rows of a charge no longer on the line with the empty PUT, and only those', async () => {
+    const { service, state, active } = setup()
+    const fee = { level: 'charge' as const, quoteLineId: lineId, chargeCode: 'fee' }
+    await service.replaceTarget(quoteId, { target: fee, phases: [], then: { adjustmentType: 'discount_percent', value: 10 }, reasonCode: 'promotion' }, actor, scope)
+    await service.replaceTarget(quoteId, phases, actor, scope)
+    expect(active()).toHaveLength(3)
+    state.charges = ['setup']
+    const removed = await service.replaceTarget(quoteId, { target: fee, phases: [], then: null }, actor, scope)
+    expect(removed.before).toHaveLength(1)
+    expect(removed.after).toEqual([])
+    expect(active().map((row) => row.level)).toEqual(['line', 'line'])
+    // Writing a price on the missing charge is still refused.
+    await expect(service.replaceTarget(quoteId, { target: fee, phases: [], then: { adjustmentType: 'discount_percent', value: 5 }, reasonCode: 'promotion' }, actor, scope))
+      .rejects.toMatchObject({ status: 404, message: 'Charge not found' })
+    // The line itself is still required.
+    state.target = false
+    await expect(service.replaceTarget(quoteId, { target: fee, phases: [], then: null }, actor, scope)).rejects.toMatchObject({ status: 404 })
   })
 })
 

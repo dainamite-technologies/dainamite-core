@@ -167,7 +167,10 @@ export class CpqTargetPriceService {
   private async plan(em: EntityManager, quote: CpqQuoteConfiguration, parsed: TargetPriceInput, scope: TenantScope): Promise<TargetPlan> {
     const { target } = parsed
     const line = await this.deps.adjustmentService.requireTarget(em, quote, target.quoteLineId, scope)
-    if (target.level === 'charge' && Array.isArray(line.charges) && !line.charges.some((charge) => charge.chargeCode === target.chargeCode)) {
+    // A body that writes nothing only removes the target's rows: allowed on a charge that left the
+    // line, so its orphan rows (ADJUSTMENT_TARGET_MISSING) can still be removed. The line stays required.
+    const writesNothing = parsed.phases.length === 0 && parsed.then === null
+    if (!writesNothing && target.level === 'charge' && Array.isArray(line.charges) && !line.charges.some((charge) => charge.chargeCode === target.chargeCode)) {
       throw new QuotingError(404, 'Charge not found')
     }
     let wanted: PriceAdjustmentInput[]

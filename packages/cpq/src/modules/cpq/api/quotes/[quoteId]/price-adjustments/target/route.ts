@@ -56,7 +56,7 @@ export const openApi: OpenApiRouteDoc = { tag: 'CPQ Quotes', pathParams: cpqQuot
   errors: [
     cpqErrorDoc(400, 'Invalid body'),
     cpqErrorDoc(403, 'Missing feature, or manual price adjustments are turned off'),
-    cpqErrorDoc(404, 'Quote, line or charge not found'),
+    cpqErrorDoc(404, 'Quote, line or charge not found. A removal (`phases: []`, `then: null`) needs only the line, so the rows of a charge that left the line can be removed'),
     cpqErrorDoc(409, 'ADJUSTMENT_LOCKED or STALE_REVISION'),
     cpqErrorDoc(422, 'LINE_NOT_ELIGIBLE, PHASE_RECURRING_ONLY, PHASE_PAST_TERM, PHASE_TOO_MANY, ADJUSTMENT_OVERLAP (adjustmentId = the other target\'s row), REASON_NOT_FOUND, REASON_NOTE_REQUIRED, CHARGE_TYPE_REQUIRED, INVALID_PERCENT, INVALID_AMOUNT, or a pricing error of a written row; `stepIndex` points at the step'),
   ],

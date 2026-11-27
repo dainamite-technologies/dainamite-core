@@ -14,6 +14,7 @@ import { withChargeWaterfall } from './priceAdjustments/chargeWaterfall'
 import { withQuotePricingWrite } from './priceAdjustments/quotePricingWrite'
 import { emitQuoteWriteEvents, type QuoteWriteEvents } from './priceAdjustments/quotePricingEvents'
 import { computeWaterfallSummary } from './priceAdjustments/pricingSnapshot'
+import { storedRuleCodes, withoutSchedule } from '../lib/priceSchedule'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { SalesQuote, SalesQuoteLine } from '@open-mercato/core/modules/sales/data/entities'
 import { CustomerEntity } from '@open-mercato/core/modules/customers/data/entities'
@@ -1184,8 +1185,12 @@ export class DefaultCpqQuotingService {
           productId: lineConfig.productId ?? undefined,
           configuration: mergedConfig,
           currencyCode: cpqConfig.currencyCode,
+          // D10: rules this line was already priced with survive the end of their campaign.
+          retainRuleCodes: storedRuleCodes(lineConfig.charges),
           ...scope,
         })
+        // D8: an existing (mirrored) line continues at the regular price; phases are for new / added lines.
+        if (isArcMirrorLine(lineConfig.configuration, cpqConfig.quoteType)) charges = charges.map(withoutSchedule)
       } else {
         charges = (lineConfig.charges ?? []) as unknown as ResolvedCharge[]
       }
@@ -1262,6 +1267,7 @@ export class DefaultCpqQuotingService {
     const adjustments = draftAdjustments ?? await loadQuoteAdjustments(em, cpqConfig.id, scope)
     const adjusted = resolveManualAdjustments(computedLines.map(({ lineConfig, charges }) => ({
       lineId: lineConfig.quoteLineId, parentLineId: lineConfig.parentLineId ?? null, quantity: lineConfig.quantity,
+      termMonths: lineConfig.termMonths ?? null,
       enginePriced: !!(lineConfig.offeringId || lineConfig.productId),
       mirrored: isArcMirrorLine(lineConfig.configuration, cpqConfig.quoteType), charges,
     })), adjustments, cpqConfig.currencyCode)

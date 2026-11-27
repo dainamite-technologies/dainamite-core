@@ -598,7 +598,7 @@ export class CpqProductCharge {
 @Unique({ name: 'cpq_price_rules_code_unique', properties: ['organizationId', 'tenantId', 'code'] })
 @Index({ name: 'cpq_price_rules_product_idx', properties: ['organizationId', 'tenantId', 'productOfferingId'] })
 export class CpqPriceRule {
-  [OptionalProps]?: 'sortOrder' | 'isActive' | 'createdAt' | 'updatedAt' | 'deletedAt'
+  [OptionalProps]?: 'sortOrder' | 'fromMonth' | 'toMonth' | 'validFrom' | 'validUntil' | 'isActive' | 'createdAt' | 'updatedAt' | 'deletedAt'
 
   @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
   id!: string
@@ -638,6 +638,23 @@ export class CpqPriceRule {
 
   @Property({ name: 'sort_order', type: 'integer', default: 0 })
   sortOrder: number = 0
+
+  /**
+   * Spec 2026-11-26 price phases (D9): months of the subscription the rule
+   * prices, 1-based and inclusive. 1 → null (the default) = every month.
+   */
+  @Property({ name: 'from_month', type: 'integer', default: 1 })
+  fromMonth: number = 1
+
+  @Property({ name: 'to_month', type: 'integer', nullable: true })
+  toMonth: number | null = null
+
+  /** D10 campaign dates (`YYYY-MM-DD`, inclusive): the quotes priced inside them get the rule. */
+  @Property({ name: 'valid_from', type: 'date', nullable: true })
+  validFrom: string | null = null
+
+  @Property({ name: 'valid_until', type: 'date', nullable: true })
+  validUntil: string | null = null
 
   @Property({ name: 'is_active', type: 'boolean', default: true })
   isActive: boolean = true
@@ -1550,7 +1567,7 @@ export class CpqSubscriptionChangeLog {
 @Index({ name: 'cpq_qpa_quote_line_idx', properties: ['organizationId', 'tenantId', 'quoteLineId'] })
 @Index({ name: 'cpq_qpa_quote_idx', properties: ['organizationId', 'tenantId', 'quoteId'] })
 export class CpqQuotePriceAdjustment {
-  [OptionalProps]?: 'windowKind' | 'fromMonth' | 'toMonth' | 'isActive' | 'createdAt' | 'updatedAt' | 'deletedAt'
+  [OptionalProps]?: 'windowKind' | 'fromMonth' | 'toMonth' | 'phaseName' | 'isActive' | 'createdAt' | 'updatedAt' | 'deletedAt'
 
   @PrimaryKey({ type: 'uuid', defaultRaw: 'gen_random_uuid()' })
   id!: string
@@ -1602,6 +1619,10 @@ export class CpqQuotePriceAdjustment {
 
   @Property({ name: 'reason_note', type: 'text', nullable: true })
   reasonNote: string | null = null
+
+  /** Price phases spec: optional phase name, sent with the billing phase ("Free trial"). */
+  @Property({ name: 'phase_name', type: 'text', nullable: true })
+  phaseName: string | null = null
 
   @Property({ name: 'created_by_user_id', type: 'uuid' })
   createdByUserId!: string

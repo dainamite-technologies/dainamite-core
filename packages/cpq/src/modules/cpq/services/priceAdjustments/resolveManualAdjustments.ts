@@ -2,6 +2,10 @@ import { isLineAmountType, type AdjustmentError, type PriceAdjustment } from '..
 import type { ResolvedCharge } from '../types'
 import { withChargeWaterfall } from './chargeWaterfall'
 import { spreadAmount } from './spreadAmount'
+import {
+  compactSchedule, isActiveInMonth, isPhasedRange, normalizeRange, scheduleRanges, segmentAt, segmentsFor,
+  type ChargeScheduleSegment,
+} from '../../lib/priceSchedule'
 
 export interface AdjustmentPricingLine {
   lineId: string
@@ -10,6 +14,8 @@ export interface AdjustmentPricingLine {
   mirrored: boolean
   /** Line quantity; a line-level amount is the line total over all of them. Defaults to 1. */
   quantity?: number
+  /** Line term in months; a phase may not pass it (PHASE_PAST_TERM). Unknown = not checked. */
+  termMonths?: number | null
   charges: ResolvedCharge[]
 }
 
@@ -37,6 +43,94 @@ export const setsChargeTotal = (charge: Pick<ResolvedCharge, 'pricingMethod'>) =
  *    some of its charges (spec F-D3).
  */
 export function resolveManualAdjustments(
+  lines: AdjustmentPricingLine[],
+  adjustments: PriceAdjustment[],
+  currencyCode: string,
+): { lines: AdjustmentPricingLine[]; errors: AdjustmentError[] } {
+  const phased = adjustments.filter(isPhasedRange)
+  const scheduled = lines.some((line) => line.charges.some((charge) => charge.schedule?.length))
+  if (!phased.length && !scheduled) return resolveSegment(lines, adjustments, currencyCode)
+
+  // Price phases (spec P, §4.3): the waterfall runs once per month segment.
+  // Phases that can never apply are rejected up front, for every segment.
+  const errors: AdjustmentError[] = []
+  const rejected = new Set<string>()
+  const byId = new Map(lines.map((line) => [line.lineId, line]))
+  for (const row of phased) {
+    const target = byId.get(row.quoteLineId)
+    if (!target || !eligible(target)) continue // reported by the segment pass
+    const { fromMonth, toMonth } = normalizeRange(row)
+    const term = target.termMonths ?? null
+    if (term && (fromMonth > term || (toMonth !== null && toMonth > term))) {
+      errors.push({ adjustmentId: row.id, quoteLineId: row.quoteLineId, ...(row.chargeCode ? { chargeCode: row.chargeCode } : {}), code: 'PHASE_PAST_TERM' })
+      rejected.add(row.id)
+      continue
+    }
+    const recurringOnly = row.level === 'line' ? row.chargeTypeFilter === 'mrc'
+      : target.charges.filter((charge) => charge.chargeCode === row.chargeCode).every((charge) => charge.chargeType === 'mrc')
+    if (!recurringOnly) {
+      errors.push({ adjustmentId: row.id, quoteLineId: row.quoteLineId, ...(row.chargeCode ? { chargeCode: row.chargeCode } : {}), code: 'PHASE_RECURRING_ONLY' })
+      rejected.add(row.id)
+    }
+  }
+  const active = adjustments.filter((row) => !rejected.has(row.id))
+  const segments = segmentsFor([
+    ...active.filter(isPhasedRange),
+    ...lines.flatMap((line) => line.charges.flatMap((charge) => scheduleRanges(charge.schedule))),
+  ])
+  const results = segments.map((segment) => resolveSegment(
+    lines.map((line) => ({ ...line, charges: line.charges.map((charge) => chargeAtMonth(charge, segment.fromMonth)) })),
+    active.filter((row) => isActiveInMonth(row, segment.fromMonth)),
+    currencyCode,
+  ))
+  const regular = results.at(-1)!
+  for (const result of results) {
+    for (const error of result.errors) {
+      if (!errors.some((entry) => entry.adjustmentId === error.adjustmentId && entry.quoteLineId === error.quoteLineId && entry.chargeCode === error.chargeCode && entry.code === error.code)) errors.push(error)
+    }
+  }
+  const out = regular.lines.map((line, lineIndex) => ({
+    ...line,
+    charges: line.charges.map((charge, chargeIndex) => {
+      const chargeErrors = errors.filter((error) => error.quoteLineId === line.lineId && (!error.chargeCode || error.chargeCode === charge.chargeCode))
+      const input = lines[lineIndex].charges[chargeIndex]
+      const { schedule: _ignored, ...rest } = charge
+      const merged = { ...rest, adjustmentErrors: chargeErrors }
+      if (charge.chargeType !== 'mrc') return merged
+      const schedule = compactSchedule(segments.map((segment, at): ChargeScheduleSegment => {
+        const segmentCharge = results[at].lines[lineIndex].charges[chargeIndex]
+        const ruleSegment = input.schedule ? segmentAt(input.schedule, segment.fromMonth) : undefined
+        const manual = segmentCharge.adjustments?.find((entry) => entry.origin === 'manual')
+        const row = manual?.adjustmentId ? active.find((entry) => entry.id === manual.adjustmentId) : undefined
+        const ruleCodes = ruleSegment?.ruleCodes ?? (segmentCharge.adjustments ?? []).filter((entry) => entry.origin !== 'manual').map((entry) => entry.ruleCode)
+        return {
+          fromMonth: segment.fromMonth, toMonth: segment.toMonth,
+          unitPrice: segmentCharge.unitPrice, totalPrice: segmentCharge.totalPrice,
+          standardUnitPrice: segmentCharge.standardUnitPrice ?? segmentCharge.unitPrice,
+          standardTotalPrice: segmentCharge.standardTotalPrice !== undefined ? segmentCharge.standardTotalPrice : segmentCharge.totalPrice,
+          source: manual ? 'manual' : ruleSegment?.source ?? (ruleCodes.length ? 'rule' : 'list'),
+          name: manual ? (row?.phaseName ?? null) : ruleSegment?.name ?? null,
+          ...(ruleCodes.length ? { ruleCodes } : {}),
+          ...(manual?.adjustmentId ? { adjustmentId: manual.adjustmentId } : {}),
+        }
+      }))
+      return schedule ? { ...merged, schedule } : merged
+    }),
+  }))
+  return { lines: out, errors }
+}
+
+/** The charge as priced in `month`: its standard (and stored offer) price of that segment, without a schedule. */
+function chargeAtMonth(charge: ResolvedCharge, month: number): ResolvedCharge {
+  const { schedule, ...rest } = charge
+  const segment = schedule?.length ? segmentAt(schedule, month) : undefined
+  if (!segment) return rest
+  return { ...rest, unitPrice: segment.unitPrice, totalPrice: segment.totalPrice,
+    standardUnitPrice: segment.standardUnitPrice, standardTotalPrice: segment.standardTotalPrice }
+}
+
+/** One month segment: the waterfall with the adjustments in force in it (spec F). */
+function resolveSegment(
   lines: AdjustmentPricingLine[],
   adjustments: PriceAdjustment[],
   currencyCode: string,
@@ -217,7 +311,7 @@ function record(row: PriceAdjustment, charge: OutputCharge, afterUnit: number, a
   charge.totalPrice = afterTotal
   charge.adjustments.push({
     origin: 'manual', adjustmentId: row.id, class: 'rep', level: row.level,
-    windowKind: 'relative', fromMonth: 1, toMonth: null,
+    windowKind: 'relative', fromMonth: normalizeRange(row).fromMonth, toMonth: normalizeRange(row).toMonth,
     ruleCode: row.id, ruleName: row.reasonCode, ruleType: row.adjustmentType,
     reasonCode: row.reasonCode, createdByUserId: row.createdByUserId,
     value: row.value, unitPriceBefore: standard, unitPriceAfter: afterUnit, delta: afterUnit - standard,

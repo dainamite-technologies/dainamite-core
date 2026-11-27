@@ -773,7 +773,7 @@ export class DefaultCpqOrderService {
     // input for the `cpq.subscription.activated` billing-onboarding event.
     const eventItems = subscriptionLines
       .slice(0, allSubItems.length)
-      .map((line, i) => ({
+      .map((line, i): ActivatedInventory['items'][number] => ({
         subscriptionItemId: allSubItems[i].id,
         orderLineId: line.orderLineId,
         startDate: iso10(line.startDate),

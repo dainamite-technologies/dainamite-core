@@ -60,3 +60,15 @@ it('hash tracks deal eligibility and normalizes omitted eligibility to true', ()
   expect(excluded.dealValue.offer).toBe(0)
   expect(excluded.snapshotHash).not.toBe(baseline.snapshotHash)
 })
+it('D5: a yearly MRC counts its monthly equivalent in MRC totals and deal value', () => {
+  const yearly = { chargeCode: 'mob', chargeName: 'Mobile', chargeType: 'mrc' as const, pricingMethod: 'flat' as const, currencyCode: 'COP', quantity: 1,
+    unitPrice: 480000, totalPrice: 480000, billingPeriod: { unit: 'year' as const, interval: 1 } }
+  const summary = computeWaterfallSummary([{ lineId: 'l', quantity: 1, termMonths: 12, charges: [yearly] }], [], 'COP')
+  expect(summary.listMrcTotal).toBe(40000)
+  expect(summary.dealValue).toEqual({ list: 480000, standard: 480000, offer: 480000 })
+})
+it('D5: a non-monthly period changes the hash; monthly charges keep their existing hash', () => {
+  const plain = computeWaterfallSummary([line], [], 'USD').snapshotHash
+  const yearly = { ...line, charges: [{ ...line.charges[0], billingPeriod: { unit: 'year' as const, interval: 1 } }] }
+  expect(computeWaterfallSummary([yearly], [], "USD").snapshotHash).not.toBe(plain)
+})

@@ -55,7 +55,10 @@ import { isNoCharge, type ItemStatus, type StatusChargeBehavior } from './itemSt
  *     later shortened or removed are charged.
  *   Each status period remembers which of its days the engine already left
  *   uncharged (`appliedFrom` / `appliedTo`); the computation returns the new
- *   values in `statusApplied`, persisted with the watermark.
+ *   values in `statusApplied`, persisted with the watermark. Credits and
+ *   re-charges are computed on the UNION of all rows (overlapping rows never
+ *   credit a day twice) and never touch a day that was not charged (a
+ *   partial period skipped by `prorate=false` — `unchargedPartials`).
  *
  * Grouping: consecutive lines of the same phase (or, on an item with its own
  * period, consecutive full periods at the same price) become ONE line —
@@ -440,10 +443,53 @@ function statusReason(row: StatusRow, kind: 'status' | 'status_reversal'): Recur
   }
 }
 
-function appliedUpdates(rows: readonly StatusRow[], billed: Range | null): StatusAppliedUpdate[] {
+/**
+ * Days of the billed window `[start, watermark]` that `prorate=false` skipped
+ * as a partial grid period and therefore NEVER charged — status credits and
+ * re-charges must not touch them. Reconstructed from the grid (the engine
+ * keeps no per-day ledger; the watermark is the only persisted guard):
+ *   - the first period when the item starts inside it (the account grid
+ *     only — an own grid is anchored at the start);
+ *   - the last period when the watermark sits on a `bill_end_date` inside it
+ *     (the charge path stops there after skipping it). An end recorded after
+ *     the period was billed leaves the watermark beyond it — charged in full.
+ * Assumes `prorate` and the grid did not change after billing (a billing
+ * period change is refused once billed; see `commands/items.ts`).
+ */
+function unchargedPartials(item: RecurringItemState, grid: Grid, start: Date, end: Date | null, watermark: Date | null): Range[] {
+  if (item.prorate || !watermark || watermark.getTime() < start.getTime()) return []
+  const out: Range[] = []
+  const first = gridPeriodContaining(grid.anchor, grid.cycle, start)
+  if (first.start.getTime() < start.getTime()) out.push([dayNum(start), dayNum(minDate(first.end, watermark))])
+  if (end && end.getTime() === watermark.getTime() && end.getTime() >= start.getTime()) {
+    const last = gridPeriodContaining(grid.anchor, grid.cycle, end)
+    if (end.getTime() < last.end.getTime()) out.push([dayNum(maxDate(last.start, start)), dayNum(end)])
+  }
+  return normalize(out)
+}
+
+/**
+ * Applied (left-uncharged) range per status row after this computation:
+ * the row's no-charge days inside `billed` that were chargeable. Rows may
+ * overlap (the engine reads the UNION of applied ranges, so a day shared by
+ * two rows is still credited / re-charged once).
+ */
+function appliedUpdates(
+  rows: readonly StatusRow[],
+  billed: Range | null,
+  uncharged: readonly Range[] = [],
+  /** Billed days outside `billed` whose previous applied state is kept as is. */
+  keep: Range | null = null,
+): StatusAppliedUpdate[] {
   const updates: StatusAppliedUpdate[] = []
   for (const row of rows) {
-    const target = row.noCharge && billed ? intersect([row.range], [billed])[0] ?? null : null
+    // Uncharged days are a prefix / suffix of the billed window, so the rest is contiguous.
+    const pieces = row.noCharge && billed ? subtract(intersect([row.range], [billed]), uncharged) : []
+    const kept = keep && row.applied ? intersect([row.applied], [keep]) : []
+    // A single range per row: keep the old days only when they extend it
+    // without a gap (never mark a day in between as left uncharged).
+    const all = pieces.length && kept.length && pieces[pieces.length - 1][1] + 1 < kept[0][0] ? pieces : normalize([...pieces, ...kept])
+    const target: Range | null = all.length ? [all[0][0], all[all.length - 1][1]] : null
     const same =
       (target === null && row.applied === null) ||
       (target !== null && row.applied !== null && target[0] === row.applied[0] && target[1] === row.applied[1])
@@ -514,32 +560,41 @@ export function computeRecurringLines(
   const skipped: RecurringSkip[] = []
 
   // ── Billed window: status credits and re-charges (L §4.3). ──
+  // Computed on day SETS (unions over all rows), never per row: a day is
+  // credited only if it was charged (not already left uncharged, not in a
+  // partial period prorate=false skipped) and re-charged only if it was left
+  // uncharged — once, however many rows cover it.
   const billedEnd = billedTo ? (end ? minDate(end, billedTo) : billedTo) : null
+  const unchargedBefore = unchargedPartials(item, grid, start, end, billedTo)
   if (billedEnd && billedEnd.getTime() >= start.getTime()) {
     const past: Range = [dayNum(start), dayNum(billedEnd)]
+    // Charged, but now a no-charge status day → credit.
+    let credits = subtract(subtract(intersect(noCharge, [past]), applied), unchargedBefore)
+    // Left uncharged, but no longer a no-charge day → charge.
+    let recharges = subtract(subtract(intersect(applied, [past]), noCharge), unchargedBefore)
     for (const row of rows) {
-      // Charged, but now a no-charge status day → credit.
-      if (row.noCharge) {
-        for (const [a, b] of subtract(intersect([row.range], [past]), applied)) {
-          const credit = slice(item, grid, fromDayNum(a), fromDayNum(b), {
+      if (row.noCharge && credits.length) {
+        const mine = intersect(credits, [row.range])
+        credits = subtract(credits, mine)
+        for (const [a, b] of mine) {
+          lines.push(...slice(item, grid, fromDayNum(a), fromDayNum(b), {
             kind: 'credit',
             exclude: [],
             skipPartialUnprorated: false,
             reason: statusReason(row, 'status'),
-          })
-          lines.push(...credit.lines)
+          }).lines)
         }
       }
-      // Left uncharged, but no longer a no-charge day → charge.
-      if (row.applied) {
-        for (const [a, b] of subtract(intersect([row.applied], [past]), noCharge)) {
-          const charge = slice(item, grid, fromDayNum(a), fromDayNum(b), {
+      if (row.applied && recharges.length) {
+        const mine = intersect(recharges, [row.applied])
+        recharges = subtract(recharges, mine)
+        for (const [a, b] of mine) {
+          lines.push(...slice(item, grid, fromDayNum(a), fromDayNum(b), {
             kind: 'charge',
             exclude: [],
             skipPartialUnprorated: false,
             reason: statusReason(row, 'status_reversal'),
-          })
-          lines.push(...charge.lines)
+          }).lines)
         }
       }
     }
@@ -548,12 +603,22 @@ export function computeRecurringLines(
   // ── End credit: the item ended inside what was already billed (A-D2). ──
   if (end && billedTo && end.getTime() < billedTo.getTime()) {
     if (!item.prorate) {
+      // No end credit: end+1 … billed_to stays as billed. Status credits above
+      // stop at the end, so the applied range is recomputed only up to the
+      // end; after it each row keeps what it had — a late pause there must
+      // not count as "left uncharged" (it was charged) and be re-charged later.
       skipped.push({ billingItemId: item.id, reason: 'ended-after-billing-no-credit', servicePeriodStart: addDays(end, 1), servicePeriodEnd: billedTo })
+      const afterEnd = maxDate(addDays(end, 1), start)
       return {
         lines: groupLines(lines, ownPeriod),
         newBilledToDate: billedTo,
         skipped,
-        statusApplied: appliedUpdates(rows, [dayNum(start), dayNum(billedTo)]),
+        statusApplied: appliedUpdates(
+          rows,
+          end.getTime() >= start.getTime() ? [dayNum(start), dayNum(end)] : null,
+          unchargedBefore,
+          [dayNum(afterEnd), dayNum(billedTo)],
+        ),
       }
     }
     const creditFrom = maxDate(addDays(end, 1), start)
@@ -596,6 +661,12 @@ export function computeRecurringLines(
     lines: groupLines(lines, ownPeriod),
     newBilledToDate,
     skipped,
-    statusApplied: appliedUpdates(rows, newBilledToDate && newBilledToDate.getTime() >= start.getTime() ? [dayNum(start), dayNum(newBilledToDate)] : null),
+    // Days of a partial period skipped by prorate=false were never charged:
+    // not "left uncharged for a status" either, so never re-charged later.
+    statusApplied: appliedUpdates(
+      rows,
+      newBilledToDate && newBilledToDate.getTime() >= start.getTime() ? [dayNum(start), dayNum(newBilledToDate)] : null,
+      unchargedPartials(item, grid, start, end, newBilledToDate),
+    ),
   }
 }

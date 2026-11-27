@@ -8,9 +8,9 @@ import { Input } from '@open-mercato/ui/primitives/input'
 import { Alert, AlertDescription } from '@open-mercato/ui/primitives/alert'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@open-mercato/ui/primitives/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@open-mercato/ui/primitives/select'
-import { ADJUSTMENT_ERROR_FALLBACKS, adjustmentErrorCode } from '../../../../../lib/priceAdjustmentView'
+import { ADJUSTMENT_ERROR_FALLBACKS } from '../../../../../lib/priceAdjustmentView'
 import {
-  bodyFromEditor, bundleLines, defaultTargetKey, editorFromRows, targetOptions,
+  bodyFromEditor, bundleLines, canSaveTarget, defaultTargetKey, editorFromRows, serverEditorError, targetOptions,
   type DialogLine, type EditorState, type StoredRow, type TargetOption,
 } from '../../../../../lib/priceDialogView'
 import { CurrentPricesTable } from './CurrentPricesTable'
@@ -28,6 +28,7 @@ const EDITOR_ERROR_FALLBACKS: Record<string, string> = {
   PHASE_VALUE_INVALID: 'Enter a valid price, percentage (above 0, up to 100) or amount',
   PHASE_TOO_MANY: 'At most 12 phases',
   PHASE_NONE: 'Add a phase that is not the regular price, or use One price',
+  THEN_PAST_TERM: 'The phases fill the term, so a Then price would never apply: shorten a phase or set Then to Regular price',
   VALUE_REQUIRED: 'Enter a value to preview the new price',
   REASON_REQUIRED: 'Pick a reason',
 }
@@ -62,26 +63,30 @@ export function PriceDialog<Q extends PreviewQuote>(props: {
   const defaultReason = reasons.some((reason) => reason.value === 'promotion') ? 'promotion' : ''
   const [key, setKey] = React.useState<string>(() => props.targetKey ?? defaultTargetKey(options, chargeCode) ?? '')
   const option = options.find((entry) => entry.key === key) ?? options[0]
-  const [editor, setEditor] = React.useState<EditorState>(() => editorFromRows(option ?? { rows: [], types: [], takesPhases: false }, defaultReason))
-  const [preview, setPreview] = React.useState<{ quote: Q; errors: PreviewError[] } | null>(null)
+  const [editor, setEditor] = React.useState<EditorState>(() => editorFromRows(t, option ?? { rows: [], types: [], takesPhases: false }, defaultReason))
+  // `key` is the body the preview priced: Save needs the preview of the current body.
+  const [preview, setPreview] = React.useState<{ key: string; quote: Q; errors: PreviewError[] } | null>(null)
   const [previewing, setPreviewing] = React.useState(false)
-  const [serverError, setServerError] = React.useState<string | null>(null)
+  const [serverError, setServerError] = React.useState<{ code: string; stepIndex?: number } | null>(null)
   const [saving, setSaving] = React.useState(false)
 
   const selectTarget = (next: string) => {
     const picked = options.find((entry) => entry.key === next)
     setKey(next)
-    if (picked) setEditor(editorFromRows(picked, defaultReason))
+    if (picked) setEditor(editorFromRows(t, picked, defaultReason))
     setPreview(null); setServerError(null)
   }
 
   const built = option ? bodyFromEditor(t, editor, option, currency, line.termMonths) : { body: null, error: null }
   const previewKey = built.body ? JSON.stringify({ ...built.body, expectedRevision: pricingRevision }) : null
+  const stepCount = editor.mode === 'phases' && option?.takesPhases ? editor.steps.length : 0
   const message = (code: string) => t(`cpq.priceAdjustments.errors.${code}`, EDITOR_ERROR_FALLBACKS[code] ?? ADJUSTMENT_ERROR_FALLBACKS[code] ?? code)
 
   // Debounced, side-effect-free preview of the draft (400 ms, §3.4).
   React.useEffect(() => {
-    if (!open || !previewKey) { setPreview(null); return }
+    // A changed body drops the old preview at once, so Save waits for the fresh one.
+    setPreview(null)
+    if (!open || !previewKey) return
     let cancelled = false
     const timer = window.setTimeout(async () => {
       setPreviewing(true)
@@ -89,14 +94,14 @@ export function PriceDialog<Q extends PreviewQuote>(props: {
         { method: 'POST', headers: { 'content-type': 'application/json' }, body: previewKey })
       if (cancelled) return
       setPreviewing(false)
-      if (call.ok && call.result) { setPreview(call.result); setServerError(null) }
-      else { setPreview(null); setServerError(adjustmentErrorCode(call.status, call.result)) }
+      if (call.ok && call.result) { setPreview({ ...call.result, key: previewKey }); setServerError(null) }
+      else { setPreview(null); setServerError(serverEditorError(call.status, call.result, stepCount)) }
     }, 400)
     return () => { cancelled = true; window.clearTimeout(timer) }
-  }, [open, previewKey, quoteId])
+  }, [open, previewKey, quoteId, stepCount])
 
   const errors = preview?.errors ?? []
-  const canSave = !!built.body && !saving && !previewing && !!preview && errors.length === 0 && !serverError
+  const canSave = canSaveTarget({ previewKey, preview, saving, previewing, serverError: serverError?.code ?? null })
 
   const save = async () => {
     if (!canSave || !previewKey) return
@@ -104,7 +109,7 @@ export function PriceDialog<Q extends PreviewQuote>(props: {
     const call = await apiCall<{ quote: Q }>(`/api/cpq/quotes/${quoteId}/price-adjustments/target`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: previewKey })
     setSaving(false)
     if (call.ok && call.result?.quote) { onSaved(call.result.quote); onClose(); return }
-    setServerError(adjustmentErrorCode(call.status, call.result))
+    setServerError(serverEditorError(call.status, call.result, stepCount))
   }
 
   const onKeyDown = (event: React.KeyboardEvent) => {
@@ -134,7 +139,7 @@ export function PriceDialog<Q extends PreviewQuote>(props: {
               onModeChange={(mode) => setEditor((current) => ({ ...current, mode }))} />
             {phases ? (
               <PhaseScheduleEditor steps={editor.steps} then={editor.then} types={option.types} currency={currency}
-                errorStep={built.error ? built.stepIndex : undefined} onChange={(steps, then) => setEditor((current) => ({ ...current, steps, then }))} />
+                errorStep={built.error ? built.stepIndex : serverError?.stepIndex} onChange={(steps, then) => setEditor((current) => ({ ...current, steps, then }))} />
             ) : (
               <OnePriceEditor option={option} charge={charge} value={editor.one} onChange={(one) => setEditor((current) => ({ ...current, one }))} />
             )}
@@ -158,8 +163,8 @@ export function PriceDialog<Q extends PreviewQuote>(props: {
             {serverError && (
               <Alert variant="warning">
                 <AlertDescription>
-                  {message(serverError)}
-                  {serverError === 'STALE_REVISION' && (
+                  {message(serverError.code)}
+                  {serverError.code === 'STALE_REVISION' && (
                     <Button type="button" variant="outline" size="sm" className="ml-2" onClick={() => { onStale(); onClose() }}>
                       {t('cpq.priceAdjustments.dialog.reload', 'Reload')}
                     </Button>

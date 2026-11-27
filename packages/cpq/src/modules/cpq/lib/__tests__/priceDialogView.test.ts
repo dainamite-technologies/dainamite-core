@@ -1,9 +1,9 @@
 import {
-  authorText, bodyFromEditor, bundleLines, defaultTargetKey, editorFromRows, emptyStep, groupByTarget, groupSummary, pricedByText,
+  authorText, bodyFromEditor, canSaveTarget, serverEditorError, bundleLines, defaultTargetKey, editorFromRows, emptyStep, groupByTarget, groupSummary, pricedByText,
   scheduleText, stepRanges, suggestedPhaseName, targetOptionLabel, targetOptions,
   type DialogLine, type EditorState, type StoredRow, type Translate,
 } from '../priceDialogView'
-import { rowsForTarget } from '../targetPrice'
+import { planTargetWrite, rowsForTarget } from '../targetPrice'
 
 const t: Translate = (_key, fallback, params) => fallback.replace(/\{(\w+)\}/g, (_, name: string) => String(params?.[name] ?? `{${name}}`))
 const lineId = '44444444-4444-4444-8444-444444444444'
@@ -71,16 +71,17 @@ describe('editor ↔ body', () => {
   const recurring = targetOptions(line, [line], phased)[0]
 
   it('loads phased rows into Price phases with their names kept, and saves the same rows back', () => {
-    const state = editorFromRows(recurring, 'promotion')
+    const state = editorFromRows(t, recurring, 'promotion')
     expect(state.mode).toBe('phases')
-    expect(state.steps.map((step) => [step.length, step.kind, step.value, step.name, step.nameTouched])).toEqual([['1', 'free', '', 'Free trial', true], ['3', 'discount_percent', '50', '50% off', true]])
+    // Both stored names are the suggestions, so they are not "typed" (F3).
+    expect(state.steps.map((step) => [step.length, step.kind, step.value, step.name, step.nameTouched])).toEqual([['1', 'free', '', 'Free trial', false], ['3', 'discount_percent', '50', '50% off', false]])
     const { body, error } = bodyFromEditor(t, state, recurring, 'USD', 12)
     expect(error).toBeNull()
     expect(rowsForTarget(body!).map((entry) => [entry.fromMonth, entry.toMonth, entry.value, entry.phaseName])).toEqual([[1, 1, 0, 'Free trial'], [2, 4, 50, '50% off']])
   })
 
   it('fills suggested names until the rep types one, supports years and a Then price', () => {
-    const state: EditorState = { ...editorFromRows({ rows: [], types: recurring.types, takesPhases: true }, 'promotion'), mode: 'phases',
+    const state: EditorState = { ...editorFromRows(t, { rows: [], types: recurring.types, takesPhases: true }, 'promotion'), mode: 'phases',
       steps: [emptyStep('free'), { ...emptyStep('discount_percent'), value: '50', length: '3' }, { ...emptyStep('price_override'), value: '110', length: '1', unit: 'year', name: 'Ramp', nameTouched: true }],
       then: { kind: 'price_override', value: '120' } }
     expect(stepRanges(state.steps)).toEqual([{ fromMonth: 1, toMonth: 1 }, { fromMonth: 2, toMonth: 4 }, { fromMonth: 5, toMonth: 16 }])
@@ -90,7 +91,7 @@ describe('editor ↔ body', () => {
   })
 
   it('reports the first error with its step', () => {
-    const base = editorFromRows(recurring, 'promotion')
+    const base = editorFromRows(t, recurring, 'promotion')
     expect(bodyFromEditor(t, { ...base, reasonCode: '' }, recurring, 'USD')).toMatchObject({ error: 'REASON_REQUIRED' })
     expect(bodyFromEditor(t, { ...base, reasonCode: 'other' }, recurring, 'USD')).toMatchObject({ error: 'REASON_NOTE_REQUIRED' })
     expect(bodyFromEditor(t, { ...base, steps: [{ ...base.steps[0], length: '0' }] }, recurring, 'USD')).toMatchObject({ error: 'PHASE_LENGTH_INVALID', stepIndex: 0 })
@@ -103,14 +104,14 @@ describe('editor ↔ body', () => {
 
   it('saves One price as then without phases, also on a target without the switcher', () => {
     const oneTime = targetOptions(line, [line], [])[1]
-    const state = { ...editorFromRows(oneTime, 'promotion'), mode: 'phases' as const, one: { adjustmentType: 'discount_percent' as const, value: '20' } }
+    const state = { ...editorFromRows(t, oneTime, 'promotion'), mode: 'phases' as const, one: { adjustmentType: 'discount_percent' as const, value: '20' } }
     expect(bodyFromEditor(t, state, oneTime, 'USD').body).toMatchObject({ phases: [], then: { adjustmentType: 'discount_percent', value: 20 } })
     expect(bodyFromEditor(t, { ...state, one: { ...state.one, value: '' } }, oneTime, 'USD')).toMatchObject({ error: 'VALUE_REQUIRED' })
   })
 
   it('opens a legacy months 4–6 row as Regular price then the phase', () => {
     const legacy = targetOptions(line, [line], [row({ value: 40, fromMonth: 4, toMonth: 6 })])[0]
-    expect(editorFromRows(legacy, 'promotion').steps.map((step) => [step.length, step.kind])).toEqual([['3', 'regular'], ['3', 'discount_percent']])
+    expect(editorFromRows(t, legacy, 'promotion').steps.map((step) => [step.length, step.kind])).toEqual([['3', 'regular'], ['3', 'discount_percent']])
   })
 })
 
@@ -151,5 +152,94 @@ describe('panels', () => {
     expect(authorText({ createdByUserId: 'a8761ab8-0000', createdByName: 'Ann', createdByEmail: 'ann@x' })).toBe('Ann')
     expect(authorText({ createdByUserId: 'a8761ab8-0000', createdByName: ' ', createdByEmail: 'ann@x' })).toBe('ann@x')
     expect(authorText({ createdByUserId: 'a8761ab8-0000' })).toBe('a8761ab8')
+  })
+})
+
+describe('loaded names follow the value until typed (F3)', () => {
+  it('re-suggests a stored suggested name when the value changes, and keeps a typed one', () => {
+    const recurring = targetOptions(line, [line], phased)[0]
+    const state = editorFromRows(t, recurring, 'promotion')
+    const changed = { ...state, steps: [state.steps[0], { ...state.steps[1], value: '30' }] }
+    expect(bodyFromEditor(t, changed, recurring, 'USD', 12).body!.phases.map((phase) => phase.name)).toEqual(['Free trial', '30% off'])
+    const custom = targetOptions(line, [line], [row({ value: 50, fromMonth: 1, toMonth: 3, phaseName: 'Spring promo' })])[0]
+    const loaded = editorFromRows(t, custom, 'promotion')
+    expect(loaded.steps[0]).toMatchObject({ name: 'Spring promo', nameTouched: true })
+    expect(bodyFromEditor(t, { ...loaded, steps: [{ ...loaded.steps[0], value: '30' }] }, custom, 'USD', 12).body!.phases[0].name).toBe('Spring promo')
+  })
+})
+
+describe('Then past the term (F4)', () => {
+  const recurring = targetOptions(line, [line], [])[0]
+  const filling: EditorState = { ...editorFromRows(t, recurring, 'promotion'), mode: 'phases',
+    steps: [{ ...emptyStep('discount_percent'), value: '10', length: '1', unit: 'year' }], then: { kind: 'price_override', value: '120' } }
+
+  it('refuses a Then price after phases that fill the term, on the Then row', () => {
+    expect(bodyFromEditor(t, filling, recurring, 'USD', 12)).toMatchObject({ body: null, error: 'THEN_PAST_TERM', stepIndex: 1 })
+    // Regular price after the term is fine, and so is a Then inside a longer term.
+    expect(bodyFromEditor(t, { ...filling, then: { kind: 'regular', value: '' } }, recurring, 'USD', 12).error).toBeNull()
+    expect(bodyFromEditor(t, filling, recurring, 'USD', 24).error).toBeNull()
+  })
+
+  it('maps a server 422 code to its step, the Then one to THEN_PAST_TERM', () => {
+    expect(serverEditorError(422, { error: 'PHASE_PAST_TERM', code: 'PHASE_PAST_TERM', stepIndex: 1 }, 1)).toEqual({ code: 'THEN_PAST_TERM', stepIndex: 1 })
+    expect(serverEditorError(422, { error: 'PHASE_PAST_TERM', code: 'PHASE_PAST_TERM', stepIndex: 0 }, 1)).toEqual({ code: 'PHASE_PAST_TERM', stepIndex: 0 })
+    expect(serverEditorError(422, { error: 'INVALID_PERCENT', code: 'INVALID_PERCENT', stepIndex: 2 }, 3)).toEqual({ code: 'INVALID_PERCENT', stepIndex: 2 })
+    expect(serverEditorError(409, { error: 'STALE_REVISION' }, 1)).toEqual({ code: 'STALE_REVISION' })
+    expect(serverEditorError(422, { error: 'ADJUSTMENT_OVERLAP', code: 'ADJUSTMENT_OVERLAP', adjustmentId: 'x' }, 1)).toEqual({ code: 'ADJUSTMENT_OVERLAP' })
+  })
+})
+
+describe('round trip of API-stored sets: an unchanged save keeps every row (D4)', () => {
+  const resave = (rows: StoredRow[], index = 0) => {
+    const option = targetOptions(line, [line], rows)[index]
+    const { body, error } = bodyFromEditor(t, editorFromRows(t, option, 'promotion'), option, 'USD', line.termMonths)
+    expect(error).toBeNull()
+    return planTargetWrite(option.rows, rowsForTarget(body!, line.termMonths))
+  }
+  const ids = (plan: ReturnType<typeof resave>) => ({ keep: plan.keep.map((entry) => entry.id), update: plan.update.map((entry) => entry.row.id), create: plan.create.length, remove: plan.remove.map((entry) => entry.id) })
+
+  it('a named Then (Trial months 1–3, Standard from month 4)', () => {
+    const rows = [row({ adjustmentType: 'price_override', value: 50, currencyCode: 'USD', fromMonth: 1, toMonth: 3, phaseName: 'Trial' }),
+      row({ adjustmentType: 'price_override', value: 90, currencyCode: 'USD', fromMonth: 4, toMonth: null, phaseName: 'Standard' })]
+    expect(ids(resave(rows))).toEqual({ keep: rows.map((entry) => entry.id), update: [], create: 0, remove: [] })
+  })
+
+  it('a legacy "months 4–6 only" row without a name', () => {
+    const rows = [row({ value: 40, currencyCode: null, fromMonth: 4, toMonth: 6, phaseName: null })]
+    expect(ids(resave(rows))).toEqual({ keep: rows.map((entry) => entry.id), update: [], create: 0, remove: [] })
+  })
+
+  it('mixed types and currencies (Set price in USD, % off without currency, amount off)', () => {
+    const rows = [row({ adjustmentType: 'price_override', value: 0, currencyCode: 'USD', fromMonth: 1, toMonth: 1, phaseName: 'Free trial' }),
+      row({ value: 50, currencyCode: null, fromMonth: 2, toMonth: 4, phaseName: 'Half price' }),
+      row({ adjustmentType: 'discount_absolute', value: 10, currencyCode: 'USD', fromMonth: 7, toMonth: 9, phaseName: null }),
+      row({ adjustmentType: 'discount_percent', value: 5, currencyCode: null, fromMonth: 10, toMonth: null })]
+    expect(ids(resave(rows))).toEqual({ keep: rows.map((entry) => entry.id), update: [], create: 0, remove: [] })
+  })
+
+  it('mixed reasons: the shown (first) reason applies to every row (§3.4), so only the other-reason row is updated', () => {
+    const rows = [row({ value: 20, fromMonth: 1, toMonth: 3, phaseName: '20% off' }), row({ value: 10, fromMonth: 4, toMonth: 6, reasonCode: 'loyalty', phaseName: '10% off' })]
+    expect(ids(resave(rows))).toEqual({ keep: [rows[0].id], update: [rows[1].id], create: 0, remove: [] })
+  })
+
+  it('a One price charge row with a stored name', () => {
+    const rows = [row({ level: 'charge', chargeCode: 'setup', chargeTypeFilter: null, adjustmentType: 'price_override', value: 80, currencyCode: 'USD', phaseName: 'Install' })]
+    const index = targetOptions(line, [line], rows).findIndex((option) => option.key === `charge:${lineId}:setup`)
+    expect(ids(resave(rows, index))).toEqual({ keep: rows.map((entry) => entry.id), update: [], create: 0, remove: [] })
+  })
+})
+
+describe('save gate', () => {
+  const preview = { key: 'a', errors: [] }
+  it('enables Save only for the preview of the current body', () => {
+    expect(canSaveTarget({ previewKey: 'a', preview, saving: false, previewing: false, serverError: null })).toBe(true)
+    // The body changed; the preview is of the old one until the fresh one arrives.
+    expect(canSaveTarget({ previewKey: 'b', preview, saving: false, previewing: false, serverError: null })).toBe(false)
+    expect(canSaveTarget({ previewKey: null, preview, saving: false, previewing: false, serverError: null })).toBe(false)
+    expect(canSaveTarget({ previewKey: 'a', preview: null, saving: false, previewing: false, serverError: null })).toBe(false)
+    expect(canSaveTarget({ previewKey: 'a', preview: { key: 'a', errors: [{}] }, saving: false, previewing: false, serverError: null })).toBe(false)
+    expect(canSaveTarget({ previewKey: 'a', preview, saving: true, previewing: false, serverError: null })).toBe(false)
+    expect(canSaveTarget({ previewKey: 'a', preview, saving: false, previewing: true, serverError: null })).toBe(false)
+    expect(canSaveTarget({ previewKey: 'a', preview, saving: false, previewing: false, serverError: 'X' })).toBe(false)
   })
 })

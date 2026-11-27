@@ -534,6 +534,7 @@
   "cpq.priceAdjustments.errors.PHASE_LENGTH_INVALID": "Podaj całkowitą liczbę miesięcy lub lat (1 lub więcej)",
   "cpq.priceAdjustments.errors.PHASE_NONE": "Dodaj co najmniej jedną fazę",
   "cpq.priceAdjustments.errors.PHASE_PAST_TERM": "Faza wykracza poza okres pozycji",
+  "cpq.priceAdjustments.errors.THEN_PAST_TERM": "Fazy wypełniają cały okres, więc cena Potem nigdy nie zostanie zastosowana: skróć fazę lub ustaw Potem na Cenę regularną",
   "cpq.priceAdjustments.errors.PHASE_RANGE_INVALID": "Ostatni miesiąc nie może być przed pierwszym",
   "cpq.priceAdjustments.errors.PHASE_RECURRING_ONLY": "Fazy dotyczą tylko opłat cyklicznych",
   "cpq.priceAdjustments.errors.PHASE_TOO_MANY": "Najwyżej 12 faz",

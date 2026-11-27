@@ -534,6 +534,7 @@
   "cpq.priceAdjustments.errors.PHASE_LENGTH_INVALID": "Enter a whole number of months or years (1 or more)",
   "cpq.priceAdjustments.errors.PHASE_NONE": "Add at least one phase",
   "cpq.priceAdjustments.errors.PHASE_PAST_TERM": "The phase runs past the line’s term",
+  "cpq.priceAdjustments.errors.THEN_PAST_TERM": "The phases fill the term, so a Then price would never apply: shorten a phase or set Then to Regular price",
   "cpq.priceAdjustments.errors.PHASE_RANGE_INVALID": "The last month must not be before the first month",
   "cpq.priceAdjustments.errors.PHASE_RECURRING_ONLY": "Phases apply to recurring charges only",
   "cpq.priceAdjustments.errors.PHASE_TOO_MANY": "At most 12 phases",

@@ -534,6 +534,7 @@
   "cpq.priceAdjustments.errors.PHASE_LENGTH_INVALID": "Introduzca un número entero de meses o años (1 o más)",
   "cpq.priceAdjustments.errors.PHASE_NONE": "Añada al menos una fase",
   "cpq.priceAdjustments.errors.PHASE_PAST_TERM": "La fase supera el plazo de la línea",
+  "cpq.priceAdjustments.errors.THEN_PAST_TERM": "Las fases ocupan todo el plazo, así que un precio Después nunca se aplicaría: acorta una fase o pon Después en Precio regular",
   "cpq.priceAdjustments.errors.PHASE_RANGE_INVALID": "El último mes no puede ser anterior al primero",
   "cpq.priceAdjustments.errors.PHASE_RECURRING_ONLY": "Las fases solo se aplican a cargos recurrentes",
   "cpq.priceAdjustments.errors.PHASE_TOO_MANY": "Como máximo 12 fases",

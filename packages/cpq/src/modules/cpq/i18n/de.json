@@ -534,6 +534,7 @@
   "cpq.priceAdjustments.errors.PHASE_LENGTH_INVALID": "Geben Sie eine ganze Zahl von Monaten oder Jahren ein (mindestens 1)",
   "cpq.priceAdjustments.errors.PHASE_NONE": "Fügen Sie mindestens eine Phase hinzu",
   "cpq.priceAdjustments.errors.PHASE_PAST_TERM": "Die Phase reicht über die Laufzeit der Position hinaus",
+  "cpq.priceAdjustments.errors.THEN_PAST_TERM": "Die Phasen füllen die Laufzeit, ein Danach-Preis würde nie gelten: Kürzen Sie eine Phase oder setzen Sie Danach auf Regulärer Preis",
   "cpq.priceAdjustments.errors.PHASE_RANGE_INVALID": "Der letzte Monat darf nicht vor dem ersten liegen",
   "cpq.priceAdjustments.errors.PHASE_RECURRING_ONLY": "Phasen gelten nur für wiederkehrende Gebühren",
   "cpq.priceAdjustments.errors.PHASE_TOO_MANY": "Höchstens 12 Phasen",

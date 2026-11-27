@@ -809,7 +809,7 @@ terminated from the inventory. Each action is dated and billing follows it throu
 - Every action writes a `status` entry in the change log and stores the stop period on the rows (`statusFromDate`, `statusToDate`, `statusChargeBehavior`, `statusReason`).
 - **Events** (emitted after the write commits, consumed by the CPQ → billing connector):
   - pause / suspend / grace / resume → `cpq.subscription_item.status_changed` `{ subscriptionId, subscriptionItemIds[], status: paused | suspended | grace | active, fromDate, toDate, chargeBehavior?, reason }`;
-  - terminate → `cpq.subscription.terminated` `{ subscriptionId, subscriptionItemIds[], effectiveDate, reason }`.
+  - terminate → `cpq.subscription.terminated` `{ subscriptionId, subscriptionItemIds[], effectiveDate, reason, wholeSubscription }`. `wholeSubscription` is decided when the event is sent: `true` for a whole-subscription terminate, `false` for one item (also when it ends the last item). The connector ends every billing item of the subscription only when it is `true`.
 - The legacy `POST /api/cpq/inventory/subscriptions/status` still works; moves to paused / suspended / grace, back to active from those, and to terminated now run as the matching action (and so emit the event too — before, a suspend or terminate from the inventory never reached billing).
 - UI: the subscription detail header shows the actions allowed for the current status; expanding an item shows "This item:" actions. Each opens a dialog (dates, billing, reason); Cmd/Ctrl+Enter submits, Escape cancels.
 

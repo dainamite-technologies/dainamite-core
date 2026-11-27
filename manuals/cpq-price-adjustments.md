@@ -95,6 +95,60 @@ depth as you type (and flags a price above standard);
   items cannot be adjusted yet (tooltip explains why). Lines added on the change
   quote can.
 
+## Price phases (trials, promotions, ramps)
+
+Spec `.ai/specs/2026-11-26-billing-price-phases-ramp-deals.md` (Phase 2). A
+price can change over the months of the subscription:
+
+| Deal | How |
+|---|---|
+| First month free | Phase *Free*, 1 month |
+| 50% off for 3 months | Phase *% off* 50, 3 months |
+| Free month, then 50% for 2 months | *Free* 1 month → *% off* 50, 2 months |
+| Ramp 100 / 110 / 120 | *Set price* 100, 1 year → *Set price* 110, 1 year; the list price 120 is the regular price |
+
+**Operator flow.** On a line (button **Phases**, the line's recurring total) or
+on a recurring charge (calendar icon), add steps: a length in **months** or
+**years** (= 12 months), a price type (**Free** = Set price 0, **Set price**,
+**% off**, **Amount off**), a value and an optional name ("Free trial",
+"Year 1"). Steps run back to back from month 1. After the last step the
+**regular price** applies. One reason covers all steps. Each step is saved as a
+manual adjustment with a month range (`fromMonth` / `toMonth`), one write at a
+time; edit or delete a step from the **Price adjustments** panel (the row shows
+its months and name). The edit dialog also accepts a month range directly.
+
+**Rules.**
+- Phases price **recurring (MRC)** charges only: a line phase targets the
+  line's recurring total (`chargeTypeFilter: mrc`, else `PHASE_RECURRING_ONLY`),
+  a charge phase an MRC charge.
+- **No overlaps** on one target: two adjustments on the same target may not
+  share a month (`ADJUSTMENT_OVERLAP`). A permanent adjustment (every month)
+  overlaps every phase on its target.
+- **No phase past the line's term** (`PHASE_PAST_TERM`, when the line has a term).
+- The **reason** is required, as for every adjustment.
+- **Per-month waterfall.** Each month: list price → the price rules in force
+  that month (including rule phases, see the price rules manual) = standard
+  price → the manual adjustment in force that month = offer price. A manual
+  phase can cancel a rule promotion (Set price to the regular price) or deepen
+  it (an extra % off).
+- **Schedule.** A phased charge carries `schedule`: month ranges with the
+  standard and offer price and the **source** (*Rule*, *Manual*, *List*). The
+  charge breakdown shows it ("Price phases"), with the regular price last. The
+  charge's own price, the line MRC and the quote MRC total are the **regular
+  price**; the **deal value** sums every month of the term at its phase price.
+- **Pricing signals.** Adding or changing a phase changes the snapshot hash, so
+  `cpq.quote.pricing_changed` fires; the snapshot's `hasTimeBasedAdjustments`
+  is `true`.
+- **Amend / Renew / Cancel (D8).** Phases only on new lines and lines added on
+  the change quote. Existing (mirrored) lines stay not eligible and continue at
+  the regular price.
+- **Order, subscription, billing.** The order line and subscription item keep
+  the schedule. The activation event and ARC `addedItems` carry it on the
+  recurring charge as `phases` (contract C2): the item's MRC charges of one
+  billing period are merged into one schedule (union of the boundaries, prices
+  summed), each phase `{ name, months, priceType: 'fixed', value }`, and
+  `unitPrice` is the regular price.
+
 ## Permissions and rollout
 
 | Control | Effect |
@@ -137,8 +191,8 @@ A typical project recipe with Open Mercato **Workflows**:
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/cpq/quotes/{quoteId}/price-adjustments` | List, `pricingRevision`, `enabled`, `reasons`. |
-| POST | `/api/cpq/quotes/{quoteId}/price-adjustments` | Create. A line-level `price_override` / `discount_absolute` needs `chargeTypeFilter` `mrc` or `nrc` (`CHARGE_TYPE_REQUIRED`). Send `expectedRevision` to avoid overwriting a colleague's change (`409 STALE_REVISION`). |
-| PATCH / DELETE | `/api/cpq/quotes/{quoteId}/price-adjustments/{adjustmentId}` | Level and target are immutable. |
+| POST | `/api/cpq/quotes/{quoteId}/price-adjustments` | Create. A line-level `price_override` / `discount_absolute` needs `chargeTypeFilter` `mrc` or `nrc` (`CHARGE_TYPE_REQUIRED`). Send `expectedRevision` to avoid overwriting a colleague's change (`409 STALE_REVISION`). Optional `fromMonth` / `toMonth` (1-based, inclusive, `toMonth` null = to the end) and `phaseName` make it a price phase. |
+| PATCH / DELETE | `/api/cpq/quotes/{quoteId}/price-adjustments/{adjustmentId}` | Level and target are immutable. The month range and `phaseName` can change. |
 | POST | `/api/cpq/quotes/{quoteId}/price-adjustments/preview` | Price a draft without saving. |
 | POST | `/api/cpq/quotes/price` | Public calculator. `includeWaterfall: true` adds list / standard prices; negotiated prices never appear here. |
 

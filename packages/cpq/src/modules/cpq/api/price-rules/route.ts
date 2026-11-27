@@ -2,7 +2,8 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { cpqContextError, resolveCpqRouteContext } from '../context'
 import { CpqPriceRule, CpqProductOffering } from '../../data/entities'
-import { cpqPriceRuleCreateSchema, cpqPriceRuleUpdateSchema } from '../../data/validators'
+import { cpqPriceRuleCreateSchema, cpqPriceRuleUpdateSchema, refinePriceRulePhase } from '../../data/validators'
+import { toDateColumn } from '../../lib/dateColumns'
 import type { OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { cpqErrorDoc, cpqPaginationQuery, cpqSortDirQuery, cpqDeleteByIdBody, cpqSuccessResponseSchema, CPQ_CRUD_WRITE_ERRORS, CPQ_CRUD_BY_ID_ERRORS } from '../_helpers/quoteRouteOpenApi'
 
@@ -26,6 +27,10 @@ function serializeRule(rule: CpqPriceRule) {
     chargeTypeFilter: rule.chargeTypeFilter ?? null,
     applicabilityCondition: rule.applicabilityCondition ?? null,
     sortOrder: rule.sortOrder,
+    fromMonth: rule.fromMonth ?? 1,
+    toMonth: rule.toMonth ?? null,
+    validFrom: toDateColumn(rule.validFrom),
+    validUntil: toDateColumn(rule.validUntil),
     isActive: rule.isActive,
     createdAt: rule.createdAt,
     updatedAt: rule.updatedAt,
@@ -149,6 +154,10 @@ export async function POST(req: Request) {
       chargeTypeFilter: body.chargeTypeFilter ?? undefined,
       applicabilityCondition: body.applicabilityCondition ?? undefined,
       sortOrder: body.sortOrder,
+      fromMonth: body.fromMonth ?? 1,
+      toMonth: body.toMonth ?? null,
+      validFrom: toDateColumn(body.validFrom ?? null),
+      validUntil: toDateColumn(body.validUntil ?? null),
       isActive: body.isActive,
     })
     await ctx.em.flush()
@@ -176,9 +185,20 @@ export async function PUT(req: Request) {
     const entity = await ctx.em.findOne(CpqPriceRule, { id, ...scope })
     if (!entity) return NextResponse.json({ error: 'Not found' }, { status: 404 })
 
-    const { value: rawValue, ...rest } = updates
+    const { value: rawValue, validFrom, validUntil, ...rest } = updates
+    // V-PR-PHASE on the merged rule: a partial update may change one end only.
+    const merged = z.object({}).superRefine((_, refineCtx) => refinePriceRulePhase(refineCtx, {
+      fromMonth: updates.fromMonth ?? entity.fromMonth ?? 1,
+      toMonth: updates.toMonth !== undefined ? updates.toMonth : entity.toMonth ?? null,
+      validFrom: validFrom !== undefined ? validFrom : toDateColumn(entity.validFrom),
+      validUntil: validUntil !== undefined ? validUntil : toDateColumn(entity.validUntil),
+      chargeTypeFilter: updates.chargeTypeFilter !== undefined ? updates.chargeTypeFilter : entity.chargeTypeFilter ?? null,
+    })).safeParse({})
+    if (!merged.success) return NextResponse.json({ error: 'Validation error', details: merged.error.issues }, { status: 400 })
     const assignData: Record<string, unknown> = { ...rest }
     if (rawValue !== undefined) assignData.value = String(rawValue)
+    if (validFrom !== undefined) assignData.validFrom = toDateColumn(validFrom)
+    if (validUntil !== undefined) assignData.validUntil = toDateColumn(validUntil)
     ctx.em.assign(entity, assignData)
     await ctx.em.flush()
 
@@ -239,12 +259,15 @@ export const openApi: OpenApiRouteDoc = {
     },
     POST: {
       summary: 'Create a CPQ price rule',
+      description:
+        'A rule may be a price phase (D9): `fromMonth` / `toMonth` limit it to months of the subscription (e.g. 1–1 = first month free), recurring charges only. Campaign dates `validFrom` / `validUntil` (D10) limit which quotes get it: quotes priced inside them; a priced quote keeps the promotion after the campaign ends. Errors: PHASE_RANGE_INVALID, PHASE_RECURRING_ONLY, CAMPAIGN_RANGE_INVALID.',
       requestBody: { schema: cpqPriceRuleCreateSchema },
       responses: [{ status: 201, description: 'Created price rule' }],
       errors: CPQ_CRUD_WRITE_ERRORS,
     },
     PUT: {
       summary: 'Update a CPQ price rule',
+      description: 'Partial update. The month range and campaign dates are validated on the merged rule (same codes as create).',
       requestBody: { schema: cpqPriceRuleUpdateSchema },
       responses: [{ status: 200, description: 'Updated price rule' }],
       errors: CPQ_CRUD_BY_ID_ERRORS,

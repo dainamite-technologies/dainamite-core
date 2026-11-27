@@ -3,6 +3,7 @@ import type { PriceAdjustment } from '../../data/price-adjustments'
 import type { PricingWaterfallSummary, ResolvedCharge } from '../types'
 import { withChargeWaterfall } from './chargeWaterfall'
 import { chargeMonthlyTotal } from '../../lib/chargeBillingPeriod'
+import { monthsInTerm } from '../../lib/priceSchedule'
 
 export interface SnapshotLine {
   lineId: string
@@ -36,6 +37,7 @@ export function computeWaterfallSummary(
   let ruleDiscountTotal = 0, manualDiscountTotal = 0
   const dealValue = { list: 0, standard: 0, offer: 0 }
   const lineDepths: number[] = []
+  let hasSchedule = false
   for (const line of lines) {
     let standardDeal = 0, offerDeal = 0
     for (const input of line.charges) {
@@ -55,10 +57,21 @@ export function computeWaterfallSummary(
       }
       if (line.includeInDeal === false) continue
       const months = charge.chargeType === 'nrc' ? 1 : line.termMonths ?? 12
+      let standardValue = standard * months, offerValue = offer * months
+      if (charge.chargeType === 'mrc' && charge.schedule?.length) {
+        // Price phases: the deal is the sum over the schedule, month by month within the term.
+        hasSchedule = true
+        standardValue = 0; offerValue = 0
+        for (const segment of charge.schedule) {
+          const inTerm = monthsInTerm(segment, months)
+          standardValue += chargeMonthlyTotal(charge, segment.standardTotalPrice ?? 0) * line.quantity * inTerm
+          offerValue += chargeMonthlyTotal(charge, segment.totalPrice ?? 0) * line.quantity * inTerm
+        }
+      }
       dealValue.list += list * months
-      dealValue.standard += standard * months
-      dealValue.offer += offer * months
-      standardDeal += standard * months; offerDeal += offer * months
+      dealValue.standard += standardValue
+      dealValue.offer += offerValue
+      standardDeal += standardValue; offerDeal += offerValue
     }
     const manualDepth = depth(standardDeal, offerDeal)
     if (manualDepth !== null) lineDepths.push(manualDepth)
@@ -72,7 +85,11 @@ export function computeWaterfallSummary(
         standardUnitPrice: charge.standardUnitPrice, standardTotalPrice: charge.standardTotalPrice,
         unitPrice: charge.unitPrice, totalPrice: charge.totalPrice,
         // Only a non-monthly period enters the hash, so existing hashes are unchanged.
-        ...(charge.billingPeriod ? { billingPeriod: charge.billingPeriod } : {}) }
+        ...(charge.billingPeriod ? { billingPeriod: charge.billingPeriod } : {}),
+        // Price phases: only a phased charge adds its schedule, so existing hashes are unchanged.
+        ...(charge.schedule?.length ? { schedule: charge.schedule.map((segment) => ({ fromMonth: segment.fromMonth, toMonth: segment.toMonth,
+          unitPrice: segment.unitPrice, totalPrice: segment.totalPrice, standardUnitPrice: segment.standardUnitPrice,
+          standardTotalPrice: segment.standardTotalPrice, source: segment.source })) } : {}) }
     }).sort((a, b) => a.chargeCode.localeCompare(b.chargeCode) || canonical(a).localeCompare(canonical(b))),
   })).sort((a, b) => a.lineId.localeCompare(b.lineId))
   const pricedAdjustments = adjustments.map((row) => ({
@@ -85,7 +102,8 @@ export function computeWaterfallSummary(
     ruleDiscountTotal, manualDiscountTotal, dealValue,
     discountDepth: { rule: depth(dealValue.list, dealValue.standard), manual: depth(dealValue.standard, dealValue.offer),
       total: depth(dealValue.list, dealValue.offer), maxLineManual: lineDepths.length ? Math.max(...lineDepths) : null },
-    hasTimeBasedAdjustments: false,
+    // Pricing signals: true when any deal line has a price phase (rule or manual).
+    hasTimeBasedAdjustments: hasSchedule || adjustments.some((row) => (row.fromMonth ?? 1) > 1 || row.toMonth != null),
     snapshotHash: createHash('sha256').update(canonical({ currencyCode, lines: pricedLines, adjustments: pricedAdjustments })).digest('hex'),
   }
 }

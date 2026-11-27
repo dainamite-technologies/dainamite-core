@@ -105,7 +105,7 @@ const getQuoteTool = defineCpqApiTool<GetQuoteInput, Record<string, unknown>, { 
   name: 'cpq.get_quote',
   displayName: 'Get CPQ quote',
   description:
-    'Fetch one CPQ quote with every line (offering, configuration, quantity, term, resolved charges, NRC / MRC totals, validation errors), the pricing summary (NRC / MRC totals, discounts, deal value) and the quote-level validation result. Returns { quote }.',
+    'Fetch one CPQ quote with every line (offering, configuration, quantity, term, resolved charges, NRC / MRC totals, validation errors), the pricing summary (NRC / MRC totals, discounts, deal value) and the quote-level validation result. A recurring charge with price phases (trial, promotion, ramp) carries `schedule`: month ranges with their price and source (rule or manual); its own unitPrice / totalPrice and the MRC totals are the regular price after the last phase, and the deal value sums the schedule over the term (`hasTimeBasedAdjustments: true`). Returns { quote }.',
   inputSchema: getQuoteInput,
   requiredFeatures: ['cpq.quotes.view'],
   toOperation: (input) => ({

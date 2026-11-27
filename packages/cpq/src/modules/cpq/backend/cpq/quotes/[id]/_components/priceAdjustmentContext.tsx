@@ -2,14 +2,14 @@
 
 import * as React from 'react'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
-import { Pencil, Tags, Trash2 } from 'lucide-react'
+import { CalendarRange, Pencil, Tags, Trash2 } from 'lucide-react'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { IconButton } from '@open-mercato/ui/primitives/icon-button'
 import { SimpleTooltip } from '@open-mercato/ui/primitives/tooltip'
 import type { AdjustmentAccess, LineEligibilityInput, WaterfallChargeInput } from '../../../../../lib/priceAdjustmentView'
 import { lineAdjustmentBlock } from '../../../../../lib/priceAdjustmentView'
 
-export type AdjustableLine = LineEligibilityInput & { lineId: string; offeringName: string }
+export type AdjustableLine = LineEligibilityInput & { lineId: string; offeringName: string; termMonths?: number | null }
 export type AdjustableCharge = WaterfallChargeInput & { chargeCode: string; chargeName: string }
 
 export type PriceAdjustmentUi = {
@@ -22,6 +22,8 @@ export type PriceAdjustmentUi = {
   canDeleteInvalid: boolean
   openCharge: (line: AdjustableLine, charge: AdjustableCharge) => void
   openLine: (line: AdjustableLine) => void
+  /** Price phases editor on a line's recurring total, or on one recurring charge. */
+  openPhases: (line: AdjustableLine, charge?: AdjustableCharge) => void
   edit: (adjustmentId: string) => void
   remove: (adjustmentId: string) => void
 }
@@ -132,5 +134,35 @@ export function ManualAdjustmentActions({ adjustmentId }: { adjustmentId: string
         <Trash2 className="h-3.5 w-3.5" />
       </IconButton>
     </span>
+  )
+}
+
+/** "Phases" action (spec P §4.3): trial / promotion / ramp steps on a line or one recurring charge. */
+export function PricePhasesAction({ line, charge }: { line: AdjustableLine; charge?: AdjustableCharge }) {
+  const t = useT()
+  const ui = usePriceAdjustmentUi()
+  const reason = useAdjustmentBlockReason(line)
+  if (!ui || ui.access.reason === 'disabled' || ui.access.reason === 'no_permission' || ui.access.reason === 'loading') return null
+  if (charge && charge.chargeType !== 'mrc') return null
+  const label = t('cpq.phases.action', 'Phases')
+  const hint = t('cpq.phases.actionHint', 'Trial, promotion or ramp: prices per month range')
+  if (charge) {
+    return (
+      <BlockedReason reason={reason}>
+        <IconButton type="button" variant="ghost" size="xs" aria-label={label} title={reason ? undefined : hint} disabled={!!reason}
+          onClick={() => ui.openPhases(line, charge)} data-testid="cpq-phases-charge">
+          <CalendarRange className="h-3.5 w-3.5" />
+        </IconButton>
+      </BlockedReason>
+    )
+  }
+  return (
+    <BlockedReason reason={reason}>
+      <Button type="button" variant="ghost" size="sm" disabled={!!reason} title={reason ? undefined : hint}
+        onClick={() => ui.openPhases(line)} data-testid="cpq-phases-line">
+        <CalendarRange className="h-4 w-4" />
+        {label}
+      </Button>
+    </BlockedReason>
   )
 }

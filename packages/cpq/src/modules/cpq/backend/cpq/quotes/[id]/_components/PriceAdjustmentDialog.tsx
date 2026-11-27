@@ -43,6 +43,9 @@ export type ExistingAdjustment = {
   reasonCode: string
   reasonNote?: string | null
   chargeTypeFilter?: 'nrc' | 'mrc' | null
+  fromMonth?: number
+  toMonth?: number | null
+  phaseName?: string | null
 }
 
 export type PriceAdjustmentDialogProps<Q extends PreviewQuote> = {
@@ -101,6 +104,9 @@ export function PriceAdjustmentDialog<Q extends PreviewQuote>(props: PriceAdjust
     reasonCode: existing?.reasonCode ?? '',
     reasonNote: existing?.reasonNote ?? '',
     chargeTypeFilter: existing?.chargeTypeFilter ?? '',
+    fromMonth: existing?.fromMonth && existing.fromMonth > 1 ? String(existing.fromMonth) : '',
+    toMonth: existing?.toMonth != null ? String(existing.toMonth) : '',
+    phaseName: existing?.phaseName ?? '',
   }), [existing, types])
   const [form, setForm] = React.useState<AdjustmentForm>(initialForm)
   const [preview, setPreview] = React.useState<{ quote: Q; errors: Array<{ adjustmentId: string; code: string }> } | null>(null)
@@ -115,6 +121,8 @@ export function PriceAdjustmentDialog<Q extends PreviewQuote>(props: PriceAdjust
   }, [open])
 
   const needsChargeType = requiresChargeType(target.level, form.adjustmentType)
+  // Price phases: month ranges apply to recurring prices only (a line's recurring total or an MRC charge).
+  const recurringTarget = target.level === 'line' ? form.chargeTypeFilter === 'mrc' : charge?.chargeType === 'mrc'
   const setType = (adjustmentType: AdjustmentType) => setForm((current) => ({
     ...current, adjustmentType,
     // Set price / Amount off on a line cover one charge type: default to Recurring.
@@ -242,6 +250,26 @@ export function PriceAdjustmentDialog<Q extends PreviewQuote>(props: PriceAdjust
             <Input inputMode="decimal" autoFocus value={form.value} onChange={(event) => setForm({ ...form, value: event.target.value })} aria-describedby="cpq-adjustment-value-hint" />
             <span id="cpq-adjustment-value-hint" className="block text-xs text-muted-foreground">{valueHint}</span>
           </label>
+
+          {recurringTarget && (
+            <div className="grid grid-cols-3 gap-2" data-testid="cpq-adjustment-months">
+              <label className="block space-y-1">
+                <span className="text-xs font-medium">{t('cpq.phases.fields.fromMonth', 'From month')}</span>
+                <Input inputMode="numeric" placeholder="1" value={form.fromMonth ?? ''} onChange={(event) => setForm({ ...form, fromMonth: event.target.value })} />
+              </label>
+              <label className="block space-y-1">
+                <span className="text-xs font-medium">{t('cpq.phases.fields.toMonth', 'To month')}</span>
+                <Input inputMode="numeric" placeholder={t('cpq.phases.fields.toEnd', 'to the end')} value={form.toMonth ?? ''} onChange={(event) => setForm({ ...form, toMonth: event.target.value })} />
+              </label>
+              <label className="block space-y-1">
+                <span className="text-xs font-medium">{t('cpq.phases.columns.phase', 'Phase')}</span>
+                <Input maxLength={100} value={form.phaseName ?? ''} onChange={(event) => setForm({ ...form, phaseName: event.target.value })} />
+              </label>
+              <span className="col-span-3 text-xs text-muted-foreground">
+                {t('cpq.phases.fields.hint', 'Leave empty for every month. A month range makes this a price phase (recurring prices only).')}
+              </span>
+            </div>
+          )}
 
           <label className="block space-y-1">
             <span className="text-xs font-medium">{t('cpq.priceAdjustments.dialog.reason', 'Reason')}</span>

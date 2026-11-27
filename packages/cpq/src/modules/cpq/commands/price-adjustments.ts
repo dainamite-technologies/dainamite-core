@@ -21,6 +21,9 @@ const snapshotSchema = z.object({
   level: z.enum(['charge', 'line']), quoteLineId: id, chargeCode: z.string().nullish(),
   chargeTypeFilter: z.enum(['nrc', 'mrc']).nullish(), adjustmentType: z.enum(['discount_percent', 'discount_absolute', 'price_override']),
   value: z.number(), currencyCode: z.string().nullish(), reasonCode: z.string(), reasonNote: z.string().nullish(),
+  // Price phases: the month range and name must survive undo (a phase never comes back permanent).
+  windowKind: z.literal('relative').optional(), fromMonth: z.number().int().min(1).optional(), toMonth: z.number().int().min(1).nullish(),
+  phaseName: z.string().nullish(),
 })
 const undoSchema = z.object({ quoteId: id, before: snapshotSchema.nullable(), after: snapshotSchema })
 

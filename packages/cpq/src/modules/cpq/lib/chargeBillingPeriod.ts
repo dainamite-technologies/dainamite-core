@@ -13,6 +13,8 @@
  * so snapshots and payloads saved before this change read as monthly.
  */
 
+import { mergeRecurringPhases, type PayloadPhase } from './payloadPhases'
+
 export const CHARGE_BILLING_PERIOD_UNITS = ['month', 'year'] as const
 export type ChargeBillingPeriodUnit = (typeof CHARGE_BILLING_PERIOD_UNITS)[number]
 
@@ -152,17 +154,25 @@ export function recurringChargesByPeriod(
 
 /**
  * The C2 recurring charges of a line: `billingPeriod` is omitted for every 1
- * month (absent = monthly), so today's payload is unchanged.
+ * month (absent = monthly), so today's payload is unchanged. A period whose
+ * charges have price phases also carries the merged `phases`
+ * (`lib/payloadPhases.ts`); `unitPrice` stays the regular price.
  */
 export function buildRecurringPayloadCharges(
   charges: ReadonlyArray<Record<string, unknown>> | null | undefined,
   quantity: number,
   monthlyTotal: number,
-): Array<{ type: 'recurring'; unitPrice: number; description: string; billingPeriod?: ChargeBillingPeriod }> {
-  return recurringChargesByPeriod(charges, quantity, monthlyTotal).map((entry) => ({
-    type: 'recurring' as const,
-    unitPrice: entry.unitPrice,
-    description: 'Recurring charge',
-    ...billingPeriodField(entry.billingPeriod),
-  }))
+): Array<{ type: 'recurring'; unitPrice: number; description: string; billingPeriod?: ChargeBillingPeriod; phases?: PayloadPhase[] }> {
+  return recurringChargesByPeriod(charges, quantity, monthlyTotal).map((entry) => {
+    const key = billingPeriodKey(entry.billingPeriod)
+    const ofPeriod = (charges ?? []).filter((charge) => charge.chargeType === 'mrc' && billingPeriodKey(chargeBillingPeriod(charge)) === key)
+    const phases = mergeRecurringPhases(ofPeriod, quantity)
+    return {
+      type: 'recurring' as const,
+      unitPrice: entry.unitPrice,
+      description: 'Recurring charge',
+      ...billingPeriodField(entry.billingPeriod),
+      ...(phases.length ? { phases } : {}),
+    }
+  })
 }

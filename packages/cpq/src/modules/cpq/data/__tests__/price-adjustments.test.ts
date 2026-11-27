@@ -12,7 +12,10 @@ it.each([
   { adjustmentType: 'discount_percent', value: 101 }, { adjustmentType: 'discount_percent', value: 0 },
   { adjustmentType: 'discount_absolute', value: 0 }, { currencyCode: null }, { currencyCode: 'usd' },
   { reasonCode: 'other', reasonNote: '' }, { reasonNote: 'x'.repeat(501) },
-  { fromMonth: 2 }, { toMonth: 3 }, { windowKind: 'absolute' },
+  { fromMonth: 0 }, { fromMonth: 4, toMonth: 3 }, { toMonth: 1.5 }, { windowKind: 'absolute' }, { phaseName: 'x'.repeat(101) },
+  // A line phase must target the recurring total.
+  { level: 'line', chargeCode: undefined, adjustmentType: 'discount_percent', value: 50, currencyCode: undefined, toMonth: 3 },
+  { level: 'line', chargeCode: undefined, chargeTypeFilter: 'nrc', toMonth: 3 },
   { level: 'line', chargeCode: undefined, adjustmentType: 'price_override' }, { chargeTypeFilter: 'mrc' },
 ])('rejects malformed or unsupported adjustments: %j', (patch) => {
   expect(cpqPriceAdjustmentInputSchema.safeParse({ ...valid, ...patch }).success).toBe(false)
@@ -23,4 +26,11 @@ it('accepts filtered line percentages and an explanation for other', () => {
 it('never accepts target changes through PATCH; merged patches are validated by the full schema', () => {
   expect(cpqPriceAdjustmentPatchSchema.safeParse({ quoteLineId: valid.quoteLineId }).success).toBe(false)
   expect(cpqPriceAdjustmentPatchSchema.parse({ reasonNote: 'New note' })).toEqual({ reasonNote: 'New note' })
+})
+it('accepts month ranges (price phases) with a name', () => {
+  const phase = cpqPriceAdjustmentInputSchema.parse({ ...valid, fromMonth: 1, toMonth: 3, phaseName: 'Promo 50%' })
+  expect(phase).toMatchObject({ fromMonth: 1, toMonth: 3, phaseName: 'Promo 50%' })
+  expect(cpqPriceAdjustmentInputSchema.safeParse({ ...valid, fromMonth: 13, toMonth: null }).success).toBe(true)
+  expect(cpqPriceAdjustmentInputSchema.safeParse({ ...valid, level: 'line', chargeCode: undefined, chargeTypeFilter: 'mrc', value: 0, fromMonth: 1, toMonth: 1 }).success).toBe(true)
+  expect(cpqPriceAdjustmentPatchSchema.parse({ fromMonth: 2, toMonth: 4 })).toEqual({ fromMonth: 2, toMonth: 4 })
 })

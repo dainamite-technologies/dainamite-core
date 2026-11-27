@@ -5,6 +5,8 @@
  * offers what the API would accept; the API stays the authority.
  */
 
+import type { ChargeScheduleSegment } from './priceSchedule'
+
 export const ADJUST_PRICE_FEATURE = 'cpq.quotes.adjust_price'
 /** Matches `assertMutable` in the adjustment service. */
 export const ADJUSTMENT_EDITABLE_STATUSES = ['new', 'incomplete', 'ready'] as const
@@ -36,6 +38,8 @@ export type WaterfallChargeInput = {
     reasonCode?: string
     createdByUserId?: string
   }> | null
+  /** Price phases: the price per month range (`lib/priceSchedule.ts`); absent = one price. */
+  schedule?: ChargeScheduleSegment[]
 }
 
 export type WaterfallRow =
@@ -183,6 +187,9 @@ export const ADJUSTMENT_ERROR_FALLBACKS: Record<string, string> = {
   REASON_NOTE_REQUIRED: 'Add a note when the reason is “Other”',
   INVALID_PERCENT: 'Enter a percentage above 0 and up to 100',
   INVALID_AMOUNT: 'Enter an amount above 0',
+  PHASE_RANGE_INVALID: 'The last month must not be before the first month',
+  PHASE_RECURRING_ONLY: 'Phases apply to recurring charges only',
+  PHASE_PAST_TERM: 'The phase runs past the line’s term',
 }
 
 export type AdjustmentForm = {
@@ -193,6 +200,10 @@ export type AdjustmentForm = {
   reasonNote: string
   /** Line level only: '' = all billable charges. */
   chargeTypeFilter: '' | 'nrc' | 'mrc'
+  /** Price phases (optional): month range as typed; '' = from month 1 / to the end. */
+  fromMonth?: string
+  toMonth?: string
+  phaseName?: string
 }
 
 export type AdjustmentTarget =
@@ -213,14 +224,108 @@ export function buildAdjustmentDraft(form: AdjustmentForm, target: AdjustmentTar
     ...(form.adjustmentType === 'discount_percent' ? {} : { currencyCode }),
     reasonCode: form.reasonCode,
     ...(note ? { reasonNote: note } : {}),
+    ...monthRangeFields(form),
     ...(expectedRevision !== undefined ? { expectedRevision } : {}),
   }
+}
+
+function positiveInt(raw: string | undefined): number | null {
+  const text = (raw ?? '').trim()
+  if (!text) return null
+  const value = Number(text)
+  return Number.isInteger(value) && value >= 1 ? value : Number.NaN
+}
+
+/** Month range + phase name of a draft; omitted for a permanent adjustment (today's payload). */
+export function monthRangeFields(form: Pick<AdjustmentForm, 'fromMonth' | 'toMonth' | 'phaseName'>): { fromMonth?: number; toMonth?: number | null; phaseName?: string | null } {
+  const from = positiveInt(form.fromMonth) ?? 1
+  const to = positiveInt(form.toMonth)
+  const name = (form.phaseName ?? '').trim()
+  if (from === 1 && to === null) return name ? { phaseName: name } : {}
+  return { fromMonth: from, toMonth: to, ...(name ? { phaseName: name } : {}) }
+}
+
+/** A permanent adjustment (every month) — the one "Adjust price" edits; phases are edited one by one. */
+export function isPermanentAdjustment(item: { fromMonth?: number | null; toMonth?: number | null }): boolean {
+  return (item.fromMonth ?? 1) === 1 && item.toMonth == null
+}
+
+// ─── Price phases editor (spec P §4.3, D7) ───────────────────────────
+
+export type PhaseStepForm = {
+  /** Length as typed; years are a shortcut for 12 months. */
+  length: string
+  unit: 'month' | 'year'
+  /** Free = Set price 0. */
+  kind: 'free' | AdjustmentType
+  value: string
+  name: string
+}
+
+export const MAX_PHASE_STEPS = 12
+
+export function emptyPhaseStep(): PhaseStepForm {
+  return { length: '1', unit: 'month', kind: 'free', value: '', name: '' }
+}
+
+/** Back-to-back month ranges from month 1; null for a step whose length is not a whole number ≥ 1. */
+export function phaseStepRanges(steps: PhaseStepForm[]): Array<{ fromMonth: number; toMonth: number } | null> {
+  let next = 1
+  return steps.map((step) => {
+    const length = positiveInt(step.length)
+    if (length === null || Number.isNaN(length)) return null
+    const months = step.unit === 'year' ? length * 12 : length
+    const range = { fromMonth: next, toMonth: next + months - 1 }
+    next = range.toMonth + 1
+    return range
+  })
+}
+
+export type PhaseDraftError = 'PHASE_LENGTH_INVALID' | 'PHASE_VALUE_INVALID' | 'PHASE_PAST_TERM' | 'PHASE_TOO_MANY' | 'PHASE_NONE'
+
+/**
+ * Drafts (POST bodies) for a phase sequence on a recurring target: a line's
+ * recurring total or one MRC charge. Validates what the server would refuse
+ * up front so a sequence is not saved half-way.
+ */
+export function buildPhaseDrafts(input: {
+  steps: PhaseStepForm[]
+  target: AdjustmentTarget
+  reasonCode: string
+  reasonNote: string
+  currencyCode: string
+  termMonths?: number | null
+}): { drafts: Array<NonNullable<ReturnType<typeof buildAdjustmentDraft>>>; error: PhaseDraftError | null; stepIndex?: number } {
+  if (!input.steps.length) return { drafts: [], error: 'PHASE_NONE' }
+  if (input.steps.length > MAX_PHASE_STEPS) return { drafts: [], error: 'PHASE_TOO_MANY' }
+  const ranges = phaseStepRanges(input.steps)
+  const drafts: Array<NonNullable<ReturnType<typeof buildAdjustmentDraft>>> = []
+  for (let index = 0; index < input.steps.length; index++) {
+    const step = input.steps[index]
+    const range = ranges[index]
+    if (!range) return { drafts: [], error: 'PHASE_LENGTH_INVALID', stepIndex: index }
+    if (input.termMonths && range.toMonth > input.termMonths) return { drafts: [], error: 'PHASE_PAST_TERM', stepIndex: index }
+    const adjustmentType: AdjustmentType = step.kind === 'free' ? 'price_override' : step.kind
+    const draft = buildAdjustmentDraft({
+      adjustmentType, value: step.kind === 'free' ? '0' : step.value, reasonCode: input.reasonCode, reasonNote: input.reasonNote,
+      chargeTypeFilter: 'mrc', fromMonth: String(range.fromMonth), toMonth: String(range.toMonth), phaseName: step.name,
+    }, input.target, input.currencyCode)
+    const value = draft?.value
+    const invalid = !draft || value === undefined || value < 0 ||
+      (adjustmentType === 'discount_percent' && (value <= 0 || value > 100)) || (adjustmentType === 'discount_absolute' && value <= 0)
+    if (invalid) return { drafts: [], error: 'PHASE_VALUE_INVALID', stepIndex: index }
+    drafts.push(draft)
+  }
+  return { drafts, error: null }
 }
 
 /** PATCH body: target fields are immutable server-side, so they are dropped. */
 export function toAdjustmentPatch(draft: NonNullable<ReturnType<typeof buildAdjustmentDraft>>) {
   const { level: _level, quoteLineId: _line, chargeCode: _charge, ...patch } = draft as typeof draft & { chargeCode?: string }
-  return { ...patch, reasonNote: patch.reasonNote ?? null, currencyCode: patch.currencyCode ?? null }
+  const range = patch as { fromMonth?: number; toMonth?: number | null; phaseName?: string | null }
+  // Always send the range, so an edit can turn a phase back into a permanent adjustment.
+  return { ...patch, reasonNote: patch.reasonNote ?? null, currencyCode: patch.currencyCode ?? null,
+    fromMonth: range.fromMonth ?? 1, toMonth: range.toMonth ?? null, phaseName: range.phaseName ?? null }
 }
 
 /** Server error body → a stable code for messages (`STALE_REVISION`, `INVALID_PERCENT`, …). */
@@ -258,6 +363,7 @@ export function parseStoredCharge(raw: unknown): (WaterfallChargeInput & { charg
     standardUnitPrice: num(record.standardUnitPrice),
     standardTotalPrice: num(record.standardTotalPrice) ?? null,
     adjustments,
+    ...(Array.isArray(record.schedule) && record.schedule.length ? { schedule: record.schedule as ChargeScheduleSegment[] } : {}),
     // D5: MRC price per period (absent = every 1 month).
     ...(record.billingPeriod && typeof record.billingPeriod === 'object' ? { billingPeriod: record.billingPeriod } : {}),
   }

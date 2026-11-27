@@ -11,10 +11,12 @@ import {
   adjustmentErrorCode,
   canDeleteInvalidAdjustment,
   collectAdjustmentErrors,
+  isPermanentAdjustment,
   type AdjustmentErrorSourceQuote,
   type AdjustmentTarget,
 } from '../../../../../lib/priceAdjustmentView'
 import { PriceAdjustmentDialog, type AdjustmentReason, type ExistingAdjustment } from './PriceAdjustmentDialog'
+import { PricePhasesDialog } from './PricePhasesDialog'
 import type { AdjustableCharge, AdjustableLine, PriceAdjustmentUi } from './priceAdjustmentContext'
 import type { StoredAdjustment } from './PriceAdjustmentsPanel'
 
@@ -59,6 +61,7 @@ export function usePriceAdjustments<Q extends ControllerQuote>({ quote, quoteTyp
   const { confirm, ConfirmDialogElement } = useConfirmDialog()
   const [list, setList] = React.useState<ListResponse | null>(null)
   const [dialog, setDialog] = React.useState<DialogState | null>(null)
+  const [phases, setPhases] = React.useState<{ target: AdjustmentTarget; targetLabel: string; termMonths: number | null } | null>(null)
   const quoteId = quote?.id ?? null
   const revision = quote?.pricingRevision ?? 0
 
@@ -108,7 +111,8 @@ export function usePriceAdjustments<Q extends ControllerQuote>({ quote, quoteTyp
     invalidIds: new Set(errorsById.keys()),
     canDeleteInvalid: canDeleteInvalidAdjustment(accessInput),
     openCharge: (line, charge) => {
-      const existing = list?.items.find((item) => item.level === 'charge' && item.quoteLineId === line.lineId && item.chargeCode === charge.chargeCode)
+      // "Adjust price" edits the permanent adjustment; phases are edited one by one from the panel.
+      const existing = list?.items.find((item) => item.level === 'charge' && item.quoteLineId === line.lineId && item.chargeCode === charge.chargeCode && isPermanentAdjustment(item))
       setDialog({
         target: { level: 'charge', quoteLineId: line.lineId, chargeCode: charge.chargeCode },
         targetLabel: `${line.offeringName} · ${charge.chargeName}`,
@@ -117,8 +121,15 @@ export function usePriceAdjustments<Q extends ControllerQuote>({ quote, quoteTyp
       })
     },
     openLine: (line) => {
-      const existing = list?.items.find((item) => item.level === 'line' && item.quoteLineId === line.lineId)
+      const existing = list?.items.find((item) => item.level === 'line' && item.quoteLineId === line.lineId && isPermanentAdjustment(item))
       setDialog({ target: { level: 'line', quoteLineId: line.lineId }, targetLabel: line.offeringName, existing: existing ?? null })
+    },
+    openPhases: (line, charge) => {
+      setPhases({
+        target: charge ? { level: 'charge', quoteLineId: line.lineId, chargeCode: charge.chargeCode } : { level: 'line', quoteLineId: line.lineId },
+        targetLabel: charge ? `${line.offeringName} · ${charge.chargeName}` : line.offeringName,
+        termMonths: line.termMonths ?? null,
+      })
     },
     edit: (adjustmentId) => {
       const item = list?.items.find((entry) => entry.id === adjustmentId)
@@ -155,11 +166,27 @@ export function usePriceAdjustments<Q extends ControllerQuote>({ quote, quoteTyp
     />
   ) : null
 
+  const phasesElement = quote && phases ? (
+    <PricePhasesDialog<Q>
+      open
+      quoteId={quote.id}
+      currency={quote.currencyCode}
+      pricingRevision={revision}
+      target={phases.target}
+      targetLabel={phases.targetLabel}
+      termMonths={phases.termMonths}
+      reasons={reasons}
+      onClose={() => setPhases(null)}
+      onSaved={(next) => onQuote(next)}
+      onStale={() => { void reloadQuote() }}
+    />
+  ) : null
+
   return {
     ui,
     items: list?.items ?? [],
     total: list?.total ?? 0,
     errorsById,
-    elements: <>{dialogElement}{ConfirmDialogElement}</>,
+    elements: <>{dialogElement}{phasesElement}{ConfirmDialogElement}</>,
   }
 }

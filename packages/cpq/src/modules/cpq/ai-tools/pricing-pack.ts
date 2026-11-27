@@ -68,7 +68,7 @@ const calculatePriceTool = defineCpqApiTool<CalculatePriceInput, CalculatePriceA
   name: 'cpq.calculate_price',
   displayName: 'Calculate CPQ price',
   description:
-    'Calculate the price of one or more configured offerings without saving anything: resolves pricing tables, tiers and active price rules. Returns { currencyCode, totals: { nrcTotal, mrcTotal, usageCharges }, primaryCharges, childItems } where each charge carries unitPrice, quantity, totalPrice (per the charge billingPeriod for MRC; absent = per month) and the applied rule adjustments; totals.mrcTotal is the monthly equivalent. This is the only source of truth for prices; never estimate a price yourself.',
+    'Calculate the price of one or more configured offerings without saving anything: resolves pricing tables, tiers and active price rules. Returns { currencyCode, totals: { nrcTotal, mrcTotal, usageCharges }, primaryCharges, childItems } where each charge carries unitPrice, quantity, totalPrice (per the charge billingPeriod for MRC; absent = per month) and the applied rule adjustments; totals.mrcTotal is the monthly equivalent. A price rule with a month range (e.g. first month free) gives the recurring charge a `schedule` (month ranges → price, returned with includeWaterfall: true); the charge price itself is the regular price after it. Rules outside their campaign dates (validFrom / validUntil) are not applied. This is the only source of truth for prices; never estimate a price yourself.',
   inputSchema: calculatePriceInput,
   requiredFeatures: ['cpq.quotes.view'],
   toOperation: (input) => {
@@ -176,7 +176,7 @@ const listPriceRulesTool = defineCpqApiTool<ListPriceRulesInput, CpqPagedApiResp
   name: 'cpq.list_price_rules',
   displayName: 'List CPQ price rules',
   description:
-    'List price rules (discounts, surcharges, overrides) with their scope, value, charge filters and applicability condition. Explains why cpq.calculate_price applied an adjustment. Returns { items, total, page, pageSize, totalPages }.',
+    'List price rules (discounts, surcharges, overrides) with their scope, value, charge filters, applicability condition, month range (fromMonth / toMonth: a price phase such as "first month free"; 1 → null = every month) and campaign dates (validFrom / validUntil: which quotes get the rule). Explains why cpq.calculate_price applied an adjustment. Returns { items, total, page, pageSize, totalPages }.',
   inputSchema: listPriceRulesInput,
   requiredFeatures: ['cpq.pricing.view'],
   toOperation: (input) => ({

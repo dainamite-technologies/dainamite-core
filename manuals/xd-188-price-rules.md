@@ -346,6 +346,40 @@ Final: unitPrice = 0, totalPrice = 0. Discount clamped to zero, not negative.
 
 ---
 
+## Part D — Price phases and campaign dates (spec P, D9 / D10)
+
+A rule can price only some **months of the subscription** (a phase) and only
+quotes priced inside its **campaign dates**.
+
+| Field | Meaning |
+|---|---|
+| *Price phase (months)* — `fromMonth` / `toMonth` | 1-based, inclusive. Empty = every month (as before). `1`–`1` = "first month free" with a Set price 0 / 100% off rule. Recurring (MRC) charges only: a phased rule never changes one-time or usage charges, and an `nrc` / `usage` charge type filter is refused (`PHASE_RECURRING_ONLY`). |
+| *Campaign dates* — `validFrom` / `validUntil` | `YYYY-MM-DD`, inclusive, both optional. A quote priced inside them gets the rule; a quote line already priced with it **keeps** it when re-saved after the campaign (the stored snapshot is authoritative). A line added after the end does not get it. |
+
+### Test 11 — First month free
+
+1. Create a rule `FTTH_TRIAL`: type *Override*, value 0, charge type *MRC only*,
+   price phase 1 to 1.
+2. Add the matching offering to a quote (term 12).
+3. **Expected:** the MRC charge shows a "1 phases" badge; its breakdown lists
+   *Month 1 — Rule — 0.00* and *From month 2 — Regular price — list price*. The
+   line MRC is the regular price; the deal value is 11 × the monthly price.
+
+### Test 12 — Promotion with campaign dates
+
+1. Create `PROMO50`: *Discount %* 50, MRC only, months 1 to 3, valid until
+   yesterday.
+2. Add a new line: **Expected:** no phase (campaign over).
+3. Set *Valid until* to a future date, add a line: the line gets months 1–3 at
+   50%. Set *Valid until* back to yesterday and change the line's quantity:
+   **Expected:** the line keeps its promotion.
+
+### Test 13 — Rule phase and a rep's manual phase
+
+On the Test 12 line, open **Phases** and add *Set price* 30 for 1 month.
+**Expected:** month 1 = 30 (source *Manual*, standard 50), months 2–3 = 50
+(*Rule*), month 4 onward = regular price.
+
 ## Part C — Cleanup
 
 Delete all test rules through the UI:

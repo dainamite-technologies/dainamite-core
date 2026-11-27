@@ -9,6 +9,7 @@ import { DepthBadge, PriceWaterfall } from './PriceWaterfall'
 import { ADJUSTMENT_ERROR_FALLBACKS, isAboveStandard, type WaterfallChargeInput } from '../lib/priceAdjustmentView'
 import { formatMoney } from '../lib/formatMoney'
 import { ChargePeriodTotal } from './ChargePeriodTotal'
+import { PriceScheduleTable } from './PriceScheduleTable'
 
 type TierBreakdownEntry = { tier: number; from: number; to: number; pricePerUnit: number; quantity: number; subtotal: number }
 
@@ -85,7 +86,7 @@ export function ChargeBreakdownTable<C extends ChargeRowView>({
       </thead>
       <tbody>
         {charges.map((c, i) => {
-          const hasDetail = !!(c.breakdown?.tiers?.length || c.adjustments?.length)
+          const hasDetail = !!(c.breakdown?.tiers?.length || c.adjustments?.length || c.schedule?.length)
           const isDetailOpen = openDetailIndex === i
           const listUnit = c.listUnitPrice ?? c.unitPrice
           const standardUnit = c.standardUnitPrice ?? c.unitPrice
@@ -95,6 +96,11 @@ export function ChargeBreakdownTable<C extends ChargeRowView>({
               <tr className="border-t border-dashed border-border/50">
                 <td className="py-1">
                   <span>{c.chargeName}</span>
+                  {c.schedule?.length ? (
+                    <Tag variant="info" className="ml-1.5 px-1.5 text-xs" data-testid="cpq-charge-phases">
+                      {t('cpq.phases.badge', '{count} phases', { count: c.schedule.length - 1 })}
+                    </Tag>
+                  ) : null}
                   {errors.length > 0 && (
                     <Tag variant="warning" className="ml-1.5 px-1.5 text-xs" data-testid="cpq-adjustment-invalid">
                       {t('cpq.priceAdjustments.invalidReason', 'Invalid: {reason}', {
@@ -196,6 +202,16 @@ function ChargePricingDetail({ charge: c, currency, reasonLabels, renderManualAc
           </table>
         </div>
       )}
+
+      {c.schedule?.length ? (
+        <div>
+          <div className="font-medium text-muted-foreground mb-1">{t('cpq.phases.scheduleTitle', 'Price phases')}</div>
+          <PriceScheduleTable schedule={c.schedule} currency={currency} />
+          <p className="mt-1 text-muted-foreground">
+            {t('cpq.phases.regularHint', 'After the last phase the regular price applies. The waterfall below is the regular price.')}
+          </p>
+        </div>
+      ) : null}
 
       <div>
         <div className="font-medium text-muted-foreground mb-1">{t('cpq.priceAdjustments.waterfall.title', 'Price waterfall')}</div>

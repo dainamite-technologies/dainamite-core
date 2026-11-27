@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { normalizeChargePricing } from './charge-pricing'
 import { CHARGE_BILLING_PERIOD_MAX_INTERVAL, CHARGE_BILLING_PERIOD_UNITS } from '../lib/chargeBillingPeriod'
+import { MAX_PHASE_MONTH } from '../lib/priceSchedule'
 import { INVENTORY_SUBSCRIPTION_STATUSES, STATUS_CHARGE_BEHAVIORS, SUBSCRIPTION_STATUS_ACTIONS } from '../services/types'
 
 /**
@@ -317,7 +318,9 @@ export const cpqProductChargeUpdateSchema = partialWithoutDefaults(cpqProductCha
 
 // ─── Price Rule ──────────────────────────────────────────────────
 
-export const cpqPriceRuleCreateSchema = z.object({
+const isoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD')
+
+export const cpqPriceRuleBaseSchema = z.object({
   code: z.string().min(1),
   name: z.string().min(1),
   description: z.string().nullish(),
@@ -329,11 +332,37 @@ export const cpqPriceRuleCreateSchema = z.object({
   applicabilityCondition: z.record(z.string(), z.unknown()).nullish(),
   sortOrder: z.number().int().optional().default(0),
   isActive: z.boolean().optional().default(true),
+  // Price phases spec (D9): months of the subscription the rule prices (1-based,
+  // inclusive). Omitted / 1 → null = every month (today). Recurring charges only.
+  fromMonth: z.number().int().min(1).max(MAX_PHASE_MONTH).optional()
+    .describe('First month of the subscription the rule prices (1 = from the start). With toMonth, the rule is a phase, e.g. 1–1 = "first month free". Recurring (MRC) charges only.'),
+  toMonth: z.number().int().min(1).max(MAX_PHASE_MONTH).nullish()
+    .describe('Last month the rule prices (inclusive); null = to the end of the subscription.'),
+  // D10 campaign dates: the quotes priced inside them get the rule; a priced quote keeps it.
+  validFrom: isoDateSchema.nullish().describe('Campaign start (YYYY-MM-DD, inclusive): quotes priced from this date get the rule.'),
+  validUntil: isoDateSchema.nullish().describe('Campaign end (YYYY-MM-DD, inclusive). A quote priced before keeps the promotion after it.'),
 })
 
-export const cpqPriceRuleUpdateSchema = partialWithoutDefaults(cpqPriceRuleCreateSchema).extend({
+type PriceRulePhaseFields = { fromMonth?: number; toMonth?: number | null; validFrom?: string | null; validUntil?: string | null; chargeTypeFilter?: string | null }
+/** V-PR-PHASE: a month range is ordered and prices recurring charges; campaign dates are ordered. */
+export function refinePriceRulePhase(ctx: z.RefinementCtx, data: PriceRulePhaseFields) {
+  const from = data.fromMonth ?? 1
+  if (data.toMonth != null && data.toMonth < from) {
+    ctx.addIssue({ code: 'custom', path: ['toMonth'], message: 'PHASE_RANGE_INVALID' })
+  }
+  if ((from > 1 || data.toMonth != null) && data.chargeTypeFilter && data.chargeTypeFilter !== 'mrc') {
+    ctx.addIssue({ code: 'custom', path: ['chargeTypeFilter'], message: 'PHASE_RECURRING_ONLY' })
+  }
+  if (data.validFrom && data.validUntil && data.validUntil < data.validFrom) {
+    ctx.addIssue({ code: 'custom', path: ['validUntil'], message: 'CAMPAIGN_RANGE_INVALID' })
+  }
+}
+
+export const cpqPriceRuleCreateSchema = cpqPriceRuleBaseSchema.superRefine((data, ctx) => refinePriceRulePhase(ctx, data))
+
+export const cpqPriceRuleUpdateSchema = partialWithoutDefaults(cpqPriceRuleBaseSchema).extend({
   id: z.string().uuid(),
-})
+}).superRefine((data, ctx) => refinePriceRulePhase(ctx, data))
 
 // ─── Pricing Table ───────────────────────────────────────────────
 

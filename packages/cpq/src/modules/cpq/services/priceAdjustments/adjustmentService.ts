@@ -13,6 +13,7 @@ import { cpqPriceAdjustmentInputSchema, cpqPriceAdjustmentPatchSchema, type Pric
 import { QuotingError, type DefaultCpqQuotingService } from '../cpqQuotingService'
 import { TERMINAL_STATUSES, type CpqStatus, type QuoteResult, type TenantScope } from '../types'
 import { withQuotePricingWrite } from './quotePricingWrite'
+import { isPhasedRange, rangesOverlap, type MonthRange } from '../../lib/priceSchedule'
 
 /** Quote statuses in which reps may still add / edit / delete manual adjustments. */
 const ADJUSTMENT_MUTABLE_STATUSES: readonly CpqStatus[] = ['new', 'incomplete', 'ready']
@@ -27,7 +28,10 @@ type Dependencies = {
 export function adjustmentInput(row: CpqQuotePriceAdjustment): PriceAdjustmentInput {
   return cpqPriceAdjustmentInputSchema.parse({ level: row.level, quoteLineId: row.quoteLineId,
     chargeCode: row.chargeCode, chargeTypeFilter: row.chargeTypeFilter, adjustmentType: row.adjustmentType,
-    value: Number(row.value), currencyCode: row.currencyCode, reasonCode: row.reasonCode, reasonNote: row.reasonNote })
+    value: Number(row.value), currencyCode: row.currencyCode, reasonCode: row.reasonCode, reasonNote: row.reasonNote,
+    // Month range (price phases); a permanent row keeps the historical shape.
+    ...(isPhasedRange(row) ? { windowKind: 'relative' as const, fromMonth: row.fromMonth, toMonth: row.toMonth } : {}),
+    ...(row.phaseName ? { phaseName: row.phaseName } : {}) })
 }
 export function adjustmentSnapshot(row: CpqQuotePriceAdjustment) {
   return { id: row.id, ...adjustmentInput(row), quoteConfigurationId: row.quoteConfigurationId,
@@ -37,10 +41,14 @@ export function adjustmentSnapshot(row: CpqQuotePriceAdjustment) {
 }
 export type AdjustmentSnapshot = ReturnType<typeof adjustmentSnapshot>
 
-type OverlapKey = { id: string; level: string; quoteLineId: string; chargeCode?: string | null; chargeTypeFilter?: string | null }
-/** Same level and target; line filters overlap when either covers all charges or both match. */
+type OverlapKey = { id: string; level: string; quoteLineId: string; chargeCode?: string | null; chargeTypeFilter?: string | null } & MonthRange
+/**
+ * Same level and target, in at least one common month (phases on one target
+ * never overlap); line filters overlap when either covers all charges or both match.
+ */
 export function adjustmentsOverlap(a: OverlapKey, b: OverlapKey): boolean {
   if (a.id === b.id || a.level !== b.level || a.quoteLineId !== b.quoteLineId) return false
+  if (!rangesOverlap(a, b)) return false
   if (a.level === 'charge') return (a.chargeCode ?? null) === (b.chargeCode ?? null)
   return !a.chargeTypeFilter || !b.chargeTypeFilter || a.chargeTypeFilter === b.chargeTypeFilter
 }
@@ -183,7 +191,8 @@ export class CpqAdjustmentService {
   private values(input: PriceAdjustmentInput) {
     return { level: input.level, quoteLineId: input.quoteLineId, chargeCode: input.chargeCode ?? null,
       chargeTypeFilter: input.chargeTypeFilter ?? null, adjustmentType: input.adjustmentType, value: String(input.value),
-      currencyCode: input.currencyCode ?? null, reasonCode: input.reasonCode, reasonNote: input.reasonNote ?? null }
+      currencyCode: input.currencyCode ?? null, reasonCode: input.reasonCode, reasonNote: input.reasonNote ?? null,
+      windowKind: 'relative', fromMonth: input.fromMonth ?? 1, toMonth: input.toMonth ?? null, phaseName: input.phaseName ?? null }
   }
 
   private write<T>(quoteId: string, scope: TenantScope, revision: number | undefined, execute: (em: EntityManager, quote: CpqQuoteConfiguration) => Promise<T>) {

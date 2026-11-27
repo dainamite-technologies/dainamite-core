@@ -264,6 +264,13 @@ export interface ResolvedCharge {
    * (`lib/chargeBillingPeriod.ts`); `unitPrice` / `totalPrice` stay per period.
    */
   billingPeriod?: { unit: 'month' | 'year'; interval: number }
+  /**
+   * Price phases spec (Phase 2): the price per month range when a phased price
+   * rule (D9) or a manual phase applies. Contiguous from month 1, the last
+   * segment open; the charge's own prices are the regular price (last segment).
+   * Absent = one price for every month (`lib/priceSchedule.ts`).
+   */
+  schedule?: import('../lib/priceSchedule').ChargeScheduleSegment[]
 }
 
 // ─── Inventory status constants ──────────────────────────────────

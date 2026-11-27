@@ -44,8 +44,8 @@ end-to-end**:
 | `cpq.subscription.cancelled` | ustawia `bill end date` na pozycjach |
 | `cpq.subscription.merged` | przepina pozycje na subskrypcję docelową |
 | `cpq.subscription.superseded` | domyka pozycje pominięte przy scaleniu |
-| `cpq.subscription_item.status_changed` | wstrzymanie / zawieszenie / grace → okres statusu linii w billingu; wznowienie → zamyka otwarty okres dzień przed |
-| `cpq.subscription.terminated` | kończy pozycje jak `cancelled` (cała subskrypcja albo tylko zakończone pozycje i ich urządzenia) |
+| `cpq.subscription_item.status_changed` | wstrzymanie / zawieszenie / grace → okres statusu linii w billingu; wznowienie → zamyka tylko okres trwający w dniu wznowienia (dzień przed); późniejszych okresów nie rusza, więc spóźnione lub powtórzone zdarzenie nie kasuje kolejnej pauzy |
+| `cpq.subscription.terminated` | kończy pozycje jak `cancelled` (flaga `wholeSubscription` z chwili wysłania: `true` → wszystkie pozycje subskrypcji, inaczej tylko wymienione pozycje i ich urządzenia; konektor nie czyta bieżącego statusu w CPQ) |
 
 > **Okres rozliczeniowy, fazy cen, status linii.** Opłata MRC z własnym okresem
 > (np. „480 000 / rok") tworzy pozycję z własnym okresem billingu (`annually` / 1) i

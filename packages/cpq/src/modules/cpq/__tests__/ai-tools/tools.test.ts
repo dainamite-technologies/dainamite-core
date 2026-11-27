@@ -354,7 +354,7 @@ const cases: ToolCase[] = [
     method: 'GET',
     mutation: false,
     input: { customerId: CUSTOMER_ID, statuses: ['active', 'suspended'], expiringWithinDays: 90 },
-    invalidInput: { statuses: ['paused'] },
+    invalidInput: { statuses: ['bogus'] },
     expectedPath: '/cpq/inventory/subscriptions',
     expectedQuery: { customerId: CUSTOMER_ID, status: 'active,suspended', expiringWithinDays: 90 },
     arrange: (fake) => fake.on('GET', '/cpq/inventory/subscriptions', PAGED),
@@ -431,6 +431,20 @@ const cases: ToolCase[] = [
     expectedQuery: { pageSize: 20 },
     arrange: (fake) => fake.on('GET', `/cpq/inventory/subscriptions/${SUBSCRIPTION_ID}/change-log`, PAGED),
     expectedOutput: PAGED,
+  },
+  {
+    name: 'cpq.change_subscription_status',
+    routeFile: 'inventory/subscriptions/actions/route.ts',
+    method: 'POST',
+    mutation: true,
+    // inventory.view: the preview reads the subscription.
+    extraFeatures: ['cpq.inventory.view'],
+    input: { subscriptionId: SUBSCRIPTION_ID, action: 'suspend', chargeBehavior: 'no_charge', reason: 'Non-payment' },
+    invalidInput: { subscriptionId: SUBSCRIPTION_ID, action: 'hibernate' },
+    expectedPath: '/cpq/inventory/subscriptions/actions',
+    expectedBody: { subscriptionId: SUBSCRIPTION_ID, action: 'suspend', chargeBehavior: 'no_charge', reason: 'Non-payment' },
+    arrange: (fake) => fake.on('POST', '/cpq/inventory/subscriptions/actions', { subscriptionItemIds: [ASSET_ID] }),
+    expectedOutput: { subscriptionItemIds: [ASSET_ID] },
   },
   // ─── orders ──────────────────────────────────────────────────────────────
   {

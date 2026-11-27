@@ -2,6 +2,7 @@ import {
   MAX_TARGET_STEPS, TargetPriceError, isOnTarget, planTargetWrite, rowsForTarget, sameRow, stepsFromRows, targetKey, targetOf,
   type PriceTarget, type TargetPriceBody,
 } from '../targetPrice'
+import { cpqTargetPriceInputSchema } from '../../data/price-adjustments'
 
 const lineId = '44444444-4444-4444-8444-444444444444'
 const recurring: PriceTarget = { level: 'line', quoteLineId: lineId, chargeTypeFilter: 'mrc' }
@@ -153,5 +154,36 @@ describe('planTargetWrite', () => {
     expect(sameRow(current[0], { ...current[0], reasonCode: 'loyalty' })).toBe(false)
     expect(sameRow(current[0], { ...current[0], phaseName: 'Trial' })).toBe(false)
     expect(sameRow(current[0], { ...current[0], reasonNote: '' })).toBe(true)
+  })
+})
+
+describe('the Then name (F2)', () => {
+  const apiStored = stored([
+    { level: 'line' as const, quoteLineId: lineId, chargeTypeFilter: 'mrc' as const, adjustmentType: 'price_override' as const, value: 50, currencyCode: 'USD', reasonCode: 'promotion', windowKind: 'relative' as const, fromMonth: 1, toMonth: 3, phaseName: 'Trial' },
+    { level: 'line' as const, quoteLineId: lineId, chargeTypeFilter: 'mrc' as const, adjustmentType: 'price_override' as const, value: 90, currencyCode: 'USD', reasonCode: 'promotion', windowKind: 'relative' as const, fromMonth: 4, toMonth: null, phaseName: 'Standard' },
+  ])
+
+  it('reads the open-ended row\'s name into Then and writes it back, so an unchanged set plans all-keep', () => {
+    const steps = stepsFromRows(apiStored)
+    expect(steps.then).toEqual({ adjustmentType: 'price_override', value: 90, name: 'Standard' })
+    const wanted = rowsForTarget(body({ phases: steps.phases, then: steps.then }), 12)
+    expect(wanted[1]).toMatchObject({ fromMonth: 4, toMonth: null, phaseName: 'Standard' })
+    const plan = planTargetWrite(apiStored, wanted)
+    expect(plan.keep.map((row) => row.id)).toEqual(['row-0', 'row-1'])
+    expect([plan.update, plan.create, plan.remove]).toEqual([[], [], []])
+  })
+
+  it('keeps a stored name on a One price row too', () => {
+    const one = stored([{ level: 'line' as const, quoteLineId: lineId, chargeTypeFilter: 'mrc' as const, adjustmentType: 'discount_percent' as const, value: 10, currencyCode: null, reasonCode: 'promotion', phaseName: 'Loyalty' }])
+    const steps = stepsFromRows(one)
+    expect(steps).toMatchObject({ mode: 'one_price', then: { name: 'Loyalty' } })
+    expect(planTargetWrite(one, rowsForTarget(body({ then: steps.then }))).keep).toHaveLength(1)
+  })
+
+  it('accepts then.name up to 100 characters in the body', () => {
+    const input = { target: recurring, phases: [], reasonCode: 'promotion' }
+    expect(cpqTargetPriceInputSchema.parse({ ...input, then: { adjustmentType: 'discount_percent', value: 5, name: ' Standard ' } }).then).toEqual({ adjustmentType: 'discount_percent', value: 5, name: 'Standard' })
+    expect(cpqTargetPriceInputSchema.safeParse({ ...input, then: { adjustmentType: 'discount_percent', value: 5, name: 'x'.repeat(101) } }).success).toBe(false)
+    expect(cpqTargetPriceInputSchema.safeParse({ ...input, then: { adjustmentType: 'discount_percent', value: 5 } }).success).toBe(true)
   })
 })

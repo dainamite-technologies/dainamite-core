@@ -90,7 +90,10 @@ export const cpqTargetPriceInputSchema = z.object({
     value: adjustmentFields.value.nullish().describe('Required except for regular.'),
     name: z.string().trim().max(100).nullish().describe('Phase name sent to billing, e.g. "Free trial".'),
   }).strict()).max(120).describe('Steps back to back from month 1; at most 12. Recurring targets only.'),
-  then: z.object({ adjustmentType: pricedTypeSchema, value: adjustmentFields.value }).strict().nullable()
+  then: z.object({
+    adjustmentType: pricedTypeSchema, value: adjustmentFields.value,
+    name: z.string().trim().max(100).nullish().describe('Optional name of the row to the end. The dialog suggests none (it is the regular price in billing) and only sends back a name the row already has, so an unchanged set keeps it.'),
+  }).strict().nullable()
     .describe('With phases: the price from the month after them to the end (null = regular price). Without phases: the One price, every month.'),
   currencyCode: adjustmentFields.currencyCode,
   reasonCode: adjustmentFields.reasonCode.nullish().describe('Value from the cpq.price_adjustment_reason dictionary; optional only when nothing is written (phases: [] and then: null).'),

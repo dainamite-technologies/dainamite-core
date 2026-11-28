@@ -17,6 +17,9 @@ Entry format (newest first within a section):
 - **`DataTable` ignores a column's `cell` when its id / `accessorKey` ends in `_at`.** (2026-11-18, #129)
   It renders the value with `formatDisplayDateTime` in the app locale (`useLocale()`). Format every other date with `formatDisplayDate` / `formatDisplayDateTime` and the same locale (billing: `lib/displayDate.ts`), never `toLocaleString()`, or one screen mixes formats.
 
+- **A CRUD list's `$ilike` filter can miss a row created a moment ago: the query engine answers it from `search_tokens`.** (2026-11-28, PR #153 CI, TC-BILL-004)
+  On a `makeCrudRoute` list with `entityId`, once the tenant has any search tokens for that entity (the init reindex writes them for seeded rows), the query engine (`query_index/lib/engine.ts`) matches `like` / `ilike` through `search_tokens`, not the column (`OM_SEARCH_USE_ILIKE_FOR_NON_ENCRYPTED_FIELDS` defaults to false). The indexer writes a new row's tokens after the create commits, so `GET …?search=<name>` straight after the POST is a race: it passed one CI run and failed the next, retry included. In integration tests, wrap such reads in `expect.poll`. Run an absence check only after a positive read of the same row, or it passes vacuously.
+
 - **The MCP HTTP server runs tools without the approval gate.** (2026-11-16, #110)
   `ai_assistant` `lib/http-server.ts` calls a tool right after the feature check. Every write tool must refuse unless `ctx.approvedPendingActionId` is set; only the pending-action executor sets it.
 - **Agent mutation-policy overrides can only restrict.** (2026-11-16, #110)

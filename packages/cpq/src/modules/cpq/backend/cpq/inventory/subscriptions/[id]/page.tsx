@@ -44,8 +44,11 @@ type SubscriptionSnapshot = {
 } | null
 
 type LineChangeEntry = {
-  action: 'add' | 'modify' | 'cancel'
+  /** `status`: a D6 status action on one item (`fromStatus` → `toStatus`). */
+  action: 'add' | 'modify' | 'cancel' | 'status'
   itemId?: string
+  fromStatus?: string
+  toStatus?: string
   quoteLineId?: string | null
   mrcDelta?: number
   mrcAmount?: number
@@ -1085,11 +1088,13 @@ function ChangeLogLineDetails({ row, currency }: { row: ChangeLogRow; currency: 
 
   type DerivedChange = {
     key: string
-    action: 'add' | 'modify' | 'cancel'
+    action: ChangeLineAction
     name: string
     beforeMrc: number | null
     afterMrc: number | null
     delta: number | null
+    fromStatus?: string
+    toStatus?: string
   }
 
   const derived: DerivedChange[] = []
@@ -1101,6 +1106,13 @@ function ChangeLogLineDetails({ row, currency }: { row: ChangeLogRow; currency: 
       const before = beforeItems.get(itemId)
       const after = afterItems.get(itemId)
       const item = after ?? before
+      if (lc.action === 'status') {
+        derived.push({
+          key: `${itemId}-${i}`, action: 'status', name: item?.name ?? itemFallback,
+          beforeMrc: null, afterMrc: null, delta: null, fromStatus: lc.fromStatus, toStatus: lc.toStatus,
+        })
+        continue
+      }
       const beforeMrc = before ? Number(before.mrcAmount ?? 0) : null
       const afterMrc = after ? Number(after.mrcAmount ?? 0) : null
       const explicitDelta = lc.mrcDelta != null ? Number(lc.mrcDelta) : null
@@ -1181,17 +1193,22 @@ function ChangeLogLineDetails({ row, currency }: { row: ChangeLogRow; currency: 
   )
 }
 
-const ACTION_GLYPH: Record<'add' | 'modify' | 'cancel', { sign: string; color: string }> = {
+type ChangeLineAction = LineChangeEntry['action']
+
+const ACTION_GLYPH: Record<ChangeLineAction, { sign: string; color: string }> = {
   add: { sign: '+', color: 'text-status-success-text' },
   modify: { sign: '~', color: 'text-status-info-text' },
   cancel: { sign: '−', color: 'text-destructive' },
+  status: { sign: '•', color: 'text-status-warning-text' },
 }
 
-function actionGlyphLabel(t: TranslateFn, action: 'add' | 'modify' | 'cancel'): string {
+function actionGlyphLabel(t: TranslateFn, action: ChangeLineAction): string {
   switch (action) {
     case 'add': return t('cpq.inventory.subscriptions.detail.changeLog.action.add', 'added')
     case 'modify': return t('cpq.inventory.subscriptions.detail.changeLog.action.modify', 'modified')
     case 'cancel': return t('cpq.inventory.subscriptions.detail.changeLog.action.cancel', 'removed')
+    case 'status': return t('cpq.inventory.subscriptions.detail.changeLog.action.status', 'status changed')
+    default: return String(action)
   }
 }
 
@@ -1200,16 +1217,19 @@ function ChangeLogLineRow({
   currency,
 }: {
   change: {
-    action: 'add' | 'modify' | 'cancel'
+    action: ChangeLineAction
     name: string
     beforeMrc: number | null
     afterMrc: number | null
     delta: number | null
+    fromStatus?: string
+    toStatus?: string
   }
   currency: string
 }) {
   const t = useT()
-  const glyph = ACTION_GLYPH[change.action]
+  // A change-log action this page does not know yet must not take the whole page down.
+  const glyph = ACTION_GLYPH[change.action] ?? ACTION_GLYPH.modify
   const showPriceChange =
     change.action === 'modify' &&
     change.beforeMrc != null &&
@@ -1229,6 +1249,11 @@ function ChangeLogLineRow({
         {glyph.sign}
       </span>
       <span className="font-medium text-foreground">{change.name}</span>
+      {change.action === 'status' && change.toStatus && (
+        <span className="text-muted-foreground" data-testid="cpq-change-log-status">
+          {change.fromStatus ? `${inventoryStatusLabel(t, change.fromStatus)} → ` : ''}{inventoryStatusLabel(t, change.toStatus)}
+        </span>
+      )}
       {showPriceChange && (
         <span className="font-mono text-muted-foreground">
           {t('cpq.inventory.subscriptions.detail.changeLog.priceChangePerMonth', '{before} → {after}/mo', {

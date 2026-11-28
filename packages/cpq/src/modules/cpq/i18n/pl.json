@@ -164,6 +164,7 @@
   "cpq.inventory.subscriptions.detail.changeLog.action.add": "dodano",
   "cpq.inventory.subscriptions.detail.changeLog.action.cancel": "usunięto",
   "cpq.inventory.subscriptions.detail.changeLog.action.modify": "zmieniono",
+  "cpq.inventory.subscriptions.detail.changeLog.action.status": "zmiana statusu",
   "cpq.inventory.subscriptions.detail.changeLog.deltaPerMonth": "({delta}/mies.)",
   "cpq.inventory.subscriptions.detail.changeLog.empty": "Brak zmian ARC.",
   "cpq.inventory.subscriptions.detail.changeLog.etf": "ETF: {amount} {currency}",

@@ -164,6 +164,7 @@
   "cpq.inventory.subscriptions.detail.changeLog.action.add": "added",
   "cpq.inventory.subscriptions.detail.changeLog.action.cancel": "removed",
   "cpq.inventory.subscriptions.detail.changeLog.action.modify": "modified",
+  "cpq.inventory.subscriptions.detail.changeLog.action.status": "status changed",
   "cpq.inventory.subscriptions.detail.changeLog.deltaPerMonth": "({delta}/mo)",
   "cpq.inventory.subscriptions.detail.changeLog.empty": "No ARC changes yet.",
   "cpq.inventory.subscriptions.detail.changeLog.etf": "ETF: {amount} {currency}",

@@ -168,6 +168,10 @@ test.describe('TC-CONN-001: CPQ phases, annual period and line status reach bill
     const subs = await call(request, token, 'GET', `/api/cpq/inventory/subscriptions?customerId=${customerId}`)
     const subId = ((subs.body.items as Json[])[0] as Json).id as string
     expect(subId).toBeTruthy()
+    // Order activation leaves the subscription pending until the operator activates it (XD-215),
+    // and status actions need an active subscription: activate it as seedActiveSubscription does.
+    const live = await call(request, token, 'POST', '/api/cpq/inventory/subscriptions/status', { id: subId, targetStatus: 'active' })
+    expect(live.status, JSON.stringify(live.body)).toBeLessThan(300)
     const items = flatten(((await call(request, token, 'GET', `/api/cpq/inventory/subscriptions?id=${subId}`)).body.items ?? []) as Item[])
     const internetItem = items.find((item) => item.offeringId === internet)!
     const mobileItem = items.find((item) => item.offeringId === mobile)!

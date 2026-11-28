@@ -164,6 +164,7 @@
   "cpq.inventory.subscriptions.detail.changeLog.action.add": "añadido",
   "cpq.inventory.subscriptions.detail.changeLog.action.cancel": "eliminado",
   "cpq.inventory.subscriptions.detail.changeLog.action.modify": "modificado",
+  "cpq.inventory.subscriptions.detail.changeLog.action.status": "cambio de estado",
   "cpq.inventory.subscriptions.detail.changeLog.deltaPerMonth": "({delta}/mes)",
   "cpq.inventory.subscriptions.detail.changeLog.empty": "Aún no hay cambios ARC.",
   "cpq.inventory.subscriptions.detail.changeLog.etf": "Penalización por baja anticipada: {amount} {currency}",

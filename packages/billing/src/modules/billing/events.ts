@@ -30,6 +30,10 @@ const events = [
   { id: 'billing.item.created', label: 'Billing Item Created', entity: 'item', category: 'crud' },
   { id: 'billing.item.updated', label: 'Billing Item Updated', entity: 'item', category: 'crud' },
   { id: 'billing.item.deleted', label: 'Billing Item Deleted', entity: 'item', category: 'crud' },
+  // Line status periods (L §4.3) — paused / suspended / grace, dated.
+  { id: 'billing.item_status_period.created', label: 'Billing Line Status Period Created', entity: 'item_status_period', category: 'crud' },
+  { id: 'billing.item_status_period.updated', label: 'Billing Line Status Period Updated', entity: 'item_status_period', category: 'crud' },
+  { id: 'billing.item_status_period.deleted', label: 'Billing Line Status Period Deleted', entity: 'item_status_period', category: 'crud' },
   {
     // One per usage upload, on the same high-throughput path as
     // `billing.usage.rated` — excluded from workflow triggers for the same

@@ -86,7 +86,9 @@ it('refuses writes when converted or disabled', async () => {
 })
 it('rejects invalid prices, missing reasons, overlaps and stale revisions', async () => {
   const { service, state } = setup()
-  await expect(service.create(quoteId, { ...input, value: 120 }, actor, scope)).rejects.toMatchObject({ status: 422, message: 'ABOVE_STANDARD' })
+  await expect(service.create(quoteId, { ...input, currencyCode: 'EUR' }, actor, scope)).rejects.toMatchObject({ status: 422, message: 'CURRENCY_MISMATCH' })
+  // Above standard is allowed (spec F-D1).
+  await expect(setup().service.create(quoteId, { ...input, value: 120 }, actor, scope)).resolves.toMatchObject({ adjustment: { value: 120 } })
   state.reason = false
   await expect(service.create(quoteId, input, actor, scope)).rejects.toMatchObject({ status: 422, message: 'REASON_NOT_FOUND' })
   const clean = setup()
@@ -97,7 +99,7 @@ it('rejects invalid prices, missing reasons, overlaps and stale revisions', asyn
 it('allows deleting an invalid adjustment while submitted', async () => {
   const { service, rows, quote } = setup()
   const created = await service.create(quoteId, input, actor, scope)
-  rows[0].value = '120'; quote.cpqStatus = 'in_approval'
+  rows[0].currencyCode = 'EUR'; quote.cpqStatus = 'in_approval'
   await service.remove(quoteId, created.adjustment.id, actor, scope)
   expect(rows[0].deletedAt).toBeInstanceOf(Date)
 })
@@ -139,8 +141,8 @@ it('previews a draft without persisting rows, revision, or any flush', async () 
 })
 it('returns invalid draft errors without saving and refuses a nonexistent replacement', async () => {
   const { service, em } = setup()
-  const preview = await service.preview(quoteId, { ...input, value: 120 }, undefined, scope)
-  expect(preview.errors).toEqual([expect.objectContaining({ code: 'ABOVE_STANDARD' })])
+  const preview = await service.preview(quoteId, { ...input, currencyCode: 'EUR' }, undefined, scope)
+  expect(preview.errors).toEqual([expect.objectContaining({ code: 'CURRENCY_MISMATCH' })])
   await expect(service.preview(quoteId, input, actor, scope)).rejects.toMatchObject({ status: 404 })
   expect(em.flush).not.toHaveBeenCalled()
 })
@@ -152,9 +154,9 @@ it('allows a new quote cloned from an ARC mirror to negotiate its engine price',
 })
 it('refuses an overlapping adjustment at write time, even when the stored one is currently invalid', async () => {
   const { service, rows, quote } = setup()
-  // 120 > standard 100 → ABOVE_STANDARD would reject it; store it directly as a pre-existing invalid row.
+  // EUR on a USD quote → CURRENCY_MISMATCH would reject it; store it directly as a pre-existing invalid row.
   rows.push({ id: '66666666-6666-4666-8666-666666666666', quoteConfigurationId: quoteId, quoteId, ...scope, level: 'charge', quoteLineId: lineId,
-    chargeCode: 'fee', chargeTypeFilter: null, adjustmentType: 'price_override', value: '120', currencyCode: 'USD', reasonCode: 'competitive_match',
+    chargeCode: 'fee', chargeTypeFilter: null, adjustmentType: 'price_override', value: '120', currencyCode: 'EUR', reasonCode: 'competitive_match',
     reasonNote: null, windowKind: 'relative', fromMonth: 1, toMonth: null, createdByUserId: actor, isActive: true, deletedAt: null,
     createdAt: new Date(), updatedAt: new Date() } as unknown as CpqQuotePriceAdjustment)
   await expect(service.create(quoteId, input, actor, scope)).rejects.toMatchObject({ status: 422, message: 'ADJUSTMENT_OVERLAP' })

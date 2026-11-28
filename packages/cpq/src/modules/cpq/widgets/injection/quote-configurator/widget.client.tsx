@@ -4,6 +4,7 @@ import type { InjectionWidgetComponentProps } from '@open-mercato/shared/modules
 import { useRouter } from 'next/navigation'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { useT, type TranslateFn } from '@open-mercato/shared/lib/i18n/context'
+import { ChargePeriodTotal } from '../../../components/ChargePeriodTotal'
 import {
   formatStatusLabel,
   quoteCpqStatusMap,
@@ -21,6 +22,7 @@ type ResolvedCharge = {
   totalPrice: number | null
   currencyCode: string
   note?: string | null
+  billingPeriod?: { unit: 'month' | 'year'; interval: number }
 }
 
 type QuoteLine = {
@@ -228,7 +230,7 @@ export default function QuoteConfiguratorWidget({ data }: InjectionWidgetCompone
                             <td className="py-1 uppercase">{chargeTypeLabel(t, c.chargeType)}</td>
                             <td className="py-1 text-right font-mono">{fmt(c.unitPrice, currency)}</td>
                             <td className="py-1 text-right font-mono">{c.quantity ?? '—'}</td>
-                            <td className="py-1 text-right font-mono">{c.totalPrice != null ? fmt(c.totalPrice, currency) : c.note ?? '—'}</td>
+                            <td className="py-1 text-right font-mono"><ChargePeriodTotal charge={c} currency={currency} format={fmt} /></td>
                           </tr>
                         ))}
                       </tbody>

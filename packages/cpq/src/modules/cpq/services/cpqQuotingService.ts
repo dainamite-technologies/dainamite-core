@@ -1,4 +1,5 @@
 import { findOneWithDecryption } from '@open-mercato/shared/lib/encryption/find'
+import { sumMonthlyRecurring } from '../lib/chargeBillingPeriod'
 import { dateColumnToIso, toDateColumn } from '../lib/dateColumns'
 import { evaluateLineCompleteness, type LineCompletenessInput } from '../lib/lineCompleteness'
 import { selectDefaultComponents } from '../lib/bundleDefaults'
@@ -13,6 +14,7 @@ import { withChargeWaterfall } from './priceAdjustments/chargeWaterfall'
 import { withQuotePricingWrite } from './priceAdjustments/quotePricingWrite'
 import { emitQuoteWriteEvents, type QuoteWriteEvents } from './priceAdjustments/quotePricingEvents'
 import { computeWaterfallSummary } from './priceAdjustments/pricingSnapshot'
+import { storedRuleCodes, withoutSchedule } from '../lib/priceSchedule'
 import type { EntityManager } from '@mikro-orm/postgresql'
 import { SalesQuote, SalesQuoteLine } from '@open-mercato/core/modules/sales/data/entities'
 import { CustomerEntity } from '@open-mercato/core/modules/customers/data/entities'
@@ -345,7 +347,7 @@ export class DefaultCpqQuotingService {
 
     // Per-instance unit price (NRC + MRC for one instance)
     const perInstanceNrc = charges.filter((c) => c.chargeType === 'nrc').reduce((s, c) => s + (c.totalPrice ?? 0), 0)
-    const perInstanceMrc = charges.filter((c) => c.chargeType === 'mrc').reduce((s, c) => s + (c.totalPrice ?? 0), 0)
+    const perInstanceMrc = sumMonthlyRecurring(charges)
     const unitPriceNet = perInstanceNrc + perInstanceMrc
     const totalNetAmount = unitPriceNet * quantity
 
@@ -651,7 +653,7 @@ export class DefaultCpqQuotingService {
 
     // Update SalesQuoteLine totals
     const perInstanceNrc = charges.filter((c) => c.chargeType === 'nrc').reduce((s, c) => s + (c.totalPrice ?? 0), 0)
-    const perInstanceMrc = charges.filter((c) => c.chargeType === 'mrc').reduce((s, c) => s + (c.totalPrice ?? 0), 0)
+    const perInstanceMrc = sumMonthlyRecurring(charges)
     const unitPriceNet = perInstanceNrc + perInstanceMrc
 
     em.assign(quoteLine, {
@@ -1183,8 +1185,12 @@ export class DefaultCpqQuotingService {
           productId: lineConfig.productId ?? undefined,
           configuration: mergedConfig,
           currencyCode: cpqConfig.currencyCode,
+          // D10: rules this line was already priced with survive the end of their campaign.
+          retainRuleCodes: storedRuleCodes(lineConfig.charges),
           ...scope,
         })
+        // D8: an existing (mirrored) line continues at the regular price; phases are for new / added lines.
+        if (isArcMirrorLine(lineConfig.configuration, cpqConfig.quoteType)) charges = charges.map(withoutSchedule)
       } else {
         charges = (lineConfig.charges ?? []) as unknown as ResolvedCharge[]
       }
@@ -1260,7 +1266,8 @@ export class DefaultCpqQuotingService {
     }
     const adjustments = draftAdjustments ?? await loadQuoteAdjustments(em, cpqConfig.id, scope)
     const adjusted = resolveManualAdjustments(computedLines.map(({ lineConfig, charges }) => ({
-      lineId: lineConfig.quoteLineId, parentLineId: lineConfig.parentLineId ?? null,
+      lineId: lineConfig.quoteLineId, parentLineId: lineConfig.parentLineId ?? null, quantity: lineConfig.quantity,
+      termMonths: lineConfig.termMonths ?? null,
       enginePriced: !!(lineConfig.offeringId || lineConfig.productId),
       mirrored: isArcMirrorLine(lineConfig.configuration, cpqConfig.quoteType), charges,
     })), adjustments, cpqConfig.currencyCode)
@@ -1302,7 +1309,7 @@ export class DefaultCpqQuotingService {
             })
             if (salesLine) {
               const perInstanceNrc = charges.filter((charge) => charge.chargeType === 'nrc').reduce((sum, charge) => sum + (charge.totalPrice ?? 0), 0)
-              const perInstanceMrc = charges.filter((charge) => charge.chargeType === 'mrc').reduce((sum, charge) => sum + (charge.totalPrice ?? 0), 0)
+              const perInstanceMrc = sumMonthlyRecurring(charges)
               const unitPriceNet = perInstanceNrc + perInstanceMrc
               em.assign(salesLine, {
                 quantity: String(lineConfig.quantity),
@@ -1712,7 +1719,7 @@ function computeLineTotals(
   usageEstimateInputs?: Array<{ chargeCode: string; estimatedQuantity: number }>,
 ) {
   const nrcPerInstance = charges.filter((c) => c.chargeType === 'nrc').reduce((s, c) => s + (c.totalPrice ?? 0), 0)
-  const mrcPerInstance = charges.filter((c) => c.chargeType === 'mrc').reduce((s, c) => s + (c.totalPrice ?? 0), 0)
+  const mrcPerInstance = sumMonthlyRecurring(charges)
 
   const nrcTotal = nrcPerInstance * quantity
   const mrcTotal = mrcPerInstance * quantity

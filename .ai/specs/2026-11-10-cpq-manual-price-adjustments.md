@@ -4,6 +4,8 @@ Extends: specs/implementation/xd-188-price-rules.md
 Extends: specs/implementation/xd-201-quoting.md
 Extends: specs/implementation/xd-187-calculate-price-api.md
 
+> **Amended by [`2026-11-26-cpq-manual-pricing-flexibility.md`](2026-11-26-cpq-manual-pricing-flexibility.md) (2026-11-26):** a manual price may be above the standard price (F-D1). Line level also gets *Set price* and *Amount off*. The "never above standard" rule, `422 ABOVE_STANDARD` and "line level = % only" below are lifted when that spec ships.
+
 App Spec: `.ai/specs/2026-11-10-app-spec-cpq-quote-price-adjustments.md` (source of truth — §1.3 glossary, §1.4 domain model, §7 Phase 1). Brief: `.ai/specs/briefs/2026-11-10-cpq-price-adjustments-manual-adjustments.md`. Depends on: `.ai/specs/2026-11-10-cpq-quote-pricing-integrity.md` (recalculate hardening, frozen Amend lines, guard API verified). Stories: US-1.1, 1.2, 1.5–1.9, 2.1, 4.1–4.3, 0.1, 0.2.
 
 ## 📝 TLDR

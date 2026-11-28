@@ -1,6 +1,6 @@
 import {
-  adjustmentAccess, adjustmentErrorCode, collectAdjustmentErrors, allowedAdjustmentTypes, buildAdjustmentDraft, canDeleteInvalidAdjustment, discountDepth, formatDepth, parseStoredCharge, toAdjustmentPatch,
-  lineAdjustmentBlock, lineWaterfallTotals, waterfallRows,
+  adjustmentAccess, adjustmentErrorCode, collectAdjustmentErrors, allowedAdjustmentTypes, canDeleteInvalidAdjustment, discountDepth, formatDepth, parseStoredCharge,
+  lineAdjustmentBlock, lineWaterfallTotals, waterfallRows, overrideSetsChargeTotal, isAboveStandard, lineTypeTotals,
 } from '../priceAdjustmentView'
 import { TERMINAL_STATUSES } from '../../services/types'
 
@@ -54,14 +54,41 @@ describe('depth', () => {
 
 describe('allowedAdjustmentTypes', () => {
   it.each([
-    ['line', undefined, ['discount_percent']],
+    ['line', undefined, ['price_override', 'discount_percent', 'discount_absolute']],
     ['charge', { chargeType: 'mrc', pricingMethod: 'flat' }, ['price_override', 'discount_percent', 'discount_absolute']],
     ['charge', { chargeType: 'nrc', pricingMethod: 'per_unit' }, ['price_override', 'discount_percent', 'discount_absolute']],
-    ['charge', { chargeType: 'mrc', pricingMethod: 'tiered' }, ['discount_percent', 'discount_absolute']],
-    ['charge', { chargeType: 'mrc', pricingMethod: 'volume' }, ['discount_percent', 'discount_absolute']],
+    ['charge', { chargeType: 'mrc', pricingMethod: 'tiered' }, ['price_override', 'discount_percent', 'discount_absolute']],
+    ['charge', { chargeType: 'mrc', pricingMethod: 'volume' }, ['price_override', 'discount_percent', 'discount_absolute']],
     ['charge', { chargeType: 'usage', pricingMethod: 'flat' }, []],
   ] as const)('%s %j → %j', (level, charge, expected) => {
     expect(allowedAdjustmentTypes(level, charge)).toEqual(expected)
+  })
+})
+
+describe('manual pricing flexibility helpers (spec F)', () => {
+  it('sets the charge total on volume and tiered charges only', () => {
+    expect(overrideSetsChargeTotal({ pricingMethod: 'tiered' })).toBe(true)
+    expect(overrideSetsChargeTotal({ pricingMethod: 'volume' })).toBe(true)
+    expect(overrideSetsChargeTotal({ pricingMethod: 'flat' })).toBe(false)
+    expect(overrideSetsChargeTotal(undefined)).toBe(false)
+  })
+  it('flags an offer above standard and shows the uplift as a negative discount', () => {
+    expect(isAboveStandard(100, 120)).toBe(true)
+    expect(isAboveStandard(100, 100)).toBe(false)
+    expect(isAboveStandard(100, 80)).toBe(false)
+    expect(isAboveStandard(null, 80)).toBe(false)
+    expect(discountDepth(100, 120)).toBeCloseTo(-0.2)
+    expect(formatDepth(discountDepth(100, 120))).toBe('+20%')
+  })
+  it('totals one charge type of a line over the line quantity', () => {
+    const line = { quantity: 2, charges: [
+      { chargeType: 'mrc' as const, unitPrice: 80, totalPrice: 80, standardTotalPrice: 100 },
+      { chargeType: 'nrc' as const, unitPrice: 10, totalPrice: 10 },
+      { chargeType: 'usage' as const, unitPrice: 1, totalPrice: null },
+    ] }
+    expect(lineTypeTotals(line, 'mrc')).toEqual({ standard: 200, offer: 160 })
+    expect(lineTypeTotals(line, 'nrc')).toEqual({ standard: 20, offer: 20 })
+    expect(lineTypeTotals(line)).toEqual({ standard: 220, offer: 180 })
   })
 })
 
@@ -90,37 +117,6 @@ describe('eligibility and access', () => {
     expect(canDeleteInvalidAdjustment({ ...base, cpqStatus: 'in_approval' })).toBe(true)
     for (const status of TERMINAL_STATUSES) expect(canDeleteInvalidAdjustment({ ...base, cpqStatus: status })).toBe(false)
     expect(canDeleteInvalidAdjustment({ ...base, convertedOrderId: 'x' })).toBe(false)
-  })
-})
-
-describe('request bodies', () => {
-  const form = { adjustmentType: 'price_override' as const, value: '80', reasonCode: 'competitive_match', reasonNote: '', chargeTypeFilter: '' as const }
-  it('builds a charge override with currency and revision', () => {
-    expect(buildAdjustmentDraft(form, { level: 'charge', quoteLineId: 'l1', chargeCode: 'fee' }, 'USD', 3)).toEqual({
-      level: 'charge', quoteLineId: 'l1', chargeCode: 'fee', adjustmentType: 'price_override', value: 80, currencyCode: 'USD', reasonCode: 'competitive_match', expectedRevision: 3,
-    })
-  })
-  it('builds a line percentage without currency, with filter and note; accepts a decimal comma', () => {
-    expect(buildAdjustmentDraft({ ...form, adjustmentType: 'discount_percent', value: '12,5', chargeTypeFilter: 'mrc', reasonCode: 'other', reasonNote: ' match ' }, { level: 'line', quoteLineId: 'l1' }, 'USD')).toEqual({
-      level: 'line', quoteLineId: 'l1', chargeTypeFilter: 'mrc', adjustmentType: 'discount_percent', value: 12.5, reasonCode: 'other', reasonNote: 'match',
-    })
-  })
-  it('returns null for empty or non-numeric values', () => {
-    expect(buildAdjustmentDraft({ ...form, value: ' ' }, { level: 'line', quoteLineId: 'l1' }, 'USD')).toBeNull()
-    expect(buildAdjustmentDraft({ ...form, value: 'abc' }, { level: 'line', quoteLineId: 'l1' }, 'USD')).toBeNull()
-  })
-  it('drops immutable target fields from a patch and clears removed notes', () => {
-    const draft = buildAdjustmentDraft(form, { level: 'charge', quoteLineId: 'l1', chargeCode: 'fee' }, 'USD', 2)!
-    expect(toAdjustmentPatch(draft)).toEqual({ adjustmentType: 'price_override', value: 80, currencyCode: 'USD', reasonCode: 'competitive_match', reasonNote: null, expectedRevision: 2 })
-  })
-  it.each([
-    [409, { error: 'STALE_REVISION' }, 'STALE_REVISION'],
-    [400, { error: 'Validation error', details: [{ message: 'Invalid' }, { message: 'INVALID_PERCENT' }] }, 'INVALID_PERCENT'],
-    [422, { error: 'ABOVE_STANDARD' }, 'ABOVE_STANDARD'],
-    [403, { error: 'Manual price adjustments are disabled' }, 'FORBIDDEN'],
-    [500, null, 'UNKNOWN'],
-  ])('maps %s %j → %s', (status, body, code) => {
-    expect(adjustmentErrorCode(status, body)).toBe(code)
   })
 })
 

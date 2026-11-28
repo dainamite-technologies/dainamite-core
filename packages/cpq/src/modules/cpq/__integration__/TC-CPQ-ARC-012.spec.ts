@@ -60,7 +60,7 @@ test.describe('TC-CPQ-ARC-012 — Amend: remove an existing item', () => {
       await expect(removedRow).not.toHaveAttribute('data-removed', 'true')
 
       // 2. Trash → confirmation dialog explains the item is cancelled. Cancel keeps the line.
-      await removedRow.getByTitle('Remove').click()
+      await removedRow.getByRole('button', { name: 'Remove', exact: true }).click()
       const dialog = page.getByRole('alertdialog')
       await expect(dialog).toContainText(`Remove ${removedName} from the subscription?`)
       await expect(dialog).toContainText('cancelled on the subscription')
@@ -69,7 +69,7 @@ test.describe('TC-CPQ-ARC-012 — Amend: remove an existing item', () => {
       await expect(removedRow).not.toHaveAttribute('data-removed', 'true')
 
       // 3. Confirm → the line stays as a `remove` line with a Restore action.
-      await removedRow.getByTitle('Remove').click()
+      await removedRow.getByRole('button', { name: 'Remove', exact: true }).click()
       await page.getByRole('alertdialog').getByRole('button', { name: 'Remove item' }).click()
       await expect(removedRow).toHaveAttribute('data-removed', 'true')
       await expect(removedRow.getByText(/^remove$/)).toBeVisible()
@@ -86,7 +86,7 @@ test.describe('TC-CPQ-ARC-012 — Amend: remove an existing item', () => {
       await expect(page.getByTestId('cpq-arc-new-mrc')).toContainText('$350.00')
 
       // 6. Remove again for the activation leg.
-      await removedRow.getByTitle('Remove').click()
+      await removedRow.getByRole('button', { name: 'Remove', exact: true }).click()
       await page.getByRole('alertdialog').getByRole('button', { name: 'Remove item' }).click()
       await expect(removedRow).toHaveAttribute('data-removed', 'true')
 

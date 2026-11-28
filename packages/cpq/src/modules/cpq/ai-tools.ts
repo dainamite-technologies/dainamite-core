@@ -20,6 +20,7 @@ import { pricingAiTools } from './ai-tools/pricing-pack'
 import { quotesAiTools } from './ai-tools/quotes-pack'
 import { inventoryAiTools } from './ai-tools/inventory-pack'
 import { ordersAiTools } from './ai-tools/orders-pack'
+import { priceAdjustmentsAiTools } from './ai-tools/price-adjustments-pack'
 import type { CpqAiToolDefinition } from './ai-tools/_shared'
 
 export const aiTools: CpqAiToolDefinition[] = [
@@ -29,6 +30,7 @@ export const aiTools: CpqAiToolDefinition[] = [
   ...quotesAiTools,
   ...inventoryAiTools,
   ...ordersAiTools,
+  ...priceAdjustmentsAiTools,
 ]
 
 export default aiTools

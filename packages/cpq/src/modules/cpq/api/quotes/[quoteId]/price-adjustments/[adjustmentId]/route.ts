@@ -36,6 +36,8 @@ export async function DELETE(req: Request, { params }: Params) {
 }
 const errors = [cpqErrorDoc(400, 'Invalid input'), cpqErrorDoc(403, 'Missing permission or disabled feature'), cpqErrorDoc(404, 'Quote or adjustment not found'), cpqErrorDoc(409, 'Adjustment locked, stale revision or changed undo target'), cpqErrorDoc(422, 'Invalid adjustment or guard rejection')]
 export const openApi: OpenApiRouteDoc = { tag: 'CPQ Quotes', pathParams, methods: {
-  PATCH: { summary: 'Update a negotiated quote price adjustment', requestBody: { schema: cpqPriceAdjustmentPatchSchema }, responses: [{ status: 200, description: 'Adjustment and updated quote' }], errors },
+  PATCH: { summary: 'Update a negotiated quote price adjustment',
+    description: 'Changes type, value, chargeTypeFilter or reason; the target stays. The merged adjustment is validated like a create (a line Set price / Amount off needs chargeTypeFilter).',
+    requestBody: { schema: cpqPriceAdjustmentPatchSchema }, responses: [{ status: 200, description: 'Adjustment and updated quote' }], errors },
   DELETE: { summary: 'Remove a negotiated quote price adjustment', query: deletionSchema, responses: [{ status: 200, description: 'Updated quote' }], errors },
 } }

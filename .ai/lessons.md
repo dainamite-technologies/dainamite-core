@@ -17,6 +17,9 @@ Entry format (newest first within a section):
 - **`DataTable` ignores a column's `cell` when its id / `accessorKey` ends in `_at`.** (2026-11-18, #129)
   It renders the value with `formatDisplayDateTime` in the app locale (`useLocale()`). Format every other date with `formatDisplayDate` / `formatDisplayDateTime` and the same locale (billing: `lib/displayDate.ts`), never `toLocaleString()`, or one screen mixes formats.
 
+- **A CRUD list's `$ilike` filter can miss a row created a moment ago: the query engine answers it from `search_tokens`.** (2026-11-28, PR #153 CI, TC-BILL-004)
+  On a `makeCrudRoute` list with `entityId`, once the tenant has any search tokens for that entity (the init reindex writes them for seeded rows), the query engine (`query_index/lib/engine.ts`) matches `like` / `ilike` through `search_tokens`, not the column (`OM_SEARCH_USE_ILIKE_FOR_NON_ENCRYPTED_FIELDS` defaults to false). The indexer writes a new row's tokens after the create commits, so `GET …?search=<name>` straight after the POST is a race: it passed one CI run and failed the next, retry included. In integration tests, wrap such reads in `expect.poll`. Run an absence check only after a positive read of the same row, or it passes vacuously.
+
 - **The MCP HTTP server runs tools without the approval gate.** (2026-11-16, #110)
   `ai_assistant` `lib/http-server.ts` calls a tool right after the feature check. Every write tool must refuse unless `ctx.approvedPendingActionId` is set; only the pending-action executor sets it.
 - **Agent mutation-policy overrides can only restrict.** (2026-11-16, #110)
@@ -45,6 +48,14 @@ Entry format (newest first within a section):
 
 ## CPQ
 
+- **Order activation leaves a new subscription `pending`; nothing moves it to `active` on its own.** (2026-11-27, PR #153 CI, TC-CONN-001)
+  The operator activates it (XD-215): `POST /api/cpq/inventory/subscriptions/status { targetStatus: 'active' }`. Status actions (pause, suspend, …) answer 409 "item status actions need an active subscription" until then. An integration test that sells → activates → pauses must make that move, as `seedActiveSubscription` does.
+- **A new `lineChanges` action needs a renderer on the subscription page, or the page crashed.** (2026-11-27, PR #153 CI, TC-CPQ-ARC-008/009)
+  D6 status actions write `{ action: 'status', fromStatus, toStatus }`; the change log indexed `ACTION_GLYPH[action].color` for add / modify / cancel only, so every subscription with a status action rendered "Something went wrong". It now has a `status` entry and a fallback glyph; add the label and glyph when you add another action.
+- **`replace_target` updates a changed step in place and makes the actor its author, so its undo must restore `createdByUserId` from the snapshot.** (2026-11-27, `services/priceAdjustments/targetPriceService.ts`)
+  `adjustmentService.values()` carries no author, and the per-row undo never needed one. Restoring only `values()` leaves the new author on the old price, and the next undo's snapshot check answers 409. Match overlap errors by membership in tests: `loadQuoteAdjustments` orders by uuid, so "the first overlapping row" is random.
+- **Adding a column to `cpq_quote_price_adjustments` means adding it to the undo `snapshotSchema` too.** (2026-11-27, price phases)
+  `commands/price-adjustments.ts` parses undo snapshots with a non-strict `z.object`, which silently drops unknown keys: undo then restores the row without the new field (a phase came back permanent), and `snapshotKey` no longer matches `adjustmentSnapshot(row)`, so undo answers 409. Keep `adjustmentInput`, `values()`, `loadQuoteAdjustments`, `cloneQuoteAdjustments` and the snapshot schema in step.
 - **Never `$ilike` a uuid column: Postgres rejects it (`operator does not exist: uuid ~~* unknown`) and the route answers 500.** (2026-11-23, `api/quotes/route.ts`)
   `GET /api/cpq/quotes?search=` did this on `quoteId` / `customerId`; the backoffice list filters client-side, so only API and AI callers saw it. Match uuids exactly; match human text (quote number) on the entity that owns it, with `buildIlikeTerm` from `@open-mercato/shared/lib/db/buildIlikeTerm`.
 - **A unique constraint on a soft-deleted table blocks re-creating a removed row.** (2026-11-17, #122)
@@ -67,8 +78,12 @@ Entry format (newest first within a section):
 
 ## Billing
 
+- **Status-period credits work out which days `prorate=false` never charged from the item's current grid and `prorate` flag.** (2026-11-27, billing review F1)
+  Changing `prorate`, or the account cycle day, after an item was billed can make a later pause credit or re-charge the wrong days. Billing refuses a billing-period change once the item is invoiced (`billing.item.billing_period_change_billed`), but not a `prorate` change. Do the same for `prorate`, or keep a per-day charged ledger, before relying on late pauses on such items.
 - **Prepaid statements bucket the ledger by `created_at`, but period-close charges are stamped at run time.** (2026-11-18, #138)
   A catch-up or future-dated run creates charges long after (or before) their bill date. Attribute charges by `metadata.bill_date`, never by `created_at`, when computing a balance at a bill date (`sumLedgerBefore` in `prepaidPeriodClose.ts`).
+- **`billing.items.bulk_create` validates the whole batch with one Zod parse: one bad entry fails every item of the event.** (2026-11-27, connector C3)
+  Billing caps phases at 12 per item and the monthly line period at 24 (annual at 5); CPQ allows more (merged multi-charge schedules, up to 120-month periods). The connector refuses such a charge before the bulk write (`mapCharge` in `lib/chargeMapper.ts`) instead of trimming it, so the subscription's other items still bill.
 
 ## Packaging and release
 
@@ -83,6 +98,11 @@ Entry format (newest first within a section):
 
 ## Local environment and tooling
 
+- **A CI page crash ("Something went wrong") leaves no console error in the Playwright artifacts; get it from a local trace.** (2026-11-27, PR #153)
+  The artifacts hold only a screenshot and `error-context.md`, and the server log is clean for client render errors. Run the spec locally with `BASE_URL=http://localhost:<port> npx playwright test --config .ai/qa/tests/playwright.config.ts <spec> --retries=0 --trace on`, unzip `trace.zip` and read the `pageError` events in `*.trace` (JSON lines): they carry the stack. `yarn dev` picks another port when 3000 is taken (another project's server), so check `lsof -iTCP -sTCP:LISTEN`.
+- **The root `yarn typecheck` can be OOM-killed on an ~11 GB box, taking the agent session down with it.** (2026-11-27, billing/CPQ flex run)
+  Typecheck one package instead: `cd packages/<pkg> && NODE_OPTIONS=--max-old-space-size=2500 ../../node_modules/.bin/tsc --noEmit -p . --ignoreDeprecations 6.0`. In a fresh worktree run `yarn build:packages` first, or the connector tests fail on missing `@dainamite/billing` modules.
+  **But a package typecheck skips tests:** `packages/*/tsconfig.json` excludes `__tests__/` and `__integration__/`, and CI runs the root `yarn typecheck`, which includes them. A green `yarn workspace @dainamite/<pkg> typecheck` still let PR #153 fail CI on test fixtures (2026-11-27). Before pushing, run the root `yarn typecheck` on a machine with room for it (fine on 32 GB with CI's `NODE_OPTIONS=--max-old-space-size=4096`).
 - **The backend header's organization switcher is a `combobox` that can render after the page content.** (2026-11-23, TC-CPQ-ARC-005)
   A page-wide `[role="combobox"]` `.first()` re-resolves on each use and can hit the switcher instead of the page's picker. Scope it: `page.getByRole('main').locator(...)`. Also clean up in `afterEach`: a `finally` in a timed-out test never completes, so fixtures pile up.
 - **A Playwright click on a server-rendered DataTable row can land before hydration and do nothing.** (2026-11-23, TC-CPQ-006)

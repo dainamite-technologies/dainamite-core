@@ -2,13 +2,13 @@
 
 import * as React from 'react'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
-import { Percent, Pencil, Trash2 } from 'lucide-react'
-import { IconButton } from '@open-mercato/ui/primitives/icon-button'
+import { Pencil, Percent, Trash2 } from 'lucide-react'
 import { SimpleTooltip } from '@open-mercato/ui/primitives/tooltip'
 import type { AdjustmentAccess, LineEligibilityInput, WaterfallChargeInput } from '../../../../../lib/priceAdjustmentView'
 import { lineAdjustmentBlock } from '../../../../../lib/priceAdjustmentView'
+import { IconAction } from '../../../../../components/IconAction'
 
-export type AdjustableLine = LineEligibilityInput & { lineId: string; offeringName: string }
+export type AdjustableLine = LineEligibilityInput & { lineId: string; offeringName: string; termMonths?: number | null }
 export type AdjustableCharge = WaterfallChargeInput & { chargeCode: string; chargeName: string }
 
 export type PriceAdjustmentUi = {
@@ -19,9 +19,11 @@ export type PriceAdjustmentUi = {
   /** Ids of adjustments currently flagged invalid (they keep Delete while locked). */
   invalidIds: Set<string>
   canDeleteInvalid: boolean
-  openCharge: (line: AdjustableLine, charge: AdjustableCharge) => void
-  openLine: (line: AdjustableLine) => void
+  /** Price dialog on the line's default target, or on one charge. */
+  openPrice: (line: AdjustableLine, charge?: AdjustableCharge) => void
+  /** Price dialog on the target of a stored row. */
   edit: (adjustmentId: string) => void
+  /** Removes the row's whole target (PUT); on a locked quote only the invalid rows (per-row DELETE). */
   remove: (adjustmentId: string) => void
 }
 
@@ -71,41 +73,27 @@ function BlockedReason({ reason, children }: { reason: string | null; children: 
   )
 }
 
-/** Per-charge "Adjust price" action. Hidden entirely when the feature is off or not permitted. */
-export function AdjustChargeAction({ line, charge }: { line: AdjustableLine; charge: AdjustableCharge }) {
+/**
+ * The one "Adjust price" action (§4.1): an icon-only `Percent` button on the
+ * line and on each non-usage charge, opening the Price dialog on the line's
+ * default target or on that charge. Hidden when the feature is off or not
+ * permitted; otherwise disabled with the reason (locked, ARC mirror, free-form).
+ */
+export function AdjustPriceAction({ line, charge }: { line: AdjustableLine; charge?: AdjustableCharge }) {
   const t = useT()
   const ui = usePriceAdjustmentUi()
   const reason = useAdjustmentBlockReason(line)
-  if (!ui || charge.chargeType === 'usage') return null
+  if (!ui || charge?.chargeType === 'usage') return null
   if (ui.access.reason === 'disabled' || ui.access.reason === 'no_permission' || ui.access.reason === 'loading') return null
   const label = t('cpq.priceAdjustments.adjustPrice', 'Adjust price')
   return (
     <BlockedReason reason={reason}>
-      <IconButton
-        variant="ghost" size="xs" aria-label={label} title={reason ? undefined : label} disabled={!!reason}
-        onClick={() => ui.openCharge(line, charge)} data-testid="cpq-adjust-charge"
+      <IconAction
+        label={label} size={charge ? 'xs' : 'sm'} disabled={!!reason}
+        onClick={() => ui.openPrice(line, charge)} data-testid={charge ? 'cpq-adjust-price-charge' : 'cpq-adjust-price-line'}
       >
-        <Pencil className="h-3.5 w-3.5" />
-      </IconButton>
-    </BlockedReason>
-  )
-}
-
-/** Line-level "Discount line" action. */
-export function DiscountLineAction({ line }: { line: AdjustableLine }) {
-  const t = useT()
-  const ui = usePriceAdjustmentUi()
-  const reason = useAdjustmentBlockReason(line)
-  if (!ui || ui.access.reason === 'disabled' || ui.access.reason === 'no_permission' || ui.access.reason === 'loading') return null
-  const label = t('cpq.priceAdjustments.discountLine', 'Discount line')
-  return (
-    <BlockedReason reason={reason}>
-      <IconButton
-        variant="ghost" size="sm" aria-label={label} title={reason ? undefined : label} disabled={!!reason}
-        onClick={() => ui.openLine(line)} data-testid="cpq-discount-line"
-      >
-        <Percent className="h-4 w-4" />
-      </IconButton>
+        <Percent className={charge ? 'h-3.5 w-3.5' : 'h-4 w-4'} />
+      </IconAction>
     </BlockedReason>
   )
 }
@@ -121,13 +109,14 @@ export function ManualAdjustmentActions({ adjustmentId }: { adjustmentId: string
   return (
     <span className="inline-flex items-center gap-0.5">
       {editable && (
-        <IconButton variant="ghost" size="xs" aria-label={t('cpq.priceAdjustments.edit', 'Edit adjustment')} onClick={() => ui.edit(adjustmentId)}>
+        <IconAction label={t('cpq.priceAdjustments.edit', 'Edit adjustment')} size="xs" onClick={() => ui.edit(adjustmentId)}>
           <Pencil className="h-3.5 w-3.5" />
-        </IconButton>
+        </IconAction>
       )}
-      <IconButton variant="ghost" size="xs" aria-label={t('cpq.priceAdjustments.delete', 'Delete adjustment')} onClick={() => ui.remove(adjustmentId)}>
+      <IconAction label={t('cpq.priceAdjustments.delete', 'Delete adjustment')} size="xs" onClick={() => ui.remove(adjustmentId)}
+        className="hover:bg-destructive/10 hover:text-destructive">
         <Trash2 className="h-3.5 w-3.5" />
-      </IconButton>
+      </IconAction>
     </span>
   )
 }

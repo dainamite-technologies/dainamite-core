@@ -5,6 +5,7 @@ import { makeCrudRoute } from '@open-mercato/shared/lib/crud/factory'
 import { withScopedPayload } from '@open-mercato/shared/lib/api/scoped'
 import { resolveTranslations } from '@open-mercato/shared/lib/i18n/server'
 import { BillingAccount, BillingItem } from '../../data/entities'
+import { loadPhasesByItem, loadStatusPeriodsByItem, serializePhases, serializeStatusPeriod } from '../../lib/itemSchedules'
 import { billingEntityIds } from '../../data/entityIds'
 import {
   billingItemCreateSchema,
@@ -27,6 +28,34 @@ const routeMetadata = {
 }
 
 export const metadata = routeMetadata
+
+const billingItemPhaseReadSchema = z.object({
+  id: z.string().uuid(),
+  sequence: z.number().int(),
+  name: z.string().nullable(),
+  durationUnit: z.enum(['day', 'week', 'month', 'year']).nullable(),
+  durationCount: z.number().int().nullable(),
+  /** Stored "until" date when the phase was defined by a date (else null). */
+  untilDate: z.string().nullable(),
+  startDate: z.string().nullable(),
+  endDate: z.string().nullable(),
+  priceType: z.enum(['free', 'fixed', 'percent_off', 'amount_off']),
+  value: z.number().nullable(),
+})
+
+const billingItemStatusPeriodReadSchema = z.object({
+  id: z.string().uuid(),
+  billingItemId: z.string().uuid(),
+  status: z.enum(['paused', 'suspended', 'grace']),
+  fromDate: z.string(),
+  toDate: z.string().nullable(),
+  chargeBehavior: z.enum(['charge', 'no_charge']),
+  reason: z.string().nullable(),
+  appliedFrom: z.string().nullable(),
+  appliedTo: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+})
 
 // The list endpoint projects raw column names — snake_case.
 const billingItemListItemSchema = z.object({
@@ -53,6 +82,19 @@ const billingItemListItemSchema = z.object({
   prorate: z.boolean(),
   tax_rate: z.union([z.string(), z.number()]),
   price_basis: z.enum(['net', 'gross']),
+  /** L §4.2: own billing period; null = follow the account cycle. */
+  billing_period_unit: z.enum(['daily', 'weekly', 'monthly', 'annually']).nullable().optional(),
+  billing_period_interval: z.number().int().nullable().optional(),
+  /** P §4.1: the price-phases switch. */
+  phases_enabled: z.boolean().optional(),
+  /** Contract C1 camelCase aliases of the three columns above. */
+  billingPeriodUnit: z.enum(['daily', 'weekly', 'monthly', 'annually']).nullable().optional(),
+  billingPeriodInterval: z.number().int().nullable().optional(),
+  phasesEnabled: z.boolean().optional(),
+  /** Price phases in order, with computed `startDate` / `endDate` (inclusive). */
+  phases: z.array(billingItemPhaseReadSchema).optional(),
+  /** Dated line status periods (paused / suspended / grace), oldest first. */
+  statusPeriods: z.array(billingItemStatusPeriodReadSchema).optional(),
   is_active: z.boolean(),
   organization_id: z.string().uuid(),
   tenant_id: z.string().uuid(),
@@ -101,6 +143,9 @@ const crud = makeCrudRoute({
       'prorate',
       'tax_rate',
       'price_basis',
+      'billing_period_unit',
+      'billing_period_interval',
+      'phases_enabled',
       'is_active',
       'organization_id',
       'tenant_id',
@@ -233,6 +278,25 @@ const crud = makeCrudRoute({
         row.bill_account_currency = account?.currencyCode ?? null
         row.bill_account_mode = account?.billingMode ?? null
       }
+      // Phases and status periods: two bounded queries (≤ pageSize item ids).
+      const first = items[0]
+      const scope = {
+        tenantId: String(first.tenant_id ?? ''),
+        organizationId: String(first.organization_id ?? ''),
+      }
+      const itemIds = items.map((row) => String(row.id))
+      const phases = await loadPhasesByItem(em, scope, itemIds)
+      const statuses = await loadStatusPeriodsByItem(em, scope, itemIds)
+      for (const row of items) {
+        const id = String(row.id)
+        const interval = row.billing_period_interval
+        row.billing_period_interval = interval === null || interval === undefined ? null : Number(interval)
+        row.billingPeriodUnit = row.billing_period_unit ?? null
+        row.billingPeriodInterval = row.billing_period_interval
+        row.phasesEnabled = Boolean(row.phases_enabled)
+        row.phases = serializePhases({ billStartDate: String(row.bill_start_date) as never }, phases.get(id) ?? [])
+        row.statusPeriods = (statuses.get(id) ?? []).map(serializeStatusPeriod)
+      }
     },
   },
 })
@@ -257,7 +321,16 @@ export const openApi = createBillingCrudOpenApi({
       'Recurring items accept `chargeTiming` (`in_advance` default | `in_arrears`) and ' +
       '`prorate` (default true); other types reject non-default values (400). ' +
       'An end date more than one day before the start date returns 422 `billing.item.end_before_start` ' +
-      '(`end = start − 1` means cancelled before start; the item never bills).',
+      '(`end = start − 1` means cancelled before start; the item never bills). ' +
+      'Recurring items only: `billingPeriodUnit` (`daily` | `weekly` | `monthly` | `annually`) + `billingPeriodInterval` (≥ 1) ' +
+      'give the line its own billing period, counted from `billStartDate` with no stub; the price is per that period. In advance ' +
+      'it is invoiced on the account bill date on or before each period start, in arrears on the first bill date after the ' +
+      'period ends; short periods on a longer account cycle are grouped into one line (`quantity` periods). Omitted / null = ' +
+      'follow the account cycle. `phases[]` (≤ 12, with `phasesEnabled`, which defaults to true when phases are sent) override ' +
+      'the price back to back from `billStartDate`: each has `durationUnit` (`day` | `week` | `month` | `year`) + `durationCount` ' +
+      'OR an inclusive `endDate`, and `priceType` `free` | `fixed` (price per billing period) | `percent_off` (0–100) | ' +
+      '`amount_off`. Lines split on phase boundaries (prorated by days; `prorate=false` → the phase on the period\'s first day). ' +
+      'After the last phase the regular `rateJson.unit_price` applies.',
   },
   update: {
     schema: billingItemUpdateSchema,
@@ -270,7 +343,13 @@ export const openApi = createBillingCrudOpenApi({
       'the billed days: the request must then carry a customer-facing reason — `creditReason` (operator text, ≤ 500 chars) ' +
       'or `creditReasonCode` + `creditReasonParams` (generated, rendered in the invoice language) — else 422 ' +
       '`billing.item.credit_reason_required`. A reason sent when nothing is credited is ignored. ' +
-      '422 `billing.item.end_before_start` when the end date is more than one day before the start.',
+      '422 `billing.item.end_before_start` when the end date is more than one day before the start. ' +
+      '`billingPeriodUnit` / `billingPeriodInterval` (recurring only; null clears = follow the account) may change only ' +
+      'until the item is first invoiced — then 422 `billing.item.billing_period_change_billed` (end the item and add a new ' +
+      'one; re-sending the unchanged period is fine). `phases` REPLACES the whole schedule; `phasesEnabled` toggles it. A ' +
+      'phase change that would re-price a day already invoiced (on or before `billed_to_date`) is refused with 422 ' +
+      '`billing.item.phase_edit_billed` — correct invoiced periods with a credit memo. 422 `billing.item.phases_recurring_only` / ' +
+      '`billing.item.billing_period_recurring_only` on other item types. Ending an item drops its later phases.',
   },
   del: {
     schema: z.object({ id: z.string().uuid() }),

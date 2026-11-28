@@ -1,5 +1,8 @@
 import { z } from 'zod'
 import { normalizeChargePricing } from './charge-pricing'
+import { CHARGE_BILLING_PERIOD_MAX_INTERVAL, CHARGE_BILLING_PERIOD_UNITS } from '../lib/chargeBillingPeriod'
+import { MAX_PHASE_MONTH } from '../lib/priceSchedule'
+import { INVENTORY_SUBSCRIPTION_STATUSES, STATUS_CHARGE_BEHAVIORS, SUBSCRIPTION_STATUS_ACTIONS } from '../services/types'
 
 /**
  * Update schemas must not inject defaults. `.partial()` keeps `.default()`
@@ -215,9 +218,33 @@ const cpqProductChargeBase = z.object({
   currencyCode: z.string().nullish(),
   quantityAttributeCode: z.string().nullish(),
   applicabilityCondition: z.record(z.string(), z.unknown()).nullish(),
+  // D5 (spec 2026-11-26 line period): the price is per interval × unit.
+  // No `.default()`: the column defaults to every 1 month.
+  billingPeriodUnit: z.enum(CHARGE_BILLING_PERIOD_UNITS).optional()
+    .describe('Unit of the billing period the price is for: month or year (default month).'),
+  billingPeriodInterval: z.number().int().min(1).max(CHARGE_BILLING_PERIOD_MAX_INTERVAL).optional()
+    .describe('Number of units per billing period, e.g. 1 with unit year = every 1 year (default 1).'),
   sortOrder: z.number().int().optional().default(0),
   isActive: z.boolean().optional().default(true),
 })
+
+// V-CHG-2: only a recurring (MRC) charge can have a period other than every
+// 1 month; a one-time or usage price has no period.
+const refineChargeBillingPeriod = (
+  ctx: z.RefinementCtx,
+  charge: { chargeType?: string; billingPeriodUnit?: string; billingPeriodInterval?: number },
+) => {
+  if (charge.chargeType === undefined || charge.chargeType === 'mrc') return
+  const unit = charge.billingPeriodUnit ?? 'month'
+  const interval = charge.billingPeriodInterval ?? 1
+  if (unit !== 'month' || interval !== 1) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['billingPeriodUnit'],
+      message: 'V-CHG-2: only a recurring (MRC) charge can have a billing period other than every 1 month',
+    })
+  }
+}
 
 // V-CHG-1: the (chargeModel × pricingMethod) combination must match the fields.
 //  fixed  → fixedPrice + currencyCode required; table fields forbidden.
@@ -274,6 +301,7 @@ const refineChargePricingShape = (
 
 export const cpqProductChargeCreateSchema = cpqProductChargeBase.superRefine((data, ctx) => {
   refineChargePricingShape(ctx, data)
+  refineChargeBillingPeriod(ctx, data)
 })
 
 export const cpqProductChargeUpdateSchema = partialWithoutDefaults(cpqProductChargeBase).extend({
@@ -285,11 +313,14 @@ export const cpqProductChargeUpdateSchema = partialWithoutDefaults(cpqProductCha
   if (data.pricingMethod !== undefined || data.chargeModel !== undefined) {
     refineChargePricingShape(ctx, data)
   }
+  refineChargeBillingPeriod(ctx, data)
 })
 
 // ─── Price Rule ──────────────────────────────────────────────────
 
-export const cpqPriceRuleCreateSchema = z.object({
+const isoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD')
+
+export const cpqPriceRuleBaseSchema = z.object({
   code: z.string().min(1),
   name: z.string().min(1),
   description: z.string().nullish(),
@@ -301,11 +332,37 @@ export const cpqPriceRuleCreateSchema = z.object({
   applicabilityCondition: z.record(z.string(), z.unknown()).nullish(),
   sortOrder: z.number().int().optional().default(0),
   isActive: z.boolean().optional().default(true),
+  // Price phases spec (D9): months of the subscription the rule prices (1-based,
+  // inclusive). Omitted / 1 → null = every month (today). Recurring charges only.
+  fromMonth: z.number().int().min(1).max(MAX_PHASE_MONTH).optional()
+    .describe('First month of the subscription the rule prices (1 = from the start). With toMonth, the rule is a phase, e.g. 1–1 = "first month free". Recurring (MRC) charges only.'),
+  toMonth: z.number().int().min(1).max(MAX_PHASE_MONTH).nullish()
+    .describe('Last month the rule prices (inclusive); null = to the end of the subscription.'),
+  // D10 campaign dates: the quotes priced inside them get the rule; a priced quote keeps it.
+  validFrom: isoDateSchema.nullish().describe('Campaign start (YYYY-MM-DD, inclusive): quotes priced from this date get the rule.'),
+  validUntil: isoDateSchema.nullish().describe('Campaign end (YYYY-MM-DD, inclusive). A quote priced before keeps the promotion after it.'),
 })
 
-export const cpqPriceRuleUpdateSchema = partialWithoutDefaults(cpqPriceRuleCreateSchema).extend({
+type PriceRulePhaseFields = { fromMonth?: number; toMonth?: number | null; validFrom?: string | null; validUntil?: string | null; chargeTypeFilter?: string | null }
+/** V-PR-PHASE: a month range is ordered and prices recurring charges; campaign dates are ordered. */
+export function refinePriceRulePhase(ctx: z.RefinementCtx, data: PriceRulePhaseFields) {
+  const from = data.fromMonth ?? 1
+  if (data.toMonth != null && data.toMonth < from) {
+    ctx.addIssue({ code: 'custom', path: ['toMonth'], message: 'PHASE_RANGE_INVALID' })
+  }
+  if ((from > 1 || data.toMonth != null) && data.chargeTypeFilter && data.chargeTypeFilter !== 'mrc') {
+    ctx.addIssue({ code: 'custom', path: ['chargeTypeFilter'], message: 'PHASE_RECURRING_ONLY' })
+  }
+  if (data.validFrom && data.validUntil && data.validUntil < data.validFrom) {
+    ctx.addIssue({ code: 'custom', path: ['validUntil'], message: 'CAMPAIGN_RANGE_INVALID' })
+  }
+}
+
+export const cpqPriceRuleCreateSchema = cpqPriceRuleBaseSchema.superRefine((data, ctx) => refinePriceRulePhase(ctx, data))
+
+export const cpqPriceRuleUpdateSchema = partialWithoutDefaults(cpqPriceRuleBaseSchema).extend({
   id: z.string().uuid(),
-})
+}).superRefine((data, ctx) => refinePriceRulePhase(ctx, data))
 
 // ─── Pricing Table ───────────────────────────────────────────────
 
@@ -640,9 +697,37 @@ export const cpqInventorySubscriptionUpdateSchema = z.object({
   metadata: z.record(z.string(), z.unknown()).nullish(),
 })
 
+const isoDateField = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD')
+
+/** D6 options shared by the status action route and the legacy status route. */
+const statusActionOptions = {
+  fromDate: isoDateField.nullish()
+    .describe('Effective date, YYYY-MM-DD (default today). Resume: the first day the service runs again. Terminate: the end date billing uses.'),
+  toDate: isoDateField.nullish()
+    .describe('Pause / suspend / grace only: inclusive last day, YYYY-MM-DD. Omit or null for an open-ended stop (end it later with resume).'),
+  chargeBehavior: z.enum(STATUS_CHARGE_BEHAVIORS).nullish()
+    .describe('Pause / suspend / grace only: whether billing keeps charging. Default: paused → no_charge, suspended / grace → charge.'),
+  reason: z.string().trim().max(500).nullish().describe('Why (shown on the change log and the billing credit line).'),
+}
+
 export const cpqInventoryStatusTransitionSchema = z.object({
   id: z.string().uuid(),
-  targetStatus: z.string().min(1),
+  targetStatus: z.enum(INVENTORY_SUBSCRIPTION_STATUSES),
+  ...statusActionOptions,
+})
+
+/** D6 — pause / suspend / grace / resume / terminate a subscription or one item. */
+export const cpqSubscriptionStatusActionSchema = z.object({
+  subscriptionId: z.string().uuid().describe('Subscription id (UUID).'),
+  subscriptionItemId: z.string().uuid().nullish()
+    .describe('One subscription item; omit for the whole subscription (every item the action applies to).'),
+  action: z.enum(SUBSCRIPTION_STATUS_ACTIONS).describe('pause | suspend | grace | resume | terminate'),
+  ...statusActionOptions,
+}).strict().superRefine((data, ctx) => {
+  const isStop = data.action === 'pause' || data.action === 'suspend' || data.action === 'grace'
+  if (!isStop && data.toDate) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['toDate'], message: 'toDate is only allowed for pause, suspend and grace' })
+  if (!isStop && data.chargeBehavior) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['chargeBehavior'], message: 'chargeBehavior is only allowed for pause, suspend and grace' })
+  if (data.fromDate && data.toDate && data.toDate < data.fromDate) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['toDate'], message: 'toDate must not be before fromDate' })
 })
 
 // ─── Inventory Subscription Item ─────────────────────────────────

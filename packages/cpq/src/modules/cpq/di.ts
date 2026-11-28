@@ -10,6 +10,7 @@ import { DefaultCpqWizardService } from './services/cpqWizardService'
 import { DefaultCpqInventoryService } from './services/cpqInventoryService'
 import { DefaultCpqOrderService } from './services/cpqOrderService'
 import { CpqAdjustmentService } from './services/priceAdjustments/adjustmentService'
+import { CpqTargetPriceService } from './services/priceAdjustments/targetPriceService'
 import { DefaultCpqBundleService } from './services/cpqBundleService'
 
 /**
@@ -25,6 +26,12 @@ export function register(container: AppContainer) {
       em: container.resolve('em'),
       quotingService: container.resolve('cpqQuotingService'),
       featureTogglesService: container.resolve('featureTogglesService'),
+    })).scoped(),
+    // One target's price in one write (UX feedback spec D4); reuses the adjustment guards.
+    cpqTargetPriceService: asFunction(() => new CpqTargetPriceService({
+      em: container.resolve('em'),
+      quotingService: container.resolve('cpqQuotingService'),
+      adjustmentService: container.resolve('cpqAdjustmentService'),
     })).scoped(),
     cpqPricingService: asFunction(({ em }: { em: EntityManager }) => {
       return new DefaultCpqPricingService(em)

@@ -207,6 +207,8 @@ Verify all status badge colors in the UI:
 | `active` | Green badge | Subscription, items, assets |
 | `pending` | Blue badge | Physical NIC asset |
 | `suspended` | Yellow badge | (see snippet below) |
+| `paused` | Gray badge | (run API Test 22) |
+| `grace` | Yellow badge | (run API Test 24) |
 | `terminated` | Red badge | (run API Test 20 to see this) |
 | `delivered` | Teal/green badge | (run asset transition to delivered only) |
 | `cancelled` | Gray badge | (create and cancel an asset to see this) |
@@ -755,6 +757,101 @@ console.log('HTTP status:', cantReactivate.status, '— expected: 409')
 
 ---
 
+## Part G1 — Charge billing period on subscription items (spec 2026-11-26 line period, D5)
+
+- A recurring (MRC) charge on an offering has a **billing period**: every N months or years
+  (`billingPeriodUnit` `month | year`, `billingPeriodInterval` ≥ 1; default every 1 month). Its fixed or
+  pricing-table price is the price **per that period**, shown as e.g. "480,000 / year" in the catalog.
+  Only an MRC charge can have a period other than every 1 month (V-CHG-2).
+- The quote line, order line and subscription item charges inherit it (`charges[].billingPeriod`, absent =
+  every 1 month); there is no override on the quote.
+- **MRC totals and deal value use the monthly equivalent** (480,000 / year → 40,000), so an item's
+  `mrcAmount` and the subscription's MRC stay comparable. Charge tables show both: "480,000.00 / year" and
+  "≈ 40,000.00 / month".
+- The subscription's `billingCycle` stays the account-level default (`monthly`).
+- The activation and ARC (`addedItems` / `changedItems`) payloads carry **one recurring charge per distinct
+  period** per item, priced per that period: `{ type: 'recurring', unitPrice: 480000, billingPeriod: { unit: 'year', interval: 1 } }`.
+  A monthly charge carries no `billingPeriod` (today's payload).
+
+---
+
+## Part G2 — Status actions: pause, suspend, grace, resume, terminate (spec 2026-11-26 line status, D6)
+
+A subscription **or one of its items** can be paused, suspended, put in a grace period, resumed or
+terminated from the inventory. Each action is dated and billing follows it through an event.
+
+**State machine (subscriptions and items share it):**
+
+| From | Allowed to |
+|---|---|
+| `pending` | `active`, `terminated` |
+| `active` | `paused`, `suspended`, `grace`, `terminated`, `expired`, `superseded` |
+| `paused` | `active` (resume), `terminated`, `superseded` |
+| `suspended` | `active` (resume), `terminated`, `superseded` |
+| `grace` | `active` (resume), `suspended`, `terminated`, `superseded` |
+| `terminated`, `expired`, `superseded` | — (terminal) |
+
+**Statuses and their billing effect (defaults):**
+
+| Status | Meaning | Billing default |
+|---|---|---|
+| `paused` | The customer asked to stop for a while (from / to; open end allowed) | No recurring charge for the paused days (`chargeBehavior: no_charge`) |
+| `suspended` | The provider cut the service, usually for non-payment | Keeps charging (`charge`); option "no charge" per suspension |
+| `grace` | Payment overdue, service still on | Billed normally; a flag before a suspension |
+| `terminated` | Ended on a date | Billing ends the items like an ARC cancel |
+
+**Rules:**
+- Endpoint: `POST /api/cpq/inventory/subscriptions/actions` with `{ subscriptionId, subscriptionItemId?, action, fromDate?, toDate?, chargeBehavior?, reason? }`.
+  `action` = `pause | suspend | grace | resume | terminate`. `fromDate` defaults to today (resume: the first day running again; terminate: the end date).
+  `toDate` (inclusive) and `chargeBehavior` are only accepted for pause / suspend / grace.
+- **Whole subscription** (no `subscriptionItemId`): every item the action applies to moves (a suspend leaves an item already paused on its own as it is; resume runs every stopped item again; terminate ends every live item). The subscription takes the status too.
+- **One item**: only that item moves; the subscription must be `active` or `grace`. Terminating the last live item terminates the subscription.
+- Every action writes a `status` entry in the change log and stores the stop period on the rows (`statusFromDate`, `statusToDate`, `statusChargeBehavior`, `statusReason`).
+- **Events** (emitted after the write commits, consumed by the CPQ → billing connector):
+  - pause / suspend / grace / resume → `cpq.subscription_item.status_changed` `{ subscriptionId, subscriptionItemIds[], status: paused | suspended | grace | active, fromDate, toDate, chargeBehavior?, reason }`;
+  - terminate → `cpq.subscription.terminated` `{ subscriptionId, subscriptionItemIds[], effectiveDate, reason, wholeSubscription }`. `wholeSubscription` is decided when the event is sent: `true` for a whole-subscription terminate, `false` for one item (also when it ends the last item). The connector ends every billing item of the subscription only when it is `true`.
+- The legacy `POST /api/cpq/inventory/subscriptions/status` still works; moves to paused / suspended / grace, back to active from those, and to terminated now run as the matching action (and so emit the event too — before, a suspend or terminate from the inventory never reached billing).
+- UI: the subscription detail header shows the actions allowed for the current status; expanding an item shows "This item:" actions. Each opens a dialog (dates, billing, reason); Cmd/Ctrl+Enter submits, Escape cancels.
+
+### API Test 22 — Pause one item with dates
+
+```js
+const sub = await fetch(`/api/cpq/inventory/subscriptions?id=${SUB_ID}`).then(r => r.json())
+const ITEM_ID = sub.items[0].id
+const paused = await fetch('/api/cpq/inventory/subscriptions/actions', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ subscriptionId: SUB_ID, subscriptionItemId: ITEM_ID, action: 'pause', fromDate: '2027-01-10', toDate: '2027-01-19', reason: 'Customer travelling' }),
+}).then(r => r.json())
+console.log(paused.subscriptionItemIds, paused.event)
+```
+
+**Expected**: the item is `paused` (subscription stays `active`); `event.id` = `cpq.subscription_item.status_changed`,
+`event.payload` has `status: 'paused'`, `fromDate: '2027-01-10'`, `toDate: '2027-01-19'`, `chargeBehavior: 'no_charge'`.
+
+### API Test 23 — Resume the item
+
+Same call with `action: 'resume', fromDate: '2027-01-20'` (no `toDate`).
+**Expected**: the item is `active`; event `status: 'active'`, `fromDate: '2027-01-20'`.
+
+### API Test 24 — Grace, then suspend the whole subscription with "no charge"
+
+`{ subscriptionId: SUB_ID, action: 'grace' }`, then `{ subscriptionId: SUB_ID, action: 'suspend', chargeBehavior: 'no_charge', reason: 'Non-payment' }`.
+**Expected**: subscription and items `grace`, then `suspended`; the suspend event lists every item and `chargeBehavior: 'no_charge'`.
+
+### API Test 25 — Invalid action (409) and invalid dates (400)
+
+- `action: 'pause'` on a suspended subscription → **409**.
+- `action: 'pause', fromDate: '2027-01-10', toDate: '2027-01-01'` → **400**.
+- `action: 'resume', chargeBehavior: 'charge'` → **400**.
+
+### API Test 26 — Terminate from the inventory
+
+`{ subscriptionId: SUB_ID, action: 'terminate', fromDate: '2027-02-01', reason: 'Moved away' }`.
+**Expected**: subscription and live items `terminated`, linked assets returned / cancelled; `event.id` = `cpq.subscription.terminated` with `effectiveDate: '2027-02-01'`.
+
+---
+
 ## Part H — Soft Delete
 
 > **Note:** Run these tests last — they remove data from the system.
@@ -823,4 +920,5 @@ console.log('Remaining subscriptions:', subList.total, '— expected: 0')
 | **API 18** | API | Combined customer inventory view with summary |
 | **API 19** | API | Parent items for quoting wizard |
 | **API 20-21** | API | Cascading termination + terminal state enforcement |
+| **API 22-26** | API | D6 status actions (item / subscription, dates, charge behaviour, events, 409 / 400) |
 | **API D-1–D-2** | API | Soft delete (assets and subscriptions) |

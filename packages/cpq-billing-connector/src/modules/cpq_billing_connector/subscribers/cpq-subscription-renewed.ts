@@ -1,6 +1,7 @@
 import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import { BillingApiClient, type Scope } from '../lib/billingApiClient'
 import {
+  billingItemCreateFields,
   mapSubscriptionItemsToBillingItems,
   type CpqSubscriptionItem,
 } from '../lib/chargeMapper'
@@ -75,15 +76,10 @@ export function buildRenewedItemPayloads(
     items: payload.addedItems ?? [],
     billStartDate: payload.newTermStart,
     billStartDateFor: (item) => arcItemBillStart(item, setup, payload.newTermStart),
+    event: 'cpq.subscription.renewed',
   }).map((item) => ({
     billAccountId,
-    type: item.type,
-    billStartDate: item.billStartDate,
-    description: item.description,
-    rateJson: item.rateJson,
-    subscriptionId: item.subscriptionId,
-    subscriptionItemId: item.subscriptionItemId,
-    sourceRef: item.sourceRef,
+    ...billingItemCreateFields(item),
   }))
 }
 
@@ -178,7 +174,7 @@ export default async function handle(payload: RenewedPayload): Promise<void> {
       sourceOrderId: payload.sourceOrderId,
       code: 'subscription_amended',
       reference,
-    })
+    }, 'cpq.subscription.renewed')
   }
 
   const added = payload.addedItems ?? []

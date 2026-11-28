@@ -46,6 +46,30 @@ async function createAccount(
   return body.id as string
 }
 
+type AccountRow = { name: string; customer_kind: string }
+
+/**
+ * Rows of `GET /api/billing/accounts?customerKind=&search=`. Once the tenant has
+ * search tokens for billing accounts, the query engine answers the `search`
+ * (ilike) filter from `search_tokens`, which the indexer fills after the create
+ * commits. A read right after the create can miss the new row, so callers poll.
+ */
+async function searchAccounts(
+  request: APIRequestContext,
+  token: string,
+  customerKind: 'person' | 'company',
+  name: string,
+): Promise<AccountRow[]> {
+  const res = await apiRequest(
+    request,
+    'GET',
+    `/api/billing/accounts?customerKind=${customerKind}&search=${encodeURIComponent(name)}`,
+    { token },
+  )
+  expect(res.ok(), `GET /api/billing/accounts status was ${res.status()}`).toBeTruthy()
+  return ((await res.json()) as { items: AccountRow[] }).items
+}
+
 async function createItem(request: APIRequestContext, token: string, billAccountId: string): Promise<string> {
   const res = await apiRequest(request, 'POST', '/api/billing/items', {
     token,
@@ -97,36 +121,26 @@ test.describe('TC-BILL-004: B2C accounts + navigation', () => {
       await createAccount(request, token, accountPayload({ customerId: personId, customerKind: 'person', name })),
     )
 
-    const persons = await apiRequest(
-      request,
-      'GET',
-      `/api/billing/accounts?customerKind=person&search=${encodeURIComponent(name)}`,
-      { token },
-    )
-    const personRows = ((await persons.json()) as { items: Array<{ name: string; customer_kind: string }> }).items
-    expect(personRows.find((row) => row.name === name)?.customer_kind).toBe('person')
+    // Poll until the search finds the row (see searchAccounts).
+    await expect
+      .poll(async () => (await searchAccounts(request, token, 'person', name)).find((row) => row.name === name)?.customer_kind, {
+        timeout: 15_000,
+      })
+      .toBe('person')
 
-    const companies = await apiRequest(
-      request,
-      'GET',
-      `/api/billing/accounts?customerKind=company&search=${encodeURIComponent(name)}`,
-      { token },
-    )
-    const companyRows = ((await companies.json()) as { items: Array<{ name: string }> }).items
+    // Asserted after the row is searchable, so an empty result means "filtered out", not "not indexed yet".
+    const companyRows = await searchAccounts(request, token, 'company', name)
     expect(companyRows.some((row) => row.name === name)).toBe(false)
   })
 
   test('defaults customer kind to company', async ({ request }) => {
     const name = `Company ${uniq()}`
     accountIds.push(await createAccount(request, token, accountPayload({ name })))
-    const res = await apiRequest(
-      request,
-      'GET',
-      `/api/billing/accounts?customerKind=company&search=${encodeURIComponent(name)}`,
-      { token },
-    )
-    const rows = ((await res.json()) as { items: Array<{ name: string; customer_kind: string }> }).items
-    expect(rows.find((row) => row.name === name)?.customer_kind).toBe('company')
+    await expect
+      .poll(async () => (await searchAccounts(request, token, 'company', name)).find((row) => row.name === name)?.customer_kind, {
+        timeout: 15_000,
+      })
+      .toBe('company')
   })
 
   test('rejects an invoice language the template does not support', async ({ request }) => {

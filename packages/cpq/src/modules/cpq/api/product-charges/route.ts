@@ -54,6 +54,8 @@ export async function GET(req: Request) {
         fixedPrice: item.fixedPrice,
         currencyCode: item.currencyCode,
         quantityAttributeCode: item.quantityAttributeCode,
+        billingPeriodUnit: item.billingPeriodUnit,
+        billingPeriodInterval: item.billingPeriodInterval,
         applicabilityCondition: item.applicabilityCondition,
         sortOrder: item.sortOrder,
         isActive: item.isActive,
@@ -111,6 +113,8 @@ export async function POST(req: Request) {
         pricingTableId: entity.pricingTableId,
         priceColumnKey: entity.priceColumnKey,
         quantityAttributeCode: entity.quantityAttributeCode,
+        billingPeriodUnit: entity.billingPeriodUnit,
+        billingPeriodInterval: entity.billingPeriodInterval,
         applicabilityCondition: entity.applicabilityCondition,
         sortOrder: entity.sortOrder,
         isActive: entity.isActive,
@@ -155,7 +159,13 @@ export async function PUT(req: Request) {
             return { ...updates, chargeModel: model, pricingMethod: source, ...sideCleared }
           })()
         : updates
-    ctx.em.assign(entity, normalizedUpdates)
+    // V-CHG-2: a charge that stops being recurring falls back to every 1 month
+    // (a one-time or usage price has no billing period).
+    const nextChargeType = updates.chargeType ?? entity.chargeType
+    const periodUpdates = nextChargeType !== 'mrc'
+      ? { billingPeriodUnit: 'month', billingPeriodInterval: 1 }
+      : {}
+    ctx.em.assign(entity, { ...normalizedUpdates, ...periodUpdates })
     await ctx.em.flush()
 
     return NextResponse.json({
@@ -169,6 +179,8 @@ export async function PUT(req: Request) {
       pricingTableId: entity.pricingTableId,
       priceColumnKey: entity.priceColumnKey,
       quantityAttributeCode: entity.quantityAttributeCode,
+      billingPeriodUnit: entity.billingPeriodUnit,
+      billingPeriodInterval: entity.billingPeriodInterval,
       applicabilityCondition: entity.applicabilityCondition,
       sortOrder: entity.sortOrder,
       isActive: entity.isActive,
@@ -213,7 +225,7 @@ export const openApi: OpenApiRouteDoc = {
   methods: {
     GET: {
       summary: 'List the charges (price components) of a product or offering',
-      description: 'Ordered by sortOrder. A charge is priced either from a fixed price or from a pricing table column.',
+      description: 'Ordered by sortOrder. A charge is priced either from a fixed price or from a pricing table column. `billingPeriodUnit` (month | year) × `billingPeriodInterval` is the period an MRC price is for (default every 1 month); MRC totals use the monthly equivalent.',
       query: cpqPaginationQuery.extend({
         productId: z.string().uuid().optional(),
         offeringId: z.string().uuid().optional(),
@@ -224,7 +236,7 @@ export const openApi: OpenApiRouteDoc = {
     POST: {
       summary: 'Create a product charge',
       description:
-        "`productId` is derived from `offeringId` (via the offering's specification) when omitted. A legacy combined `pricingMethod` is normalized into `chargeModel` plus `pricingMethod` (fixed or table).",
+        "`productId` is derived from `offeringId` (via the offering's specification) when omitted. A legacy combined `pricingMethod` is normalized into `chargeModel` plus `pricingMethod` (fixed or table). `billingPeriodUnit` / `billingPeriodInterval` (default every 1 month) say which period the price is for; only an MRC charge can have a period other than every 1 month (V-CHG-2).",
       requestBody: { schema: cpqProductChargeCreateSchema },
       responses: [{ status: 201, description: 'Created charge' }],
       errors: [

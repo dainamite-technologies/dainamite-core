@@ -5,6 +5,11 @@ import {
   INVENTORY_SUBSCRIPTION_STATUSES,
   INVENTORY_SUBSCRIPTION_TRANSITIONS,
   INVENTORY_SUBSCRIPTION_ITEM_STATUSES,
+  INVENTORY_SUBSCRIPTION_ITEM_TRANSITIONS,
+  SUBSCRIPTION_STATUS_ACTIONS,
+  SUBSCRIPTION_STATUS_ACTION_FROM,
+  SUBSCRIPTION_STATUS_ACTION_TARGET,
+  defaultChargeBehavior,
   INVENTORY_ASSET_STATUSES,
   INVENTORY_ASSET_TRANSITIONS,
   CPQ_ORDER_STATUSES,
@@ -155,6 +160,8 @@ describe('Inventory subscription lifecycle', () => {
       'terminated',
       'expired',
       'superseded',
+      'paused',
+      'grace',
     ])
   })
 
@@ -181,6 +188,41 @@ describe('Inventory subscription lifecycle', () => {
       expect(INVENTORY_SUBSCRIPTION_TRANSITIONS.active).toContain('expired')
     })
 
+    it('D6: active → paused / grace, and both resume to active', () => {
+      expect(INVENTORY_SUBSCRIPTION_TRANSITIONS.active).toEqual(expect.arrayContaining(['paused', 'grace']))
+      expect(INVENTORY_SUBSCRIPTION_TRANSITIONS.paused).toContain('active')
+      expect(INVENTORY_SUBSCRIPTION_TRANSITIONS.grace).toContain('active')
+    })
+
+    it('D6: grace escalates to a suspension', () => {
+      expect(INVENTORY_SUBSCRIPTION_TRANSITIONS.grace).toContain('suspended')
+    })
+
+    it('D6: paused and grace can be terminated', () => {
+      expect(INVENTORY_SUBSCRIPTION_TRANSITIONS.paused).toContain('terminated')
+      expect(INVENTORY_SUBSCRIPTION_TRANSITIONS.grace).toContain('terminated')
+    })
+
+    it('D6: every status action starts only from statuses the state machine allows', () => {
+      for (const action of SUBSCRIPTION_STATUS_ACTIONS) {
+        const target = SUBSCRIPTION_STATUS_ACTION_TARGET[action]
+        for (const from of SUBSCRIPTION_STATUS_ACTION_FROM[action]) {
+          expect({ action, from, allowed: INVENTORY_SUBSCRIPTION_TRANSITIONS[from].includes(target) }).toEqual({ action, from, allowed: true })
+        }
+      }
+    })
+
+    it('D6: default charge behaviour — paused no charge, suspended / grace charge', () => {
+      expect(defaultChargeBehavior('paused')).toBe('no_charge')
+      expect(defaultChargeBehavior('suspended')).toBe('charge')
+      expect(defaultChargeBehavior('grace')).toBe('charge')
+    })
+
+    it('items share the subscription state machine', () => {
+      expect(INVENTORY_SUBSCRIPTION_ITEM_TRANSITIONS).toBe(INVENTORY_SUBSCRIPTION_TRANSITIONS)
+      expect(INVENTORY_SUBSCRIPTION_ITEM_STATUSES).toEqual(expect.arrayContaining(['paused', 'grace']))
+    })
+
     it('any non-terminal status can be terminated', () => {
       expect(INVENTORY_SUBSCRIPTION_TRANSITIONS.pending).toContain('terminated')
       expect(INVENTORY_SUBSCRIPTION_TRANSITIONS.active).toContain('terminated')
@@ -191,6 +233,16 @@ describe('Inventory subscription lifecycle', () => {
   describe('illegal transitions', () => {
     it('pending → suspended is forbidden (must activate first)', () => {
       expect(INVENTORY_SUBSCRIPTION_TRANSITIONS.pending).not.toContain('suspended')
+    })
+
+    it('paused / grace cannot be reached from pending', () => {
+      expect(INVENTORY_SUBSCRIPTION_TRANSITIONS.pending).not.toContain('paused')
+      expect(INVENTORY_SUBSCRIPTION_TRANSITIONS.pending).not.toContain('grace')
+    })
+
+    it('a paused subscription cannot be suspended or put in grace without resuming', () => {
+      expect(INVENTORY_SUBSCRIPTION_TRANSITIONS.paused).not.toContain('suspended')
+      expect(INVENTORY_SUBSCRIPTION_TRANSITIONS.paused).not.toContain('grace')
     })
 
     it('terminated and expired are terminal', () => {
@@ -312,6 +364,7 @@ describe("ARC (XD-250) — quote types & enums", () => {
       "cancel",
       "merge-result",
       "merge-source",
+      "status",
     ])
   })
 

@@ -16,7 +16,7 @@ export async function cloneQuoteAdjustments(em: EntityManager, sourceId: string,
         // An orphaned invalid target remains invalid, without pointing back into the source quote.
         quoteLineId: lineIds.get(row.quoteLineId) ?? randomUUID(), level: row.level, chargeCode: row.chargeCode,
         chargeTypeFilter: row.chargeTypeFilter, adjustmentType: row.adjustmentType, value: row.value, currencyCode: row.currencyCode,
-        windowKind: row.windowKind, fromMonth: row.fromMonth, toMonth: row.toMonth,
+        windowKind: row.windowKind, fromMonth: row.fromMonth, toMonth: row.toMonth, phaseName: row.phaseName,
         reasonCode: row.reasonCode, reasonNote: row.reasonNote, createdByUserId: row.createdByUserId, isActive: row.isActive }))
     }
     if (rows.length < 500) return

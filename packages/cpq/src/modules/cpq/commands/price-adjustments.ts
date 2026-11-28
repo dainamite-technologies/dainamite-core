@@ -4,9 +4,10 @@ import { resolveTranslations } from '@open-mercato/shared/lib/i18n/server'
 import { extractUndoPayload } from '@open-mercato/shared/lib/commands/undo'
 import { registerCommand, type CommandHandler, type CommandRuntimeContext } from '@open-mercato/shared/lib/commands'
 import type { RbacService } from '@open-mercato/core/modules/auth/services/rbacService'
-import { cpqPriceAdjustmentInputSchema, cpqPriceAdjustmentPatchSchema } from '../data/price-adjustments'
+import { cpqPriceAdjustmentInputSchema, cpqPriceAdjustmentPatchSchema, cpqPriceTargetSchema, cpqTargetPriceInputSchema } from '../data/price-adjustments'
 import { QuotingError } from '../services/cpqQuotingService'
 import type { CpqAdjustmentService, AdjustmentWriteResult, AdjustmentSnapshot } from '../services/priceAdjustments/adjustmentService'
+import type { CpqTargetPriceService, TargetWriteResult } from '../services/priceAdjustments/targetPriceService'
 
 const id = z.string().uuid()
 const createSchema = z.object({ quoteId: id, adjustment: cpqPriceAdjustmentInputSchema }).strict()
@@ -21,8 +22,13 @@ const snapshotSchema = z.object({
   level: z.enum(['charge', 'line']), quoteLineId: id, chargeCode: z.string().nullish(),
   chargeTypeFilter: z.enum(['nrc', 'mrc']).nullish(), adjustmentType: z.enum(['discount_percent', 'discount_absolute', 'price_override']),
   value: z.number(), currencyCode: z.string().nullish(), reasonCode: z.string(), reasonNote: z.string().nullish(),
+  // Price phases: the month range and name must survive undo (a phase never comes back permanent).
+  windowKind: z.literal('relative').optional(), fromMonth: z.number().int().min(1).optional(), toMonth: z.number().int().min(1).nullish(),
+  phaseName: z.string().nullish(),
 })
 const undoSchema = z.object({ quoteId: id, before: snapshotSchema.nullable(), after: snapshotSchema })
+const replaceTargetSchema = z.object({ quoteId: id, body: cpqTargetPriceInputSchema }).strict()
+const targetUndoSchema = z.object({ quoteId: id, target: cpqPriceTargetSchema, before: z.array(snapshotSchema), after: z.array(snapshotSchema) })
 
 async function context(ctx: CommandRuntimeContext) {
   // RBAC is checked for the authenticated subject (user or API key); the
@@ -36,7 +42,8 @@ async function context(ctx: CommandRuntimeContext) {
   const scope = { tenantId, organizationId }
   const rbac = ctx.container.resolve<RbacService>('rbacService')
   if (!(await rbac.userHasAllFeatures(subject, ['cpq.quotes.manage', 'cpq.quotes.adjust_price'], scope))) throw new QuotingError(403, 'Price adjustment permission required')
-  return { actor, scope, service: ctx.container.resolve<CpqAdjustmentService>('cpqAdjustmentService') }
+  return { actor, scope, service: ctx.container.resolve<CpqAdjustmentService>('cpqAdjustmentService'),
+    targets: () => ctx.container.resolve<CpqTargetPriceService>('cpqTargetPriceService') }
 }
 
 async function buildLog(quoteId: string, result: AdjustmentWriteResult) {
@@ -85,6 +92,35 @@ export const deleteAdjustmentCommand: CommandHandler<z.infer<typeof deleteSchema
   buildLog: ({ input, result }) => buildLog(input.quoteId, result),
   undo,
 }
+/**
+ * One target's price in one save (UX feedback spec D4, §7): replaces every
+ * row of the target; undo restores them all, or answers 409 when a row it
+ * wrote changed since.
+ */
+export const replaceTargetCommand: CommandHandler<z.infer<typeof replaceTargetSchema>, TargetWriteResult> = {
+  id: 'cpq.quote_price_adjustment.replace_target', isUndoable: true,
+  async execute(input, ctx) {
+    const parsed = replaceTargetSchema.parse(input)
+    const { actor, scope, targets } = await context(ctx)
+    return targets().replaceTarget(parsed.quoteId, parsed.body, actor, scope)
+  },
+  async buildLog({ input, result }) {
+    const { translate } = await resolveTranslations()
+    const anchor = result.after[0] ?? result.before[0]
+    return { actionLabel: translate('cpq.priceAdjustments.audit.replaceTarget', 'Set quote price'), resourceKind: 'cpq.quote_price_adjustment',
+      resourceId: anchor?.id ?? input.quoteId, tenantId: anchor?.tenantId, organizationId: anchor?.organizationId,
+      snapshotBefore: result.before, snapshotAfter: result.after,
+      payload: { undo: { quoteId: input.quoteId, target: result.target, before: result.before, after: result.after } } }
+  },
+  async undo({ logEntry, ctx }) {
+    const envelope = targetUndoSchema.safeParse(extractUndoPayload<unknown>(logEntry))
+    if (!envelope.success) throw new QuotingError(422, 'Invalid adjustment undo data')
+    const { actor, scope, targets } = await context(ctx)
+    const { quoteId, target, before, after } = envelope.data
+    await targets().undoTarget(quoteId, target, before as AdjustmentSnapshot[], after as AdjustmentSnapshot[], actor, scope)
+  },
+}
 registerCommand(createAdjustmentCommand)
 registerCommand(updateAdjustmentCommand)
 registerCommand(deleteAdjustmentCommand)
+registerCommand(replaceTargetCommand)

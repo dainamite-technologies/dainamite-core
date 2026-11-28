@@ -5,6 +5,7 @@ import { Button } from '@open-mercato/ui/primitives/button'
 import { Tag } from '@open-mercato/ui/primitives/tag'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import { NumberInput } from '../../../../components/NumberInput'
+import { Input } from '@open-mercato/ui/primitives/input'
 import { buildRuleTypeLabels } from '../PriceRuleForm'
 
 type PriceRule = {
@@ -20,6 +21,10 @@ type PriceRule = {
   applicabilityCondition: Record<string, unknown> | null
   sortOrder: number
   isActive: boolean
+  fromMonth?: number
+  toMonth?: number | null
+  validFrom?: string | null
+  validUntil?: string | null
   createdAt: string
   updatedAt: string
 }
@@ -39,6 +44,10 @@ type FormData = {
   conditionValue: string
   sortOrder: string
   isActive: boolean
+  fromMonth: string
+  toMonth: string
+  validFrom: string
+  validUntil: string
 }
 
 function ruleToForm(rule: PriceRule): FormData {
@@ -56,6 +65,10 @@ function ruleToForm(rule: PriceRule): FormData {
     conditionValue: cond?.value ?? '',
     sortOrder: String(rule.sortOrder),
     isActive: rule.isActive,
+    fromMonth: rule.fromMonth && rule.fromMonth > 1 ? String(rule.fromMonth) : '',
+    toMonth: rule.toMonth != null ? String(rule.toMonth) : '',
+    validFrom: rule.validFrom ?? '',
+    validUntil: rule.validUntil ?? '',
   }
 }
 
@@ -136,6 +149,11 @@ export default function PriceRuleDetailPage(props: { params?: { id?: string } })
         sortOrder: Number(form.sortOrder),
         isActive: form.isActive,
         productOfferingId: form.productOfferingId || null,
+        // D9 / D10: always sent, so clearing a range or a date takes effect.
+        fromMonth: form.fromMonth.trim() ? Number(form.fromMonth) : 1,
+        toMonth: form.toMonth.trim() ? Number(form.toMonth) : null,
+        validFrom: form.validFrom || null,
+        validUntil: form.validUntil || null,
       }
       if (form.description) payload.description = form.description
       else payload.description = null
@@ -349,6 +367,26 @@ export default function PriceRuleDetailPage(props: { params?: { id?: string } })
                 {offerings.map((o) => <option key={o.id} value={o.id}>{o.name} ({o.code})</option>)}
               </select>
             </label>
+            <div className="col-span-2 space-y-1" data-testid="cpq-price-rule-phase">
+              <span className="text-sm font-medium">{t('cpq.priceRules.form.phase', 'Price phase (months)')}</span>
+              <span className="ml-2 text-xs text-muted-foreground">{t('cpq.priceRules.form.phaseHint', '(optional — e.g. 1 to 1 = first month free; empty = every month; recurring charges only)')}</span>
+              <div className="grid grid-cols-2 gap-2">
+                <NumberInput integer placeholder={t('cpq.priceRules.form.fromMonth', 'From month (1)')}
+                  value={form.fromMonth === '' ? null : Number(form.fromMonth)}
+                  onChange={(n) => setForm({ ...form, fromMonth: n == null ? '' : String(n) })} />
+                <NumberInput integer placeholder={t('cpq.priceRules.form.toMonth', 'To month (to the end)')}
+                  value={form.toMonth === '' ? null : Number(form.toMonth)}
+                  onChange={(n) => setForm({ ...form, toMonth: n == null ? '' : String(n) })} />
+              </div>
+            </div>
+            <div className="col-span-2 space-y-1" data-testid="cpq-price-rule-campaign">
+              <span className="text-sm font-medium">{t('cpq.priceRules.form.campaign', 'Campaign dates')}</span>
+              <span className="ml-2 text-xs text-muted-foreground">{t('cpq.priceRules.form.campaignHint', '(optional — quotes priced in these dates get the rule; a priced quote keeps it after the end)')}</span>
+              <div className="grid grid-cols-2 gap-2">
+                <Input type="date" aria-label={t('cpq.priceRules.form.validFrom', 'Valid from')} value={form.validFrom} onChange={(e) => setForm({ ...form, validFrom: e.target.value })} />
+                <Input type="date" aria-label={t('cpq.priceRules.form.validUntil', 'Valid until')} value={form.validUntil} onChange={(e) => setForm({ ...form, validUntil: e.target.value })} />
+              </div>
+            </div>
             <div className="col-span-2 space-y-1">
               <span className="text-sm font-medium">{t('cpq.priceRules.form.applicabilityCondition', 'Applicability Condition')}</span>
               <span className="ml-2 text-xs text-muted-foreground">{t('cpq.priceRules.form.optionalHint', '(optional)')}</span>
@@ -399,6 +437,24 @@ export default function PriceRuleDetailPage(props: { params?: { id?: string } })
               <div className="flex justify-between border-t pt-3">
                 <dt className="text-sm text-muted-foreground">{t('cpq.priceRules.detail.sortOrder', 'Sort Order')}</dt>
                 <dd className="text-sm font-mono">{rule.sortOrder}</dd>
+              </div>
+              <div className="flex justify-between border-t pt-3">
+                <dt className="text-sm text-muted-foreground">{t('cpq.priceRules.detail.phase', 'Months')}</dt>
+                <dd className="text-sm" data-testid="cpq-price-rule-detail-phase">
+                  {(rule.fromMonth ?? 1) === 1 && rule.toMonth == null
+                    ? t('cpq.priceRules.detail.everyMonth', 'Every month')
+                    : rule.toMonth == null
+                      ? t('cpq.phases.monthsFrom', 'From month {from}', { from: rule.fromMonth ?? 1 })
+                      : t('cpq.phases.months', 'Months {from}–{to}', { from: rule.fromMonth ?? 1, to: rule.toMonth })}
+                </dd>
+              </div>
+              <div className="flex justify-between border-t pt-3">
+                <dt className="text-sm text-muted-foreground">{t('cpq.priceRules.form.campaign', 'Campaign dates')}</dt>
+                <dd className="text-sm">
+                  {rule.validFrom || rule.validUntil
+                    ? `${rule.validFrom ?? '…'} – ${rule.validUntil ?? '…'}`
+                    : t('cpq.priceRules.detail.noCampaign', 'Always')}
+                </dd>
               </div>
               {rule.description && (
                 <div className="border-t pt-3">

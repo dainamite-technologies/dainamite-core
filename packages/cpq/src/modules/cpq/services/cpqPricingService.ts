@@ -1,8 +1,13 @@
 import type { EntityManager } from '@mikro-orm/postgresql'
+import { billingPeriodField, normalizeBillingPeriod } from '../lib/chargeBillingPeriod'
 import { CpqProductCharge, CpqPricingTable, CpqPricingTableEntry, CpqPriceRule } from '../data/entities'
 import type { ResolvedCharge, RuleAdjustment, TierBreakdown } from './types'
 import { getBaseCurrencyCode } from './types'
 import { normalizeChargePricing } from '../data/charge-pricing'
+import {
+  compactSchedule, isActiveInMonth, isInsideCampaign, isPhasedRange, segmentsFor, todayIso,
+  type ChargeScheduleSegment,
+} from '../lib/priceSchedule'
 
 export type { ResolvedCharge, RuleAdjustment, TierBreakdown }
 
@@ -79,6 +84,13 @@ export class DefaultCpqPricingService {
     currencyCode?: string
     tenantId: string
     organizationId: string
+    /** D10: campaign dates are checked against this `YYYY-MM-DD` date (default: today). */
+    pricingDate?: string
+    /**
+     * D10: rule codes the stored snapshot was priced with. Such a rule still
+     * applies outside its campaign dates, so a priced quote keeps its promotion.
+     */
+    retainRuleCodes?: ReadonlySet<string>
   }): Promise<ResolvedCharge[]> {
     const { offeringId, productId, configuration, tenantId, organizationId, currencyCode } = params
 
@@ -131,16 +143,61 @@ export class DefaultCpqPricingService {
       organizationId,
     })
 
-    if (rules.length > 0) {
-      this.applyPriceRules(results, rules, configuration)
-    }
+    const pricingDate = params.pricingDate ?? todayIso()
+    const inForce = rules.filter((rule) => isInsideCampaign(rule, pricingDate) || params.retainRuleCodes?.has(rule.code))
+    return this.applyRuleSchedule(results, inForce, configuration)
+  }
 
-    for (const resolved of results) {
-      resolved.standardUnitPrice = resolved.unitPrice
-      resolved.standardTotalPrice = resolved.totalPrice
+  /**
+   * D9: the standard price per month segment. Rules without a month range
+   * apply in every month, as before; phased rules cut the term into segments
+   * and each segment runs the rules in force in it, in sort order. The
+   * charge's own prices are the regular (last, open) segment; a `schedule`
+   * is attached only to charges whose price changes over time.
+   */
+  applyRuleSchedule(results: ResolvedCharge[], rules: CpqPriceRule[], configuration: Record<string, unknown>): ResolvedCharge[] {
+    const phased = rules.filter((rule) => isPhasedRange(rule) && evaluateApplicability(rule.applicabilityCondition, configuration))
+    const withStandard = (charges: ResolvedCharge[]) => {
+      for (const resolved of charges) {
+        resolved.standardUnitPrice = resolved.unitPrice
+        resolved.standardTotalPrice = resolved.totalPrice
+      }
+      return charges
     }
-
-    return results
+    if (phased.length === 0) {
+      if (rules.length > 0) this.applyPriceRules(results, rules, configuration)
+      return withStandard(results)
+    }
+    const segments = segmentsFor(phased)
+    const priced = segments.map((segment) => {
+      const copy = results.map((charge) => ({ ...charge, adjustments: [...(charge.adjustments ?? [])] }))
+      this.applyPriceRules(copy, rules.filter((rule) => isActiveInMonth(rule, segment.fromMonth)), configuration)
+      return withStandard(copy)
+    })
+    const regular = priced.at(-1)!
+    // Phases price recurring charges only (spec §4.3): one-time / usage get the
+    // rules without a month range — also not an open-ended phase (13+), which
+    // is in force in the regular segment (review F4).
+    const permanentOnly = results.map((charge) => ({ ...charge, adjustments: [...(charge.adjustments ?? [])] }))
+    this.applyPriceRules(permanentOnly, rules.filter((rule) => !isPhasedRange(rule)), configuration)
+    withStandard(permanentOnly)
+    return regular.map((charge, index) => {
+      if (charge.chargeType !== 'mrc') return permanentOnly[index]
+      const schedule = compactSchedule(segments.map((segment, at): ChargeScheduleSegment => {
+        const segmentCharge = priced[at][index]
+        const applied = (segmentCharge.adjustments ?? []).filter((entry) => entry.origin === 'rule')
+        const phasedNames = applied.filter((entry) => entry.toMonth != null || (entry.fromMonth ?? 1) > 1).map((entry) => entry.ruleName)
+        return {
+          fromMonth: segment.fromMonth, toMonth: segment.toMonth,
+          unitPrice: segmentCharge.unitPrice, totalPrice: segmentCharge.totalPrice,
+          standardUnitPrice: segmentCharge.unitPrice, standardTotalPrice: segmentCharge.totalPrice,
+          source: applied.length ? 'rule' : 'list',
+          name: phasedNames.length ? phasedNames.join(' + ') : null,
+          ...(applied.length ? { ruleCodes: applied.map((entry) => entry.ruleCode) } : {}),
+        }
+      }))
+      return schedule ? { ...charge, schedule } : charge
+    })
   }
 
   private async loadPriceRules(params: {
@@ -227,6 +284,7 @@ export class DefaultCpqPricingService {
 
         const adjustment: RuleAdjustment = {
           origin: 'rule',
+          ...(isPhasedRange(rule) ? { windowKind: 'relative' as const, fromMonth: rule.fromMonth ?? 1, toMonth: rule.toMonth ?? null } : {}),
           ruleCode: rule.code,
           ruleName: rule.name,
           ruleType: rule.ruleType,
@@ -268,6 +326,8 @@ export class DefaultCpqPricingService {
       quantity: 1,
       totalPrice: 0,
       currencyCode: fallbackCurrency,
+      // D5: an MRC price is per the charge's billing period (absent = every 1 month).
+      ...(charge.chargeType === 'mrc' ? billingPeriodField(normalizeBillingPeriod(charge)) : {}),
     }
 
     // ── Fixed price: unit price is the charge's own fixedPrice. Also the
